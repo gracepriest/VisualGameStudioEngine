@@ -8,12 +8,14 @@
 #pragma comment(lib, "VisualGameStudioEngine.lib")  // Change this to your actual DLL name
 
 void MyCustomDraw() {
+	Texture2D tex = Framework_LoadTexture("ninja.jpg");
     Framework_DrawText("Hello from Callback!", 100, 10, 20, 255, 0, 0, 255);
     Framework_DrawText("Score: 1000", 100, 40, 16, 0, 255, 0, 255);
     Framework_DrawText("Level: 5", 100, 60, 16, 0, 0, 255, 255);
 	Framework_DrawRectangle(50, 100, 200, 100, 255, 255, 0, 128);
 	Framework_DrawLine(50, 100, 250, 200, 255, 0, 255, 255);
 	Framework_DrawCircle(400, 200, 50, 0, 255, 255, 128);
+    Framework_DrawTexture(tex, 100, 100, 255, 255, 255, 255);
 }
 
 int main()
@@ -30,18 +32,25 @@ int main()
     std::cout << "Framework initialized successfully!\n";
     std::cout << "Window created - you should see a white window with 'Hello from Framework!' text\n";
     std::cout << "Close the window to exit...\n";
-    // Register your custom draw function
-    Framework_SetDrawCallback(MyCustomDraw);
+    Framework_InitAudio();
+    int m = Framework_AcquireMusicH("music.mp3");
+	int s = Framework_LoadSoundH("paddle_hit.wav");
+    Framework_SetMusicVolumeH(m, 0.8f);
+    Framework_PlayMusicH(m);
 
-    // Main game loop
-    while (!Framework_ShouldClose())
-    {
-        Framework_Update();
-       
+    while (!Framework_ShouldClose()) {
+        Framework_Update(); // internally calls Framework_UpdateAllMusic()
+        if (Framework_IsKeyPressed(KEY_SPACE)) { // Space key  
+
+            Framework_PlaySoundH(s);
+        }
     }
 
-    // Cleanup
+    Framework_ReleaseMusicH(m);
+    Framework_CloseAudio();
+
     Framework_Shutdown();
+
 
     std::cout << "Framework shut down successfully!\n";
     std::cout << "Press Enter to exit...";
