@@ -309,7 +309,7 @@ extern "C" {
     void   Framework_DrawGrid(int slices, float spacing) { DrawGrid(slices, spacing); }
 
     // --- Audio core ---
-    void Framework_InitAudio() { InitAudioDevice(); }
+    bool Framework_InitAudio() { InitAudioDevice(); return IsAudioDeviceReady(); }
     void Framework_CloseAudio() {
         for (auto& kv : g_sounds) UnloadSound(kv.second);
         g_sounds.clear();

@@ -1,0 +1,157 @@
+﻿Imports System.Runtime.CompilerServices
+Imports System.Runtime.InteropServices
+
+Public Module Utiliy
+    'Enum for initialization results
+    Enum InitResult
+        INIT_OK = 0
+        INIT_NO_WINDOW
+        INIT_NO_AUDIO
+        INIT_BAD_CONTEXT
+    End Enum
+
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure SceneCallbacks
+        Public onEnter As SceneVoidFn
+        Public onExit As SceneVoidFn
+        Public onResume As SceneVoidFn
+        Public onUpdateFixed As SceneUpdateFixedFn
+        Public onUpdateFrame As SceneUpdateFrameFn
+        Public onDraw As SceneVoidFn
+    End Structure
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Shader
+        Public id As Integer
+        Public locs As IntPtr  ' int* (opaque)
+    End Structure
+    ' Define structures used by the framework
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Vector2
+        Public X As Single
+        Public Y As Single
+
+        Public Sub New(x As Single, y As Single)
+            Me.X = x
+            Me.Y = y
+        End Sub
+    End Structure
+
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Rectangle
+        Public X As Single
+        Public Y As Single
+        Public Width As Single
+        Public Height As Single
+
+        Public Sub New(x As Single, y As Single, width As Single, height As Single)
+            Me.X = x
+            Me.Y = y
+            Me.Width = width
+            Me.Height = height
+        End Sub
+    End Structure
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Texture2D
+        Public id As UInteger   ' OpenGL texture id
+        Public width As Integer
+        Public height As Integer
+        Public mipmaps As Integer
+        Public format As Integer
+    End Structure
+    ' TextureCubemap == Texture/Texture2D in raylib
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure TextureCubemap
+        Public id As UInteger
+        Public width As Integer
+        Public height As Integer
+        Public mipmaps As Integer
+        Public format As Integer
+    End Structure
+
+    ' CPU-side image (pixel pointer lives in C/C++; we treat as IntPtr)
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Image
+        Public data As IntPtr
+        Public width As Integer
+        Public height As Integer
+        Public mipmaps As Integer
+        Public format As Integer
+    End Structure
+
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure RenderTexture2D
+        Public id As UInteger
+        Public texture As Texture2D
+        Public depth As Texture2D
+    End Structure
+
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure NPatchInfo
+        Public source As Rectangle
+        Public left As Integer
+        Public top As Integer
+        Public right As Integer
+        Public bottom As Integer
+        Public layout As Integer
+    End Structure
+
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Camera2D
+        Public offset As Vector2
+        Public target As Vector2
+        Public rotation As Single
+        Public zoom As Single
+    End Structure
+
+    ' You only need enough of Font to pass it by value
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Font
+        Public baseSize As Integer
+        Public glyphCount As Integer
+        Public glyphPadding As Integer
+        Public texture As Texture2D
+        Public recs As IntPtr      ' Rectangle* (opaque to VB)
+        Public glyphs As IntPtr    ' GlyphInfo* (opaque to VB)
+    End Structure
+
+    Public Enum TextureFilter
+        Point = 0
+        Bilinear = 1
+        Trilinear = 2
+        Anisotropic4x = 3
+        Anisotropic8x = 4
+        Anisotropic16x = 5
+    End Enum
+
+    Public Enum TextureWrap
+        Repeat_ = 0
+        Clamp = 1
+        MirrorRepeat = 2
+        MirrorClamp = 3
+    End Enum
+
+    ' ===========================
+    '     Convenience Helpers
+    ' ===========================
+
+    ' Safely upload a managed byte() to a GPU texture (no unsafe code in VB)
+    <MethodImpl(MethodImplOptions.AggressiveInlining)>
+    Public Sub Framework_UpdateTextureFromBytes(tex As Texture2D, data As Byte())
+        Dim handle = GCHandle.Alloc(data, GCHandleType.Pinned)
+        Try
+            Framework_UpdateTexture(tex, handle.AddrOfPinnedObject())
+        Finally
+            handle.Free()
+        End Try
+    End Sub
+
+    <MethodImpl(MethodImplOptions.AggressiveInlining)>
+    Public Sub Framework_UpdateTextureRecFromBytes(tex As Texture2D, rect As Rectangle, data As Byte())
+        Dim handle = GCHandle.Alloc(data, GCHandleType.Pinned)
+        Try
+            Framework_UpdateTextureRec(tex, rect, handle.AddrOfPinnedObject())
+        Finally
+            handle.Free()
+        End Try
+    End Sub
+End Module

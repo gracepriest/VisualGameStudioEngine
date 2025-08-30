@@ -127,9 +127,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="CPPengineTest.cpp" />
+    <ClCompile Include="Scene.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\VisualGameStudioEngine\framework.h" />
+    <ClInclude Include="SceneBase.h" />
+    <ClInclude Include="TitleScene.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

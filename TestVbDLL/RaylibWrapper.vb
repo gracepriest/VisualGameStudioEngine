@@ -3,111 +3,7 @@ Imports System.Runtime.CompilerServices
 
 Public Module FrameworkWrapper
 
-    ' Define structures used by the framework
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure Vector2
-        Public X As Single
-        Public Y As Single
 
-        Public Sub New(x As Single, y As Single)
-            Me.X = x
-            Me.Y = y
-        End Sub
-    End Structure
-
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure Rectangle
-        Public X As Single
-        Public Y As Single
-        Public Width As Single
-        Public Height As Single
-
-        Public Sub New(x As Single, y As Single, width As Single, height As Single)
-            Me.X = x
-            Me.Y = y
-            Me.Width = width
-            Me.Height = height
-        End Sub
-    End Structure
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure Texture2D
-        Public id As UInteger   ' OpenGL texture id
-        Public width As Integer
-        Public height As Integer
-        Public mipmaps As Integer
-        Public format As Integer
-    End Structure
-    ' TextureCubemap == Texture/Texture2D in raylib
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure TextureCubemap
-        Public id As UInteger
-        Public width As Integer
-        Public height As Integer
-        Public mipmaps As Integer
-        Public format As Integer
-    End Structure
-
-    ' CPU-side image (pixel pointer lives in C/C++; we treat as IntPtr)
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure Image
-        Public data As IntPtr
-        Public width As Integer
-        Public height As Integer
-        Public mipmaps As Integer
-        Public format As Integer
-    End Structure
-
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure RenderTexture2D
-        Public id As UInteger
-        Public texture As Texture2D
-        Public depth As Texture2D
-    End Structure
-
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure NPatchInfo
-        Public source As Rectangle
-        Public left As Integer
-        Public top As Integer
-        Public right As Integer
-        Public bottom As Integer
-        Public layout As Integer
-    End Structure
-
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure Camera2D
-        Public offset As Vector2
-        Public target As Vector2
-        Public rotation As Single
-        Public zoom As Single
-    End Structure
-
-    ' You only need enough of Font to pass it by value
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure Font
-        Public baseSize As Integer
-        Public glyphCount As Integer
-        Public glyphPadding As Integer
-        Public texture As Texture2D
-        Public recs As IntPtr      ' Rectangle* (opaque to VB)
-        Public glyphs As IntPtr    ' GlyphInfo* (opaque to VB)
-    End Structure
-
-    Public Enum TextureFilter
-        Point = 0
-        Bilinear = 1
-        Trilinear = 2
-        Anisotropic4x = 3
-        Anisotropic8x = 4
-        Anisotropic16x = 5
-    End Enum
-
-    Public Enum TextureWrap
-        Repeat_ = 0
-        Clamp = 1
-        MirrorRepeat = 2
-        MirrorClamp = 3
-    End Enum
     ' Define the callback delegate
     Public Delegate Sub DrawCallback()
 
@@ -492,30 +388,7 @@ Public Module FrameworkWrapper
     Public Sub Framework_DrawTextEx(font As Font, text As String, pos As Vector2, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
     End Sub
 
-    ' ===========================
-    '     Convenience Helpers
-    ' ===========================
 
-    ' Safely upload a managed byte() to a GPU texture (no unsafe code in VB)
-    <MethodImpl(MethodImplOptions.AggressiveInlining)>
-    Public Sub Framework_UpdateTextureFromBytes(tex As Texture2D, data As Byte())
-        Dim handle = GCHandle.Alloc(data, GCHandleType.Pinned)
-        Try
-            Framework_UpdateTexture(tex, handle.AddrOfPinnedObject())
-        Finally
-            handle.Free()
-        End Try
-    End Sub
-
-    <MethodImpl(MethodImplOptions.AggressiveInlining)>
-    Public Sub Framework_UpdateTextureRecFromBytes(tex As Texture2D, rect As Rectangle, data As Byte())
-        Dim handle = GCHandle.Alloc(data, GCHandleType.Pinned)
-        Try
-            Framework_UpdateTextureRec(tex, rect, handle.AddrOfPinnedObject())
-        Finally
-            handle.Free()
-        End Try
-    End Sub
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Sub Framework_SetFixedStep(seconds As Double) : End Sub
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Sub Framework_ResetFixedClock() : End Sub
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Function Framework_StepFixed() As Boolean : End Function
@@ -524,27 +397,11 @@ Public Module FrameworkWrapper
 
 
 
-    Public Class SpriteAnim
-        Public FrameW As Integer, FrameH As Integer, Columns As Integer, Count As Integer, Fps As Single
-        Private _time As Single, _index As Integer
-        Public Sub New(w As Integer, h As Integer, cols As Integer, count As Integer, fps As Single)
-            FrameW = w : FrameH = h : Columns = cols : count = count : fps = fps
-        End Sub
-        Public Sub Update(dt As Single)
-            _time += dt
-            While _time >= 1.0F / Fps
-                _time -= 1.0F / Fps
-                _index = (_index + 1) Mod Count
-            End While
-        End Sub
-        Public Function SourceRect(sheet As Rectangle) As Rectangle
-            Return Framework_SpriteFrame(sheet, FrameW, FrameH, _index, Columns)
-        End Function
-    End Class
+
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Sub Framework_DrawFPS(x As Integer, y As Integer) : End Sub
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Sub Framework_DrawGrid(slices As Integer, spacing As Single) : End Sub
     ' ===== Audio =====
-    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Sub Framework_InitAudio() : End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Function Framework_InitAudio() As Boolean : End Function
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Sub Framework_CloseAudio() : End Sub
 
     ' Sound (SFX)
@@ -559,11 +416,7 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)> Public Sub Framework_SetSoundPanH(h As Integer, pan As Single) : End Sub
 
 
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure Shader
-        Public id As Integer
-        Public locs As IntPtr  ' int* (opaque)
-    End Structure
+
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi, EntryPoint:="Framework_LoadShaderF")>
     Public Function Framework_LoadShaderF(vsPath As String, fsPath As String) As Shader
@@ -635,62 +488,10 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown() : End Sub
 
-    Public NotInheritable Class TextureHandle
-        Implements IDisposable
-        Public ReadOnly Handle As Integer
-        Public Sub New(path As String)
-            Handle = Framework_AcquireTextureH(path)
-        End Sub
-        Public Sub Draw(x As Integer, y As Integer, Optional r As Byte = 255, Optional g As Byte = 255, Optional b As Byte = 255, Optional a As Byte = 255)
-            Framework_DrawTextureH(Handle, x, y, r, g, b, a)
-        End Sub
-        Public Sub Dispose() Implements IDisposable.Dispose
-            Framework_ReleaseTextureH(Handle)
-        End Sub
-    End Class
 
-    Public NotInheritable Class FontHandle
-        Implements IDisposable
-        Public ReadOnly Handle As Integer
-        Public Sub New(path As String, size As Integer)
-            Handle = Framework_AcquireFontH(path, size)
-        End Sub
-        Public Sub DrawText(text As String, pos As Vector2, size As Single, spacing As Single, Optional r As Byte = 255, Optional g As Byte = 255, Optional b As Byte = 255, Optional a As Byte = 255)
-            Framework_DrawTextExH(Handle, text, pos, size, spacing, r, g, b, a)
-        End Sub
-        Public Sub Dispose() Implements IDisposable.Dispose
-            Framework_ReleaseFontH(Handle)
-        End Sub
-    End Class
 
-    Public NotInheritable Class MusicHandle
-        Implements IDisposable
-        Public ReadOnly Handle As Integer
-        Public Sub New(path As String)
-            Handle = Framework_AcquireMusicH(path)
-        End Sub
-        Public Sub Play()
-            Framework_PlayMusicH(Handle)
-        End Sub
-        Public Sub Pause()
-            Framework_PauseMusicH(Handle)
-        End Sub
-        Public Sub [Stop]()
-            Framework_StopMusicH(Handle)
-        End Sub
-        Public Sub ResumePlayback()
-            Framework_ResumeMusicH(Handle)
-        End Sub
-        Public Sub Volume(v As Single)
-            Framework_SetMusicVolumeH(Handle, v)
-        End Sub
-        Public Sub Pitch(p As Single)
-            Framework_SetMusicPitchH(Handle, p)
-        End Sub
-        Public Sub Dispose() Implements IDisposable.Dispose
-            Framework_ReleaseMusicH(Handle)
-        End Sub
-    End Class
+
+
     ' ==== Scene callbacks ====
     <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
     Public Delegate Sub SceneVoidFn()
@@ -699,15 +500,7 @@ Public Module FrameworkWrapper
     <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
     Public Delegate Sub SceneUpdateFrameFn(dt As Single)
 
-    <StructLayout(LayoutKind.Sequential)>
-    Public Structure SceneCallbacks
-        Public onEnter As SceneVoidFn
-        Public onExit As SceneVoidFn
-        Public onResume As SceneVoidFn
-        Public onUpdateFixed As SceneUpdateFixedFn
-        Public onUpdateFrame As SceneUpdateFrameFn
-        Public onDraw As SceneVoidFn
-    End Structure
+
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_CreateScriptScene(cb As SceneCallbacks) As Integer
