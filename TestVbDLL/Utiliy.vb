@@ -2,6 +2,8 @@
 Imports System.Runtime.InteropServices
 
 Public Module Utiliy
+    Public Const WINDOW_WIDTH = 1200
+    Public WINDOW_HEIGHT = 720
     'Enum for initialization results
     Enum InitResult
         INIT_OK = 0
@@ -154,4 +156,43 @@ Public Module Utiliy
             handle.Free()
         End Try
     End Sub
+    Public Enum Keys
+        SPACE = 32
+        ENTER = 257
+        ESCAPE = 256
+        UP = 265
+        DOWN = 264
+        LEFT = 263
+        RIGHT = 262
+        W = 87
+        S = 83
+        A = 65
+        D = 68
+        P = 80
+        R = 82
+        F = 70
+        M = 77
+        O = 79
+        C = 67
+        Q = 81
+        E = 69
+        T = 84
+        L = 76
+        N = 78
+        ONE = 49
+        TWO = 50
+        THREE = 51
+        FOUR = 52
+        FIVE = 53
+        SIX = 54
+        SEVEN = 55
+        EIGHT = 56
+        NINE = 57
+        ZERO = 48
+    End Enum
+    <System.Runtime.CompilerServices.Extension>
+    Public Sub DrawRectangle(rec As Rectangle, r As Byte, g As Byte, b As Byte, a As Byte)
+        Framework_DrawRectangle(CInt(rec.X), CInt(rec.Y), rec.Width, rec.Height, r, g, b, a)
+    End Sub
+
 End Module

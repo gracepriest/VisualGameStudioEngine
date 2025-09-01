@@ -1,9 +1,11 @@
-﻿Public Class Game
+﻿
+
+Public Class Game
     'a function Init the game window
     Public Function Init() As Integer
         Try
             REM initialize the game window
-            If Not Framework_Initialize(800, 450, "Two Scenes (DLL-managed)") Then Return InitResult.INIT_NO_WINDOW
+            If Not Framework_Initialize(WINDOW_WIDTH, WINDOW_HEIGHT, "Two Scenes (DLL-managed)") Then Return InitResult.INIT_NO_WINDOW
 
             ' Optional: make ESC close the window
             Framework_SetExitKey(256) ' 256 = KEY_ESCAPE

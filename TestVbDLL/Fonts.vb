@@ -1,12 +1,12 @@
-﻿Module Fonts
+﻿Public Module Fonts
 
     'UI font
-    Dim _UI As FontHandle
+    Public RETRO_FONT As FontHandle
 
     Public Function LoadFonts() As Boolean
         Try
             ' Load game fonts here
-            _UI = New FontHandle("resources/font.ttf", 20)
+            RETRO_FONT = New FontHandle("C:\Users\melvi\source\repos\VisualGameStudioEngine\x64\Release\net8.0\fonts\retro.ttf", 20)
         Catch ex As Exception
             Console.WriteLine("Failed to load font: " & ex.Message)
             Return False
@@ -16,9 +16,9 @@
     End Function
 
     Public Sub UnloadFonts()
-        If _UI IsNot Nothing Then
-            _UI.Dispose()
-            _UI = Nothing
+        If RETRO_FONT IsNot Nothing Then
+            RETRO_FONT.Dispose()
+            RETRO_FONT = Nothing
         End If
     End Sub
 End Module
