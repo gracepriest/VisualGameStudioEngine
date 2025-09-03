@@ -6,7 +6,7 @@
     Public Function LoadFonts() As Boolean
         Try
             ' Load game fonts here
-            RETRO_FONT = New FontHandle("C:\Users\melvi\source\repos\VisualGameStudioEngine\x64\Release\net8.0\fonts\retro.ttf", 20)
+            RETRO_FONT = New FontHandle("fonts\retro.ttf", 20)
         Catch ex As Exception
             Console.WriteLine("Failed to load font: " & ex.Message)
             Return False

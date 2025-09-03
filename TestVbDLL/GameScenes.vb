@@ -36,10 +36,10 @@ Class TitleScene
     Protected Overrides Sub OnUpdateFrame(dt As Single)
         ' ENTER -> go to Game
 
-        If Framework_IsKeyPressed(257) Then
-            Framework_PlaySoundH(sfxHit)
-            SetCurrentScene(New MenuScene)
-        End If
+        'If Framework_IsKeyPressed(257) Then
+        '    Framework_PlaySoundH(sfxHit)
+        '    SetCurrentScene(New MenuScene)
+        'End If
         'paddle1.Update(dt)
         '' is hold down
         'If Framework_IsKeyDown(Keys.UP) Then
@@ -49,17 +49,26 @@ Class TitleScene
         'Else
         '    paddle1.dy = 0.0F
         'End If
-        If Framework_IsKeyPressed(Keys.UP And menuIndex > 0) Then
+        If Framework_IsKeyPressed(Keys.UP) AndAlso menuIndex > 0 Then
+            'play sound
+            Framework_PlaySoundH(sfxWall)
             menuIndex -= 1
             menuPos.Y -= 50
-        ElseIf Framework_IsKeyPressed(Keys.DOWN And menuIndex < 2) Then
+
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 2 Then
+            'play sound
+            Framework_PlaySoundH(sfxWall)
             menuIndex += 1
             menuPos.Y += 50
+
         End If
         If Framework_IsKeyPressed(Keys.SPACE) Then
+
             Select Case menuIndex
                 Case 0
-                'change scene to 1 player
+                    'change scene to 1 player
+                    Framework_PlaySoundH(sfxHit)
+                    SetCurrentScene(New Player1Scene)
 
                 Case 1
                 'start a 2 player game
@@ -80,7 +89,7 @@ Class TitleScene
         Framework_DrawTextExH(RETRO_FONT.Handle, txtPong, New Vector2(WINDOW_WIDTH / 2.8, 50), 100, 1.0F, 255, 255, 255, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txtPlayer1, New Vector2(WINDOW_WIDTH / 2.5, y), 40, 1.0F, 255, 255, 255, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txtPlayer2, New Vector2(WINDOW_WIDTH / 2.5, y + 50), 40, 1.0F, 255, 255, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtOptions, New Vector2(WINDOW_WIDTH / 2.5, y + 100), 40, 1.0F, 255, 255, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtOptions, New Vector2(WINDOW_WIDTH / 2.6, y + 100), 40, 1.0F, 255, 255, 255, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 170), 20, 1.0F, 255, 255, 255, 255)
         menuPos.DrawRectangle(255, 0, 0, 90)
         'RETRO_FONT.DrawText(temp, New Vector2(x, y), 20, 1.0F, 255, 255, 255, 255)
@@ -122,3 +131,47 @@ Class MenuScene
         Framework_DrawFPS(700, 10)
     End Sub
 End Class
+
+Class Player1Scene
+    Inherits Scene
+    Dim paddle1 As New Paddle
+    Dim paddle2 As New Paddle
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("PlayScene OnEnter")
+        paddle2.paddlePos.X = 1130.0F
+    End Sub
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("PlayScene OnExit")
+    End Sub
+    Protected Overrides Sub OnResume()
+        Console.WriteLine("PlayScene OnResume")
+    End Sub
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        ' ENTER -> go to Game
+        If Framework_IsKeyPressed(Keys.BACKSPACE) Then
+            SetCurrentScene(New TitleScene)
+        End If
+        ' Player 1 controls
+        ' is hold down
+        If Framework_IsKeyDown(Keys.UP) Then
+            paddle1.dy -= paddle1.paddleSpeed
+        ElseIf Framework_IsKeyDown(Keys.DOWN) Then
+            paddle1.dy += paddle1.paddleSpeed
+        Else
+            paddle1.dy = 0.0F
+        End If
+        paddle1.Update(dt)
+        paddle2.Update(dt)
+
+    End Sub
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(10, 10, 20, 255)
+        paddle1.Draw()
+        paddle2.Draw()
+        Framework_DrawFPS(700, 10)
+    End Sub
+End Class
+

@@ -6,8 +6,8 @@ Module Sound
     Public Function LoadSounds() As Boolean
         Try
             ' Load game sounds here
-            sfxHit = Framework_LoadSoundH("hit.wav")
-            sfxWall = Framework_LoadSoundH("wall.wav")
+            sfxHit = Framework_LoadSoundH("Sounds\hit.wav")
+            sfxWall = Framework_LoadSoundH("Sounds\wall.wav")
             ' Load music stream
             Dim music As MusicHandle = New MusicHandle("music.mp3")
         Catch ex As Exception

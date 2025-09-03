@@ -158,6 +158,7 @@ Public Module Utiliy
     End Sub
     Public Enum Keys
         SPACE = 32
+        BACKSPACE = 259
         ENTER = 257
         ESCAPE = 256
         UP = 265
