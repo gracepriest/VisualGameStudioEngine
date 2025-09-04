@@ -112,7 +112,47 @@ Module SceneBridge
         Return handle
     End Function
 
+    Public Function GetCurrentScene() As Scene
+        Return _current
+    End Function
+    ' Create scene WITHOUT changing/pushing
+    Public Function RegisterScene(scene As Scene) As Integer
+        _current = scene                   ' make bridge dispatch into this scene
+        Dim cb = MakeCallbacks()           ' build delegates for THIS scene
+        Dim id = Framework_CreateScriptScene(cb)
+        scene.sceneId = id
+        Return id
+    End Function
+
     Public Sub WireEngineDraw()
         Framework_SetDrawCallback(_drawDel)
+    End Sub
+
+    Private ReadOnly _managedStack As New Stack(Of Scene)
+
+
+    ' Only registers the scene and returns its id (no change/push here)
+
+
+    Public Function ChangeTo(scene As Scene) As Integer
+        Dim id = RegisterScene(scene)
+        _managedStack.Clear()
+        _managedStack.Push(scene)
+        Framework_SceneChange(id)
+        Return id
+    End Function
+
+    Public Function Push(scene As Scene) As Integer
+        Dim id = RegisterScene(scene)
+        _managedStack.Push(scene)
+        Framework_ScenePush(id)
+        Return id
+    End Function
+
+    Public Sub Pop()
+        ' swap _current to what will be shown after the native pop
+        If _managedStack.Count > 0 Then _managedStack.Pop()
+        _current = If(_managedStack.Count > 0, _managedStack.Peek(), Nothing)
+        Framework_ScenePop()
     End Sub
 End Module

@@ -760,19 +760,22 @@ extern "C" {
     // ---- Per-frame tick ----
     // Uses your fixed-step helpers (Framework_StepFixed / Framework_GetFixedStep / Framework_GetFrameTime)
     void Framework_SceneTick() {
-        auto sc = TopScene();
-        if (!sc) return;
-
-        // Fixed updates: run 0..N times this frame
+        // Fixed: re-check top each fixed step
         while (Framework_StepFixed()) {
+            auto sc = TopScene();
+            if (!sc) return;
             if (sc->cb.onUpdateFixed) sc->cb.onUpdateFixed(Framework_GetFixedStep());
         }
 
-        // Variable per-frame update
-        if (sc->cb.onUpdateFrame) sc->cb.onUpdateFrame((float)Framework_GetFrameTime());
+        // Frame update (top may change inside)
+        if (auto sc = TopScene(); sc && sc->cb.onUpdateFrame) {
+            sc->cb.onUpdateFrame((float)Framework_GetFrameTime());
+        }
 
-        // Draw
-        if (sc->cb.onDraw) sc->cb.onDraw();
+        // Draw the current top (which may have changed during update)
+        if (auto sc = TopScene(); sc && sc->cb.onDraw) {
+            sc->cb.onDraw();
+        }
     }
 
 } // extern "C"

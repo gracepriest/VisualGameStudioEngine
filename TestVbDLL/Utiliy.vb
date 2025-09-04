@@ -29,27 +29,27 @@ Public Module Utiliy
     ' Define structures used by the framework
     <StructLayout(LayoutKind.Sequential)>
     Public Structure Vector2
-        Public X As Single
-        Public Y As Single
+        Public x As Single
+        Public y As Single
 
-        Public Sub New(x As Single, y As Single)
-            Me.X = x
-            Me.Y = y
+        Public Sub New(x1 As Single, y1 As Single)
+            Me.x = x1
+            Me.y = y1
         End Sub
     End Structure
 
     <StructLayout(LayoutKind.Sequential)>
     Public Structure Rectangle
-        Public X As Single
-        Public Y As Single
-        Public Width As Single
-        Public Height As Single
+        Public x As Single
+        Public y As Single
+        Public width As Single
+        Public height As Single
 
-        Public Sub New(x As Single, y As Single, width As Single, height As Single)
-            Me.X = x
-            Me.Y = y
-            Me.Width = width
-            Me.Height = height
+        Public Sub New(x1 As Single, y1 As Single, width1 As Single, height1 As Single)
+            Me.x = x1
+            Me.y = y1
+            Me.width = width1
+            Me.height = height1
         End Sub
     End Structure
     <StructLayout(LayoutKind.Sequential)>

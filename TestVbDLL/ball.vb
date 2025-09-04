@@ -1,52 +1,61 @@
-﻿Public Class ball
-    Public ballPos As New Vector2(50.0F, 250.0F)
-    Public ballWidth As Integer = 16
-    Public ballHeight As Integer = 16
+﻿
+Imports RL = TestVbDLL.Utiliy.Rectangle
+Public Class Ball
+    Public ballPos As New Vector2(WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2)
+    Public ballWidth As Single = 16
+    Public ballHeight As Single = 16
     Public radius As Integer = 8
     Public dy As Single = 0.0F
     Public dx As Single = 0.0F
 
     Public Sub Update(dt As Double)
-        ballPos.X += dx * CSng(dt)
-        ballPos.Y += dy * CSng(dt)
-        'limit ball to screen
-        If ballPos.Y < 0 Then
-            ballPos.Y = 0
-            dy = -dy
-        ElseIf ballPos.Y + ballHeight > WINDOW_HEIGHT Then
-            ballPos.Y = WINDOW_HEIGHT - ballHeight
-        End If
+        ballPos.x += dx * CSng(dt)
+        ballPos.y += dy * CSng(dt)
     End Sub
 
     Public Sub BallReSet()
         'reset ball to center
-        ballPos.X = WINDOW_WIDTH / 2.0F
-        ballPos.Y = WINDOW_HEIGHT / 2.0F
+        ballPos.x = WINDOW_WIDTH / 2.0F
+        ballPos.y = WINDOW_HEIGHT / 2.0F
         dy = 0.0F
         dx = 0.0F
     End Sub
 
     Public Sub Draw()
         'using a rectangle for the paddle
-        Framework_DrawRectangle(CInt(ballPos.X), CInt(ballPos.Y), ballWidth, ballHeight, 255, 255, 255, 255)
+        Framework_DrawRectangle(CInt(ballPos.x), CInt(ballPos.y), ballWidth, ballHeight, 255, 255, 255, 255)
 
     End Sub
-    Public Function BallCollieded(paddle As Paddle) As Boolean
+    Public Function BallCollieded(paddle1 As Paddle) As Boolean
+        Dim gBall As RL
+        With gBall
+            .x = ballPos.x
+            .y = ballPos.y
+            .width = ballWidth
+            .height = ballHeight
+        End With
+
+        Dim gPaddle As RL
+        With gPaddle
+            .x = paddle1.paddlePos.x
+            .y = paddle1.paddlePos.y
+            .width = paddle1.paddleWidth
+            .height = paddle1.paddleHeight
+        End With
         'check for collision between ball and paddle using framework collision function
-        Return Framework_CheckCollisionRecs(New Rectangle(CInt(ballPos.X), CInt(ballPos.Y), ballWidth, ballHeight), New Rectangle(CInt(paddle.paddlePos.X), CInt(paddle.paddlePos.Y), paddle.paddleWidth, paddle.paddleHeight))
+        'Console.WriteLine("Ball Position: " & ballPos.X & ", " & ballPos.Y)
+        'Console.WriteLine("Paddle Position: " & paddle1.paddlePos.X & ", " & paddle1.paddlePos.Y)
+        'Console.WriteLine(Framework_CheckCollisionRecs(gBall, gPaddle))
+        Return Framework_CheckCollisionRecs(gBall, gPaddle)
     End Function
-    Public Sub ReflectFromPaddle(paddle As Paddle)
-        'reverse x direction
-        dx = -dx
-        'add some y direction based on where the ball hit the paddle
-        Dim paddleCenter As Single = paddle.paddlePos.Y + paddle.paddleHeight / 2.0F
-        Dim ballCenter As Single = ballPos.Y + ballHeight / 2.0F
-        Dim offset As Single = ballCenter - paddleCenter
-        dy = offset / (paddle.paddleHeight / 2.0F) * 1.0F
-        If dx > 0 Then
-            ballPos.X = paddle.paddlePos.X + paddle.paddleWidth
-        Else
-            ballPos.X = paddle.paddlePos.X - ballWidth
+    'aabb
+    Public Function AABBCheck(paddle1 As Paddle) As Boolean
+        If (ballPos.x < paddle1.paddlePos.x + paddle1.paddleWidth AndAlso
+            ballPos.x + ballWidth > paddle1.paddlePos.x AndAlso
+            ballPos.y < paddle1.paddlePos.y + paddle1.paddleHeight AndAlso
+            ballPos.y + ballHeight > paddle1.paddlePos.y) Then
+            Return True
         End If
-    End Sub
+        Return False
+    End Function
 End Class

@@ -27,10 +27,11 @@ Public Class Game
             LoadImages()
 
             ' Create scenes
-            Dim _titleHandle As Integer = SetCurrentScene(New TitleScene)
+            'Dim _titleHandle As Integer = SetCurrentScene(New TitleScene)
             ' Start with title  
-            Framework_SceneChange(_titleHandle)
+            'Framework_SceneChange(_titleHandle)
             ' Wire up the engine draw callback
+            ChangeTo(New TitleScene)
             WireEngineDraw()
         Catch ex As Exception
             Console.WriteLine("Failed to load game resources: " & ex.Message)

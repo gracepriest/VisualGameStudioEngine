@@ -2,8 +2,8 @@
     'Dim paddleTexture As New TextureHandle("C:\Users\melvi\source\repos\VisualGameStudioEngine\x64\Release\net8.0\image\paddle")
     Public paddlePos As New Vector2(50.0F, 250.0F)
     Public paddleSpeed As Single = 25.0F
-    Public paddleWidth As Integer = 20
-    Public paddleHeight As Integer = 100
+    Public paddleWidth As Single = 20
+    Public paddleHeight As Single = 100
     Public dy As Single = 0.0F
 
     Public Sub Update(dt As Double)
