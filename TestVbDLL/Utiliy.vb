@@ -196,4 +196,22 @@ Public Module Utiliy
         Framework_DrawRectangle(CInt(rec.X), CInt(rec.Y), rec.Width, rec.Height, r, g, b, a)
     End Sub
 
+    ' Build source rects for a grid-based atlas.
+    ' margin/spacing let you skip guide lines or padding if the sheet has them.
+    Public Function SliceGrid(frameW As Integer, frameH As Integer,
+                              columns As Integer, rows As Integer,
+                              Optional marginX As Integer = 0, Optional marginY As Integer = 0,
+                              Optional spacingX As Integer = 0, Optional spacingY As Integer = 0) As List(Of Utiliy.Rectangle)
+            Dim rects As New List(Of Utiliy.Rectangle)
+            For r = 0 To rows - 1
+                For c = 0 To columns - 1
+                    Dim sx = marginX + c * (frameW + spacingX)
+                    Dim sy = marginY + r * (frameH + spacingY)
+                    rects.Add(New Utiliy.Rectangle(sx, sy, frameW, frameH))
+                Next
+            Next
+            Return rects
+        End Function
+
+
 End Module
