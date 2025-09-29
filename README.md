@@ -9,10 +9,10 @@ Unlike traditional engines, Visual Game Basic lives inside a DLL, giving develop
 
 <b>RayLib Powered:</b> Built on one of the most beginner-friendly and performance-focused game libraries available.<br><br>
 
-<b>DLL Framework:</b> The heart of Vigil Game Basic is a DLL, making it reusable, compact, and easy to integrate.<br><br>
+<b>DLL Framework:</b> The heart of visual Game Basic is a DLL, making it reusable, compact, and easy to integrate.<br><br>
 
-<b>Multi-Language Support:</b> Call the same framework from Vigil Basic, C++, or C#, giving you freedom of choice.
+<b>Multi-Language Support:</b> Call the same framework from visual Basic, C++, or C#, giving you freedom of choice.
 
-Future-Proof Studio: Vigil Game Studio isn’t just a framework—it’s a complete environment, with plans for full IDE support, templates, and tooling to help you focus on creativity instead of setup.
+Future-Proof Studio: visual Game Studio isn’t just a framework—it’s a complete environment, with plans for full IDE support, templates, and tooling to help you focus on creativity instead of setup.
 
 Whether you’re prototyping a simple arcade game or building out a full studio project, Visual Game Studio gives you the building blocks to bring your vision to life with clarity and speed.</p><br><br>
