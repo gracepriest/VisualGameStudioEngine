@@ -24,7 +24,7 @@ Public Class Game
             'Load game resources here
             LoadSounds()
             LoadFonts()
-            LoadImages()
+            'LoadImages()
 
             ' Create scenes
             'Dim _titleHandle As Integer = SetCurrentScene(New TitleScene)
@@ -53,7 +53,7 @@ Public Class Game
         ' Assuming _titleHandle is accessible here; if not, it should be stored as a class member
         ' Framework_DestroyScene(_titleHandle)
         UnloadFonts()
-        UnloadImages()
+        'UnloadImages()
         UnloadSounds()
         Framework_Shutdown()
     End Sub
