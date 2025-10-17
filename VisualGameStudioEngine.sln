@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.14.36401.2 d17.14
+VisualStudioVersion = 17.14.36401.2
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "VisualGameStudioEngine", "VisualGameStudioEngine\VisualGameStudioEngine.vcxproj", "{90E6C614-277C-4EA6-9625-880CBEAD970C}"
 EndProject
@@ -11,6 +11,10 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CPPengineTest", "CPPengineT
 	EndProjectSection
 EndProject
 Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "TestVbDLL", "TestVbDLL\TestVbDLL.vbproj", "{058371E4-2179-49B5-BD68-298F4B74E37D}"
+EndProject
+Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "RaylibWrapper", "RaylibWrapper\RaylibWrapper.vbproj", "{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}"
+EndProject
+Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "VisualGameStudio", "VisualGameStudio\VisualGameStudio.vbproj", "{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -58,6 +62,30 @@ Global
 		{058371E4-2179-49B5-BD68-298F4B74E37D}.Release|x64.Build.0 = Release|Any CPU
 		{058371E4-2179-49B5-BD68-298F4B74E37D}.Release|x86.ActiveCfg = Release|Any CPU
 		{058371E4-2179-49B5-BD68-298F4B74E37D}.Release|x86.Build.0 = Release|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Debug|x64.Build.0 = Debug|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Debug|x86.Build.0 = Debug|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Release|x64.ActiveCfg = Release|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Release|x64.Build.0 = Release|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Release|x86.ActiveCfg = Release|Any CPU
+		{41CC78DB-63E7-46E8-B0E4-6497EB3F8BAA}.Release|x86.Build.0 = Release|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Debug|x64.Build.0 = Debug|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Debug|x86.Build.0 = Debug|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Release|Any CPU.Build.0 = Release|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Release|x64.ActiveCfg = Release|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Release|x64.Build.0 = Release|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Release|x86.ActiveCfg = Release|Any CPU
+		{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
