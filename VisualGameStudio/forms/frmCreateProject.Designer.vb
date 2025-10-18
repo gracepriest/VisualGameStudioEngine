@@ -26,6 +26,7 @@ Partial Class frmCreateProject
         ListView1 = New ListView()
         Button1 = New Button()
         Button2 = New Button()
+        lblDes = New Label()
         SuspendLayout()
         ' 
         ' ListBox1
@@ -63,12 +64,22 @@ Partial Class frmCreateProject
         Button2.Text = "Cancel"
         Button2.UseVisualStyleBackColor = True
         ' 
+        ' lblDes
+        ' 
+        lblDes.AutoSize = True
+        lblDes.Location = New Point(21, 401)
+        lblDes.Name = "lblDes"
+        lblDes.Size = New Size(41, 15)
+        lblDes.TabIndex = 4
+        lblDes.Text = "Label1"
+        ' 
         ' frmCreateProject
         ' 
         AutoScaleDimensions = New SizeF(7F, 15F)
         AutoScaleMode = AutoScaleMode.Font
         BackColor = SystemColors.ControlLight
         ClientSize = New Size(800, 450)
+        Controls.Add(lblDes)
         Controls.Add(Button2)
         Controls.Add(Button1)
         Controls.Add(ListView1)
@@ -79,10 +90,12 @@ Partial Class frmCreateProject
         Name = "frmCreateProject"
         Text = "New from template"
         ResumeLayout(False)
+        PerformLayout()
     End Sub
 
     Friend WithEvents ListBox1 As ListBox
     Friend WithEvents ListView1 As ListView
     Friend WithEvents Button1 As Button
     Friend WithEvents Button2 As Button
+    Friend WithEvents lblDes As Label
 End Class

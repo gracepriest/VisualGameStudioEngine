@@ -42,4 +42,9 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Models\" />
+    <Folder Include="Source Files\" />
+  </ItemGroup>
+
 </Project>

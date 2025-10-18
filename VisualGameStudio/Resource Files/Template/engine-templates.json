@@ -1,0 +1,64 @@
+[
+    {
+      "id": "Console Application",
+      "name": "Console App",
+      "category": "Console",
+      "manifest": "Console/manifest.json"
+    },
+    
+    {
+      "id": "Web Application",
+      "name": "Web App",
+      "category": "Web",
+      "manifest": "WebApplication/manifest.json"
+    },
+    
+    {
+      "id": "WASM Application",
+      "name": "WASM App",
+      "category": "WASM",
+      "manifest": "WASMApplication/manifest.json"
+    },
+    
+    {
+      "id": "WinForms Application",
+      "name": "WinForms App",
+      "category": "WinForms",
+      "manifest": "WinFormsApplication/manifest.json"
+    },
+
+    {
+      "id": "WPF",
+      "name": "WPF",
+      "category": "WPF",
+      "manifest": "WPF/manifest.json"
+    },
+    
+    {
+      "id": "2D Game",
+      "name": "2D Game",
+      "category": "Game",
+      "manifest": "2DGame/manifest.json"
+    },
+    {
+      "id": "3D Game",
+      "name": "3D Game",
+      "category": "Game",
+      "manifest": "3DGame/manifest.json"
+    },
+   
+    {
+      "id": "Empty Project",
+      "name": "Empty Project",
+      "category": "General",
+      "manifest": "EmptyProject/manifest.json"
+    },
+    
+    {
+      "id": "Mobile Application",
+      "name": "Mobile App",
+      "category": "Mobile",
+      "manifest": "MobileApplication/manifest.json"
+    }
+  ]
+

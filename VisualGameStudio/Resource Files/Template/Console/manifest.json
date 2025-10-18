@@ -1,0 +1,64 @@
+//console manifest file
+{
+  "id": "Console Application",
+  "name": "Console Application",
+  "description": "A basic console application template.",
+  "version": "1.0.0",
+  "languages": [ "C#", "VB", "C++" ],
+  "thumbnail": "console.png",
+  "defaults": {
+    "outputType": "console",
+    "windowHeight": 800,
+    "windowWidth": 600
+
+  },
+  "projectType": "console",
+  "scaffold": {
+    "C#": [
+      {
+        "source": "CSharp/Program.cs",
+        "destination": "Program.cs"
+      },
+      //APP.CONFIG FILE
+      {
+        "source": "CSharp/app.config",
+        "destination": "app.config"
+      },
+
+      {
+        "source": "CSharp/ConsoleApp.csproj",
+        "destination": "{ProjectName}.csproj"
+      }
+    ],
+
+    //VB SCAFFOLDING
+    "VB": [
+      {
+        "source": "VB/Module1.vb",
+        "destination": "Module1.vb"
+      },
+      //APP.CONFIG FILE
+      {
+        "source": "VB/app.config",
+        "destination": "app.config"
+      },
+      {
+        "source": "VB/ConsoleApp.vbproj",
+        "destination": "{ProjectName}.vbproj"
+      }
+    ],
+    //C++ SCAFFOLDING
+    "C++": [
+      {
+        "source": "Cpp/main.cpp",
+        "destination": "main.cpp"
+      },
+      {
+        "source": "Cpp/ConsoleApp.vcxproj",
+        "destination": "{ProjectName}.vcxproj"
+      }
+    ]
+  }
+
+
+}
