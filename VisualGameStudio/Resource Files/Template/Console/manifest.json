@@ -6,13 +6,14 @@
   "version": "1.0.0",
   "languages": [ "C#", "VB", "C++" ],
   "thumbnail": "console.png",
+  "projectType": "console",
   "defaults": {
     "outputType": "console",
     "windowHeight": 800,
     "windowWidth": 600
 
   },
-  "projectType": "console",
+
   "scaffold": {
     "C#": [
       {

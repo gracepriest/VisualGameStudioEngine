@@ -26,6 +26,7 @@ Partial Class frmCreateProject
         ListView1 = New ListView()
         Button1 = New Button()
         Button2 = New Button()
+        lblProjectType = New Label()
         lblDes = New Label()
         SuspendLayout()
         ' 
@@ -52,7 +53,7 @@ Partial Class frmCreateProject
         Button1.Name = "Button1"
         Button1.Size = New Size(79, 31)
         Button1.TabIndex = 2
-        Button1.Text = "Create"
+        Button1.Text = "Select"
         Button1.UseVisualStyleBackColor = True
         ' 
         ' Button2
@@ -64,13 +65,22 @@ Partial Class frmCreateProject
         Button2.Text = "Cancel"
         Button2.UseVisualStyleBackColor = True
         ' 
+        ' lblProjectType
+        ' 
+        lblProjectType.AutoSize = True
+        lblProjectType.Location = New Point(21, 401)
+        lblProjectType.Name = "lblProjectType"
+        lblProjectType.Size = New Size(41, 15)
+        lblProjectType.TabIndex = 4
+        lblProjectType.Text = "Label1"
+        ' 
         ' lblDes
         ' 
         lblDes.AutoSize = True
-        lblDes.Location = New Point(21, 401)
+        lblDes.Location = New Point(156, 401)
         lblDes.Name = "lblDes"
         lblDes.Size = New Size(41, 15)
-        lblDes.TabIndex = 4
+        lblDes.TabIndex = 5
         lblDes.Text = "Label1"
         ' 
         ' frmCreateProject
@@ -80,6 +90,7 @@ Partial Class frmCreateProject
         BackColor = SystemColors.ControlLight
         ClientSize = New Size(800, 450)
         Controls.Add(lblDes)
+        Controls.Add(lblProjectType)
         Controls.Add(Button2)
         Controls.Add(Button1)
         Controls.Add(ListView1)
@@ -97,5 +108,6 @@ Partial Class frmCreateProject
     Friend WithEvents ListView1 As ListView
     Friend WithEvents Button1 As Button
     Friend WithEvents Button2 As Button
+    Friend WithEvents lblProjectType As Label
     Friend WithEvents lblDes As Label
 End Class
