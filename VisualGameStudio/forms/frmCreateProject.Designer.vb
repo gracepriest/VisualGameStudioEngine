@@ -22,30 +22,31 @@ Partial Class frmCreateProject
     'Do not modify it using the code editor.
     <System.Diagnostics.DebuggerStepThrough()> _
     Private Sub InitializeComponent()
-        ListBox1 = New ListBox()
-        ListView1 = New ListView()
+        lstProjectType = New ListBox()
+        lstView = New ListView()
         Button1 = New Button()
         Button2 = New Button()
         lblProjectType = New Label()
         lblDes = New Label()
+        SaveFileDialog1 = New SaveFileDialog()
         SuspendLayout()
         ' 
-        ' ListBox1
+        ' lstProjectType
         ' 
-        ListBox1.FormattingEnabled = True
-        ListBox1.ItemHeight = 15
-        ListBox1.Location = New Point(5, 12)
-        ListBox1.Name = "ListBox1"
-        ListBox1.Size = New Size(121, 364)
-        ListBox1.TabIndex = 0
+        lstProjectType.FormattingEnabled = True
+        lstProjectType.ItemHeight = 15
+        lstProjectType.Location = New Point(5, 12)
+        lstProjectType.Name = "lstProjectType"
+        lstProjectType.Size = New Size(121, 364)
+        lstProjectType.TabIndex = 0
         ' 
-        ' ListView1
+        ' lstView
         ' 
-        ListView1.Location = New Point(134, 12)
-        ListView1.Name = "ListView1"
-        ListView1.Size = New Size(533, 362)
-        ListView1.TabIndex = 1
-        ListView1.UseCompatibleStateImageBehavior = False
+        lstView.Location = New Point(132, 12)
+        lstView.Name = "lstView"
+        lstView.Size = New Size(533, 362)
+        lstView.TabIndex = 1
+        lstView.UseCompatibleStateImageBehavior = False
         ' 
         ' Button1
         ' 
@@ -83,6 +84,9 @@ Partial Class frmCreateProject
         lblDes.TabIndex = 5
         lblDes.Text = "Label1"
         ' 
+        ' SaveFileDialog1
+        ' 
+        ' 
         ' frmCreateProject
         ' 
         AutoScaleDimensions = New SizeF(7F, 15F)
@@ -93,8 +97,8 @@ Partial Class frmCreateProject
         Controls.Add(lblProjectType)
         Controls.Add(Button2)
         Controls.Add(Button1)
-        Controls.Add(ListView1)
-        Controls.Add(ListBox1)
+        Controls.Add(lstView)
+        Controls.Add(lstProjectType)
         FormBorderStyle = FormBorderStyle.FixedDialog
         MaximizeBox = False
         MinimizeBox = False
@@ -104,10 +108,11 @@ Partial Class frmCreateProject
         PerformLayout()
     End Sub
 
-    Friend WithEvents ListBox1 As ListBox
-    Friend WithEvents ListView1 As ListView
+    Friend WithEvents lstProjectType As ListBox
+    Friend WithEvents lstView As ListView
     Friend WithEvents Button1 As Button
     Friend WithEvents Button2 As Button
     Friend WithEvents lblProjectType As Label
     Friend WithEvents lblDes As Label
+    Friend WithEvents SaveFileDialog1 As SaveFileDialog
 End Class

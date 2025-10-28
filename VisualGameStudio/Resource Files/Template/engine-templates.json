@@ -10,7 +10,7 @@
       "id": "Web Application",
       "name": "Web App",
       "category": "Web",
-      "manifest": "WebApplication/manifest.json"
+      "manifest": "Web/manifest.json"
     },
     
     {

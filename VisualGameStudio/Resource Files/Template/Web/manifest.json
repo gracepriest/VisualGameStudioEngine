@@ -1,0 +1,44 @@
+[
+  {
+    "Id": 1,
+    "Name": "Web Application",
+    "Description": "A basic web application template with HTML, CSS, and JavaScript scaffolding.",
+    "Version": "1.0.0",
+    "Languages": [ "C#", "VB", "JavaScript" ],
+    "Thumbnail": "console.png",
+    "ProjectType": "web",
+    "Defaults": {
+      "outputType": "web",
+      "windowHeight": 900,
+      "windowWidth": 1440
+    },
+    "Scaffold": {
+      "HTML": [
+        {
+          "source": "HTML/index.html",
+          "destination": "index.html"
+        },
+        {
+          "source": "HTML/about.html",
+          "destination": "about.html"
+        }
+      ],
+      "CSS": [
+        {
+          "source": "CSS/style.css",
+          "destination": "style.css"
+        }
+      ],
+      "JavaScript": [
+        {
+          "source": "JS/main.js",
+          "destination": "main.js"
+        },
+        {
+          "source": "JS/app.js",
+          "destination": "app.js"
+        }
+      ]
+    }
+  }
+]

@@ -1,65 +1,116 @@
-//console manifest file
-{
-  "id": "Console Application",
-  "name": "Console Application",
-  "description": "A basic console application template.",
-  "version": "1.0.0",
-  "languages": [ "C#", "VB", "C++" ],
-  "thumbnail": "console.png",
-  "projectType": "console",
-  "defaults": {
-    "outputType": "console",
-    "windowHeight": 800,
-    "windowWidth": 600
-
+[
+  {
+    "Id": 0,
+    "Name": "Console Application",
+    "Description": "A basic console application template.",
+    "Version": "1.0.0",
+    "Languages": [ "C#", "VB", "C++" ],
+    "Thumbnail": "console.png",
+    "ProjectType": "console",
+    "Defaults": {
+      "outputType": "console",
+      "windowHeight": 800,
+      "windowWidth": 600
+    },
+    "Scaffold": {
+      "C#": [
+        {
+          "source": "CSharp/Program.cs",
+          "destination": "Program.cs"
+        },
+        {
+          "source": "CSharp/app.config",
+          "destination": "app.config"
+        },
+        {
+          "source": "CSharp/ConsoleApp.csproj",
+          "destination": "{ProjectName}.csproj"
+        }
+      ],
+      "VB": [
+        {
+          "source": "VB/Module1.vb",
+          "destination": "Module1.vb"
+        },
+        {
+          "source": "VB/app.config",
+          "destination": "app.config"
+        },
+        {
+          "source": "VB/ConsoleApp.vbproj",
+          "destination": "{ProjectName}.vbproj"
+        }
+      ],
+      "C++": [
+        {
+          "source": "Cpp/main.cpp",
+          "destination": "main.cpp"
+        },
+        {
+          "source": "Cpp/ConsoleApp.vcxproj",
+          "destination": "{ProjectName}.vcxproj"
+        }
+      ]
+    }
   },
 
-  "scaffold": {
-    "C#": [
-      {
-        "source": "CSharp/Program.cs",
-        "destination": "Program.cs"
-      },
-      //APP.CONFIG FILE
-      {
-        "source": "CSharp/app.config",
-        "destination": "app.config"
-      },
-
-      {
-        "source": "CSharp/ConsoleApp.csproj",
-        "destination": "{ProjectName}.csproj"
-      }
-    ],
-
-    //VB SCAFFOLDING
-    "VB": [
-      {
-        "source": "VB/Module1.vb",
-        "destination": "Module1.vb"
-      },
-      //APP.CONFIG FILE
-      {
-        "source": "VB/app.config",
-        "destination": "app.config"
-      },
-      {
-        "source": "VB/ConsoleApp.vbproj",
-        "destination": "{ProjectName}.vbproj"
-      }
-    ],
-    //C++ SCAFFOLDING
-    "C++": [
-      {
-        "source": "Cpp/main.cpp",
-        "destination": "main.cpp"
-      },
-      {
-        "source": "Cpp/ConsoleApp.vcxproj",
-        "destination": "{ProjectName}.vcxproj"
-      }
-    ]
+  {
+    "id": 0,
+    "name": "Console Game (Raylib)",
+    "description": "A simple Raylib-powered console-style game template.",
+    "version": "1.0.0",
+    "languages": [ "C#", "VB", "C++" ],
+    "thumbnail": "console.png",
+    "projectType": "game",
+    "defaults": {
+      "outputType": "console",
+      "windowHeight": 720,
+      "windowWidth": 1280
+    },
+    "scaffold": {
+      "C#": [
+        {
+          "source": "CSharp/Game.cs",
+          "destination": "Game.cs"
+        },
+        {
+          "source": "CSharp/Program.cs",
+          "destination": "Program.cs"
+        },
+        {
+          "source": "CSharp/RaylibConsoleGame.csproj",
+          "destination": "{ProjectName}.csproj"
+        }
+      ],
+      "VB": [
+        {
+          "source": "VB/Game.vb",
+          "destination": "Game.vb"
+        },
+        {
+          "source": "VB/Module1.vb",
+          "destination": "Module1.vb"
+        },
+        {
+          "source": "VB/RaylibConsoleGame.vbproj",
+          "destination": "{ProjectName}.vbproj"
+        }
+      ],
+      "C++": [
+        {
+          "source": "Cpp/main.cpp",
+          "destination": "main.cpp"
+        },
+        {
+          "source": "Cpp/Game.cpp",
+          "destination": "Game.cpp"
+        },
+        {
+          "source": "Cpp/RaylibConsoleGame.vcxproj",
+          "destination": "{ProjectName}.vcxproj"
+        }
+      ]
+    }
   }
 
-
-}
+]
