@@ -11,7 +11,7 @@ Public Module FrameworkWrapper
     Public Delegate Sub DrawCallback()
 
     ' RaylibWrapper.vb (top of the module)
-    Friend Const ENGINE_DLL As String = "C:\Users\melvi\source\repos\VisualGameStudioEngine\x64\Release\VisualGameStudioEngine.dll"
+    Friend Const ENGINE_DLL As String = "VisualGameStudioEngine.dll"
 
     ' Window management
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -491,6 +491,86 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown() : End Sub
 
+    ' ========= ECS v1 – entities & components =========
+
+    ' Entities
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_CreateEntity() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_DestroyEntity(entity As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_IsAlive(entity As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_ClearAll()
+    End Sub
+
+    ' Transform2D
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_AddTransform2D(entity As Integer, x As Single, y As Single,
+                                            rotation As Single, sx As Single, sy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_HasTransform2D(entity As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetTransformPosition(entity As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetTransformRotation(entity As Integer, rotation As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetTransformScale(entity As Integer, sx As Single, sy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_GetTransformPosition(entity As Integer) As Vector2
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_GetTransformScale(entity As Integer) As Vector2
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_GetTransformRotation(entity As Integer) As Single
+    End Function
+
+    ' Sprite2D
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_AddSprite2D(entity As Integer, textureHandle As Integer,
+                                         srcX As Single, srcY As Single, srcW As Single, srcH As Single,
+                                         r As Byte, g As Byte, b As Byte, a As Byte,
+                                         layer As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_HasSprite2D(entity As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetSpriteTint(entity As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetSpriteVisible(entity As Integer, visible As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetSpriteLayer(entity As Integer, layer As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_DrawSprites()
+    End Sub
 
 
 
@@ -780,6 +860,7 @@ Public Module Utiliy
         Public Property frames As Dictionary(Of String, SpriteFrame) = New Dictionary(Of String, SpriteFrame)(StringComparer.OrdinalIgnoreCase)
         Public Sub New(tex As TextureHandle)
             texture = tex
+            frames = New Dictionary(Of String, SpriteFrame)(StringComparer.OrdinalIgnoreCase)
         End Sub
         'add a frame
         Public Sub Add(name As String, rect As Rectangle, Optional offset As Vector2 = Nothing, Optional pivot As Vector2 = Nothing)
@@ -964,7 +1045,11 @@ Public Module UtiliyClasses
         Public FrameW As Integer, FrameH As Integer, Columns As Integer, Count As Integer, Fps As Single
         Private _time As Single, _index As Integer
         Public Sub New(w As Integer, h As Integer, cols As Integer, count As Integer, fps As Single)
-            FrameW = w : FrameH = h : Columns = cols : count = count : fps = fps
+            FrameW = w
+            FrameH = h
+            Columns = cols
+            Me.Count = count
+            Me.Fps = fps
         End Sub
         Public Sub Update(dt As Single)
             _time += dt

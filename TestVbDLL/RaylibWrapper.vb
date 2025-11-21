@@ -524,5 +524,96 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_SceneTick()
     End Sub
+    ' ===== ECS v1 – Entities & Components =====
+
+    ' Entities
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_CreateEntity() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_DestroyEntity(entity As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_IsAlive(entity As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_ClearAll()
+    End Sub
+
+    ' Transform2D
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_AddTransform2D(entity As Integer,
+                                            x As Single, y As Single,
+                                            rotation As Single,
+                                            sx As Single, sy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_HasTransform2D(entity As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetTransformPosition(entity As Integer,
+                                                  x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetTransformRotation(entity As Integer,
+                                                  rotation As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetTransformScale(entity As Integer,
+                                               sx As Single, sy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_GetTransformPosition(entity As Integer) As Vector2
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_GetTransformScale(entity As Integer) As Vector2
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_GetTransformRotation(entity As Integer) As Single
+    End Function
+
+    ' Sprite2D
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_AddSprite2D(entity As Integer,
+                                         textureHandle As Integer,
+                                         srcX As Single, srcY As Single,
+                                         srcW As Single, srcH As Single,
+                                         r As Byte, g As Byte, b As Byte, a As Byte,
+                                         layer As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Ecs_HasSprite2D(entity As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetSpriteTint(entity As Integer,
+                                           r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetSpriteVisible(entity As Integer,
+                                              visible As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetSpriteLayer(entity As Integer,
+                                            layer As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_DrawSprites()
+    End Sub
+
 
 End Module

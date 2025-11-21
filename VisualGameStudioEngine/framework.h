@@ -234,6 +234,42 @@ extern "C" {
     __declspec(dllexport) bool  Framework_SceneHas();
     __declspec(dllexport) void  Framework_SceneTick();
 
+    // ===============
+// ECS v1 – Entities & Components
+// ===============
+
+// Entities
+    __declspec(dllexport) int   Framework_Ecs_CreateEntity();
+    __declspec(dllexport) void  Framework_Ecs_DestroyEntity(int entity);
+    __declspec(dllexport) bool  Framework_Ecs_IsAlive(int entity);
+    __declspec(dllexport) void  Framework_Ecs_ClearAll();
+
+    // Transform2D component
+    __declspec(dllexport) void   Framework_Ecs_AddTransform2D(int entity, float x, float y,
+        float rotation, float sx, float sy);
+    __declspec(dllexport) bool   Framework_Ecs_HasTransform2D(int entity);
+    __declspec(dllexport) void   Framework_Ecs_SetTransformPosition(int entity, float x, float y);
+    __declspec(dllexport) void   Framework_Ecs_SetTransformRotation(int entity, float rotation);
+    __declspec(dllexport) void   Framework_Ecs_SetTransformScale(int entity, float sx, float sy);
+    __declspec(dllexport) Vector2 Framework_Ecs_GetTransformPosition(int entity);
+    __declspec(dllexport) Vector2 Framework_Ecs_GetTransformScale(int entity);
+    __declspec(dllexport) float   Framework_Ecs_GetTransformRotation(int entity);
+
+    // Sprite2D component (2D render)
+    __declspec(dllexport) void  Framework_Ecs_AddSprite2D(int entity, int textureHandle,
+        float srcX, float srcY, float srcW, float srcH,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a,
+        int layer);
+    __declspec(dllexport) bool  Framework_Ecs_HasSprite2D(int entity);
+    __declspec(dllexport) void  Framework_Ecs_SetSpriteTint(int entity,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Ecs_SetSpriteVisible(int entity, bool visible);
+    __declspec(dllexport) void  Framework_Ecs_SetSpriteLayer(int entity, int layer);
+
+    // Render system
+    __declspec(dllexport) void  Framework_Ecs_DrawSprites();
+
+
     // ========
     // Cleanup
     // ========
