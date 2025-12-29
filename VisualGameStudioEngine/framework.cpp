@@ -296,6 +296,102 @@ namespace {
         bool enabled = true;
     };
 
+    // ========================================================================
+    // TILESET (shared resource)
+    // ========================================================================
+    struct Tileset {
+        int textureHandle = 0;
+        int tileWidth = 16;
+        int tileHeight = 16;
+        int columns = 1;
+        bool valid = false;
+    };
+
+    std::unordered_map<int, Tileset> g_tilesets;
+    int g_nextTilesetHandle = 1;
+
+    // ========================================================================
+    // TILEMAP COMPONENT
+    // ========================================================================
+    struct TilemapComponent {
+        int tilesetHandle = 0;
+        int mapWidth = 0;
+        int mapHeight = 0;
+        std::vector<int> tiles;  // 2D grid stored as 1D, -1 = empty
+        std::unordered_set<int> solidTiles;  // Which tile indices are solid
+    };
+
+    // ========================================================================
+    // ANIMATION CLIP (shared resource)
+    // ========================================================================
+    struct AnimFrame {
+        Rectangle source{0, 0, 0, 0};
+        float duration = 0.1f;  // seconds
+    };
+
+    struct AnimClip {
+        std::string name;
+        std::vector<AnimFrame> frames;
+        int loopMode = ANIM_LOOP_REPEAT;
+        bool valid = false;
+    };
+
+    std::unordered_map<int, AnimClip> g_animClips;
+    int g_nextAnimClipHandle = 1;
+
+    // ========================================================================
+    // ANIMATOR COMPONENT
+    // ========================================================================
+    struct AnimatorComponent {
+        int clipHandle = 0;
+        int currentFrame = 0;
+        float timer = 0.0f;
+        float speed = 1.0f;
+        bool playing = false;
+        bool pingpongReverse = false;  // For pingpong mode
+    };
+
+    // ========================================================================
+    // PARTICLE EMITTER COMPONENT
+    // ========================================================================
+    struct Particle {
+        float x, y;
+        float vx, vy;
+        float life;       // Remaining life
+        float maxLife;    // Initial life (for lerping)
+        float size;
+        bool active = false;
+    };
+
+    struct ParticleEmitterComponent {
+        int textureHandle = 0;
+        Rectangle sourceRect{0, 0, 0, 0};
+
+        // Emission settings
+        float emissionRate = 10.0f;  // particles per second
+        float emissionAccum = 0.0f;  // accumulator for spawning
+        int maxParticles = 100;
+
+        // Particle properties
+        float lifetimeMin = 1.0f;
+        float lifetimeMax = 2.0f;
+        float velocityMinX = -50.0f, velocityMinY = -100.0f;
+        float velocityMaxX = 50.0f, velocityMaxY = -50.0f;
+        Color colorStart{255, 255, 255, 255};
+        Color colorEnd{255, 255, 255, 0};
+        float sizeStart = 8.0f;
+        float sizeEnd = 2.0f;
+        float gravityX = 0.0f;
+        float gravityY = 100.0f;
+        float spreadAngle = 45.0f;  // Cone angle in degrees
+        float directionX = 0.0f;
+        float directionY = -1.0f;   // Default: upward
+
+        // State
+        bool active = false;
+        std::vector<Particle> particles;
+    };
+
     // Entity storage
     int g_nextEntityId = 1;
     std::unordered_set<Entity> g_entities;
@@ -307,6 +403,9 @@ namespace {
     std::unordered_map<Entity, Velocity2D> g_velocity2D;
     std::unordered_map<Entity, BoxCollider2D> g_boxCollider2D;
     std::unordered_map<Entity, EnabledComponent> g_enabled;
+    std::unordered_map<Entity, TilemapComponent> g_tilemap;
+    std::unordered_map<Entity, AnimatorComponent> g_animator;
+    std::unordered_map<Entity, ParticleEmitterComponent> g_particleEmitter;
 
     // Helpers
     bool EcsIsAlive(Entity e) {
@@ -2495,6 +2594,624 @@ extern "C" {
         }
 
         return true;
+    }
+
+    // ========================================================================
+    // TILEMAP SYSTEM
+    // ========================================================================
+    int Framework_Tileset_Create(int textureHandle, int tileWidth, int tileHeight, int columns) {
+        Tileset ts;
+        ts.textureHandle = textureHandle;
+        ts.tileWidth = tileWidth > 0 ? tileWidth : 16;
+        ts.tileHeight = tileHeight > 0 ? tileHeight : 16;
+        ts.columns = columns > 0 ? columns : 1;
+        ts.valid = true;
+        int h = g_nextTilesetHandle++;
+        g_tilesets[h] = ts;
+        return h;
+    }
+
+    void Framework_Tileset_Destroy(int tilesetHandle) {
+        g_tilesets.erase(tilesetHandle);
+    }
+
+    bool Framework_Tileset_IsValid(int tilesetHandle) {
+        auto it = g_tilesets.find(tilesetHandle);
+        return it != g_tilesets.end() && it->second.valid;
+    }
+
+    int Framework_Tileset_GetTileWidth(int tilesetHandle) {
+        auto it = g_tilesets.find(tilesetHandle);
+        return (it != g_tilesets.end()) ? it->second.tileWidth : 0;
+    }
+
+    int Framework_Tileset_GetTileHeight(int tilesetHandle) {
+        auto it = g_tilesets.find(tilesetHandle);
+        return (it != g_tilesets.end()) ? it->second.tileHeight : 0;
+    }
+
+    void Framework_Ecs_AddTilemap(int entity, int tilesetHandle, int mapWidth, int mapHeight) {
+        if (!EcsIsAlive(entity)) return;
+        TilemapComponent tm;
+        tm.tilesetHandle = tilesetHandle;
+        tm.mapWidth = mapWidth > 0 ? mapWidth : 1;
+        tm.mapHeight = mapHeight > 0 ? mapHeight : 1;
+        tm.tiles.resize(tm.mapWidth * tm.mapHeight, -1);
+        g_tilemap[entity] = tm;
+    }
+
+    bool Framework_Ecs_HasTilemap(int entity) {
+        return g_tilemap.find(entity) != g_tilemap.end();
+    }
+
+    void Framework_Ecs_RemoveTilemap(int entity) {
+        g_tilemap.erase(entity);
+    }
+
+    void Framework_Ecs_SetTile(int entity, int x, int y, int tileIndex) {
+        auto it = g_tilemap.find(entity);
+        if (it == g_tilemap.end()) return;
+        TilemapComponent& tm = it->second;
+        if (x < 0 || x >= tm.mapWidth || y < 0 || y >= tm.mapHeight) return;
+        tm.tiles[y * tm.mapWidth + x] = tileIndex;
+    }
+
+    int Framework_Ecs_GetTile(int entity, int x, int y) {
+        auto it = g_tilemap.find(entity);
+        if (it == g_tilemap.end()) return -1;
+        const TilemapComponent& tm = it->second;
+        if (x < 0 || x >= tm.mapWidth || y < 0 || y >= tm.mapHeight) return -1;
+        return tm.tiles[y * tm.mapWidth + x];
+    }
+
+    void Framework_Ecs_FillTiles(int entity, int tileIndex) {
+        auto it = g_tilemap.find(entity);
+        if (it == g_tilemap.end()) return;
+        std::fill(it->second.tiles.begin(), it->second.tiles.end(), tileIndex);
+    }
+
+    void Framework_Ecs_SetTileCollision(int entity, int tileIndex, bool solid) {
+        auto it = g_tilemap.find(entity);
+        if (it == g_tilemap.end()) return;
+        if (solid) {
+            it->second.solidTiles.insert(tileIndex);
+        } else {
+            it->second.solidTiles.erase(tileIndex);
+        }
+    }
+
+    bool Framework_Ecs_GetTileCollision(int entity, int tileIndex) {
+        auto it = g_tilemap.find(entity);
+        if (it == g_tilemap.end()) return false;
+        return it->second.solidTiles.count(tileIndex) > 0;
+    }
+
+    int Framework_Ecs_GetTilemapWidth(int entity) {
+        auto it = g_tilemap.find(entity);
+        return (it != g_tilemap.end()) ? it->second.mapWidth : 0;
+    }
+
+    int Framework_Ecs_GetTilemapHeight(int entity) {
+        auto it = g_tilemap.find(entity);
+        return (it != g_tilemap.end()) ? it->second.mapHeight : 0;
+    }
+
+    void Framework_Ecs_DrawTilemap(int entity) {
+        auto tmIt = g_tilemap.find(entity);
+        if (tmIt == g_tilemap.end()) return;
+
+        const TilemapComponent& tm = tmIt->second;
+        auto tsIt = g_tilesets.find(tm.tilesetHandle);
+        if (tsIt == g_tilesets.end() || !tsIt->second.valid) return;
+
+        const Tileset& ts = tsIt->second;
+        auto texIt = g_texByHandle.find(ts.textureHandle);
+        if (texIt == g_texByHandle.end() || !texIt->second.valid) return;
+
+        // Get entity transform for position offset
+        float offsetX = 0, offsetY = 0;
+        auto trIt = g_transform2D.find(entity);
+        if (trIt != g_transform2D.end()) {
+            offsetX = trIt->second.position.x;
+            offsetY = trIt->second.position.y;
+        }
+
+        const Texture2D& tex = texIt->second.tex;
+
+        for (int y = 0; y < tm.mapHeight; y++) {
+            for (int x = 0; x < tm.mapWidth; x++) {
+                int tileIdx = tm.tiles[y * tm.mapWidth + x];
+                if (tileIdx < 0) continue;
+
+                int srcX = (tileIdx % ts.columns) * ts.tileWidth;
+                int srcY = (tileIdx / ts.columns) * ts.tileHeight;
+
+                Rectangle src = { (float)srcX, (float)srcY, (float)ts.tileWidth, (float)ts.tileHeight };
+                Vector2 pos = { offsetX + x * ts.tileWidth, offsetY + y * ts.tileHeight };
+
+                DrawTextureRec(tex, src, pos, WHITE);
+            }
+        }
+    }
+
+    void Framework_Tilemaps_Draw() {
+        for (auto& kv : g_tilemap) {
+            if (!EcsIsAlive(kv.first)) continue;
+            auto enIt = g_enabled.find(kv.first);
+            if (enIt != g_enabled.end() && !enIt->second.enabled) continue;
+            Framework_Ecs_DrawTilemap(kv.first);
+        }
+    }
+
+    bool Framework_Tilemap_PointSolid(int entity, float worldX, float worldY) {
+        auto tmIt = g_tilemap.find(entity);
+        if (tmIt == g_tilemap.end()) return false;
+
+        const TilemapComponent& tm = tmIt->second;
+        auto tsIt = g_tilesets.find(tm.tilesetHandle);
+        if (tsIt == g_tilesets.end()) return false;
+
+        float offsetX = 0, offsetY = 0;
+        auto trIt = g_transform2D.find(entity);
+        if (trIt != g_transform2D.end()) {
+            offsetX = trIt->second.position.x;
+            offsetY = trIt->second.position.y;
+        }
+
+        int tileX = (int)((worldX - offsetX) / tsIt->second.tileWidth);
+        int tileY = (int)((worldY - offsetY) / tsIt->second.tileHeight);
+
+        if (tileX < 0 || tileX >= tm.mapWidth || tileY < 0 || tileY >= tm.mapHeight) return false;
+
+        int tileIdx = tm.tiles[tileY * tm.mapWidth + tileX];
+        return tm.solidTiles.count(tileIdx) > 0;
+    }
+
+    bool Framework_Tilemap_BoxSolid(int entity, float worldX, float worldY, float w, float h) {
+        // Check all four corners and center
+        if (Framework_Tilemap_PointSolid(entity, worldX, worldY)) return true;
+        if (Framework_Tilemap_PointSolid(entity, worldX + w, worldY)) return true;
+        if (Framework_Tilemap_PointSolid(entity, worldX, worldY + h)) return true;
+        if (Framework_Tilemap_PointSolid(entity, worldX + w, worldY + h)) return true;
+        if (Framework_Tilemap_PointSolid(entity, worldX + w/2, worldY + h/2)) return true;
+        return false;
+    }
+
+    // ========================================================================
+    // ANIMATION SYSTEM
+    // ========================================================================
+    int Framework_AnimClip_Create(const char* name, int frameCount) {
+        AnimClip clip;
+        clip.name = name ? name : "";
+        clip.frames.resize(frameCount > 0 ? frameCount : 1);
+        clip.valid = true;
+        int h = g_nextAnimClipHandle++;
+        g_animClips[h] = clip;
+        return h;
+    }
+
+    void Framework_AnimClip_Destroy(int clipHandle) {
+        g_animClips.erase(clipHandle);
+    }
+
+    bool Framework_AnimClip_IsValid(int clipHandle) {
+        auto it = g_animClips.find(clipHandle);
+        return it != g_animClips.end() && it->second.valid;
+    }
+
+    void Framework_AnimClip_SetFrame(int clipHandle, int frameIndex,
+        float srcX, float srcY, float srcW, float srcH, float duration) {
+        auto it = g_animClips.find(clipHandle);
+        if (it == g_animClips.end()) return;
+        if (frameIndex < 0 || frameIndex >= (int)it->second.frames.size()) return;
+        AnimFrame& f = it->second.frames[frameIndex];
+        f.source = { srcX, srcY, srcW, srcH };
+        f.duration = duration > 0 ? duration : 0.1f;
+    }
+
+    void Framework_AnimClip_SetLoopMode(int clipHandle, int loopMode) {
+        auto it = g_animClips.find(clipHandle);
+        if (it == g_animClips.end()) return;
+        it->second.loopMode = loopMode;
+    }
+
+    int Framework_AnimClip_GetFrameCount(int clipHandle) {
+        auto it = g_animClips.find(clipHandle);
+        return (it != g_animClips.end()) ? (int)it->second.frames.size() : 0;
+    }
+
+    float Framework_AnimClip_GetTotalDuration(int clipHandle) {
+        auto it = g_animClips.find(clipHandle);
+        if (it == g_animClips.end()) return 0.0f;
+        float total = 0.0f;
+        for (const auto& f : it->second.frames) {
+            total += f.duration;
+        }
+        return total;
+    }
+
+    int Framework_AnimClip_FindByName(const char* name) {
+        if (!name) return -1;
+        for (const auto& kv : g_animClips) {
+            if (kv.second.name == name) return kv.first;
+        }
+        return -1;
+    }
+
+    void Framework_Ecs_AddAnimator(int entity) {
+        if (!EcsIsAlive(entity)) return;
+        g_animator[entity] = AnimatorComponent();
+    }
+
+    bool Framework_Ecs_HasAnimator(int entity) {
+        return g_animator.find(entity) != g_animator.end();
+    }
+
+    void Framework_Ecs_RemoveAnimator(int entity) {
+        g_animator.erase(entity);
+    }
+
+    void Framework_Ecs_SetAnimatorClip(int entity, int clipHandle) {
+        auto it = g_animator.find(entity);
+        if (it == g_animator.end()) return;
+        it->second.clipHandle = clipHandle;
+        it->second.currentFrame = 0;
+        it->second.timer = 0.0f;
+        it->second.pingpongReverse = false;
+    }
+
+    int Framework_Ecs_GetAnimatorClip(int entity) {
+        auto it = g_animator.find(entity);
+        return (it != g_animator.end()) ? it->second.clipHandle : -1;
+    }
+
+    void Framework_Ecs_AnimatorPlay(int entity) {
+        auto it = g_animator.find(entity);
+        if (it == g_animator.end()) return;
+        it->second.playing = true;
+    }
+
+    void Framework_Ecs_AnimatorPause(int entity) {
+        auto it = g_animator.find(entity);
+        if (it == g_animator.end()) return;
+        it->second.playing = false;
+    }
+
+    void Framework_Ecs_AnimatorStop(int entity) {
+        auto it = g_animator.find(entity);
+        if (it == g_animator.end()) return;
+        it->second.playing = false;
+        it->second.currentFrame = 0;
+        it->second.timer = 0.0f;
+        it->second.pingpongReverse = false;
+    }
+
+    void Framework_Ecs_AnimatorSetSpeed(int entity, float speed) {
+        auto it = g_animator.find(entity);
+        if (it == g_animator.end()) return;
+        it->second.speed = speed;
+    }
+
+    bool Framework_Ecs_AnimatorIsPlaying(int entity) {
+        auto it = g_animator.find(entity);
+        return (it != g_animator.end()) ? it->second.playing : false;
+    }
+
+    int Framework_Ecs_AnimatorGetFrame(int entity) {
+        auto it = g_animator.find(entity);
+        return (it != g_animator.end()) ? it->second.currentFrame : 0;
+    }
+
+    void Framework_Ecs_AnimatorSetFrame(int entity, int frameIndex) {
+        auto it = g_animator.find(entity);
+        if (it == g_animator.end()) return;
+        it->second.currentFrame = frameIndex;
+        it->second.timer = 0.0f;
+    }
+
+    void Framework_Animators_Update(float dt) {
+        for (auto& kv : g_animator) {
+            if (!EcsIsAlive(kv.first)) continue;
+            AnimatorComponent& anim = kv.second;
+            if (!anim.playing) continue;
+
+            auto clipIt = g_animClips.find(anim.clipHandle);
+            if (clipIt == g_animClips.end() || clipIt->second.frames.empty()) continue;
+
+            const AnimClip& clip = clipIt->second;
+            const AnimFrame& frame = clip.frames[anim.currentFrame];
+
+            anim.timer += dt * anim.speed;
+
+            if (anim.timer >= frame.duration) {
+                anim.timer -= frame.duration;
+
+                int frameCount = (int)clip.frames.size();
+                if (clip.loopMode == ANIM_LOOP_PINGPONG) {
+                    if (anim.pingpongReverse) {
+                        anim.currentFrame--;
+                        if (anim.currentFrame <= 0) {
+                            anim.currentFrame = 0;
+                            anim.pingpongReverse = false;
+                        }
+                    } else {
+                        anim.currentFrame++;
+                        if (anim.currentFrame >= frameCount - 1) {
+                            anim.currentFrame = frameCount - 1;
+                            anim.pingpongReverse = true;
+                        }
+                    }
+                } else {
+                    anim.currentFrame++;
+                    if (anim.currentFrame >= frameCount) {
+                        if (clip.loopMode == ANIM_LOOP_REPEAT) {
+                            anim.currentFrame = 0;
+                        } else {
+                            anim.currentFrame = frameCount - 1;
+                            anim.playing = false;
+                        }
+                    }
+                }
+            }
+
+            // Update sprite source rect if entity has a sprite
+            auto sprIt = g_sprite2D.find(kv.first);
+            if (sprIt != g_sprite2D.end()) {
+                sprIt->second.source = clip.frames[anim.currentFrame].source;
+            }
+        }
+    }
+
+    // ========================================================================
+    // PARTICLE SYSTEM
+    // ========================================================================
+    namespace {
+        float RandFloat(float minVal, float maxVal) {
+            return minVal + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / (maxVal - minVal)));
+        }
+
+        unsigned char LerpByte(unsigned char a, unsigned char b, float t) {
+            return (unsigned char)(a + (b - a) * t);
+        }
+    }
+
+    void Framework_Ecs_AddParticleEmitter(int entity, int textureHandle) {
+        if (!EcsIsAlive(entity)) return;
+        ParticleEmitterComponent pe;
+        pe.textureHandle = textureHandle;
+        pe.particles.resize(pe.maxParticles);
+        g_particleEmitter[entity] = pe;
+    }
+
+    bool Framework_Ecs_HasParticleEmitter(int entity) {
+        return g_particleEmitter.find(entity) != g_particleEmitter.end();
+    }
+
+    void Framework_Ecs_RemoveParticleEmitter(int entity) {
+        g_particleEmitter.erase(entity);
+    }
+
+    void Framework_Ecs_SetEmitterRate(int entity, float particlesPerSecond) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.emissionRate = particlesPerSecond;
+    }
+
+    void Framework_Ecs_SetEmitterLifetime(int entity, float minLife, float maxLife) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.lifetimeMin = minLife;
+        it->second.lifetimeMax = maxLife;
+    }
+
+    void Framework_Ecs_SetEmitterVelocity(int entity, float minVx, float minVy, float maxVx, float maxVy) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.velocityMinX = minVx;
+        it->second.velocityMinY = minVy;
+        it->second.velocityMaxX = maxVx;
+        it->second.velocityMaxY = maxVy;
+    }
+
+    void Framework_Ecs_SetEmitterColorStart(int entity, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.colorStart = { r, g, b, a };
+    }
+
+    void Framework_Ecs_SetEmitterColorEnd(int entity, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.colorEnd = { r, g, b, a };
+    }
+
+    void Framework_Ecs_SetEmitterSize(int entity, float startSize, float endSize) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.sizeStart = startSize;
+        it->second.sizeEnd = endSize;
+    }
+
+    void Framework_Ecs_SetEmitterGravity(int entity, float gx, float gy) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.gravityX = gx;
+        it->second.gravityY = gy;
+    }
+
+    void Framework_Ecs_SetEmitterSpread(int entity, float angleDegrees) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.spreadAngle = angleDegrees;
+    }
+
+    void Framework_Ecs_SetEmitterDirection(int entity, float dirX, float dirY) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.directionX = dirX;
+        it->second.directionY = dirY;
+    }
+
+    void Framework_Ecs_SetEmitterMaxParticles(int entity, int maxParticles) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.maxParticles = maxParticles > 0 ? maxParticles : 1;
+        it->second.particles.resize(it->second.maxParticles);
+    }
+
+    void Framework_Ecs_SetEmitterSourceRect(int entity, float srcX, float srcY, float srcW, float srcH) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.sourceRect = { srcX, srcY, srcW, srcH };
+    }
+
+    void Framework_Ecs_EmitterStart(int entity) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.active = true;
+    }
+
+    void Framework_Ecs_EmitterStop(int entity) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.active = false;
+    }
+
+    void Framework_Ecs_EmitterBurst(int entity, int count) {
+        auto peIt = g_particleEmitter.find(entity);
+        if (peIt == g_particleEmitter.end()) return;
+
+        ParticleEmitterComponent& pe = peIt->second;
+
+        // Get emitter world position
+        float emitX = 0, emitY = 0;
+        auto trIt = g_transform2D.find(entity);
+        if (trIt != g_transform2D.end()) {
+            emitX = trIt->second.position.x;
+            emitY = trIt->second.position.y;
+        }
+
+        float baseAngle = atan2f(pe.directionY, pe.directionX);
+        float spreadRad = pe.spreadAngle * DEG2RAD;
+
+        for (int i = 0; i < count; i++) {
+            // Find inactive particle
+            for (auto& p : pe.particles) {
+                if (!p.active) {
+                    p.active = true;
+                    p.x = emitX;
+                    p.y = emitY;
+                    p.maxLife = RandFloat(pe.lifetimeMin, pe.lifetimeMax);
+                    p.life = p.maxLife;
+                    p.size = pe.sizeStart;
+
+                    // Calculate velocity with spread
+                    float angle = baseAngle + RandFloat(-spreadRad/2, spreadRad/2);
+                    float speed = RandFloat(
+                        sqrtf(pe.velocityMinX*pe.velocityMinX + pe.velocityMinY*pe.velocityMinY),
+                        sqrtf(pe.velocityMaxX*pe.velocityMaxX + pe.velocityMaxY*pe.velocityMaxY)
+                    );
+                    p.vx = cosf(angle) * speed;
+                    p.vy = sinf(angle) * speed;
+                    break;
+                }
+            }
+        }
+    }
+
+    bool Framework_Ecs_EmitterIsActive(int entity) {
+        auto it = g_particleEmitter.find(entity);
+        return (it != g_particleEmitter.end()) ? it->second.active : false;
+    }
+
+    int Framework_Ecs_EmitterGetParticleCount(int entity) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return 0;
+        int count = 0;
+        for (const auto& p : it->second.particles) {
+            if (p.active) count++;
+        }
+        return count;
+    }
+
+    void Framework_Ecs_EmitterClear(int entity) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        for (auto& p : it->second.particles) {
+            p.active = false;
+        }
+    }
+
+    void Framework_Particles_Update(float dt) {
+        for (auto& kv : g_particleEmitter) {
+            if (!EcsIsAlive(kv.first)) continue;
+            ParticleEmitterComponent& pe = kv.second;
+
+            // Spawn new particles if active
+            if (pe.active && pe.emissionRate > 0) {
+                pe.emissionAccum += dt * pe.emissionRate;
+                while (pe.emissionAccum >= 1.0f) {
+                    pe.emissionAccum -= 1.0f;
+                    Framework_Ecs_EmitterBurst(kv.first, 1);
+                }
+            }
+
+            // Update existing particles
+            for (auto& p : pe.particles) {
+                if (!p.active) continue;
+
+                p.life -= dt;
+                if (p.life <= 0) {
+                    p.active = false;
+                    continue;
+                }
+
+                // Apply velocity and gravity
+                p.vx += pe.gravityX * dt;
+                p.vy += pe.gravityY * dt;
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+
+                // Interpolate size
+                float t = 1.0f - (p.life / p.maxLife);
+                p.size = pe.sizeStart + (pe.sizeEnd - pe.sizeStart) * t;
+            }
+        }
+    }
+
+    void Framework_Particles_Draw() {
+        for (auto& kv : g_particleEmitter) {
+            if (!EcsIsAlive(kv.first)) continue;
+            ParticleEmitterComponent& pe = kv.second;
+
+            // Get texture if available
+            Texture2D* tex = nullptr;
+            auto texIt = g_texByHandle.find(pe.textureHandle);
+            if (texIt != g_texByHandle.end() && texIt->second.valid) {
+                tex = &texIt->second.tex;
+            }
+
+            for (const auto& p : pe.particles) {
+                if (!p.active) continue;
+
+                // Calculate color
+                float t = 1.0f - (p.life / p.maxLife);
+                Color c;
+                c.r = LerpByte(pe.colorStart.r, pe.colorEnd.r, t);
+                c.g = LerpByte(pe.colorStart.g, pe.colorEnd.g, t);
+                c.b = LerpByte(pe.colorStart.b, pe.colorEnd.b, t);
+                c.a = LerpByte(pe.colorStart.a, pe.colorEnd.a, t);
+
+                if (tex && pe.sourceRect.width > 0 && pe.sourceRect.height > 0) {
+                    // Draw textured particle
+                    Rectangle dest = { p.x - p.size/2, p.y - p.size/2, p.size, p.size };
+                    DrawTexturePro(*tex, pe.sourceRect, dest, {0, 0}, 0, c);
+                } else {
+                    // Draw as circle
+                    DrawCircle((int)p.x, (int)p.y, p.size/2, c);
+                }
+            }
+        }
     }
 
     // ========================================================================

@@ -37,7 +37,19 @@ enum ComponentType {
     COMP_VELOCITY2D = 6,
     COMP_BOXCOLLIDER2D = 7,
     COMP_ENABLED = 8,
+    COMP_TILEMAP = 9,
+    COMP_ANIMATOR = 10,
+    COMP_PARTICLE_EMITTER = 11,
     COMP_COUNT // Keep last
+};
+
+// ============================================================================
+// ANIMATION LOOP MODES
+// ============================================================================
+enum AnimLoopMode {
+    ANIM_LOOP_NONE = 0,      // Play once and stop
+    ANIM_LOOP_REPEAT = 1,    // Loop continuously
+    ANIM_LOOP_PINGPONG = 2   // Play forward then backward
 };
 
 // ============================================================================
@@ -484,6 +496,96 @@ extern "C" {
     __declspec(dllexport) int   Framework_Prefab_Instantiate(int prefabH, int parentEntity, float x, float y);  // Returns root entity
     __declspec(dllexport) void  Framework_Prefab_Unload(int prefabH);
     __declspec(dllexport) bool  Framework_Prefab_SaveEntity(int entity, const char* path);  // Save entity subtree as prefab
+
+    // ========================================================================
+    // TILEMAP SYSTEM
+    // ========================================================================
+    // Tileset management (shared across tilemaps)
+    __declspec(dllexport) int   Framework_Tileset_Create(int textureHandle, int tileWidth, int tileHeight, int columns);
+    __declspec(dllexport) void  Framework_Tileset_Destroy(int tilesetHandle);
+    __declspec(dllexport) bool  Framework_Tileset_IsValid(int tilesetHandle);
+    __declspec(dllexport) int   Framework_Tileset_GetTileWidth(int tilesetHandle);
+    __declspec(dllexport) int   Framework_Tileset_GetTileHeight(int tilesetHandle);
+
+    // Tilemap component
+    __declspec(dllexport) void  Framework_Ecs_AddTilemap(int entity, int tilesetHandle, int mapWidth, int mapHeight);
+    __declspec(dllexport) bool  Framework_Ecs_HasTilemap(int entity);
+    __declspec(dllexport) void  Framework_Ecs_RemoveTilemap(int entity);
+    __declspec(dllexport) void  Framework_Ecs_SetTile(int entity, int x, int y, int tileIndex);  // -1 = empty
+    __declspec(dllexport) int   Framework_Ecs_GetTile(int entity, int x, int y);
+    __declspec(dllexport) void  Framework_Ecs_FillTiles(int entity, int tileIndex);  // Fill all with same tile
+    __declspec(dllexport) void  Framework_Ecs_SetTileCollision(int entity, int tileIndex, bool solid);
+    __declspec(dllexport) bool  Framework_Ecs_GetTileCollision(int entity, int tileIndex);
+    __declspec(dllexport) int   Framework_Ecs_GetTilemapWidth(int entity);   // In tiles
+    __declspec(dllexport) int   Framework_Ecs_GetTilemapHeight(int entity);  // In tiles
+    __declspec(dllexport) void  Framework_Ecs_DrawTilemap(int entity);       // Draw single tilemap
+    __declspec(dllexport) void  Framework_Tilemaps_Draw();                   // Draw all tilemaps
+
+    // Tilemap collision queries
+    __declspec(dllexport) bool  Framework_Tilemap_PointSolid(int entity, float worldX, float worldY);
+    __declspec(dllexport) bool  Framework_Tilemap_BoxSolid(int entity, float worldX, float worldY, float w, float h);
+
+    // ========================================================================
+    // ANIMATION SYSTEM
+    // ========================================================================
+    // Animation clip management (reusable animation data)
+    __declspec(dllexport) int   Framework_AnimClip_Create(const char* name, int frameCount);
+    __declspec(dllexport) void  Framework_AnimClip_Destroy(int clipHandle);
+    __declspec(dllexport) bool  Framework_AnimClip_IsValid(int clipHandle);
+    __declspec(dllexport) void  Framework_AnimClip_SetFrame(int clipHandle, int frameIndex,
+        float srcX, float srcY, float srcW, float srcH, float duration);
+    __declspec(dllexport) void  Framework_AnimClip_SetLoopMode(int clipHandle, int loopMode);  // AnimLoopMode
+    __declspec(dllexport) int   Framework_AnimClip_GetFrameCount(int clipHandle);
+    __declspec(dllexport) float Framework_AnimClip_GetTotalDuration(int clipHandle);
+    __declspec(dllexport) int   Framework_AnimClip_FindByName(const char* name);
+
+    // Animator component
+    __declspec(dllexport) void  Framework_Ecs_AddAnimator(int entity);
+    __declspec(dllexport) bool  Framework_Ecs_HasAnimator(int entity);
+    __declspec(dllexport) void  Framework_Ecs_RemoveAnimator(int entity);
+    __declspec(dllexport) void  Framework_Ecs_SetAnimatorClip(int entity, int clipHandle);
+    __declspec(dllexport) int   Framework_Ecs_GetAnimatorClip(int entity);
+    __declspec(dllexport) void  Framework_Ecs_AnimatorPlay(int entity);
+    __declspec(dllexport) void  Framework_Ecs_AnimatorPause(int entity);
+    __declspec(dllexport) void  Framework_Ecs_AnimatorStop(int entity);  // Stop and reset to frame 0
+    __declspec(dllexport) void  Framework_Ecs_AnimatorSetSpeed(int entity, float speed);  // 1.0 = normal
+    __declspec(dllexport) bool  Framework_Ecs_AnimatorIsPlaying(int entity);
+    __declspec(dllexport) int   Framework_Ecs_AnimatorGetFrame(int entity);
+    __declspec(dllexport) void  Framework_Ecs_AnimatorSetFrame(int entity, int frameIndex);
+    __declspec(dllexport) void  Framework_Animators_Update(float dt);  // Update all animators
+
+    // ========================================================================
+    // PARTICLE SYSTEM
+    // ========================================================================
+    // Particle emitter component
+    __declspec(dllexport) void  Framework_Ecs_AddParticleEmitter(int entity, int textureHandle);
+    __declspec(dllexport) bool  Framework_Ecs_HasParticleEmitter(int entity);
+    __declspec(dllexport) void  Framework_Ecs_RemoveParticleEmitter(int entity);
+
+    // Emitter configuration
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterRate(int entity, float particlesPerSecond);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterLifetime(int entity, float minLife, float maxLife);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterVelocity(int entity, float minVx, float minVy, float maxVx, float maxVy);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterColorStart(int entity, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterColorEnd(int entity, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterSize(int entity, float startSize, float endSize);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterGravity(int entity, float gx, float gy);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterSpread(int entity, float angleDegrees);  // Cone angle
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterDirection(int entity, float dirX, float dirY);  // Base direction
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterMaxParticles(int entity, int maxParticles);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterSourceRect(int entity, float srcX, float srcY, float srcW, float srcH);
+
+    // Emitter control
+    __declspec(dllexport) void  Framework_Ecs_EmitterStart(int entity);
+    __declspec(dllexport) void  Framework_Ecs_EmitterStop(int entity);
+    __declspec(dllexport) void  Framework_Ecs_EmitterBurst(int entity, int count);  // Emit burst of particles
+    __declspec(dllexport) bool  Framework_Ecs_EmitterIsActive(int entity);
+    __declspec(dllexport) int   Framework_Ecs_EmitterGetParticleCount(int entity);  // Current active particles
+    __declspec(dllexport) void  Framework_Ecs_EmitterClear(int entity);  // Kill all particles
+
+    // Particle systems update/draw
+    __declspec(dllexport) void  Framework_Particles_Update(float dt);  // Update all emitters
+    __declspec(dllexport) void  Framework_Particles_Draw();            // Draw all particles
 
     // ========================================================================
     // CLEANUP
