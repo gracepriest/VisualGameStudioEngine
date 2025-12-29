@@ -1,4 +1,5 @@
 // framework.cpp
+// Visual Game Studio Engine - Framework v1.0 / Engine v0.5
 #include "pch.h"
 #include "framework.h"
 
@@ -8,409 +9,59 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
-
-// Forward declarations for functions used before they are defined later
-extern "C" void Framework_UpdateAllMusic();
-extern "C" void Framework_ResourcesShutdown();
-
-// ----------------------------------------------------------------------------
-// Simple handle maps for SFX (as in your original section)
-// ----------------------------------------------------------------------------
-static std::unordered_map<int, Sound> g_sounds;
-static int g_nextSound = 1;
-
-// --- Fixed timestep helpers ---
-static double g_fixedStep = 1.0 / 60.0;
-static double g_accum = 0.0;
-
-extern "C" {
-
-    // =======================
-    // Window / App lifecycle
-    // =======================
-    bool Framework_Initialize(int width, int height, const char* title) {
-        InitWindow(width, height, title);
-        SetTargetFPS(60);
-        return true;
-    }
-
-    static DrawCallback userDrawCallback = nullptr;
-
-    void Framework_SetDrawCallback(DrawCallback callback) {
-        userDrawCallback = callback;
-    }
-
-    void Framework_Update() {
-        BeginDrawing();
-        // ClearBackground(RAYWHITE); // leave color to user
-
-        if (userDrawCallback != nullptr) {
-            userDrawCallback();
-        }
-
-        EndDrawing();
-        Framework_UpdateAllMusic(); // keep music streams alive
-
-        g_accum += (double)GetFrameTime();
-    }
-
-    void Framework_BeginDrawing() { BeginDrawing(); }
-    void Framework_EndDrawing() { EndDrawing(); }
-
-    void Framework_ClearBackground(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color color = { r, g, b, a };
-        ClearBackground(color);
-    }
-
-    bool Framework_ShouldClose() { return WindowShouldClose(); }
-
-    void Framework_Shutdown() {
-        Framework_ResourcesShutdown();
-        CloseWindow();
-    }
-
-    // ========
-    // Timing
-    // ========
-    void   Framework_SetTargetFPS(int fps) { SetTargetFPS(fps); }
-    float  Framework_GetFrameTime() { return GetFrameTime(); }
-    double Framework_GetTime() { return GetTime(); }
-    int    Framework_GetFPS() { return GetFPS(); }
-
-    // ---------------------------
-    // (Optional) Window mgmt helpers
-    // ---------------------------
-    void   Framework_SetWindowTitle(const char* title) { SetWindowTitle(title); }
-    void   Framework_SetWindowIcon(Image image) { SetWindowIcon(image); }
-    void   Framework_SetWindowPosition(int x, int y) { SetWindowPosition(x, y); }
-    void   Framework_SetWindowMonitor(int monitor) { SetWindowMonitor(monitor); }
-    void   Framework_SetWindowMinSize(int width, int height) { SetWindowMinSize(width, height); }
-    void   Framework_SetWindowSize(int width, int height) { SetWindowSize(width, height); }
-    Vector2 Framework_GetScreenToWorld2D(Vector2 p, Camera2D c) { return GetScreenToWorld2D(p, c); }
-
-    // =======
-    // Input
-    // =======
-
-    // Keyboard
-    bool Framework_IsKeyPressed(int key) { return IsKeyPressed(key); }
-    bool Framework_IsKeyPressedRepeat(int key) { return IsKeyPressedRepeat(key); }
-    bool Framework_IsKeyDown(int key) { return IsKeyDown(key); }
-    bool Framework_IsKeyReleased(int key) { return IsKeyReleased(key); }
-    bool Framework_IsKeyUp(int key) { return IsKeyUp(key); }
-    int  Framework_GetKeyPressed() { return GetKeyPressed(); }
-    int  Framework_GetCharPressed() { return GetCharPressed(); }
-    void Framework_SetExitKey(int key) { SetExitKey(key); }
-
-    // Mouse
-    int     Framework_GetMouseX() { return GetMouseX(); }
-    int     Framework_GetMouseY() { return GetMouseY(); }
-    bool    Framework_IsMouseButtonPressed(int b) { return IsMouseButtonPressed(b); }
-    bool    Framework_IsMouseButtonDown(int b) { return IsMouseButtonDown(b); }
-    bool    Framework_IsMouseButtonReleased(int b) { return IsMouseButtonReleased(b); }
-    bool    Framework_IsMouseButtonUp(int b) { return IsMouseButtonUp(b); }
-    Vector2 Framework_GetMousePosition() { return GetMousePosition(); }
-    Vector2 Framework_GetMouseDelta() { return GetMouseDelta(); }
-    void    Framework_SetMousePosition(int x, int y) { SetMousePosition(x, y); }
-    void    Framework_SetMouseOffset(int ox, int oy) { SetMouseOffset(ox, oy); }
-    void    Framework_SetMouseScale(float sx, float sy) { SetMouseScale(sx, sy); }
-    float   Framework_GetMouseWheelMove() { return GetMouseWheelMove(); }
-    Vector2 Framework_GetMouseWheelMoveV() { return GetMouseWheelMoveV(); }
-    void    Framework_SetMouseCursor(int cursor) { SetMouseCursor(cursor); }
-
-    // Cursor control
-    void Framework_ShowCursor() { ShowCursor(); }
-    void Framework_HideCursor() { HideCursor(); }
-    bool Framework_IsCursorHidden() { return IsCursorHidden(); }
-    void Framework_EnableCursor() { EnableCursor(); }
-    void Framework_DisableCursor() { DisableCursor(); }
-    bool Framework_IsCursorOnScreen() { return IsCursorOnScreen(); }
-
-    // ---------------------------
-    // Drawing: text + basic shapes
-    // ---------------------------
-    void Framework_DrawText(const char* text, int x, int y, int fontSize,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color color = { r, g, b, a };
-        DrawText(text, x, y, fontSize, color);
-    }
-
-    void Framework_DrawRectangle(int x, int y, int w, int h,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color color = { r, g, b, a };
-        DrawRectangle(x, y, w, h, color);
-    }
-
-    void Framework_DrawPixel(int x, int y,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color color = { r, g, b, a };
-        DrawPixel(x, y, color);
-    }
-
-    void Framework_DrawLine(int x0, int y0, int x1, int y1,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color color = { r, g, b, a };
-        DrawLine(x0, y0, x1, y1, color);
-    }
-
-    void Framework_DrawCircle(int cx, int cy, float radius,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color color = { r, g, b, a };
-        DrawCircle(cx, cy, radius, color);
-    }
-
-    // -----------
-    // Collisions
-    // -----------
-    bool      Framework_CheckCollisionRecs(Rectangle a, Rectangle b) { return CheckCollisionRecs(a, b); }
-    bool      Framework_CheckCollisionCircles(Vector2 c1, float r1, Vector2 c2, float r2) { return CheckCollisionCircles(c1, r1, c2, r2); }
-    bool      Framework_CheckCollisionCircleRec(Vector2 c, float r, Rectangle rec) { return CheckCollisionCircleRec(c, r, rec); }
-    bool      Framework_CheckCollisionCircleLine(Vector2 c, float r, Vector2 p1, Vector2 p2) { return CheckCollisionCircleLine(c, r, p1, p2); }
-    bool      Framework_CheckCollisionPointRec(Vector2 p, Rectangle rec) { return CheckCollisionPointRec(p, rec); }
-    bool      Framework_CheckCollisionPointCircle(Vector2 p, Vector2 c, float r) { return CheckCollisionPointCircle(p, c, r); }
-    bool      Framework_CheckCollisionPointTriangle(Vector2 p, Vector2 p1, Vector2 p2, Vector2 p3) { return CheckCollisionPointTriangle(p, p1, p2, p3); }
-    bool      Framework_CheckCollisionPointLine(Vector2 p, Vector2 p1, Vector2 p2, int thr) { return CheckCollisionPointLine(p, p1, p2, thr); }
-    bool      Framework_CheckCollisionPointPoly(Vector2 p, const Vector2* pts, int n) { return CheckCollisionPointPoly(p, pts, n); }
-    bool      Framework_CheckCollisionLines(Vector2 s1, Vector2 e1, Vector2 s2, Vector2 e2, Vector2* cp) {
-        return CheckCollisionLines(s1, e1, s2, e2, cp);
-    }
-    Rectangle Framework_GetCollisionRec(Rectangle a, Rectangle b) { return GetCollisionRec(a, b); }
-
-    // =========================================================================
-    //                          TEXTURE / IMAGE API
-    // =========================================================================
-
-    // --- Loaders ---
-    Texture2D Framework_LoadTexture(const char* fileName) {
-        return LoadTexture(fileName);
-    }
-
-    Texture2D Framework_LoadTextureFromImage(Image image) {
-        return LoadTextureFromImage(image);
-    }
-
-    TextureCubemap Framework_LoadTextureCubemap(Image image, int layout) {
-        return LoadTextureCubemap(image, layout);
-    }
-
-    RenderTexture2D Framework_LoadRenderTexture(int width, int height) {
-        return LoadRenderTexture(width, height);
-    }
-
-    // --- Validity / Unload ---
-    bool Framework_IsTextureValid(Texture2D texture) {
-        // Adjust if your raylib version uses a different validity check.
-        return IsTextureValid(texture);
-    }
-
-    void Framework_UnloadTexture(Texture2D texture) {
-        UnloadTexture(texture);
-    }
-
-    bool Framework_IsRenderTextureValid(RenderTexture2D target) {
-        return IsRenderTextureValid(target);
-    }
-
-    void Framework_UnloadRenderTexture(RenderTexture2D target) {
-        UnloadRenderTexture(target);
-    }
-
-    // --- Updates & config ---
-    void Framework_UpdateTexture(Texture2D texture, const void* pixels) {
-        UpdateTexture(texture, pixels);
-    }
-
-    void Framework_UpdateTextureRec(Texture2D texture, Rectangle rec, const void* pixels) {
-        UpdateTextureRec(texture, rec, pixels);
-    }
-
-    void Framework_GenTextureMipmaps(Texture2D* texture) {
-        GenTextureMipmaps(texture);
-    }
-
-    void Framework_SetTextureFilter(Texture2D texture, int filter) {
-        SetTextureFilter(texture, filter); // e.g., TEXTURE_FILTER_BILINEAR
-    }
-
-    void Framework_SetTextureWrap(Texture2D texture, int wrap) {
-        SetTextureWrap(texture, wrap);     // e.g., TEXTURE_WRAP_CLAMP
-    }
-
-    // --- Drawing wrappers (with tint as RGBA bytes) ---
-    void Framework_DrawTexture(Texture2D texture, int posX, int posY,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color tint = { r, g, b, a };
-        DrawTexture(texture, posX, posY, tint);
-    }
-
-    void Framework_DrawTextureV(Texture2D texture, Vector2 position,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color tint = { r, g, b, a };
-        DrawTextureV(texture, position, tint);
-    }
-
-    void Framework_DrawTextureEx(Texture2D texture, Vector2 position, float rotation, float scale,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color tint = { r, g, b, a };
-        DrawTextureEx(texture, position, rotation, scale, tint);
-    }
-
-    void Framework_DrawTextureRec(Texture2D texture, Rectangle source, Vector2 position,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color tint = { r, g, b, a };
-        DrawTextureRec(texture, source, position, tint);
-    }
-
-    void Framework_DrawTexturePro(Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin,
-        float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color tint = { r, g, b, a };
-        DrawTexturePro(texture, source, dest, origin, rotation, tint);
-    }
-
-    void Framework_DrawTextureNPatch(Texture2D texture, NPatchInfo nPatchInfo, Rectangle dest, Vector2 origin,
-        float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color tint = { r, g, b, a };
-        DrawTextureNPatch(texture, nPatchInfo, dest, origin, rotation, tint);
-    }
-
-    // --- Render-to-texture & 2D camera ---
-    void Framework_BeginTextureMode(RenderTexture2D rt) { BeginTextureMode(rt); }
-    void Framework_EndTextureMode() { EndTextureMode(); }
-
-    void Framework_BeginMode2D(Camera2D cam) { BeginMode2D(cam); }
-    void Framework_EndMode2D() { EndMode2D(); }
-
-    // --- Sprite sheet helper (0-based frame index) ---
-    Rectangle Framework_SpriteFrame(Rectangle sheetArea, int frameW, int frameH, int index, int columns) {
-        Rectangle r{};
-        r.x = sheetArea.x + (index % columns) * frameW;
-        r.y = sheetArea.y + (index / columns) * frameH;
-        r.width = (float)frameW;
-        r.height = (float)frameH;
-        return r;
-    }
-
-    // --- Image utilities ---
-    Image Framework_LoadImage(const char* fileName) { return LoadImage(fileName); }
-    void  Framework_UnloadImage(Image img) { UnloadImage(img); }
-    void  Framework_ImageColorInvert(Image* img) { ImageColorInvert(img); }
-    void  Framework_ImageResize(Image* img, int w, int h) { ImageResize(img, w, h); }
-    void  Framework_ImageFlipVertical(Image* img) { ImageFlipVertical(img); }
-
-    // --- Fonts & advanced text ---
-    Font Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount) {
-        return LoadFontEx(fileName, fontSize, glyphs, glyphCount);
-    }
-
-    void Framework_UnloadFont(Font font) {
-        UnloadFont(font);
-    }
-
-    void Framework_DrawTextEx(Font font, const char* text, Vector2 pos, float fontSize, float spacing,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        Color tint = { r, g, b, a };
-        DrawTextEx(font, text, pos, fontSize, spacing, tint);
-    }
-
-    // --- Fixed-step helpers ---
-    void   Framework_SetFixedStep(double seconds) { g_fixedStep = seconds; }
-    void   Framework_ResetFixedClock() { g_accum = 0.0; }
-
-    bool Framework_StepFixed() {
-        if (g_accum >= g_fixedStep) {
-            g_accum -= g_fixedStep;
-            return true;
-        }
-        return false;
-    }
-
-    double Framework_GetFixedStep() { return g_fixedStep; }
-    double Framework_GetAccumulator() { return g_accum; }
-
-    void Framework_DrawFPS(int x, int y) { DrawFPS(x, y); }
-    void Framework_DrawGrid(int slices, float spacing) { DrawGrid(slices, spacing); }
-
-    // --- Audio core ---
-    bool Framework_InitAudio() {
-        InitAudioDevice();
-        return IsAudioDeviceReady();
-    }
-
-    void Framework_CloseAudio() {
-        for (auto& kv : g_sounds) {
-            UnloadSound(kv.second);
-        }
-        g_sounds.clear();
-        CloseAudioDevice();
-    }
-
-    // --- Sound (SFX) ---
-    int Framework_LoadSoundH(const char* file) {
-        Sound s = LoadSound(file);
-        int id = g_nextSound++;
-        g_sounds[id] = s;
-        return id;
-    }
-
-    void Framework_UnloadSoundH(int h) {
-        auto it = g_sounds.find(h);
-        if (it != g_sounds.end()) {
-            UnloadSound(it->second);
-            g_sounds.erase(it);
-        }
-    }
-
-    void Framework_PlaySoundH(int h) { if (g_sounds.count(h)) PlaySound(g_sounds[h]); }
-    void Framework_StopSoundH(int h) { if (g_sounds.count(h)) StopSound(g_sounds[h]); }
-    void Framework_PauseSoundH(int h) { if (g_sounds.count(h)) PauseSound(g_sounds[h]); }
-    void Framework_ResumeSoundH(int h) { if (g_sounds.count(h)) ResumeSound(g_sounds[h]); }
-    void Framework_SetSoundVolumeH(int h, float v) { if (g_sounds.count(h)) SetSoundVolume(g_sounds[h], v); }
-    void Framework_SetSoundPitchH(int h, float p) { if (g_sounds.count(h)) SetSoundPitch(g_sounds[h], p); }
-    void Framework_SetSoundPanH(int h, float pan) { if (g_sounds.count(h)) SetSoundPan(g_sounds[h], pan); }
-
-    // --- Shaders ---
-    Shader Framework_LoadShaderF(const char* vsPath, const char* fsPath) {
-        return LoadShader(vsPath, fsPath);
-    }
-
-    void   Framework_UnloadShader(Shader sh) { UnloadShader(sh); }
-    void   Framework_BeginShaderMode(Shader sh) { BeginShaderMode(sh); }
-    void   Framework_EndShaderMode() { EndShaderMode(); }
-    int    Framework_GetShaderLocation(Shader sh, const char* name) { return GetShaderLocation(sh, name); }
-
-    void Framework_SetShaderValue1f(Shader sh, int loc, float v) {
-        SetShaderValue(sh, loc, &v, SHADER_UNIFORM_FLOAT);
-    }
-
-    void Framework_SetShaderValue2f(Shader sh, int loc, float x, float y) {
-        float a[2]{ x, y };
-        SetShaderValue(sh, loc, a, SHADER_UNIFORM_VEC2);
-    }
-
-    void Framework_SetShaderValue3f(Shader sh, int loc, float x, float y, float z) {
-        float a[3]{ x, y, z };
-        SetShaderValue(sh, loc, a, SHADER_UNIFORM_VEC3);
-    }
-
-    void Framework_SetShaderValue4f(Shader sh, int loc, float x, float y, float z, float w) {
-        float a[4]{ x, y, z, w };
-        SetShaderValue(sh, loc, a, SHADER_UNIFORM_VEC4);
-    }
-
-    void Framework_SetShaderValue1i(Shader sh, int loc, int v) {
-        SetShaderValue(sh, loc, &v, SHADER_UNIFORM_INT);
-    }
-
-} // extern "C"
+#include <cstring>
+#include <cmath>
+#include <fstream>
+#include <functional>
 
 // ============================================================================
-//                           RESOURCE CACHES
-//                  (Textures, Fonts, Music - handle-based)
+// GLOBAL ENGINE STATE
 // ============================================================================
-
 namespace {
+    EngineState g_engineState = ENGINE_STOPPED;
+    unsigned long long g_frameCount = 0;
+    float g_timeScale = 1.0f;
+    float g_masterVolume = 1.0f;
+    bool g_audioPaused = false;
 
-    // path normalization: lowercase + forward slashes
+    // Fixed timestep
+    double g_fixedStep = 1.0 / 60.0;
+    double g_accum = 0.0;
+
+    // Asset root path
+    char g_assetRoot[FW_PATH_MAX] = "";
+
+    // Draw callback
+    DrawCallback userDrawCallback = nullptr;
+
+    // Managed Camera2D
+    Camera2D g_camera = { {0, 0}, {0, 0}, 0.0f, 1.0f };
+    int g_cameraFollowEntity = -1;
+
+    // Debug overlay state
+    bool g_debugEnabled = false;
+    bool g_debugDrawBounds = true;
+    bool g_debugDrawHierarchy = false;
+    bool g_debugDrawStats = true;
+}
+
+// ============================================================================
+// SOUND CACHE
+// ============================================================================
+namespace {
+    struct SoundEntry {
+        Sound snd{};
+        bool valid = false;
+        bool paused = false;
+    };
+    std::unordered_map<int, SoundEntry> g_sounds;
+    int g_nextSound = 1;
+}
+
+// ============================================================================
+// TEXTURE CACHE
+// ============================================================================
+namespace {
     std::string NormalizePath(std::string p) {
         std::replace(p.begin(), p.end(), '\\', '/');
         std::transform(p.begin(), p.end(), p.begin(),
@@ -418,7 +69,15 @@ namespace {
         return p;
     }
 
-    // ------------------- TEXTURES -------------------
+    std::string ResolveAssetPath(const char* path) {
+        if (!path) return "";
+        std::string p(path);
+        if (g_assetRoot[0] != '\0' && p.length() > 0 && p[0] != '/' && p[1] != ':') {
+            p = std::string(g_assetRoot) + "/" + p;
+        }
+        return NormalizePath(p);
+    }
+
     struct TexEntry {
         Texture2D   tex{};
         int         refCount = 0;
@@ -426,12 +85,12 @@ namespace {
         bool        valid = false;
     };
 
-    static std::unordered_map<int, TexEntry> g_texByHandle;
-    static std::unordered_map<std::string, int> g_handleByTexPath;
-    static int                                 g_nextTexHandle = 1;
+    std::unordered_map<int, TexEntry> g_texByHandle;
+    std::unordered_map<std::string, int> g_handleByTexPath;
+    int g_nextTexHandle = 1;
 
     int AcquireTextureH_Internal(const char* cpath) {
-        std::string path = NormalizePath(cpath ? cpath : "");
+        std::string path = ResolveAssetPath(cpath);
         auto it = g_handleByTexPath.find(path);
         if (it != g_handleByTexPath.end()) {
             g_texByHandle[it->second].refCount++;
@@ -466,18 +125,22 @@ namespace {
         if (it == g_texByHandle.end() || !it->second.valid) return nullptr;
         return &it->second.tex;
     }
+}
 
-    // ------------------- FONTS -------------------
+// ============================================================================
+// FONT CACHE
+// ============================================================================
+namespace {
     struct FontEntry {
         Font        font{};
         int         refCount = 0;
-        std::string key;   // path|size (normalized)
+        std::string key;
         bool        valid = false;
     };
 
-    static std::unordered_map<int, FontEntry> g_fontByHandle;
-    static std::unordered_map<std::string, int>  g_handleByFontKey;
-    static int                                  g_nextFontHandle = 1;
+    std::unordered_map<int, FontEntry> g_fontByHandle;
+    std::unordered_map<std::string, int> g_handleByFontKey;
+    int g_nextFontHandle = 1;
 
     std::string MakeFontKey(const std::string& path, int size) {
         return NormalizePath(path) + "|" + std::to_string(size);
@@ -491,14 +154,15 @@ namespace {
             return it->second;
         }
 
-        Font f = LoadFontEx(cpath, size, nullptr, 0);
+        std::string path = ResolveAssetPath(cpath);
+        Font f = LoadFontEx(path.c_str(), size, nullptr, 0);
         int h = g_nextFontHandle++;
 
         FontEntry e;
         e.font = f;
         e.refCount = 1;
         e.key = key;
-        e.valid = (f.texture.id != 0); // heuristic: font has an atlas texture
+        e.valid = (f.texture.id != 0);
         g_fontByHandle[h] = e;
         g_handleByFontKey[key] = h;
         return h;
@@ -519,8 +183,12 @@ namespace {
         if (it == g_fontByHandle.end() || !it->second.valid) return nullptr;
         return &it->second.font;
     }
+}
 
-    // ------------------- MUSIC (streaming) -------------------
+// ============================================================================
+// MUSIC CACHE
+// ============================================================================
+namespace {
     struct MusicEntry {
         Music       mus{};
         int         refCount = 0;
@@ -529,12 +197,12 @@ namespace {
         bool        playing = false;
     };
 
-    static std::unordered_map<int, MusicEntry> g_musByHandle;
-    static std::unordered_map<std::string, int>   g_handleByMusPath;
-    static int                                   g_nextMusicHandle = 1;
+    std::unordered_map<int, MusicEntry> g_musByHandle;
+    std::unordered_map<std::string, int> g_handleByMusPath;
+    int g_nextMusicHandle = 1;
 
     int AcquireMusicH_Internal(const char* cpath) {
-        std::string path = NormalizePath(cpath ? cpath : "");
+        std::string path = ResolveAssetPath(cpath);
         auto it = g_handleByMusPath.find(path);
         if (it != g_handleByMusPath.end()) {
             g_musByHandle[it->second].refCount++;
@@ -548,7 +216,7 @@ namespace {
         e.mus = m;
         e.refCount = 1;
         e.path = path;
-        e.valid = (m.ctxData != nullptr); // raylib: valid if internal ctx exists
+        e.valid = (m.ctxData != nullptr);
         e.playing = false;
         g_musByHandle[h] = e;
         g_handleByMusPath[path] = h;
@@ -573,84 +241,779 @@ namespace {
         if (it == g_musByHandle.end() || !it->second.valid) return nullptr;
         return &it->second.mus;
     }
+}
 
-} // anonymous namespace
+// ============================================================================
+// ECS CORE
+// ============================================================================
+namespace {
+    using Entity = int;
 
-// ======= EXPORTED WRAPPERS =======
+    // Component structures
+    struct Transform2D {
+        Vector2 position{ 0.0f, 0.0f };
+        float   rotation = 0.0f;
+        Vector2 scale{ 1.0f, 1.0f };
+    };
+
+    struct Sprite2D {
+        int       textureHandle = 0;
+        Rectangle source{ 0, 0, 0, 0 };
+        Color     tint{ 255, 255, 255, 255 };
+        int       layer = 0;
+        bool      visible = true;
+    };
+
+    struct NameComponent {
+        char name[FW_NAME_MAX] = {0};
+    };
+
+    struct TagComponent {
+        char tag[FW_TAG_MAX] = {0};
+    };
+
+    struct HierarchyComponent {
+        int parent = -1;
+        int firstChild = -1;
+        int nextSibling = -1;
+        int prevSibling = -1;
+    };
+
+    struct Velocity2D {
+        float vx = 0.0f;
+        float vy = 0.0f;
+    };
+
+    struct BoxCollider2D {
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+        bool isTrigger = false;
+    };
+
+    struct EnabledComponent {
+        bool enabled = true;
+    };
+
+    // Entity storage
+    int g_nextEntityId = 1;
+    std::unordered_set<Entity> g_entities;
+    std::unordered_map<Entity, Transform2D> g_transform2D;
+    std::unordered_map<Entity, Sprite2D> g_sprite2D;
+    std::unordered_map<Entity, NameComponent> g_name;
+    std::unordered_map<Entity, TagComponent> g_tag;
+    std::unordered_map<Entity, HierarchyComponent> g_hierarchy;
+    std::unordered_map<Entity, Velocity2D> g_velocity2D;
+    std::unordered_map<Entity, BoxCollider2D> g_boxCollider2D;
+    std::unordered_map<Entity, EnabledComponent> g_enabled;
+
+    // Helpers
+    bool EcsIsAlive(Entity e) {
+        return g_entities.find(e) != g_entities.end();
+    }
+
+    void RemoveFromParent(Entity e) {
+        auto hIt = g_hierarchy.find(e);
+        if (hIt == g_hierarchy.end()) return;
+
+        HierarchyComponent& h = hIt->second;
+        if (h.parent == -1) return;
+
+        auto pIt = g_hierarchy.find(h.parent);
+        if (pIt != g_hierarchy.end()) {
+            if (pIt->second.firstChild == e) {
+                pIt->second.firstChild = h.nextSibling;
+            }
+        }
+
+        if (h.prevSibling != -1) {
+            auto prevIt = g_hierarchy.find(h.prevSibling);
+            if (prevIt != g_hierarchy.end()) {
+                prevIt->second.nextSibling = h.nextSibling;
+            }
+        }
+        if (h.nextSibling != -1) {
+            auto nextIt = g_hierarchy.find(h.nextSibling);
+            if (nextIt != g_hierarchy.end()) {
+                nextIt->second.prevSibling = h.prevSibling;
+            }
+        }
+
+        h.parent = -1;
+        h.prevSibling = -1;
+        h.nextSibling = -1;
+    }
+
+    void DestroyEntityRecursive(Entity e) {
+        auto hIt = g_hierarchy.find(e);
+        if (hIt != g_hierarchy.end()) {
+            int child = hIt->second.firstChild;
+            while (child != -1) {
+                int next = -1;
+                auto chIt = g_hierarchy.find(child);
+                if (chIt != g_hierarchy.end()) {
+                    next = chIt->second.nextSibling;
+                }
+                DestroyEntityRecursive(child);
+                child = next;
+            }
+        }
+
+        RemoveFromParent(e);
+        g_entities.erase(e);
+        g_transform2D.erase(e);
+        g_sprite2D.erase(e);
+        g_name.erase(e);
+        g_tag.erase(e);
+        g_hierarchy.erase(e);
+        g_velocity2D.erase(e);
+        g_boxCollider2D.erase(e);
+        g_enabled.erase(e);
+    }
+
+    void EcsClearAllInternal() {
+        g_entities.clear();
+        g_transform2D.clear();
+        g_sprite2D.clear();
+        g_name.clear();
+        g_tag.clear();
+        g_hierarchy.clear();
+        g_velocity2D.clear();
+        g_boxCollider2D.clear();
+        g_enabled.clear();
+    }
+
+    Vector2 GetWorldPositionInternal(Entity e) {
+        auto tIt = g_transform2D.find(e);
+        if (tIt == g_transform2D.end()) return Vector2{ 0, 0 };
+
+        Vector2 pos = tIt->second.position;
+
+        auto hIt = g_hierarchy.find(e);
+        if (hIt != g_hierarchy.end() && hIt->second.parent != -1) {
+            Vector2 parentPos = GetWorldPositionInternal(hIt->second.parent);
+            pos.x += parentPos.x;
+            pos.y += parentPos.y;
+        }
+
+        return pos;
+    }
+
+    float GetWorldRotationInternal(Entity e) {
+        auto tIt = g_transform2D.find(e);
+        if (tIt == g_transform2D.end()) return 0.0f;
+
+        float rot = tIt->second.rotation;
+
+        auto hIt = g_hierarchy.find(e);
+        if (hIt != g_hierarchy.end() && hIt->second.parent != -1) {
+            rot += GetWorldRotationInternal(hIt->second.parent);
+        }
+
+        return rot;
+    }
+
+    Vector2 GetWorldScaleInternal(Entity e) {
+        auto tIt = g_transform2D.find(e);
+        if (tIt == g_transform2D.end()) return Vector2{ 1, 1 };
+
+        Vector2 scale = tIt->second.scale;
+
+        auto hIt = g_hierarchy.find(e);
+        if (hIt != g_hierarchy.end() && hIt->second.parent != -1) {
+            Vector2 parentScale = GetWorldScaleInternal(hIt->second.parent);
+            scale.x *= parentScale.x;
+            scale.y *= parentScale.y;
+        }
+
+        return scale;
+    }
+
+    bool IsActiveInHierarchyInternal(Entity e) {
+        auto enIt = g_enabled.find(e);
+        if (enIt != g_enabled.end() && !enIt->second.enabled) return false;
+
+        auto hIt = g_hierarchy.find(e);
+        if (hIt != g_hierarchy.end() && hIt->second.parent != -1) {
+            return IsActiveInHierarchyInternal(hIt->second.parent);
+        }
+
+        return true;
+    }
+
+    Rectangle GetBoxColliderWorldBoundsInternal(Entity e) {
+        Rectangle result = { 0, 0, 0, 0 };
+
+        auto bcIt = g_boxCollider2D.find(e);
+        if (bcIt == g_boxCollider2D.end()) return result;
+
+        Vector2 worldPos = GetWorldPositionInternal(e);
+        Vector2 worldScale = GetWorldScaleInternal(e);
+
+        result.x = worldPos.x + bcIt->second.offsetX * worldScale.x;
+        result.y = worldPos.y + bcIt->second.offsetY * worldScale.y;
+        result.width = bcIt->second.width * worldScale.x;
+        result.height = bcIt->second.height * worldScale.y;
+
+        return result;
+    }
+
+    // Draw sprites (layer sorted, respects enabled state)
+    struct DrawItem {
+        int         layer;
+        Sprite2D*   sprite;
+        Entity      entity;
+    };
+
+    void EcsDrawSpritesInternal() {
+        if (g_sprite2D.empty()) return;
+
+        std::vector<DrawItem> items;
+        items.reserve(g_sprite2D.size());
+
+        for (auto& kv : g_sprite2D) {
+            Entity e = kv.first;
+            Sprite2D& sp = kv.second;
+            if (!sp.visible) continue;
+            if (!EcsIsAlive(e)) continue;
+            if (!IsActiveInHierarchyInternal(e)) continue;
+
+            auto tIt = g_transform2D.find(e);
+            if (tIt == g_transform2D.end()) continue;
+
+            items.push_back(DrawItem{ sp.layer, &sp, e });
+        }
+
+        std::sort(items.begin(), items.end(),
+            [](const DrawItem& a, const DrawItem& b) {
+                return a.layer < b.layer;
+            });
+
+        for (auto& it : items) {
+            Sprite2D* sp = it.sprite;
+
+            const Texture2D* tex = GetTextureH_Internal(sp->textureHandle);
+            if (!tex) continue;
+
+            Vector2 worldPos = GetWorldPositionInternal(it.entity);
+            float worldRot = GetWorldRotationInternal(it.entity);
+            Vector2 worldScale = GetWorldScaleInternal(it.entity);
+
+            Rectangle dst;
+            dst.x = worldPos.x;
+            dst.y = worldPos.y;
+            dst.width = sp->source.width * worldScale.x;
+            dst.height = sp->source.height * worldScale.y;
+
+            Vector2 origin{ dst.width * 0.5f, dst.height * 0.5f };
+
+            DrawTexturePro(*tex, sp->source, dst, origin, worldRot, sp->tint);
+        }
+    }
+}
+
+// ============================================================================
+// SCENE SYSTEM
+// ============================================================================
+namespace {
+    struct ScriptScene {
+        SceneCallbacks cb{};
+    };
+
+    std::unordered_map<int, ScriptScene> g_scenes;
+    std::vector<int> g_sceneStack;
+    int g_nextSceneHandle = 1;
+
+    ScriptScene* GetScene(int h) {
+        auto it = g_scenes.find(h);
+        return (it == g_scenes.end()) ? nullptr : &it->second;
+    }
+
+    ScriptScene* TopScene() {
+        if (g_sceneStack.empty()) return nullptr;
+        return GetScene(g_sceneStack.back());
+    }
+}
+
+// ============================================================================
+// PREFAB STORAGE
+// ============================================================================
+namespace {
+    struct PrefabData {
+        std::vector<uint8_t> data;
+        bool valid = false;
+    };
+
+    std::unordered_map<int, PrefabData> g_prefabs;
+    int g_nextPrefabHandle = 1;
+}
+
+// Forward declarations
+extern "C" void Framework_UpdateAllMusic();
+extern "C" void Framework_ResourcesShutdown();
+
+// ============================================================================
+// ENGINE STATE & LIFECYCLE
+// ============================================================================
 extern "C" {
 
-    // --- Textures (handle-based) ---
-    int  Framework_AcquireTextureH(const char* path) { return AcquireTextureH_Internal(path); }
-    void Framework_ReleaseTextureH(int handle) { ReleaseTextureH_Internal(handle); }
-    bool Framework_IsTextureValidH(int handle) { return GetTextureH_Internal(handle) != nullptr; }
+    bool Framework_Initialize(int width, int height, const char* title) {
+        InitWindow(width, height, title);
+        SetTargetFPS(60);
+        g_engineState = ENGINE_RUNNING;
+        g_frameCount = 0;
+        g_timeScale = 1.0f;
+        g_accum = 0.0;
 
-    void Framework_DrawTextureH(int handle, int x, int y,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        const Texture2D* tex = GetTextureH_Internal(handle);
-        if (tex) {
-            Color tint{ r, g, b, a };
-            DrawTexture(*tex, x, y, tint);
+        // Initialize camera
+        g_camera.offset = Vector2{ (float)width / 2.0f, (float)height / 2.0f };
+        g_camera.target = Vector2{ 0, 0 };
+        g_camera.rotation = 0.0f;
+        g_camera.zoom = 1.0f;
+
+        return true;
+    }
+
+    void Framework_Update() {
+        if (g_engineState == ENGINE_STOPPED) return;
+
+        g_frameCount++;
+
+        BeginDrawing();
+
+        if (userDrawCallback != nullptr) {
+            userDrawCallback();
+        }
+
+        EndDrawing();
+
+        if (!g_audioPaused) {
+            Framework_UpdateAllMusic();
+        }
+
+        // Only accumulate time if not paused
+        if (g_engineState == ENGINE_RUNNING) {
+            g_accum += (double)GetFrameTime() * g_timeScale;
         }
     }
 
-    void Framework_DrawTextureVH(int handle, Vector2 pos,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        const Texture2D* tex = GetTextureH_Internal(handle);
-        if (tex) {
-            Color tint{ r, g, b, a };
-            DrawTextureV(*tex, pos, tint);
+    bool Framework_ShouldClose() {
+        return WindowShouldClose() || g_engineState == ENGINE_QUITTING;
+    }
+
+    void Framework_Shutdown() {
+        g_engineState = ENGINE_STOPPED;
+        Framework_ResourcesShutdown();
+        EcsClearAllInternal();
+        CloseWindow();
+    }
+
+    int Framework_GetState() {
+        return (int)g_engineState;
+    }
+
+    void Framework_Pause() {
+        if (g_engineState == ENGINE_RUNNING) {
+            g_engineState = ENGINE_PAUSED;
         }
     }
 
-    void Framework_DrawTextureExH(int handle, Vector2 pos, float rotation, float scale,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        const Texture2D* tex = GetTextureH_Internal(handle);
-        if (tex) {
-            Color tint{ r, g, b, a };
-            DrawTextureEx(*tex, pos, rotation, scale, tint);
+    void Framework_Resume() {
+        if (g_engineState == ENGINE_PAUSED) {
+            g_engineState = ENGINE_RUNNING;
         }
     }
 
-    void Framework_DrawTextureRecH(int handle, Rectangle src, Vector2 pos,
+    void Framework_Quit() {
+        g_engineState = ENGINE_QUITTING;
+    }
+
+    bool Framework_IsPaused() {
+        return g_engineState == ENGINE_PAUSED;
+    }
+
+    // ========================================================================
+    // DRAW CONTROL
+    // ========================================================================
+    void Framework_SetDrawCallback(DrawCallback callback) {
+        userDrawCallback = callback;
+    }
+
+    void Framework_BeginDrawing() { BeginDrawing(); }
+    void Framework_EndDrawing() { EndDrawing(); }
+
+    void Framework_ClearBackground(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        Color color = { r, g, b, a };
+        ClearBackground(color);
+    }
+
+    void Framework_DrawText(const char* text, int x, int y, int fontSize,
         unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        const Texture2D* tex = GetTextureH_Internal(handle);
-        if (tex) {
-            Color tint{ r, g, b, a };
-            DrawTextureRec(*tex, src, pos, tint);
+        Color color = { r, g, b, a };
+        DrawText(text, x, y, fontSize, color);
+    }
+
+    void Framework_DrawRectangle(int x, int y, int w, int h,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        Color color = { r, g, b, a };
+        DrawRectangle(x, y, w, h, color);
+    }
+
+    // ========================================================================
+    // TIMING
+    // ========================================================================
+    void   Framework_SetTargetFPS(int fps) { SetTargetFPS(fps); }
+    float  Framework_GetFrameTime() { return GetFrameTime(); }
+    float  Framework_GetDeltaTime() { return GetFrameTime() * g_timeScale; }
+    double Framework_GetTime() { return GetTime(); }
+    int    Framework_GetFPS() { return GetFPS(); }
+    unsigned long long Framework_GetFrameCount() { return g_frameCount; }
+
+    void  Framework_SetTimeScale(float scale) { g_timeScale = scale < 0.0f ? 0.0f : scale; }
+    float Framework_GetTimeScale() { return g_timeScale; }
+
+    void   Framework_SetFixedStep(double seconds) { g_fixedStep = seconds; }
+    void   Framework_ResetFixedClock() { g_accum = 0.0; }
+
+    bool Framework_StepFixed() {
+        if (g_engineState != ENGINE_RUNNING) return false;
+        if (g_accum >= g_fixedStep) {
+            g_accum -= g_fixedStep;
+            return true;
+        }
+        return false;
+    }
+
+    double Framework_GetFixedStep() { return g_fixedStep; }
+    double Framework_GetAccumulator() { return g_accum; }
+
+    // ========================================================================
+    // INPUT - KEYBOARD
+    // ========================================================================
+    bool Framework_IsKeyPressed(int key) { return IsKeyPressed(key); }
+    bool Framework_IsKeyPressedRepeat(int key) { return IsKeyPressedRepeat(key); }
+    bool Framework_IsKeyDown(int key) { return IsKeyDown(key); }
+    bool Framework_IsKeyReleased(int key) { return IsKeyReleased(key); }
+    bool Framework_IsKeyUp(int key) { return IsKeyUp(key); }
+    int  Framework_GetKeyPressed() { return GetKeyPressed(); }
+    int  Framework_GetCharPressed() { return GetCharPressed(); }
+    void Framework_SetExitKey(int key) { SetExitKey(key); }
+
+    // ========================================================================
+    // INPUT - MOUSE
+    // ========================================================================
+    int     Framework_GetMouseX() { return GetMouseX(); }
+    int     Framework_GetMouseY() { return GetMouseY(); }
+    bool    Framework_IsMouseButtonPressed(int b) { return IsMouseButtonPressed(b); }
+    bool    Framework_IsMouseButtonDown(int b) { return IsMouseButtonDown(b); }
+    bool    Framework_IsMouseButtonReleased(int b) { return IsMouseButtonReleased(b); }
+    bool    Framework_IsMouseButtonUp(int b) { return IsMouseButtonUp(b); }
+    Vector2 Framework_GetMousePosition() { return GetMousePosition(); }
+    Vector2 Framework_GetMouseDelta() { return GetMouseDelta(); }
+    void    Framework_SetMousePosition(int x, int y) { SetMousePosition(x, y); }
+    void    Framework_SetMouseOffset(int ox, int oy) { SetMouseOffset(ox, oy); }
+    void    Framework_SetMouseScale(float sx, float sy) { SetMouseScale(sx, sy); }
+    float   Framework_GetMouseWheelMove() { return GetMouseWheelMove(); }
+    Vector2 Framework_GetMouseWheelMoveV() { return GetMouseWheelMoveV(); }
+    void    Framework_SetMouseCursor(int cursor) { SetMouseCursor(cursor); }
+
+    void Framework_ShowCursor() { ShowCursor(); }
+    void Framework_HideCursor() { HideCursor(); }
+    bool Framework_IsCursorHidden() { return IsCursorHidden(); }
+    void Framework_EnableCursor() { EnableCursor(); }
+    void Framework_DisableCursor() { DisableCursor(); }
+    bool Framework_IsCursorOnScreen() { return IsCursorOnScreen(); }
+
+    // ========================================================================
+    // SHAPES
+    // ========================================================================
+    void Framework_DrawPixel(int x, int y,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawPixel(x, y, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawLine(int x0, int y0, int x1, int y1,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawLine(x0, y0, x1, y1, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawCircle(int cx, int cy, float radius,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawCircle(cx, cy, radius, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawCircleLines(int cx, int cy, float radius,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawCircleLines(cx, cy, radius, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawRectangleLines(int x, int y, int w, int h,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRectangleLines(x, y, w, h, Color{ r, g, b, a });
+    }
+
+    // ========================================================================
+    // COLLISIONS
+    // ========================================================================
+    bool      Framework_CheckCollisionRecs(Rectangle a, Rectangle b) { return CheckCollisionRecs(a, b); }
+    bool      Framework_CheckCollisionCircles(Vector2 c1, float r1, Vector2 c2, float r2) { return CheckCollisionCircles(c1, r1, c2, r2); }
+    bool      Framework_CheckCollisionCircleRec(Vector2 c, float r, Rectangle rec) { return CheckCollisionCircleRec(c, r, rec); }
+    bool      Framework_CheckCollisionCircleLine(Vector2 c, float r, Vector2 p1, Vector2 p2) { return CheckCollisionCircleLine(c, r, p1, p2); }
+    bool      Framework_CheckCollisionPointRec(Vector2 p, Rectangle rec) { return CheckCollisionPointRec(p, rec); }
+    bool      Framework_CheckCollisionPointCircle(Vector2 p, Vector2 c, float r) { return CheckCollisionPointCircle(p, c, r); }
+    bool      Framework_CheckCollisionPointTriangle(Vector2 p, Vector2 p1, Vector2 p2, Vector2 p3) { return CheckCollisionPointTriangle(p, p1, p2, p3); }
+    bool      Framework_CheckCollisionPointLine(Vector2 p, Vector2 p1, Vector2 p2, int thr) { return CheckCollisionPointLine(p, p1, p2, thr); }
+    bool      Framework_CheckCollisionPointPoly(Vector2 p, const Vector2* pts, int n) { return CheckCollisionPointPoly(p, pts, n); }
+    bool      Framework_CheckCollisionLines(Vector2 s1, Vector2 e1, Vector2 s2, Vector2 e2, Vector2* cp) {
+        return CheckCollisionLines(s1, e1, s2, e2, cp);
+    }
+    Rectangle Framework_GetCollisionRec(Rectangle a, Rectangle b) { return GetCollisionRec(a, b); }
+
+    // ========================================================================
+    // TEXTURES / IMAGES
+    // ========================================================================
+    Texture2D Framework_LoadTexture(const char* fileName) {
+        std::string path = ResolveAssetPath(fileName);
+        return LoadTexture(path.c_str());
+    }
+
+    void Framework_UnloadTexture(Texture2D texture) { UnloadTexture(texture); }
+    bool Framework_IsTextureValid(Texture2D texture) { return IsTextureValid(texture); }
+
+    void Framework_UpdateTexture(Texture2D texture, const void* pixels) { UpdateTexture(texture, pixels); }
+    void Framework_UpdateTextureRec(Texture2D texture, Rectangle rec, const void* pixels) { UpdateTextureRec(texture, rec, pixels); }
+    void Framework_GenTextureMipmaps(Texture2D* texture) { GenTextureMipmaps(texture); }
+    void Framework_SetTextureFilter(Texture2D texture, int filter) { SetTextureFilter(texture, filter); }
+    void Framework_SetTextureWrap(Texture2D texture, int wrap) { SetTextureWrap(texture, wrap); }
+
+    void Framework_DrawTexture(Texture2D texture, int posX, int posY,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTexture(texture, posX, posY, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTextureV(Texture2D texture, Vector2 position,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTextureV(texture, position, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTextureEx(Texture2D texture, Vector2 position, float rotation, float scale,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTextureEx(texture, position, rotation, scale, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTextureRec(Texture2D texture, Rectangle source, Vector2 position,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTextureRec(texture, source, position, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTexturePro(Texture2D texture, Rectangle source, Rectangle dest, Vector2 origin,
+        float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTexturePro(texture, source, dest, origin, rotation, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTextureNPatch(Texture2D texture, NPatchInfo nPatchInfo, Rectangle dest, Vector2 origin,
+        float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTextureNPatch(texture, nPatchInfo, dest, origin, rotation, Color{ r, g, b, a });
+    }
+
+    RenderTexture2D Framework_LoadRenderTexture(int width, int height) { return LoadRenderTexture(width, height); }
+    void Framework_UnloadRenderTexture(RenderTexture2D target) { UnloadRenderTexture(target); }
+    bool Framework_IsRenderTextureValid(RenderTexture2D target) { return IsRenderTextureValid(target); }
+    void Framework_BeginTextureMode(RenderTexture2D rt) { BeginTextureMode(rt); }
+    void Framework_EndTextureMode() { EndTextureMode(); }
+    void Framework_BeginMode2D(Camera2D cam) { BeginMode2D(cam); }
+    void Framework_EndMode2D() { EndMode2D(); }
+
+    Image Framework_LoadImage(const char* fileName) {
+        std::string path = ResolveAssetPath(fileName);
+        return LoadImage(path.c_str());
+    }
+    void  Framework_UnloadImage(Image img) { UnloadImage(img); }
+    void  Framework_ImageColorInvert(Image* img) { ImageColorInvert(img); }
+    void  Framework_ImageResize(Image* img, int w, int h) { ImageResize(img, w, h); }
+    void  Framework_ImageFlipVertical(Image* img) { ImageFlipVertical(img); }
+
+    Font Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount) {
+        std::string path = ResolveAssetPath(fileName);
+        return LoadFontEx(path.c_str(), fontSize, glyphs, glyphCount);
+    }
+
+    void Framework_UnloadFont(Font font) { UnloadFont(font); }
+
+    void Framework_DrawTextEx(Font font, const char* text, Vector2 pos, float fontSize, float spacing,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTextEx(font, text, pos, fontSize, spacing, Color{ r, g, b, a });
+    }
+
+    Rectangle Framework_SpriteFrame(Rectangle sheetArea, int frameW, int frameH, int index, int columns) {
+        Rectangle r{};
+        r.x = sheetArea.x + (index % columns) * frameW;
+        r.y = sheetArea.y + (index / columns) * frameH;
+        r.width = (float)frameW;
+        r.height = (float)frameH;
+        return r;
+    }
+
+    void Framework_DrawFPS(int x, int y) { DrawFPS(x, y); }
+    void Framework_DrawGrid(int slices, float spacing) { DrawGrid(slices, spacing); }
+
+    // ========================================================================
+    // CAMERA 2D (Managed)
+    // ========================================================================
+    void Framework_Camera_SetPosition(float x, float y) {
+        g_camera.target = Vector2{ x, y };
+    }
+
+    void Framework_Camera_SetTarget(float x, float y) {
+        g_camera.target = Vector2{ x, y };
+    }
+
+    void Framework_Camera_SetRotation(float rotation) {
+        g_camera.rotation = rotation;
+    }
+
+    void Framework_Camera_SetZoom(float zoom) {
+        g_camera.zoom = zoom < 0.01f ? 0.01f : zoom;
+    }
+
+    void Framework_Camera_SetOffset(float x, float y) {
+        g_camera.offset = Vector2{ x, y };
+    }
+
+    Vector2 Framework_Camera_GetPosition() {
+        return g_camera.target;
+    }
+
+    float Framework_Camera_GetZoom() {
+        return g_camera.zoom;
+    }
+
+    float Framework_Camera_GetRotation() {
+        return g_camera.rotation;
+    }
+
+    void Framework_Camera_FollowEntity(int entity) {
+        g_cameraFollowEntity = entity;
+    }
+
+    void Framework_Camera_BeginMode() {
+        // Update camera if following an entity
+        if (g_cameraFollowEntity != -1 && EcsIsAlive(g_cameraFollowEntity)) {
+            Vector2 pos = GetWorldPositionInternal(g_cameraFollowEntity);
+            g_camera.target = pos;
+        }
+        BeginMode2D(g_camera);
+    }
+
+    void Framework_Camera_EndMode() {
+        EndMode2D();
+    }
+
+    Vector2 Framework_Camera_ScreenToWorld(float screenX, float screenY) {
+        return GetScreenToWorld2D(Vector2{ screenX, screenY }, g_camera);
+    }
+
+    Vector2 Framework_Camera_WorldToScreen(float worldX, float worldY) {
+        return GetWorldToScreen2D(Vector2{ worldX, worldY }, g_camera);
+    }
+
+    // ========================================================================
+    // AUDIO
+    // ========================================================================
+    bool Framework_InitAudio() {
+        InitAudioDevice();
+        return IsAudioDeviceReady();
+    }
+
+    void Framework_CloseAudio() {
+        for (auto& kv : g_sounds) {
+            if (kv.second.valid) UnloadSound(kv.second.snd);
+        }
+        g_sounds.clear();
+        CloseAudioDevice();
+    }
+
+    void Framework_SetMasterVolume(float volume) {
+        g_masterVolume = volume < 0.0f ? 0.0f : (volume > 1.0f ? 1.0f : volume);
+        SetMasterVolume(g_masterVolume);
+    }
+
+    float Framework_GetMasterVolume() {
+        return g_masterVolume;
+    }
+
+    void Framework_PauseAllAudio() {
+        g_audioPaused = true;
+        for (auto& kv : g_sounds) {
+            if (kv.second.valid && IsSoundPlaying(kv.second.snd)) {
+                PauseSound(kv.second.snd);
+                kv.second.paused = true;
+            }
+        }
+        for (auto& kv : g_musByHandle) {
+            if (kv.second.playing) {
+                PauseMusicStream(kv.second.mus);
+            }
         }
     }
 
-    void Framework_DrawTextureProH(int handle, Rectangle src, Rectangle dst, Vector2 origin, float rotation,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        const Texture2D* tex = GetTextureH_Internal(handle);
-        if (tex) {
-            Color tint{ r, g, b, a };
-            DrawTexturePro(*tex, src, dst, origin, rotation, tint);
+    void Framework_ResumeAllAudio() {
+        g_audioPaused = false;
+        for (auto& kv : g_sounds) {
+            if (kv.second.valid && kv.second.paused) {
+                ResumeSound(kv.second.snd);
+                kv.second.paused = false;
+            }
+        }
+        for (auto& kv : g_musByHandle) {
+            if (kv.second.playing) {
+                ResumeMusicStream(kv.second.mus);
+            }
         }
     }
 
-    // --- Fonts (handle-based) ---
-    int  Framework_AcquireFontH(const char* path, int fontSize) { return AcquireFontH_Internal(path, fontSize); }
-    void Framework_ReleaseFontH(int handle) { ReleaseFontH_Internal(handle); }
-    bool Framework_IsFontValidH(int handle) { return GetFontH_Internal(handle) != nullptr; }
+    int Framework_LoadSoundH(const char* file) {
+        std::string path = ResolveAssetPath(file);
+        Sound s = LoadSound(path.c_str());
+        int id = g_nextSound++;
+        SoundEntry entry;
+        entry.snd = s;
+        entry.valid = IsSoundValid(s);
+        entry.paused = false;
+        g_sounds[id] = entry;
+        return id;
+    }
 
-    void Framework_DrawTextExH(int handle, const char* text, Vector2 pos, float fontSize, float spacing,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        const Font* f = GetFontH_Internal(handle);
-        if (f) {
-            Color tint{ r, g, b, a };
-            DrawTextEx(*f, text, pos, fontSize, spacing, tint);
+    void Framework_UnloadSoundH(int h) {
+        auto it = g_sounds.find(h);
+        if (it != g_sounds.end()) {
+            if (it->second.valid) UnloadSound(it->second.snd);
+            g_sounds.erase(it);
         }
     }
 
-    // --- Music (handle-based cache) ---
+    void Framework_PlaySoundH(int h) {
+        auto it = g_sounds.find(h);
+        if (it != g_sounds.end() && it->second.valid && !g_audioPaused) {
+            PlaySound(it->second.snd);
+        }
+    }
+    void Framework_StopSoundH(int h) { auto it = g_sounds.find(h); if (it != g_sounds.end() && it->second.valid) StopSound(it->second.snd); }
+    void Framework_PauseSoundH(int h) { auto it = g_sounds.find(h); if (it != g_sounds.end() && it->second.valid) PauseSound(it->second.snd); }
+    void Framework_ResumeSoundH(int h) { auto it = g_sounds.find(h); if (it != g_sounds.end() && it->second.valid) ResumeSound(it->second.snd); }
+    void Framework_SetSoundVolumeH(int h, float v) { auto it = g_sounds.find(h); if (it != g_sounds.end() && it->second.valid) SetSoundVolume(it->second.snd, v); }
+    void Framework_SetSoundPitchH(int h, float p) { auto it = g_sounds.find(h); if (it != g_sounds.end() && it->second.valid) SetSoundPitch(it->second.snd, p); }
+    void Framework_SetSoundPanH(int h, float pan) { auto it = g_sounds.find(h); if (it != g_sounds.end() && it->second.valid) SetSoundPan(it->second.snd, pan); }
+
+    // Music
     int  Framework_AcquireMusicH(const char* path) { return AcquireMusicH_Internal(path); }
     void Framework_ReleaseMusicH(int handle) { ReleaseMusicH_Internal(handle); }
     bool Framework_IsMusicValidH(int handle) { return GetMusicH_Internal(handle) != nullptr; }
 
     void Framework_PlayMusicH(int handle) {
         Music* m = GetMusicH_Internal(handle);
-        if (m) {
+        if (m && !g_audioPaused) {
             PlayMusicStream(*m);
             g_musByHandle[handle].playing = true;
         }
@@ -668,15 +1031,13 @@ extern "C" {
         Music* m = GetMusicH_Internal(handle);
         if (m) {
             PauseMusicStream(*m);
-            g_musByHandle[handle].playing = false;
         }
     }
 
     void Framework_ResumeMusicH(int handle) {
         Music* m = GetMusicH_Internal(handle);
-        if (m) {
+        if (m && !g_audioPaused) {
             ResumeMusicStream(*m);
-            g_musByHandle[handle].playing = true;
         }
     }
 
@@ -696,6 +1057,7 @@ extern "C" {
     }
 
     void Framework_UpdateAllMusic() {
+        if (g_audioPaused) return;
         for (auto& kv : g_musByHandle) {
             if (kv.second.playing) {
                 UpdateMusicStream(kv.second.mus);
@@ -703,169 +1065,195 @@ extern "C" {
         }
     }
 
-    // --- Unified resources shutdown ---
-    void Framework_ResourcesShutdown() {
-        // Textures
-        for (auto& kv : g_texByHandle) {
-            if (kv.second.valid) UnloadTexture(kv.second.tex);
-        }
-        g_texByHandle.clear();
-        g_handleByTexPath.clear();
+    // ========================================================================
+    // SHADERS
+    // ========================================================================
+    Shader Framework_LoadShaderF(const char* vsPath, const char* fsPath) {
+        std::string vs = vsPath ? ResolveAssetPath(vsPath) : "";
+        std::string fs = fsPath ? ResolveAssetPath(fsPath) : "";
+        return LoadShader(vs.empty() ? nullptr : vs.c_str(), fs.empty() ? nullptr : fs.c_str());
+    }
 
-        // Fonts
-        for (auto& kv : g_fontByHandle) {
-            if (kv.second.valid) UnloadFont(kv.second.font);
-        }
-        g_fontByHandle.clear();
-        g_handleByFontKey.clear();
+    void   Framework_UnloadShader(Shader sh) { UnloadShader(sh); }
+    void   Framework_BeginShaderMode(Shader sh) { BeginShaderMode(sh); }
+    void   Framework_EndShaderMode() { EndShaderMode(); }
+    int    Framework_GetShaderLocation(Shader sh, const char* name) { return GetShaderLocation(sh, name); }
 
-        // Music
-        for (auto& kv : g_musByHandle) {
-            if (kv.second.valid) {
-                StopMusicStream(kv.second.mus);
-                UnloadMusicStream(kv.second.mus);
+    void Framework_SetShaderValue1f(Shader sh, int loc, float v) {
+        SetShaderValue(sh, loc, &v, SHADER_UNIFORM_FLOAT);
+    }
+    void Framework_SetShaderValue2f(Shader sh, int loc, float x, float y) {
+        float a[2]{ x, y };
+        SetShaderValue(sh, loc, a, SHADER_UNIFORM_VEC2);
+    }
+    void Framework_SetShaderValue3f(Shader sh, int loc, float x, float y, float z) {
+        float a[3]{ x, y, z };
+        SetShaderValue(sh, loc, a, SHADER_UNIFORM_VEC3);
+    }
+    void Framework_SetShaderValue4f(Shader sh, int loc, float x, float y, float z, float w) {
+        float a[4]{ x, y, z, w };
+        SetShaderValue(sh, loc, a, SHADER_UNIFORM_VEC4);
+    }
+    void Framework_SetShaderValue1i(Shader sh, int loc, int v) {
+        SetShaderValue(sh, loc, &v, SHADER_UNIFORM_INT);
+    }
+
+    // ========================================================================
+    // ASSET CACHE
+    // ========================================================================
+    void Framework_SetAssetRoot(const char* path) {
+        if (path) {
+            strncpy_s(g_assetRoot, FW_PATH_MAX, path, _TRUNCATE);
+        } else {
+            g_assetRoot[0] = '\0';
+        }
+    }
+
+    const char* Framework_GetAssetRoot() {
+        return g_assetRoot;
+    }
+
+    int  Framework_AcquireTextureH(const char* path) { return AcquireTextureH_Internal(path); }
+    void Framework_ReleaseTextureH(int handle) { ReleaseTextureH_Internal(handle); }
+    bool Framework_IsTextureValidH(int handle) { return GetTextureH_Internal(handle) != nullptr; }
+
+    void Framework_DrawTextureH(int handle, int x, int y,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        const Texture2D* tex = GetTextureH_Internal(handle);
+        if (tex) DrawTexture(*tex, x, y, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTextureVH(int handle, Vector2 pos,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        const Texture2D* tex = GetTextureH_Internal(handle);
+        if (tex) DrawTextureV(*tex, pos, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTextureExH(int handle, Vector2 pos, float rotation, float scale,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        const Texture2D* tex = GetTextureH_Internal(handle);
+        if (tex) DrawTextureEx(*tex, pos, rotation, scale, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTextureRecH(int handle, Rectangle src, Vector2 pos,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        const Texture2D* tex = GetTextureH_Internal(handle);
+        if (tex) DrawTextureRec(*tex, src, pos, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTextureProH(int handle, Rectangle src, Rectangle dst, Vector2 origin, float rotation,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        const Texture2D* tex = GetTextureH_Internal(handle);
+        if (tex) DrawTexturePro(*tex, src, dst, origin, rotation, Color{ r, g, b, a });
+    }
+
+    int Framework_GetTextureWidth(int handle) {
+        const Texture2D* tex = GetTextureH_Internal(handle);
+        return tex ? tex->width : 0;
+    }
+
+    int Framework_GetTextureHeight(int handle) {
+        const Texture2D* tex = GetTextureH_Internal(handle);
+        return tex ? tex->height : 0;
+    }
+
+    int  Framework_AcquireFontH(const char* path, int fontSize) { return AcquireFontH_Internal(path, fontSize); }
+    void Framework_ReleaseFontH(int handle) { ReleaseFontH_Internal(handle); }
+    bool Framework_IsFontValidH(int handle) { return GetFontH_Internal(handle) != nullptr; }
+
+    void Framework_DrawTextExH(int handle, const char* text, Vector2 pos, float fontSize, float spacing,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        const Font* f = GetFontH_Internal(handle);
+        if (f) DrawTextEx(*f, text, pos, fontSize, spacing, Color{ r, g, b, a });
+    }
+
+    // ========================================================================
+    // SCENE SYSTEM
+    // ========================================================================
+    int Framework_CreateScriptScene(SceneCallbacks cb) {
+        int h = g_nextSceneHandle++;
+        g_scenes[h] = ScriptScene{ cb };
+        return h;
+    }
+
+    void Framework_DestroyScene(int sceneHandle) {
+        for (int i = (int)g_sceneStack.size() - 1; i >= 0; --i) {
+            if (g_sceneStack[i] == sceneHandle) {
+                if (i == (int)g_sceneStack.size() - 1) {
+                    if (auto sc = GetScene(sceneHandle); sc && sc->cb.onExit) {
+                        sc->cb.onExit();
+                    }
+                }
+                g_sceneStack.erase(g_sceneStack.begin() + i);
             }
         }
-        g_musByHandle.clear();
-        g_handleByMusPath.clear();
+        g_scenes.erase(sceneHandle);
     }
 
-} // extern "C"
-
-
-// ================================
-//   ECS v1 + Native Scene Manager
-// ================================
-namespace {
-
-    // -------------------
-    // ECS v1 – core types
-    // -------------------
-    using Entity = int;
-
-    struct Transform2D {
-        Vector2 position{ 0.0f, 0.0f };
-        float   rotation = 0.0f;               // degrees
-        Vector2 scale{ 1.0f, 1.0f };
-    };
-
-    struct Sprite2D {
-        int      textureHandle = 0;
-        Rectangle source{ 0, 0, 0, 0 };
-        Color    tint{ 255, 255, 255, 255 };
-        int      layer = 0;
-        bool     visible = true;
-    };
-
-    static int                                   g_nextEntityId = 1;
-    static std::unordered_set<Entity>            g_entities;
-    static std::unordered_map<Entity, Transform2D> g_transform2D;
-    static std::unordered_map<Entity, Sprite2D>    g_sprite2D;
-
-    static bool EcsIsAlive(Entity e) {
-        return g_entities.find(e) != g_entities.end();
+    void Framework_SceneChange(int sceneHandle) {
+        if (!g_sceneStack.empty()) {
+            if (auto sc = TopScene(); sc && sc->cb.onExit) sc->cb.onExit();
+            g_sceneStack.pop_back();
+        }
+        g_sceneStack.push_back(sceneHandle);
+        if (auto sc = TopScene(); sc && sc->cb.onEnter) sc->cb.onEnter();
     }
 
-    static void EcsDestroyEntityInternal(Entity e) {
-        g_entities.erase(e);
-        g_transform2D.erase(e);
-        g_sprite2D.erase(e);
+    void Framework_ScenePush(int sceneHandle) {
+        g_sceneStack.push_back(sceneHandle);
+        if (auto sc = TopScene(); sc && sc->cb.onEnter) sc->cb.onEnter();
     }
 
-    static void EcsClearAllInternal() {
-        g_entities.clear();
-        g_transform2D.clear();
-        g_sprite2D.clear();
+    void Framework_ScenePop() {
+        if (g_sceneStack.empty()) return;
+        if (auto sc = TopScene(); sc && sc->cb.onExit) sc->cb.onExit();
+        g_sceneStack.pop_back();
+        if (auto sc = TopScene(); sc && sc->cb.onResume) sc->cb.onResume();
     }
 
-    struct DrawItem {
-        int         layer;
-        Sprite2D* sprite;
-        Transform2D* transform;
-    };
+    bool Framework_SceneHas() {
+        return !g_sceneStack.empty();
+    }
 
-    static void EcsDrawSpritesInternal() {
-        if (g_sprite2D.empty()) return;
+    int Framework_SceneGetCurrent() {
+        return g_sceneStack.empty() ? -1 : g_sceneStack.back();
+    }
 
-        std::vector<DrawItem> items;
-        items.reserve(g_sprite2D.size());
-
-        for (auto& kv : g_sprite2D) {
-            Entity e = kv.first;
-            Sprite2D& sp = kv.second;
-            if (!sp.visible) continue;
-            if (!EcsIsAlive(e)) continue;
-
-            auto tIt = g_transform2D.find(e);
-            if (tIt == g_transform2D.end()) continue;
-
-            items.push_back(DrawItem{ sp.layer, &sp, &tIt->second });
+    void Framework_SceneTick() {
+        if (g_engineState == ENGINE_RUNNING) {
+            while (Framework_StepFixed()) {
+                auto sc = TopScene();
+                if (!sc) return;
+                if (sc->cb.onUpdateFixed) {
+                    sc->cb.onUpdateFixed(Framework_GetFixedStep());
+                }
+            }
         }
 
-        std::sort(items.begin(), items.end(),
-            [](const DrawItem& a, const DrawItem& b) {
-                return a.layer < b.layer;
-            });
+        // Frame update runs even when paused (for UI)
+        if (auto sc = TopScene(); sc && sc->cb.onUpdateFrame) {
+            float dt = (g_engineState == ENGINE_RUNNING) ? Framework_GetDeltaTime() : 0.0f;
+            sc->cb.onUpdateFrame(dt);
+        }
 
-        for (auto& it : items) {
-            Sprite2D* sp = it.sprite;
-            Transform2D* tr = it.transform;
-
-            const Texture2D* tex = GetTextureH_Internal(sp->textureHandle);
-            if (!tex) continue;
-
-            Rectangle dst;
-            dst.x = tr->position.x;
-            dst.y = tr->position.y;
-            dst.width = sp->source.width * tr->scale.x;
-            dst.height = sp->source.height * tr->scale.y;
-
-            Vector2 origin{ dst.width * 0.5f, dst.height * 0.5f };
-
-            DrawTexturePro(*tex, sp->source, dst, origin, tr->rotation, sp->tint);
+        if (auto sc = TopScene(); sc && sc->cb.onDraw) {
+            sc->cb.onDraw();
         }
     }
 
-    // -------------------
-    // Script scene stack
-    // -------------------
-
-    struct ScriptScene {
-        SceneCallbacks cb{};
-    };
-
-    static std::unordered_map<int, ScriptScene> g_scenes;
-    static std::vector<int>                     g_stack;
-    static int                                  g_nextSceneHandle = 1;
-
-    static inline ScriptScene* GetScene(int h) {
-        auto it = g_scenes.find(h);
-        return (it == g_scenes.end()) ? nullptr : &it->second;
-    }
-
-    static inline ScriptScene* TopScene() {
-        if (g_stack.empty()) return nullptr;
-        return GetScene(g_stack.back());
-    }
-
-} // anonymous namespace
-
-extern "C" {
-
-    // -----------------------
-    // ECS v1 – exported API
-    // -----------------------
-
-    // Entities
+    // ========================================================================
+    // ECS - ENTITIES
+    // ========================================================================
     int Framework_Ecs_CreateEntity() {
         Entity e = g_nextEntityId++;
         g_entities.insert(e);
+        g_enabled[e] = EnabledComponent{ true };
         return e;
     }
 
     void Framework_Ecs_DestroyEntity(int entity) {
         if (!EcsIsAlive(entity)) return;
-        EcsDestroyEntityInternal(entity);
+        DestroyEntityRecursive(entity);
     }
 
     bool Framework_Ecs_IsAlive(int entity) {
@@ -876,9 +1264,202 @@ extern "C" {
         EcsClearAllInternal();
     }
 
-    // Transform2D
-    void Framework_Ecs_AddTransform2D(int entity, float x, float y,
-        float rotation, float sx, float sy) {
+    int Framework_Ecs_GetEntityCount() {
+        return (int)g_entities.size();
+    }
+
+    int Framework_Ecs_GetAllEntities(int* buffer, int bufferSize) {
+        if (!buffer || bufferSize <= 0) return 0;
+        int count = 0;
+        for (Entity e : g_entities) {
+            if (count >= bufferSize) break;
+            buffer[count++] = e;
+        }
+        return count;
+    }
+
+    // ========================================================================
+    // ECS - NAME COMPONENT
+    // ========================================================================
+    void Framework_Ecs_SetName(int entity, const char* name) {
+        if (!EcsIsAlive(entity)) return;
+        NameComponent nc;
+        memset(nc.name, 0, FW_NAME_MAX);
+        if (name) {
+            strncpy_s(nc.name, FW_NAME_MAX, name, _TRUNCATE);
+        }
+        g_name[entity] = nc;
+    }
+
+    const char* Framework_Ecs_GetName(int entity) {
+        auto it = g_name.find(entity);
+        if (it == g_name.end()) return "";
+        return it->second.name;
+    }
+
+    bool Framework_Ecs_HasName(int entity) {
+        return g_name.find(entity) != g_name.end();
+    }
+
+    int Framework_Ecs_FindByName(const char* name) {
+        if (!name) return -1;
+        for (auto& kv : g_name) {
+            if (strcmp(kv.second.name, name) == 0) {
+                return kv.first;
+            }
+        }
+        return -1;
+    }
+
+    // ========================================================================
+    // ECS - TAG COMPONENT
+    // ========================================================================
+    void Framework_Ecs_SetTag(int entity, const char* tag) {
+        if (!EcsIsAlive(entity)) return;
+        TagComponent tc;
+        memset(tc.tag, 0, FW_TAG_MAX);
+        if (tag) {
+            strncpy_s(tc.tag, FW_TAG_MAX, tag, _TRUNCATE);
+        }
+        g_tag[entity] = tc;
+    }
+
+    const char* Framework_Ecs_GetTag(int entity) {
+        auto it = g_tag.find(entity);
+        if (it == g_tag.end()) return "";
+        return it->second.tag;
+    }
+
+    bool Framework_Ecs_HasTag(int entity) {
+        return g_tag.find(entity) != g_tag.end();
+    }
+
+    int Framework_Ecs_FindAllByTag(const char* tag, int* buffer, int bufferSize) {
+        if (!tag || !buffer || bufferSize <= 0) return 0;
+        int count = 0;
+        for (auto& kv : g_tag) {
+            if (count >= bufferSize) break;
+            if (strcmp(kv.second.tag, tag) == 0) {
+                buffer[count++] = kv.first;
+            }
+        }
+        return count;
+    }
+
+    // ========================================================================
+    // ECS - ENABLED COMPONENT
+    // ========================================================================
+    void Framework_Ecs_SetEnabled(int entity, bool enabled) {
+        if (!EcsIsAlive(entity)) return;
+        g_enabled[entity].enabled = enabled;
+    }
+
+    bool Framework_Ecs_IsEnabled(int entity) {
+        auto it = g_enabled.find(entity);
+        if (it == g_enabled.end()) return true;
+        return it->second.enabled;
+    }
+
+    bool Framework_Ecs_IsActiveInHierarchy(int entity) {
+        if (!EcsIsAlive(entity)) return false;
+        return IsActiveInHierarchyInternal(entity);
+    }
+
+    // ========================================================================
+    // ECS - HIERARCHY COMPONENT
+    // ========================================================================
+    void Framework_Ecs_SetParent(int entity, int parent) {
+        if (!EcsIsAlive(entity)) return;
+        if (parent != -1 && !EcsIsAlive(parent)) return;
+        if (entity == parent) return;
+
+        RemoveFromParent(entity);
+
+        if (g_hierarchy.find(entity) == g_hierarchy.end()) {
+            g_hierarchy[entity] = HierarchyComponent{};
+        }
+
+        if (parent == -1) return;
+
+        if (g_hierarchy.find(parent) == g_hierarchy.end()) {
+            g_hierarchy[parent] = HierarchyComponent{};
+        }
+
+        HierarchyComponent& h = g_hierarchy[entity];
+        HierarchyComponent& ph = g_hierarchy[parent];
+
+        h.parent = parent;
+        h.nextSibling = ph.firstChild;
+        h.prevSibling = -1;
+
+        if (ph.firstChild != -1) {
+            auto fcIt = g_hierarchy.find(ph.firstChild);
+            if (fcIt != g_hierarchy.end()) {
+                fcIt->second.prevSibling = entity;
+            }
+        }
+
+        ph.firstChild = entity;
+    }
+
+    int Framework_Ecs_GetParent(int entity) {
+        auto it = g_hierarchy.find(entity);
+        if (it == g_hierarchy.end()) return -1;
+        return it->second.parent;
+    }
+
+    int Framework_Ecs_GetFirstChild(int entity) {
+        auto it = g_hierarchy.find(entity);
+        if (it == g_hierarchy.end()) return -1;
+        return it->second.firstChild;
+    }
+
+    int Framework_Ecs_GetNextSibling(int entity) {
+        auto it = g_hierarchy.find(entity);
+        if (it == g_hierarchy.end()) return -1;
+        return it->second.nextSibling;
+    }
+
+    int Framework_Ecs_GetChildCount(int entity) {
+        auto it = g_hierarchy.find(entity);
+        if (it == g_hierarchy.end()) return 0;
+
+        int count = 0;
+        int child = it->second.firstChild;
+        while (child != -1) {
+            count++;
+            auto cIt = g_hierarchy.find(child);
+            if (cIt == g_hierarchy.end()) break;
+            child = cIt->second.nextSibling;
+        }
+        return count;
+    }
+
+    int Framework_Ecs_GetChildren(int entity, int* buffer, int bufferSize) {
+        if (!buffer || bufferSize <= 0) return 0;
+
+        auto it = g_hierarchy.find(entity);
+        if (it == g_hierarchy.end()) return 0;
+
+        int count = 0;
+        int child = it->second.firstChild;
+        while (child != -1 && count < bufferSize) {
+            buffer[count++] = child;
+            auto cIt = g_hierarchy.find(child);
+            if (cIt == g_hierarchy.end()) break;
+            child = cIt->second.nextSibling;
+        }
+        return count;
+    }
+
+    void Framework_Ecs_DetachFromParent(int entity) {
+        RemoveFromParent(entity);
+    }
+
+    // ========================================================================
+    // ECS - TRANSFORM2D COMPONENT
+    // ========================================================================
+    void Framework_Ecs_AddTransform2D(int entity, float x, float y, float rotation, float sx, float sy) {
         if (!EcsIsAlive(entity)) return;
         Transform2D t;
         t.position = Vector2{ x, y };
@@ -927,7 +1508,88 @@ extern "C" {
         return it->second.rotation;
     }
 
-    // Sprite2D
+    Vector2 Framework_Ecs_GetWorldPosition(int entity) {
+        if (!EcsIsAlive(entity)) return Vector2{ 0, 0 };
+        return GetWorldPositionInternal(entity);
+    }
+
+    float Framework_Ecs_GetWorldRotation(int entity) {
+        if (!EcsIsAlive(entity)) return 0.0f;
+        return GetWorldRotationInternal(entity);
+    }
+
+    Vector2 Framework_Ecs_GetWorldScale(int entity) {
+        if (!EcsIsAlive(entity)) return Vector2{ 1, 1 };
+        return GetWorldScaleInternal(entity);
+    }
+
+    // ========================================================================
+    // ECS - VELOCITY2D COMPONENT
+    // ========================================================================
+    void Framework_Ecs_AddVelocity2D(int entity, float vx, float vy) {
+        if (!EcsIsAlive(entity)) return;
+        g_velocity2D[entity] = Velocity2D{ vx, vy };
+    }
+
+    bool Framework_Ecs_HasVelocity2D(int entity) {
+        return g_velocity2D.find(entity) != g_velocity2D.end();
+    }
+
+    void Framework_Ecs_SetVelocity(int entity, float vx, float vy) {
+        auto it = g_velocity2D.find(entity);
+        if (it == g_velocity2D.end()) return;
+        it->second.vx = vx;
+        it->second.vy = vy;
+    }
+
+    Vector2 Framework_Ecs_GetVelocity(int entity) {
+        auto it = g_velocity2D.find(entity);
+        if (it == g_velocity2D.end()) return Vector2{ 0, 0 };
+        return Vector2{ it->second.vx, it->second.vy };
+    }
+
+    void Framework_Ecs_RemoveVelocity2D(int entity) {
+        g_velocity2D.erase(entity);
+    }
+
+    // ========================================================================
+    // ECS - BOXCOLLIDER2D COMPONENT
+    // ========================================================================
+    void Framework_Ecs_AddBoxCollider2D(int entity, float offsetX, float offsetY, float width, float height, bool isTrigger) {
+        if (!EcsIsAlive(entity)) return;
+        g_boxCollider2D[entity] = BoxCollider2D{ offsetX, offsetY, width, height, isTrigger };
+    }
+
+    bool Framework_Ecs_HasBoxCollider2D(int entity) {
+        return g_boxCollider2D.find(entity) != g_boxCollider2D.end();
+    }
+
+    void Framework_Ecs_SetBoxCollider(int entity, float offsetX, float offsetY, float width, float height) {
+        auto it = g_boxCollider2D.find(entity);
+        if (it == g_boxCollider2D.end()) return;
+        it->second.offsetX = offsetX;
+        it->second.offsetY = offsetY;
+        it->second.width = width;
+        it->second.height = height;
+    }
+
+    void Framework_Ecs_SetBoxColliderTrigger(int entity, bool isTrigger) {
+        auto it = g_boxCollider2D.find(entity);
+        if (it == g_boxCollider2D.end()) return;
+        it->second.isTrigger = isTrigger;
+    }
+
+    Rectangle Framework_Ecs_GetBoxColliderWorldBounds(int entity) {
+        return GetBoxColliderWorldBoundsInternal(entity);
+    }
+
+    void Framework_Ecs_RemoveBoxCollider2D(int entity) {
+        g_boxCollider2D.erase(entity);
+    }
+
+    // ========================================================================
+    // ECS - SPRITE2D COMPONENT
+    // ========================================================================
     void Framework_Ecs_AddSprite2D(int entity, int textureHandle,
         float srcX, float srcY, float srcW, float srcH,
         unsigned char r, unsigned char g, unsigned char b, unsigned char a,
@@ -946,8 +1608,7 @@ extern "C" {
         return g_sprite2D.find(entity) != g_sprite2D.end();
     }
 
-    void Framework_Ecs_SetSpriteTint(int entity,
-        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+    void Framework_Ecs_SetSpriteTint(int entity, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
         auto it = g_sprite2D.find(entity);
         if (it == g_sprite2D.end()) return;
         it->second.tint = Color{ r, g, b, a };
@@ -965,87 +1626,907 @@ extern "C" {
         it->second.layer = layer;
     }
 
+    void Framework_Ecs_SetSpriteSource(int entity, float srcX, float srcY, float srcW, float srcH) {
+        auto it = g_sprite2D.find(entity);
+        if (it == g_sprite2D.end()) return;
+        it->second.source = Rectangle{ srcX, srcY, srcW, srcH };
+    }
+
+    void Framework_Ecs_SetSpriteTexture(int entity, int textureHandle) {
+        auto it = g_sprite2D.find(entity);
+        if (it == g_sprite2D.end()) return;
+        it->second.textureHandle = textureHandle;
+    }
+
+    void Framework_Ecs_RemoveSprite2D(int entity) {
+        g_sprite2D.erase(entity);
+    }
+
+    // ========================================================================
+    // ECS - SYSTEMS
+    // ========================================================================
+    void Framework_Ecs_UpdateVelocities(float dt) {
+        for (auto& kv : g_velocity2D) {
+            Entity e = kv.first;
+            if (!IsActiveInHierarchyInternal(e)) continue;
+
+            auto tIt = g_transform2D.find(e);
+            if (tIt == g_transform2D.end()) continue;
+
+            tIt->second.position.x += kv.second.vx * dt;
+            tIt->second.position.y += kv.second.vy * dt;
+        }
+    }
+
     void Framework_Ecs_DrawSprites() {
         EcsDrawSpritesInternal();
     }
 
-    // -----------------------
-    // Scene objects (script-driven)
-    // -----------------------
+    // ========================================================================
+    // PHYSICS - OVERLAP QUERIES
+    // ========================================================================
+    int Framework_Physics_OverlapBox(float x, float y, float w, float h, int* buffer, int bufferSize) {
+        if (!buffer || bufferSize <= 0) return 0;
 
-    int Framework_CreateScriptScene(SceneCallbacks cb) {
-        int h = g_nextSceneHandle++;
-        g_scenes[h] = ScriptScene{ cb };
+        Rectangle query = { x, y, w, h };
+        int count = 0;
+
+        for (auto& kv : g_boxCollider2D) {
+            if (count >= bufferSize) break;
+            Rectangle bounds = GetBoxColliderWorldBoundsInternal(kv.first);
+            if (CheckCollisionRecs(query, bounds)) {
+                buffer[count++] = kv.first;
+            }
+        }
+
+        return count;
+    }
+
+    int Framework_Physics_OverlapCircle(float x, float y, float radius, int* buffer, int bufferSize) {
+        if (!buffer || bufferSize <= 0) return 0;
+
+        Vector2 center = { x, y };
+        int count = 0;
+
+        for (auto& kv : g_boxCollider2D) {
+            if (count >= bufferSize) break;
+            Rectangle bounds = GetBoxColliderWorldBoundsInternal(kv.first);
+            if (CheckCollisionCircleRec(center, radius, bounds)) {
+                buffer[count++] = kv.first;
+            }
+        }
+
+        return count;
+    }
+
+    bool Framework_Physics_CheckEntityOverlap(int entityA, int entityB) {
+        if (!EcsIsAlive(entityA) || !EcsIsAlive(entityB)) return false;
+
+        auto aIt = g_boxCollider2D.find(entityA);
+        auto bIt = g_boxCollider2D.find(entityB);
+        if (aIt == g_boxCollider2D.end() || bIt == g_boxCollider2D.end()) return false;
+
+        Rectangle boundsA = GetBoxColliderWorldBoundsInternal(entityA);
+        Rectangle boundsB = GetBoxColliderWorldBoundsInternal(entityB);
+
+        return CheckCollisionRecs(boundsA, boundsB);
+    }
+
+    int Framework_Physics_GetOverlappingEntities(int entity, int* buffer, int bufferSize) {
+        if (!buffer || bufferSize <= 0) return 0;
+        if (!EcsIsAlive(entity)) return 0;
+
+        auto eIt = g_boxCollider2D.find(entity);
+        if (eIt == g_boxCollider2D.end()) return 0;
+
+        Rectangle bounds = GetBoxColliderWorldBoundsInternal(entity);
+        int count = 0;
+
+        for (auto& kv : g_boxCollider2D) {
+            if (count >= bufferSize) break;
+            if (kv.first == entity) continue;
+
+            Rectangle otherBounds = GetBoxColliderWorldBoundsInternal(kv.first);
+            if (CheckCollisionRecs(bounds, otherBounds)) {
+                buffer[count++] = kv.first;
+            }
+        }
+
+        return count;
+    }
+
+    // ========================================================================
+    // INTROSPECTION
+    // ========================================================================
+    int Framework_Entity_GetComponentCount(int entity) {
+        if (!EcsIsAlive(entity)) return 0;
+        int count = 0;
+        if (g_transform2D.find(entity) != g_transform2D.end()) count++;
+        if (g_sprite2D.find(entity) != g_sprite2D.end()) count++;
+        if (g_name.find(entity) != g_name.end()) count++;
+        if (g_tag.find(entity) != g_tag.end()) count++;
+        if (g_hierarchy.find(entity) != g_hierarchy.end()) count++;
+        if (g_velocity2D.find(entity) != g_velocity2D.end()) count++;
+        if (g_boxCollider2D.find(entity) != g_boxCollider2D.end()) count++;
+        if (g_enabled.find(entity) != g_enabled.end()) count++;
+        return count;
+    }
+
+    int Framework_Entity_GetComponentTypeAt(int entity, int index) {
+        if (!EcsIsAlive(entity)) return COMP_NONE;
+        int current = 0;
+        if (g_transform2D.find(entity) != g_transform2D.end()) { if (current == index) return COMP_TRANSFORM2D; current++; }
+        if (g_sprite2D.find(entity) != g_sprite2D.end()) { if (current == index) return COMP_SPRITE2D; current++; }
+        if (g_name.find(entity) != g_name.end()) { if (current == index) return COMP_NAME; current++; }
+        if (g_tag.find(entity) != g_tag.end()) { if (current == index) return COMP_TAG; current++; }
+        if (g_hierarchy.find(entity) != g_hierarchy.end()) { if (current == index) return COMP_HIERARCHY; current++; }
+        if (g_velocity2D.find(entity) != g_velocity2D.end()) { if (current == index) return COMP_VELOCITY2D; current++; }
+        if (g_boxCollider2D.find(entity) != g_boxCollider2D.end()) { if (current == index) return COMP_BOXCOLLIDER2D; current++; }
+        if (g_enabled.find(entity) != g_enabled.end()) { if (current == index) return COMP_ENABLED; current++; }
+        return COMP_NONE;
+    }
+
+    bool Framework_Entity_HasComponent(int entity, int compType) {
+        if (!EcsIsAlive(entity)) return false;
+        switch (compType) {
+            case COMP_TRANSFORM2D: return g_transform2D.find(entity) != g_transform2D.end();
+            case COMP_SPRITE2D: return g_sprite2D.find(entity) != g_sprite2D.end();
+            case COMP_NAME: return g_name.find(entity) != g_name.end();
+            case COMP_TAG: return g_tag.find(entity) != g_tag.end();
+            case COMP_HIERARCHY: return g_hierarchy.find(entity) != g_hierarchy.end();
+            case COMP_VELOCITY2D: return g_velocity2D.find(entity) != g_velocity2D.end();
+            case COMP_BOXCOLLIDER2D: return g_boxCollider2D.find(entity) != g_boxCollider2D.end();
+            case COMP_ENABLED: return g_enabled.find(entity) != g_enabled.end();
+            default: return false;
+        }
+    }
+
+    // Field metadata
+    static const char* s_transform2DFields[] = { "posX", "posY", "rotation", "scaleX", "scaleY" };
+    static const char* s_sprite2DFields[] = { "textureHandle", "srcX", "srcY", "srcW", "srcH", "tintR", "tintG", "tintB", "tintA", "layer", "visible" };
+    static const char* s_nameFields[] = { "name" };
+    static const char* s_tagFields[] = { "tag" };
+    static const char* s_hierarchyFields[] = { "parent", "firstChild", "nextSibling" };
+    static const char* s_velocity2DFields[] = { "vx", "vy" };
+    static const char* s_boxCollider2DFields[] = { "offsetX", "offsetY", "width", "height", "isTrigger" };
+    static const char* s_enabledFields[] = { "enabled" };
+
+    int Framework_Component_GetFieldCount(int compType) {
+        switch (compType) {
+            case COMP_TRANSFORM2D: return 5;
+            case COMP_SPRITE2D: return 11;
+            case COMP_NAME: return 1;
+            case COMP_TAG: return 1;
+            case COMP_HIERARCHY: return 3;
+            case COMP_VELOCITY2D: return 2;
+            case COMP_BOXCOLLIDER2D: return 5;
+            case COMP_ENABLED: return 1;
+            default: return 0;
+        }
+    }
+
+    const char* Framework_Component_GetFieldName(int compType, int fieldIndex) {
+        switch (compType) {
+            case COMP_TRANSFORM2D: return (fieldIndex >= 0 && fieldIndex < 5) ? s_transform2DFields[fieldIndex] : "";
+            case COMP_SPRITE2D: return (fieldIndex >= 0 && fieldIndex < 11) ? s_sprite2DFields[fieldIndex] : "";
+            case COMP_NAME: return (fieldIndex == 0) ? s_nameFields[0] : "";
+            case COMP_TAG: return (fieldIndex == 0) ? s_tagFields[0] : "";
+            case COMP_HIERARCHY: return (fieldIndex >= 0 && fieldIndex < 3) ? s_hierarchyFields[fieldIndex] : "";
+            case COMP_VELOCITY2D: return (fieldIndex >= 0 && fieldIndex < 2) ? s_velocity2DFields[fieldIndex] : "";
+            case COMP_BOXCOLLIDER2D: return (fieldIndex >= 0 && fieldIndex < 5) ? s_boxCollider2DFields[fieldIndex] : "";
+            case COMP_ENABLED: return (fieldIndex == 0) ? s_enabledFields[0] : "";
+            default: return "";
+        }
+    }
+
+    int Framework_Component_GetFieldType(int compType, int fieldIndex) {
+        // 0=float, 1=int, 2=bool, 3=string
+        switch (compType) {
+            case COMP_TRANSFORM2D: return 0; // all floats
+            case COMP_SPRITE2D:
+                if (fieldIndex == 0 || fieldIndex == 9) return 1; // textureHandle, layer = int
+                if (fieldIndex == 10) return 2; // visible = bool
+                return 0; // rest are floats
+            case COMP_NAME: return 3;
+            case COMP_TAG: return 3;
+            case COMP_HIERARCHY: return 1; // all ints
+            case COMP_VELOCITY2D: return 0;
+            case COMP_BOXCOLLIDER2D:
+                if (fieldIndex == 4) return 2; // isTrigger = bool
+                return 0;
+            case COMP_ENABLED: return 2;
+            default: return 0;
+        }
+    }
+
+    float Framework_Component_GetFieldFloat(int entity, int compType, int fieldIndex) {
+        switch (compType) {
+            case COMP_TRANSFORM2D: {
+                auto it = g_transform2D.find(entity);
+                if (it == g_transform2D.end()) return 0.0f;
+                switch (fieldIndex) {
+                    case 0: return it->second.position.x;
+                    case 1: return it->second.position.y;
+                    case 2: return it->second.rotation;
+                    case 3: return it->second.scale.x;
+                    case 4: return it->second.scale.y;
+                }
+                break;
+            }
+            case COMP_SPRITE2D: {
+                auto it = g_sprite2D.find(entity);
+                if (it == g_sprite2D.end()) return 0.0f;
+                switch (fieldIndex) {
+                    case 1: return it->second.source.x;
+                    case 2: return it->second.source.y;
+                    case 3: return it->second.source.width;
+                    case 4: return it->second.source.height;
+                    case 5: return (float)it->second.tint.r;
+                    case 6: return (float)it->second.tint.g;
+                    case 7: return (float)it->second.tint.b;
+                    case 8: return (float)it->second.tint.a;
+                }
+                break;
+            }
+            case COMP_VELOCITY2D: {
+                auto it = g_velocity2D.find(entity);
+                if (it == g_velocity2D.end()) return 0.0f;
+                switch (fieldIndex) {
+                    case 0: return it->second.vx;
+                    case 1: return it->second.vy;
+                }
+                break;
+            }
+            case COMP_BOXCOLLIDER2D: {
+                auto it = g_boxCollider2D.find(entity);
+                if (it == g_boxCollider2D.end()) return 0.0f;
+                switch (fieldIndex) {
+                    case 0: return it->second.offsetX;
+                    case 1: return it->second.offsetY;
+                    case 2: return it->second.width;
+                    case 3: return it->second.height;
+                }
+                break;
+            }
+        }
+        return 0.0f;
+    }
+
+    int Framework_Component_GetFieldInt(int entity, int compType, int fieldIndex) {
+        switch (compType) {
+            case COMP_SPRITE2D: {
+                auto it = g_sprite2D.find(entity);
+                if (it == g_sprite2D.end()) return 0;
+                switch (fieldIndex) {
+                    case 0: return it->second.textureHandle;
+                    case 9: return it->second.layer;
+                }
+                break;
+            }
+            case COMP_HIERARCHY: {
+                auto it = g_hierarchy.find(entity);
+                if (it == g_hierarchy.end()) return -1;
+                switch (fieldIndex) {
+                    case 0: return it->second.parent;
+                    case 1: return it->second.firstChild;
+                    case 2: return it->second.nextSibling;
+                }
+                break;
+            }
+        }
+        return 0;
+    }
+
+    bool Framework_Component_GetFieldBool(int entity, int compType, int fieldIndex) {
+        switch (compType) {
+            case COMP_SPRITE2D: {
+                auto it = g_sprite2D.find(entity);
+                if (it == g_sprite2D.end()) return false;
+                if (fieldIndex == 10) return it->second.visible;
+                break;
+            }
+            case COMP_BOXCOLLIDER2D: {
+                auto it = g_boxCollider2D.find(entity);
+                if (it == g_boxCollider2D.end()) return false;
+                if (fieldIndex == 4) return it->second.isTrigger;
+                break;
+            }
+            case COMP_ENABLED: {
+                auto it = g_enabled.find(entity);
+                if (it == g_enabled.end()) return true;
+                if (fieldIndex == 0) return it->second.enabled;
+                break;
+            }
+        }
+        return false;
+    }
+
+    const char* Framework_Component_GetFieldString(int entity, int compType, int fieldIndex) {
+        switch (compType) {
+            case COMP_NAME: {
+                auto it = g_name.find(entity);
+                if (it == g_name.end()) return "";
+                return it->second.name;
+            }
+            case COMP_TAG: {
+                auto it = g_tag.find(entity);
+                if (it == g_tag.end()) return "";
+                return it->second.tag;
+            }
+        }
+        return "";
+    }
+
+    void Framework_Component_SetFieldFloat(int entity, int compType, int fieldIndex, float value) {
+        switch (compType) {
+            case COMP_TRANSFORM2D: {
+                auto it = g_transform2D.find(entity);
+                if (it == g_transform2D.end()) return;
+                switch (fieldIndex) {
+                    case 0: it->second.position.x = value; break;
+                    case 1: it->second.position.y = value; break;
+                    case 2: it->second.rotation = value; break;
+                    case 3: it->second.scale.x = value; break;
+                    case 4: it->second.scale.y = value; break;
+                }
+                break;
+            }
+            case COMP_SPRITE2D: {
+                auto it = g_sprite2D.find(entity);
+                if (it == g_sprite2D.end()) return;
+                switch (fieldIndex) {
+                    case 1: it->second.source.x = value; break;
+                    case 2: it->second.source.y = value; break;
+                    case 3: it->second.source.width = value; break;
+                    case 4: it->second.source.height = value; break;
+                    case 5: it->second.tint.r = (unsigned char)value; break;
+                    case 6: it->second.tint.g = (unsigned char)value; break;
+                    case 7: it->second.tint.b = (unsigned char)value; break;
+                    case 8: it->second.tint.a = (unsigned char)value; break;
+                }
+                break;
+            }
+            case COMP_VELOCITY2D: {
+                auto it = g_velocity2D.find(entity);
+                if (it == g_velocity2D.end()) return;
+                switch (fieldIndex) {
+                    case 0: it->second.vx = value; break;
+                    case 1: it->second.vy = value; break;
+                }
+                break;
+            }
+            case COMP_BOXCOLLIDER2D: {
+                auto it = g_boxCollider2D.find(entity);
+                if (it == g_boxCollider2D.end()) return;
+                switch (fieldIndex) {
+                    case 0: it->second.offsetX = value; break;
+                    case 1: it->second.offsetY = value; break;
+                    case 2: it->second.width = value; break;
+                    case 3: it->second.height = value; break;
+                }
+                break;
+            }
+        }
+    }
+
+    void Framework_Component_SetFieldInt(int entity, int compType, int fieldIndex, int value) {
+        switch (compType) {
+            case COMP_SPRITE2D: {
+                auto it = g_sprite2D.find(entity);
+                if (it == g_sprite2D.end()) return;
+                switch (fieldIndex) {
+                    case 0: it->second.textureHandle = value; break;
+                    case 9: it->second.layer = value; break;
+                }
+                break;
+            }
+        }
+    }
+
+    void Framework_Component_SetFieldBool(int entity, int compType, int fieldIndex, bool value) {
+        switch (compType) {
+            case COMP_SPRITE2D: {
+                auto it = g_sprite2D.find(entity);
+                if (it == g_sprite2D.end()) return;
+                if (fieldIndex == 10) it->second.visible = value;
+                break;
+            }
+            case COMP_BOXCOLLIDER2D: {
+                auto it = g_boxCollider2D.find(entity);
+                if (it == g_boxCollider2D.end()) return;
+                if (fieldIndex == 4) it->second.isTrigger = value;
+                break;
+            }
+            case COMP_ENABLED: {
+                auto it = g_enabled.find(entity);
+                if (it == g_enabled.end()) return;
+                if (fieldIndex == 0) it->second.enabled = value;
+                break;
+            }
+        }
+    }
+
+    void Framework_Component_SetFieldString(int entity, int compType, int fieldIndex, const char* value) {
+        switch (compType) {
+            case COMP_NAME: {
+                auto it = g_name.find(entity);
+                if (it == g_name.end()) return;
+                if (value) {
+                    strncpy_s(it->second.name, FW_NAME_MAX, value, _TRUNCATE);
+                }
+                break;
+            }
+            case COMP_TAG: {
+                auto it = g_tag.find(entity);
+                if (it == g_tag.end()) return;
+                if (value) {
+                    strncpy_s(it->second.tag, FW_TAG_MAX, value, _TRUNCATE);
+                }
+                break;
+            }
+        }
+    }
+
+    // ========================================================================
+    // DEBUG OVERLAY
+    // ========================================================================
+    void Framework_Debug_SetEnabled(bool enabled) {
+        g_debugEnabled = enabled;
+    }
+
+    bool Framework_Debug_IsEnabled() {
+        return g_debugEnabled;
+    }
+
+    void Framework_Debug_DrawEntityBounds(bool enabled) {
+        g_debugDrawBounds = enabled;
+    }
+
+    void Framework_Debug_DrawHierarchy(bool enabled) {
+        g_debugDrawHierarchy = enabled;
+    }
+
+    void Framework_Debug_DrawStats(bool enabled) {
+        g_debugDrawStats = enabled;
+    }
+
+    void Framework_Debug_Render() {
+        if (!g_debugEnabled) return;
+
+        // Draw entity bounds
+        if (g_debugDrawBounds) {
+            for (auto& kv : g_boxCollider2D) {
+                if (!IsActiveInHierarchyInternal(kv.first)) continue;
+                Rectangle bounds = GetBoxColliderWorldBoundsInternal(kv.first);
+                Color col = kv.second.isTrigger ? Color{ 0, 255, 0, 128 } : Color{ 255, 255, 0, 128 };
+                DrawRectangleLinesEx(bounds, 1.0f, col);
+            }
+        }
+
+        // Draw hierarchy lines
+        if (g_debugDrawHierarchy) {
+            for (auto& kv : g_hierarchy) {
+                if (kv.second.parent == -1) continue;
+                Vector2 childPos = GetWorldPositionInternal(kv.first);
+                Vector2 parentPos = GetWorldPositionInternal(kv.second.parent);
+                DrawLineV(childPos, parentPos, Color{ 128, 128, 255, 200 });
+            }
+        }
+
+        // Draw stats
+        if (g_debugDrawStats) {
+            int y = 10;
+            char buf[128];
+
+            snprintf(buf, sizeof(buf), "FPS: %d", GetFPS());
+            DrawText(buf, 10, y, 16, WHITE); y += 18;
+
+            snprintf(buf, sizeof(buf), "Entities: %d", (int)g_entities.size());
+            DrawText(buf, 10, y, 16, WHITE); y += 18;
+
+            snprintf(buf, sizeof(buf), "Sprites: %d", (int)g_sprite2D.size());
+            DrawText(buf, 10, y, 16, WHITE); y += 18;
+
+            snprintf(buf, sizeof(buf), "Frame: %llu", g_frameCount);
+            DrawText(buf, 10, y, 16, WHITE); y += 18;
+
+            const char* stateStr = "UNKNOWN";
+            switch (g_engineState) {
+                case ENGINE_STOPPED: stateStr = "STOPPED"; break;
+                case ENGINE_RUNNING: stateStr = "RUNNING"; break;
+                case ENGINE_PAUSED: stateStr = "PAUSED"; break;
+                case ENGINE_QUITTING: stateStr = "QUITTING"; break;
+            }
+            snprintf(buf, sizeof(buf), "State: %s", stateStr);
+            DrawText(buf, 10, y, 16, WHITE);
+        }
+    }
+
+    // ========================================================================
+    // PREFABS & SERIALIZATION (Basic implementation)
+    // ========================================================================
+
+    // Scene/Prefab binary format magic
+    #define VGSE_MAGIC 0x45534756  // 'VGSE'
+    #define VGSE_VERSION 1
+
+    bool Framework_Scene_Save(const char* path) {
+        if (!path) return false;
+
+        std::ofstream file(path, std::ios::binary);
+        if (!file) return false;
+
+        // Header
+        uint32_t magic = VGSE_MAGIC;
+        uint16_t version = VGSE_VERSION;
+        uint32_t entityCount = (uint32_t)g_entities.size();
+
+        file.write((char*)&magic, sizeof(magic));
+        file.write((char*)&version, sizeof(version));
+        file.write((char*)&entityCount, sizeof(entityCount));
+
+        // For each entity, write components
+        for (Entity e : g_entities) {
+            file.write((char*)&e, sizeof(e));
+
+            // Flags for which components exist
+            uint16_t compFlags = 0;
+            if (g_transform2D.find(e) != g_transform2D.end()) compFlags |= (1 << COMP_TRANSFORM2D);
+            if (g_sprite2D.find(e) != g_sprite2D.end()) compFlags |= (1 << COMP_SPRITE2D);
+            if (g_name.find(e) != g_name.end()) compFlags |= (1 << COMP_NAME);
+            if (g_tag.find(e) != g_tag.end()) compFlags |= (1 << COMP_TAG);
+            if (g_hierarchy.find(e) != g_hierarchy.end()) compFlags |= (1 << COMP_HIERARCHY);
+            if (g_velocity2D.find(e) != g_velocity2D.end()) compFlags |= (1 << COMP_VELOCITY2D);
+            if (g_boxCollider2D.find(e) != g_boxCollider2D.end()) compFlags |= (1 << COMP_BOXCOLLIDER2D);
+            if (g_enabled.find(e) != g_enabled.end()) compFlags |= (1 << COMP_ENABLED);
+
+            file.write((char*)&compFlags, sizeof(compFlags));
+
+            if (compFlags & (1 << COMP_TRANSFORM2D)) {
+                file.write((char*)&g_transform2D[e], sizeof(Transform2D));
+            }
+            if (compFlags & (1 << COMP_SPRITE2D)) {
+                file.write((char*)&g_sprite2D[e], sizeof(Sprite2D));
+            }
+            if (compFlags & (1 << COMP_NAME)) {
+                file.write((char*)&g_name[e], sizeof(NameComponent));
+            }
+            if (compFlags & (1 << COMP_TAG)) {
+                file.write((char*)&g_tag[e], sizeof(TagComponent));
+            }
+            if (compFlags & (1 << COMP_HIERARCHY)) {
+                file.write((char*)&g_hierarchy[e], sizeof(HierarchyComponent));
+            }
+            if (compFlags & (1 << COMP_VELOCITY2D)) {
+                file.write((char*)&g_velocity2D[e], sizeof(Velocity2D));
+            }
+            if (compFlags & (1 << COMP_BOXCOLLIDER2D)) {
+                file.write((char*)&g_boxCollider2D[e], sizeof(BoxCollider2D));
+            }
+            if (compFlags & (1 << COMP_ENABLED)) {
+                file.write((char*)&g_enabled[e], sizeof(EnabledComponent));
+            }
+        }
+
+        return true;
+    }
+
+    bool Framework_Scene_Load(const char* path) {
+        if (!path) return false;
+
+        std::ifstream file(path, std::ios::binary);
+        if (!file) return false;
+
+        uint32_t magic;
+        uint16_t version;
+        uint32_t entityCount;
+
+        file.read((char*)&magic, sizeof(magic));
+        if (magic != VGSE_MAGIC) return false;
+
+        file.read((char*)&version, sizeof(version));
+        if (version != VGSE_VERSION) return false;
+
+        file.read((char*)&entityCount, sizeof(entityCount));
+
+        // Clear current scene
+        EcsClearAllInternal();
+
+        for (uint32_t i = 0; i < entityCount; i++) {
+            Entity e;
+            file.read((char*)&e, sizeof(e));
+
+            g_entities.insert(e);
+            if (e >= g_nextEntityId) g_nextEntityId = e + 1;
+
+            uint16_t compFlags;
+            file.read((char*)&compFlags, sizeof(compFlags));
+
+            if (compFlags & (1 << COMP_TRANSFORM2D)) {
+                Transform2D t;
+                file.read((char*)&t, sizeof(t));
+                g_transform2D[e] = t;
+            }
+            if (compFlags & (1 << COMP_SPRITE2D)) {
+                Sprite2D s;
+                file.read((char*)&s, sizeof(s));
+                g_sprite2D[e] = s;
+            }
+            if (compFlags & (1 << COMP_NAME)) {
+                NameComponent n;
+                file.read((char*)&n, sizeof(n));
+                g_name[e] = n;
+            }
+            if (compFlags & (1 << COMP_TAG)) {
+                TagComponent t;
+                file.read((char*)&t, sizeof(t));
+                g_tag[e] = t;
+            }
+            if (compFlags & (1 << COMP_HIERARCHY)) {
+                HierarchyComponent h;
+                file.read((char*)&h, sizeof(h));
+                g_hierarchy[e] = h;
+            }
+            if (compFlags & (1 << COMP_VELOCITY2D)) {
+                Velocity2D v;
+                file.read((char*)&v, sizeof(v));
+                g_velocity2D[e] = v;
+            }
+            if (compFlags & (1 << COMP_BOXCOLLIDER2D)) {
+                BoxCollider2D b;
+                file.read((char*)&b, sizeof(b));
+                g_boxCollider2D[e] = b;
+            }
+            if (compFlags & (1 << COMP_ENABLED)) {
+                EnabledComponent en;
+                file.read((char*)&en, sizeof(en));
+                g_enabled[e] = en;
+            }
+        }
+
+        return true;
+    }
+
+    int Framework_Prefab_Load(const char* path) {
+        if (!path) return 0;
+
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file) return 0;
+
+        std::streamsize size = file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        PrefabData pd;
+        pd.data.resize((size_t)size);
+        if (!file.read((char*)pd.data.data(), size)) return 0;
+
+        pd.valid = true;
+        int h = g_nextPrefabHandle++;
+        g_prefabs[h] = std::move(pd);
         return h;
     }
 
-    void Framework_DestroyScene(int sceneHandle) {
-        // If it’s on the stack, pop it first
-        for (int i = (int)g_stack.size() - 1; i >= 0; --i) {
-            if (g_stack[i] == sceneHandle) {
-                // If top, call OnExit
-                if (i == (int)g_stack.size() - 1) {
-                    if (auto sc = GetScene(sceneHandle); sc && sc->cb.onExit) {
-                        sc->cb.onExit();
-                    }
+    int Framework_Prefab_Instantiate(int prefabH, int parentEntity, float x, float y) {
+        auto it = g_prefabs.find(prefabH);
+        if (it == g_prefabs.end() || !it->second.valid) return -1;
+
+        // Parse prefab data and create entities
+        // This is a simplified version - a full impl would need to remap entity IDs
+        const uint8_t* data = it->second.data.data();
+        size_t offset = 0;
+
+        uint32_t magic = *(uint32_t*)(data + offset); offset += 4;
+        if (magic != VGSE_MAGIC) return -1;
+
+        uint16_t version = *(uint16_t*)(data + offset); offset += 2;
+        if (version != VGSE_VERSION) return -1;
+
+        uint32_t entityCount = *(uint32_t*)(data + offset); offset += 4;
+
+        std::unordered_map<Entity, Entity> idRemap;
+        Entity rootEntity = -1;
+
+        // First pass: create entities and remap IDs
+        for (uint32_t i = 0; i < entityCount; i++) {
+            Entity oldId = *(Entity*)(data + offset); offset += sizeof(Entity);
+            Entity newId = g_nextEntityId++;
+            g_entities.insert(newId);
+            idRemap[oldId] = newId;
+
+            if (rootEntity == -1) rootEntity = newId;
+
+            uint16_t compFlags = *(uint16_t*)(data + offset); offset += 2;
+
+            if (compFlags & (1 << COMP_TRANSFORM2D)) {
+                Transform2D t = *(Transform2D*)(data + offset);
+                offset += sizeof(Transform2D);
+                // Offset position for root entity
+                if (newId == rootEntity) {
+                    t.position.x += x;
+                    t.position.y += y;
                 }
-                g_stack.erase(g_stack.begin() + i);
+                g_transform2D[newId] = t;
             }
-        }
-        g_scenes.erase(sceneHandle);
-    }
-
-    // ---- Stack ops ----
-    void Framework_SceneChange(int sceneHandle) {
-        // Exit current top
-        if (!g_stack.empty()) {
-            if (auto sc = TopScene(); sc && sc->cb.onExit) sc->cb.onExit();
-            g_stack.pop_back();
-        }
-        // Push new
-        g_stack.push_back(sceneHandle);
-        if (auto sc = TopScene(); sc && sc->cb.onEnter) sc->cb.onEnter();
-    }
-
-    void Framework_ScenePush(int sceneHandle) {
-        g_stack.push_back(sceneHandle);
-        if (auto sc = TopScene(); sc && sc->cb.onEnter) sc->cb.onEnter();
-    }
-
-    void Framework_ScenePop() {
-        if (g_stack.empty()) return;
-        // Exit current
-        if (auto sc = TopScene(); sc && sc->cb.onExit) sc->cb.onExit();
-        g_stack.pop_back();
-        // Resume previous
-        if (auto sc = TopScene(); sc && sc->cb.onResume) sc->cb.onResume();
-    }
-
-    bool Framework_SceneHas() {
-        return !g_stack.empty();
-    }
-
-    // ---- Per-frame tick ----
-    // Uses fixed-step helpers to drive onUpdateFixed
-    void Framework_SceneTick() {
-        // Fixed updates (top may change each step)
-        while (Framework_StepFixed()) {
-            auto sc = TopScene();
-            if (!sc) return;
-            if (sc->cb.onUpdateFixed) {
-                sc->cb.onUpdateFixed(Framework_GetFixedStep());
+            if (compFlags & (1 << COMP_SPRITE2D)) {
+                Sprite2D s = *(Sprite2D*)(data + offset);
+                offset += sizeof(Sprite2D);
+                g_sprite2D[newId] = s;
+            }
+            if (compFlags & (1 << COMP_NAME)) {
+                NameComponent n = *(NameComponent*)(data + offset);
+                offset += sizeof(NameComponent);
+                g_name[newId] = n;
+            }
+            if (compFlags & (1 << COMP_TAG)) {
+                TagComponent t = *(TagComponent*)(data + offset);
+                offset += sizeof(TagComponent);
+                g_tag[newId] = t;
+            }
+            if (compFlags & (1 << COMP_HIERARCHY)) {
+                HierarchyComponent h = *(HierarchyComponent*)(data + offset);
+                offset += sizeof(HierarchyComponent);
+                // Will fix up in second pass
+                g_hierarchy[newId] = h;
+            }
+            if (compFlags & (1 << COMP_VELOCITY2D)) {
+                Velocity2D v = *(Velocity2D*)(data + offset);
+                offset += sizeof(Velocity2D);
+                g_velocity2D[newId] = v;
+            }
+            if (compFlags & (1 << COMP_BOXCOLLIDER2D)) {
+                BoxCollider2D b = *(BoxCollider2D*)(data + offset);
+                offset += sizeof(BoxCollider2D);
+                g_boxCollider2D[newId] = b;
+            }
+            if (compFlags & (1 << COMP_ENABLED)) {
+                EnabledComponent en = *(EnabledComponent*)(data + offset);
+                offset += sizeof(EnabledComponent);
+                g_enabled[newId] = en;
             }
         }
 
-        // Frame update
-        if (auto sc = TopScene(); sc && sc->cb.onUpdateFrame) {
-            sc->cb.onUpdateFrame((float)Framework_GetFrameTime());
+        // Second pass: fix hierarchy references
+        for (auto& kv : idRemap) {
+            Entity newId = kv.second;
+            auto hIt = g_hierarchy.find(newId);
+            if (hIt != g_hierarchy.end()) {
+                HierarchyComponent& h = hIt->second;
+                if (h.parent != -1) {
+                    auto pIt = idRemap.find(h.parent);
+                    h.parent = (pIt != idRemap.end()) ? pIt->second : -1;
+                }
+                if (h.firstChild != -1) {
+                    auto cIt = idRemap.find(h.firstChild);
+                    h.firstChild = (cIt != idRemap.end()) ? cIt->second : -1;
+                }
+                if (h.nextSibling != -1) {
+                    auto sIt = idRemap.find(h.nextSibling);
+                    h.nextSibling = (sIt != idRemap.end()) ? sIt->second : -1;
+                }
+                if (h.prevSibling != -1) {
+                    auto sIt = idRemap.find(h.prevSibling);
+                    h.prevSibling = (sIt != idRemap.end()) ? sIt->second : -1;
+                }
+            }
         }
 
-        // Draw
-        if (auto sc = TopScene(); sc && sc->cb.onDraw) {
-            sc->cb.onDraw();
+        // Set parent if specified
+        if (parentEntity != -1 && EcsIsAlive(parentEntity) && rootEntity != -1) {
+            Framework_Ecs_SetParent(rootEntity, parentEntity);
         }
+
+        return rootEntity;
+    }
+
+    void Framework_Prefab_Unload(int prefabH) {
+        g_prefabs.erase(prefabH);
+    }
+
+    bool Framework_Prefab_SaveEntity(int entity, const char* path) {
+        if (!path || !EcsIsAlive(entity)) return false;
+
+        // Collect entity and all descendants
+        std::vector<Entity> entities;
+        std::function<void(Entity)> collect = [&](Entity e) {
+            entities.push_back(e);
+            auto hIt = g_hierarchy.find(e);
+            if (hIt != g_hierarchy.end()) {
+                int child = hIt->second.firstChild;
+                while (child != -1) {
+                    collect(child);
+                    auto chIt = g_hierarchy.find(child);
+                    if (chIt == g_hierarchy.end()) break;
+                    child = chIt->second.nextSibling;
+                }
+            }
+        };
+        collect(entity);
+
+        std::ofstream file(path, std::ios::binary);
+        if (!file) return false;
+
+        uint32_t magic = VGSE_MAGIC;
+        uint16_t version = VGSE_VERSION;
+        uint32_t entityCount = (uint32_t)entities.size();
+
+        file.write((char*)&magic, sizeof(magic));
+        file.write((char*)&version, sizeof(version));
+        file.write((char*)&entityCount, sizeof(entityCount));
+
+        for (Entity e : entities) {
+            file.write((char*)&e, sizeof(e));
+
+            uint16_t compFlags = 0;
+            if (g_transform2D.find(e) != g_transform2D.end()) compFlags |= (1 << COMP_TRANSFORM2D);
+            if (g_sprite2D.find(e) != g_sprite2D.end()) compFlags |= (1 << COMP_SPRITE2D);
+            if (g_name.find(e) != g_name.end()) compFlags |= (1 << COMP_NAME);
+            if (g_tag.find(e) != g_tag.end()) compFlags |= (1 << COMP_TAG);
+            if (g_hierarchy.find(e) != g_hierarchy.end()) compFlags |= (1 << COMP_HIERARCHY);
+            if (g_velocity2D.find(e) != g_velocity2D.end()) compFlags |= (1 << COMP_VELOCITY2D);
+            if (g_boxCollider2D.find(e) != g_boxCollider2D.end()) compFlags |= (1 << COMP_BOXCOLLIDER2D);
+            if (g_enabled.find(e) != g_enabled.end()) compFlags |= (1 << COMP_ENABLED);
+
+            file.write((char*)&compFlags, sizeof(compFlags));
+
+            if (compFlags & (1 << COMP_TRANSFORM2D)) {
+                file.write((char*)&g_transform2D[e], sizeof(Transform2D));
+            }
+            if (compFlags & (1 << COMP_SPRITE2D)) {
+                file.write((char*)&g_sprite2D[e], sizeof(Sprite2D));
+            }
+            if (compFlags & (1 << COMP_NAME)) {
+                file.write((char*)&g_name[e], sizeof(NameComponent));
+            }
+            if (compFlags & (1 << COMP_TAG)) {
+                file.write((char*)&g_tag[e], sizeof(TagComponent));
+            }
+            if (compFlags & (1 << COMP_HIERARCHY)) {
+                file.write((char*)&g_hierarchy[e], sizeof(HierarchyComponent));
+            }
+            if (compFlags & (1 << COMP_VELOCITY2D)) {
+                file.write((char*)&g_velocity2D[e], sizeof(Velocity2D));
+            }
+            if (compFlags & (1 << COMP_BOXCOLLIDER2D)) {
+                file.write((char*)&g_boxCollider2D[e], sizeof(BoxCollider2D));
+            }
+            if (compFlags & (1 << COMP_ENABLED)) {
+                file.write((char*)&g_enabled[e], sizeof(EnabledComponent));
+            }
+        }
+
+        return true;
+    }
+
+    // ========================================================================
+    // CLEANUP
+    // ========================================================================
+    void Framework_ResourcesShutdown() {
+        // Textures
+        for (auto& kv : g_texByHandle) {
+            if (kv.second.valid) UnloadTexture(kv.second.tex);
+        }
+        g_texByHandle.clear();
+        g_handleByTexPath.clear();
+
+        // Fonts
+        for (auto& kv : g_fontByHandle) {
+            if (kv.second.valid) UnloadFont(kv.second.font);
+        }
+        g_fontByHandle.clear();
+        g_handleByFontKey.clear();
+
+        // Music
+        for (auto& kv : g_musByHandle) {
+            if (kv.second.valid) {
+                StopMusicStream(kv.second.mus);
+                UnloadMusicStream(kv.second.mus);
+            }
+        }
+        g_musByHandle.clear();
+        g_handleByMusPath.clear();
+
+        // Prefabs
+        g_prefabs.clear();
     }
 
 } // extern "C"

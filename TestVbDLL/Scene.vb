@@ -1,11 +1,13 @@
 ﻿' SceneBridge.vb
-' Requires the delegates/structs and P/Invokes already in RaylibWrapper.vb:
-'   - SceneVoidFn, SceneUpdateFixedFn, SceneUpdateFrameFn, SceneCallbacks
-'   - Framework_CreateScriptScene, Framework_SceneChange, Framework_SceneTick, Framework_SetDrawCallback
+' Requires delegates/structs + P/Invokes already defined in RaylibWrapper.vb:
+'   SceneVoidFn, SceneUpdateFixedFn, SceneUpdateFrameFn, SceneCallbacks
+'   Framework_CreateScriptScene, Framework_SceneChange, Framework_ScenePush,
+'   Framework_ScenePop, Framework_SceneTick, Framework_SetDrawCallback
 
-' Abstract base (VB: MustInherit + MustOverride == C++ pure virtuals)
+' Abstract scene base = C++ “scripted scene” interface
 Public MustInherit Class Scene
     Public sceneId As Integer = -1
+
     Protected MustOverride Sub OnEnter()
     Protected MustOverride Sub OnExit()
     Protected MustOverride Sub OnResume()
@@ -13,146 +15,186 @@ Public MustInherit Class Scene
     Protected MustOverride Sub OnUpdateFrame(dt As Single)
     Protected MustOverride Sub OnDraw()
 
-    Public Sub enter()
+    ' Public façade (so engine code calls these, not the MustOverride methods directly)
+    Public Sub Enter()
         OnEnter()
     End Sub
-    Public Sub [exit]()
+
+    Public Sub [Exit]()
         OnExit()
     End Sub
-    Public Sub [resume]()
+
+    Public Sub [Resume]()
         OnResume()
     End Sub
-    Public Sub updateFixed(dt As Double)
+
+    Public Sub UpdateFixed(dt As Double)
         OnUpdateFixed(dt)
     End Sub
-    Public Sub updateFrame(dt As Single)
+
+    Public Sub UpdateFrame(dt As Single)
         OnUpdateFrame(dt)
     End Sub
-    Public Sub draw()
+
+    Public Sub Draw()
         OnDraw()
     End Sub
-
 End Class
 
 Module SceneBridge
 
-    ' Global “current” scene (like static Scene* gCurrent)
+    ' ================
+    ' Managed state
+    ' ================
+
+    ' The VB scene that should receive all update/draw callbacks
     Private _current As Scene
 
-    ' Keep all delegates rooted so the GC never collects them
-    Private ReadOnly _dEnter As SceneVoidFn = AddressOf CB_OnEnter
-    Private ReadOnly _dExit As SceneVoidFn = AddressOf CB_OnExit
-    Private ReadOnly _dResume As SceneVoidFn = AddressOf CB_OnResume
+    ' Simple mirror of the native scene stack (top = Peek())
+    Private ReadOnly _managedStack As New Stack(Of Scene)
+
+    ' ===========================
+    ' Delegate roots (GC pin)
+    ' ===========================
+
+    ' We only use callbacks for fixed/frame/draw.
+    ' Enter / Exit / Resume are handled in VB directly.
     Private ReadOnly _dFixed As SceneUpdateFixedFn = AddressOf CB_OnUpdateFixed
     Private ReadOnly _dFrame As SceneUpdateFrameFn = AddressOf CB_OnUpdateFrame
     Private ReadOnly _dDraw As SceneVoidFn = AddressOf CB_OnDraw
 
-    ' Draw callback that ticks the native scene stack
+    ' Draw callback for the *engine* (called once per frame by Framework_Update)
     Private ReadOnly _drawDel As DrawCallback = AddressOf EngineDraw
 
-    ' --------- C++-style forwarders ---------
-    Private Sub CB_OnEnter()
-        If _current IsNot Nothing Then
-            _current.enter()
-        End If
-    End Sub
-
-    Private Sub CB_OnExit()
-        If _current IsNot Nothing Then
-            _current.exit()
-        End If
-    End Sub
-
-    Private Sub CB_OnResume()
-        If _current IsNot Nothing Then
-            _current.[resume]()
-        End If
-    End Sub
+    ' ===========================
+    ' Callback implementations
+    ' ===========================
 
     Private Sub CB_OnUpdateFixed(dt As Double)
-        If _current IsNot Nothing Then
-            _current.updateFixed(dt)
+        Dim s = _current
+        If s IsNot Nothing Then
+            s.UpdateFixed(dt)
         End If
     End Sub
 
     Private Sub CB_OnUpdateFrame(dt As Single)
-        If _current IsNot Nothing Then
-            _current.updateFrame(dt)
+        Dim s = _current
+        If s IsNot Nothing Then
+            s.UpdateFrame(dt)
         End If
     End Sub
 
     Private Sub CB_OnDraw()
-        If _current IsNot Nothing Then
-            _current.draw()
+        Dim s = _current
+        If s IsNot Nothing Then
+            s.Draw()
         End If
     End Sub
 
+    ' Called by raylib every frame via Framework_Update -> userDrawCallback
     Private Sub EngineDraw()
-        ' Bridge into the engine’s scene tick each frame
+        ' Let the native scene system run fixed-step + frame + draw.
         Framework_SceneTick()
     End Sub
 
+    ' Build a SceneCallbacks struct for a VB scene.
+    ' NOTE: Enter/Exit/Resume are NULL here; we drive those manually in VB.
     Private Function MakeCallbacks() As SceneCallbacks
         Return New SceneCallbacks With {
-            .onEnter = _dEnter,
-            .onExit = _dExit,
-            .onResume = _dResume,
+            .onEnter = Nothing,
+            .onExit = Nothing,
+            .onResume = Nothing,
             .onUpdateFixed = _dFixed,
             .onUpdateFrame = _dFrame,
             .onDraw = _dDraw
         }
     End Function
 
-    ' ---- Public API (matches your SetCurrentScene / WireEngineDraw) ----
-    Public Function SetCurrentScene(scene As Scene) As Integer
-        _current = scene
+    ' Register a scene with the native engine and assign its handle.
+    Private Function RegisterScene(scene As Scene) As Integer
         Dim cb = MakeCallbacks()
-        Dim handle = Framework_CreateScriptScene(cb)
-        Framework_SceneChange(handle)
-        Return handle
-    End Function
-
-    Public Function GetCurrentScene() As Scene
-        Return _current
-    End Function
-    ' Create scene WITHOUT changing/pushing
-    Public Function RegisterScene(scene As Scene) As Integer
-        _current = scene                   ' make bridge dispatch into this scene
-        Dim cb = MakeCallbacks()           ' build delegates for THIS scene
         Dim id = Framework_CreateScriptScene(cb)
         scene.sceneId = id
         Return id
     End Function
 
+    ' ===========================
+    ' Public API
+    ' ===========================
+
+    ' Hook the engine’s draw callback exactly once at startup.
     Public Sub WireEngineDraw()
         Framework_SetDrawCallback(_drawDel)
     End Sub
 
-    Private ReadOnly _managedStack As New Stack(Of Scene)
+    Public Function GetCurrentScene() As Scene
+        Return _current
+    End Function
 
+    ' Simple alias for “hard change” (clears stack, goes to new scene)
+    Public Function SetCurrentScene(scene As Scene) As Integer
+        Return ChangeTo(scene)
+    End Function
 
-    ' Only registers the scene and returns its id (no change/push here)
-
-
+    ' Replace whatever is on the stack with a new scene
     Public Function ChangeTo(scene As Scene) As Integer
-        Dim id = RegisterScene(scene)
+        ' Call Exit() on the old top (if any)
+        Dim old As Scene = If(_managedStack.Count > 0, _managedStack.Peek(), Nothing)
+        If old IsNot Nothing Then
+            old.Exit()
+        End If
+
+        ' Reset our managed stack and push the new scene
         _managedStack.Clear()
         _managedStack.Push(scene)
+
+        ' Make this the “current” scene for callbacks
+        _current = scene
+
+        ' Call Enter() in managed land
+        scene.Enter()
+
+        ' Register with native + change top of native stack
+        Dim id = RegisterScene(scene)
         Framework_SceneChange(id)
         Return id
     End Function
 
+    ' Push a new scene on top (e.g. pause menu)
     Public Function Push(scene As Scene) As Integer
-        Dim id = RegisterScene(scene)
+        ' Optional: you could add an OnPause() on Scene if you want.
+        ' For now we just push the new scene.
+
         _managedStack.Push(scene)
+        _current = scene
+
+        ' Scene lifecycle in VB
+        scene.Enter()
+
+        ' Register with engine + push onto native stack
+        Dim id = RegisterScene(scene)
         Framework_ScenePush(id)
         Return id
     End Function
 
+    ' Pop the top scene and resume the one underneath
     Public Sub Pop()
-        ' swap _current to what will be shown after the native pop
-        If _managedStack.Count > 0 Then _managedStack.Pop()
+        If _managedStack.Count = 0 Then Return
+
+        ' Pop & exit the current scene (managed)
+        Dim old As Scene = _managedStack.Pop()
+        old.Exit()
+
+        ' New top (if any)
         _current = If(_managedStack.Count > 0, _managedStack.Peek(), Nothing)
+
+        ' Resume the scene underneath (managed)
+        If _current IsNot Nothing Then
+            _current.Resume()
+        End If
+
+        ' Keep native stack in sync
         Framework_ScenePop()
     End Sub
+
 End Module
