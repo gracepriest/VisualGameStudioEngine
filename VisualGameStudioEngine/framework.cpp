@@ -5080,6 +5080,810 @@ extern "C" {
     }
 
     // ========================================================================
+    // AUDIO MANAGER - Advanced Audio System Implementation
+    // ========================================================================
+
+    // Audio group state
+    struct AudioGroupState {
+        float volume = 1.0f;
+        float targetVolume = 1.0f;
+        float fadeSpeed = 0.0f;
+        bool muted = false;
+    };
+    static AudioGroupState g_audioGroups[AUDIO_GROUP_COUNT];
+
+    // Managed sound with group
+    struct ManagedSound {
+        Sound sound;
+        int group = AUDIO_GROUP_SFX;
+        float baseVolume = 1.0f;
+        bool valid = false;
+    };
+    static std::unordered_map<int, ManagedSound> g_managedSounds;
+    static int g_nextSoundHandle = 1;
+
+    // Managed music with advanced features
+    struct ManagedMusic {
+        Music music;
+        float baseVolume = 1.0f;
+        float targetVolume = 1.0f;
+        float fadeSpeed = 0.0f;
+        bool looping = true;
+        bool valid = false;
+        bool playing = false;
+    };
+    static std::unordered_map<int, ManagedMusic> g_managedMusic;
+    static int g_nextMusicHandle = 1;
+
+    // Sound pool for frequent sounds
+    struct SoundPool {
+        std::vector<Sound> sounds;
+        int nextIndex = 0;
+        int group = AUDIO_GROUP_SFX;
+        bool valid = false;
+    };
+    static std::unordered_map<int, SoundPool> g_soundPools;
+    static int g_nextPoolHandle = 1;
+
+    // Playlist
+    struct Playlist {
+        std::vector<int> tracks;  // Music handles
+        int currentIndex = 0;
+        bool shuffle = false;
+        int repeatMode = 1;  // 0=none, 1=all, 2=one
+        float crossfadeDuration = 0.0f;
+        bool playing = false;
+        bool valid = false;
+        std::vector<int> shuffleOrder;
+    };
+    static std::unordered_map<int, Playlist> g_playlists;
+    static int g_nextPlaylistHandle = 1;
+    static int g_activePlaylist = -1;
+
+    // Spatial audio
+    static float g_listenerX = 0.0f;
+    static float g_listenerY = 0.0f;
+    static float g_spatialMinDist = 100.0f;
+    static float g_spatialMaxDist = 1000.0f;
+    static bool g_spatialEnabled = true;
+
+    // Crossfade state
+    static int g_crossfadeFrom = -1;
+    static int g_crossfadeTo = -1;
+    static float g_crossfadeProgress = 0.0f;
+    static float g_crossfadeDuration = 0.0f;
+
+    // Helper: Calculate effective volume for a group
+    static float Audio_GetEffectiveVolume(int group, float baseVolume) {
+        if (group < 0 || group >= AUDIO_GROUP_COUNT) return baseVolume;
+
+        float groupVol = g_audioGroups[group].muted ? 0.0f : g_audioGroups[group].volume;
+        float masterVol = g_audioGroups[AUDIO_GROUP_MASTER].muted ? 0.0f : g_audioGroups[AUDIO_GROUP_MASTER].volume;
+
+        return baseVolume * groupVol * masterVol;
+    }
+
+    // Helper: Calculate spatial pan and volume
+    static void Audio_CalculateSpatial(float soundX, float soundY, float& outVolume, float& outPan) {
+        if (!g_spatialEnabled) {
+            outVolume = 1.0f;
+            outPan = 0.5f;
+            return;
+        }
+
+        float dx = soundX - g_listenerX;
+        float dy = soundY - g_listenerY;
+        float distance = sqrtf(dx * dx + dy * dy);
+
+        // Volume falloff
+        if (distance <= g_spatialMinDist) {
+            outVolume = 1.0f;
+        } else if (distance >= g_spatialMaxDist) {
+            outVolume = 0.0f;
+        } else {
+            float t = (distance - g_spatialMinDist) / (g_spatialMaxDist - g_spatialMinDist);
+            outVolume = 1.0f - t;
+        }
+
+        // Pan based on x position (-1 to 1, then convert to 0-1)
+        float screenWidth = (float)GetScreenWidth();
+        if (screenWidth > 0 && distance > 0.01f) {
+            float normalizedX = dx / fmaxf(distance, g_spatialMaxDist);
+            outPan = 0.5f + normalizedX * 0.5f;
+            outPan = fmaxf(0.0f, fminf(1.0f, outPan));
+        } else {
+            outPan = 0.5f;
+        }
+    }
+
+    // Group volume control
+    void Framework_Audio_SetGroupVolume(int group, float volume) {
+        if (group >= 0 && group < AUDIO_GROUP_COUNT) {
+            g_audioGroups[group].volume = fmaxf(0.0f, fminf(1.0f, volume));
+            g_audioGroups[group].targetVolume = g_audioGroups[group].volume;
+            g_audioGroups[group].fadeSpeed = 0.0f;
+        }
+    }
+
+    float Framework_Audio_GetGroupVolume(int group) {
+        if (group >= 0 && group < AUDIO_GROUP_COUNT) {
+            return g_audioGroups[group].volume;
+        }
+        return 0.0f;
+    }
+
+    void Framework_Audio_SetGroupMuted(int group, bool muted) {
+        if (group >= 0 && group < AUDIO_GROUP_COUNT) {
+            g_audioGroups[group].muted = muted;
+        }
+    }
+
+    bool Framework_Audio_IsGroupMuted(int group) {
+        if (group >= 0 && group < AUDIO_GROUP_COUNT) {
+            return g_audioGroups[group].muted;
+        }
+        return false;
+    }
+
+    void Framework_Audio_FadeGroupVolume(int group, float targetVolume, float duration) {
+        if (group >= 0 && group < AUDIO_GROUP_COUNT && duration > 0.0f) {
+            g_audioGroups[group].targetVolume = fmaxf(0.0f, fminf(1.0f, targetVolume));
+            g_audioGroups[group].fadeSpeed = (g_audioGroups[group].targetVolume - g_audioGroups[group].volume) / duration;
+        }
+    }
+
+    // Sound with group assignment
+    int Framework_Audio_LoadSound(const char* path, int group) {
+        if (!path) return -1;
+
+        Sound snd = LoadSound(path);
+        if (!IsSoundValid(snd)) return -1;
+
+        int handle = g_nextSoundHandle++;
+        ManagedSound ms;
+        ms.sound = snd;
+        ms.group = (group >= 0 && group < AUDIO_GROUP_COUNT) ? group : AUDIO_GROUP_SFX;
+        ms.baseVolume = 1.0f;
+        ms.valid = true;
+        g_managedSounds[handle] = ms;
+        return handle;
+    }
+
+    void Framework_Audio_UnloadSound(int handle) {
+        auto it = g_managedSounds.find(handle);
+        if (it != g_managedSounds.end() && it->second.valid) {
+            UnloadSound(it->second.sound);
+            g_managedSounds.erase(it);
+        }
+    }
+
+    void Framework_Audio_PlaySound(int handle) {
+        auto it = g_managedSounds.find(handle);
+        if (it != g_managedSounds.end() && it->second.valid) {
+            float vol = Audio_GetEffectiveVolume(it->second.group, it->second.baseVolume);
+            SetSoundVolume(it->second.sound, vol);
+            PlaySound(it->second.sound);
+        }
+    }
+
+    void Framework_Audio_PlaySoundEx(int handle, float volume, float pitch, float pan) {
+        auto it = g_managedSounds.find(handle);
+        if (it != g_managedSounds.end() && it->second.valid) {
+            float vol = Audio_GetEffectiveVolume(it->second.group, volume);
+            SetSoundVolume(it->second.sound, vol);
+            SetSoundPitch(it->second.sound, pitch);
+            SetSoundPan(it->second.sound, pan);
+            PlaySound(it->second.sound);
+        }
+    }
+
+    void Framework_Audio_StopSound(int handle) {
+        auto it = g_managedSounds.find(handle);
+        if (it != g_managedSounds.end() && it->second.valid) {
+            StopSound(it->second.sound);
+        }
+    }
+
+    void Framework_Audio_SetSoundGroup(int handle, int group) {
+        auto it = g_managedSounds.find(handle);
+        if (it != g_managedSounds.end() && group >= 0 && group < AUDIO_GROUP_COUNT) {
+            it->second.group = group;
+        }
+    }
+
+    int Framework_Audio_GetSoundGroup(int handle) {
+        auto it = g_managedSounds.find(handle);
+        return (it != g_managedSounds.end()) ? it->second.group : -1;
+    }
+
+    // Spatial audio
+    void Framework_Audio_SetListenerPosition(float x, float y) {
+        g_listenerX = x;
+        g_listenerY = y;
+    }
+
+    void Framework_Audio_GetListenerPosition(float* x, float* y) {
+        if (x) *x = g_listenerX;
+        if (y) *y = g_listenerY;
+    }
+
+    void Framework_Audio_PlaySoundAt(int handle, float x, float y) {
+        Framework_Audio_PlaySoundAtEx(handle, x, y, 1.0f, 1.0f);
+    }
+
+    void Framework_Audio_PlaySoundAtEx(int handle, float x, float y, float volume, float pitch) {
+        auto it = g_managedSounds.find(handle);
+        if (it != g_managedSounds.end() && it->second.valid) {
+            float spatialVol, pan;
+            Audio_CalculateSpatial(x, y, spatialVol, pan);
+
+            float finalVol = Audio_GetEffectiveVolume(it->second.group, volume * spatialVol);
+            SetSoundVolume(it->second.sound, finalVol);
+            SetSoundPitch(it->second.sound, pitch);
+            SetSoundPan(it->second.sound, pan);
+            PlaySound(it->second.sound);
+        }
+    }
+
+    void Framework_Audio_SetSpatialFalloff(float minDist, float maxDist) {
+        g_spatialMinDist = fmaxf(1.0f, minDist);
+        g_spatialMaxDist = fmaxf(g_spatialMinDist + 1.0f, maxDist);
+    }
+
+    void Framework_Audio_SetSpatialEnabled(bool enabled) {
+        g_spatialEnabled = enabled;
+    }
+
+    // Sound pooling
+    int Framework_Audio_CreatePool(const char* path, int poolSize, int group) {
+        if (!path || poolSize <= 0) return -1;
+
+        SoundPool pool;
+        pool.group = (group >= 0 && group < AUDIO_GROUP_COUNT) ? group : AUDIO_GROUP_SFX;
+        pool.valid = true;
+
+        for (int i = 0; i < poolSize; i++) {
+            Sound snd = LoadSound(path);
+            if (IsSoundValid(snd)) {
+                pool.sounds.push_back(snd);
+            }
+        }
+
+        if (pool.sounds.empty()) return -1;
+
+        int handle = g_nextPoolHandle++;
+        g_soundPools[handle] = pool;
+        return handle;
+    }
+
+    void Framework_Audio_DestroyPool(int poolHandle) {
+        auto it = g_soundPools.find(poolHandle);
+        if (it != g_soundPools.end()) {
+            for (auto& snd : it->second.sounds) {
+                UnloadSound(snd);
+            }
+            g_soundPools.erase(it);
+        }
+    }
+
+    void Framework_Audio_PlayFromPool(int poolHandle) {
+        auto it = g_soundPools.find(poolHandle);
+        if (it == g_soundPools.end() || !it->second.valid || it->second.sounds.empty()) return;
+
+        SoundPool& pool = it->second;
+        Sound& snd = pool.sounds[pool.nextIndex];
+
+        float vol = Audio_GetEffectiveVolume(pool.group, 1.0f);
+        SetSoundVolume(snd, vol);
+        SetSoundPan(snd, 0.5f);
+        PlaySound(snd);
+
+        pool.nextIndex = (pool.nextIndex + 1) % (int)pool.sounds.size();
+    }
+
+    void Framework_Audio_PlayFromPoolAt(int poolHandle, float x, float y) {
+        auto it = g_soundPools.find(poolHandle);
+        if (it == g_soundPools.end() || !it->second.valid || it->second.sounds.empty()) return;
+
+        SoundPool& pool = it->second;
+        Sound& snd = pool.sounds[pool.nextIndex];
+
+        float spatialVol, pan;
+        Audio_CalculateSpatial(x, y, spatialVol, pan);
+
+        float vol = Audio_GetEffectiveVolume(pool.group, spatialVol);
+        SetSoundVolume(snd, vol);
+        SetSoundPan(snd, pan);
+        PlaySound(snd);
+
+        pool.nextIndex = (pool.nextIndex + 1) % (int)pool.sounds.size();
+    }
+
+    void Framework_Audio_PlayFromPoolEx(int poolHandle, float volume, float pitch, float pan) {
+        auto it = g_soundPools.find(poolHandle);
+        if (it == g_soundPools.end() || !it->second.valid || it->second.sounds.empty()) return;
+
+        SoundPool& pool = it->second;
+        Sound& snd = pool.sounds[pool.nextIndex];
+
+        float vol = Audio_GetEffectiveVolume(pool.group, volume);
+        SetSoundVolume(snd, vol);
+        SetSoundPitch(snd, pitch);
+        SetSoundPan(snd, pan);
+        PlaySound(snd);
+
+        pool.nextIndex = (pool.nextIndex + 1) % (int)pool.sounds.size();
+    }
+
+    void Framework_Audio_StopPool(int poolHandle) {
+        auto it = g_soundPools.find(poolHandle);
+        if (it != g_soundPools.end()) {
+            for (auto& snd : it->second.sounds) {
+                StopSound(snd);
+            }
+        }
+    }
+
+    // Music with advanced features
+    int Framework_Audio_LoadMusic(const char* path) {
+        if (!path) return -1;
+
+        Music mus = LoadMusicStream(path);
+        if (!IsMusicValid(mus)) return -1;
+
+        int handle = g_nextMusicHandle++;
+        ManagedMusic mm;
+        mm.music = mus;
+        mm.baseVolume = 1.0f;
+        mm.targetVolume = 1.0f;
+        mm.looping = true;
+        mm.valid = true;
+        mm.playing = false;
+        g_managedMusic[handle] = mm;
+        return handle;
+    }
+
+    void Framework_Audio_UnloadMusic(int handle) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            StopMusicStream(it->second.music);
+            UnloadMusicStream(it->second.music);
+            g_managedMusic.erase(it);
+        }
+    }
+
+    void Framework_Audio_PlayMusic(int handle) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            it->second.music.looping = it->second.looping;
+            float vol = Audio_GetEffectiveVolume(AUDIO_GROUP_MUSIC, it->second.baseVolume);
+            SetMusicVolume(it->second.music, vol);
+            PlayMusicStream(it->second.music);
+            it->second.playing = true;
+        }
+    }
+
+    void Framework_Audio_StopMusic(int handle) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            StopMusicStream(it->second.music);
+            it->second.playing = false;
+        }
+    }
+
+    void Framework_Audio_PauseMusic(int handle) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            PauseMusicStream(it->second.music);
+        }
+    }
+
+    void Framework_Audio_ResumeMusic(int handle) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            ResumeMusicStream(it->second.music);
+        }
+    }
+
+    void Framework_Audio_SetMusicVolume(int handle, float volume) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            it->second.baseVolume = fmaxf(0.0f, fminf(1.0f, volume));
+            it->second.targetVolume = it->second.baseVolume;
+            float vol = Audio_GetEffectiveVolume(AUDIO_GROUP_MUSIC, it->second.baseVolume);
+            SetMusicVolume(it->second.music, vol);
+        }
+    }
+
+    void Framework_Audio_SetMusicPitch(int handle, float pitch) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            SetMusicPitch(it->second.music, pitch);
+        }
+    }
+
+    void Framework_Audio_SetMusicLooping(int handle, bool looping) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            it->second.looping = looping;
+            it->second.music.looping = looping;
+        }
+    }
+
+    bool Framework_Audio_IsMusicPlaying(int handle) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            return IsMusicStreamPlaying(it->second.music);
+        }
+        return false;
+    }
+
+    float Framework_Audio_GetMusicLength(int handle) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            return GetMusicTimeLength(it->second.music);
+        }
+        return 0.0f;
+    }
+
+    float Framework_Audio_GetMusicPosition(int handle) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            return GetMusicTimePlayed(it->second.music);
+        }
+        return 0.0f;
+    }
+
+    void Framework_Audio_SeekMusic(int handle, float position) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            SeekMusicStream(it->second.music, position);
+        }
+    }
+
+    // Music crossfading
+    void Framework_Audio_CrossfadeTo(int newMusicHandle, float duration) {
+        if (duration <= 0.0f) {
+            // Instant switch
+            if (g_crossfadeFrom >= 0) Framework_Audio_StopMusic(g_crossfadeFrom);
+            Framework_Audio_PlayMusic(newMusicHandle);
+            g_crossfadeFrom = -1;
+            g_crossfadeTo = -1;
+            return;
+        }
+
+        // Find currently playing music
+        int currentPlaying = -1;
+        for (auto& kv : g_managedMusic) {
+            if (kv.second.valid && kv.second.playing && IsMusicStreamPlaying(kv.second.music)) {
+                currentPlaying = kv.first;
+                break;
+            }
+        }
+
+        g_crossfadeFrom = currentPlaying;
+        g_crossfadeTo = newMusicHandle;
+        g_crossfadeProgress = 0.0f;
+        g_crossfadeDuration = duration;
+
+        // Start new track at zero volume
+        auto it = g_managedMusic.find(newMusicHandle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            SetMusicVolume(it->second.music, 0.0f);
+            PlayMusicStream(it->second.music);
+            it->second.playing = true;
+        }
+    }
+
+    void Framework_Audio_FadeOutMusic(int handle, float duration) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid && duration > 0.0f) {
+            it->second.targetVolume = 0.0f;
+            it->second.fadeSpeed = -it->second.baseVolume / duration;
+        }
+    }
+
+    void Framework_Audio_FadeInMusic(int handle, float duration, float targetVolume) {
+        auto it = g_managedMusic.find(handle);
+        if (it != g_managedMusic.end() && it->second.valid) {
+            it->second.baseVolume = 0.0f;
+            SetMusicVolume(it->second.music, 0.0f);
+            PlayMusicStream(it->second.music);
+            it->second.playing = true;
+
+            if (duration > 0.0f) {
+                it->second.targetVolume = fmaxf(0.0f, fminf(1.0f, targetVolume));
+                it->second.fadeSpeed = it->second.targetVolume / duration;
+            }
+        }
+    }
+
+    bool Framework_Audio_IsCrossfading() {
+        return g_crossfadeTo >= 0;
+    }
+
+    // Playlist system
+    int Framework_Audio_CreatePlaylist() {
+        int handle = g_nextPlaylistHandle++;
+        Playlist pl;
+        pl.valid = true;
+        g_playlists[handle] = pl;
+        return handle;
+    }
+
+    void Framework_Audio_DestroyPlaylist(int playlistHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end()) {
+            if (g_activePlaylist == playlistHandle) {
+                g_activePlaylist = -1;
+            }
+            g_playlists.erase(it);
+        }
+    }
+
+    void Framework_Audio_PlaylistAdd(int playlistHandle, int musicHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end() && it->second.valid) {
+            it->second.tracks.push_back(musicHandle);
+        }
+    }
+
+    void Framework_Audio_PlaylistRemove(int playlistHandle, int index) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end() && index >= 0 && index < (int)it->second.tracks.size()) {
+            it->second.tracks.erase(it->second.tracks.begin() + index);
+        }
+    }
+
+    void Framework_Audio_PlaylistClear(int playlistHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end()) {
+            it->second.tracks.clear();
+            it->second.shuffleOrder.clear();
+            it->second.currentIndex = 0;
+        }
+    }
+
+    void Framework_Audio_PlaylistPlay(int playlistHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it == g_playlists.end() || it->second.tracks.empty()) return;
+
+        Playlist& pl = it->second;
+        pl.playing = true;
+        pl.currentIndex = 0;
+        g_activePlaylist = playlistHandle;
+
+        // Generate shuffle order if needed
+        if (pl.shuffle) {
+            pl.shuffleOrder.resize(pl.tracks.size());
+            for (size_t i = 0; i < pl.tracks.size(); i++) pl.shuffleOrder[i] = (int)i;
+            for (size_t i = pl.tracks.size() - 1; i > 0; i--) {
+                int j = rand() % (i + 1);
+                std::swap(pl.shuffleOrder[i], pl.shuffleOrder[j]);
+            }
+        }
+
+        int trackIndex = pl.shuffle ? pl.shuffleOrder[0] : 0;
+        if (pl.crossfadeDuration > 0) {
+            Framework_Audio_FadeInMusic(pl.tracks[trackIndex], pl.crossfadeDuration, 1.0f);
+        } else {
+            Framework_Audio_PlayMusic(pl.tracks[trackIndex]);
+        }
+    }
+
+    void Framework_Audio_PlaylistStop(int playlistHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it == g_playlists.end()) return;
+
+        Playlist& pl = it->second;
+        pl.playing = false;
+
+        for (int trackHandle : pl.tracks) {
+            Framework_Audio_StopMusic(trackHandle);
+        }
+
+        if (g_activePlaylist == playlistHandle) {
+            g_activePlaylist = -1;
+        }
+    }
+
+    void Framework_Audio_PlaylistNext(int playlistHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it == g_playlists.end() || it->second.tracks.empty()) return;
+
+        Playlist& pl = it->second;
+        int currentTrackIndex = pl.shuffle ? pl.shuffleOrder[pl.currentIndex] : pl.currentIndex;
+
+        pl.currentIndex++;
+        if (pl.currentIndex >= (int)pl.tracks.size()) {
+            if (pl.repeatMode == 1) {  // Repeat all
+                pl.currentIndex = 0;
+                if (pl.shuffle) {
+                    // Reshuffle
+                    for (size_t i = pl.tracks.size() - 1; i > 0; i--) {
+                        int j = rand() % (i + 1);
+                        std::swap(pl.shuffleOrder[i], pl.shuffleOrder[j]);
+                    }
+                }
+            } else {
+                pl.currentIndex = (int)pl.tracks.size() - 1;
+                pl.playing = false;
+                return;
+            }
+        }
+
+        int newTrackIndex = pl.shuffle ? pl.shuffleOrder[pl.currentIndex] : pl.currentIndex;
+
+        if (pl.crossfadeDuration > 0) {
+            Framework_Audio_CrossfadeTo(pl.tracks[newTrackIndex], pl.crossfadeDuration);
+        } else {
+            Framework_Audio_StopMusic(pl.tracks[currentTrackIndex]);
+            Framework_Audio_PlayMusic(pl.tracks[newTrackIndex]);
+        }
+    }
+
+    void Framework_Audio_PlaylistPrev(int playlistHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it == g_playlists.end() || it->second.tracks.empty()) return;
+
+        Playlist& pl = it->second;
+        int currentTrackIndex = pl.shuffle ? pl.shuffleOrder[pl.currentIndex] : pl.currentIndex;
+
+        pl.currentIndex--;
+        if (pl.currentIndex < 0) {
+            if (pl.repeatMode == 1) {
+                pl.currentIndex = (int)pl.tracks.size() - 1;
+            } else {
+                pl.currentIndex = 0;
+                return;
+            }
+        }
+
+        int newTrackIndex = pl.shuffle ? pl.shuffleOrder[pl.currentIndex] : pl.currentIndex;
+
+        if (pl.crossfadeDuration > 0) {
+            Framework_Audio_CrossfadeTo(pl.tracks[newTrackIndex], pl.crossfadeDuration);
+        } else {
+            Framework_Audio_StopMusic(pl.tracks[currentTrackIndex]);
+            Framework_Audio_PlayMusic(pl.tracks[newTrackIndex]);
+        }
+    }
+
+    void Framework_Audio_PlaylistSetShuffle(int playlistHandle, bool shuffle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end()) {
+            it->second.shuffle = shuffle;
+        }
+    }
+
+    void Framework_Audio_PlaylistSetRepeat(int playlistHandle, int mode) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end()) {
+            it->second.repeatMode = mode;
+        }
+    }
+
+    int Framework_Audio_PlaylistGetCurrent(int playlistHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end()) {
+            return it->second.currentIndex;
+        }
+        return -1;
+    }
+
+    int Framework_Audio_PlaylistGetCount(int playlistHandle) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end()) {
+            return (int)it->second.tracks.size();
+        }
+        return 0;
+    }
+
+    void Framework_Audio_PlaylistSetCrossfade(int playlistHandle, float duration) {
+        auto it = g_playlists.find(playlistHandle);
+        if (it != g_playlists.end()) {
+            it->second.crossfadeDuration = fmaxf(0.0f, duration);
+        }
+    }
+
+    // Audio manager update
+    void Framework_Audio_Update(float dt) {
+        // Update group volume fading
+        for (int i = 0; i < AUDIO_GROUP_COUNT; i++) {
+            AudioGroupState& group = g_audioGroups[i];
+            if (group.fadeSpeed != 0.0f) {
+                group.volume += group.fadeSpeed * dt;
+                if ((group.fadeSpeed > 0 && group.volume >= group.targetVolume) ||
+                    (group.fadeSpeed < 0 && group.volume <= group.targetVolume)) {
+                    group.volume = group.targetVolume;
+                    group.fadeSpeed = 0.0f;
+                }
+            }
+        }
+
+        // Update music streams and fading
+        for (auto& kv : g_managedMusic) {
+            ManagedMusic& mm = kv.second;
+            if (!mm.valid) continue;
+
+            // Update stream
+            if (mm.playing) {
+                UpdateMusicStream(mm.music);
+            }
+
+            // Handle volume fading
+            if (mm.fadeSpeed != 0.0f) {
+                mm.baseVolume += mm.fadeSpeed * dt;
+                if ((mm.fadeSpeed > 0 && mm.baseVolume >= mm.targetVolume) ||
+                    (mm.fadeSpeed < 0 && mm.baseVolume <= mm.targetVolume)) {
+                    mm.baseVolume = mm.targetVolume;
+                    mm.fadeSpeed = 0.0f;
+
+                    // Stop if faded to zero
+                    if (mm.baseVolume <= 0.0f) {
+                        StopMusicStream(mm.music);
+                        mm.playing = false;
+                    }
+                }
+                float vol = Audio_GetEffectiveVolume(AUDIO_GROUP_MUSIC, mm.baseVolume);
+                SetMusicVolume(mm.music, vol);
+            }
+        }
+
+        // Handle crossfading
+        if (g_crossfadeTo >= 0 && g_crossfadeDuration > 0.0f) {
+            g_crossfadeProgress += dt;
+            float t = g_crossfadeProgress / g_crossfadeDuration;
+
+            if (t >= 1.0f) {
+                // Crossfade complete
+                if (g_crossfadeFrom >= 0) {
+                    Framework_Audio_StopMusic(g_crossfadeFrom);
+                }
+                auto itTo = g_managedMusic.find(g_crossfadeTo);
+                if (itTo != g_managedMusic.end()) {
+                    itTo->second.baseVolume = 1.0f;
+                    float vol = Audio_GetEffectiveVolume(AUDIO_GROUP_MUSIC, 1.0f);
+                    SetMusicVolume(itTo->second.music, vol);
+                }
+                g_crossfadeFrom = -1;
+                g_crossfadeTo = -1;
+            } else {
+                // Update volumes
+                if (g_crossfadeFrom >= 0) {
+                    auto itFrom = g_managedMusic.find(g_crossfadeFrom);
+                    if (itFrom != g_managedMusic.end()) {
+                        float vol = Audio_GetEffectiveVolume(AUDIO_GROUP_MUSIC, 1.0f - t);
+                        SetMusicVolume(itFrom->second.music, vol);
+                    }
+                }
+                auto itTo = g_managedMusic.find(g_crossfadeTo);
+                if (itTo != g_managedMusic.end()) {
+                    float vol = Audio_GetEffectiveVolume(AUDIO_GROUP_MUSIC, t);
+                    SetMusicVolume(itTo->second.music, vol);
+                }
+            }
+        }
+
+        // Handle playlist auto-advance
+        if (g_activePlaylist >= 0) {
+            auto it = g_playlists.find(g_activePlaylist);
+            if (it != g_playlists.end() && it->second.playing && !it->second.tracks.empty()) {
+                Playlist& pl = it->second;
+                int trackIndex = pl.shuffle ? pl.shuffleOrder[pl.currentIndex] : pl.currentIndex;
+
+                if (!Framework_Audio_IsMusicPlaying(pl.tracks[trackIndex]) && !Framework_Audio_IsCrossfading()) {
+                    if (pl.repeatMode == 2) {  // Repeat one
+                        Framework_Audio_PlayMusic(pl.tracks[trackIndex]);
+                    } else {
+                        Framework_Audio_PlaylistNext(g_activePlaylist);
+                    }
+                }
+            }
+        }
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {

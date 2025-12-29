@@ -71,6 +71,18 @@ enum CollisionShapeType {
 };
 
 // ============================================================================
+// AUDIO GROUPS
+// ============================================================================
+enum AudioGroup {
+    AUDIO_GROUP_MASTER = 0,
+    AUDIO_GROUP_MUSIC = 1,
+    AUDIO_GROUP_SFX = 2,
+    AUDIO_GROUP_VOICE = 3,
+    AUDIO_GROUP_AMBIENT = 4,
+    AUDIO_GROUP_COUNT
+};
+
+// ============================================================================
 // UI ELEMENT TYPES
 // ============================================================================
 enum UIElementType {
@@ -363,6 +375,81 @@ extern "C" {
     __declspec(dllexport) void  Framework_SetMusicPitchH(int handle, float p);
     __declspec(dllexport) void  Framework_UpdateMusicH(int handle);
     __declspec(dllexport) void  Framework_UpdateAllMusic();
+
+    // ========================================================================
+    // AUDIO MANAGER - Advanced Audio System
+    // ========================================================================
+    // Group volume control
+    __declspec(dllexport) void  Framework_Audio_SetGroupVolume(int group, float volume);  // AudioGroup enum
+    __declspec(dllexport) float Framework_Audio_GetGroupVolume(int group);
+    __declspec(dllexport) void  Framework_Audio_SetGroupMuted(int group, bool muted);
+    __declspec(dllexport) bool  Framework_Audio_IsGroupMuted(int group);
+    __declspec(dllexport) void  Framework_Audio_FadeGroupVolume(int group, float targetVolume, float duration);
+
+    // Sound with group assignment
+    __declspec(dllexport) int   Framework_Audio_LoadSound(const char* path, int group);
+    __declspec(dllexport) void  Framework_Audio_UnloadSound(int handle);
+    __declspec(dllexport) void  Framework_Audio_PlaySound(int handle);
+    __declspec(dllexport) void  Framework_Audio_PlaySoundEx(int handle, float volume, float pitch, float pan);
+    __declspec(dllexport) void  Framework_Audio_StopSound(int handle);
+    __declspec(dllexport) void  Framework_Audio_SetSoundGroup(int handle, int group);
+    __declspec(dllexport) int   Framework_Audio_GetSoundGroup(int handle);
+
+    // Spatial audio (2D positioning)
+    __declspec(dllexport) void  Framework_Audio_SetListenerPosition(float x, float y);
+    __declspec(dllexport) void  Framework_Audio_GetListenerPosition(float* x, float* y);
+    __declspec(dllexport) void  Framework_Audio_PlaySoundAt(int handle, float x, float y);
+    __declspec(dllexport) void  Framework_Audio_PlaySoundAtEx(int handle, float x, float y, float volume, float pitch);
+    __declspec(dllexport) void  Framework_Audio_SetSpatialFalloff(float minDist, float maxDist);  // Distance for volume falloff
+    __declspec(dllexport) void  Framework_Audio_SetSpatialEnabled(bool enabled);
+
+    // Sound pooling (for frequent sounds like footsteps, gunshots)
+    __declspec(dllexport) int   Framework_Audio_CreatePool(const char* path, int poolSize, int group);
+    __declspec(dllexport) void  Framework_Audio_DestroyPool(int poolHandle);
+    __declspec(dllexport) void  Framework_Audio_PlayFromPool(int poolHandle);
+    __declspec(dllexport) void  Framework_Audio_PlayFromPoolAt(int poolHandle, float x, float y);
+    __declspec(dllexport) void  Framework_Audio_PlayFromPoolEx(int poolHandle, float volume, float pitch, float pan);
+    __declspec(dllexport) void  Framework_Audio_StopPool(int poolHandle);
+
+    // Music with group (streaming)
+    __declspec(dllexport) int   Framework_Audio_LoadMusic(const char* path);
+    __declspec(dllexport) void  Framework_Audio_UnloadMusic(int handle);
+    __declspec(dllexport) void  Framework_Audio_PlayMusic(int handle);
+    __declspec(dllexport) void  Framework_Audio_StopMusic(int handle);
+    __declspec(dllexport) void  Framework_Audio_PauseMusic(int handle);
+    __declspec(dllexport) void  Framework_Audio_ResumeMusic(int handle);
+    __declspec(dllexport) void  Framework_Audio_SetMusicVolume(int handle, float volume);
+    __declspec(dllexport) void  Framework_Audio_SetMusicPitch(int handle, float pitch);
+    __declspec(dllexport) void  Framework_Audio_SetMusicLooping(int handle, bool looping);
+    __declspec(dllexport) bool  Framework_Audio_IsMusicPlaying(int handle);
+    __declspec(dllexport) float Framework_Audio_GetMusicLength(int handle);
+    __declspec(dllexport) float Framework_Audio_GetMusicPosition(int handle);
+    __declspec(dllexport) void  Framework_Audio_SeekMusic(int handle, float position);
+
+    // Music crossfading
+    __declspec(dllexport) void  Framework_Audio_CrossfadeTo(int newMusicHandle, float duration);
+    __declspec(dllexport) void  Framework_Audio_FadeOutMusic(int handle, float duration);
+    __declspec(dllexport) void  Framework_Audio_FadeInMusic(int handle, float duration, float targetVolume);
+    __declspec(dllexport) bool  Framework_Audio_IsCrossfading();
+
+    // Playlist system
+    __declspec(dllexport) int   Framework_Audio_CreatePlaylist();
+    __declspec(dllexport) void  Framework_Audio_DestroyPlaylist(int playlistHandle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistAdd(int playlistHandle, int musicHandle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistRemove(int playlistHandle, int index);
+    __declspec(dllexport) void  Framework_Audio_PlaylistClear(int playlistHandle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistPlay(int playlistHandle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistStop(int playlistHandle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistNext(int playlistHandle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistPrev(int playlistHandle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistSetShuffle(int playlistHandle, bool shuffle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistSetRepeat(int playlistHandle, int mode);  // 0=none, 1=all, 2=one
+    __declspec(dllexport) int   Framework_Audio_PlaylistGetCurrent(int playlistHandle);
+    __declspec(dllexport) int   Framework_Audio_PlaylistGetCount(int playlistHandle);
+    __declspec(dllexport) void  Framework_Audio_PlaylistSetCrossfade(int playlistHandle, float duration);
+
+    // Audio manager update (call each frame)
+    __declspec(dllexport) void  Framework_Audio_Update(float dt);
 
     // ========================================================================
     // SHADERS
