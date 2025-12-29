@@ -343,6 +343,66 @@ extern "C" {
     __declspec(dllexport) Vector2 Framework_Camera_WorldToScreen(float worldX, float worldY);
 
     // ========================================================================
+    // CAMERA 2D (Enhanced)
+    // ========================================================================
+    // Smooth follow
+    __declspec(dllexport) void  Framework_Camera_SetFollowTarget(float x, float y);
+    __declspec(dllexport) void  Framework_Camera_SetFollowLerp(float lerpSpeed);  // 0-1, higher = faster
+    __declspec(dllexport) float Framework_Camera_GetFollowLerp();
+    __declspec(dllexport) void  Framework_Camera_SetFollowEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Camera_IsFollowEnabled();
+
+    // Deadzone (area where target can move without camera moving)
+    __declspec(dllexport) void  Framework_Camera_SetDeadzone(float width, float height);
+    __declspec(dllexport) void  Framework_Camera_GetDeadzone(float* width, float* height);
+    __declspec(dllexport) void  Framework_Camera_SetDeadzoneEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Camera_IsDeadzoneEnabled();
+
+    // Look-ahead (camera leads target based on velocity)
+    __declspec(dllexport) void  Framework_Camera_SetLookahead(float distance, float smoothing);
+    __declspec(dllexport) void  Framework_Camera_SetLookaheadEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Camera_SetLookaheadVelocity(float vx, float vy);
+
+    // Screen shake
+    __declspec(dllexport) void  Framework_Camera_Shake(float intensity, float duration);
+    __declspec(dllexport) void  Framework_Camera_ShakeEx(float intensity, float duration, float frequency, float decay);
+    __declspec(dllexport) void  Framework_Camera_StopShake();
+    __declspec(dllexport) bool  Framework_Camera_IsShaking();
+    __declspec(dllexport) float Framework_Camera_GetShakeIntensity();
+
+    // Bounds/constraints (camera won't show beyond these world coordinates)
+    __declspec(dllexport) void  Framework_Camera_SetBounds(float minX, float minY, float maxX, float maxY);
+    __declspec(dllexport) void  Framework_Camera_GetBounds(float* minX, float* minY, float* maxX, float* maxY);
+    __declspec(dllexport) void  Framework_Camera_SetBoundsEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Camera_IsBoundsEnabled();
+    __declspec(dllexport) void  Framework_Camera_ClearBounds();
+
+    // Zoom controls
+    __declspec(dllexport) void  Framework_Camera_SetZoomLimits(float minZoom, float maxZoom);
+    __declspec(dllexport) void  Framework_Camera_ZoomTo(float targetZoom, float duration);
+    __declspec(dllexport) void  Framework_Camera_ZoomAt(float targetZoom, float worldX, float worldY, float duration);
+
+    // Smooth rotation
+    __declspec(dllexport) void  Framework_Camera_RotateTo(float targetRotation, float duration);
+
+    // Pan/move
+    __declspec(dllexport) void  Framework_Camera_PanTo(float worldX, float worldY, float duration);
+    __declspec(dllexport) void  Framework_Camera_PanBy(float deltaX, float deltaY, float duration);
+    __declspec(dllexport) bool  Framework_Camera_IsPanning();
+    __declspec(dllexport) void  Framework_Camera_StopPan();
+
+    // Flash effect (screen flash for impacts, etc.)
+    __declspec(dllexport) void  Framework_Camera_Flash(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float duration);
+    __declspec(dllexport) bool  Framework_Camera_IsFlashing();
+    __declspec(dllexport) void  Framework_Camera_DrawFlash();
+
+    // Camera update (call each frame for smooth follow, shake, transitions)
+    __declspec(dllexport) void  Framework_Camera_Update(float dt);
+
+    // Reset camera to defaults
+    __declspec(dllexport) void  Framework_Camera_Reset();
+
+    // ========================================================================
     // AUDIO
     // ========================================================================
     __declspec(dllexport) bool  Framework_InitAudio();

@@ -38,6 +38,69 @@ namespace {
     Camera2D g_camera = { {0, 0}, {0, 0}, 0.0f, 1.0f };
     int g_cameraFollowEntity = -1;
 
+    // Enhanced Camera State
+    struct CameraState {
+        // Smooth follow
+        Vector2 followTarget = { 0, 0 };
+        float followLerp = 0.1f;          // 0-1, speed of follow
+        bool followEnabled = false;
+
+        // Deadzone
+        float deadzoneWidth = 0;
+        float deadzoneHeight = 0;
+        bool deadzoneEnabled = false;
+
+        // Look-ahead
+        float lookaheadDistance = 0;
+        float lookaheadSmoothing = 0.1f;
+        Vector2 lookaheadVelocity = { 0, 0 };
+        Vector2 currentLookahead = { 0, 0 };
+        bool lookaheadEnabled = false;
+
+        // Screen shake
+        float shakeIntensity = 0;
+        float shakeDuration = 0;
+        float shakeTimer = 0;
+        float shakeFrequency = 60.0f;     // oscillations per second
+        float shakeDecay = 1.0f;          // 0-1, how fast it decays
+        float shakeTime = 0;              // for noise sampling
+        Vector2 shakeOffset = { 0, 0 };
+
+        // Bounds
+        float boundsMinX = 0, boundsMinY = 0;
+        float boundsMaxX = 0, boundsMaxY = 0;
+        bool boundsEnabled = false;
+
+        // Zoom limits and transitions
+        float minZoom = 0.1f;
+        float maxZoom = 10.0f;
+        float zoomFrom = 1.0f;
+        float zoomTo = 1.0f;
+        float zoomDuration = 0;
+        float zoomTimer = 0;
+        Vector2 zoomPivot = { 0, 0 };     // for ZoomAt
+        bool zoomAtPivot = false;
+
+        // Rotation transition
+        float rotationFrom = 0;
+        float rotationTo = 0;
+        float rotationDuration = 0;
+        float rotationTimer = 0;
+
+        // Pan transition
+        Vector2 panFrom = { 0, 0 };
+        Vector2 panTo = { 0, 0 };
+        float panDuration = 0;
+        float panTimer = 0;
+        bool panning = false;
+
+        // Flash effect
+        unsigned char flashR = 255, flashG = 255, flashB = 255, flashA = 255;
+        float flashDuration = 0;
+        float flashTimer = 0;
+    };
+    CameraState g_camState;
+
     // Debug overlay state
     bool g_debugEnabled = false;
     bool g_debugDrawBounds = true;
@@ -1015,6 +1078,420 @@ extern "C" {
 
     Vector2 Framework_Camera_WorldToScreen(float worldX, float worldY) {
         return GetWorldToScreen2D(Vector2{ worldX, worldY }, g_camera);
+    }
+
+    // ========================================================================
+    // CAMERA 2D (Enhanced)
+    // ========================================================================
+
+    // Easing function for smooth transitions
+    static float EaseOutQuad(float t) {
+        return t * (2.0f - t);
+    }
+
+    static float EaseInOutQuad(float t) {
+        return t < 0.5f ? 2.0f * t * t : 1.0f - powf(-2.0f * t + 2.0f, 2.0f) / 2.0f;
+    }
+
+    // Simple noise function for shake
+    static float ShakeNoise(float x) {
+        // Simple pseudo-random based on sine
+        return sinf(x * 12.9898f) * cosf(x * 78.233f);
+    }
+
+    // Smooth follow
+    void Framework_Camera_SetFollowTarget(float x, float y) {
+        g_camState.followTarget = Vector2{ x, y };
+    }
+
+    void Framework_Camera_SetFollowLerp(float lerpSpeed) {
+        g_camState.followLerp = lerpSpeed < 0.0f ? 0.0f : (lerpSpeed > 1.0f ? 1.0f : lerpSpeed);
+    }
+
+    float Framework_Camera_GetFollowLerp() {
+        return g_camState.followLerp;
+    }
+
+    void Framework_Camera_SetFollowEnabled(bool enabled) {
+        g_camState.followEnabled = enabled;
+    }
+
+    bool Framework_Camera_IsFollowEnabled() {
+        return g_camState.followEnabled;
+    }
+
+    // Deadzone
+    void Framework_Camera_SetDeadzone(float width, float height) {
+        g_camState.deadzoneWidth = width < 0 ? 0 : width;
+        g_camState.deadzoneHeight = height < 0 ? 0 : height;
+    }
+
+    void Framework_Camera_GetDeadzone(float* width, float* height) {
+        if (width) *width = g_camState.deadzoneWidth;
+        if (height) *height = g_camState.deadzoneHeight;
+    }
+
+    void Framework_Camera_SetDeadzoneEnabled(bool enabled) {
+        g_camState.deadzoneEnabled = enabled;
+    }
+
+    bool Framework_Camera_IsDeadzoneEnabled() {
+        return g_camState.deadzoneEnabled;
+    }
+
+    // Look-ahead
+    void Framework_Camera_SetLookahead(float distance, float smoothing) {
+        g_camState.lookaheadDistance = distance;
+        g_camState.lookaheadSmoothing = smoothing < 0.0f ? 0.0f : (smoothing > 1.0f ? 1.0f : smoothing);
+    }
+
+    void Framework_Camera_SetLookaheadEnabled(bool enabled) {
+        g_camState.lookaheadEnabled = enabled;
+        if (!enabled) {
+            g_camState.currentLookahead = Vector2{ 0, 0 };
+        }
+    }
+
+    void Framework_Camera_SetLookaheadVelocity(float vx, float vy) {
+        g_camState.lookaheadVelocity = Vector2{ vx, vy };
+    }
+
+    // Screen shake
+    void Framework_Camera_Shake(float intensity, float duration) {
+        g_camState.shakeIntensity = intensity;
+        g_camState.shakeDuration = duration;
+        g_camState.shakeTimer = duration;
+        g_camState.shakeFrequency = 60.0f;
+        g_camState.shakeDecay = 1.0f;
+    }
+
+    void Framework_Camera_ShakeEx(float intensity, float duration, float frequency, float decay) {
+        g_camState.shakeIntensity = intensity;
+        g_camState.shakeDuration = duration;
+        g_camState.shakeTimer = duration;
+        g_camState.shakeFrequency = frequency > 0 ? frequency : 60.0f;
+        g_camState.shakeDecay = decay < 0 ? 0 : (decay > 1 ? 1 : decay);
+    }
+
+    void Framework_Camera_StopShake() {
+        g_camState.shakeTimer = 0;
+        g_camState.shakeOffset = Vector2{ 0, 0 };
+    }
+
+    bool Framework_Camera_IsShaking() {
+        return g_camState.shakeTimer > 0;
+    }
+
+    float Framework_Camera_GetShakeIntensity() {
+        if (g_camState.shakeTimer <= 0) return 0;
+        float progress = 1.0f - (g_camState.shakeTimer / g_camState.shakeDuration);
+        float decay = 1.0f - (progress * g_camState.shakeDecay);
+        return g_camState.shakeIntensity * decay;
+    }
+
+    // Bounds
+    void Framework_Camera_SetBounds(float minX, float minY, float maxX, float maxY) {
+        g_camState.boundsMinX = minX;
+        g_camState.boundsMinY = minY;
+        g_camState.boundsMaxX = maxX;
+        g_camState.boundsMaxY = maxY;
+    }
+
+    void Framework_Camera_GetBounds(float* minX, float* minY, float* maxX, float* maxY) {
+        if (minX) *minX = g_camState.boundsMinX;
+        if (minY) *minY = g_camState.boundsMinY;
+        if (maxX) *maxX = g_camState.boundsMaxX;
+        if (maxY) *maxY = g_camState.boundsMaxY;
+    }
+
+    void Framework_Camera_SetBoundsEnabled(bool enabled) {
+        g_camState.boundsEnabled = enabled;
+    }
+
+    bool Framework_Camera_IsBoundsEnabled() {
+        return g_camState.boundsEnabled;
+    }
+
+    void Framework_Camera_ClearBounds() {
+        g_camState.boundsEnabled = false;
+        g_camState.boundsMinX = g_camState.boundsMinY = 0;
+        g_camState.boundsMaxX = g_camState.boundsMaxY = 0;
+    }
+
+    // Zoom controls
+    void Framework_Camera_SetZoomLimits(float minZoom, float maxZoom) {
+        g_camState.minZoom = minZoom > 0.01f ? minZoom : 0.01f;
+        g_camState.maxZoom = maxZoom > g_camState.minZoom ? maxZoom : g_camState.minZoom;
+    }
+
+    void Framework_Camera_ZoomTo(float targetZoom, float duration) {
+        targetZoom = targetZoom < g_camState.minZoom ? g_camState.minZoom :
+                    (targetZoom > g_camState.maxZoom ? g_camState.maxZoom : targetZoom);
+
+        if (duration <= 0) {
+            g_camera.zoom = targetZoom;
+            g_camState.zoomTimer = 0;
+        } else {
+            g_camState.zoomFrom = g_camera.zoom;
+            g_camState.zoomTo = targetZoom;
+            g_camState.zoomDuration = duration;
+            g_camState.zoomTimer = duration;
+            g_camState.zoomAtPivot = false;
+        }
+    }
+
+    void Framework_Camera_ZoomAt(float targetZoom, float worldX, float worldY, float duration) {
+        targetZoom = targetZoom < g_camState.minZoom ? g_camState.minZoom :
+                    (targetZoom > g_camState.maxZoom ? g_camState.maxZoom : targetZoom);
+
+        g_camState.zoomFrom = g_camera.zoom;
+        g_camState.zoomTo = targetZoom;
+        g_camState.zoomDuration = duration > 0 ? duration : 0.001f;
+        g_camState.zoomTimer = g_camState.zoomDuration;
+        g_camState.zoomPivot = Vector2{ worldX, worldY };
+        g_camState.zoomAtPivot = true;
+    }
+
+    // Rotation
+    void Framework_Camera_RotateTo(float targetRotation, float duration) {
+        if (duration <= 0) {
+            g_camera.rotation = targetRotation;
+            g_camState.rotationTimer = 0;
+        } else {
+            g_camState.rotationFrom = g_camera.rotation;
+            g_camState.rotationTo = targetRotation;
+            g_camState.rotationDuration = duration;
+            g_camState.rotationTimer = duration;
+        }
+    }
+
+    // Pan
+    void Framework_Camera_PanTo(float worldX, float worldY, float duration) {
+        if (duration <= 0) {
+            g_camera.target = Vector2{ worldX, worldY };
+            g_camState.panning = false;
+            g_camState.panTimer = 0;
+        } else {
+            g_camState.panFrom = g_camera.target;
+            g_camState.panTo = Vector2{ worldX, worldY };
+            g_camState.panDuration = duration;
+            g_camState.panTimer = duration;
+            g_camState.panning = true;
+        }
+    }
+
+    void Framework_Camera_PanBy(float deltaX, float deltaY, float duration) {
+        float newX = g_camera.target.x + deltaX;
+        float newY = g_camera.target.y + deltaY;
+        Framework_Camera_PanTo(newX, newY, duration);
+    }
+
+    bool Framework_Camera_IsPanning() {
+        return g_camState.panning && g_camState.panTimer > 0;
+    }
+
+    void Framework_Camera_StopPan() {
+        g_camState.panning = false;
+        g_camState.panTimer = 0;
+    }
+
+    // Flash effect
+    void Framework_Camera_Flash(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float duration) {
+        g_camState.flashR = r;
+        g_camState.flashG = g;
+        g_camState.flashB = b;
+        g_camState.flashA = a;
+        g_camState.flashDuration = duration;
+        g_camState.flashTimer = duration;
+    }
+
+    bool Framework_Camera_IsFlashing() {
+        return g_camState.flashTimer > 0;
+    }
+
+    void Framework_Camera_DrawFlash() {
+        if (g_camState.flashTimer <= 0) return;
+
+        float alpha = g_camState.flashTimer / g_camState.flashDuration;
+        unsigned char a = (unsigned char)(g_camState.flashA * alpha);
+
+        DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(),
+            Color{ g_camState.flashR, g_camState.flashG, g_camState.flashB, a });
+    }
+
+    // Camera update - call each frame
+    void Framework_Camera_Update(float dt) {
+        Vector2 targetPos = g_camera.target;
+
+        // Handle entity follow (legacy support)
+        if (g_cameraFollowEntity != -1 && EcsIsAlive(g_cameraFollowEntity)) {
+            Vector2 entityPos = GetWorldPositionInternal(g_cameraFollowEntity);
+            g_camState.followTarget = entityPos;
+            g_camState.followEnabled = true;
+        }
+
+        // Smooth follow with optional deadzone
+        if (g_camState.followEnabled) {
+            Vector2 diff = {
+                g_camState.followTarget.x - targetPos.x,
+                g_camState.followTarget.y - targetPos.y
+            };
+
+            // Apply deadzone if enabled
+            if (g_camState.deadzoneEnabled) {
+                float halfW = g_camState.deadzoneWidth / 2.0f;
+                float halfH = g_camState.deadzoneHeight / 2.0f;
+
+                if (fabsf(diff.x) < halfW) diff.x = 0;
+                else diff.x -= (diff.x > 0 ? halfW : -halfW);
+
+                if (fabsf(diff.y) < halfH) diff.y = 0;
+                else diff.y -= (diff.y > 0 ? halfH : -halfH);
+            }
+
+            // Apply look-ahead if enabled
+            if (g_camState.lookaheadEnabled && g_camState.lookaheadDistance > 0) {
+                float velLen = sqrtf(g_camState.lookaheadVelocity.x * g_camState.lookaheadVelocity.x +
+                                    g_camState.lookaheadVelocity.y * g_camState.lookaheadVelocity.y);
+                if (velLen > 0.1f) {
+                    Vector2 targetLookahead = {
+                        (g_camState.lookaheadVelocity.x / velLen) * g_camState.lookaheadDistance,
+                        (g_camState.lookaheadVelocity.y / velLen) * g_camState.lookaheadDistance
+                    };
+                    // Smooth the lookahead
+                    g_camState.currentLookahead.x += (targetLookahead.x - g_camState.currentLookahead.x) * g_camState.lookaheadSmoothing;
+                    g_camState.currentLookahead.y += (targetLookahead.y - g_camState.currentLookahead.y) * g_camState.lookaheadSmoothing;
+                } else {
+                    // Decay lookahead when stopped
+                    g_camState.currentLookahead.x *= 0.95f;
+                    g_camState.currentLookahead.y *= 0.95f;
+                }
+                diff.x += g_camState.currentLookahead.x;
+                diff.y += g_camState.currentLookahead.y;
+            }
+
+            // Lerp towards target
+            targetPos.x += diff.x * g_camState.followLerp;
+            targetPos.y += diff.y * g_camState.followLerp;
+        }
+
+        // Pan transition (overrides follow while active)
+        if (g_camState.panning && g_camState.panTimer > 0) {
+            g_camState.panTimer -= dt;
+            if (g_camState.panTimer <= 0) {
+                targetPos = g_camState.panTo;
+                g_camState.panning = false;
+            } else {
+                float t = 1.0f - (g_camState.panTimer / g_camState.panDuration);
+                t = EaseInOutQuad(t);
+                targetPos.x = g_camState.panFrom.x + (g_camState.panTo.x - g_camState.panFrom.x) * t;
+                targetPos.y = g_camState.panFrom.y + (g_camState.panTo.y - g_camState.panFrom.y) * t;
+            }
+        }
+
+        // Zoom transition
+        if (g_camState.zoomTimer > 0) {
+            g_camState.zoomTimer -= dt;
+            float t = 1.0f - (g_camState.zoomTimer / g_camState.zoomDuration);
+            t = EaseOutQuad(t);
+
+            float newZoom = g_camState.zoomFrom + (g_camState.zoomTo - g_camState.zoomFrom) * t;
+
+            // If zooming at a pivot point, adjust target to keep pivot stable
+            if (g_camState.zoomAtPivot && g_camState.zoomTimer > 0) {
+                Vector2 screenPivot = GetWorldToScreen2D(g_camState.zoomPivot, g_camera);
+                g_camera.zoom = newZoom;
+                Vector2 newWorldPivot = GetScreenToWorld2D(screenPivot, g_camera);
+                targetPos.x += g_camState.zoomPivot.x - newWorldPivot.x;
+                targetPos.y += g_camState.zoomPivot.y - newWorldPivot.y;
+            } else {
+                g_camera.zoom = newZoom;
+            }
+
+            if (g_camState.zoomTimer <= 0) {
+                g_camera.zoom = g_camState.zoomTo;
+            }
+        }
+
+        // Rotation transition
+        if (g_camState.rotationTimer > 0) {
+            g_camState.rotationTimer -= dt;
+            float t = 1.0f - (g_camState.rotationTimer / g_camState.rotationDuration);
+            t = EaseInOutQuad(t);
+            g_camera.rotation = g_camState.rotationFrom + (g_camState.rotationTo - g_camState.rotationFrom) * t;
+
+            if (g_camState.rotationTimer <= 0) {
+                g_camera.rotation = g_camState.rotationTo;
+            }
+        }
+
+        // Apply bounds constraints
+        if (g_camState.boundsEnabled) {
+            // Calculate visible area in world coords
+            float viewW = (float)GetScreenWidth() / g_camera.zoom;
+            float viewH = (float)GetScreenHeight() / g_camera.zoom;
+            float halfW = viewW / 2.0f;
+            float halfH = viewH / 2.0f;
+
+            // Clamp target to keep view within bounds
+            float boundsW = g_camState.boundsMaxX - g_camState.boundsMinX;
+            float boundsH = g_camState.boundsMaxY - g_camState.boundsMinY;
+
+            if (viewW < boundsW) {
+                if (targetPos.x - halfW < g_camState.boundsMinX)
+                    targetPos.x = g_camState.boundsMinX + halfW;
+                if (targetPos.x + halfW > g_camState.boundsMaxX)
+                    targetPos.x = g_camState.boundsMaxX - halfW;
+            } else {
+                targetPos.x = (g_camState.boundsMinX + g_camState.boundsMaxX) / 2.0f;
+            }
+
+            if (viewH < boundsH) {
+                if (targetPos.y - halfH < g_camState.boundsMinY)
+                    targetPos.y = g_camState.boundsMinY + halfH;
+                if (targetPos.y + halfH > g_camState.boundsMaxY)
+                    targetPos.y = g_camState.boundsMaxY - halfH;
+            } else {
+                targetPos.y = (g_camState.boundsMinY + g_camState.boundsMaxY) / 2.0f;
+            }
+        }
+
+        // Screen shake
+        g_camState.shakeOffset = Vector2{ 0, 0 };
+        if (g_camState.shakeTimer > 0) {
+            g_camState.shakeTimer -= dt;
+            g_camState.shakeTime += dt;
+
+            if (g_camState.shakeTimer > 0) {
+                float progress = 1.0f - (g_camState.shakeTimer / g_camState.shakeDuration);
+                float decay = 1.0f - (progress * g_camState.shakeDecay);
+                float currentIntensity = g_camState.shakeIntensity * decay;
+
+                // Use noise-based shake for more natural feel
+                float t = g_camState.shakeTime * g_camState.shakeFrequency;
+                g_camState.shakeOffset.x = ShakeNoise(t) * currentIntensity;
+                g_camState.shakeOffset.y = ShakeNoise(t + 100.0f) * currentIntensity;
+            }
+        }
+
+        // Apply final position with shake offset
+        g_camera.target.x = targetPos.x + g_camState.shakeOffset.x;
+        g_camera.target.y = targetPos.y + g_camState.shakeOffset.y;
+
+        // Update flash
+        if (g_camState.flashTimer > 0) {
+            g_camState.flashTimer -= dt;
+        }
+    }
+
+    // Reset camera to defaults
+    void Framework_Camera_Reset() {
+        g_camera.target = Vector2{ 0, 0 };
+        g_camera.offset = Vector2{ (float)GetScreenWidth() / 2.0f, (float)GetScreenHeight() / 2.0f };
+        g_camera.rotation = 0;
+        g_camera.zoom = 1.0f;
+        g_cameraFollowEntity = -1;
+        g_camState = CameraState{};
     }
 
     // ========================================================================
@@ -5113,7 +5590,7 @@ extern "C" {
         bool playing = false;
     };
     static std::unordered_map<int, ManagedMusic> g_managedMusic;
-    static int g_nextMusicHandle = 1;
+    // Note: g_nextMusicHandle is defined in the anonymous namespace above
 
     // Sound pool for frequent sounds
     struct SoundPool {
