@@ -18,6 +18,7 @@ Class TitleScene
     Dim txtOptions As String = "  OPTIONS"
     Dim txt2DDemo As String = "  2D DEMO"
     Dim txtUIDemo As String = "  UI DEMO"
+    Dim txtPhysicsDemo As String = "PHYSICS DEMO"
     'locations
     Dim textWidth As Integer = 10 * (temp.Length())
     Dim x As Integer = (800 - textWidth) / 2
@@ -77,7 +78,7 @@ Class TitleScene
             menuIndex -= 1
             menuPos.Y -= 50
 
-        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 4 Then
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 5 Then
             'play sound
             Framework_PlaySoundH(sfxWall)
             menuIndex += 1
@@ -106,6 +107,10 @@ Class TitleScene
                     'UI System Demo
                     Framework_PlaySoundH(sfxHit)
                     ChangeTo(New DemoUIScene)
+                Case 5
+                    'Physics System Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoPhysicsScene)
             End Select
         End If
 
@@ -124,7 +129,8 @@ Class TitleScene
         Framework_DrawTextExH(RETRO_FONT.Handle, txtOptions, New Vector2(WINDOW_WIDTH / 2.6, y + 100), 40, 1.0F, 255, 255, 255, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txt2DDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 150), 40, 1.0F, 100, 255, 100, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txtUIDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 200), 40, 1.0F, 100, 200, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 270), 20, 1.0F, 255, 255, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtPhysicsDemo, New Vector2(WINDOW_WIDTH / 2.85, y + 250), 40, 1.0F, 255, 150, 100, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 320), 20, 1.0F, 255, 255, 255, 255)
         menuPos.DrawRectangle(255, 0, 0, 90)
         'draw tile #0 at (50, 50)
         'atlas.DrawRec(pong(0), New Vector2(50, 80))
@@ -1192,6 +1198,218 @@ Class DemoUIScene
         ' Draw instructions at bottom
         Framework_DrawText("Click the button, drag the slider, toggle checkbox, type in text field", 10, WINDOW_HEIGHT - 50, 16, 150, 150, 150, 255)
         Framework_DrawText("[BACKSPACE] Return to menu", 10, WINDOW_HEIGHT - 25, 16, 255, 150, 150, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ============================================================================
+' PHYSICS DEMO SCENE - Demonstrates 2D Physics System
+' ============================================================================
+Class DemoPhysicsScene
+    Inherits Scene
+
+    ' Physics bodies
+    Private _groundBody As Integer = -1
+    Private _leftWallBody As Integer = -1
+    Private _rightWallBody As Integer = -1
+    Private _platformBody As Integer = -1
+    Private _ballBodies As New List(Of Integer)
+    Private _boxBodies As New List(Of Integer)
+
+    ' Spawn timer
+    Private _spawnTimer As Single = 0.0F
+    Private _spawnInterval As Single = 0.5F
+
+    ' Debug toggle
+    Private _showDebug As Boolean = True
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoPhysicsScene OnEnter - Showcasing Physics System")
+
+        ' Set gravity
+        Framework_Physics_SetGravity(0, 500)
+
+        ' Create ground (static)
+        _groundBody = Framework_Physics_CreateBody(BODY_STATIC, WINDOW_WIDTH / 2, WINDOW_HEIGHT - 20)
+        Framework_Physics_SetBodyBox(_groundBody, WINDOW_WIDTH, 40)
+        Framework_Physics_SetBodyFriction(_groundBody, 0.5F)
+
+        ' Create walls (static)
+        _leftWallBody = Framework_Physics_CreateBody(BODY_STATIC, 20, WINDOW_HEIGHT / 2)
+        Framework_Physics_SetBodyBox(_leftWallBody, 40, WINDOW_HEIGHT)
+        Framework_Physics_SetBodyFriction(_leftWallBody, 0.3F)
+
+        _rightWallBody = Framework_Physics_CreateBody(BODY_STATIC, WINDOW_WIDTH - 20, WINDOW_HEIGHT / 2)
+        Framework_Physics_SetBodyBox(_rightWallBody, 40, WINDOW_HEIGHT)
+        Framework_Physics_SetBodyFriction(_rightWallBody, 0.3F)
+
+        ' Create angled platform (static)
+        _platformBody = Framework_Physics_CreateBody(BODY_STATIC, WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2)
+        Framework_Physics_SetBodyBox(_platformBody, 300, 20)
+        Framework_Physics_SetBodyRestitution(_platformBody, 0.3F)
+
+        ' Enable debug drawing
+        Framework_Physics_SetDebugDraw(_showDebug)
+
+        ' Spawn some initial objects
+        SpawnBall(300, 100)
+        SpawnBall(400, 80)
+        SpawnBall(500, 120)
+        SpawnBox(350, 50)
+        SpawnBox(450, 30)
+    End Sub
+
+    Private Sub SpawnBall(x As Single, y As Single)
+        Dim body As Integer = Framework_Physics_CreateBody(BODY_DYNAMIC, x, y)
+        Framework_Physics_SetBodyCircle(body, 15 + CSng(_ballBodies.Count Mod 3) * 5)
+        Framework_Physics_SetBodyMass(body, 1.0F)
+        Framework_Physics_SetBodyRestitution(body, 0.7F)  ' Bouncy
+        Framework_Physics_SetBodyFriction(body, 0.2F)
+        _ballBodies.Add(body)
+    End Sub
+
+    Private Sub SpawnBox(x As Single, y As Single)
+        Dim body As Integer = Framework_Physics_CreateBody(BODY_DYNAMIC, x, y)
+        Dim size As Single = 25 + CSng(_boxBodies.Count Mod 3) * 10
+        Framework_Physics_SetBodyBox(body, size, size)
+        Framework_Physics_SetBodyMass(body, 2.0F)
+        Framework_Physics_SetBodyRestitution(body, 0.3F)
+        Framework_Physics_SetBodyFriction(body, 0.5F)
+        _boxBodies.Add(body)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("DemoPhysicsScene OnExit")
+
+        ' Cleanup all physics bodies
+        Framework_Physics_DestroyAllBodies()
+        _ballBodies.Clear()
+        _boxBodies.Clear()
+    End Sub
+
+    Protected Overrides Sub OnResume()
+        Console.WriteLine("DemoPhysicsScene OnResume")
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        ' ESC or BACKSPACE to return to title
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Toggle debug draw with D key
+        If Framework_IsKeyPressed(Keys.D) Then
+            _showDebug = Not _showDebug
+            Framework_Physics_SetDebugDraw(_showDebug)
+        End If
+
+        ' Spawn ball with left click
+        If Framework_IsMouseButtonPressed(0) Then
+            Dim mx As Integer = Framework_GetMouseX()
+            Dim my As Integer = Framework_GetMouseY()
+            SpawnBall(mx, my)
+        End If
+
+        ' Spawn box with right click
+        If Framework_IsMouseButtonPressed(1) Then
+            Dim mx As Integer = Framework_GetMouseX()
+            Dim my As Integer = Framework_GetMouseY()
+            SpawnBox(mx, my)
+        End If
+
+        ' Auto spawn timer
+        _spawnTimer += dt
+        If _spawnTimer >= _spawnInterval Then
+            _spawnTimer = 0
+            ' Random spawn at top
+            Dim rand As New Random()
+            Dim spawnX As Single = 100 + CSng(rand.NextDouble() * (WINDOW_WIDTH - 200))
+            If rand.Next(2) = 0 Then
+                SpawnBall(spawnX, 50)
+            Else
+                SpawnBox(spawnX, 50)
+            End If
+        End If
+
+        ' Limit max bodies (cleanup oldest)
+        While _ballBodies.Count + _boxBodies.Count > 50
+            If _ballBodies.Count > 0 Then
+                Framework_Physics_DestroyBody(_ballBodies(0))
+                _ballBodies.RemoveAt(0)
+            ElseIf _boxBodies.Count > 0 Then
+                Framework_Physics_DestroyBody(_boxBodies(0))
+                _boxBodies.RemoveAt(0)
+            End If
+        End While
+
+        ' Apply force with SPACE (push everything up)
+        If Framework_IsKeyDown(Keys.SPACE) Then
+            For Each body In _ballBodies
+                Framework_Physics_ApplyForce(body, 0, -500)
+            Next
+            For Each body In _boxBodies
+                Framework_Physics_ApplyForce(body, 0, -800)
+            Next
+        End If
+
+        ' Step physics simulation
+        Framework_Physics_Step(dt)
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(15, 15, 25, 255)
+
+        ' Draw static objects (ground, walls, platform)
+        ' Ground
+        Framework_DrawRectangle(0, WINDOW_HEIGHT - 40, WINDOW_WIDTH, 40, 60, 60, 80, 255)
+        ' Walls
+        Framework_DrawRectangle(0, 0, 40, WINDOW_HEIGHT, 60, 60, 80, 255)
+        Framework_DrawRectangle(WINDOW_WIDTH - 40, 0, 40, WINDOW_HEIGHT, 60, 60, 80, 255)
+        ' Platform
+        Framework_DrawRectangle(CInt(WINDOW_WIDTH / 2 - 150), CInt(WINDOW_HEIGHT / 2 - 10), 300, 20, 80, 80, 100, 255)
+
+        ' Draw dynamic bodies
+        For Each body In _ballBodies
+            Dim x As Single = 0, y As Single = 0
+            Framework_Physics_GetBodyPosition(body, x, y)
+            Dim radius As Single = 15 + CSng(_ballBodies.IndexOf(body) Mod 3) * 5
+            ' Color based on velocity
+            Dim vx As Single = 0, vy As Single = 0
+            Framework_Physics_GetBodyVelocity(body, vx, vy)
+            Dim speed As Single = CSng(Math.Sqrt(vx * vx + vy * vy))
+            Dim r As Byte = CByte(Math.Min(255, 100 + speed * 0.5))
+            Dim g As Byte = CByte(Math.Max(0, 200 - speed * 0.3))
+            Framework_DrawCircle(CInt(x), CInt(y), radius, r, g, 150, 255)
+        Next
+
+        For Each body In _boxBodies
+            Dim x As Single = 0, y As Single = 0
+            Framework_Physics_GetBodyPosition(body, x, y)
+            Dim size As Single = 25 + CSng(_boxBodies.IndexOf(body) Mod 3) * 10
+            ' Color based on velocity
+            Dim vx As Single = 0, vy As Single = 0
+            Framework_Physics_GetBodyVelocity(body, vx, vy)
+            Dim speed As Single = CSng(Math.Sqrt(vx * vx + vy * vy))
+            Dim r As Byte = CByte(Math.Min(255, 150 + speed * 0.3))
+            Dim b As Byte = CByte(Math.Max(0, 200 - speed * 0.3))
+            Framework_DrawRectangle(CInt(x - size / 2), CInt(y - size / 2), CInt(size), CInt(size), r, 100, b, 255)
+        Next
+
+        ' Draw physics debug overlay
+        If _showDebug Then
+            Framework_Physics_DrawDebug()
+        End If
+
+        ' Instructions
+        Framework_DrawText("[Left Click] Spawn Ball  [Right Click] Spawn Box", 10, 10, 16, 200, 200, 200, 255)
+        Framework_DrawText("[SPACE] Apply Upward Force  [D] Toggle Debug", 10, 30, 16, 200, 200, 200, 255)
+        Framework_DrawText("[BACKSPACE] Return to menu", 10, 50, 16, 255, 150, 150, 255)
+        Framework_DrawText("Bodies: " & (_ballBodies.Count + _boxBodies.Count).ToString(), 10, WINDOW_HEIGHT - 30, 16, 150, 255, 150, 255)
 
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
     End Sub

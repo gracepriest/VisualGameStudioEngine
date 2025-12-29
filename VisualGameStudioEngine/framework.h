@@ -53,6 +53,24 @@ enum AnimLoopMode {
 };
 
 // ============================================================================
+// PHYSICS BODY TYPES
+// ============================================================================
+enum PhysicsBodyType {
+    BODY_STATIC = 0,     // Never moves (walls, platforms)
+    BODY_DYNAMIC = 1,    // Fully simulated (players, objects)
+    BODY_KINEMATIC = 2   // Moved by code, affects dynamics (moving platforms)
+};
+
+// ============================================================================
+// COLLISION SHAPE TYPES
+// ============================================================================
+enum CollisionShapeType {
+    SHAPE_CIRCLE = 0,
+    SHAPE_BOX = 1,       // AABB
+    SHAPE_POLYGON = 2
+};
+
+// ============================================================================
 // UI ELEMENT TYPES
 // ============================================================================
 enum UIElementType {
@@ -104,6 +122,9 @@ typedef void (*SceneUpdateFrameFn)(float dt);
 typedef void (*UICallback)(int elementId);
 typedef void (*UIValueCallback)(int elementId, float value);
 typedef void (*UITextCallback)(int elementId, const char* text);
+
+// Physics Callbacks
+typedef void (*PhysicsCollisionCallback)(int bodyA, int bodyB, float normalX, float normalY, float depth);
 
 struct SceneCallbacks {
     SceneVoidFn         onEnter;
@@ -719,6 +740,107 @@ extern "C" {
     // UI Layout helpers
     __declspec(dllexport) void  Framework_UI_LayoutVertical(int parentId, float spacing, float paddingX, float paddingY);
     __declspec(dllexport) void  Framework_UI_LayoutHorizontal(int parentId, float spacing, float paddingX, float paddingY);
+
+    // ========================================================================
+    // PHYSICS SYSTEM - 2D Rigid Body Physics
+    // ========================================================================
+    // World settings
+    __declspec(dllexport) void  Framework_Physics_SetGravity(float gx, float gy);
+    __declspec(dllexport) void  Framework_Physics_GetGravity(float* gx, float* gy);
+    __declspec(dllexport) void  Framework_Physics_SetIterations(int velocityIterations, int positionIterations);
+    __declspec(dllexport) void  Framework_Physics_SetEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Physics_IsEnabled();
+
+    // Physics body creation/destruction
+    __declspec(dllexport) int   Framework_Physics_CreateBody(int bodyType, float x, float y);  // Returns body handle
+    __declspec(dllexport) void  Framework_Physics_DestroyBody(int bodyHandle);
+    __declspec(dllexport) bool  Framework_Physics_IsBodyValid(int bodyHandle);
+    __declspec(dllexport) void  Framework_Physics_DestroyAllBodies();
+
+    // Body type
+    __declspec(dllexport) void  Framework_Physics_SetBodyType(int bodyHandle, int bodyType);  // PhysicsBodyType enum
+    __declspec(dllexport) int   Framework_Physics_GetBodyType(int bodyHandle);
+
+    // Body transform
+    __declspec(dllexport) void  Framework_Physics_SetBodyPosition(int bodyHandle, float x, float y);
+    __declspec(dllexport) void  Framework_Physics_GetBodyPosition(int bodyHandle, float* x, float* y);
+    __declspec(dllexport) void  Framework_Physics_SetBodyRotation(int bodyHandle, float radians);
+    __declspec(dllexport) float Framework_Physics_GetBodyRotation(int bodyHandle);
+
+    // Body dynamics
+    __declspec(dllexport) void  Framework_Physics_SetBodyVelocity(int bodyHandle, float vx, float vy);
+    __declspec(dllexport) void  Framework_Physics_GetBodyVelocity(int bodyHandle, float* vx, float* vy);
+    __declspec(dllexport) void  Framework_Physics_SetBodyAngularVelocity(int bodyHandle, float omega);
+    __declspec(dllexport) float Framework_Physics_GetBodyAngularVelocity(int bodyHandle);
+    __declspec(dllexport) void  Framework_Physics_ApplyForce(int bodyHandle, float fx, float fy);
+    __declspec(dllexport) void  Framework_Physics_ApplyForceAtPoint(int bodyHandle, float fx, float fy, float px, float py);
+    __declspec(dllexport) void  Framework_Physics_ApplyImpulse(int bodyHandle, float ix, float iy);
+    __declspec(dllexport) void  Framework_Physics_ApplyTorque(int bodyHandle, float torque);
+
+    // Body properties
+    __declspec(dllexport) void  Framework_Physics_SetBodyMass(int bodyHandle, float mass);
+    __declspec(dllexport) float Framework_Physics_GetBodyMass(int bodyHandle);
+    __declspec(dllexport) void  Framework_Physics_SetBodyRestitution(int bodyHandle, float restitution);  // Bounciness 0-1
+    __declspec(dllexport) float Framework_Physics_GetBodyRestitution(int bodyHandle);
+    __declspec(dllexport) void  Framework_Physics_SetBodyFriction(int bodyHandle, float friction);  // 0-1
+    __declspec(dllexport) float Framework_Physics_GetBodyFriction(int bodyHandle);
+    __declspec(dllexport) void  Framework_Physics_SetBodyGravityScale(int bodyHandle, float scale);  // 0 = no gravity
+    __declspec(dllexport) float Framework_Physics_GetBodyGravityScale(int bodyHandle);
+    __declspec(dllexport) void  Framework_Physics_SetBodyLinearDamping(int bodyHandle, float damping);
+    __declspec(dllexport) void  Framework_Physics_SetBodyAngularDamping(int bodyHandle, float damping);
+    __declspec(dllexport) void  Framework_Physics_SetBodyFixedRotation(int bodyHandle, bool fixed);
+    __declspec(dllexport) bool  Framework_Physics_IsBodyFixedRotation(int bodyHandle);
+    __declspec(dllexport) void  Framework_Physics_SetBodySleepingAllowed(int bodyHandle, bool allowed);
+    __declspec(dllexport) void  Framework_Physics_WakeBody(int bodyHandle);
+    __declspec(dllexport) bool  Framework_Physics_IsBodyAwake(int bodyHandle);
+
+    // Collision shapes - attach to body
+    __declspec(dllexport) void  Framework_Physics_SetBodyCircle(int bodyHandle, float radius);
+    __declspec(dllexport) void  Framework_Physics_SetBodyCircleOffset(int bodyHandle, float radius, float offsetX, float offsetY);
+    __declspec(dllexport) void  Framework_Physics_SetBodyBox(int bodyHandle, float width, float height);
+    __declspec(dllexport) void  Framework_Physics_SetBodyBoxOffset(int bodyHandle, float width, float height, float offsetX, float offsetY);
+    __declspec(dllexport) void  Framework_Physics_SetBodyPolygon(int bodyHandle, const float* vertices, int vertexCount);  // pairs of x,y
+    __declspec(dllexport) int   Framework_Physics_GetBodyShapeType(int bodyHandle);  // CollisionShapeType enum
+
+    // Collision filtering
+    __declspec(dllexport) void  Framework_Physics_SetBodyLayer(int bodyHandle, unsigned int layer);      // Bitmask layer
+    __declspec(dllexport) void  Framework_Physics_SetBodyMask(int bodyHandle, unsigned int mask);        // Bitmask of layers to collide with
+    __declspec(dllexport) void  Framework_Physics_SetBodyTrigger(int bodyHandle, bool isTrigger);        // Triggers don't resolve collisions
+    __declspec(dllexport) bool  Framework_Physics_IsBodyTrigger(int bodyHandle);
+
+    // Entity binding - link physics body to ECS entity
+    __declspec(dllexport) void  Framework_Physics_BindToEntity(int bodyHandle, int entityId);
+    __declspec(dllexport) int   Framework_Physics_GetBoundEntity(int bodyHandle);  // Returns -1 if not bound
+    __declspec(dllexport) int   Framework_Physics_GetEntityBody(int entityId);     // Returns -1 if no body
+
+    // User data
+    __declspec(dllexport) void  Framework_Physics_SetBodyUserData(int bodyHandle, int userData);
+    __declspec(dllexport) int   Framework_Physics_GetBodyUserData(int bodyHandle);
+
+    // Collision callbacks
+    __declspec(dllexport) void  Framework_Physics_SetCollisionEnterCallback(PhysicsCollisionCallback callback);
+    __declspec(dllexport) void  Framework_Physics_SetCollisionStayCallback(PhysicsCollisionCallback callback);
+    __declspec(dllexport) void  Framework_Physics_SetCollisionExitCallback(PhysicsCollisionCallback callback);
+    __declspec(dllexport) void  Framework_Physics_SetTriggerEnterCallback(PhysicsCollisionCallback callback);
+    __declspec(dllexport) void  Framework_Physics_SetTriggerExitCallback(PhysicsCollisionCallback callback);
+
+    // Physics queries
+    __declspec(dllexport) int   Framework_Physics_RaycastFirst(float startX, float startY, float dirX, float dirY, float maxDist,
+                                                                float* hitX, float* hitY, float* hitNormalX, float* hitNormalY);  // Returns body handle or -1
+    __declspec(dllexport) int   Framework_Physics_RaycastAll(float startX, float startY, float dirX, float dirY, float maxDist,
+                                                              int* bodyBuffer, int bufferSize);  // Returns count
+    __declspec(dllexport) int   Framework_Physics_QueryCircle(float x, float y, float radius, int* bodyBuffer, int bufferSize);
+    __declspec(dllexport) int   Framework_Physics_QueryBox(float x, float y, float width, float height, int* bodyBuffer, int bufferSize);
+    __declspec(dllexport) bool  Framework_Physics_TestOverlap(int bodyA, int bodyB);
+
+    // Simulation
+    __declspec(dllexport) void  Framework_Physics_Step(float dt);  // Advance physics simulation
+    __declspec(dllexport) void  Framework_Physics_SyncToEntities();  // Copy body positions to bound entities
+
+    // Debug rendering
+    __declspec(dllexport) void  Framework_Physics_SetDebugDraw(bool enabled);
+    __declspec(dllexport) bool  Framework_Physics_IsDebugDrawEnabled();
+    __declspec(dllexport) void  Framework_Physics_DrawDebug();  // Draw all collision shapes
 
     // ========================================================================
     // CLEANUP

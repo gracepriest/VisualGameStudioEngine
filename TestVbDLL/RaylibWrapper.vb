@@ -1626,6 +1626,285 @@ Public Module FrameworkWrapper
     Public Const UI_STATE_FOCUSED As Integer = 4
 #End Region
 
+#Region "Physics System"
+    ' World settings
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetGravity(gx As Single, gy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_GetGravity(ByRef gx As Single, ByRef gy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetIterations(velocityIterations As Integer, positionIterations As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetEnabled(enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_IsEnabled() As Boolean
+    End Function
+
+    ' Body creation/destruction
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_CreateBody(bodyType As Integer, x As Single, y As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_DestroyBody(bodyHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_IsBodyValid(bodyHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_DestroyAllBodies()
+    End Sub
+
+    ' Body type
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyType(bodyHandle As Integer, bodyType As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyType(bodyHandle As Integer) As Integer
+    End Function
+
+    ' Body transform
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyPosition(bodyHandle As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_GetBodyPosition(bodyHandle As Integer, ByRef x As Single, ByRef y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyRotation(bodyHandle As Integer, radians As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyRotation(bodyHandle As Integer) As Single
+    End Function
+
+    ' Body dynamics
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyVelocity(bodyHandle As Integer, vx As Single, vy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_GetBodyVelocity(bodyHandle As Integer, ByRef vx As Single, ByRef vy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyAngularVelocity(bodyHandle As Integer, omega As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyAngularVelocity(bodyHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_ApplyForce(bodyHandle As Integer, fx As Single, fy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_ApplyForceAtPoint(bodyHandle As Integer, fx As Single, fy As Single, px As Single, py As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_ApplyImpulse(bodyHandle As Integer, ix As Single, iy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_ApplyTorque(bodyHandle As Integer, torque As Single)
+    End Sub
+
+    ' Body properties
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyMass(bodyHandle As Integer, mass As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyMass(bodyHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyRestitution(bodyHandle As Integer, restitution As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyRestitution(bodyHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyFriction(bodyHandle As Integer, friction As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyFriction(bodyHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyGravityScale(bodyHandle As Integer, scale As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyGravityScale(bodyHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyLinearDamping(bodyHandle As Integer, damping As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyAngularDamping(bodyHandle As Integer, damping As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyFixedRotation(bodyHandle As Integer, fixed As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_IsBodyFixedRotation(bodyHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodySleepingAllowed(bodyHandle As Integer, allowed As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_WakeBody(bodyHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_IsBodyAwake(bodyHandle As Integer) As Boolean
+    End Function
+
+    ' Collision shapes
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyCircle(bodyHandle As Integer, radius As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyCircleOffset(bodyHandle As Integer, radius As Single, offsetX As Single, offsetY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyBox(bodyHandle As Integer, width As Single, height As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyBoxOffset(bodyHandle As Integer, width As Single, height As Single, offsetX As Single, offsetY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyPolygon(bodyHandle As Integer, vertices As Single(), vertexCount As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyShapeType(bodyHandle As Integer) As Integer
+    End Function
+
+    ' Collision filtering
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyLayer(bodyHandle As Integer, layer As UInteger)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyMask(bodyHandle As Integer, mask As UInteger)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyTrigger(bodyHandle As Integer, isTrigger As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_IsBodyTrigger(bodyHandle As Integer) As Boolean
+    End Function
+
+    ' Entity binding
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_BindToEntity(bodyHandle As Integer, entityId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBoundEntity(bodyHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetEntityBody(entityId As Integer) As Integer
+    End Function
+
+    ' User data
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetBodyUserData(bodyHandle As Integer, userData As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_GetBodyUserData(bodyHandle As Integer) As Integer
+    End Function
+
+    ' Physics queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_RaycastFirst(startX As Single, startY As Single, dirX As Single, dirY As Single, maxDist As Single,
+        ByRef hitX As Single, ByRef hitY As Single, ByRef hitNormalX As Single, ByRef hitNormalY As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_RaycastAll(startX As Single, startY As Single, dirX As Single, dirY As Single, maxDist As Single,
+        bodyBuffer As Integer(), bufferSize As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_QueryCircle(x As Single, y As Single, radius As Single, bodyBuffer As Integer(), bufferSize As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_QueryBox(x As Single, y As Single, width As Single, height As Single, bodyBuffer As Integer(), bufferSize As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_TestOverlap(bodyA As Integer, bodyB As Integer) As Boolean
+    End Function
+
+    ' Simulation
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_Step(dt As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SyncToEntities()
+    End Sub
+
+    ' Debug rendering
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_SetDebugDraw(enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Physics_IsDebugDrawEnabled() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Physics_DrawDebug()
+    End Sub
+
+    ' Physics body type constants
+    Public Const BODY_STATIC As Integer = 0
+    Public Const BODY_DYNAMIC As Integer = 1
+    Public Const BODY_KINEMATIC As Integer = 2
+
+    ' Collision shape type constants
+    Public Const SHAPE_CIRCLE As Integer = 0
+    Public Const SHAPE_BOX As Integer = 1
+    Public Const SHAPE_POLYGON As Integer = 2
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

@@ -4089,6 +4089,997 @@ extern "C" {
     }
 
     // ========================================================================
+    // PHYSICS SYSTEM - 2D Rigid Body Physics Implementation
+    // ========================================================================
+
+    // Physics body structure
+    struct PhysicsBody {
+        int handle = -1;
+        int type = BODY_DYNAMIC;
+        bool valid = true;
+
+        // Transform
+        float x = 0, y = 0;
+        float rotation = 0;  // radians
+
+        // Dynamics
+        float vx = 0, vy = 0;
+        float angularVelocity = 0;
+        float forceX = 0, forceY = 0;
+        float torque = 0;
+
+        // Properties
+        float mass = 1.0f;
+        float invMass = 1.0f;  // 1/mass, 0 for static
+        float inertia = 1.0f;
+        float invInertia = 1.0f;
+        float restitution = 0.2f;  // Bounciness
+        float friction = 0.3f;
+        float gravityScale = 1.0f;
+        float linearDamping = 0.0f;
+        float angularDamping = 0.0f;
+        bool fixedRotation = false;
+        bool sleepingAllowed = true;
+        bool awake = true;
+
+        // Shape
+        int shapeType = SHAPE_BOX;
+        float shapeRadius = 16.0f;  // For circle
+        float shapeWidth = 32.0f;   // For box
+        float shapeHeight = 32.0f;
+        float shapeOffsetX = 0, shapeOffsetY = 0;
+        std::vector<float> polygonVerts;  // x,y pairs for polygon
+
+        // Collision filtering
+        unsigned int layer = 1;
+        unsigned int mask = 0xFFFFFFFF;
+        bool isTrigger = false;
+
+        // Entity binding
+        int boundEntity = -1;
+        int userData = 0;
+    };
+
+    // Physics world state
+    static std::unordered_map<int, PhysicsBody> g_physicsBodies;
+    static int g_physicsNextHandle = 1;
+    static float g_gravityX = 0.0f;
+    static float g_gravityY = 980.0f;  // Default gravity (pixels/s^2)
+    static int g_velocityIterations = 8;
+    static int g_positionIterations = 3;
+    static bool g_physicsEnabled = true;
+    static bool g_physicsDebugDraw = false;
+
+    // Collision callbacks
+    static PhysicsCollisionCallback g_onCollisionEnter = nullptr;
+    static PhysicsCollisionCallback g_onCollisionStay = nullptr;
+    static PhysicsCollisionCallback g_onCollisionExit = nullptr;
+    static PhysicsCollisionCallback g_onTriggerEnter = nullptr;
+    static PhysicsCollisionCallback g_onTriggerExit = nullptr;
+
+    // Collision tracking for enter/stay/exit detection
+    struct CollisionPair {
+        int bodyA, bodyB;
+        bool operator==(const CollisionPair& o) const { return (bodyA == o.bodyA && bodyB == o.bodyB) || (bodyA == o.bodyB && bodyB == o.bodyA); }
+    };
+    struct CollisionPairHash {
+        size_t operator()(const CollisionPair& p) const {
+            int a = p.bodyA < p.bodyB ? p.bodyA : p.bodyB;
+            int b = p.bodyA < p.bodyB ? p.bodyB : p.bodyA;
+            return std::hash<long long>()(((long long)a << 32) | b);
+        }
+    };
+    static std::unordered_set<CollisionPair, CollisionPairHash> g_activeCollisions;
+    static std::unordered_set<CollisionPair, CollisionPairHash> g_prevCollisions;
+
+    // Entity-to-body mapping
+    static std::unordered_map<int, int> g_entityToBody;
+
+    // Physics helper functions
+    namespace {
+        float Physics_Dot(float ax, float ay, float bx, float by) {
+            return ax * bx + ay * by;
+        }
+
+        float Physics_Cross(float ax, float ay, float bx, float by) {
+            return ax * by - ay * bx;
+        }
+
+        float Physics_Length(float x, float y) {
+            return sqrtf(x * x + y * y);
+        }
+
+        void Physics_Normalize(float& x, float& y) {
+            float len = Physics_Length(x, y);
+            if (len > 0.0001f) { x /= len; y /= len; }
+        }
+
+        // Get AABB bounds for a body
+        void Physics_GetAABB(const PhysicsBody& body, float& minX, float& minY, float& maxX, float& maxY) {
+            if (body.shapeType == SHAPE_CIRCLE) {
+                minX = body.x + body.shapeOffsetX - body.shapeRadius;
+                minY = body.y + body.shapeOffsetY - body.shapeRadius;
+                maxX = body.x + body.shapeOffsetX + body.shapeRadius;
+                maxY = body.y + body.shapeOffsetY + body.shapeRadius;
+            } else {  // BOX or POLYGON (use box bounds)
+                float hw = body.shapeWidth / 2;
+                float hh = body.shapeHeight / 2;
+                minX = body.x + body.shapeOffsetX - hw;
+                minY = body.y + body.shapeOffsetY - hh;
+                maxX = body.x + body.shapeOffsetX + hw;
+                maxY = body.y + body.shapeOffsetY + hh;
+            }
+        }
+
+        // Circle vs Circle collision
+        bool Physics_CircleVsCircle(const PhysicsBody& a, const PhysicsBody& b,
+            float& normalX, float& normalY, float& depth) {
+            float ax = a.x + a.shapeOffsetX;
+            float ay = a.y + a.shapeOffsetY;
+            float bx = b.x + b.shapeOffsetX;
+            float by = b.y + b.shapeOffsetY;
+
+            float dx = bx - ax;
+            float dy = by - ay;
+            float dist = Physics_Length(dx, dy);
+            float sumRadii = a.shapeRadius + b.shapeRadius;
+
+            if (dist >= sumRadii) return false;
+
+            if (dist > 0.0001f) {
+                normalX = dx / dist;
+                normalY = dy / dist;
+            } else {
+                normalX = 1; normalY = 0;
+            }
+            depth = sumRadii - dist;
+            return true;
+        }
+
+        // Box vs Box collision (AABB)
+        bool Physics_BoxVsBox(const PhysicsBody& a, const PhysicsBody& b,
+            float& normalX, float& normalY, float& depth) {
+            float aMinX, aMinY, aMaxX, aMaxY;
+            float bMinX, bMinY, bMaxX, bMaxY;
+            Physics_GetAABB(a, aMinX, aMinY, aMaxX, aMaxY);
+            Physics_GetAABB(b, bMinX, bMinY, bMaxX, bMaxY);
+
+            float overlapX = fminf(aMaxX, bMaxX) - fmaxf(aMinX, bMinX);
+            float overlapY = fminf(aMaxY, bMaxY) - fmaxf(aMinY, bMinY);
+
+            if (overlapX <= 0 || overlapY <= 0) return false;
+
+            if (overlapX < overlapY) {
+                normalX = (a.x < b.x) ? -1.0f : 1.0f;
+                normalY = 0;
+                depth = overlapX;
+            } else {
+                normalX = 0;
+                normalY = (a.y < b.y) ? -1.0f : 1.0f;
+                depth = overlapY;
+            }
+            return true;
+        }
+
+        // Circle vs Box collision
+        bool Physics_CircleVsBox(const PhysicsBody& circle, const PhysicsBody& box,
+            float& normalX, float& normalY, float& depth) {
+            float cx = circle.x + circle.shapeOffsetX;
+            float cy = circle.y + circle.shapeOffsetY;
+
+            float bMinX, bMinY, bMaxX, bMaxY;
+            Physics_GetAABB(box, bMinX, bMinY, bMaxX, bMaxY);
+
+            // Find closest point on box to circle center
+            float closestX = fmaxf(bMinX, fminf(cx, bMaxX));
+            float closestY = fmaxf(bMinY, fminf(cy, bMaxY));
+
+            float dx = cx - closestX;
+            float dy = cy - closestY;
+            float dist = Physics_Length(dx, dy);
+
+            if (dist >= circle.shapeRadius) return false;
+
+            if (dist > 0.0001f) {
+                normalX = dx / dist;
+                normalY = dy / dist;
+            } else {
+                // Circle center is inside box
+                float toLeft = cx - bMinX;
+                float toRight = bMaxX - cx;
+                float toTop = cy - bMinY;
+                float toBottom = bMaxY - cy;
+                float minDist = fminf(fminf(toLeft, toRight), fminf(toTop, toBottom));
+                if (minDist == toLeft) { normalX = -1; normalY = 0; }
+                else if (minDist == toRight) { normalX = 1; normalY = 0; }
+                else if (minDist == toTop) { normalX = 0; normalY = -1; }
+                else { normalX = 0; normalY = 1; }
+            }
+            depth = circle.shapeRadius - dist;
+            return true;
+        }
+
+        // Test collision between two bodies
+        bool Physics_TestCollision(const PhysicsBody& a, const PhysicsBody& b,
+            float& normalX, float& normalY, float& depth) {
+            // Check layer masks
+            if (!(a.layer & b.mask) || !(b.layer & a.mask)) return false;
+
+            if (a.shapeType == SHAPE_CIRCLE && b.shapeType == SHAPE_CIRCLE) {
+                return Physics_CircleVsCircle(a, b, normalX, normalY, depth);
+            } else if (a.shapeType == SHAPE_BOX && b.shapeType == SHAPE_BOX) {
+                return Physics_BoxVsBox(a, b, normalX, normalY, depth);
+            } else if (a.shapeType == SHAPE_CIRCLE && b.shapeType == SHAPE_BOX) {
+                return Physics_CircleVsBox(a, b, normalX, normalY, depth);
+            } else if (a.shapeType == SHAPE_BOX && b.shapeType == SHAPE_CIRCLE) {
+                bool result = Physics_CircleVsBox(b, a, normalX, normalY, depth);
+                normalX = -normalX; normalY = -normalY;
+                return result;
+            }
+            // Polygon collision would go here - using AABB approximation
+            return Physics_BoxVsBox(a, b, normalX, normalY, depth);
+        }
+
+        // Resolve collision between two bodies
+        void Physics_ResolveCollision(PhysicsBody& a, PhysicsBody& b,
+            float normalX, float normalY, float depth) {
+            // Skip triggers
+            if (a.isTrigger || b.isTrigger) return;
+
+            // Calculate inverse masses
+            float invMassA = (a.type == BODY_STATIC) ? 0 : a.invMass;
+            float invMassB = (b.type == BODY_STATIC) ? 0 : b.invMass;
+            float totalInvMass = invMassA + invMassB;
+
+            if (totalInvMass == 0) return;  // Both static
+
+            // Separate bodies (positional correction)
+            float correctionPercent = 0.8f;
+            float slop = 0.01f;  // Small penetration allowed
+            float correction = fmaxf(depth - slop, 0.0f) / totalInvMass * correctionPercent;
+
+            if (a.type != BODY_STATIC) {
+                a.x -= normalX * correction * invMassA;
+                a.y -= normalY * correction * invMassA;
+            }
+            if (b.type != BODY_STATIC) {
+                b.x += normalX * correction * invMassB;
+                b.y += normalY * correction * invMassB;
+            }
+
+            // Calculate relative velocity
+            float relVelX = b.vx - a.vx;
+            float relVelY = b.vy - a.vy;
+            float relVelNormal = Physics_Dot(relVelX, relVelY, normalX, normalY);
+
+            // Don't resolve if velocities are separating
+            if (relVelNormal > 0) return;
+
+            // Calculate restitution (bounce)
+            float e = fminf(a.restitution, b.restitution);
+
+            // Calculate impulse scalar
+            float j = -(1 + e) * relVelNormal / totalInvMass;
+
+            // Apply impulse
+            if (a.type != BODY_STATIC) {
+                a.vx -= j * invMassA * normalX;
+                a.vy -= j * invMassA * normalY;
+            }
+            if (b.type != BODY_STATIC) {
+                b.vx += j * invMassB * normalX;
+                b.vy += j * invMassB * normalY;
+            }
+
+            // Friction impulse
+            float tangentX = relVelX - relVelNormal * normalX;
+            float tangentY = relVelY - relVelNormal * normalY;
+            float tangentLen = Physics_Length(tangentX, tangentY);
+
+            if (tangentLen > 0.0001f) {
+                tangentX /= tangentLen;
+                tangentY /= tangentLen;
+
+                float jt = -Physics_Dot(relVelX, relVelY, tangentX, tangentY) / totalInvMass;
+                float mu = sqrtf(a.friction * b.friction);  // Friction coefficient
+
+                // Clamp friction impulse
+                float maxFriction = fabsf(j) * mu;
+                jt = fmaxf(-maxFriction, fminf(maxFriction, jt));
+
+                if (a.type != BODY_STATIC) {
+                    a.vx -= jt * invMassA * tangentX;
+                    a.vy -= jt * invMassA * tangentY;
+                }
+                if (b.type != BODY_STATIC) {
+                    b.vx += jt * invMassB * tangentX;
+                    b.vy += jt * invMassB * tangentY;
+                }
+            }
+        }
+    }
+
+    // World settings
+    void Framework_Physics_SetGravity(float gx, float gy) {
+        g_gravityX = gx;
+        g_gravityY = gy;
+    }
+
+    void Framework_Physics_GetGravity(float* gx, float* gy) {
+        if (gx) *gx = g_gravityX;
+        if (gy) *gy = g_gravityY;
+    }
+
+    void Framework_Physics_SetIterations(int velocityIterations, int positionIterations) {
+        g_velocityIterations = velocityIterations > 0 ? velocityIterations : 1;
+        g_positionIterations = positionIterations > 0 ? positionIterations : 1;
+    }
+
+    void Framework_Physics_SetEnabled(bool enabled) { g_physicsEnabled = enabled; }
+    bool Framework_Physics_IsEnabled() { return g_physicsEnabled; }
+
+    // Body creation/destruction
+    int Framework_Physics_CreateBody(int bodyType, float x, float y) {
+        PhysicsBody body;
+        body.handle = g_physicsNextHandle++;
+        body.type = bodyType;
+        body.x = x;
+        body.y = y;
+
+        if (bodyType == BODY_STATIC) {
+            body.invMass = 0;
+            body.invInertia = 0;
+        }
+
+        g_physicsBodies[body.handle] = body;
+        return body.handle;
+    }
+
+    void Framework_Physics_DestroyBody(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) {
+            if (it->second.boundEntity >= 0) {
+                g_entityToBody.erase(it->second.boundEntity);
+            }
+            g_physicsBodies.erase(it);
+        }
+    }
+
+    bool Framework_Physics_IsBodyValid(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return it != g_physicsBodies.end() && it->second.valid;
+    }
+
+    void Framework_Physics_DestroyAllBodies() {
+        g_physicsBodies.clear();
+        g_entityToBody.clear();
+        g_activeCollisions.clear();
+        g_prevCollisions.clear();
+    }
+
+    // Body type
+    void Framework_Physics_SetBodyType(int bodyHandle, int bodyType) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it == g_physicsBodies.end()) return;
+        it->second.type = bodyType;
+        if (bodyType == BODY_STATIC) {
+            it->second.invMass = 0;
+            it->second.invInertia = 0;
+            it->second.vx = it->second.vy = 0;
+        } else {
+            it->second.invMass = 1.0f / it->second.mass;
+            it->second.invInertia = 1.0f / it->second.inertia;
+        }
+    }
+
+    int Framework_Physics_GetBodyType(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.type : BODY_STATIC;
+    }
+
+    // Body transform
+    void Framework_Physics_SetBodyPosition(int bodyHandle, float x, float y) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.x = x; it->second.y = y; }
+    }
+
+    void Framework_Physics_GetBodyPosition(int bodyHandle, float* x, float* y) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) {
+            if (x) *x = it->second.x;
+            if (y) *y = it->second.y;
+        }
+    }
+
+    void Framework_Physics_SetBodyRotation(int bodyHandle, float radians) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.rotation = radians; }
+    }
+
+    float Framework_Physics_GetBodyRotation(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.rotation : 0;
+    }
+
+    // Body dynamics
+    void Framework_Physics_SetBodyVelocity(int bodyHandle, float vx, float vy) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.vx = vx; it->second.vy = vy; }
+    }
+
+    void Framework_Physics_GetBodyVelocity(int bodyHandle, float* vx, float* vy) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) {
+            if (vx) *vx = it->second.vx;
+            if (vy) *vy = it->second.vy;
+        }
+    }
+
+    void Framework_Physics_SetBodyAngularVelocity(int bodyHandle, float omega) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.angularVelocity = omega; }
+    }
+
+    float Framework_Physics_GetBodyAngularVelocity(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.angularVelocity : 0;
+    }
+
+    void Framework_Physics_ApplyForce(int bodyHandle, float fx, float fy) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end() && it->second.type != BODY_STATIC) {
+            it->second.forceX += fx;
+            it->second.forceY += fy;
+            it->second.awake = true;
+        }
+    }
+
+    void Framework_Physics_ApplyForceAtPoint(int bodyHandle, float fx, float fy, float px, float py) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it == g_physicsBodies.end() || it->second.type == BODY_STATIC) return;
+        it->second.forceX += fx;
+        it->second.forceY += fy;
+        // Calculate torque from force at point
+        float rx = px - it->second.x;
+        float ry = py - it->second.y;
+        it->second.torque += Physics_Cross(rx, ry, fx, fy);
+        it->second.awake = true;
+    }
+
+    void Framework_Physics_ApplyImpulse(int bodyHandle, float ix, float iy) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end() && it->second.type != BODY_STATIC) {
+            it->second.vx += ix * it->second.invMass;
+            it->second.vy += iy * it->second.invMass;
+            it->second.awake = true;
+        }
+    }
+
+    void Framework_Physics_ApplyTorque(int bodyHandle, float torque) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end() && it->second.type != BODY_STATIC) {
+            it->second.torque += torque;
+            it->second.awake = true;
+        }
+    }
+
+    // Body properties
+    void Framework_Physics_SetBodyMass(int bodyHandle, float mass) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) {
+            it->second.mass = mass > 0.0001f ? mass : 0.0001f;
+            if (it->second.type != BODY_STATIC) {
+                it->second.invMass = 1.0f / it->second.mass;
+            }
+        }
+    }
+
+    float Framework_Physics_GetBodyMass(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.mass : 0;
+    }
+
+    void Framework_Physics_SetBodyRestitution(int bodyHandle, float restitution) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.restitution = fmaxf(0, fminf(1, restitution)); }
+    }
+
+    float Framework_Physics_GetBodyRestitution(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.restitution : 0;
+    }
+
+    void Framework_Physics_SetBodyFriction(int bodyHandle, float friction) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.friction = fmaxf(0, fminf(1, friction)); }
+    }
+
+    float Framework_Physics_GetBodyFriction(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.friction : 0;
+    }
+
+    void Framework_Physics_SetBodyGravityScale(int bodyHandle, float scale) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.gravityScale = scale; }
+    }
+
+    float Framework_Physics_GetBodyGravityScale(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.gravityScale : 1.0f;
+    }
+
+    void Framework_Physics_SetBodyLinearDamping(int bodyHandle, float damping) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.linearDamping = fmaxf(0, damping); }
+    }
+
+    void Framework_Physics_SetBodyAngularDamping(int bodyHandle, float damping) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.angularDamping = fmaxf(0, damping); }
+    }
+
+    void Framework_Physics_SetBodyFixedRotation(int bodyHandle, bool fixed) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.fixedRotation = fixed; }
+    }
+
+    bool Framework_Physics_IsBodyFixedRotation(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.fixedRotation : false;
+    }
+
+    void Framework_Physics_SetBodySleepingAllowed(int bodyHandle, bool allowed) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.sleepingAllowed = allowed; }
+    }
+
+    void Framework_Physics_WakeBody(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.awake = true; }
+    }
+
+    bool Framework_Physics_IsBodyAwake(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.awake : false;
+    }
+
+    // Collision shapes
+    void Framework_Physics_SetBodyCircle(int bodyHandle, float radius) {
+        Framework_Physics_SetBodyCircleOffset(bodyHandle, radius, 0, 0);
+    }
+
+    void Framework_Physics_SetBodyCircleOffset(int bodyHandle, float radius, float offsetX, float offsetY) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it == g_physicsBodies.end()) return;
+        it->second.shapeType = SHAPE_CIRCLE;
+        it->second.shapeRadius = radius;
+        it->second.shapeOffsetX = offsetX;
+        it->second.shapeOffsetY = offsetY;
+        // Update inertia for circle: I = 0.5 * m * r^2
+        it->second.inertia = 0.5f * it->second.mass * radius * radius;
+        if (it->second.type != BODY_STATIC) {
+            it->second.invInertia = 1.0f / it->second.inertia;
+        }
+    }
+
+    void Framework_Physics_SetBodyBox(int bodyHandle, float width, float height) {
+        Framework_Physics_SetBodyBoxOffset(bodyHandle, width, height, 0, 0);
+    }
+
+    void Framework_Physics_SetBodyBoxOffset(int bodyHandle, float width, float height, float offsetX, float offsetY) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it == g_physicsBodies.end()) return;
+        it->second.shapeType = SHAPE_BOX;
+        it->second.shapeWidth = width;
+        it->second.shapeHeight = height;
+        it->second.shapeOffsetX = offsetX;
+        it->second.shapeOffsetY = offsetY;
+        // Update inertia for box: I = (1/12) * m * (w^2 + h^2)
+        it->second.inertia = (1.0f / 12.0f) * it->second.mass * (width * width + height * height);
+        if (it->second.type != BODY_STATIC) {
+            it->second.invInertia = 1.0f / it->second.inertia;
+        }
+    }
+
+    void Framework_Physics_SetBodyPolygon(int bodyHandle, const float* vertices, int vertexCount) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it == g_physicsBodies.end() || !vertices || vertexCount < 3) return;
+        it->second.shapeType = SHAPE_POLYGON;
+        it->second.polygonVerts.clear();
+        it->second.polygonVerts.assign(vertices, vertices + vertexCount * 2);
+        // Calculate bounding box for AABB approximation
+        float minX = vertices[0], maxX = vertices[0];
+        float minY = vertices[1], maxY = vertices[1];
+        for (int i = 1; i < vertexCount; i++) {
+            minX = fminf(minX, vertices[i * 2]);
+            maxX = fmaxf(maxX, vertices[i * 2]);
+            minY = fminf(minY, vertices[i * 2 + 1]);
+            maxY = fmaxf(maxY, vertices[i * 2 + 1]);
+        }
+        it->second.shapeWidth = maxX - minX;
+        it->second.shapeHeight = maxY - minY;
+    }
+
+    int Framework_Physics_GetBodyShapeType(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.shapeType : SHAPE_BOX;
+    }
+
+    // Collision filtering
+    void Framework_Physics_SetBodyLayer(int bodyHandle, unsigned int layer) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.layer = layer; }
+    }
+
+    void Framework_Physics_SetBodyMask(int bodyHandle, unsigned int mask) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.mask = mask; }
+    }
+
+    void Framework_Physics_SetBodyTrigger(int bodyHandle, bool isTrigger) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.isTrigger = isTrigger; }
+    }
+
+    bool Framework_Physics_IsBodyTrigger(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.isTrigger : false;
+    }
+
+    // Entity binding
+    void Framework_Physics_BindToEntity(int bodyHandle, int entityId) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it == g_physicsBodies.end()) return;
+        // Unbind previous entity if any
+        if (it->second.boundEntity >= 0) {
+            g_entityToBody.erase(it->second.boundEntity);
+        }
+        it->second.boundEntity = entityId;
+        if (entityId >= 0) {
+            g_entityToBody[entityId] = bodyHandle;
+        }
+    }
+
+    int Framework_Physics_GetBoundEntity(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.boundEntity : -1;
+    }
+
+    int Framework_Physics_GetEntityBody(int entityId) {
+        auto it = g_entityToBody.find(entityId);
+        return (it != g_entityToBody.end()) ? it->second : -1;
+    }
+
+    // User data
+    void Framework_Physics_SetBodyUserData(int bodyHandle, int userData) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it != g_physicsBodies.end()) { it->second.userData = userData; }
+    }
+
+    int Framework_Physics_GetBodyUserData(int bodyHandle) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        return (it != g_physicsBodies.end()) ? it->second.userData : 0;
+    }
+
+    // Collision callbacks
+    void Framework_Physics_SetCollisionEnterCallback(PhysicsCollisionCallback callback) { g_onCollisionEnter = callback; }
+    void Framework_Physics_SetCollisionStayCallback(PhysicsCollisionCallback callback) { g_onCollisionStay = callback; }
+    void Framework_Physics_SetCollisionExitCallback(PhysicsCollisionCallback callback) { g_onCollisionExit = callback; }
+    void Framework_Physics_SetTriggerEnterCallback(PhysicsCollisionCallback callback) { g_onTriggerEnter = callback; }
+    void Framework_Physics_SetTriggerExitCallback(PhysicsCollisionCallback callback) { g_onTriggerExit = callback; }
+
+    // Physics queries
+    int Framework_Physics_RaycastFirst(float startX, float startY, float dirX, float dirY, float maxDist,
+        float* hitX, float* hitY, float* hitNormalX, float* hitNormalY) {
+        Physics_Normalize(dirX, dirY);
+        float closestT = maxDist;
+        int closestBody = -1;
+        float closestNX = 0, closestNY = 0;
+
+        for (auto& kv : g_physicsBodies) {
+            const PhysicsBody& body = kv.second;
+            if (!body.valid) continue;
+
+            // Simple ray-AABB intersection for now
+            float minX, minY, maxX, maxY;
+            Physics_GetAABB(body, minX, minY, maxX, maxY);
+
+            float tmin = 0, tmax = maxDist;
+            float nx = 0, ny = 0;
+
+            // X slab
+            if (fabsf(dirX) > 0.0001f) {
+                float t1 = (minX - startX) / dirX;
+                float t2 = (maxX - startX) / dirX;
+                if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+                if (t1 > tmin) { tmin = t1; nx = -dirX / fabsf(dirX); ny = 0; }
+                if (t2 < tmax) tmax = t2;
+            } else if (startX < minX || startX > maxX) continue;
+
+            // Y slab
+            if (fabsf(dirY) > 0.0001f) {
+                float t1 = (minY - startY) / dirY;
+                float t2 = (maxY - startY) / dirY;
+                if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+                if (t1 > tmin) { tmin = t1; nx = 0; ny = -dirY / fabsf(dirY); }
+                if (t2 < tmax) tmax = t2;
+            } else if (startY < minY || startY > maxY) continue;
+
+            if (tmin <= tmax && tmin > 0 && tmin < closestT) {
+                closestT = tmin;
+                closestBody = kv.first;
+                closestNX = nx;
+                closestNY = ny;
+            }
+        }
+
+        if (closestBody >= 0) {
+            if (hitX) *hitX = startX + dirX * closestT;
+            if (hitY) *hitY = startY + dirY * closestT;
+            if (hitNormalX) *hitNormalX = closestNX;
+            if (hitNormalY) *hitNormalY = closestNY;
+        }
+        return closestBody;
+    }
+
+    int Framework_Physics_RaycastAll(float startX, float startY, float dirX, float dirY, float maxDist,
+        int* bodyBuffer, int bufferSize) {
+        if (!bodyBuffer || bufferSize <= 0) return 0;
+        Physics_Normalize(dirX, dirY);
+        int count = 0;
+
+        for (auto& kv : g_physicsBodies) {
+            if (count >= bufferSize) break;
+            const PhysicsBody& body = kv.second;
+            if (!body.valid) continue;
+
+            float minX, minY, maxX, maxY;
+            Physics_GetAABB(body, minX, minY, maxX, maxY);
+
+            // Ray-AABB test
+            float tmin = 0, tmax = maxDist;
+            if (fabsf(dirX) > 0.0001f) {
+                float t1 = (minX - startX) / dirX;
+                float t2 = (maxX - startX) / dirX;
+                if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+                tmin = fmaxf(tmin, t1);
+                tmax = fminf(tmax, t2);
+            } else if (startX < minX || startX > maxX) continue;
+
+            if (fabsf(dirY) > 0.0001f) {
+                float t1 = (minY - startY) / dirY;
+                float t2 = (maxY - startY) / dirY;
+                if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+                tmin = fmaxf(tmin, t1);
+                tmax = fminf(tmax, t2);
+            } else if (startY < minY || startY > maxY) continue;
+
+            if (tmin <= tmax && tmin > 0) {
+                bodyBuffer[count++] = kv.first;
+            }
+        }
+        return count;
+    }
+
+    int Framework_Physics_QueryCircle(float x, float y, float radius, int* bodyBuffer, int bufferSize) {
+        if (!bodyBuffer || bufferSize <= 0) return 0;
+        int count = 0;
+
+        for (auto& kv : g_physicsBodies) {
+            if (count >= bufferSize) break;
+            const PhysicsBody& body = kv.second;
+            if (!body.valid) continue;
+
+            float minX, minY, maxX, maxY;
+            Physics_GetAABB(body, minX, minY, maxX, maxY);
+
+            // Expand AABB by radius and check point
+            if (x >= minX - radius && x <= maxX + radius && y >= minY - radius && y <= maxY + radius) {
+                bodyBuffer[count++] = kv.first;
+            }
+        }
+        return count;
+    }
+
+    int Framework_Physics_QueryBox(float x, float y, float width, float height, int* bodyBuffer, int bufferSize) {
+        if (!bodyBuffer || bufferSize <= 0) return 0;
+        int count = 0;
+
+        float qMinX = x - width / 2, qMinY = y - height / 2;
+        float qMaxX = x + width / 2, qMaxY = y + height / 2;
+
+        for (auto& kv : g_physicsBodies) {
+            if (count >= bufferSize) break;
+            const PhysicsBody& body = kv.second;
+            if (!body.valid) continue;
+
+            float minX, minY, maxX, maxY;
+            Physics_GetAABB(body, minX, minY, maxX, maxY);
+
+            if (qMaxX >= minX && qMinX <= maxX && qMaxY >= minY && qMinY <= maxY) {
+                bodyBuffer[count++] = kv.first;
+            }
+        }
+        return count;
+    }
+
+    bool Framework_Physics_TestOverlap(int bodyA, int bodyB) {
+        auto itA = g_physicsBodies.find(bodyA);
+        auto itB = g_physicsBodies.find(bodyB);
+        if (itA == g_physicsBodies.end() || itB == g_physicsBodies.end()) return false;
+
+        float nx, ny, depth;
+        return Physics_TestCollision(itA->second, itB->second, nx, ny, depth);
+    }
+
+    // Simulation
+    void Framework_Physics_Step(float dt) {
+        if (!g_physicsEnabled || dt <= 0) return;
+
+        // Integrate forces for dynamic bodies
+        for (auto& kv : g_physicsBodies) {
+            PhysicsBody& body = kv.second;
+            if (!body.valid || body.type == BODY_STATIC || !body.awake) continue;
+
+            if (body.type == BODY_DYNAMIC) {
+                // Apply gravity
+                body.vx += g_gravityX * body.gravityScale * dt;
+                body.vy += g_gravityY * body.gravityScale * dt;
+
+                // Apply accumulated forces
+                body.vx += body.forceX * body.invMass * dt;
+                body.vy += body.forceY * body.invMass * dt;
+                body.forceX = body.forceY = 0;
+
+                // Apply torque
+                if (!body.fixedRotation) {
+                    body.angularVelocity += body.torque * body.invInertia * dt;
+                    body.torque = 0;
+                }
+
+                // Apply damping
+                body.vx *= 1.0f / (1.0f + body.linearDamping * dt);
+                body.vy *= 1.0f / (1.0f + body.linearDamping * dt);
+                body.angularVelocity *= 1.0f / (1.0f + body.angularDamping * dt);
+            }
+
+            // Integrate velocity
+            body.x += body.vx * dt;
+            body.y += body.vy * dt;
+            if (!body.fixedRotation) {
+                body.rotation += body.angularVelocity * dt;
+            }
+        }
+
+        // Collect active bodies
+        std::vector<int> bodies;
+        for (auto& kv : g_physicsBodies) {
+            if (kv.second.valid) bodies.push_back(kv.first);
+        }
+
+        // Detect and resolve collisions
+        g_activeCollisions.clear();
+
+        for (int iter = 0; iter < g_positionIterations; iter++) {
+            for (size_t i = 0; i < bodies.size(); i++) {
+                for (size_t j = i + 1; j < bodies.size(); j++) {
+                    int hA = bodies[i], hB = bodies[j];
+                    PhysicsBody& a = g_physicsBodies[hA];
+                    PhysicsBody& b = g_physicsBodies[hB];
+
+                    // Skip if both are static
+                    if (a.type == BODY_STATIC && b.type == BODY_STATIC) continue;
+
+                    float normalX, normalY, depth;
+                    if (Physics_TestCollision(a, b, normalX, normalY, depth)) {
+                        CollisionPair pair = {hA, hB};
+                        g_activeCollisions.insert(pair);
+
+                        // Fire callbacks on first detection (iter == 0)
+                        if (iter == 0) {
+                            bool wasColliding = g_prevCollisions.count(pair) > 0;
+
+                            if (a.isTrigger || b.isTrigger) {
+                                if (!wasColliding && g_onTriggerEnter) {
+                                    g_onTriggerEnter(hA, hB, normalX, normalY, depth);
+                                }
+                            } else {
+                                if (!wasColliding && g_onCollisionEnter) {
+                                    g_onCollisionEnter(hA, hB, normalX, normalY, depth);
+                                } else if (wasColliding && g_onCollisionStay) {
+                                    g_onCollisionStay(hA, hB, normalX, normalY, depth);
+                                }
+                            }
+                        }
+
+                        // Resolve collision
+                        Physics_ResolveCollision(a, b, normalX, normalY, depth);
+                    }
+                }
+            }
+        }
+
+        // Fire exit callbacks
+        for (const auto& pair : g_prevCollisions) {
+            if (g_activeCollisions.count(pair) == 0) {
+                auto itA = g_physicsBodies.find(pair.bodyA);
+                auto itB = g_physicsBodies.find(pair.bodyB);
+                if (itA != g_physicsBodies.end() && itB != g_physicsBodies.end()) {
+                    if (itA->second.isTrigger || itB->second.isTrigger) {
+                        if (g_onTriggerExit) g_onTriggerExit(pair.bodyA, pair.bodyB, 0, 0, 0);
+                    } else {
+                        if (g_onCollisionExit) g_onCollisionExit(pair.bodyA, pair.bodyB, 0, 0, 0);
+                    }
+                }
+            }
+        }
+
+        g_prevCollisions = g_activeCollisions;
+    }
+
+    void Framework_Physics_SyncToEntities() {
+        for (auto& kv : g_physicsBodies) {
+            PhysicsBody& body = kv.second;
+            if (!body.valid || body.boundEntity < 0) continue;
+
+            // Update entity transform from physics body
+            auto trIt = g_transform2D.find(body.boundEntity);
+            if (trIt != g_transform2D.end()) {
+                trIt->second.position.x = body.x;
+                trIt->second.position.y = body.y;
+                trIt->second.rotation = body.rotation * RAD2DEG;
+            }
+        }
+    }
+
+    // Debug rendering
+    void Framework_Physics_SetDebugDraw(bool enabled) { g_physicsDebugDraw = enabled; }
+    bool Framework_Physics_IsDebugDrawEnabled() { return g_physicsDebugDraw; }
+
+    void Framework_Physics_DrawDebug() {
+        if (!g_physicsDebugDraw) return;
+
+        for (auto& kv : g_physicsBodies) {
+            const PhysicsBody& body = kv.second;
+            if (!body.valid) continue;
+
+            Color color;
+            switch (body.type) {
+                case BODY_STATIC: color = { 100, 100, 100, 200 }; break;
+                case BODY_DYNAMIC: color = { 0, 200, 0, 200 }; break;
+                case BODY_KINEMATIC: color = { 200, 200, 0, 200 }; break;
+                default: color = WHITE; break;
+            }
+
+            if (body.isTrigger) {
+                color = { 0, 150, 255, 100 };
+            }
+
+            if (body.shapeType == SHAPE_CIRCLE) {
+                DrawCircleLines(
+                    (int)(body.x + body.shapeOffsetX),
+                    (int)(body.y + body.shapeOffsetY),
+                    body.shapeRadius, color);
+            } else {
+                float hw = body.shapeWidth / 2;
+                float hh = body.shapeHeight / 2;
+                DrawRectangleLines(
+                    (int)(body.x + body.shapeOffsetX - hw),
+                    (int)(body.y + body.shapeOffsetY - hh),
+                    (int)body.shapeWidth, (int)body.shapeHeight, color);
+            }
+
+            // Draw velocity vector
+            if (body.type == BODY_DYNAMIC && (fabsf(body.vx) > 1 || fabsf(body.vy) > 1)) {
+                DrawLine((int)body.x, (int)body.y,
+                    (int)(body.x + body.vx * 0.1f), (int)(body.y + body.vy * 0.1f),
+                    RED);
+            }
+        }
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {
