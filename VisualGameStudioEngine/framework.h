@@ -53,12 +53,57 @@ enum AnimLoopMode {
 };
 
 // ============================================================================
+// UI ELEMENT TYPES
+// ============================================================================
+enum UIElementType {
+    UI_LABEL = 0,
+    UI_BUTTON = 1,
+    UI_PANEL = 2,
+    UI_SLIDER = 3,
+    UI_CHECKBOX = 4,
+    UI_TEXTINPUT = 5,
+    UI_PROGRESSBAR = 6,
+    UI_IMAGE = 7
+};
+
+// ============================================================================
+// UI ANCHOR TYPES
+// ============================================================================
+enum UIAnchor {
+    UI_ANCHOR_TOP_LEFT = 0,
+    UI_ANCHOR_TOP_CENTER = 1,
+    UI_ANCHOR_TOP_RIGHT = 2,
+    UI_ANCHOR_CENTER_LEFT = 3,
+    UI_ANCHOR_CENTER = 4,
+    UI_ANCHOR_CENTER_RIGHT = 5,
+    UI_ANCHOR_BOTTOM_LEFT = 6,
+    UI_ANCHOR_BOTTOM_CENTER = 7,
+    UI_ANCHOR_BOTTOM_RIGHT = 8
+};
+
+// ============================================================================
+// UI ELEMENT STATE
+// ============================================================================
+enum UIState {
+    UI_STATE_NORMAL = 0,
+    UI_STATE_HOVERED = 1,
+    UI_STATE_PRESSED = 2,
+    UI_STATE_DISABLED = 3,
+    UI_STATE_FOCUSED = 4
+};
+
+// ============================================================================
 // CALLBACK TYPES
 // ============================================================================
 typedef void (*DrawCallback)();
 typedef void (*SceneVoidFn)();
 typedef void (*SceneUpdateFixedFn)(double dt);
 typedef void (*SceneUpdateFrameFn)(float dt);
+
+// UI Callbacks
+typedef void (*UICallback)(int elementId);
+typedef void (*UIValueCallback)(int elementId, float value);
+typedef void (*UITextCallback)(int elementId, const char* text);
 
 struct SceneCallbacks {
     SceneVoidFn         onEnter;
@@ -586,6 +631,94 @@ extern "C" {
     // Particle systems update/draw
     __declspec(dllexport) void  Framework_Particles_Update(float dt);  // Update all emitters
     __declspec(dllexport) void  Framework_Particles_Draw();            // Draw all particles
+
+    // ========================================================================
+    // UI SYSTEM
+    // ========================================================================
+    // UI Element lifecycle
+    __declspec(dllexport) int   Framework_UI_CreateLabel(const char* text, float x, float y);
+    __declspec(dllexport) int   Framework_UI_CreateButton(const char* text, float x, float y, float width, float height);
+    __declspec(dllexport) int   Framework_UI_CreatePanel(float x, float y, float width, float height);
+    __declspec(dllexport) int   Framework_UI_CreateSlider(float x, float y, float width, float minVal, float maxVal, float initialVal);
+    __declspec(dllexport) int   Framework_UI_CreateCheckbox(const char* text, float x, float y, bool initialState);
+    __declspec(dllexport) int   Framework_UI_CreateTextInput(float x, float y, float width, float height, const char* placeholder);
+    __declspec(dllexport) int   Framework_UI_CreateProgressBar(float x, float y, float width, float height, float initialValue);
+    __declspec(dllexport) int   Framework_UI_CreateImage(int textureHandle, float x, float y, float width, float height);
+    __declspec(dllexport) void  Framework_UI_Destroy(int elementId);
+    __declspec(dllexport) void  Framework_UI_DestroyAll();
+    __declspec(dllexport) bool  Framework_UI_IsValid(int elementId);
+
+    // UI Element properties - Common
+    __declspec(dllexport) void  Framework_UI_SetPosition(int elementId, float x, float y);
+    __declspec(dllexport) void  Framework_UI_SetSize(int elementId, float width, float height);
+    __declspec(dllexport) void  Framework_UI_SetAnchor(int elementId, int anchor);  // UIAnchor enum
+    __declspec(dllexport) void  Framework_UI_SetVisible(int elementId, bool visible);
+    __declspec(dllexport) void  Framework_UI_SetEnabled(int elementId, bool enabled);
+    __declspec(dllexport) void  Framework_UI_SetParent(int elementId, int parentId);  // -1 for no parent
+    __declspec(dllexport) void  Framework_UI_SetLayer(int elementId, int layer);  // Higher = drawn on top
+    __declspec(dllexport) float Framework_UI_GetX(int elementId);
+    __declspec(dllexport) float Framework_UI_GetY(int elementId);
+    __declspec(dllexport) float Framework_UI_GetWidth(int elementId);
+    __declspec(dllexport) float Framework_UI_GetHeight(int elementId);
+    __declspec(dllexport) int   Framework_UI_GetState(int elementId);  // UIState enum
+    __declspec(dllexport) int   Framework_UI_GetType(int elementId);   // UIElementType enum
+    __declspec(dllexport) bool  Framework_UI_IsVisible(int elementId);
+    __declspec(dllexport) bool  Framework_UI_IsEnabled(int elementId);
+
+    // UI Element properties - Text/Font
+    __declspec(dllexport) void  Framework_UI_SetText(int elementId, const char* text);
+    __declspec(dllexport) const char* Framework_UI_GetText(int elementId);
+    __declspec(dllexport) void  Framework_UI_SetFont(int elementId, int fontHandle);
+    __declspec(dllexport) void  Framework_UI_SetFontSize(int elementId, float size);
+    __declspec(dllexport) void  Framework_UI_SetTextColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_UI_SetTextAlign(int elementId, int anchor);  // Use UIAnchor for alignment
+
+    // UI Element properties - Colors
+    __declspec(dllexport) void  Framework_UI_SetBackgroundColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_UI_SetBorderColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_UI_SetHoverColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_UI_SetPressedColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_UI_SetDisabledColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_UI_SetBorderWidth(int elementId, float width);
+    __declspec(dllexport) void  Framework_UI_SetCornerRadius(int elementId, float radius);
+    __declspec(dllexport) void  Framework_UI_SetPadding(int elementId, float left, float top, float right, float bottom);
+
+    // UI Element properties - Value-based (Slider, ProgressBar, Checkbox)
+    __declspec(dllexport) void  Framework_UI_SetValue(int elementId, float value);
+    __declspec(dllexport) float Framework_UI_GetValue(int elementId);
+    __declspec(dllexport) void  Framework_UI_SetMinMax(int elementId, float minVal, float maxVal);
+    __declspec(dllexport) void  Framework_UI_SetChecked(int elementId, bool checked);
+    __declspec(dllexport) bool  Framework_UI_IsChecked(int elementId);
+
+    // UI Element properties - TextInput specific
+    __declspec(dllexport) void  Framework_UI_SetPlaceholder(int elementId, const char* text);
+    __declspec(dllexport) void  Framework_UI_SetMaxLength(int elementId, int maxLength);
+    __declspec(dllexport) void  Framework_UI_SetPasswordMode(int elementId, bool isPassword);
+    __declspec(dllexport) void  Framework_UI_SetCursorPosition(int elementId, int position);
+    __declspec(dllexport) int   Framework_UI_GetCursorPosition(int elementId);
+
+    // UI Element properties - Image specific
+    __declspec(dllexport) void  Framework_UI_SetTexture(int elementId, int textureHandle);
+    __declspec(dllexport) void  Framework_UI_SetSourceRect(int elementId, float srcX, float srcY, float srcW, float srcH);
+    __declspec(dllexport) void  Framework_UI_SetTint(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // UI Callbacks
+    __declspec(dllexport) void  Framework_UI_SetClickCallback(int elementId, UICallback callback);
+    __declspec(dllexport) void  Framework_UI_SetHoverCallback(int elementId, UICallback callback);
+    __declspec(dllexport) void  Framework_UI_SetValueChangedCallback(int elementId, UIValueCallback callback);
+    __declspec(dllexport) void  Framework_UI_SetTextChangedCallback(int elementId, UITextCallback callback);
+
+    // UI System update/draw
+    __declspec(dllexport) void  Framework_UI_Update();       // Process input, update states
+    __declspec(dllexport) void  Framework_UI_Draw();         // Draw all visible UI elements
+    __declspec(dllexport) int   Framework_UI_GetHovered();   // Returns element under mouse, -1 if none
+    __declspec(dllexport) int   Framework_UI_GetFocused();   // Returns focused element, -1 if none
+    __declspec(dllexport) void  Framework_UI_SetFocus(int elementId);  // -1 to clear focus
+    __declspec(dllexport) bool  Framework_UI_HasFocus();     // True if any UI element has focus
+
+    // UI Layout helpers
+    __declspec(dllexport) void  Framework_UI_LayoutVertical(int parentId, float spacing, float paddingX, float paddingY);
+    __declspec(dllexport) void  Framework_UI_LayoutHorizontal(int parentId, float spacing, float paddingX, float paddingY);
 
     // ========================================================================
     // CLEANUP

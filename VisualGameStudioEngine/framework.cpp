@@ -3215,6 +3215,880 @@ extern "C" {
     }
 
     // ========================================================================
+    // UI SYSTEM - Implementation
+    // ========================================================================
+
+    // UI Element structure
+    struct UIElement {
+        int id = -1;
+        int type = UI_LABEL;
+        int state = UI_STATE_NORMAL;
+        int anchor = UI_ANCHOR_TOP_LEFT;
+        int parent = -1;
+        int layer = 0;
+
+        // Position and size
+        float x = 0, y = 0;
+        float width = 100, height = 30;
+        float padding[4] = {5, 5, 5, 5};  // left, top, right, bottom
+
+        // Text properties
+        std::string text;
+        std::string placeholder;
+        int fontHandle = 0;
+        float fontSize = 20.0f;
+        Color textColor = WHITE;
+        int textAlign = UI_ANCHOR_CENTER_LEFT;
+
+        // Colors
+        Color bgColor = { 60, 60, 60, 255 };
+        Color borderColor = { 100, 100, 100, 255 };
+        Color hoverColor = { 80, 80, 80, 255 };
+        Color pressedColor = { 40, 40, 40, 255 };
+        Color disabledColor = { 40, 40, 40, 150 };
+        float borderWidth = 1.0f;
+        float cornerRadius = 0.0f;
+
+        // Value properties (slider, progress, checkbox)
+        float value = 0.0f;
+        float minValue = 0.0f;
+        float maxValue = 1.0f;
+        bool checked = false;
+
+        // TextInput specific
+        int maxLength = 256;
+        bool passwordMode = false;
+        int cursorPos = 0;
+        float cursorBlinkTimer = 0.0f;
+
+        // Image specific
+        int textureHandle = 0;
+        Rectangle sourceRect = {0, 0, 0, 0};
+        Color tint = WHITE;
+
+        // State
+        bool visible = true;
+        bool enabled = true;
+        bool valid = true;
+
+        // Callbacks (stored as function pointers)
+        UICallback onClick = nullptr;
+        UICallback onHover = nullptr;
+        UIValueCallback onValueChanged = nullptr;
+        UITextCallback onTextChanged = nullptr;
+    };
+
+    // UI Storage
+    static std::unordered_map<int, UIElement> g_uiElements;
+    static int g_uiNextId = 1;
+    static int g_uiFocusedId = -1;
+    static int g_uiHoveredId = -1;
+
+    // Helper: Get computed position based on anchor
+    static Vector2 UI_GetAnchoredPosition(const UIElement& el) {
+        float baseX = el.x;
+        float baseY = el.y;
+
+        // Get parent bounds or screen bounds
+        float parentX = 0, parentY = 0;
+        float parentW = (float)GetScreenWidth();
+        float parentH = (float)GetScreenHeight();
+
+        if (el.parent >= 0) {
+            auto pit = g_uiElements.find(el.parent);
+            if (pit != g_uiElements.end() && pit->second.valid) {
+                Vector2 ppos = UI_GetAnchoredPosition(pit->second);
+                parentX = ppos.x;
+                parentY = ppos.y;
+                parentW = pit->second.width;
+                parentH = pit->second.height;
+            }
+        }
+
+        float anchorX = parentX, anchorY = parentY;
+        switch (el.anchor) {
+            case UI_ANCHOR_TOP_LEFT:      anchorX = parentX; anchorY = parentY; break;
+            case UI_ANCHOR_TOP_CENTER:    anchorX = parentX + parentW/2 - el.width/2; anchorY = parentY; break;
+            case UI_ANCHOR_TOP_RIGHT:     anchorX = parentX + parentW - el.width; anchorY = parentY; break;
+            case UI_ANCHOR_CENTER_LEFT:   anchorX = parentX; anchorY = parentY + parentH/2 - el.height/2; break;
+            case UI_ANCHOR_CENTER:        anchorX = parentX + parentW/2 - el.width/2; anchorY = parentY + parentH/2 - el.height/2; break;
+            case UI_ANCHOR_CENTER_RIGHT:  anchorX = parentX + parentW - el.width; anchorY = parentY + parentH/2 - el.height/2; break;
+            case UI_ANCHOR_BOTTOM_LEFT:   anchorX = parentX; anchorY = parentY + parentH - el.height; break;
+            case UI_ANCHOR_BOTTOM_CENTER: anchorX = parentX + parentW/2 - el.width/2; anchorY = parentY + parentH - el.height; break;
+            case UI_ANCHOR_BOTTOM_RIGHT:  anchorX = parentX + parentW - el.width; anchorY = parentY + parentH - el.height; break;
+        }
+
+        return { anchorX + baseX, anchorY + baseY };
+    }
+
+    // Helper: Point in rect
+    static bool UI_PointInRect(float px, float py, float rx, float ry, float rw, float rh) {
+        return px >= rx && px <= rx + rw && py >= ry && py <= ry + rh;
+    }
+
+    // Helper: Draw rounded rectangle
+    static void UI_DrawRoundedRect(float x, float y, float w, float h, float radius, Color color) {
+        if (radius <= 0) {
+            DrawRectangle((int)x, (int)y, (int)w, (int)h, color);
+        } else {
+            DrawRectangleRounded({x, y, w, h}, radius / (w < h ? w : h), 8, color);
+        }
+    }
+
+    // Helper: Get font by handle (for UI)
+    static Font UI_GetFontByHandle(int handle) {
+        auto it = g_fontByHandle.find(handle);
+        if (it != g_fontByHandle.end() && it->second.valid) {
+            return it->second.font;
+        }
+        return GetFontDefault();
+    }
+
+    // Helper: Draw text with alignment
+    static void UI_DrawAlignedText(const char* text, float x, float y, float w, float h, int fontH, float fontSize, int align, Color color) {
+        Font font = UI_GetFontByHandle(fontH);
+        Vector2 textSize = MeasureTextEx(font, text, fontSize, 1);
+
+        float tx = x, ty = y;
+        switch (align) {
+            case UI_ANCHOR_TOP_LEFT:      tx = x; ty = y; break;
+            case UI_ANCHOR_TOP_CENTER:    tx = x + w/2 - textSize.x/2; ty = y; break;
+            case UI_ANCHOR_TOP_RIGHT:     tx = x + w - textSize.x; ty = y; break;
+            case UI_ANCHOR_CENTER_LEFT:   tx = x; ty = y + h/2 - textSize.y/2; break;
+            case UI_ANCHOR_CENTER:        tx = x + w/2 - textSize.x/2; ty = y + h/2 - textSize.y/2; break;
+            case UI_ANCHOR_CENTER_RIGHT:  tx = x + w - textSize.x; ty = y + h/2 - textSize.y/2; break;
+            case UI_ANCHOR_BOTTOM_LEFT:   tx = x; ty = y + h - textSize.y; break;
+            case UI_ANCHOR_BOTTOM_CENTER: tx = x + w/2 - textSize.x/2; ty = y + h - textSize.y; break;
+            case UI_ANCHOR_BOTTOM_RIGHT:  tx = x + w - textSize.x; ty = y + h - textSize.y; break;
+        }
+
+        DrawTextEx(font, text, {tx, ty}, fontSize, 1, color);
+    }
+
+    // Create functions
+    int Framework_UI_CreateLabel(const char* text, float x, float y) {
+        UIElement el;
+        el.id = g_uiNextId++;
+        el.type = UI_LABEL;
+        el.x = x; el.y = y;
+        el.text = text ? text : "";
+        el.bgColor = {0, 0, 0, 0};  // Transparent by default
+        el.borderWidth = 0;
+
+        // Auto-size based on text
+        Vector2 textSize = MeasureTextEx(GetFontDefault(), el.text.c_str(), el.fontSize, 1);
+        el.width = textSize.x + el.padding[0] + el.padding[2];
+        el.height = textSize.y + el.padding[1] + el.padding[3];
+
+        g_uiElements[el.id] = el;
+        return el.id;
+    }
+
+    int Framework_UI_CreateButton(const char* text, float x, float y, float width, float height) {
+        UIElement el;
+        el.id = g_uiNextId++;
+        el.type = UI_BUTTON;
+        el.x = x; el.y = y;
+        el.width = width; el.height = height;
+        el.text = text ? text : "";
+        el.textAlign = UI_ANCHOR_CENTER;
+        el.bgColor = { 70, 130, 180, 255 };  // Steel blue
+        el.hoverColor = { 100, 149, 237, 255 };  // Cornflower blue
+        el.pressedColor = { 30, 90, 140, 255 };
+        el.cornerRadius = 4.0f;
+
+        g_uiElements[el.id] = el;
+        return el.id;
+    }
+
+    int Framework_UI_CreatePanel(float x, float y, float width, float height) {
+        UIElement el;
+        el.id = g_uiNextId++;
+        el.type = UI_PANEL;
+        el.x = x; el.y = y;
+        el.width = width; el.height = height;
+        el.bgColor = { 45, 45, 48, 240 };
+        el.borderColor = { 80, 80, 80, 255 };
+        el.cornerRadius = 8.0f;
+
+        g_uiElements[el.id] = el;
+        return el.id;
+    }
+
+    int Framework_UI_CreateSlider(float x, float y, float width, float minVal, float maxVal, float initialVal) {
+        UIElement el;
+        el.id = g_uiNextId++;
+        el.type = UI_SLIDER;
+        el.x = x; el.y = y;
+        el.width = width; el.height = 20;
+        el.minValue = minVal; el.maxValue = maxVal;
+        el.value = initialVal;
+        el.bgColor = { 60, 60, 60, 255 };
+        el.hoverColor = { 70, 130, 180, 255 };  // Track fill color
+        el.pressedColor = { 100, 149, 237, 255 };  // Handle color
+        el.cornerRadius = 4.0f;
+
+        g_uiElements[el.id] = el;
+        return el.id;
+    }
+
+    int Framework_UI_CreateCheckbox(const char* text, float x, float y, bool initialState) {
+        UIElement el;
+        el.id = g_uiNextId++;
+        el.type = UI_CHECKBOX;
+        el.x = x; el.y = y;
+        el.width = 24; el.height = 24;
+        el.text = text ? text : "";
+        el.checked = initialState;
+        el.value = initialState ? 1.0f : 0.0f;
+        el.bgColor = { 60, 60, 60, 255 };
+        el.hoverColor = { 80, 80, 80, 255 };
+        el.pressedColor = { 70, 130, 180, 255 };  // Checked color
+        el.cornerRadius = 4.0f;
+
+        g_uiElements[el.id] = el;
+        return el.id;
+    }
+
+    int Framework_UI_CreateTextInput(float x, float y, float width, float height, const char* placeholder) {
+        UIElement el;
+        el.id = g_uiNextId++;
+        el.type = UI_TEXTINPUT;
+        el.x = x; el.y = y;
+        el.width = width; el.height = height;
+        el.placeholder = placeholder ? placeholder : "";
+        el.bgColor = { 30, 30, 30, 255 };
+        el.borderColor = { 100, 100, 100, 255 };
+        el.hoverColor = { 70, 130, 180, 255 };  // Focus border color
+        el.cornerRadius = 4.0f;
+        el.textAlign = UI_ANCHOR_CENTER_LEFT;
+
+        g_uiElements[el.id] = el;
+        return el.id;
+    }
+
+    int Framework_UI_CreateProgressBar(float x, float y, float width, float height, float initialValue) {
+        UIElement el;
+        el.id = g_uiNextId++;
+        el.type = UI_PROGRESSBAR;
+        el.x = x; el.y = y;
+        el.width = width; el.height = height;
+        el.value = initialValue;
+        el.bgColor = { 40, 40, 40, 255 };
+        el.hoverColor = { 76, 175, 80, 255 };  // Fill color (green)
+        el.cornerRadius = 4.0f;
+
+        g_uiElements[el.id] = el;
+        return el.id;
+    }
+
+    int Framework_UI_CreateImage(int textureHandle, float x, float y, float width, float height) {
+        UIElement el;
+        el.id = g_uiNextId++;
+        el.type = UI_IMAGE;
+        el.x = x; el.y = y;
+        el.width = width; el.height = height;
+        el.textureHandle = textureHandle;
+        el.tint = WHITE;
+        el.bgColor = {0, 0, 0, 0};
+
+        g_uiElements[el.id] = el;
+        return el.id;
+    }
+
+    void Framework_UI_Destroy(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) {
+            it->second.valid = false;
+            g_uiElements.erase(it);
+        }
+        if (g_uiFocusedId == elementId) g_uiFocusedId = -1;
+        if (g_uiHoveredId == elementId) g_uiHoveredId = -1;
+    }
+
+    void Framework_UI_DestroyAll() {
+        g_uiElements.clear();
+        g_uiFocusedId = -1;
+        g_uiHoveredId = -1;
+    }
+
+    bool Framework_UI_IsValid(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return it != g_uiElements.end() && it->second.valid;
+    }
+
+    // Property setters - Common
+    void Framework_UI_SetPosition(int elementId, float x, float y) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.x = x; it->second.y = y; }
+    }
+
+    void Framework_UI_SetSize(int elementId, float width, float height) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.width = width; it->second.height = height; }
+    }
+
+    void Framework_UI_SetAnchor(int elementId, int anchor) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.anchor = anchor; }
+    }
+
+    void Framework_UI_SetVisible(int elementId, bool visible) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.visible = visible; }
+    }
+
+    void Framework_UI_SetEnabled(int elementId, bool enabled) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) {
+            it->second.enabled = enabled;
+            it->second.state = enabled ? UI_STATE_NORMAL : UI_STATE_DISABLED;
+        }
+    }
+
+    void Framework_UI_SetParent(int elementId, int parentId) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.parent = parentId; }
+    }
+
+    void Framework_UI_SetLayer(int elementId, int layer) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.layer = layer; }
+    }
+
+    float Framework_UI_GetX(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.x : 0;
+    }
+
+    float Framework_UI_GetY(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.y : 0;
+    }
+
+    float Framework_UI_GetWidth(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.width : 0;
+    }
+
+    float Framework_UI_GetHeight(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.height : 0;
+    }
+
+    int Framework_UI_GetState(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.state : UI_STATE_NORMAL;
+    }
+
+    int Framework_UI_GetType(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.type : UI_LABEL;
+    }
+
+    bool Framework_UI_IsVisible(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.visible : false;
+    }
+
+    bool Framework_UI_IsEnabled(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.enabled : false;
+    }
+
+    // Property setters - Text/Font
+    void Framework_UI_SetText(int elementId, const char* text) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.text = text ? text : ""; }
+    }
+
+    const char* Framework_UI_GetText(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.text.c_str() : "";
+    }
+
+    void Framework_UI_SetFont(int elementId, int fontHandle) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.fontHandle = fontHandle; }
+    }
+
+    void Framework_UI_SetFontSize(int elementId, float size) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.fontSize = size; }
+    }
+
+    void Framework_UI_SetTextColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.textColor = {r, g, b, a}; }
+    }
+
+    void Framework_UI_SetTextAlign(int elementId, int anchor) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.textAlign = anchor; }
+    }
+
+    // Property setters - Colors
+    void Framework_UI_SetBackgroundColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.bgColor = {r, g, b, a}; }
+    }
+
+    void Framework_UI_SetBorderColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.borderColor = {r, g, b, a}; }
+    }
+
+    void Framework_UI_SetHoverColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.hoverColor = {r, g, b, a}; }
+    }
+
+    void Framework_UI_SetPressedColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.pressedColor = {r, g, b, a}; }
+    }
+
+    void Framework_UI_SetDisabledColor(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.disabledColor = {r, g, b, a}; }
+    }
+
+    void Framework_UI_SetBorderWidth(int elementId, float width) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.borderWidth = width; }
+    }
+
+    void Framework_UI_SetCornerRadius(int elementId, float radius) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.cornerRadius = radius; }
+    }
+
+    void Framework_UI_SetPadding(int elementId, float left, float top, float right, float bottom) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) {
+            it->second.padding[0] = left;
+            it->second.padding[1] = top;
+            it->second.padding[2] = right;
+            it->second.padding[3] = bottom;
+        }
+    }
+
+    // Property setters - Value-based
+    void Framework_UI_SetValue(int elementId, float value) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) {
+            float clamped = fmaxf(it->second.minValue, fminf(it->second.maxValue, value));
+            it->second.value = clamped;
+        }
+    }
+
+    float Framework_UI_GetValue(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.value : 0;
+    }
+
+    void Framework_UI_SetMinMax(int elementId, float minVal, float maxVal) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) {
+            it->second.minValue = minVal;
+            it->second.maxValue = maxVal;
+        }
+    }
+
+    void Framework_UI_SetChecked(int elementId, bool checked) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) {
+            it->second.checked = checked;
+            it->second.value = checked ? 1.0f : 0.0f;
+        }
+    }
+
+    bool Framework_UI_IsChecked(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.checked : false;
+    }
+
+    // Property setters - TextInput specific
+    void Framework_UI_SetPlaceholder(int elementId, const char* text) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.placeholder = text ? text : ""; }
+    }
+
+    void Framework_UI_SetMaxLength(int elementId, int maxLength) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.maxLength = maxLength; }
+    }
+
+    void Framework_UI_SetPasswordMode(int elementId, bool isPassword) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.passwordMode = isPassword; }
+    }
+
+    void Framework_UI_SetCursorPosition(int elementId, int position) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) {
+            it->second.cursorPos = std::max(0, std::min(position, (int)it->second.text.length()));
+        }
+    }
+
+    int Framework_UI_GetCursorPosition(int elementId) {
+        auto it = g_uiElements.find(elementId);
+        return (it != g_uiElements.end()) ? it->second.cursorPos : 0;
+    }
+
+    // Property setters - Image specific
+    void Framework_UI_SetTexture(int elementId, int textureHandle) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.textureHandle = textureHandle; }
+    }
+
+    void Framework_UI_SetSourceRect(int elementId, float srcX, float srcY, float srcW, float srcH) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.sourceRect = {srcX, srcY, srcW, srcH}; }
+    }
+
+    void Framework_UI_SetTint(int elementId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.tint = {r, g, b, a}; }
+    }
+
+    // Callbacks
+    void Framework_UI_SetClickCallback(int elementId, UICallback callback) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.onClick = callback; }
+    }
+
+    void Framework_UI_SetHoverCallback(int elementId, UICallback callback) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.onHover = callback; }
+    }
+
+    void Framework_UI_SetValueChangedCallback(int elementId, UIValueCallback callback) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.onValueChanged = callback; }
+    }
+
+    void Framework_UI_SetTextChangedCallback(int elementId, UITextCallback callback) {
+        auto it = g_uiElements.find(elementId);
+        if (it != g_uiElements.end()) { it->second.onTextChanged = callback; }
+    }
+
+    // UI Update - Process input and states
+    void Framework_UI_Update() {
+        Vector2 mousePos = GetMousePosition();
+        bool mousePressed = IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
+        bool mouseDown = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+        bool mouseReleased = IsMouseButtonReleased(MOUSE_LEFT_BUTTON);
+
+        int newHovered = -1;
+
+        // Collect and sort elements by layer (higher layers on top)
+        std::vector<std::pair<int, UIElement*>> sortedElements;
+        for (auto& kv : g_uiElements) {
+            if (kv.second.valid && kv.second.visible && kv.second.enabled) {
+                sortedElements.push_back({kv.first, &kv.second});
+            }
+        }
+        std::sort(sortedElements.begin(), sortedElements.end(),
+            [](const auto& a, const auto& b) { return a.second->layer > b.second->layer; });
+
+        // Find topmost hovered element
+        for (auto& [id, el] : sortedElements) {
+            Vector2 pos = UI_GetAnchoredPosition(*el);
+            if (UI_PointInRect(mousePos.x, mousePos.y, pos.x, pos.y, el->width, el->height)) {
+                newHovered = id;
+                break;  // Topmost wins
+            }
+        }
+
+        // Update hover state
+        if (newHovered != g_uiHoveredId) {
+            if (g_uiHoveredId >= 0) {
+                auto it = g_uiElements.find(g_uiHoveredId);
+                if (it != g_uiElements.end() && it->second.state == UI_STATE_HOVERED) {
+                    it->second.state = UI_STATE_NORMAL;
+                }
+            }
+            g_uiHoveredId = newHovered;
+            if (newHovered >= 0) {
+                auto it = g_uiElements.find(newHovered);
+                if (it != g_uiElements.end()) {
+                    it->second.state = UI_STATE_HOVERED;
+                    if (it->second.onHover) it->second.onHover(newHovered);
+                }
+            }
+        }
+
+        // Process clicks
+        if (mousePressed && newHovered >= 0) {
+            auto it = g_uiElements.find(newHovered);
+            if (it != g_uiElements.end()) {
+                it->second.state = UI_STATE_PRESSED;
+
+                // Set focus for text inputs
+                if (it->second.type == UI_TEXTINPUT) {
+                    g_uiFocusedId = newHovered;
+                    it->second.state = UI_STATE_FOCUSED;
+                }
+            }
+        }
+
+        // Click outside clears focus
+        if (mousePressed && newHovered < 0) {
+            g_uiFocusedId = -1;
+        }
+
+        // Process release (click complete)
+        if (mouseReleased && newHovered >= 0) {
+            auto it = g_uiElements.find(newHovered);
+            if (it != g_uiElements.end() && it->second.state == UI_STATE_PRESSED) {
+                it->second.state = UI_STATE_HOVERED;
+
+                // Handle click by type
+                switch (it->second.type) {
+                    case UI_BUTTON:
+                        if (it->second.onClick) it->second.onClick(newHovered);
+                        break;
+                    case UI_CHECKBOX:
+                        it->second.checked = !it->second.checked;
+                        it->second.value = it->second.checked ? 1.0f : 0.0f;
+                        if (it->second.onValueChanged) it->second.onValueChanged(newHovered, it->second.value);
+                        break;
+                }
+            }
+        }
+
+        // Slider dragging
+        for (auto& kv : g_uiElements) {
+            if (kv.second.type == UI_SLIDER && kv.second.state == UI_STATE_PRESSED && mouseDown) {
+                Vector2 pos = UI_GetAnchoredPosition(kv.second);
+                float relX = mousePos.x - pos.x;
+                float ratio = fmaxf(0, fminf(1, relX / kv.second.width));
+                float newValue = kv.second.minValue + ratio * (kv.second.maxValue - kv.second.minValue);
+                if (newValue != kv.second.value) {
+                    kv.second.value = newValue;
+                    if (kv.second.onValueChanged) kv.second.onValueChanged(kv.first, newValue);
+                }
+            }
+        }
+
+        // Text input handling
+        if (g_uiFocusedId >= 0) {
+            auto it = g_uiElements.find(g_uiFocusedId);
+            if (it != g_uiElements.end() && it->second.type == UI_TEXTINPUT) {
+                UIElement& el = it->second;
+                el.cursorBlinkTimer += GetFrameTime();
+
+                // Handle character input
+                int key = GetCharPressed();
+                while (key > 0) {
+                    if ((int)el.text.length() < el.maxLength && key >= 32 && key <= 126) {
+                        el.text.insert(el.cursorPos, 1, (char)key);
+                        el.cursorPos++;
+                        if (el.onTextChanged) el.onTextChanged(g_uiFocusedId, el.text.c_str());
+                    }
+                    key = GetCharPressed();
+                }
+
+                // Handle special keys
+                if (IsKeyPressed(KEY_BACKSPACE) && el.cursorPos > 0) {
+                    el.text.erase(el.cursorPos - 1, 1);
+                    el.cursorPos--;
+                    if (el.onTextChanged) el.onTextChanged(g_uiFocusedId, el.text.c_str());
+                }
+                if (IsKeyPressed(KEY_DELETE) && el.cursorPos < (int)el.text.length()) {
+                    el.text.erase(el.cursorPos, 1);
+                    if (el.onTextChanged) el.onTextChanged(g_uiFocusedId, el.text.c_str());
+                }
+                if (IsKeyPressed(KEY_LEFT) && el.cursorPos > 0) el.cursorPos--;
+                if (IsKeyPressed(KEY_RIGHT) && el.cursorPos < (int)el.text.length()) el.cursorPos++;
+                if (IsKeyPressed(KEY_HOME)) el.cursorPos = 0;
+                if (IsKeyPressed(KEY_END)) el.cursorPos = (int)el.text.length();
+            }
+        }
+    }
+
+    // UI Draw
+    void Framework_UI_Draw() {
+        // Collect and sort elements by layer
+        std::vector<std::pair<int, UIElement*>> sortedElements;
+        for (auto& kv : g_uiElements) {
+            if (kv.second.valid && kv.second.visible) {
+                sortedElements.push_back({kv.first, &kv.second});
+            }
+        }
+        std::sort(sortedElements.begin(), sortedElements.end(),
+            [](const auto& a, const auto& b) { return a.second->layer < b.second->layer; });
+
+        for (auto& [id, el] : sortedElements) {
+            Vector2 pos = UI_GetAnchoredPosition(*el);
+            float x = pos.x, y = pos.y, w = el->width, h = el->height;
+
+            Color bgColor = el->bgColor;
+            if (!el->enabled) bgColor = el->disabledColor;
+            else if (el->state == UI_STATE_PRESSED) bgColor = el->pressedColor;
+            else if (el->state == UI_STATE_HOVERED) bgColor = el->hoverColor;
+            else if (el->state == UI_STATE_FOCUSED) bgColor = el->bgColor;
+
+            switch (el->type) {
+                case UI_LABEL: {
+                    if (bgColor.a > 0) UI_DrawRoundedRect(x, y, w, h, el->cornerRadius, bgColor);
+                    UI_DrawAlignedText(el->text.c_str(), x + el->padding[0], y + el->padding[1],
+                        w - el->padding[0] - el->padding[2], h - el->padding[1] - el->padding[3],
+                        el->fontHandle, el->fontSize, el->textAlign, el->textColor);
+                    break;
+                }
+
+                case UI_BUTTON: {
+                    UI_DrawRoundedRect(x, y, w, h, el->cornerRadius, bgColor);
+                    if (el->borderWidth > 0) {
+                        DrawRectangleLinesEx({x, y, w, h}, el->borderWidth, el->borderColor);
+                    }
+                    UI_DrawAlignedText(el->text.c_str(), x, y, w, h, el->fontHandle, el->fontSize, el->textAlign, el->textColor);
+                    break;
+                }
+
+                case UI_PANEL: {
+                    UI_DrawRoundedRect(x, y, w, h, el->cornerRadius, bgColor);
+                    if (el->borderWidth > 0) {
+                        DrawRectangleLinesEx({x, y, w, h}, el->borderWidth, el->borderColor);
+                    }
+                    break;
+                }
+
+                case UI_SLIDER: {
+                    // Track background
+                    UI_DrawRoundedRect(x, y + h/2 - 4, w, 8, 4, el->bgColor);
+                    // Filled portion
+                    float ratio = (el->value - el->minValue) / (el->maxValue - el->minValue);
+                    UI_DrawRoundedRect(x, y + h/2 - 4, w * ratio, 8, 4, el->hoverColor);
+                    // Handle
+                    float handleX = x + w * ratio - 8;
+                    DrawCircle((int)(handleX + 8), (int)(y + h/2), 10, el->pressedColor);
+                    break;
+                }
+
+                case UI_CHECKBOX: {
+                    // Box
+                    UI_DrawRoundedRect(x, y, 24, 24, el->cornerRadius, bgColor);
+                    DrawRectangleLinesEx({x, y, 24, 24}, el->borderWidth, el->borderColor);
+                    // Checkmark
+                    if (el->checked) {
+                        DrawLine((int)(x + 5), (int)(y + 12), (int)(x + 10), (int)(y + 18), el->pressedColor);
+                        DrawLine((int)(x + 10), (int)(y + 18), (int)(x + 19), (int)(y + 6), el->pressedColor);
+                    }
+                    // Label
+                    if (!el->text.empty()) {
+                        UI_DrawAlignedText(el->text.c_str(), x + 30, y, w, 24, el->fontHandle, el->fontSize, UI_ANCHOR_CENTER_LEFT, el->textColor);
+                    }
+                    break;
+                }
+
+                case UI_TEXTINPUT: {
+                    Color borderCol = (el->state == UI_STATE_FOCUSED) ? el->hoverColor : el->borderColor;
+                    UI_DrawRoundedRect(x, y, w, h, el->cornerRadius, el->bgColor);
+                    DrawRectangleLinesEx({x, y, w, h}, el->borderWidth, borderCol);
+
+                    // Text or placeholder
+                    const char* displayText = el->text.empty() ? el->placeholder.c_str() : el->text.c_str();
+                    Color textCol = el->text.empty() ? Color{150, 150, 150, 255} : el->textColor;
+
+                    std::string masked = el->text;
+                    if (el->passwordMode && !el->text.empty()) {
+                        masked = std::string(el->text.length(), '*');
+                        displayText = masked.c_str();
+                    }
+
+                    UI_DrawAlignedText(displayText, x + el->padding[0], y, w - el->padding[0] - el->padding[2], h, el->fontHandle, el->fontSize, el->textAlign, textCol);
+
+                    // Cursor
+                    if (el->state == UI_STATE_FOCUSED && fmod(el->cursorBlinkTimer, 1.0f) < 0.5f) {
+                        Font font = UI_GetFontByHandle(el->fontHandle);
+                        std::string beforeCursor = el->passwordMode ? std::string(el->cursorPos, '*') : el->text.substr(0, el->cursorPos);
+                        Vector2 textSize = MeasureTextEx(font, beforeCursor.c_str(), el->fontSize, 1);
+                        float cursorX = x + el->padding[0] + textSize.x;
+                        DrawLine((int)cursorX, (int)(y + 4), (int)cursorX, (int)(y + h - 4), el->textColor);
+                    }
+                    break;
+                }
+
+                case UI_PROGRESSBAR: {
+                    UI_DrawRoundedRect(x, y, w, h, el->cornerRadius, el->bgColor);
+                    float ratio = (el->value - el->minValue) / (el->maxValue - el->minValue);
+                    if (ratio > 0) {
+                        UI_DrawRoundedRect(x, y, w * ratio, h, el->cornerRadius, el->hoverColor);
+                    }
+                    if (el->borderWidth > 0) {
+                        DrawRectangleLinesEx({x, y, w, h}, el->borderWidth, el->borderColor);
+                    }
+                    break;
+                }
+
+                case UI_IMAGE: {
+                    auto texIt = g_texByHandle.find(el->textureHandle);
+                    if (texIt != g_texByHandle.end() && texIt->second.valid) {
+                        Rectangle src = el->sourceRect;
+                        if (src.width <= 0) src = {0, 0, (float)texIt->second.tex.width, (float)texIt->second.tex.height};
+                        Rectangle dest = {x, y, w, h};
+                        DrawTexturePro(texIt->second.tex, src, dest, {0, 0}, 0, el->tint);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    int Framework_UI_GetHovered() { return g_uiHoveredId; }
+    int Framework_UI_GetFocused() { return g_uiFocusedId; }
+
+    void Framework_UI_SetFocus(int elementId) {
+        if (g_uiFocusedId >= 0) {
+            auto it = g_uiElements.find(g_uiFocusedId);
+            if (it != g_uiElements.end()) it->second.state = UI_STATE_NORMAL;
+        }
+        g_uiFocusedId = elementId;
+        if (elementId >= 0) {
+            auto it = g_uiElements.find(elementId);
+            if (it != g_uiElements.end()) it->second.state = UI_STATE_FOCUSED;
+        }
+    }
+
+    bool Framework_UI_HasFocus() { return g_uiFocusedId >= 0; }
+
+    // Layout helpers
+    void Framework_UI_LayoutVertical(int parentId, float spacing, float paddingX, float paddingY) {
+        std::vector<UIElement*> children;
+        for (auto& kv : g_uiElements) {
+            if (kv.second.parent == parentId && kv.second.valid) {
+                children.push_back(&kv.second);
+            }
+        }
+
+        float currentY = paddingY;
+        for (auto* child : children) {
+            child->x = paddingX;
+            child->y = currentY;
+            currentY += child->height + spacing;
+        }
+    }
+
+    void Framework_UI_LayoutHorizontal(int parentId, float spacing, float paddingX, float paddingY) {
+        std::vector<UIElement*> children;
+        for (auto& kv : g_uiElements) {
+            if (kv.second.parent == parentId && kv.second.valid) {
+                children.push_back(&kv.second);
+            }
+        }
+
+        float currentX = paddingX;
+        for (auto* child : children) {
+            child->x = currentX;
+            child->y = paddingY;
+            currentX += child->width + spacing;
+        }
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {

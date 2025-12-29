@@ -17,6 +17,7 @@ Class TitleScene
     Dim txtPlayer2 As String = "2 PLAYER"
     Dim txtOptions As String = "  OPTIONS"
     Dim txt2DDemo As String = "  2D DEMO"
+    Dim txtUIDemo As String = "  UI DEMO"
     'locations
     Dim textWidth As Integer = 10 * (temp.Length())
     Dim x As Integer = (800 - textWidth) / 2
@@ -76,7 +77,7 @@ Class TitleScene
             menuIndex -= 1
             menuPos.Y -= 50
 
-        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 3 Then
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 4 Then
             'play sound
             Framework_PlaySoundH(sfxWall)
             menuIndex += 1
@@ -101,6 +102,10 @@ Class TitleScene
                     '2D Systems Demo
                     Framework_PlaySoundH(sfxHit)
                     ChangeTo(New Demo2DScene)
+                Case 4
+                    'UI System Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoUIScene)
             End Select
         End If
 
@@ -118,7 +123,8 @@ Class TitleScene
         Framework_DrawTextExH(RETRO_FONT.Handle, txtPlayer2, New Vector2(WINDOW_WIDTH / 2.5, y + 50), 40, 1.0F, 255, 255, 255, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txtOptions, New Vector2(WINDOW_WIDTH / 2.6, y + 100), 40, 1.0F, 255, 255, 255, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txt2DDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 150), 40, 1.0F, 100, 255, 100, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 220), 20, 1.0F, 255, 255, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtUIDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 200), 40, 1.0F, 100, 200, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 270), 20, 1.0F, 255, 255, 255, 255)
         menuPos.DrawRectangle(255, 0, 0, 90)
         'draw tile #0 at (50, 50)
         'atlas.DrawRec(pong(0), New Vector2(50, 80))
@@ -1038,5 +1044,155 @@ Class Demo2DScene
         ' Stats
         Dim particleCount As Integer = Framework_Ecs_EmitterGetParticleCount(_particleEntity)
         Framework_DrawText("Particles: " & particleCount.ToString(), WINDOW_WIDTH - 150, 40, 16, 255, 200, 100, 255)
+    End Sub
+End Class
+
+' ============================================================================
+' DemoUIScene - Showcases the UI System
+' ============================================================================
+Class DemoUIScene
+    Inherits Scene
+
+    ' UI Element IDs
+    Private _panelId As Integer = -1
+    Private _titleLabelId As Integer = -1
+    Private _buttonId As Integer = -1
+    Private _sliderId As Integer = -1
+    Private _sliderLabelId As Integer = -1
+    Private _checkboxId As Integer = -1
+    Private _textInputId As Integer = -1
+    Private _progressBarId As Integer = -1
+    Private _progressLabelId As Integer = -1
+
+    ' Demo state
+    Private _progressValue As Single = 0.0F
+    Private _progressDirection As Integer = 1
+    Private _clickCount As Integer = 0
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoUIScene OnEnter - Showcasing UI System")
+
+        ' Create a panel as container
+        _panelId = Framework_UI_CreatePanel(0, 0, 400, 450)
+        Framework_UI_SetAnchor(_panelId, UI_ANCHOR_CENTER)
+        Framework_UI_SetBackgroundColor(_panelId, 40, 40, 45, 240)
+        Framework_UI_SetBorderColor(_panelId, 100, 100, 100, 255)
+        Framework_UI_SetBorderWidth(_panelId, 2)
+        Framework_UI_SetCornerRadius(_panelId, 12)
+
+        ' Title label
+        _titleLabelId = Framework_UI_CreateLabel("UI System Demo", 0, 20)
+        Framework_UI_SetParent(_titleLabelId, _panelId)
+        Framework_UI_SetAnchor(_titleLabelId, UI_ANCHOR_TOP_CENTER)
+        Framework_UI_SetFontSize(_titleLabelId, 28)
+        Framework_UI_SetTextColor(_titleLabelId, 255, 255, 255, 255)
+
+        ' Button
+        _buttonId = Framework_UI_CreateButton("Click Me!", 0, 70, 200, 45)
+        Framework_UI_SetParent(_buttonId, _panelId)
+        Framework_UI_SetAnchor(_buttonId, UI_ANCHOR_TOP_CENTER)
+        Framework_UI_SetFontSize(_buttonId, 20)
+        Framework_UI_SetCornerRadius(_buttonId, 8)
+
+        ' Slider with label
+        _sliderLabelId = Framework_UI_CreateLabel("Volume: 50%", 50, 140)
+        Framework_UI_SetParent(_sliderLabelId, _panelId)
+        Framework_UI_SetFontSize(_sliderLabelId, 16)
+        Framework_UI_SetTextColor(_sliderLabelId, 200, 200, 200, 255)
+
+        _sliderId = Framework_UI_CreateSlider(50, 170, 300, 0, 100, 50)
+        Framework_UI_SetParent(_sliderId, _panelId)
+        Framework_UI_SetHoverColor(_sliderId, 70, 130, 180, 255)
+        Framework_UI_SetPressedColor(_sliderId, 100, 149, 237, 255)
+
+        ' Checkbox
+        _checkboxId = Framework_UI_CreateCheckbox("Enable Sound Effects", 50, 220, True)
+        Framework_UI_SetParent(_checkboxId, _panelId)
+        Framework_UI_SetSize(_checkboxId, 250, 24)
+        Framework_UI_SetFontSize(_checkboxId, 16)
+        Framework_UI_SetTextColor(_checkboxId, 200, 200, 200, 255)
+
+        ' Text input
+        _textInputId = Framework_UI_CreateTextInput(50, 270, 300, 36, "Enter your name...")
+        Framework_UI_SetParent(_textInputId, _panelId)
+        Framework_UI_SetFontSize(_textInputId, 16)
+        Framework_UI_SetCornerRadius(_textInputId, 6)
+
+        ' Progress bar with label
+        _progressLabelId = Framework_UI_CreateLabel("Loading: 0%", 50, 330)
+        Framework_UI_SetParent(_progressLabelId, _panelId)
+        Framework_UI_SetFontSize(_progressLabelId, 16)
+        Framework_UI_SetTextColor(_progressLabelId, 200, 200, 200, 255)
+
+        _progressBarId = Framework_UI_CreateProgressBar(50, 360, 300, 24, 0)
+        Framework_UI_SetParent(_progressBarId, _panelId)
+        Framework_UI_SetHoverColor(_progressBarId, 76, 175, 80, 255)  ' Green fill
+        Framework_UI_SetCornerRadius(_progressBarId, 4)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("DemoUIScene OnExit")
+        Framework_UI_DestroyAll()
+    End Sub
+
+    Protected Overrides Sub OnResume()
+        Console.WriteLine("DemoUIScene OnResume")
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        ' ESC or BACKSPACE to return to title
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Update UI system
+        Framework_UI_Update()
+
+        ' Check for button click (manual polling since we can't use callbacks easily from VB)
+        If Framework_UI_GetState(_buttonId) = UI_STATE_PRESSED Then
+            ' Button was clicked
+        End If
+
+        ' Check if button was just clicked (state changed from pressed)
+        Static lastButtonState As Integer = UI_STATE_NORMAL
+        Dim currentState As Integer = Framework_UI_GetState(_buttonId)
+        If lastButtonState = UI_STATE_PRESSED AndAlso currentState = UI_STATE_HOVERED Then
+            _clickCount += 1
+            Framework_UI_SetText(_buttonId, "Clicked " & _clickCount.ToString() & " times!")
+        End If
+        lastButtonState = currentState
+
+        ' Update slider label based on slider value
+        Dim sliderVal As Single = Framework_UI_GetValue(_sliderId)
+        Framework_UI_SetText(_sliderLabelId, "Volume: " & CInt(sliderVal).ToString() & "%")
+
+        ' Animate progress bar
+        _progressValue += dt * 20 * _progressDirection
+        If _progressValue >= 100 Then
+            _progressValue = 100
+            _progressDirection = -1
+        ElseIf _progressValue <= 0 Then
+            _progressValue = 0
+            _progressDirection = 1
+        End If
+        Framework_UI_SetValue(_progressBarId, _progressValue)
+        Framework_UI_SetText(_progressLabelId, "Loading: " & CInt(_progressValue).ToString() & "%")
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(25, 25, 35, 255)
+
+        ' Draw all UI elements
+        Framework_UI_Draw()
+
+        ' Draw instructions at bottom
+        Framework_DrawText("Click the button, drag the slider, toggle checkbox, type in text field", 10, WINDOW_HEIGHT - 50, 16, 150, 150, 150, 255)
+        Framework_DrawText("[BACKSPACE] Return to menu", 10, WINDOW_HEIGHT - 25, 16, 255, 150, 150, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
     End Sub
 End Class
