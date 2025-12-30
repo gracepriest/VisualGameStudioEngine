@@ -2634,6 +2634,7 @@ extern "C" {
     __declspec(dllexport) void  Framework_Effects_BeginCapture();   // Begin capturing scene to buffer
     __declspec(dllexport) void  Framework_Effects_EndCapture();     // End capture
     __declspec(dllexport) void  Framework_Effects_Apply();          // Apply all effects and render to screen
+    __declspec(dllexport) void  Framework_Effects_DrawOverlays(int screenWidth, int screenHeight);  // Draw overlays without render texture
     __declspec(dllexport) void  Framework_Effects_Update(float deltaTime);
 
     // ---- Presets ----

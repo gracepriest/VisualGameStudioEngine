@@ -5345,7 +5345,8 @@ extern "C" {
 
         int newHovered = -1;
 
-        // Collect and sort elements by layer (higher layers on top)
+        // Collect and sort elements by layer (higher layers on top), then by area (smaller on top)
+        // This ensures children (usually smaller) are checked before parents at the same layer
         std::vector<std::pair<int, UIElement*>> sortedElements;
         for (auto& kv : g_uiElements) {
             if (kv.second.valid && kv.second.visible && kv.second.enabled) {
@@ -5353,7 +5354,15 @@ extern "C" {
             }
         }
         std::sort(sortedElements.begin(), sortedElements.end(),
-            [](const auto& a, const auto& b) { return a.second->layer > b.second->layer; });
+            [](const auto& a, const auto& b) {
+                // First by layer (higher layer = on top = checked first)
+                if (a.second->layer != b.second->layer)
+                    return a.second->layer > b.second->layer;
+                // Then by area (smaller area = on top = checked first)
+                float areaA = a.second->width * a.second->height;
+                float areaB = b.second->width * b.second->height;
+                return areaA < areaB;
+            });
 
         // Find topmost hovered element
         for (auto& [id, el] : sortedElements) {
@@ -5471,12 +5480,24 @@ extern "C" {
         }
     }
 
+    // Helper: Check if element and all ancestors are visible
+    static bool UI_IsEffectivelyVisible(const UIElement& el) {
+        if (!el.visible) return false;
+        if (el.parent >= 0) {
+            auto pit = g_uiElements.find(el.parent);
+            if (pit != g_uiElements.end()) {
+                return UI_IsEffectivelyVisible(pit->second);
+            }
+        }
+        return true;
+    }
+
     // UI Draw
     void Framework_UI_Draw() {
         // Collect and sort elements by layer
         std::vector<std::pair<int, UIElement*>> sortedElements;
         for (auto& kv : g_uiElements) {
-            if (kv.second.valid && kv.second.visible) {
+            if (kv.second.valid && UI_IsEffectivelyVisible(kv.second)) {
                 sortedElements.push_back({kv.first, &kv.second});
             }
         }
@@ -6480,105 +6501,117 @@ extern "C" {
     void Framework_Physics_Step(float dt) {
         if (!g_physicsEnabled || dt <= 0) return;
 
-        // Integrate forces for dynamic bodies
-        for (auto& kv : g_physicsBodies) {
-            PhysicsBody& body = kv.second;
-            if (!body.valid || body.type == BODY_STATIC || !body.awake) continue;
+        // Use substeps for more stable simulation
+        const float fixedStep = 1.0f / 120.0f;  // 120 Hz physics
+        static float accumulator = 0.0f;
+        accumulator += dt;
 
-            if (body.type == BODY_DYNAMIC) {
-                // Apply gravity
-                body.vx += g_gravityX * body.gravityScale * dt;
-                body.vy += g_gravityY * body.gravityScale * dt;
+        // Limit accumulator to prevent spiral of death
+        if (accumulator > 0.1f) accumulator = 0.1f;
 
-                // Apply accumulated forces
-                body.vx += body.forceX * body.invMass * dt;
-                body.vy += body.forceY * body.invMass * dt;
-                body.forceX = body.forceY = 0;
+        while (accumulator >= fixedStep) {
+            accumulator -= fixedStep;
 
-                // Apply torque
-                if (!body.fixedRotation) {
-                    body.angularVelocity += body.torque * body.invInertia * dt;
-                    body.torque = 0;
+            // Integrate forces for dynamic bodies
+            for (auto& kv : g_physicsBodies) {
+                PhysicsBody& body = kv.second;
+                if (!body.valid || body.type == BODY_STATIC || !body.awake) continue;
+
+                if (body.type == BODY_DYNAMIC) {
+                    // Apply gravity
+                    body.vx += g_gravityX * body.gravityScale * fixedStep;
+                    body.vy += g_gravityY * body.gravityScale * fixedStep;
+
+                    // Apply accumulated forces
+                    body.vx += body.forceX * body.invMass * fixedStep;
+                    body.vy += body.forceY * body.invMass * fixedStep;
+                    body.forceX = body.forceY = 0;
+
+                    // Apply torque
+                    if (!body.fixedRotation) {
+                        body.angularVelocity += body.torque * body.invInertia * fixedStep;
+                        body.torque = 0;
+                    }
+
+                    // Apply damping
+                    body.vx *= 1.0f / (1.0f + body.linearDamping * fixedStep);
+                    body.vy *= 1.0f / (1.0f + body.linearDamping * fixedStep);
+                    body.angularVelocity *= 1.0f / (1.0f + body.angularDamping * fixedStep);
                 }
 
-                // Apply damping
-                body.vx *= 1.0f / (1.0f + body.linearDamping * dt);
-                body.vy *= 1.0f / (1.0f + body.linearDamping * dt);
-                body.angularVelocity *= 1.0f / (1.0f + body.angularDamping * dt);
+                // Integrate velocity
+                body.x += body.vx * fixedStep;
+                body.y += body.vy * fixedStep;
+                if (!body.fixedRotation) {
+                    body.rotation += body.angularVelocity * fixedStep;
+                }
             }
 
-            // Integrate velocity
-            body.x += body.vx * dt;
-            body.y += body.vy * dt;
-            if (!body.fixedRotation) {
-                body.rotation += body.angularVelocity * dt;
+            // Collect active bodies
+            std::vector<int> bodies;
+            for (auto& kv : g_physicsBodies) {
+                if (kv.second.valid) bodies.push_back(kv.first);
             }
-        }
 
-        // Collect active bodies
-        std::vector<int> bodies;
-        for (auto& kv : g_physicsBodies) {
-            if (kv.second.valid) bodies.push_back(kv.first);
-        }
+            // Detect and resolve collisions
+            g_activeCollisions.clear();
 
-        // Detect and resolve collisions
-        g_activeCollisions.clear();
+            for (int iter = 0; iter < g_positionIterations; iter++) {
+                for (size_t i = 0; i < bodies.size(); i++) {
+                    for (size_t j = i + 1; j < bodies.size(); j++) {
+                        int hA = bodies[i], hB = bodies[j];
+                        PhysicsBody& a = g_physicsBodies[hA];
+                        PhysicsBody& b = g_physicsBodies[hB];
 
-        for (int iter = 0; iter < g_positionIterations; iter++) {
-            for (size_t i = 0; i < bodies.size(); i++) {
-                for (size_t j = i + 1; j < bodies.size(); j++) {
-                    int hA = bodies[i], hB = bodies[j];
-                    PhysicsBody& a = g_physicsBodies[hA];
-                    PhysicsBody& b = g_physicsBodies[hB];
+                        // Skip if both are static
+                        if (a.type == BODY_STATIC && b.type == BODY_STATIC) continue;
 
-                    // Skip if both are static
-                    if (a.type == BODY_STATIC && b.type == BODY_STATIC) continue;
+                        float normalX, normalY, depth;
+                        if (Physics_TestCollision(a, b, normalX, normalY, depth)) {
+                            CollisionPair pair = {hA, hB};
+                            g_activeCollisions.insert(pair);
 
-                    float normalX, normalY, depth;
-                    if (Physics_TestCollision(a, b, normalX, normalY, depth)) {
-                        CollisionPair pair = {hA, hB};
-                        g_activeCollisions.insert(pair);
+                            // Fire callbacks on first detection (iter == 0)
+                            if (iter == 0) {
+                                bool wasColliding = g_prevCollisions.count(pair) > 0;
 
-                        // Fire callbacks on first detection (iter == 0)
-                        if (iter == 0) {
-                            bool wasColliding = g_prevCollisions.count(pair) > 0;
-
-                            if (a.isTrigger || b.isTrigger) {
-                                if (!wasColliding && g_onTriggerEnter) {
-                                    g_onTriggerEnter(hA, hB, normalX, normalY, depth);
-                                }
-                            } else {
-                                if (!wasColliding && g_onCollisionEnter) {
-                                    g_onCollisionEnter(hA, hB, normalX, normalY, depth);
-                                } else if (wasColliding && g_onCollisionStay) {
-                                    g_onCollisionStay(hA, hB, normalX, normalY, depth);
+                                if (a.isTrigger || b.isTrigger) {
+                                    if (!wasColliding && g_onTriggerEnter) {
+                                        g_onTriggerEnter(hA, hB, normalX, normalY, depth);
+                                    }
+                                } else {
+                                    if (!wasColliding && g_onCollisionEnter) {
+                                        g_onCollisionEnter(hA, hB, normalX, normalY, depth);
+                                    } else if (wasColliding && g_onCollisionStay) {
+                                        g_onCollisionStay(hA, hB, normalX, normalY, depth);
+                                    }
                                 }
                             }
+
+                            // Resolve collision
+                            Physics_ResolveCollision(a, b, normalX, normalY, depth);
                         }
-
-                        // Resolve collision
-                        Physics_ResolveCollision(a, b, normalX, normalY, depth);
                     }
                 }
             }
-        }
 
-        // Fire exit callbacks
-        for (const auto& pair : g_prevCollisions) {
-            if (g_activeCollisions.count(pair) == 0) {
-                auto itA = g_physicsBodies.find(pair.bodyA);
-                auto itB = g_physicsBodies.find(pair.bodyB);
-                if (itA != g_physicsBodies.end() && itB != g_physicsBodies.end()) {
-                    if (itA->second.isTrigger || itB->second.isTrigger) {
-                        if (g_onTriggerExit) g_onTriggerExit(pair.bodyA, pair.bodyB, 0, 0, 0);
-                    } else {
-                        if (g_onCollisionExit) g_onCollisionExit(pair.bodyA, pair.bodyB, 0, 0, 0);
+            // Fire exit callbacks
+            for (const auto& pair : g_prevCollisions) {
+                if (g_activeCollisions.count(pair) == 0) {
+                    auto itA = g_physicsBodies.find(pair.bodyA);
+                    auto itB = g_physicsBodies.find(pair.bodyB);
+                    if (itA != g_physicsBodies.end() && itB != g_physicsBodies.end()) {
+                        if (itA->second.isTrigger || itB->second.isTrigger) {
+                            if (g_onTriggerExit) g_onTriggerExit(pair.bodyA, pair.bodyB, 0, 0, 0);
+                        } else {
+                            if (g_onCollisionExit) g_onCollisionExit(pair.bodyA, pair.bodyB, 0, 0, 0);
+                        }
                     }
                 }
             }
-        }
 
-        g_prevCollisions = g_activeCollisions;
+            g_prevCollisions = g_activeCollisions;
+        }  // End while (accumulator >= fixedStep)
     }
 
     void Framework_Physics_SyncToEntities() {
@@ -16228,6 +16261,7 @@ extern "C" {
         RenderTexture2D sceneBuffer;
         RenderTexture2D effectBuffer;
         bool hasRenderTargets = false;
+        bool isCapturing = false;  // Track if currently capturing
 
         // Vignette
         bool vignetteEnabled = false;
@@ -16540,67 +16574,67 @@ extern "C" {
     // ---- Rendering ----
     void Framework_Effects_BeginCapture() {
         if (!g_effects.initialized || !g_effects.hasRenderTargets) return;
+        g_effects.isCapturing = true;
         BeginTextureMode(g_effects.sceneBuffer);
         ClearBackground(BLACK);
     }
 
     void Framework_Effects_EndCapture() {
-        if (!g_effects.initialized || !g_effects.hasRenderTargets) return;
+        if (!g_effects.initialized || !g_effects.hasRenderTargets || !g_effects.isCapturing) return;
         EndTextureMode();
+        g_effects.isCapturing = false;
     }
 
     void Framework_Effects_Apply() {
-        if (!g_effects.initialized || !g_effects.hasRenderTargets || !g_effects.enabled) {
-            // Just draw the scene buffer if effects disabled
-            if (g_effects.hasRenderTargets) {
-                DrawTextureRec(g_effects.sceneBuffer.texture,
-                    { 0, 0, (float)g_effects.width, -(float)g_effects.height },
-                    { g_effects.shakeOffsetX, g_effects.shakeOffsetY }, WHITE);
+        // Only draw from buffer if we actually captured to it
+        bool shouldDrawBuffer = g_effects.initialized && g_effects.hasRenderTargets && !g_effects.isCapturing;
+
+        if (shouldDrawBuffer) {
+            float w = (float)g_effects.width;
+            float h = (float)g_effects.height;
+
+            // Draw scene to screen with shake offset
+            DrawTextureRec(g_effects.sceneBuffer.texture,
+                { 0, 0, w, -h },
+                { g_effects.shakeOffsetX, g_effects.shakeOffsetY }, WHITE);
+
+            // Apply pixelate effect (draws over)
+            if (g_effects.enabled && g_effects.pixelateEnabled && g_effects.pixelateSize > 1) {
+                Image img = LoadImageFromTexture(g_effects.sceneBuffer.texture);
+                ImageFlipVertical(&img);
+                int pw = g_effects.width / g_effects.pixelateSize;
+                int ph = g_effects.height / g_effects.pixelateSize;
+                ImageResize(&img, pw, ph);
+                ImageResizeNN(&img, g_effects.width, g_effects.height);
+                Texture2D pixTex = LoadTextureFromImage(img);
+                DrawTexture(pixTex, (int)g_effects.shakeOffsetX, (int)g_effects.shakeOffsetY, WHITE);
+                UnloadTexture(pixTex);
+                UnloadImage(img);
             }
-            return;
         }
 
-        float w = (float)g_effects.width;
-        float h = (float)g_effects.height;
+        // Get screen dimensions for overlays
+        int screenW = g_effects.initialized ? g_effects.width : GetScreenWidth();
+        int screenH = g_effects.initialized ? g_effects.height : GetScreenHeight();
 
-        // Draw scene to screen with shake offset
-        DrawTextureRec(g_effects.sceneBuffer.texture,
-            { 0, 0, w, -h },
-            { g_effects.shakeOffsetX, g_effects.shakeOffsetY }, WHITE);
-
-        // Apply pixelate effect (draws over)
-        if (g_effects.pixelateEnabled && g_effects.pixelateSize > 1) {
-            Image img = LoadImageFromTexture(g_effects.sceneBuffer.texture);
-            ImageFlipVertical(&img);
-            int pw = g_effects.width / g_effects.pixelateSize;
-            int ph = g_effects.height / g_effects.pixelateSize;
-            ImageResize(&img, pw, ph);
-            ImageResizeNN(&img, g_effects.width, g_effects.height);
-            Texture2D pixTex = LoadTextureFromImage(img);
-            DrawTexture(pixTex, (int)g_effects.shakeOffsetX, (int)g_effects.shakeOffsetY, WHITE);
-            UnloadTexture(pixTex);
-            UnloadImage(img);
-        }
-
-        // Apply scanlines
-        if (g_effects.scanlinesEnabled) {
-            float lineHeight = h / g_effects.scanlinesCount;
+        // Apply scanlines (overlay effect)
+        if (g_effects.enabled && g_effects.scanlinesEnabled) {
+            float lineHeight = (float)screenH / g_effects.scanlinesCount;
             for (int i = 0; i < g_effects.scanlinesCount; i++) {
                 float y = i * lineHeight + g_effects.scanlinesOffset;
-                while (y >= h) y -= h;
-                DrawRectangle(0, (int)y, g_effects.width, (int)(lineHeight * 0.5f),
+                while (y >= screenH) y -= screenH;
+                DrawRectangle(0, (int)y, screenW, (int)(lineHeight * 0.5f),
                     { 0, 0, 0, (unsigned char)(255 * g_effects.scanlinesIntensity) });
             }
         }
 
-        // Apply vignette
-        if (g_effects.vignetteEnabled) {
-            float cx = w * 0.5f;
-            float cy = h * 0.5f;
-            float maxDist = sqrtf(cx * cx + cy * cy);
+        // Apply vignette (overlay effect)
+        if (g_effects.enabled && g_effects.vignetteEnabled) {
+            float cx = screenW * 0.5f;
+            float cy = screenH * 0.5f;
 
-            for (int y = 0; y < g_effects.height; y += 4) {
-                for (int x = 0; x < g_effects.width; x += 4) {
+            for (int y = 0; y < screenH; y += 4) {
+                for (int x = 0; x < screenW; x += 4) {
                     float dx = (x - cx) / cx;
                     float dy = (y - cy) / cy;
                     float dist = sqrtf(dx * dx + dy * dy);
@@ -16617,10 +16651,10 @@ extern "C" {
             }
         }
 
-        // Apply film grain
-        if (g_effects.filmGrainEnabled) {
-            for (int y = 0; y < g_effects.height; y += 2) {
-                for (int x = 0; x < g_effects.width; x += 2) {
+        // Apply film grain (overlay effect)
+        if (g_effects.enabled && g_effects.filmGrainEnabled) {
+            for (int y = 0; y < screenH; y += 2) {
+                for (int x = 0; x < screenW; x += 2) {
                     float noise = (float)(rand() % 1000) / 1000.0f - 0.5f;
                     int gray = (int)(128 + noise * 255 * g_effects.filmGrainIntensity);
                     gray = gray < 0 ? 0 : (gray > 255 ? 255 : gray);
@@ -16629,27 +16663,67 @@ extern "C" {
             }
         }
 
+        // Apply flash overlay (always works, no initialization needed)
+        if (g_effects.flashActive && g_effects.flashTimer > 0) {
+            float alpha = g_effects.flashTimer / g_effects.flashDuration;
+            DrawRectangle(0, 0, screenW, screenH,
+                { g_effects.flashR, g_effects.flashG, g_effects.flashB, (unsigned char)(alpha * 200) });
+        }
+
+        // Apply fade overlay (always works, no initialization needed)
+        if (g_effects.fadeAmount > 0) {
+            DrawRectangle(0, 0, screenW, screenH,
+                { g_effects.fadeR, g_effects.fadeG, g_effects.fadeB, (unsigned char)(g_effects.fadeAmount * 255) });
+        }
+
+        // Apply tint (overlay effect)
+        if (g_effects.enabled && g_effects.tintEnabled) {
+            BeginBlendMode(BLEND_MULTIPLIED);
+            unsigned char tr = (unsigned char)(255 - (255 - g_effects.tintR) * g_effects.tintAmount);
+            unsigned char tg = (unsigned char)(255 - (255 - g_effects.tintG) * g_effects.tintAmount);
+            unsigned char tb = (unsigned char)(255 - (255 - g_effects.tintB) * g_effects.tintAmount);
+            DrawRectangle(0, 0, screenW, screenH, { tr, tg, tb, 255 });
+            EndBlendMode();
+        }
+    }
+
+    // Draw overlay effects without requiring render texture initialization
+    // Call this at the end of your OnDraw to add flash, fade, shake overlays
+    void Framework_Effects_DrawOverlays(int screenWidth, int screenHeight) {
+        // Apply vignette
+        if (g_effects.vignetteEnabled) {
+            float cx = screenWidth * 0.5f;
+            float cy = screenHeight * 0.5f;
+
+            for (int y = 0; y < screenHeight; y += 4) {
+                for (int x = 0; x < screenWidth; x += 4) {
+                    float dx = (x - cx) / cx;
+                    float dy = (y - cy) / cy;
+                    float dist = sqrtf(dx * dx + dy * dy);
+
+                    float vignette = 1.0f - smoothstep(g_effects.vignetteRadius - g_effects.vignetteSoftness,
+                        g_effects.vignetteRadius + g_effects.vignetteSoftness, dist);
+                    vignette = 1.0f - (1.0f - vignette) * g_effects.vignetteIntensity;
+
+                    if (vignette < 1.0f) {
+                        unsigned char alpha = (unsigned char)((1.0f - vignette) * 255);
+                        DrawRectangle(x, y, 4, 4, { g_effects.vignetteR, g_effects.vignetteG, g_effects.vignetteB, alpha });
+                    }
+                }
+            }
+        }
+
         // Apply flash overlay
         if (g_effects.flashActive && g_effects.flashTimer > 0) {
             float alpha = g_effects.flashTimer / g_effects.flashDuration;
-            DrawRectangle(0, 0, g_effects.width, g_effects.height,
+            DrawRectangle(0, 0, screenWidth, screenHeight,
                 { g_effects.flashR, g_effects.flashG, g_effects.flashB, (unsigned char)(alpha * 200) });
         }
 
         // Apply fade overlay
         if (g_effects.fadeAmount > 0) {
-            DrawRectangle(0, 0, g_effects.width, g_effects.height,
+            DrawRectangle(0, 0, screenWidth, screenHeight,
                 { g_effects.fadeR, g_effects.fadeG, g_effects.fadeB, (unsigned char)(g_effects.fadeAmount * 255) });
-        }
-
-        // Apply tint
-        if (g_effects.tintEnabled) {
-            BeginBlendMode(BLEND_MULTIPLIED);
-            unsigned char tr = (unsigned char)(255 - (255 - g_effects.tintR) * g_effects.tintAmount);
-            unsigned char tg = (unsigned char)(255 - (255 - g_effects.tintG) * g_effects.tintAmount);
-            unsigned char tb = (unsigned char)(255 - (255 - g_effects.tintB) * g_effects.tintAmount);
-            DrawRectangle(0, 0, g_effects.width, g_effects.height, { tr, tg, tb, 255 });
-            EndBlendMode();
         }
     }
 

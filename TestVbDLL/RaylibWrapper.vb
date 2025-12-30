@@ -6420,6 +6420,10 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Effects_DrawOverlays(screenWidth As Integer, screenHeight As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_Effects_Update(deltaTime As Single)
     End Sub
 

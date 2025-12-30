@@ -19,6 +19,7 @@ Class TitleScene
     Dim txt2DDemo As String = "  2D DEMO"
     Dim txtUIDemo As String = "  UI DEMO"
     Dim txtPhysicsDemo As String = "PHYSICS DEMO"
+    Dim txtShowcase As String = "SHOWCASE PONG"
     'locations
     Dim textWidth As Integer = 10 * (temp.Length())
     Dim x As Integer = (800 - textWidth) / 2
@@ -78,7 +79,7 @@ Class TitleScene
             menuIndex -= 1
             menuPos.Y -= 50
 
-        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 5 Then
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 6 Then
             'play sound
             Framework_PlaySoundH(sfxWall)
             menuIndex += 1
@@ -111,6 +112,10 @@ Class TitleScene
                     'Physics System Demo
                     Framework_PlaySoundH(sfxHit)
                     ChangeTo(New DemoPhysicsScene)
+                Case 6
+                    'Showcase Pong - ALL Framework Features
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New PongShowcaseScene)
             End Select
         End If
 
@@ -130,7 +135,8 @@ Class TitleScene
         Framework_DrawTextExH(RETRO_FONT.Handle, txt2DDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 150), 40, 1.0F, 100, 255, 100, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txtUIDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 200), 40, 1.0F, 100, 200, 255, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txtPhysicsDemo, New Vector2(WINDOW_WIDTH / 2.85, y + 250), 40, 1.0F, 255, 150, 100, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 320), 20, 1.0F, 255, 255, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtShowcase, New Vector2(WINDOW_WIDTH / 2.8, y + 300), 40, 1.0F, 255, 215, 0, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 370), 20, 1.0F, 255, 255, 255, 255)
         menuPos.DrawRectangle(255, 0, 0, 90)
         'draw tile #0 at (50, 50)
         'atlas.DrawRec(pong(0), New Vector2(50, 80))
@@ -749,6 +755,534 @@ Class EndScene
         Framework_DrawText(winningPlayer.Name & " WINS!", WINDOW_WIDTH / 2 - 275, 250, 50, 255, 255, 255, 255)
         Framework_DrawText("PRESS SPACE TO RETURN TO TITLE!", WINDOW_WIDTH / 2 - 275, 300, 25, 255, 255, 255, 255)
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ============================================================================
+' PongShowcaseScene - Demonstrates ALL Framework Features in a Pong game
+' Features: Screen Effects, Achievements, Leaderboard, Tweening, Timers,
+'           Particles, UI System, Camera Effects, Audio Groups
+' ============================================================================
+Class PongShowcaseScene
+    Inherits Scene
+
+    ' Game Objects
+    Private _paddle1 As New Paddle()
+    Private _paddle2 As New Paddle()
+    Private _ball As New Ball()
+
+    ' Scores
+    Private _player1Score As Integer = 0
+    Private _player2Score As Integer = 0
+    Private Const WIN_SCORE As Integer = 5
+
+    ' Game state
+    Private _gameState As Integer = 0 ' 0=countdown, 1=playing, 2=paused, 3=gameover
+    Private _countdownTimer As Single = 3.0F
+    Private _gameTimer As Single = 0.0F
+    Private _rallyCount As Integer = 0
+    Private _maxRally As Integer = 0
+    Private _servingPlayer As Integer = 1
+
+    ' Random
+    Private _rand As New Random()
+
+    ' Particle emitter entity
+    Private _particleEntity As Integer = -1
+
+    ' Achievement IDs
+    Private _achFirstHit As Integer = 0
+    Private _achFirstScore As Integer = 0
+    Private _achRally5 As Integer = 0
+    Private _achRally10 As Integer = 0
+    Private _achWinner As Integer = 0
+    Private _achPerfectGame As Integer = 0
+
+    ' Leaderboard ID
+    Private _leaderboardId As Integer = 0
+
+    ' Tween IDs
+    Private _paddle1TweenY As Integer = -1
+    Private _paddle2TweenY As Integer = -1
+
+    ' Effects state
+    Private _screenShakeActive As Boolean = False
+    Private _effectsInitialized As Boolean = False
+
+    ' UI Elements
+    Private _pausePanel As Integer = -1
+    Private _pauseLabel As Integer = -1
+    Private _resumeButton As Integer = -1
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("PongShowcaseScene OnEnter - FRAMEWORK SHOWCASE")
+
+        ' Initialize screen effects for overlay effects (flash, fade, vignette)
+        ' Using simple overlay mode - no render texture needed
+        _effectsInitialized = True
+        Framework_Effects_SetVignetteEnabled(True)
+        Framework_Effects_SetVignetteIntensity(0.3F)
+        Framework_Effects_SetVignetteRadius(0.9F)
+        Framework_Effects_SetVignetteSoftness(0.5F)
+
+        ' Setup Paddles
+        _paddle1.setSide("left")
+        _paddle2.setSide("right")
+        _paddle1.setColor(100, 200, 255, 255)  ' Blue
+        _paddle2.setColor(255, 100, 100, 255)  ' Red
+        _paddle2.isAI = True
+        _paddle2.getBall(_ball)
+
+        ' Setup Achievements
+        SetupAchievements()
+
+        ' Setup Leaderboard
+        _leaderboardId = Framework_Leaderboard_Create("PongHighScores", LEADERBOARD_SORT_DESC, 10)
+        Framework_Leaderboard_Load(_leaderboardId, "pong_scores.dat")
+
+        ' Setup Particle Emitter for ball collision effects
+        SetupParticles()
+
+        ' Setup Pause UI (hidden initially)
+        SetupPauseUI()
+
+        ' Start with countdown
+        _gameState = 0
+        _countdownTimer = 3.0F
+
+        ' Play start sound
+        Framework_PlaySoundH(sfxWall)
+    End Sub
+
+    Private Sub SetupAchievements()
+        ' Create achievements
+        _achFirstHit = Framework_Achievement_Create("first_hit", "First Contact", "Hit the ball for the first time")
+        Framework_Achievement_SetPoints(_achFirstHit, 10)
+
+        _achFirstScore = Framework_Achievement_Create("first_score", "On The Board", "Score your first point")
+        Framework_Achievement_SetPoints(_achFirstScore, 20)
+
+        _achRally5 = Framework_Achievement_Create("rally5", "Getting Warmed Up", "Achieve a 5-hit rally")
+        Framework_Achievement_SetPoints(_achRally5, 30)
+        Framework_Achievement_SetProgressTarget(_achRally5, 5)
+
+        _achRally10 = Framework_Achievement_Create("rally10", "Rally Master", "Achieve a 10-hit rally")
+        Framework_Achievement_SetPoints(_achRally10, 50)
+        Framework_Achievement_SetProgressTarget(_achRally10, 10)
+
+        _achWinner = Framework_Achievement_Create("winner", "Champion", "Win a game")
+        Framework_Achievement_SetPoints(_achWinner, 100)
+
+        _achPerfectGame = Framework_Achievement_Create("perfect", "Flawless Victory", "Win without opponent scoring")
+        Framework_Achievement_SetPoints(_achPerfectGame, 200)
+        Framework_Achievement_SetHidden(_achPerfectGame, True)
+
+        ' Set notification position
+        Framework_Achievement_SetNotificationPosition(WINDOW_WIDTH - 320, 80)
+        Framework_Achievement_SetNotificationDuration(4.0F)
+
+        ' Try to load saved achievements
+        Framework_Achievement_Load("achievements.dat")
+    End Sub
+
+    Private Sub SetupParticles()
+        _particleEntity = Framework_Ecs_CreateEntity()
+        Framework_Ecs_SetName(_particleEntity, "BallParticles")
+        Framework_Ecs_AddTransform2D(_particleEntity, WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2, 0.0F, 1.0F, 1.0F)
+        Framework_Ecs_AddParticleEmitter(_particleEntity, 0)
+
+        Framework_Ecs_SetEmitterRate(_particleEntity, 0.0F)  ' Burst only
+        Framework_Ecs_SetEmitterMaxParticles(_particleEntity, 100)
+        Framework_Ecs_SetEmitterLifetime(_particleEntity, 0.3F, 0.8F)
+        Framework_Ecs_SetEmitterVelocity(_particleEntity, -200.0F, -200.0F, 200.0F, 200.0F)
+        Framework_Ecs_SetEmitterColorStart(_particleEntity, 255, 255, 100, 255)
+        Framework_Ecs_SetEmitterColorEnd(_particleEntity, 255, 150, 0, 0)
+        Framework_Ecs_SetEmitterSize(_particleEntity, 8.0F, 2.0F)
+        Framework_Ecs_SetEmitterGravity(_particleEntity, 0.0F, 300.0F)
+    End Sub
+
+    Private Sub SetupPauseUI()
+        _pausePanel = Framework_UI_CreatePanel(0, 0, 300, 200)
+        Framework_UI_SetAnchor(_pausePanel, UI_ANCHOR_CENTER)
+        Framework_UI_SetBackgroundColor(_pausePanel, 30, 30, 40, 240)
+        Framework_UI_SetBorderColor(_pausePanel, 100, 100, 255, 255)
+        Framework_UI_SetBorderWidth(_pausePanel, 3)
+        Framework_UI_SetCornerRadius(_pausePanel, 15)
+        Framework_UI_SetVisible(_pausePanel, False)
+
+        _pauseLabel = Framework_UI_CreateLabel("PAUSED", 0, 30)
+        Framework_UI_SetParent(_pauseLabel, _pausePanel)
+        Framework_UI_SetAnchor(_pauseLabel, UI_ANCHOR_TOP_CENTER)
+        Framework_UI_SetFontSize(_pauseLabel, 36)
+        Framework_UI_SetTextColor(_pauseLabel, 255, 255, 255, 255)
+
+        _resumeButton = Framework_UI_CreateButton("Press P to Resume", 0, 100, 200, 40)
+        Framework_UI_SetParent(_resumeButton, _pausePanel)
+        Framework_UI_SetAnchor(_resumeButton, UI_ANCHOR_TOP_CENTER)
+        Framework_UI_SetFontSize(_resumeButton, 16)
+    End Sub
+
+    Private Sub SpawnHitParticles(x As Single, y As Single, r As Byte, g As Byte, b As Byte)
+        ' Move emitter to collision point
+        Framework_Ecs_SetTransformPosition(_particleEntity, x, y)
+        Framework_Ecs_SetEmitterColorStart(_particleEntity, r, g, b, 255)
+        Framework_Ecs_SetEmitterColorEnd(_particleEntity, r, g, b, 0)
+
+        ' Burst particles
+        Framework_Ecs_EmitterBurst(_particleEntity, 15)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("PongShowcaseScene OnExit")
+
+        ' Save achievements and leaderboard
+        Framework_Achievement_Save("achievements.dat")
+        Framework_Leaderboard_Save(_leaderboardId, "pong_scores.dat")
+
+        ' Cleanup particles
+        If _particleEntity >= 0 Then
+            Framework_Ecs_DestroyEntity(_particleEntity)
+        End If
+
+        Framework_UI_DestroyAll()
+    End Sub
+
+    Protected Overrides Sub OnResume()
+        Console.WriteLine("PongShowcaseScene OnResume")
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        ' Update achievements
+        Framework_Achievement_Update(dt)
+
+        ' Update particles
+        Framework_Particles_Update(dt)
+
+        ' Update UI
+        Framework_UI_Update()
+
+        ' Update screen effects (flash, fade timers)
+        Framework_Effects_Update(dt)
+
+        ' ESC or BACKSPACE to return to title
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Pause toggle
+        If Framework_IsKeyPressed(Keys.P) Then
+            If _gameState = 1 Then
+                _gameState = 2
+                Framework_UI_SetVisible(_pausePanel, True)
+            ElseIf _gameState = 2 Then
+                _gameState = 1
+                Framework_UI_SetVisible(_pausePanel, False)
+            End If
+        End If
+
+        Select Case _gameState
+            Case 0 ' Countdown
+                UpdateCountdown(dt)
+            Case 1 ' Playing
+                UpdateGame(dt)
+            Case 2 ' Paused
+                ' Do nothing
+            Case 3 ' Game Over
+                UpdateGameOver(dt)
+        End Select
+    End Sub
+
+    Private Sub UpdateCountdown(dt As Single)
+        _countdownTimer -= dt
+        If _countdownTimer <= 0 Then
+            _gameState = 1
+            StartRound()
+        End If
+    End Sub
+
+    Private Sub StartRound()
+        _ball.BallReSet()
+        _paddle1.reset()
+        _paddle2.reset()
+        _rallyCount = 0
+
+        ' Set ball velocity based on serving player
+        _ball.dy = _rand.Next(-50, 50)
+        If _servingPlayer = 1 Then
+            _ball.dx = _rand.Next(200, 350)
+        Else
+            _ball.dx = -_rand.Next(200, 350)
+        End If
+
+        ' Screen fade in effect (when effects enabled)
+        ' Framework_Effects_FadeIn(0.3F)
+    End Sub
+
+    Private Sub UpdateGame(dt As Single)
+        _gameTimer += dt
+
+        ' Player 1 controls (Arrow keys) - increased speed for responsiveness
+        Dim playerSpeed As Single = _paddle1.paddleSpeed * 8.0F  ' Much faster than base speed
+        If Framework_IsKeyDown(Keys.UP) Then
+            _paddle1.dy = -playerSpeed
+        ElseIf Framework_IsKeyDown(Keys.DOWN) Then
+            _paddle1.dy = playerSpeed
+        Else
+            _paddle1.dy = 0.0F
+        End If
+
+        ' Update paddles and ball
+        _paddle1.Update(dt)
+        _paddle2.Update(dt)
+        _ball.Update(dt)
+
+        ' Ball collision with paddles
+        CheckPaddleCollision()
+
+        ' Ball collision with walls
+        CheckWallCollision()
+
+        ' Ball out of bounds (scoring)
+        CheckScoring()
+    End Sub
+
+    Private Sub CheckPaddleCollision()
+        ' Check paddle 1 collision
+        If _ball.AABBCheck(_paddle1) Then
+            OnPaddleHit(_paddle1, True)
+        End If
+
+        ' Check paddle 2 collision
+        If _ball.AABBCheck(_paddle2) Then
+            OnPaddleHit(_paddle2, False)
+        End If
+    End Sub
+
+    Private Sub OnPaddleHit(paddle As Paddle, isPlayer1 As Boolean)
+        ' Play hit sound
+        Framework_PlaySoundH(sfxHit)
+
+        ' Reverse ball direction with speed increase
+        _ball.dx = -_ball.dx * 1.05F
+        If Math.Abs(_ball.dx) > 800 Then _ball.dx = Math.Sign(_ball.dx) * 800 ' Cap speed
+
+        ' Move ball outside paddle
+        If isPlayer1 Then
+            _ball.ballPos.X = paddle.paddlePos.X + paddle.paddleWidth + 1
+        Else
+            _ball.ballPos.X = paddle.paddlePos.X - _ball.ballWidth - 1
+        End If
+
+        ' Randomize Y velocity based on hit position
+        Dim hitOffset As Single = (_ball.ballPos.Y + _ball.ballHeight / 2) - (paddle.paddlePos.Y + paddle.paddleHeight / 2)
+        _ball.dy = hitOffset * 3
+
+        ' Increment rally
+        _rallyCount += 1
+        If _rallyCount > _maxRally Then _maxRally = _rallyCount
+
+        ' Screen flash effect (when effects enabled)
+        Framework_Effects_Flash(255, 255, 255, 0.05F)
+
+        ' Spawn particles at collision
+        Dim particleX As Single = _ball.ballPos.X + _ball.ballWidth / 2
+        Dim particleY As Single = _ball.ballPos.Y + _ball.ballHeight / 2
+        If isPlayer1 Then
+            SpawnHitParticles(particleX, particleY, 100, 200, 255)
+        Else
+            SpawnHitParticles(particleX, particleY, 255, 100, 100)
+        End If
+
+        ' Update achievements
+        Framework_Achievement_Unlock(_achFirstHit)
+        Framework_Achievement_SetProgress(_achRally5, _rallyCount)
+        Framework_Achievement_SetProgress(_achRally10, _rallyCount)
+    End Sub
+
+    Private Sub CheckWallCollision()
+        ' Top wall
+        If _ball.ballPos.Y < 0 Then
+            _ball.ballPos.Y = 0
+            _ball.dy = -_ball.dy
+            Framework_PlaySoundH(sfxWall)
+            SpawnHitParticles(_ball.ballPos.X + _ball.ballWidth / 2, 5, 150, 150, 150)
+        End If
+
+        ' Bottom wall
+        If _ball.ballPos.Y >= WINDOW_HEIGHT - _ball.ballHeight Then
+            _ball.ballPos.Y = WINDOW_HEIGHT - _ball.ballHeight
+            _ball.dy = -_ball.dy
+            Framework_PlaySoundH(sfxWall)
+            SpawnHitParticles(_ball.ballPos.X + _ball.ballWidth / 2, WINDOW_HEIGHT - 5, 150, 150, 150)
+        End If
+    End Sub
+
+    Private Sub CheckScoring()
+        ' Ball goes off left side - Player 2 scores
+        If _ball.ballPos.X < -_ball.ballWidth Then
+            OnScore(2)
+        End If
+
+        ' Ball goes off right side - Player 1 scores
+        If _ball.ballPos.X > WINDOW_WIDTH Then
+            OnScore(1)
+        End If
+    End Sub
+
+    Private Sub OnScore(scoringPlayer As Integer)
+        If scoringPlayer = 1 Then
+            _player1Score += 1
+            _servingPlayer = 1
+            Framework_Effects_Flash(100, 200, 255, 0.2F)  ' Blue flash
+        Else
+            _player2Score += 1
+            _servingPlayer = 2
+            Framework_Effects_Flash(255, 100, 100, 0.2F)  ' Red flash
+        End If
+
+        ' Screen shake on score (when effects enabled)
+        ' Framework_Effects_Shake(8.0F, 0.3F)
+
+        ' Achievement for first score
+        Framework_Achievement_Unlock(_achFirstScore)
+
+        ' Reset rally
+        _rallyCount = 0
+
+        ' Check for win
+        If _player1Score >= WIN_SCORE OrElse _player2Score >= WIN_SCORE Then
+            OnGameOver()
+        Else
+            ' Continue - brief pause then restart
+            _gameState = 0
+            _countdownTimer = 1.5F
+        End If
+    End Sub
+
+    Private Sub OnGameOver()
+        _gameState = 3
+
+        ' Determine winner
+        Dim winner As String = If(_player1Score > _player2Score, "PLAYER 1", "AI")
+        Dim winnerScore As Integer = Math.Max(_player1Score, _player2Score)
+
+        ' Submit to leaderboard
+        Framework_Leaderboard_SubmitScore(_leaderboardId, winner, winnerScore)
+
+        ' Achievements
+        If _player1Score > _player2Score Then
+            Framework_Achievement_Unlock(_achWinner)
+
+            ' Perfect game?
+            If _player2Score = 0 Then
+                Framework_Achievement_Unlock(_achPerfectGame)
+            End If
+        End If
+
+        ' Save progress
+        Framework_Achievement_Save("achievements.dat")
+        Framework_Leaderboard_Save(_leaderboardId, "pong_scores.dat")
+    End Sub
+
+    Private Sub UpdateGameOver(dt As Single)
+        ' Press SPACE to restart
+        If Framework_IsKeyPressed(Keys.SPACE) Then
+            ' Reset game
+            _player1Score = 0
+            _player2Score = 0
+            _gameTimer = 0
+            _maxRally = 0
+            _gameState = 0
+            _countdownTimer = 3.0F
+            ' Framework_Effects_FadeIn(0.5F)
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        ' Clear background
+        Framework_ClearBackground(15, 20, 30, 255)
+
+        ' Draw center line
+        For i As Integer = 0 To WINDOW_HEIGHT Step 30
+            Framework_DrawRectangle(WINDOW_WIDTH / 2 - 2, i, 4, 15, 50, 50, 60, 255)
+        Next
+
+        ' Draw paddles
+        _paddle1.Draw()
+        _paddle2.Draw()
+
+        ' Draw ball (if playing or countdown < 1)
+        If _gameState = 1 OrElse (_gameState = 0 AndAlso _countdownTimer < 1.0F) Then
+            _ball.Draw()
+        End If
+
+        ' Draw particles
+        Framework_Particles_Draw()
+
+        ' Draw scores
+        Framework_DrawTextExH(RETRO_FONT.Handle, _player1Score.ToString(), New Vector2(WINDOW_WIDTH / 2 - 100, 30), 80, 1.0F, 100, 200, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, _player2Score.ToString(), New Vector2(WINDOW_WIDTH / 2 + 60, 30), 80, 1.0F, 255, 100, 100, 255)
+
+        ' Draw game state specific UI
+        Select Case _gameState
+            Case 0 ' Countdown
+                Dim countText As String = Math.Ceiling(_countdownTimer).ToString()
+                If _countdownTimer < 0.5F Then countText = "GO!"
+                Framework_DrawTextExH(RETRO_FONT.Handle, countText, New Vector2(WINDOW_WIDTH / 2 - 40, WINDOW_HEIGHT / 2 - 40), 80, 1.0F, 255, 255, 0, 255)
+
+            Case 1 ' Playing
+                ' Rally counter
+                Framework_DrawText("Rally: " & _rallyCount.ToString(), 10, 10, 16, 150, 150, 150, 255)
+                Framework_DrawText("Best: " & _maxRally.ToString(), 10, 30, 16, 150, 150, 150, 255)
+                Framework_DrawText("Time: " & CInt(_gameTimer).ToString() & "s", 10, 50, 16, 150, 150, 150, 255)
+
+            Case 3 ' Game Over
+                Dim winner As String = If(_player1Score > _player2Score, "PLAYER 1 WINS!", "AI WINS!")
+                Framework_DrawTextExH(RETRO_FONT.Handle, winner, New Vector2(WINDOW_WIDTH / 2 - 200, WINDOW_HEIGHT / 2 - 50), 50, 1.0F, 255, 215, 0, 255)
+                Framework_DrawText("Press SPACE to play again", WINDOW_WIDTH / 2 - 120, WINDOW_HEIGHT / 2 + 30, 20, 200, 200, 200, 255)
+
+                ' Draw leaderboard
+                DrawLeaderboard()
+        End Select
+
+        ' Draw UI (pause menu)
+        Framework_UI_Draw()
+
+        ' Draw achievement notifications
+        Framework_Achievement_DrawNotifications()
+
+        ' Draw overlay effects (vignette, flash, fade) - no render texture needed
+        If _effectsInitialized Then
+            Framework_Effects_DrawOverlays(WINDOW_WIDTH, WINDOW_HEIGHT)
+        End If
+
+        ' Draw FPS and instructions (outside effects)
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+        Framework_DrawText("[P] Pause  [BACKSPACE] Menu", WINDOW_WIDTH - 250, WINDOW_HEIGHT - 25, 14, 100, 100, 100, 255)
+
+        ' Achievement stats
+        Dim unlocked As Integer = Framework_Achievement_GetUnlockedCount()
+        Dim total As Integer = Framework_Achievement_GetCount()
+        Dim points As Integer = Framework_Achievement_GetEarnedPoints()
+        Framework_DrawText($"Achievements: {unlocked}/{total} ({points} pts)", WINDOW_WIDTH - 250, WINDOW_HEIGHT - 45, 14, 150, 150, 100, 255)
+    End Sub
+
+    Private Sub DrawLeaderboard()
+        Framework_DrawText("HIGH SCORES", WINDOW_WIDTH / 2 - 60, WINDOW_HEIGHT / 2 + 80, 20, 255, 215, 0, 255)
+
+        Dim entryCount As Integer = Framework_Leaderboard_GetEntryCount(_leaderboardId)
+        Dim displayCount As Integer = Math.Min(entryCount, 5)
+
+        For i As Integer = 1 To displayCount
+            Dim namePtr As IntPtr = Framework_Leaderboard_GetEntryName(_leaderboardId, i)
+            Dim name As String = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(namePtr)
+            Dim score As Integer = Framework_Leaderboard_GetEntryScore(_leaderboardId, i)
+            Framework_DrawText($"{i}. {name}: {score}", WINDOW_WIDTH / 2 - 60, WINDOW_HEIGHT / 2 + 100 + i * 20, 16, 200, 200, 200, 255)
+        Next
     End Sub
 End Class
 
