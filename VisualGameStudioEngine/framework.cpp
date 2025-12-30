@@ -8840,6 +8840,529 @@ extern "C" {
     }
 
     // ========================================================================
+    // EVENT SYSTEM - Publish/Subscribe messaging
+    // ========================================================================
+
+    // Subscription types to handle different callback signatures
+    enum SubscriptionType {
+        SUB_TYPE_BASIC = 0,
+        SUB_TYPE_INT = 1,
+        SUB_TYPE_FLOAT = 2,
+        SUB_TYPE_STRING = 3,
+        SUB_TYPE_VECTOR2 = 4,
+        SUB_TYPE_ENTITY = 5
+    };
+
+    struct Subscription {
+        int id;
+        int eventId;
+        SubscriptionType type;
+        void* callback;
+        void* userData;
+        int priority;
+        bool enabled;
+        bool oneShot;
+        int targetEntity;  // -1 for global, >= 0 for entity-specific
+    };
+
+    struct RegisteredEvent {
+        int id;
+        std::string name;
+        std::vector<int> subscriptionIds;  // Sorted by priority
+    };
+
+    struct QueuedEvent {
+        int eventId;
+        EventDataType dataType;
+        int intValue;
+        float floatValue;
+        std::string stringValue;
+        float x, y;
+        float delay;
+        float elapsed;
+        int targetEntity;  // -1 for global
+    };
+
+    // Event system globals
+    static std::unordered_map<int, RegisteredEvent> g_events;
+    static std::unordered_map<std::string, int> g_eventIdByName;
+    static std::unordered_map<int, Subscription> g_subscriptions;
+    static std::vector<QueuedEvent> g_eventQueue;
+    static int g_nextEventId = 1;
+    static int g_nextSubscriptionId = 1;
+    static bool g_eventsPaused = false;
+
+    // Helper to get subscription
+    Subscription* GetSubscription(int subId) {
+        auto it = g_subscriptions.find(subId);
+        return it != g_subscriptions.end() ? &it->second : nullptr;
+    }
+
+    // Helper to get event
+    RegisteredEvent* GetEvent(int eventId) {
+        auto it = g_events.find(eventId);
+        return it != g_events.end() ? &it->second : nullptr;
+    }
+
+    // Helper to sort subscriptions by priority
+    void SortEventSubscriptions(int eventId) {
+        auto* evt = GetEvent(eventId);
+        if (!evt) return;
+
+        std::sort(evt->subscriptionIds.begin(), evt->subscriptionIds.end(),
+            [](int a, int b) {
+                auto* subA = GetSubscription(a);
+                auto* subB = GetSubscription(b);
+                if (!subA || !subB) return false;
+                return subA->priority > subB->priority;  // Higher priority first
+            });
+    }
+
+    // Event registration
+    int Framework_Event_Register(const char* eventName) {
+        if (!eventName) return -1;
+
+        std::string name(eventName);
+        auto it = g_eventIdByName.find(name);
+        if (it != g_eventIdByName.end()) {
+            return it->second;  // Already registered
+        }
+
+        int eventId = g_nextEventId++;
+        RegisteredEvent evt;
+        evt.id = eventId;
+        evt.name = name;
+        g_events[eventId] = evt;
+        g_eventIdByName[name] = eventId;
+        return eventId;
+    }
+
+    int Framework_Event_GetId(const char* eventName) {
+        if (!eventName) return -1;
+        auto it = g_eventIdByName.find(std::string(eventName));
+        return it != g_eventIdByName.end() ? it->second : -1;
+    }
+
+    const char* Framework_Event_GetName(int eventId) {
+        auto* evt = GetEvent(eventId);
+        return evt ? evt->name.c_str() : nullptr;
+    }
+
+    bool Framework_Event_Exists(const char* eventName) {
+        return eventName && g_eventIdByName.find(std::string(eventName)) != g_eventIdByName.end();
+    }
+
+    // Subscribe helpers
+    int CreateSubscription(int eventId, SubscriptionType type, void* callback, void* userData, bool oneShot, int targetEntity) {
+        if (!callback) return -1;
+        auto* evt = GetEvent(eventId);
+        if (!evt) return -1;
+
+        int subId = g_nextSubscriptionId++;
+        Subscription sub;
+        sub.id = subId;
+        sub.eventId = eventId;
+        sub.type = type;
+        sub.callback = callback;
+        sub.userData = userData;
+        sub.priority = 0;
+        sub.enabled = true;
+        sub.oneShot = oneShot;
+        sub.targetEntity = targetEntity;
+        g_subscriptions[subId] = sub;
+        evt->subscriptionIds.push_back(subId);
+        return subId;
+    }
+
+    int Framework_Event_Subscribe(int eventId, EventCallback callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_BASIC, (void*)callback, userData, false, -1);
+    }
+
+    int Framework_Event_SubscribeInt(int eventId, EventCallbackInt callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_INT, (void*)callback, userData, false, -1);
+    }
+
+    int Framework_Event_SubscribeFloat(int eventId, EventCallbackFloat callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_FLOAT, (void*)callback, userData, false, -1);
+    }
+
+    int Framework_Event_SubscribeString(int eventId, EventCallbackString callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_STRING, (void*)callback, userData, false, -1);
+    }
+
+    int Framework_Event_SubscribeVector2(int eventId, EventCallbackVector2 callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_VECTOR2, (void*)callback, userData, false, -1);
+    }
+
+    int Framework_Event_SubscribeEntity(int eventId, EventCallbackEntity callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_ENTITY, (void*)callback, userData, false, -1);
+    }
+
+    int Framework_Event_SubscribeByName(const char* eventName, EventCallback callback, void* userData) {
+        int eventId = Framework_Event_GetId(eventName);
+        if (eventId < 0) eventId = Framework_Event_Register(eventName);
+        return Framework_Event_Subscribe(eventId, callback, userData);
+    }
+
+    int Framework_Event_SubscribeOnce(int eventId, EventCallback callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_BASIC, (void*)callback, userData, true, -1);
+    }
+
+    int Framework_Event_SubscribeOnceInt(int eventId, EventCallbackInt callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_INT, (void*)callback, userData, true, -1);
+    }
+
+    // Unsubscribe
+    void Framework_Event_Unsubscribe(int subscriptionId) {
+        auto* sub = GetSubscription(subscriptionId);
+        if (!sub) return;
+
+        auto* evt = GetEvent(sub->eventId);
+        if (evt) {
+            auto& subs = evt->subscriptionIds;
+            subs.erase(std::remove(subs.begin(), subs.end(), subscriptionId), subs.end());
+        }
+        g_subscriptions.erase(subscriptionId);
+    }
+
+    void Framework_Event_UnsubscribeAll(int eventId) {
+        auto* evt = GetEvent(eventId);
+        if (!evt) return;
+
+        for (int subId : evt->subscriptionIds) {
+            g_subscriptions.erase(subId);
+        }
+        evt->subscriptionIds.clear();
+    }
+
+    void Framework_Event_UnsubscribeCallback(int eventId, EventCallback callback) {
+        auto* evt = GetEvent(eventId);
+        if (!evt) return;
+
+        std::vector<int> toRemove;
+        for (int subId : evt->subscriptionIds) {
+            auto* sub = GetSubscription(subId);
+            if (sub && sub->callback == (void*)callback) {
+                toRemove.push_back(subId);
+            }
+        }
+        for (int subId : toRemove) {
+            Framework_Event_Unsubscribe(subId);
+        }
+    }
+
+    // Publish events (immediate dispatch)
+    void DispatchEvent(int eventId, EventDataType dataType, int intVal, float floatVal,
+                       const char* strVal, float x, float y, int targetEntity) {
+        if (g_eventsPaused) return;
+
+        auto* evt = GetEvent(eventId);
+        if (!evt) return;
+
+        std::vector<int> toRemove;
+
+        // Copy subscription IDs to avoid iterator invalidation
+        std::vector<int> subs = evt->subscriptionIds;
+
+        for (int subId : subs) {
+            auto* sub = GetSubscription(subId);
+            if (!sub || !sub->enabled) continue;
+            if (sub->targetEntity >= 0 && sub->targetEntity != targetEntity) continue;
+
+            switch (sub->type) {
+            case SUB_TYPE_BASIC:
+                ((EventCallback)sub->callback)(eventId, sub->userData);
+                break;
+            case SUB_TYPE_INT:
+                ((EventCallbackInt)sub->callback)(eventId, intVal, sub->userData);
+                break;
+            case SUB_TYPE_FLOAT:
+                ((EventCallbackFloat)sub->callback)(eventId, floatVal, sub->userData);
+                break;
+            case SUB_TYPE_STRING:
+                ((EventCallbackString)sub->callback)(eventId, strVal ? strVal : "", sub->userData);
+                break;
+            case SUB_TYPE_VECTOR2:
+                ((EventCallbackVector2)sub->callback)(eventId, x, y, sub->userData);
+                break;
+            case SUB_TYPE_ENTITY:
+                ((EventCallbackEntity)sub->callback)(eventId, targetEntity >= 0 ? targetEntity : intVal, sub->userData);
+                break;
+            }
+
+            if (sub->oneShot) {
+                toRemove.push_back(subId);
+            }
+        }
+
+        // Remove one-shot subscriptions
+        for (int subId : toRemove) {
+            Framework_Event_Unsubscribe(subId);
+        }
+    }
+
+    void Framework_Event_Publish(int eventId) {
+        DispatchEvent(eventId, EVENT_DATA_NONE, 0, 0.0f, nullptr, 0, 0, -1);
+    }
+
+    void Framework_Event_PublishInt(int eventId, int value) {
+        DispatchEvent(eventId, EVENT_DATA_INT, value, 0.0f, nullptr, 0, 0, -1);
+    }
+
+    void Framework_Event_PublishFloat(int eventId, float value) {
+        DispatchEvent(eventId, EVENT_DATA_FLOAT, 0, value, nullptr, 0, 0, -1);
+    }
+
+    void Framework_Event_PublishString(int eventId, const char* value) {
+        DispatchEvent(eventId, EVENT_DATA_STRING, 0, 0.0f, value, 0, 0, -1);
+    }
+
+    void Framework_Event_PublishVector2(int eventId, float x, float y) {
+        DispatchEvent(eventId, EVENT_DATA_VECTOR2, 0, 0.0f, nullptr, x, y, -1);
+    }
+
+    void Framework_Event_PublishEntity(int eventId, int entity) {
+        DispatchEvent(eventId, EVENT_DATA_ENTITY, entity, 0.0f, nullptr, 0, 0, -1);
+    }
+
+    void Framework_Event_PublishByName(const char* eventName) {
+        int eventId = Framework_Event_GetId(eventName);
+        if (eventId >= 0) Framework_Event_Publish(eventId);
+    }
+
+    void Framework_Event_PublishByNameInt(const char* eventName, int value) {
+        int eventId = Framework_Event_GetId(eventName);
+        if (eventId >= 0) Framework_Event_PublishInt(eventId, value);
+    }
+
+    // Queued/deferred events
+    void Framework_Event_Queue(int eventId) {
+        QueuedEvent qe;
+        qe.eventId = eventId;
+        qe.dataType = EVENT_DATA_NONE;
+        qe.delay = 0;
+        qe.elapsed = 0;
+        qe.targetEntity = -1;
+        g_eventQueue.push_back(qe);
+    }
+
+    void Framework_Event_QueueInt(int eventId, int value) {
+        QueuedEvent qe;
+        qe.eventId = eventId;
+        qe.dataType = EVENT_DATA_INT;
+        qe.intValue = value;
+        qe.delay = 0;
+        qe.elapsed = 0;
+        qe.targetEntity = -1;
+        g_eventQueue.push_back(qe);
+    }
+
+    void Framework_Event_QueueFloat(int eventId, float value) {
+        QueuedEvent qe;
+        qe.eventId = eventId;
+        qe.dataType = EVENT_DATA_FLOAT;
+        qe.floatValue = value;
+        qe.delay = 0;
+        qe.elapsed = 0;
+        qe.targetEntity = -1;
+        g_eventQueue.push_back(qe);
+    }
+
+    void Framework_Event_QueueString(int eventId, const char* value) {
+        QueuedEvent qe;
+        qe.eventId = eventId;
+        qe.dataType = EVENT_DATA_STRING;
+        qe.stringValue = value ? value : "";
+        qe.delay = 0;
+        qe.elapsed = 0;
+        qe.targetEntity = -1;
+        g_eventQueue.push_back(qe);
+    }
+
+    void Framework_Event_QueueDelayed(int eventId, float delay) {
+        QueuedEvent qe;
+        qe.eventId = eventId;
+        qe.dataType = EVENT_DATA_NONE;
+        qe.delay = delay;
+        qe.elapsed = 0;
+        qe.targetEntity = -1;
+        g_eventQueue.push_back(qe);
+    }
+
+    void Framework_Event_QueueDelayedInt(int eventId, int value, float delay) {
+        QueuedEvent qe;
+        qe.eventId = eventId;
+        qe.dataType = EVENT_DATA_INT;
+        qe.intValue = value;
+        qe.delay = delay;
+        qe.elapsed = 0;
+        qe.targetEntity = -1;
+        g_eventQueue.push_back(qe);
+    }
+
+    // Entity-specific events
+    int Framework_Event_SubscribeToEntity(int entity, int eventId, EventCallbackEntity callback, void* userData) {
+        return CreateSubscription(eventId, SUB_TYPE_ENTITY, (void*)callback, userData, false, entity);
+    }
+
+    void Framework_Event_PublishToEntity(int entity, int eventId) {
+        DispatchEvent(eventId, EVENT_DATA_ENTITY, entity, 0.0f, nullptr, 0, 0, entity);
+    }
+
+    void Framework_Event_PublishToEntityInt(int entity, int eventId, int value) {
+        DispatchEvent(eventId, EVENT_DATA_INT, value, 0.0f, nullptr, 0, 0, entity);
+    }
+
+    void Framework_Event_UnsubscribeFromEntity(int entity, int eventId) {
+        auto* evt = GetEvent(eventId);
+        if (!evt) return;
+
+        std::vector<int> toRemove;
+        for (int subId : evt->subscriptionIds) {
+            auto* sub = GetSubscription(subId);
+            if (sub && sub->targetEntity == entity) {
+                toRemove.push_back(subId);
+            }
+        }
+        for (int subId : toRemove) {
+            Framework_Event_Unsubscribe(subId);
+        }
+    }
+
+    void Framework_Event_UnsubscribeAllFromEntity(int entity) {
+        std::vector<int> toRemove;
+        for (auto& pair : g_subscriptions) {
+            if (pair.second.targetEntity == entity) {
+                toRemove.push_back(pair.first);
+            }
+        }
+        for (int subId : toRemove) {
+            Framework_Event_Unsubscribe(subId);
+        }
+    }
+
+    // Priority control
+    void Framework_Event_SetPriority(int subscriptionId, int priority) {
+        auto* sub = GetSubscription(subscriptionId);
+        if (!sub) return;
+        sub->priority = priority;
+        SortEventSubscriptions(sub->eventId);
+    }
+
+    int Framework_Event_GetPriority(int subscriptionId) {
+        auto* sub = GetSubscription(subscriptionId);
+        return sub ? sub->priority : 0;
+    }
+
+    // Event state and management
+    void Framework_Event_SetEnabled(int subscriptionId, bool enabled) {
+        auto* sub = GetSubscription(subscriptionId);
+        if (sub) sub->enabled = enabled;
+    }
+
+    bool Framework_Event_IsEnabled(int subscriptionId) {
+        auto* sub = GetSubscription(subscriptionId);
+        return sub ? sub->enabled : false;
+    }
+
+    bool Framework_Event_IsSubscriptionValid(int subscriptionId) {
+        return GetSubscription(subscriptionId) != nullptr;
+    }
+
+    int Framework_Event_GetSubscriberCount(int eventId) {
+        auto* evt = GetEvent(eventId);
+        return evt ? (int)evt->subscriptionIds.size() : 0;
+    }
+
+    // Queue processing
+    void Framework_Event_ProcessQueue(float dt) {
+        if (g_eventsPaused) return;
+
+        std::vector<int> toFire;
+
+        for (size_t i = 0; i < g_eventQueue.size(); i++) {
+            QueuedEvent& qe = g_eventQueue[i];
+            qe.elapsed += dt;
+            if (qe.elapsed >= qe.delay) {
+                toFire.push_back((int)i);
+            }
+        }
+
+        // Fire events in order and remove from queue (reverse order to maintain indices)
+        for (int i = (int)toFire.size() - 1; i >= 0; i--) {
+            int idx = toFire[i];
+            QueuedEvent& qe = g_eventQueue[idx];
+
+            switch (qe.dataType) {
+            case EVENT_DATA_NONE:
+                if (qe.targetEntity >= 0)
+                    Framework_Event_PublishToEntity(qe.targetEntity, qe.eventId);
+                else
+                    Framework_Event_Publish(qe.eventId);
+                break;
+            case EVENT_DATA_INT:
+                if (qe.targetEntity >= 0)
+                    Framework_Event_PublishToEntityInt(qe.targetEntity, qe.eventId, qe.intValue);
+                else
+                    Framework_Event_PublishInt(qe.eventId, qe.intValue);
+                break;
+            case EVENT_DATA_FLOAT:
+                Framework_Event_PublishFloat(qe.eventId, qe.floatValue);
+                break;
+            case EVENT_DATA_STRING:
+                Framework_Event_PublishString(qe.eventId, qe.stringValue.c_str());
+                break;
+            case EVENT_DATA_VECTOR2:
+                Framework_Event_PublishVector2(qe.eventId, qe.x, qe.y);
+                break;
+            default:
+                break;
+            }
+
+            g_eventQueue.erase(g_eventQueue.begin() + idx);
+        }
+    }
+
+    void Framework_Event_ClearQueue() {
+        g_eventQueue.clear();
+    }
+
+    int Framework_Event_GetQueuedCount() {
+        return (int)g_eventQueue.size();
+    }
+
+    // Global event system management
+    void Framework_Event_PauseAll() {
+        g_eventsPaused = true;
+    }
+
+    void Framework_Event_ResumeAll() {
+        g_eventsPaused = false;
+    }
+
+    bool Framework_Event_IsPaused() {
+        return g_eventsPaused;
+    }
+
+    void Framework_Event_Clear() {
+        g_events.clear();
+        g_eventIdByName.clear();
+        g_subscriptions.clear();
+        g_eventQueue.clear();
+        g_nextEventId = 1;
+        g_nextSubscriptionId = 1;
+        g_eventsPaused = false;
+    }
+
+    int Framework_Event_GetEventCount() {
+        return (int)g_events.size();
+    }
+
+    int Framework_Event_GetTotalSubscriptions() {
+        return (int)g_subscriptions.size();
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {

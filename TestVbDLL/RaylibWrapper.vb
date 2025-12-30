@@ -3213,6 +3213,255 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Event System"
+    ' ========================================================================
+    ' EVENT SYSTEM - Publish/Subscribe messaging
+    ' ========================================================================
+
+    ' Event Data Types
+    Public Enum EventDataType
+        None = 0
+        Int = 1
+        Float = 2
+        StringType = 3
+        Vector2Type = 4
+        Entity = 5
+        Pointer = 6
+    End Enum
+
+    ' Event Callback Delegates
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub EventCallback(eventId As Integer, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub EventCallbackInt(eventId As Integer, value As Integer, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub EventCallbackFloat(eventId As Integer, value As Single, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub EventCallbackString(eventId As Integer, value As IntPtr, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub EventCallbackVector2(eventId As Integer, x As Single, y As Single, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub EventCallbackEntity(eventId As Integer, entity As Integer, userData As IntPtr)
+
+    ' Event Registration and Naming
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_Register(eventName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_GetId(eventName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_GetName(eventId As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_Exists(eventName As String) As Boolean
+    End Function
+
+    ' Subscribe to Events (returns subscription handle)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_Subscribe(eventId As Integer, callback As EventCallback, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeInt(eventId As Integer, callback As EventCallbackInt, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeFloat(eventId As Integer, callback As EventCallbackFloat, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeString(eventId As Integer, callback As EventCallbackString, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeVector2(eventId As Integer, callback As EventCallbackVector2, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeEntity(eventId As Integer, callback As EventCallbackEntity, userData As IntPtr) As Integer
+    End Function
+
+    ' Subscribe by Name (convenience)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeByName(eventName As String, callback As EventCallback, userData As IntPtr) As Integer
+    End Function
+
+    ' One-shot Subscriptions (auto-unsubscribe after first trigger)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeOnce(eventId As Integer, callback As EventCallback, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeOnceInt(eventId As Integer, callback As EventCallbackInt, userData As IntPtr) As Integer
+    End Function
+
+    ' Unsubscribe
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_Unsubscribe(subscriptionId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_UnsubscribeAll(eventId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_UnsubscribeCallback(eventId As Integer, callback As EventCallback)
+    End Sub
+
+    ' Publish Events (immediate dispatch)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_Publish(eventId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishInt(eventId As Integer, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishFloat(eventId As Integer, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishString(eventId As Integer, value As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishVector2(eventId As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishEntity(eventId As Integer, entity As Integer)
+    End Sub
+
+    ' Publish by Name (convenience)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishByName(eventName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishByNameInt(eventName As String, value As Integer)
+    End Sub
+
+    ' Queued/Deferred Events
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_Queue(eventId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_QueueInt(eventId As Integer, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_QueueFloat(eventId As Integer, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_QueueString(eventId As Integer, value As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_QueueDelayed(eventId As Integer, delay As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_QueueDelayedInt(eventId As Integer, value As Integer, delay As Single)
+    End Sub
+
+    ' Entity-Specific Events
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_SubscribeToEntity(entity As Integer, eventId As Integer, callback As EventCallbackEntity, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishToEntity(entity As Integer, eventId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PublishToEntityInt(entity As Integer, eventId As Integer, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_UnsubscribeFromEntity(entity As Integer, eventId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_UnsubscribeAllFromEntity(entity As Integer)
+    End Sub
+
+    ' Priority Control
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_SetPriority(subscriptionId As Integer, priority As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_GetPriority(subscriptionId As Integer) As Integer
+    End Function
+
+    ' Event State and Management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_SetEnabled(subscriptionId As Integer, enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_IsEnabled(subscriptionId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_IsSubscriptionValid(subscriptionId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_GetSubscriberCount(eventId As Integer) As Integer
+    End Function
+
+    ' Queue Processing and Management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_ProcessQueue(dt As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_ClearQueue()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_GetQueuedCount() As Integer
+    End Function
+
+    ' Global Event System Management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_PauseAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_ResumeAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_IsPaused() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Event_Clear()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_GetEventCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Event_GetTotalSubscriptions() As Integer
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

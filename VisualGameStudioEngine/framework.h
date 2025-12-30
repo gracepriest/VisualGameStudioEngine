@@ -1405,6 +1405,105 @@ extern "C" {
     __declspec(dllexport) float Framework_Tween_Ease(float t, int easing);  // Apply easing to 0-1 value
 
     // ========================================================================
+    // EVENT SYSTEM - Publish/Subscribe messaging
+    // ========================================================================
+
+    // Event data types for payloads
+    enum EventDataType {
+        EVENT_DATA_NONE = 0,
+        EVENT_DATA_INT = 1,
+        EVENT_DATA_FLOAT = 2,
+        EVENT_DATA_STRING = 3,
+        EVENT_DATA_VECTOR2 = 4,
+        EVENT_DATA_ENTITY = 5,
+        EVENT_DATA_POINTER = 6
+    };
+
+    // Event callback types
+    typedef void (*EventCallback)(int eventId, void* userData);
+    typedef void (*EventCallbackInt)(int eventId, int value, void* userData);
+    typedef void (*EventCallbackFloat)(int eventId, float value, void* userData);
+    typedef void (*EventCallbackString)(int eventId, const char* value, void* userData);
+    typedef void (*EventCallbackVector2)(int eventId, float x, float y, void* userData);
+    typedef void (*EventCallbackEntity)(int eventId, int entity, void* userData);
+
+    // Event registration and naming
+    __declspec(dllexport) int   Framework_Event_Register(const char* eventName);  // Returns event ID
+    __declspec(dllexport) int   Framework_Event_GetId(const char* eventName);     // Get ID by name (-1 if not found)
+    __declspec(dllexport) const char* Framework_Event_GetName(int eventId);       // Get name by ID
+    __declspec(dllexport) bool  Framework_Event_Exists(const char* eventName);
+
+    // Subscribe to events (returns subscription handle)
+    __declspec(dllexport) int   Framework_Event_Subscribe(int eventId, EventCallback callback, void* userData);
+    __declspec(dllexport) int   Framework_Event_SubscribeInt(int eventId, EventCallbackInt callback, void* userData);
+    __declspec(dllexport) int   Framework_Event_SubscribeFloat(int eventId, EventCallbackFloat callback, void* userData);
+    __declspec(dllexport) int   Framework_Event_SubscribeString(int eventId, EventCallbackString callback, void* userData);
+    __declspec(dllexport) int   Framework_Event_SubscribeVector2(int eventId, EventCallbackVector2 callback, void* userData);
+    __declspec(dllexport) int   Framework_Event_SubscribeEntity(int eventId, EventCallbackEntity callback, void* userData);
+
+    // Subscribe by name (convenience)
+    __declspec(dllexport) int   Framework_Event_SubscribeByName(const char* eventName, EventCallback callback, void* userData);
+
+    // One-shot subscriptions (auto-unsubscribe after first trigger)
+    __declspec(dllexport) int   Framework_Event_SubscribeOnce(int eventId, EventCallback callback, void* userData);
+    __declspec(dllexport) int   Framework_Event_SubscribeOnceInt(int eventId, EventCallbackInt callback, void* userData);
+
+    // Unsubscribe
+    __declspec(dllexport) void  Framework_Event_Unsubscribe(int subscriptionId);
+    __declspec(dllexport) void  Framework_Event_UnsubscribeAll(int eventId);      // Remove all listeners for event
+    __declspec(dllexport) void  Framework_Event_UnsubscribeCallback(int eventId, EventCallback callback);  // Remove specific callback
+
+    // Publish events (immediate dispatch)
+    __declspec(dllexport) void  Framework_Event_Publish(int eventId);
+    __declspec(dllexport) void  Framework_Event_PublishInt(int eventId, int value);
+    __declspec(dllexport) void  Framework_Event_PublishFloat(int eventId, float value);
+    __declspec(dllexport) void  Framework_Event_PublishString(int eventId, const char* value);
+    __declspec(dllexport) void  Framework_Event_PublishVector2(int eventId, float x, float y);
+    __declspec(dllexport) void  Framework_Event_PublishEntity(int eventId, int entity);
+
+    // Publish by name (convenience)
+    __declspec(dllexport) void  Framework_Event_PublishByName(const char* eventName);
+    __declspec(dllexport) void  Framework_Event_PublishByNameInt(const char* eventName, int value);
+
+    // Queued/deferred events (processed on Framework_Event_ProcessQueue)
+    __declspec(dllexport) void  Framework_Event_Queue(int eventId);
+    __declspec(dllexport) void  Framework_Event_QueueInt(int eventId, int value);
+    __declspec(dllexport) void  Framework_Event_QueueFloat(int eventId, float value);
+    __declspec(dllexport) void  Framework_Event_QueueString(int eventId, const char* value);
+    __declspec(dllexport) void  Framework_Event_QueueDelayed(int eventId, float delay);  // Fire after delay
+    __declspec(dllexport) void  Framework_Event_QueueDelayedInt(int eventId, int value, float delay);
+
+    // Entity-specific events
+    __declspec(dllexport) int   Framework_Event_SubscribeToEntity(int entity, int eventId, EventCallbackEntity callback, void* userData);
+    __declspec(dllexport) void  Framework_Event_PublishToEntity(int entity, int eventId);
+    __declspec(dllexport) void  Framework_Event_PublishToEntityInt(int entity, int eventId, int value);
+    __declspec(dllexport) void  Framework_Event_UnsubscribeFromEntity(int entity, int eventId);
+    __declspec(dllexport) void  Framework_Event_UnsubscribeAllFromEntity(int entity);  // Clear all entity subscriptions
+
+    // Priority control (higher = called first, default = 0)
+    __declspec(dllexport) void  Framework_Event_SetPriority(int subscriptionId, int priority);
+    __declspec(dllexport) int   Framework_Event_GetPriority(int subscriptionId);
+
+    // Event state and management
+    __declspec(dllexport) void  Framework_Event_SetEnabled(int subscriptionId, bool enabled);
+    __declspec(dllexport) bool  Framework_Event_IsEnabled(int subscriptionId);
+    __declspec(dllexport) bool  Framework_Event_IsSubscriptionValid(int subscriptionId);
+    __declspec(dllexport) int   Framework_Event_GetSubscriberCount(int eventId);
+
+    // Queue processing and management
+    __declspec(dllexport) void  Framework_Event_ProcessQueue(float dt);  // Process queued/delayed events
+    __declspec(dllexport) void  Framework_Event_ClearQueue();
+    __declspec(dllexport) int   Framework_Event_GetQueuedCount();
+
+    // Global event system management
+    __declspec(dllexport) void  Framework_Event_PauseAll();   // Stop processing events
+    __declspec(dllexport) void  Framework_Event_ResumeAll();
+    __declspec(dllexport) bool  Framework_Event_IsPaused();
+    __declspec(dllexport) void  Framework_Event_Clear();      // Clear all events and subscriptions
+    __declspec(dllexport) int   Framework_Event_GetEventCount();
+    __declspec(dllexport) int   Framework_Event_GetTotalSubscriptions();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();
