@@ -1593,6 +1593,74 @@ extern "C" {
     __declspec(dllexport) void  Framework_Timer_ClearCompleted();  // Remove finished one-shot timers
 
     // ========================================================================
+    // OBJECT POOLING - Efficient object reuse
+    // ========================================================================
+
+    // Forward declarations for functions used by entity pools
+    __declspec(dllexport) void  Framework_Ecs_DestroyEntity(int entity);
+    __declspec(dllexport) void  Framework_Ecs_SetEnabled(int entity, bool enabled);
+    __declspec(dllexport) int   Framework_Prefab_Instantiate(int prefabH, int parentEntity, float x, float y);
+
+    // Pool callback types
+    typedef void (*PoolResetCallback)(int poolId, int objectIndex, void* userData);
+    typedef void (*PoolInitCallback)(int poolId, int objectIndex, void* userData);
+
+    // Pool creation and management
+    __declspec(dllexport) int   Framework_Pool_Create(const char* poolName, int initialCapacity, int maxCapacity);
+    __declspec(dllexport) int   Framework_Pool_GetByName(const char* poolName);
+    __declspec(dllexport) void  Framework_Pool_Destroy(int poolId);
+    __declspec(dllexport) bool  Framework_Pool_IsValid(int poolId);
+
+    // Pool configuration
+    __declspec(dllexport) void  Framework_Pool_SetAutoGrow(int poolId, bool autoGrow);
+    __declspec(dllexport) bool  Framework_Pool_GetAutoGrow(int poolId);
+    __declspec(dllexport) void  Framework_Pool_SetGrowAmount(int poolId, int amount);  // How many to add when growing
+    __declspec(dllexport) int   Framework_Pool_GetGrowAmount(int poolId);
+    __declspec(dllexport) void  Framework_Pool_SetResetCallback(int poolId, PoolResetCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Pool_SetInitCallback(int poolId, PoolInitCallback callback, void* userData);
+
+    // Acquire and release objects
+    __declspec(dllexport) int   Framework_Pool_Acquire(int poolId);  // Returns object index, -1 if empty
+    __declspec(dllexport) void  Framework_Pool_Release(int poolId, int objectIndex);
+    __declspec(dllexport) void  Framework_Pool_ReleaseAll(int poolId);  // Return all to pool
+
+    // Pool state queries
+    __declspec(dllexport) int   Framework_Pool_GetCapacity(int poolId);
+    __declspec(dllexport) int   Framework_Pool_GetActiveCount(int poolId);
+    __declspec(dllexport) int   Framework_Pool_GetAvailableCount(int poolId);
+    __declspec(dllexport) bool  Framework_Pool_IsEmpty(int poolId);  // No available objects
+    __declspec(dllexport) bool  Framework_Pool_IsFull(int poolId);   // All objects in use
+    __declspec(dllexport) bool  Framework_Pool_IsObjectActive(int poolId, int objectIndex);
+
+    // Pool statistics
+    __declspec(dllexport) int   Framework_Pool_GetTotalAcquires(int poolId);
+    __declspec(dllexport) int   Framework_Pool_GetTotalReleases(int poolId);
+    __declspec(dllexport) int   Framework_Pool_GetPeakUsage(int poolId);
+    __declspec(dllexport) void  Framework_Pool_ResetStats(int poolId);
+
+    // Pre-warming (allocate objects ahead of time)
+    __declspec(dllexport) void  Framework_Pool_Warmup(int poolId, int count);
+    __declspec(dllexport) void  Framework_Pool_Shrink(int poolId);  // Remove unused capacity
+
+    // Entity pools (special pools that manage ECS entities)
+    __declspec(dllexport) int   Framework_Pool_CreateEntityPool(const char* poolName, int prefabId, int initialCapacity, int maxCapacity);
+    __declspec(dllexport) int   Framework_Pool_AcquireEntity(int poolId);  // Returns entity ID
+    __declspec(dllexport) void  Framework_Pool_ReleaseEntity(int poolId, int entity);
+
+    // Iterate active objects
+    __declspec(dllexport) int   Framework_Pool_GetFirstActive(int poolId);  // Returns first active index, -1 if none
+    __declspec(dllexport) int   Framework_Pool_GetNextActive(int poolId, int currentIndex);  // Returns next active, -1 if none
+
+    // Bulk operations
+    __declspec(dllexport) int   Framework_Pool_AcquireMultiple(int poolId, int count, int* outIndices);  // Returns actual count acquired
+    __declspec(dllexport) void  Framework_Pool_ReleaseMultiple(int poolId, int* indices, int count);
+
+    // Global pool management
+    __declspec(dllexport) int   Framework_Pool_GetPoolCount();
+    __declspec(dllexport) void  Framework_Pool_DestroyAll();
+    __declspec(dllexport) void  Framework_Pool_ReleaseAllPools();  // Release all objects in all pools
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

@@ -9937,6 +9937,445 @@ extern "C" {
     }
 
     // ========================================================================
+    // OBJECT POOLING - Efficient object reuse
+    // ========================================================================
+
+    struct PoolObject {
+        bool active;
+        int entityId;  // For entity pools, -1 for generic pools
+    };
+
+    struct ObjectPool {
+        int id;
+        std::string name;
+        std::vector<PoolObject> objects;
+        std::vector<int> availableIndices;  // Stack of available object indices
+        int maxCapacity;
+        bool autoGrow;
+        int growAmount;
+        int prefabId;  // For entity pools, -1 for generic
+        bool isEntityPool;
+
+        // Callbacks
+        PoolResetCallback resetCallback;
+        void* resetUserData;
+        PoolInitCallback initCallback;
+        void* initUserData;
+
+        // Statistics
+        int totalAcquires;
+        int totalReleases;
+        int peakUsage;
+    };
+
+    // Pool system globals
+    static std::unordered_map<int, ObjectPool> g_pools;
+    static std::unordered_map<std::string, int> g_poolIdByName;
+    static int g_nextPoolId = 1;
+
+    // Helper to get pool
+    ObjectPool* GetPool(int poolId) {
+        auto it = g_pools.find(poolId);
+        return it != g_pools.end() ? &it->second : nullptr;
+    }
+
+    // Pool creation and management
+    int Framework_Pool_Create(const char* poolName, int initialCapacity, int maxCapacity) {
+        if (!poolName || initialCapacity < 0) return -1;
+        if (maxCapacity > 0 && initialCapacity > maxCapacity) initialCapacity = maxCapacity;
+
+        std::string name(poolName);
+        auto it = g_poolIdByName.find(name);
+        if (it != g_poolIdByName.end()) {
+            return it->second;  // Already exists
+        }
+
+        ObjectPool pool;
+        pool.id = g_nextPoolId++;
+        pool.name = name;
+        pool.maxCapacity = maxCapacity > 0 ? maxCapacity : INT_MAX;
+        pool.autoGrow = true;
+        pool.growAmount = 10;
+        pool.prefabId = -1;
+        pool.isEntityPool = false;
+        pool.resetCallback = nullptr;
+        pool.resetUserData = nullptr;
+        pool.initCallback = nullptr;
+        pool.initUserData = nullptr;
+        pool.totalAcquires = 0;
+        pool.totalReleases = 0;
+        pool.peakUsage = 0;
+
+        // Initialize objects
+        pool.objects.resize(initialCapacity);
+        for (int i = 0; i < initialCapacity; i++) {
+            pool.objects[i].active = false;
+            pool.objects[i].entityId = -1;
+            pool.availableIndices.push_back(i);
+        }
+
+        g_pools[pool.id] = pool;
+        g_poolIdByName[name] = pool.id;
+        return pool.id;
+    }
+
+    int Framework_Pool_GetByName(const char* poolName) {
+        if (!poolName) return -1;
+        auto it = g_poolIdByName.find(std::string(poolName));
+        return it != g_poolIdByName.end() ? it->second : -1;
+    }
+
+    void Framework_Pool_Destroy(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return;
+
+        // For entity pools, destroy all entities
+        if (pool->isEntityPool) {
+            for (auto& obj : pool->objects) {
+                if (obj.entityId >= 0) {
+                    Framework_Ecs_DestroyEntity(obj.entityId);
+                }
+            }
+        }
+
+        g_poolIdByName.erase(pool->name);
+        g_pools.erase(poolId);
+    }
+
+    bool Framework_Pool_IsValid(int poolId) {
+        return GetPool(poolId) != nullptr;
+    }
+
+    // Pool configuration
+    void Framework_Pool_SetAutoGrow(int poolId, bool autoGrow) {
+        auto* pool = GetPool(poolId);
+        if (pool) pool->autoGrow = autoGrow;
+    }
+
+    bool Framework_Pool_GetAutoGrow(int poolId) {
+        auto* pool = GetPool(poolId);
+        return pool ? pool->autoGrow : false;
+    }
+
+    void Framework_Pool_SetGrowAmount(int poolId, int amount) {
+        auto* pool = GetPool(poolId);
+        if (pool && amount > 0) pool->growAmount = amount;
+    }
+
+    int Framework_Pool_GetGrowAmount(int poolId) {
+        auto* pool = GetPool(poolId);
+        return pool ? pool->growAmount : 0;
+    }
+
+    void Framework_Pool_SetResetCallback(int poolId, PoolResetCallback callback, void* userData) {
+        auto* pool = GetPool(poolId);
+        if (pool) {
+            pool->resetCallback = callback;
+            pool->resetUserData = userData;
+        }
+    }
+
+    void Framework_Pool_SetInitCallback(int poolId, PoolInitCallback callback, void* userData) {
+        auto* pool = GetPool(poolId);
+        if (pool) {
+            pool->initCallback = callback;
+            pool->initUserData = userData;
+        }
+    }
+
+    // Internal: grow pool
+    void GrowPool(ObjectPool* pool, int amount) {
+        if (!pool) return;
+        int currentSize = (int)pool->objects.size();
+        int newSize = currentSize + amount;
+        if (newSize > pool->maxCapacity) newSize = pool->maxCapacity;
+        if (newSize <= currentSize) return;
+
+        pool->objects.resize(newSize);
+        for (int i = currentSize; i < newSize; i++) {
+            pool->objects[i].active = false;
+            pool->objects[i].entityId = -1;
+            pool->availableIndices.push_back(i);
+
+            // For entity pools, create entities
+            if (pool->isEntityPool && pool->prefabId >= 0) {
+                int entity = Framework_Prefab_Instantiate(pool->prefabId, -1, 0, 0);
+                pool->objects[i].entityId = entity;
+                Framework_Ecs_SetEnabled(entity, false);
+            }
+
+            // Call init callback
+            if (pool->initCallback) {
+                pool->initCallback(pool->id, i, pool->initUserData);
+            }
+        }
+    }
+
+    // Acquire and release objects
+    int Framework_Pool_Acquire(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return -1;
+
+        // Check if we need to grow
+        if (pool->availableIndices.empty()) {
+            if (pool->autoGrow && (int)pool->objects.size() < pool->maxCapacity) {
+                GrowPool(pool, pool->growAmount);
+            }
+            if (pool->availableIndices.empty()) {
+                return -1;  // Still empty, can't grow more
+            }
+        }
+
+        // Get from available stack
+        int index = pool->availableIndices.back();
+        pool->availableIndices.pop_back();
+        pool->objects[index].active = true;
+
+        // Update stats
+        pool->totalAcquires++;
+        int activeCount = (int)pool->objects.size() - (int)pool->availableIndices.size();
+        if (activeCount > pool->peakUsage) pool->peakUsage = activeCount;
+
+        return index;
+    }
+
+    void Framework_Pool_Release(int poolId, int objectIndex) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return;
+        if (objectIndex < 0 || objectIndex >= (int)pool->objects.size()) return;
+        if (!pool->objects[objectIndex].active) return;  // Already released
+
+        pool->objects[objectIndex].active = false;
+        pool->availableIndices.push_back(objectIndex);
+        pool->totalReleases++;
+
+        // Call reset callback
+        if (pool->resetCallback) {
+            pool->resetCallback(pool->id, objectIndex, pool->resetUserData);
+        }
+    }
+
+    void Framework_Pool_ReleaseAll(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return;
+
+        pool->availableIndices.clear();
+        for (int i = 0; i < (int)pool->objects.size(); i++) {
+            if (pool->objects[i].active) {
+                pool->objects[i].active = false;
+                pool->totalReleases++;
+                if (pool->resetCallback) {
+                    pool->resetCallback(pool->id, i, pool->resetUserData);
+                }
+            }
+            pool->availableIndices.push_back(i);
+        }
+    }
+
+    // Pool state queries
+    int Framework_Pool_GetCapacity(int poolId) {
+        auto* pool = GetPool(poolId);
+        return pool ? (int)pool->objects.size() : 0;
+    }
+
+    int Framework_Pool_GetActiveCount(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return 0;
+        return (int)pool->objects.size() - (int)pool->availableIndices.size();
+    }
+
+    int Framework_Pool_GetAvailableCount(int poolId) {
+        auto* pool = GetPool(poolId);
+        return pool ? (int)pool->availableIndices.size() : 0;
+    }
+
+    bool Framework_Pool_IsEmpty(int poolId) {
+        auto* pool = GetPool(poolId);
+        return pool ? pool->availableIndices.empty() : true;
+    }
+
+    bool Framework_Pool_IsFull(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return true;
+        return pool->availableIndices.empty() && (int)pool->objects.size() >= pool->maxCapacity;
+    }
+
+    bool Framework_Pool_IsObjectActive(int poolId, int objectIndex) {
+        auto* pool = GetPool(poolId);
+        if (!pool || objectIndex < 0 || objectIndex >= (int)pool->objects.size()) return false;
+        return pool->objects[objectIndex].active;
+    }
+
+    // Pool statistics
+    int Framework_Pool_GetTotalAcquires(int poolId) {
+        auto* pool = GetPool(poolId);
+        return pool ? pool->totalAcquires : 0;
+    }
+
+    int Framework_Pool_GetTotalReleases(int poolId) {
+        auto* pool = GetPool(poolId);
+        return pool ? pool->totalReleases : 0;
+    }
+
+    int Framework_Pool_GetPeakUsage(int poolId) {
+        auto* pool = GetPool(poolId);
+        return pool ? pool->peakUsage : 0;
+    }
+
+    void Framework_Pool_ResetStats(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (pool) {
+            pool->totalAcquires = 0;
+            pool->totalReleases = 0;
+            pool->peakUsage = Framework_Pool_GetActiveCount(poolId);
+        }
+    }
+
+    // Pre-warming
+    void Framework_Pool_Warmup(int poolId, int count) {
+        auto* pool = GetPool(poolId);
+        if (!pool || count <= 0) return;
+
+        int currentSize = (int)pool->objects.size();
+        int targetSize = currentSize + count;
+        if (targetSize > pool->maxCapacity) targetSize = pool->maxCapacity;
+
+        GrowPool(pool, targetSize - currentSize);
+    }
+
+    void Framework_Pool_Shrink(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return;
+
+        // Only shrink if we have inactive objects at the end
+        // This is a simple shrink - just removes trailing inactive objects
+        while (!pool->objects.empty() && !pool->objects.back().active) {
+            int lastIndex = (int)pool->objects.size() - 1;
+
+            // Remove from available indices
+            auto it = std::find(pool->availableIndices.begin(), pool->availableIndices.end(), lastIndex);
+            if (it != pool->availableIndices.end()) {
+                pool->availableIndices.erase(it);
+            }
+
+            // For entity pools, destroy the entity
+            if (pool->isEntityPool && pool->objects.back().entityId >= 0) {
+                Framework_Ecs_DestroyEntity(pool->objects.back().entityId);
+            }
+
+            pool->objects.pop_back();
+        }
+    }
+
+    // Entity pools
+    int Framework_Pool_CreateEntityPool(const char* poolName, int prefabId, int initialCapacity, int maxCapacity) {
+        int poolId = Framework_Pool_Create(poolName, 0, maxCapacity);  // Create empty first
+        auto* pool = GetPool(poolId);
+        if (!pool) return -1;
+
+        pool->prefabId = prefabId;
+        pool->isEntityPool = true;
+
+        // Now add initial capacity with entities
+        if (initialCapacity > 0) {
+            GrowPool(pool, initialCapacity);
+        }
+
+        return poolId;
+    }
+
+    int Framework_Pool_AcquireEntity(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (!pool || !pool->isEntityPool) return -1;
+
+        int index = Framework_Pool_Acquire(poolId);
+        if (index < 0) return -1;
+
+        int entity = pool->objects[index].entityId;
+        if (entity >= 0) {
+            Framework_Ecs_SetEnabled(entity, true);
+        }
+        return entity;
+    }
+
+    void Framework_Pool_ReleaseEntity(int poolId, int entity) {
+        auto* pool = GetPool(poolId);
+        if (!pool || !pool->isEntityPool) return;
+
+        // Find the object with this entity
+        for (int i = 0; i < (int)pool->objects.size(); i++) {
+            if (pool->objects[i].entityId == entity && pool->objects[i].active) {
+                Framework_Ecs_SetEnabled(entity, false);
+                Framework_Pool_Release(poolId, i);
+                return;
+            }
+        }
+    }
+
+    // Iterate active objects
+    int Framework_Pool_GetFirstActive(int poolId) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return -1;
+
+        for (int i = 0; i < (int)pool->objects.size(); i++) {
+            if (pool->objects[i].active) return i;
+        }
+        return -1;
+    }
+
+    int Framework_Pool_GetNextActive(int poolId, int currentIndex) {
+        auto* pool = GetPool(poolId);
+        if (!pool) return -1;
+
+        for (int i = currentIndex + 1; i < (int)pool->objects.size(); i++) {
+            if (pool->objects[i].active) return i;
+        }
+        return -1;
+    }
+
+    // Bulk operations
+    int Framework_Pool_AcquireMultiple(int poolId, int count, int* outIndices) {
+        if (!outIndices || count <= 0) return 0;
+
+        int acquired = 0;
+        for (int i = 0; i < count; i++) {
+            int index = Framework_Pool_Acquire(poolId);
+            if (index < 0) break;
+            outIndices[acquired++] = index;
+        }
+        return acquired;
+    }
+
+    void Framework_Pool_ReleaseMultiple(int poolId, int* indices, int count) {
+        if (!indices || count <= 0) return;
+
+        for (int i = 0; i < count; i++) {
+            Framework_Pool_Release(poolId, indices[i]);
+        }
+    }
+
+    // Global pool management
+    int Framework_Pool_GetPoolCount() {
+        return (int)g_pools.size();
+    }
+
+    void Framework_Pool_DestroyAll() {
+        std::vector<int> poolIds;
+        for (auto& pair : g_pools) {
+            poolIds.push_back(pair.first);
+        }
+        for (int id : poolIds) {
+            Framework_Pool_Destroy(id);
+        }
+    }
+
+    void Framework_Pool_ReleaseAllPools() {
+        for (auto& pair : g_pools) {
+            Framework_Pool_ReleaseAll(pair.first);
+        }
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {
