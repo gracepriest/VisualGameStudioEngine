@@ -696,6 +696,115 @@ namespace {
         if (g_sceneStack.empty()) return nullptr;
         return GetScene(g_sceneStack.back());
     }
+
+    // Scene Manager State
+    struct SceneManagerState {
+        // Transition settings
+        SceneTransitionType transitionType = TRANSITION_FADE;
+        TransitionEasing transitionEasing = EASE_IN_OUT_QUAD;
+        float transitionDuration = 0.5f;
+        Color transitionColor = { 0, 0, 0, 255 };  // Black by default
+
+        // Transition runtime state
+        TransitionState transitionState = TRANS_STATE_NONE;
+        float transitionTimer = 0.0f;
+        int pendingScene = -1;           // Scene to change to after transition out
+        bool pendingIsPush = false;      // Is this a push or change?
+        bool pendingIsPop = false;       // Is this a pop?
+
+        // Loading screen
+        bool loadingEnabled = false;
+        float loadingMinDuration = 0.5f;
+        float loadingTimer = 0.0f;
+        float loadingProgress = 0.0f;
+        LoadingCallback loadingCallback = nullptr;
+        LoadingDrawCallback loadingDrawCallback = nullptr;
+
+        // Preloading
+        bool isPreloading = false;
+        int preloadScene = -1;
+
+        // Render texture for transition effects
+        RenderTexture2D transitionRenderTexture = { 0 };
+        bool renderTextureValid = false;
+    };
+
+    SceneManagerState g_sceneManager;
+
+    // Easing functions
+    float ApplyEasing(float t, TransitionEasing easing) {
+        switch (easing) {
+            case EASE_LINEAR:
+                return t;
+            case EASE_IN_QUAD:
+                return t * t;
+            case EASE_OUT_QUAD:
+                return t * (2.0f - t);
+            case EASE_IN_OUT_QUAD:
+                return t < 0.5f ? 2.0f * t * t : -1.0f + (4.0f - 2.0f * t) * t;
+            case EASE_IN_CUBIC:
+                return t * t * t;
+            case EASE_OUT_CUBIC: {
+                float f = t - 1.0f;
+                return f * f * f + 1.0f;
+            }
+            case EASE_IN_OUT_CUBIC:
+                return t < 0.5f ? 4.0f * t * t * t : (t - 1.0f) * (2.0f * t - 2.0f) * (2.0f * t - 2.0f) + 1.0f;
+            case EASE_IN_EXPO:
+                return t == 0.0f ? 0.0f : powf(2.0f, 10.0f * (t - 1.0f));
+            case EASE_OUT_EXPO:
+                return t == 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
+            case EASE_IN_OUT_EXPO:
+                if (t == 0.0f) return 0.0f;
+                if (t == 1.0f) return 1.0f;
+                if (t < 0.5f) return powf(2.0f, 20.0f * t - 10.0f) / 2.0f;
+                return (2.0f - powf(2.0f, -20.0f * t + 10.0f)) / 2.0f;
+            default:
+                return t;
+        }
+    }
+
+    // Initialize render texture for transitions if needed
+    void EnsureTransitionRenderTexture() {
+        if (!g_sceneManager.renderTextureValid) {
+            int w = GetScreenWidth();
+            int h = GetScreenHeight();
+            if (w > 0 && h > 0) {
+                g_sceneManager.transitionRenderTexture = LoadRenderTexture(w, h);
+                g_sceneManager.renderTextureValid = true;
+            }
+        }
+    }
+
+    // Perform the actual scene switch
+    void PerformSceneSwitch() {
+        if (g_sceneManager.pendingIsPop) {
+            // Pop operation
+            if (!g_sceneStack.empty()) {
+                if (auto sc = TopScene(); sc && sc->cb.onExit) sc->cb.onExit();
+                g_sceneStack.pop_back();
+                if (auto sc = TopScene(); sc && sc->cb.onResume) sc->cb.onResume();
+            }
+        }
+        else if (g_sceneManager.pendingIsPush) {
+            // Push operation
+            g_sceneStack.push_back(g_sceneManager.pendingScene);
+            if (auto sc = TopScene(); sc && sc->cb.onEnter) sc->cb.onEnter();
+        }
+        else {
+            // Change operation
+            if (!g_sceneStack.empty()) {
+                if (auto sc = TopScene(); sc && sc->cb.onExit) sc->cb.onExit();
+                g_sceneStack.pop_back();
+            }
+            g_sceneStack.push_back(g_sceneManager.pendingScene);
+            if (auto sc = TopScene(); sc && sc->cb.onEnter) sc->cb.onEnter();
+        }
+
+        g_sceneManager.pendingScene = -1;
+        g_sceneManager.pendingIsPush = false;
+        g_sceneManager.pendingIsPop = false;
+    }
 }
 
 // ============================================================================
@@ -1815,6 +1924,374 @@ extern "C" {
         if (auto sc = TopScene(); sc && sc->cb.onDraw) {
             sc->cb.onDraw();
         }
+    }
+
+    // ========================================================================
+    // SCENE MANAGER - Transitions & Loading Screens
+    // ========================================================================
+    void Framework_Scene_SetTransition(int transitionType, float duration) {
+        g_sceneManager.transitionType = (SceneTransitionType)transitionType;
+        g_sceneManager.transitionDuration = duration;
+    }
+
+    void Framework_Scene_SetTransitionEx(int transitionType, float duration, int easing) {
+        g_sceneManager.transitionType = (SceneTransitionType)transitionType;
+        g_sceneManager.transitionDuration = duration;
+        g_sceneManager.transitionEasing = (TransitionEasing)easing;
+    }
+
+    void Framework_Scene_SetTransitionColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        g_sceneManager.transitionColor = { r, g, b, a };
+    }
+
+    int Framework_Scene_GetTransitionType() {
+        return (int)g_sceneManager.transitionType;
+    }
+
+    float Framework_Scene_GetTransitionDuration() {
+        return g_sceneManager.transitionDuration;
+    }
+
+    int Framework_Scene_GetTransitionEasing() {
+        return (int)g_sceneManager.transitionEasing;
+    }
+
+    void Framework_Scene_ChangeWithTransition(int sceneHandle) {
+        if (g_sceneManager.transitionState != TRANS_STATE_NONE) return;  // Already transitioning
+
+        g_sceneManager.pendingScene = sceneHandle;
+        g_sceneManager.pendingIsPush = false;
+        g_sceneManager.pendingIsPop = false;
+
+        if (g_sceneManager.transitionType == TRANSITION_NONE || g_sceneManager.transitionDuration <= 0.0f) {
+            // No transition, switch immediately
+            PerformSceneSwitch();
+        }
+        else {
+            // Start transition out
+            g_sceneManager.transitionState = TRANS_STATE_OUT;
+            g_sceneManager.transitionTimer = 0.0f;
+            EnsureTransitionRenderTexture();
+        }
+    }
+
+    void Framework_Scene_ChangeWithTransitionEx(int sceneHandle, int transitionType, float duration) {
+        g_sceneManager.transitionType = (SceneTransitionType)transitionType;
+        g_sceneManager.transitionDuration = duration;
+        Framework_Scene_ChangeWithTransition(sceneHandle);
+    }
+
+    void Framework_Scene_PushWithTransition(int sceneHandle) {
+        if (g_sceneManager.transitionState != TRANS_STATE_NONE) return;
+
+        g_sceneManager.pendingScene = sceneHandle;
+        g_sceneManager.pendingIsPush = true;
+        g_sceneManager.pendingIsPop = false;
+
+        if (g_sceneManager.transitionType == TRANSITION_NONE || g_sceneManager.transitionDuration <= 0.0f) {
+            PerformSceneSwitch();
+        }
+        else {
+            g_sceneManager.transitionState = TRANS_STATE_OUT;
+            g_sceneManager.transitionTimer = 0.0f;
+            EnsureTransitionRenderTexture();
+        }
+    }
+
+    void Framework_Scene_PopWithTransition() {
+        if (g_sceneManager.transitionState != TRANS_STATE_NONE) return;
+        if (g_sceneStack.empty()) return;
+
+        g_sceneManager.pendingScene = -1;
+        g_sceneManager.pendingIsPush = false;
+        g_sceneManager.pendingIsPop = true;
+
+        if (g_sceneManager.transitionType == TRANSITION_NONE || g_sceneManager.transitionDuration <= 0.0f) {
+            PerformSceneSwitch();
+        }
+        else {
+            g_sceneManager.transitionState = TRANS_STATE_OUT;
+            g_sceneManager.transitionTimer = 0.0f;
+            EnsureTransitionRenderTexture();
+        }
+    }
+
+    bool Framework_Scene_IsTransitioning() {
+        return g_sceneManager.transitionState != TRANS_STATE_NONE;
+    }
+
+    int Framework_Scene_GetTransitionState() {
+        return (int)g_sceneManager.transitionState;
+    }
+
+    float Framework_Scene_GetTransitionProgress() {
+        if (g_sceneManager.transitionDuration <= 0.0f) return 1.0f;
+        float rawProgress = g_sceneManager.transitionTimer / g_sceneManager.transitionDuration;
+        return ApplyEasing(rawProgress < 0.0f ? 0.0f : (rawProgress > 1.0f ? 1.0f : rawProgress), g_sceneManager.transitionEasing);
+    }
+
+    void Framework_Scene_SkipTransition() {
+        if (g_sceneManager.transitionState == TRANS_STATE_NONE) return;
+
+        // Skip to the end
+        if (g_sceneManager.transitionState == TRANS_STATE_OUT || g_sceneManager.transitionState == TRANS_STATE_LOADING) {
+            PerformSceneSwitch();
+        }
+        g_sceneManager.transitionState = TRANS_STATE_NONE;
+        g_sceneManager.transitionTimer = 0.0f;
+        g_sceneManager.loadingTimer = 0.0f;
+        g_sceneManager.loadingProgress = 0.0f;
+    }
+
+    void Framework_Scene_SetLoadingEnabled(bool enabled) {
+        g_sceneManager.loadingEnabled = enabled;
+    }
+
+    bool Framework_Scene_IsLoadingEnabled() {
+        return g_sceneManager.loadingEnabled;
+    }
+
+    void Framework_Scene_SetLoadingMinDuration(float seconds) {
+        g_sceneManager.loadingMinDuration = seconds;
+    }
+
+    float Framework_Scene_GetLoadingMinDuration() {
+        return g_sceneManager.loadingMinDuration;
+    }
+
+    void Framework_Scene_SetLoadingCallback(LoadingCallback callback) {
+        g_sceneManager.loadingCallback = callback;
+    }
+
+    void Framework_Scene_SetLoadingDrawCallback(LoadingDrawCallback callback) {
+        g_sceneManager.loadingDrawCallback = callback;
+    }
+
+    void Framework_Scene_SetLoadingProgress(float progress) {
+        g_sceneManager.loadingProgress = progress < 0.0f ? 0.0f : (progress > 1.0f ? 1.0f : progress);
+    }
+
+    float Framework_Scene_GetLoadingProgress() {
+        return g_sceneManager.loadingProgress;
+    }
+
+    bool Framework_Scene_IsLoading() {
+        return g_sceneManager.transitionState == TRANS_STATE_LOADING;
+    }
+
+    int Framework_Scene_GetStackSize() {
+        return (int)g_sceneStack.size();
+    }
+
+    int Framework_Scene_GetSceneAt(int index) {
+        if (index < 0 || index >= (int)g_sceneStack.size()) return -1;
+        return g_sceneStack[index];
+    }
+
+    int Framework_Scene_GetPreviousScene() {
+        if (g_sceneStack.size() < 2) return -1;
+        return g_sceneStack[g_sceneStack.size() - 2];
+    }
+
+    void Framework_Scene_Update(float dt) {
+        switch (g_sceneManager.transitionState) {
+            case TRANS_STATE_NONE:
+                // Normal scene tick
+                Framework_SceneTick();
+                break;
+
+            case TRANS_STATE_OUT:
+                // Transitioning out of current scene
+                g_sceneManager.transitionTimer += dt;
+                if (g_sceneManager.transitionTimer >= g_sceneManager.transitionDuration) {
+                    // Transition out complete
+                    if (g_sceneManager.loadingEnabled) {
+                        // Go to loading state
+                        g_sceneManager.transitionState = TRANS_STATE_LOADING;
+                        g_sceneManager.loadingTimer = 0.0f;
+                        g_sceneManager.loadingProgress = 0.0f;
+                    }
+                    else {
+                        // Skip loading, do scene switch
+                        PerformSceneSwitch();
+                        g_sceneManager.transitionState = TRANS_STATE_IN;
+                        g_sceneManager.transitionTimer = 0.0f;
+                    }
+                }
+                break;
+
+            case TRANS_STATE_LOADING:
+                // Loading screen active
+                g_sceneManager.loadingTimer += dt;
+                if (g_sceneManager.loadingCallback) {
+                    g_sceneManager.loadingCallback(g_sceneManager.loadingProgress);
+                }
+                // Check if loading is complete
+                if (g_sceneManager.loadingProgress >= 1.0f &&
+                    g_sceneManager.loadingTimer >= g_sceneManager.loadingMinDuration) {
+                    // Perform scene switch and start transition in
+                    PerformSceneSwitch();
+                    g_sceneManager.transitionState = TRANS_STATE_IN;
+                    g_sceneManager.transitionTimer = 0.0f;
+                }
+                break;
+
+            case TRANS_STATE_IN:
+                // Transitioning into new scene
+                g_sceneManager.transitionTimer += dt;
+                if (g_sceneManager.transitionTimer >= g_sceneManager.transitionDuration) {
+                    // Transition complete
+                    g_sceneManager.transitionState = TRANS_STATE_NONE;
+                    g_sceneManager.transitionTimer = 0.0f;
+                }
+                // Update the new scene even during transition in
+                Framework_SceneTick();
+                break;
+        }
+    }
+
+    void Framework_Scene_Draw() {
+        if (g_sceneManager.transitionState == TRANS_STATE_NONE) return;
+
+        int screenWidth = GetScreenWidth();
+        int screenHeight = GetScreenHeight();
+        float progress = Framework_Scene_GetTransitionProgress();
+
+        // For transition OUT, progress goes 0->1 (fade in the effect)
+        // For transition IN, progress goes 0->1 (fade out the effect)
+        float effectAlpha = 0.0f;
+        if (g_sceneManager.transitionState == TRANS_STATE_OUT) {
+            effectAlpha = progress;  // 0 -> 1
+        }
+        else if (g_sceneManager.transitionState == TRANS_STATE_IN) {
+            effectAlpha = 1.0f - progress;  // 1 -> 0
+        }
+        else if (g_sceneManager.transitionState == TRANS_STATE_LOADING) {
+            effectAlpha = 1.0f;  // Fully covered during loading
+        }
+
+        Color col = g_sceneManager.transitionColor;
+
+        switch (g_sceneManager.transitionType) {
+            case TRANSITION_NONE:
+                break;
+
+            case TRANSITION_FADE:
+            case TRANSITION_FADE_WHITE:
+                if (g_sceneManager.transitionType == TRANSITION_FADE_WHITE) {
+                    col = { 255, 255, 255, 255 };
+                }
+                col.a = (unsigned char)(effectAlpha * 255.0f);
+                DrawRectangle(0, 0, screenWidth, screenHeight, col);
+                break;
+
+            case TRANSITION_SLIDE_LEFT:
+                DrawRectangle((int)((1.0f - effectAlpha) * screenWidth), 0, screenWidth, screenHeight, col);
+                break;
+
+            case TRANSITION_SLIDE_RIGHT:
+                DrawRectangle((int)(-screenWidth + effectAlpha * screenWidth), 0, screenWidth, screenHeight, col);
+                break;
+
+            case TRANSITION_SLIDE_UP:
+                DrawRectangle(0, (int)((1.0f - effectAlpha) * screenHeight), screenWidth, screenHeight, col);
+                break;
+
+            case TRANSITION_SLIDE_DOWN:
+                DrawRectangle(0, (int)(-screenHeight + effectAlpha * screenHeight), screenWidth, screenHeight, col);
+                break;
+
+            case TRANSITION_WIPE_LEFT:
+                DrawRectangle(0, 0, (int)(effectAlpha * screenWidth), screenHeight, col);
+                break;
+
+            case TRANSITION_WIPE_RIGHT:
+                DrawRectangle((int)((1.0f - effectAlpha) * screenWidth), 0, (int)(effectAlpha * screenWidth), screenHeight, col);
+                break;
+
+            case TRANSITION_WIPE_UP:
+                DrawRectangle(0, 0, screenWidth, (int)(effectAlpha * screenHeight), col);
+                break;
+
+            case TRANSITION_WIPE_DOWN:
+                DrawRectangle(0, (int)((1.0f - effectAlpha) * screenHeight), screenWidth, (int)(effectAlpha * screenHeight), col);
+                break;
+
+            case TRANSITION_CIRCLE_IN: {
+                // Circular iris closing
+                float maxRadius = sqrtf((float)(screenWidth * screenWidth + screenHeight * screenHeight)) / 2.0f;
+                float radius = maxRadius * (1.0f - effectAlpha);
+                // Draw four rects around a circle (simple approximation)
+                // For proper circle mask, would need shaders
+                DrawRectangle(0, 0, screenWidth, screenHeight, col);
+                if (radius > 0) {
+                    DrawCircle(screenWidth / 2, screenHeight / 2, radius, { 0, 0, 0, 0 });  // Won't work as expected without shaders
+                    // Simple workaround: just fade
+                    col.a = (unsigned char)(effectAlpha * 255.0f);
+                    DrawRectangle(0, 0, screenWidth, screenHeight, col);
+                }
+                break;
+            }
+
+            case TRANSITION_CIRCLE_OUT: {
+                // Circular iris opening - inverse of circle in
+                float maxRadius = sqrtf((float)(screenWidth * screenWidth + screenHeight * screenHeight)) / 2.0f;
+                float radius = maxRadius * effectAlpha;
+                col.a = (unsigned char)(effectAlpha * 255.0f);
+                DrawRectangle(0, 0, screenWidth, screenHeight, col);
+                break;
+            }
+
+            case TRANSITION_PIXELATE:
+            case TRANSITION_DISSOLVE:
+                // These would require shaders for proper implementation
+                // Fall back to fade
+                col.a = (unsigned char)(effectAlpha * 255.0f);
+                DrawRectangle(0, 0, screenWidth, screenHeight, col);
+                break;
+        }
+
+        // Draw loading screen if in loading state
+        if (g_sceneManager.transitionState == TRANS_STATE_LOADING) {
+            if (g_sceneManager.loadingDrawCallback) {
+                g_sceneManager.loadingDrawCallback();
+            }
+            else {
+                // Default loading screen
+                int barWidth = 400;
+                int barHeight = 20;
+                int barX = (screenWidth - barWidth) / 2;
+                int barY = (screenHeight - barHeight) / 2 + 50;
+
+                // Background bar
+                DrawRectangle(barX, barY, barWidth, barHeight, DARKGRAY);
+                // Progress bar
+                DrawRectangle(barX, barY, (int)(barWidth * g_sceneManager.loadingProgress), barHeight, WHITE);
+                // Border
+                DrawRectangleLines(barX, barY, barWidth, barHeight, WHITE);
+
+                // Loading text
+                const char* loadingText = "Loading...";
+                int textWidth = MeasureText(loadingText, 30);
+                DrawText(loadingText, (screenWidth - textWidth) / 2, barY - 50, 30, WHITE);
+            }
+        }
+    }
+
+    void Framework_Scene_PreloadStart(int sceneHandle) {
+        g_sceneManager.isPreloading = true;
+        g_sceneManager.preloadScene = sceneHandle;
+        g_sceneManager.loadingProgress = 0.0f;
+    }
+
+    bool Framework_Scene_IsPreloading() {
+        return g_sceneManager.isPreloading;
+    }
+
+    void Framework_Scene_PreloadCancel() {
+        g_sceneManager.isPreloading = false;
+        g_sceneManager.preloadScene = -1;
+        g_sceneManager.loadingProgress = 0.0f;
     }
 
     // ========================================================================

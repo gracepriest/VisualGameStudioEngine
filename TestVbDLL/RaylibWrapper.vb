@@ -906,6 +906,186 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Scene Manager - Transitions & Loading Screens"
+    ' Scene Transition Types
+    Public Enum SceneTransitionType As Integer
+        TRANSITION_NONE = 0
+        TRANSITION_FADE = 1
+        TRANSITION_FADE_WHITE = 2
+        TRANSITION_SLIDE_LEFT = 3
+        TRANSITION_SLIDE_RIGHT = 4
+        TRANSITION_SLIDE_UP = 5
+        TRANSITION_SLIDE_DOWN = 6
+        TRANSITION_WIPE_LEFT = 7
+        TRANSITION_WIPE_RIGHT = 8
+        TRANSITION_WIPE_UP = 9
+        TRANSITION_WIPE_DOWN = 10
+        TRANSITION_CIRCLE_IN = 11
+        TRANSITION_CIRCLE_OUT = 12
+        TRANSITION_PIXELATE = 13
+        TRANSITION_DISSOLVE = 14
+    End Enum
+
+    ' Transition Easing Types
+    Public Enum TransitionEasing As Integer
+        EASE_LINEAR = 0
+        EASE_IN_QUAD = 1
+        EASE_OUT_QUAD = 2
+        EASE_IN_OUT_QUAD = 3
+        EASE_IN_CUBIC = 4
+        EASE_OUT_CUBIC = 5
+        EASE_IN_OUT_CUBIC = 6
+        EASE_IN_EXPO = 7
+        EASE_OUT_EXPO = 8
+        EASE_IN_OUT_EXPO = 9
+    End Enum
+
+    ' Transition State
+    Public Enum TransitionState As Integer
+        TRANS_STATE_NONE = 0
+        TRANS_STATE_OUT = 1
+        TRANS_STATE_LOADING = 2
+        TRANS_STATE_IN = 3
+    End Enum
+
+    ' Scene Manager Callbacks
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub LoadingCallback(progress As Single)
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub LoadingDrawCallback()
+
+    ' Transition Configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SetTransition(transitionType As Integer, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SetTransitionEx(transitionType As Integer, duration As Single, easing As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SetTransitionColor(r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetTransitionType() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetTransitionDuration() As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetTransitionEasing() As Integer
+    End Function
+
+    ' Scene Change with Transition
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_ChangeWithTransition(sceneHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_ChangeWithTransitionEx(sceneHandle As Integer, transitionType As Integer, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_PushWithTransition(sceneHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_PopWithTransition()
+    End Sub
+
+    ' Transition State Queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_IsTransitioning() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetTransitionState() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetTransitionProgress() As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SkipTransition()
+    End Sub
+
+    ' Loading Screen
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SetLoadingEnabled(enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_IsLoadingEnabled() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SetLoadingMinDuration(seconds As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetLoadingMinDuration() As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SetLoadingCallback(callback As LoadingCallback)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SetLoadingDrawCallback(callback As LoadingDrawCallback)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_SetLoadingProgress(progress As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetLoadingProgress() As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_IsLoading() As Boolean
+    End Function
+
+    ' Scene Stack Queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetStackSize() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetSceneAt(index As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_GetPreviousScene() As Integer
+    End Function
+
+    ' Scene Update (handles transitions, loading, and scene ticks)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_Update(dt As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_Draw()
+    End Sub
+
+    ' Preloading
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_PreloadStart(sceneHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Scene_IsPreloading() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Scene_PreloadCancel()
+    End Sub
+#End Region
+
 #Region "ECS - Entities"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_Ecs_CreateEntity() As Integer

@@ -123,6 +123,53 @@ enum UIState {
 };
 
 // ============================================================================
+// SCENE TRANSITION TYPES
+// ============================================================================
+enum SceneTransitionType {
+    TRANSITION_NONE = 0,
+    TRANSITION_FADE = 1,           // Fade to black then fade in
+    TRANSITION_FADE_WHITE = 2,     // Fade to white then fade in
+    TRANSITION_SLIDE_LEFT = 3,     // New scene slides in from right
+    TRANSITION_SLIDE_RIGHT = 4,    // New scene slides in from left
+    TRANSITION_SLIDE_UP = 5,       // New scene slides in from bottom
+    TRANSITION_SLIDE_DOWN = 6,     // New scene slides in from top
+    TRANSITION_WIPE_LEFT = 7,      // Wipe effect from right to left
+    TRANSITION_WIPE_RIGHT = 8,     // Wipe effect from left to right
+    TRANSITION_WIPE_UP = 9,        // Wipe effect from bottom to top
+    TRANSITION_WIPE_DOWN = 10,     // Wipe effect from top to bottom
+    TRANSITION_CIRCLE_IN = 11,     // Circular iris close
+    TRANSITION_CIRCLE_OUT = 12,    // Circular iris open
+    TRANSITION_PIXELATE = 13,      // Pixelation effect
+    TRANSITION_DISSOLVE = 14       // Random dissolve
+};
+
+// ============================================================================
+// SCENE TRANSITION EASING
+// ============================================================================
+enum TransitionEasing {
+    EASE_LINEAR = 0,
+    EASE_IN_QUAD = 1,
+    EASE_OUT_QUAD = 2,
+    EASE_IN_OUT_QUAD = 3,
+    EASE_IN_CUBIC = 4,
+    EASE_OUT_CUBIC = 5,
+    EASE_IN_OUT_CUBIC = 6,
+    EASE_IN_EXPO = 7,
+    EASE_OUT_EXPO = 8,
+    EASE_IN_OUT_EXPO = 9
+};
+
+// ============================================================================
+// SCENE TRANSITION STATE
+// ============================================================================
+enum TransitionState {
+    TRANS_STATE_NONE = 0,
+    TRANS_STATE_OUT = 1,      // Transitioning out of current scene
+    TRANS_STATE_LOADING = 2,  // Loading screen active
+    TRANS_STATE_IN = 3        // Transitioning into new scene
+};
+
+// ============================================================================
 // CALLBACK TYPES
 // ============================================================================
 typedef void (*DrawCallback)();
@@ -137,6 +184,10 @@ typedef void (*UITextCallback)(int elementId, const char* text);
 
 // Physics Callbacks
 typedef void (*PhysicsCollisionCallback)(int bodyA, int bodyB, float normalX, float normalY, float depth);
+
+// Scene Manager Callbacks
+typedef void (*LoadingCallback)(float progress);  // Called during loading with 0-1 progress
+typedef void (*LoadingDrawCallback)();            // Custom loading screen draw function
 
 struct SceneCallbacks {
     SceneVoidFn         onEnter;
@@ -560,6 +611,54 @@ extern "C" {
     __declspec(dllexport) bool  Framework_SceneHas();
     __declspec(dllexport) void  Framework_SceneTick();
     __declspec(dllexport) int   Framework_SceneGetCurrent();
+
+    // ========================================================================
+    // SCENE MANAGER - Transitions & Loading Screens
+    // ========================================================================
+    // Transition configuration
+    __declspec(dllexport) void  Framework_Scene_SetTransition(int transitionType, float duration);  // SceneTransitionType enum
+    __declspec(dllexport) void  Framework_Scene_SetTransitionEx(int transitionType, float duration, int easing);  // With easing
+    __declspec(dllexport) void  Framework_Scene_SetTransitionColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) int   Framework_Scene_GetTransitionType();
+    __declspec(dllexport) float Framework_Scene_GetTransitionDuration();
+    __declspec(dllexport) int   Framework_Scene_GetTransitionEasing();
+
+    // Scene change with transition
+    __declspec(dllexport) void  Framework_Scene_ChangeWithTransition(int sceneHandle);
+    __declspec(dllexport) void  Framework_Scene_ChangeWithTransitionEx(int sceneHandle, int transitionType, float duration);
+    __declspec(dllexport) void  Framework_Scene_PushWithTransition(int sceneHandle);
+    __declspec(dllexport) void  Framework_Scene_PopWithTransition();
+
+    // Transition state
+    __declspec(dllexport) bool  Framework_Scene_IsTransitioning();
+    __declspec(dllexport) int   Framework_Scene_GetTransitionState();  // TransitionState enum
+    __declspec(dllexport) float Framework_Scene_GetTransitionProgress();  // 0-1 progress
+    __declspec(dllexport) void  Framework_Scene_SkipTransition();  // Skip current transition
+
+    // Loading screen
+    __declspec(dllexport) void  Framework_Scene_SetLoadingEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Scene_IsLoadingEnabled();
+    __declspec(dllexport) void  Framework_Scene_SetLoadingMinDuration(float seconds);  // Minimum loading screen time
+    __declspec(dllexport) float Framework_Scene_GetLoadingMinDuration();
+    __declspec(dllexport) void  Framework_Scene_SetLoadingCallback(LoadingCallback callback);
+    __declspec(dllexport) void  Framework_Scene_SetLoadingDrawCallback(LoadingDrawCallback callback);
+    __declspec(dllexport) void  Framework_Scene_SetLoadingProgress(float progress);  // Set by game code during load
+    __declspec(dllexport) float Framework_Scene_GetLoadingProgress();
+    __declspec(dllexport) bool  Framework_Scene_IsLoading();
+
+    // Scene stack queries
+    __declspec(dllexport) int   Framework_Scene_GetStackSize();
+    __declspec(dllexport) int   Framework_Scene_GetSceneAt(int index);  // 0 = bottom of stack
+    __declspec(dllexport) int   Framework_Scene_GetPreviousScene();  // Scene below current, or -1
+
+    // Scene update (handles transitions, loading, and scene ticks)
+    __declspec(dllexport) void  Framework_Scene_Update(float dt);
+    __declspec(dllexport) void  Framework_Scene_Draw();  // Draw transition effects
+
+    // Preloading scenes (for async loading)
+    __declspec(dllexport) void  Framework_Scene_PreloadStart(int sceneHandle);
+    __declspec(dllexport) bool  Framework_Scene_IsPreloading();
+    __declspec(dllexport) void  Framework_Scene_PreloadCancel();
 
     // ========================================================================
     // ECS - ENTITIES
