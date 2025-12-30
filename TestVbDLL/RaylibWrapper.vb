@@ -6179,7 +6179,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6192,7 +6192,7 @@ Public Module FrameworkWrapper
 
     ' ---- Vignette Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetVignetteEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetVignetteEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6213,7 +6213,7 @@ Public Module FrameworkWrapper
 
     ' ---- Blur Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetBlurEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetBlurEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6226,7 +6226,7 @@ Public Module FrameworkWrapper
 
     ' ---- Chromatic Aberration ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetChromaticEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetChromaticEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6239,7 +6239,7 @@ Public Module FrameworkWrapper
 
     ' ---- Pixelate Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetPixelateEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetPixelateEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6248,7 +6248,7 @@ Public Module FrameworkWrapper
 
     ' ---- Scanlines Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetScanlinesEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetScanlinesEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6265,7 +6265,7 @@ Public Module FrameworkWrapper
 
     ' ---- CRT Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetCRTEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetCRTEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6278,7 +6278,7 @@ Public Module FrameworkWrapper
 
     ' ---- Color Effects ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetGrayscaleEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetGrayscaleEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6286,7 +6286,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetSepiaEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetSepiaEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6294,7 +6294,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetInvertEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetInvertEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6303,7 +6303,7 @@ Public Module FrameworkWrapper
 
     ' ---- Color Grading ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetTintEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetTintEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6332,7 +6332,7 @@ Public Module FrameworkWrapper
 
     ' ---- Film Grain / Noise ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetFilmGrainEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetFilmGrainEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>

@@ -16593,24 +16593,30 @@ extern "C" {
             float w = (float)g_effects.width;
             float h = (float)g_effects.height;
 
-            // Draw scene to screen with shake offset
-            DrawTextureRec(g_effects.sceneBuffer.texture,
-                { 0, 0, w, -h },
-                { g_effects.shakeOffsetX, g_effects.shakeOffsetY }, WHITE);
+            // Draw the captured scene buffer
+            Rectangle srcRect = { 0, 0, w, -h };  // Flip Y
+            Vector2 pos = { g_effects.shakeOffsetX, g_effects.shakeOffsetY };
 
-            // Apply pixelate effect (draws over)
-            if (g_effects.enabled && g_effects.pixelateEnabled && g_effects.pixelateSize > 1) {
-                Image img = LoadImageFromTexture(g_effects.sceneBuffer.texture);
-                ImageFlipVertical(&img);
-                int pw = g_effects.width / g_effects.pixelateSize;
-                int ph = g_effects.height / g_effects.pixelateSize;
-                ImageResize(&img, pw, ph);
-                ImageResizeNN(&img, g_effects.width, g_effects.height);
-                Texture2D pixTex = LoadTextureFromImage(img);
-                DrawTexture(pixTex, (int)g_effects.shakeOffsetX, (int)g_effects.shakeOffsetY, WHITE);
-                UnloadTexture(pixTex);
-                UnloadImage(img);
+            // Apply color effects via tint
+            Color tint = WHITE;
+            if (g_effects.enabled && g_effects.grayscaleEnabled) {
+                // For grayscale, desaturate by drawing with gray tint
+                tint.r = 180;
+                tint.g = 180;
+                tint.b = 180;
             }
+            if (g_effects.enabled && g_effects.sepiaEnabled) {
+                // Sepia warm tint
+                tint.r = 255;
+                tint.g = 230;
+                tint.b = 200;
+            }
+
+            DrawTextureRec(g_effects.sceneBuffer.texture, srcRect, pos, tint);
+        } else {
+            // Debug: show red if capture system failed
+            DrawRectangle(0, 0, 100, 30, RED);
+            DrawText("CAPTURE FAILED", 5, 5, 10, WHITE);
         }
 
         // Get screen dimensions for overlays
@@ -16690,6 +16696,17 @@ extern "C" {
     // Draw overlay effects without requiring render texture initialization
     // Call this at the end of your OnDraw to add flash, fade, shake overlays
     void Framework_Effects_DrawOverlays(int screenWidth, int screenHeight) {
+        // Apply scanlines
+        if (g_effects.scanlinesEnabled) {
+            float lineHeight = (float)screenHeight / g_effects.scanlinesCount;
+            for (int i = 0; i < g_effects.scanlinesCount; i++) {
+                float y = i * lineHeight + g_effects.scanlinesOffset;
+                while (y >= screenHeight) y -= screenHeight;
+                DrawRectangle(0, (int)y, screenWidth, (int)(lineHeight * 0.5f),
+                    { 0, 0, 0, (unsigned char)(255 * g_effects.scanlinesIntensity) });
+            }
+        }
+
         // Apply vignette
         if (g_effects.vignetteEnabled) {
             float cx = screenWidth * 0.5f;

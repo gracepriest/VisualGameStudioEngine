@@ -10,26 +10,36 @@ Class TitleScene
     Dim player1 As New Player(1, "PLAYER 1", 0, paddle1)
     Dim player2 As New Player(2, "PLAYER 2", 0, paddle2)
     Dim menuIndex As Integer = 0
-    Dim temp As String = "Title Scene - Press SPACE to Start"
-    'pong text centering
-    Dim txtPong As String = "PONG"
-    Dim txtPlayer1 As String = "1 PLAYER"
-    Dim txtPlayer2 As String = "2 PLAYER"
-    Dim txtOptions As String = "  OPTIONS"
-    Dim txt2DDemo As String = "  2D DEMO"
-    Dim txtUIDemo As String = "  UI DEMO"
-    Dim txtPhysicsDemo As String = "PHYSICS DEMO"
-    Dim txtShowcase As String = "SHOWCASE PONG"
-    Dim txtTweenDemo As String = " TWEEN DEMO"
-    Dim txtCameraDemo As String = "CAMERA DEMO"
-    Dim txtAIDemo As String = "  AI DEMO"
-    Dim txtAudioDemo As String = " AUDIO DEMO"
-    Dim txtEffectsDemo As String = "EFFECTS DEMO"
-    'locations
-    Dim textWidth As Integer = 10 * (temp.Length())
-    Dim x As Integer = (800 - textWidth) / 2
-    Dim y As Integer = WINDOW_HEIGHT / 2 - 10
-    Dim menuPos As New Rectangle(WINDOW_WIDTH / 2.5, y, 365, 40)
+    Dim temp As String = "Arrow Keys to Navigate, SPACE to Select"
+
+    ' Menu items in grid order (left column, right column per row)
+    Dim menuItems() As String = {
+        "1 PLAYER", "2 PLAYER",
+        "OPTIONS", "2D DEMO",
+        "UI DEMO", "PHYSICS",
+        "SHOWCASE", "TWEEN",
+        "CAMERA", "AI PATH",
+        "AUDIO", "EFFECTS"
+    }
+
+    ' Menu item colors (R, G, B)
+    Dim menuColors(,) As Byte = {
+        {255, 255, 255}, {255, 255, 255},
+        {255, 255, 255}, {100, 255, 100},
+        {100, 200, 255}, {255, 150, 100},
+        {255, 215, 0}, {255, 100, 255},
+        {100, 255, 200}, {255, 200, 100},
+        {100, 200, 255}, {255, 100, 200}
+    }
+
+    ' Grid layout constants
+    Const MENU_COLS As Integer = 2
+    Const MENU_ROWS As Integer = 6
+    Const MENU_START_Y As Integer = 150
+    Const MENU_ITEM_WIDTH As Integer = 250
+    Const MENU_ITEM_HEIGHT As Integer = 50
+    Const MENU_GAP_X As Integer = 40
+    Const MENU_GAP_Y As Integer = 15
     'Dim atlas As New TextureHandle("images/blocks.png")
 
     ' Tell it the tile geometry of your sheet:
@@ -78,18 +88,19 @@ Class TitleScene
         'Else
         '    paddle1.dy = 0.0F
         'End If
-        If Framework_IsKeyPressed(Keys.UP) AndAlso menuIndex > 0 Then
-            'play sound
+        ' Grid navigation (2 columns)
+        If Framework_IsKeyPressed(Keys.UP) AndAlso menuIndex >= MENU_COLS Then
+            Framework_PlaySoundH(sfxWall)
+            menuIndex -= MENU_COLS
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < menuItems.Length - MENU_COLS Then
+            Framework_PlaySoundH(sfxWall)
+            menuIndex += MENU_COLS
+        ElseIf Framework_IsKeyPressed(Keys.LEFT) AndAlso (menuIndex Mod MENU_COLS) > 0 Then
             Framework_PlaySoundH(sfxWall)
             menuIndex -= 1
-            menuPos.Y -= 50
-
-        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 11 Then
-            'play sound
+        ElseIf Framework_IsKeyPressed(Keys.RIGHT) AndAlso (menuIndex Mod MENU_COLS) < MENU_COLS - 1 Then
             Framework_PlaySoundH(sfxWall)
             menuIndex += 1
-            menuPos.Y += 50
-
         End If
         If Framework_IsKeyPressed(Keys.SPACE) Then
 
@@ -148,26 +159,44 @@ Class TitleScene
     Protected Overrides Sub OnDraw()
         Framework_ClearBackground(46, 67, 111, 255)
 
+        ' Draw title
+        Framework_DrawTextExH(RETRO_FONT.Handle, "PONG", New Vector2(WINDOW_WIDTH / 2 - 120, 30), 80, 1.0F, 255, 255, 255, 255)
 
-        'paddle
+        ' Calculate grid start position (centered)
+        Dim gridWidth As Integer = MENU_COLS * MENU_ITEM_WIDTH + (MENU_COLS - 1) * MENU_GAP_X
+        Dim startX As Integer = (WINDOW_WIDTH - gridWidth) / 2
+
+        ' Draw menu items in grid
+        For i As Integer = 0 To menuItems.Length - 1
+            Dim col As Integer = i Mod MENU_COLS
+            Dim row As Integer = i \ MENU_COLS
+
+            Dim itemX As Integer = startX + col * (MENU_ITEM_WIDTH + MENU_GAP_X)
+            Dim itemY As Integer = MENU_START_Y + row * (MENU_ITEM_HEIGHT + MENU_GAP_Y)
+
+            ' Draw selection highlight
+            If i = menuIndex Then
+                Framework_DrawRectangle(itemX - 5, itemY - 5, MENU_ITEM_WIDTH + 10, MENU_ITEM_HEIGHT + 10, 255, 50, 50, 150)
+                Framework_DrawRectangle(itemX - 3, itemY - 3, MENU_ITEM_WIDTH + 6, MENU_ITEM_HEIGHT + 6, 255, 100, 100, 200)
+            End If
+
+            ' Draw item background
+            Framework_DrawRectangle(itemX, itemY, MENU_ITEM_WIDTH, MENU_ITEM_HEIGHT, 30, 40, 60, 200)
+
+            ' Draw item text (centered in box)
+            Dim textX As Integer = itemX + 20
+            Dim textY As Integer = itemY + 10
+            Framework_DrawTextExH(RETRO_FONT.Handle, menuItems(i), New Vector2(textX, textY), 28, 1.0F,
+                menuColors(i, 0), menuColors(i, 1), menuColors(i, 2), 255)
+        Next
+
+        ' Draw instructions at bottom
+        Dim instructY As Integer = MENU_START_Y + MENU_ROWS * (MENU_ITEM_HEIGHT + MENU_GAP_Y) + 30
+        Framework_DrawText(temp, (WINDOW_WIDTH - temp.Length * 10) / 2, instructY, 18, 200, 200, 200, 255)
+
+        ' Draw paddles as decoration
         player1.gPaddle.Draw()
         player2.gPaddle.Draw()
-        'Framework_DrawText(temp, x, y, 20, 255, 255, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtPong, New Vector2(WINDOW_WIDTH / 2.8, 50), 100, 1.0F, 255, 255, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtPlayer1, New Vector2(WINDOW_WIDTH / 2.5, y), 40, 1.0F, 255, 255, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtPlayer2, New Vector2(WINDOW_WIDTH / 2.5, y + 50), 40, 1.0F, 255, 255, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtOptions, New Vector2(WINDOW_WIDTH / 2.6, y + 100), 40, 1.0F, 255, 255, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txt2DDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 150), 40, 1.0F, 100, 255, 100, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtUIDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 200), 40, 1.0F, 100, 200, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtPhysicsDemo, New Vector2(WINDOW_WIDTH / 2.85, y + 250), 40, 1.0F, 255, 150, 100, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtShowcase, New Vector2(WINDOW_WIDTH / 2.8, y + 300), 40, 1.0F, 255, 215, 0, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtTweenDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 350), 40, 1.0F, 255, 100, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtCameraDemo, New Vector2(WINDOW_WIDTH / 2.8, y + 400), 40, 1.0F, 100, 255, 200, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtAIDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 450), 40, 1.0F, 255, 200, 100, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtAudioDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 500), 40, 1.0F, 100, 200, 255, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, txtEffectsDemo, New Vector2(WINDOW_WIDTH / 2.85, y + 550), 40, 1.0F, 255, 100, 200, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 620), 20, 1.0F, 255, 255, 255, 255)
-        menuPos.DrawRectangle(255, 0, 0, 90)
         'draw tile #0 at (50, 50)
         'atlas.DrawRec(pong(0), New Vector2(50, 80))
 
@@ -2657,6 +2686,10 @@ Public Class DemoEffectsScene
     Protected Overrides Sub OnEnter()
         Console.WriteLine("DemoEffectsScene OnEnter - Showcasing Screen Effects")
 
+        ' Reset camera for this demo (center on screen center, no offset)
+        Framework_Camera_SetTarget(WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2)
+        Framework_Camera_SetOffset(WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2)
+
         ' Create some colorful particles to see effects on
         Dim rnd As New Random()
         For i As Integer = 0 To 49
@@ -2743,9 +2776,9 @@ Public Class DemoEffectsScene
             Framework_Effects_FlashWhite(0.2F)
         End If
 
-        ' Screen shake on ENTER
+        ' Screen shake on ENTER (uses camera system shake)
         If Framework_IsKeyPressed(Keys.ENTER) Then
-            Framework_Camera_Shake(8, 0.3F)
+            Framework_Camera_Shake(10.0F, 0.4F)
         End If
 
         ' Update particles
@@ -2768,6 +2801,9 @@ Public Class DemoEffectsScene
     Protected Overrides Sub OnDraw()
         Framework_ClearBackground(40, 50, 70, 255)
 
+        ' Begin 2D camera mode for shake effect
+        Framework_Camera_BeginMode()
+
         ' Draw colorful background pattern
         For x As Integer = 0 To 11
             For y As Integer = 0 To 7
@@ -2784,10 +2820,34 @@ Public Class DemoEffectsScene
             Framework_DrawCircle(CInt(p.x), CInt(p.y), 15, p.r, p.g, p.b, 255)
         Next
 
-        ' Draw effects overlays
+        ' Apply grayscale effect (overlay simulation - desaturates by drawing gray over)
+        If _grayscaleEnabled Then
+            Framework_DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, 128, 128, 128, 180)
+        End If
+
+        ' Apply sepia effect (overlay simulation - warm brownish tint)
+        If _sepiaEnabled Then
+            Framework_DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, 112, 66, 20, 100)
+        End If
+
+        ' Apply pixelate effect (visual indicator only - true pixelate needs shaders)
+        If _pixelateEnabled Then
+            ' Draw grid lines to simulate pixelation
+            For px As Integer = 0 To WINDOW_WIDTH Step _pixelSize * 4
+                Framework_DrawRectangle(px, 0, 1, WINDOW_HEIGHT, 0, 0, 0, 50)
+            Next
+            For py As Integer = 0 To WINDOW_HEIGHT Step _pixelSize * 4
+                Framework_DrawRectangle(0, py, WINDOW_WIDTH, 1, 0, 0, 0, 50)
+            Next
+        End If
+
+        ' End 2D camera mode
+        Framework_Camera_EndMode()
+
+        ' Draw overlay effects (vignette, flash, scanlines)
         Framework_Effects_DrawOverlays(WINDOW_WIDTH, WINDOW_HEIGHT)
 
-        ' Draw UI
+        ' Draw UI on top (after effects so it's not affected)
         Framework_DrawText("SCREEN EFFECTS DEMO", 10, 10, 24, 255, 255, 255, 255)
 
         ' Effect status
