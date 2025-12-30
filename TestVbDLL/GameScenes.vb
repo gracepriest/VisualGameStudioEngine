@@ -2247,10 +2247,12 @@ Public Class DemoAIScene
     Private _gridHandle As Integer = -1
     Private _pathHandle As Integer = -1
 
-    Private _agentX As Single = 60
-    Private _agentY As Single = 60
-    Private _targetX As Single = 540
-    Private _targetY As Single = 540
+    ' Agent starts at cell center (cell 2,2 = 2*30+15 = 75)
+    Private _agentX As Single = 75
+    Private _agentY As Single = 75
+    ' Target at cell (17,17) center
+    Private _targetX As Single = 525
+    Private _targetY As Single = 525
 
     ' Path following
     Private _currentPath As New List(Of (x As Single, y As Single))
@@ -2259,6 +2261,11 @@ Public Class DemoAIScene
 
     ' Obstacles
     Private ReadOnly _obstacles As New List(Of (x As Integer, y As Integer))
+
+    ' Debug: last click position
+    Private _lastClickX As Integer = -1
+    Private _lastClickY As Integer = -1
+    Private _lastClickType As String = ""
 
     Protected Overrides Sub OnEnter()
         Console.WriteLine("DemoAIScene OnEnter - Showcasing AI/Pathfinding System")
@@ -2300,22 +2307,28 @@ Public Class DemoAIScene
         ' Destroy previous path if exists
         If _pathHandle >= 0 Then Framework_Path_Destroy(_pathHandle)
 
-        ' Convert positions to grid coordinates
-        Dim startCellX As Integer = CInt(_agentX / CELL_SIZE)
-        Dim startCellY As Integer = CInt(_agentY / CELL_SIZE)
-        Dim endCellX As Integer = CInt(_targetX / CELL_SIZE)
-        Dim endCellY As Integer = CInt(_targetY / CELL_SIZE)
+        ' Convert positions to grid coordinates (use integer division, not rounding)
+        Dim startCellX As Integer = CInt(Math.Floor(_agentX / CELL_SIZE))
+        Dim startCellY As Integer = CInt(Math.Floor(_agentY / CELL_SIZE))
+        Dim endCellX As Integer = CInt(Math.Floor(_targetX / CELL_SIZE))
+        Dim endCellY As Integer = CInt(Math.Floor(_targetY / CELL_SIZE))
 
         ' Find path using A*
+        Console.WriteLine($"FindPath: from cell ({startCellX},{startCellY}) to ({endCellX},{endCellY})")
         _pathHandle = Framework_Path_FindCell(_gridHandle, startCellX, startCellY, endCellX, endCellY)
+        Console.WriteLine($"Path handle: {_pathHandle}")
 
         If _pathHandle >= 0 Then
             Dim pathLength As Integer = Framework_Path_GetLength(_pathHandle)
+            Console.WriteLine($"Path length: {pathLength}")
             For i As Integer = 0 To pathLength - 1
                 Dim px As Single = 0, py As Single = 0
                 Framework_Path_GetWaypoint(_pathHandle, i, px, py)
                 _currentPath.Add((px, py))
+                Console.WriteLine($"  Waypoint {i}: ({px},{py})")
             Next
+        Else
+            Console.WriteLine("Path not found!")
         End If
     End Sub
 
@@ -2325,29 +2338,34 @@ Public Class DemoAIScene
             Return
         End If
 
-        ' Set new target with mouse click
-        If Framework_IsMouseButtonPressed(0) Then
-            Dim mx As Integer = Framework_GetMouseX()
-            Dim my As Integer = Framework_GetMouseY()
-            Dim cellX As Integer = mx \ CELL_SIZE
-            Dim cellY As Integer = my \ CELL_SIZE
+        ' Get mouse position
+        Dim mx As Integer = Framework_GetMouseX()
+        Dim my As Integer = Framework_GetMouseY()
+        Dim cellX As Integer = mx \ CELL_SIZE
+        Dim cellY As Integer = my \ CELL_SIZE
 
-            ' Check if clicked cell is walkable
+        ' Set new target with LEFT mouse click (same as Physics demo)
+        If Framework_IsMouseButtonPressed(0) Then
+            _lastClickX = mx
+            _lastClickY = my
+            _lastClickType = "LEFT"
+
+            ' Check if clicked cell is walkable and within grid
             If cellX >= 0 AndAlso cellX < GRID_SIZE AndAlso cellY >= 0 AndAlso cellY < GRID_SIZE Then
                 If Framework_NavGrid_IsWalkable(_gridHandle, cellX, cellY) Then
-                    _targetX = mx
-                    _targetY = my
+                    ' Snap target to cell center
+                    _targetX = cellX * CELL_SIZE + CELL_SIZE / 2
+                    _targetY = cellY * CELL_SIZE + CELL_SIZE / 2
                     FindPath()
                 End If
             End If
         End If
 
-        ' Toggle obstacle with right click
+        ' Toggle obstacle with RIGHT mouse click
         If Framework_IsMouseButtonPressed(1) Then
-            Dim mx As Integer = Framework_GetMouseX()
-            Dim my As Integer = Framework_GetMouseY()
-            Dim cellX As Integer = mx \ CELL_SIZE
-            Dim cellY As Integer = my \ CELL_SIZE
+            _lastClickX = mx
+            _lastClickY = my
+            _lastClickType = "RIGHT"
 
             If cellX >= 0 AndAlso cellX < GRID_SIZE AndAlso cellY >= 0 AndAlso cellY < GRID_SIZE Then
                 Dim isWalkable As Boolean = Framework_NavGrid_IsWalkable(_gridHandle, cellX, cellY)
@@ -2398,12 +2416,19 @@ Public Class DemoAIScene
             Next
         Next
 
-        ' Draw path
-        If _currentPath.Count > 1 Then
+        ' Draw path waypoints and lines
+        If _currentPath.Count > 0 Then
+            ' Draw path lines
             For i As Integer = 0 To _currentPath.Count - 2
                 Dim p1 = _currentPath(i)
                 Dim p2 = _currentPath(i + 1)
-                Framework_DrawLine(CInt(p1.x), CInt(p1.y), CInt(p2.x), CInt(p2.y), 100, 200, 100, 200)
+                Framework_DrawLine(CInt(p1.x), CInt(p1.y), CInt(p2.x), CInt(p2.y), 100, 255, 100, 255)
+            Next
+            ' Draw waypoints as small circles
+            For i As Integer = 0 To _currentPath.Count - 1
+                Dim p = _currentPath(i)
+                Dim c As Byte = If(i = _pathIndex, CByte(255), CByte(150))
+                Framework_DrawCircle(CInt(p.x), CInt(p.y), 5, c, 255, c, 255)
             Next
         End If
 
@@ -2416,11 +2441,40 @@ Public Class DemoAIScene
         Framework_DrawCircle(CInt(_agentX), CInt(_agentY), 10, 255, 150, 50, 255)
 
         ' Draw UI
-        Framework_DrawText("AI/PATHFINDING DEMO", GRID_SIZE * CELL_SIZE + 20, 10, 20, 255, 255, 255, 255)
-        Framework_DrawText("[Left Click] Set Target", GRID_SIZE * CELL_SIZE + 20, 50, 14, 150, 255, 150, 255)
-        Framework_DrawText("[Right Click] Toggle Wall", GRID_SIZE * CELL_SIZE + 20, 70, 14, 150, 255, 150, 255)
-        Framework_DrawText("[BACKSPACE] Return", GRID_SIZE * CELL_SIZE + 20, 90, 14, 255, 150, 150, 255)
-        Framework_DrawText("Path Length: " & _currentPath.Count.ToString(), GRID_SIZE * CELL_SIZE + 20, 130, 14, 200, 200, 200, 255)
+        Dim uiX As Integer = GRID_SIZE * CELL_SIZE + 20
+        Framework_DrawText("AI/PATHFINDING DEMO", uiX, 10, 20, 255, 255, 255, 255)
+        Framework_DrawText("[Left Click] Set Target", uiX, 50, 14, 150, 255, 150, 255)
+        Framework_DrawText("[Right Click] Toggle Wall", uiX, 70, 14, 150, 255, 150, 255)
+        Framework_DrawText("[BACKSPACE] Return", uiX, 90, 14, 255, 150, 150, 255)
+
+        ' Debug info
+        Framework_DrawText("Path Waypoints: " & _currentPath.Count.ToString(), uiX, 130, 14, 200, 200, 200, 255)
+        Framework_DrawText("Current Index: " & _pathIndex.ToString(), uiX, 150, 14, 200, 200, 200, 255)
+        Framework_DrawText("Path Handle: " & _pathHandle.ToString(), uiX, 170, 14, 200, 200, 200, 255)
+        Framework_DrawText("Agent: (" & CInt(_agentX) & "," & CInt(_agentY) & ")", uiX, 200, 14, 255, 200, 100, 255)
+        Framework_DrawText("Target: (" & CInt(_targetX) & "," & CInt(_targetY) & ")", uiX, 220, 14, 100, 255, 100, 255)
+
+        ' Mouse debug
+        Dim mouseX As Integer = Framework_GetMouseX()
+        Dim mouseY As Integer = Framework_GetMouseY()
+        Dim hoverCell As String = $"({mouseX \ CELL_SIZE},{mouseY \ CELL_SIZE})"
+        Framework_DrawText("Mouse: (" & mouseX & "," & mouseY & ") " & hoverCell, uiX, 250, 14, 255, 255, 100, 255)
+        Framework_DrawText("Last Click: " & _lastClickType & " (" & _lastClickX & "," & _lastClickY & ")", uiX, 270, 14, 255, 150, 255, 255)
+
+        ' Debug: show mouse button states
+        Dim lb As Boolean = Framework_IsMouseButtonPressed(0)
+        Dim rb As Boolean = Framework_IsMouseButtonPressed(1)
+        Dim lbDown As Boolean = Framework_IsMouseButtonDown(0)
+        Dim rbDown As Boolean = Framework_IsMouseButtonDown(1)
+        Framework_DrawText("LB Pressed: " & lb.ToString() & " Down: " & lbDown.ToString(), uiX, 290, 14, If(lb, CByte(255), CByte(150)), 150, 150, 255)
+        Framework_DrawText("RB Pressed: " & rb.ToString() & " Down: " & rbDown.ToString(), uiX, 310, 14, 150, 150, If(rb, CByte(255), CByte(150)), 255)
+
+        ' Draw mouse cursor highlight on grid
+        Dim cursorCellX As Integer = mouseX \ CELL_SIZE
+        Dim cursorCellY As Integer = mouseY \ CELL_SIZE
+        If cursorCellX >= 0 AndAlso cursorCellX < GRID_SIZE AndAlso cursorCellY >= 0 AndAlso cursorCellY < GRID_SIZE Then
+            Framework_DrawRectangle(cursorCellX * CELL_SIZE, cursorCellY * CELL_SIZE, CELL_SIZE, CELL_SIZE, 255, 255, 255, 50)
+        End If
 
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
     End Sub

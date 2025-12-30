@@ -161,23 +161,23 @@ Public Module FrameworkWrapper
 
 #Region "Input - Keyboard"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyPressed(key As Integer) As Boolean
+    Public Function Framework_IsKeyPressed(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyPressedRepeat(key As Integer) As Boolean
+    Public Function Framework_IsKeyPressedRepeat(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyDown(key As Integer) As Boolean
+    Public Function Framework_IsKeyDown(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyReleased(key As Integer) As Boolean
+    Public Function Framework_IsKeyReleased(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyUp(key As Integer) As Boolean
+    Public Function Framework_IsKeyUp(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -203,19 +203,19 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMouseButtonPressed(button As Integer) As Boolean
+    Public Function Framework_IsMouseButtonPressed(button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMouseButtonDown(button As Integer) As Boolean
+    Public Function Framework_IsMouseButtonDown(button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMouseButtonReleased(button As Integer) As Boolean
+    Public Function Framework_IsMouseButtonReleased(button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMouseButtonUp(button As Integer) As Boolean
+    Public Function Framework_IsMouseButtonUp(button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
