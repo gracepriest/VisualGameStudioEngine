@@ -3462,6 +3462,238 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Timer System"
+    ' ========================================================================
+    ' TIMER SYSTEM - Delayed execution and scheduling
+    ' ========================================================================
+
+    ' Timer States
+    Public Enum TimerState
+        Pending = 0
+        Running = 1
+        Paused = 2
+        Completed = 3
+        Cancelled = 4
+    End Enum
+
+    ' Timer Callback Delegates
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub TimerCallback(timerId As Integer, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub TimerCallbackInt(timerId As Integer, value As Integer, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub TimerCallbackFloat(timerId As Integer, value As Single, userData As IntPtr)
+
+    ' Basic Timers (one-shot)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_After(delay As Single, callback As TimerCallback, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_AfterInt(delay As Single, callback As TimerCallbackInt, value As Integer, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_AfterFloat(delay As Single, callback As TimerCallbackFloat, value As Single, userData As IntPtr) As Integer
+    End Function
+
+    ' Repeating Timers
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_Every(interval As Single, callback As TimerCallback, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_EveryInt(interval As Single, callback As TimerCallbackInt, value As Integer, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_EveryLimit(interval As Single, repeatCount As Integer, callback As TimerCallback, userData As IntPtr) As Integer
+    End Function
+
+    ' Timer with Initial Delay then Repeat
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_AfterThenEvery(delay As Single, interval As Single, callback As TimerCallback, userData As IntPtr) As Integer
+    End Function
+
+    ' Timer Control
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_Cancel(timerId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_Pause(timerId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_Resume(timerId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_Reset(timerId As Integer)
+    End Sub
+
+    ' Timer State Queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_IsValid(timerId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_IsRunning(timerId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_IsPaused(timerId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetState(timerId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetElapsed(timerId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetRemaining(timerId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetRepeatCount(timerId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetCurrentRepeat(timerId As Integer) As Integer
+    End Function
+
+    ' Timer Configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SetTimeScale(timerId As Integer, scale As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetTimeScale(timerId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SetInterval(timerId As Integer, interval As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetInterval(timerId As Integer) As Single
+    End Function
+
+    ' Entity-Bound Timers
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_AfterEntity(entity As Integer, delay As Single, callback As TimerCallback, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_EveryEntity(entity As Integer, interval As Single, callback As TimerCallback, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_CancelAllForEntity(entity As Integer)
+    End Sub
+
+    ' Sequence Building
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_CreateSequence() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SequenceAppend(seqId As Integer, delay As Single, callback As TimerCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SequenceAppendInt(seqId As Integer, delay As Single, callback As TimerCallbackInt, value As Integer, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SequenceStart(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SequencePause(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SequenceResume(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SequenceCancel(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SequenceReset(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_SequenceIsValid(seqId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_SequenceIsRunning(seqId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_SequenceGetDuration(seqId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_SequenceGetElapsed(seqId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SequenceSetLoop(seqId As Integer, shouldLoop As Boolean)
+    End Sub
+
+    ' Global Timer Management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_Update(dt As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_PauseAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_ResumeAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_CancelAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetActiveCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_SetGlobalTimeScale(scale As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_GetGlobalTimeScale() As Single
+    End Function
+
+    ' Frame-Based Timers
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_AfterFrames(frames As Integer, callback As TimerCallback, userData As IntPtr) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Timer_EveryFrames(frames As Integer, callback As TimerCallback, userData As IntPtr) As Integer
+    End Function
+
+    ' Utility Functions
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Timer_ClearCompleted()
+    End Sub
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

@@ -9363,6 +9363,580 @@ extern "C" {
     }
 
     // ========================================================================
+    // TIMER SYSTEM - Delayed execution and scheduling
+    // ========================================================================
+
+    enum TimerType {
+        TIMER_ONESHOT = 0,
+        TIMER_REPEATING = 1,
+        TIMER_FRAME_ONESHOT = 2,
+        TIMER_FRAME_REPEATING = 3
+    };
+
+    enum TimerCallbackType {
+        TIMER_CB_BASIC = 0,
+        TIMER_CB_INT = 1,
+        TIMER_CB_FLOAT = 2
+    };
+
+    struct Timer {
+        int id;
+        TimerType type;
+        TimerCallbackType callbackType;
+        TimerState state;
+        void* callback;
+        void* userData;
+        int intValue;
+        float floatValue;
+        float delay;           // Initial delay before first fire
+        float interval;        // Time between fires (for repeating)
+        float elapsed;         // Time since timer started
+        float timeScale;       // Per-timer time scale
+        int repeatCount;       // -1 = infinite, 0+ = limited
+        int currentRepeat;     // Current repeat iteration
+        int targetEntity;      // -1 for global, >= 0 for entity-bound
+        int frameDelay;        // For frame-based timers
+        int frameInterval;     // For frame-based repeating
+        int frameCounter;      // Current frame count
+        bool hasInitialDelay;  // For AfterThenEvery pattern
+        bool initialDelayDone; // Has initial delay passed
+    };
+
+    struct TimerSequenceEntry {
+        float delay;
+        TimerCallbackType callbackType;
+        void* callback;
+        void* userData;
+        int intValue;
+        bool fired;
+    };
+
+    struct TimerSequence {
+        int id;
+        std::vector<TimerSequenceEntry> entries;
+        float elapsed;
+        float duration;
+        TimerState state;
+        bool loop;
+    };
+
+    // Timer system globals
+    static std::unordered_map<int, Timer> g_timers;
+    static std::unordered_map<int, TimerSequence> g_timerSequences;
+    static int g_nextTimerId = 1;
+    static int g_nextTimerSeqId = 1;
+    static bool g_timersPaused = false;
+    static float g_globalTimerTimeScale = 1.0f;
+
+    // Helper to get timer
+    Timer* GetTimer(int timerId) {
+        auto it = g_timers.find(timerId);
+        return it != g_timers.end() ? &it->second : nullptr;
+    }
+
+    // Helper to get sequence
+    TimerSequence* GetTimerSequence(int seqId) {
+        auto it = g_timerSequences.find(seqId);
+        return it != g_timerSequences.end() ? &it->second : nullptr;
+    }
+
+    // Internal timer creation
+    int CreateTimer(TimerType type, TimerCallbackType cbType, void* callback, void* userData,
+                    float delay, float interval, int repeatCount, int entity) {
+        if (!callback) return -1;
+
+        Timer t;
+        t.id = g_nextTimerId++;
+        t.type = type;
+        t.callbackType = cbType;
+        t.state = delay > 0 ? TIMER_STATE_PENDING : TIMER_STATE_RUNNING;
+        t.callback = callback;
+        t.userData = userData;
+        t.intValue = 0;
+        t.floatValue = 0.0f;
+        t.delay = delay;
+        t.interval = interval;
+        t.elapsed = 0.0f;
+        t.timeScale = 1.0f;
+        t.repeatCount = repeatCount;
+        t.currentRepeat = 0;
+        t.targetEntity = entity;
+        t.frameDelay = 0;
+        t.frameInterval = 0;
+        t.frameCounter = 0;
+        t.hasInitialDelay = false;
+        t.initialDelayDone = false;
+        g_timers[t.id] = t;
+        return t.id;
+    }
+
+    // Basic timers (one-shot)
+    int Framework_Timer_After(float delay, TimerCallback callback, void* userData) {
+        return CreateTimer(TIMER_ONESHOT, TIMER_CB_BASIC, (void*)callback, userData, delay, 0, 1, -1);
+    }
+
+    int Framework_Timer_AfterInt(float delay, TimerCallbackInt callback, int value, void* userData) {
+        int id = CreateTimer(TIMER_ONESHOT, TIMER_CB_INT, (void*)callback, userData, delay, 0, 1, -1);
+        if (auto* t = GetTimer(id)) t->intValue = value;
+        return id;
+    }
+
+    int Framework_Timer_AfterFloat(float delay, TimerCallbackFloat callback, float value, void* userData) {
+        int id = CreateTimer(TIMER_ONESHOT, TIMER_CB_FLOAT, (void*)callback, userData, delay, 0, 1, -1);
+        if (auto* t = GetTimer(id)) t->floatValue = value;
+        return id;
+    }
+
+    // Repeating timers
+    int Framework_Timer_Every(float interval, TimerCallback callback, void* userData) {
+        return CreateTimer(TIMER_REPEATING, TIMER_CB_BASIC, (void*)callback, userData, 0, interval, -1, -1);
+    }
+
+    int Framework_Timer_EveryInt(float interval, TimerCallbackInt callback, int value, void* userData) {
+        int id = CreateTimer(TIMER_REPEATING, TIMER_CB_INT, (void*)callback, userData, 0, interval, -1, -1);
+        if (auto* t = GetTimer(id)) t->intValue = value;
+        return id;
+    }
+
+    int Framework_Timer_EveryLimit(float interval, int repeatCount, TimerCallback callback, void* userData) {
+        return CreateTimer(TIMER_REPEATING, TIMER_CB_BASIC, (void*)callback, userData, 0, interval, repeatCount, -1);
+    }
+
+    int Framework_Timer_AfterThenEvery(float delay, float interval, TimerCallback callback, void* userData) {
+        int id = CreateTimer(TIMER_REPEATING, TIMER_CB_BASIC, (void*)callback, userData, delay, interval, -1, -1);
+        if (auto* t = GetTimer(id)) {
+            t->hasInitialDelay = true;
+            t->initialDelayDone = false;
+        }
+        return id;
+    }
+
+    // Timer control
+    void Framework_Timer_Cancel(int timerId) {
+        auto* t = GetTimer(timerId);
+        if (t) t->state = TIMER_STATE_CANCELLED;
+    }
+
+    void Framework_Timer_Pause(int timerId) {
+        auto* t = GetTimer(timerId);
+        if (t && t->state == TIMER_STATE_RUNNING) t->state = TIMER_STATE_PAUSED;
+    }
+
+    void Framework_Timer_Resume(int timerId) {
+        auto* t = GetTimer(timerId);
+        if (t && t->state == TIMER_STATE_PAUSED) t->state = TIMER_STATE_RUNNING;
+    }
+
+    void Framework_Timer_Reset(int timerId) {
+        auto* t = GetTimer(timerId);
+        if (!t) return;
+        t->elapsed = 0.0f;
+        t->currentRepeat = 0;
+        t->frameCounter = 0;
+        t->initialDelayDone = false;
+        t->state = t->delay > 0 ? TIMER_STATE_PENDING : TIMER_STATE_RUNNING;
+    }
+
+    // Timer state queries
+    bool Framework_Timer_IsValid(int timerId) {
+        return GetTimer(timerId) != nullptr;
+    }
+
+    bool Framework_Timer_IsRunning(int timerId) {
+        auto* t = GetTimer(timerId);
+        return t && t->state == TIMER_STATE_RUNNING;
+    }
+
+    bool Framework_Timer_IsPaused(int timerId) {
+        auto* t = GetTimer(timerId);
+        return t && t->state == TIMER_STATE_PAUSED;
+    }
+
+    int Framework_Timer_GetState(int timerId) {
+        auto* t = GetTimer(timerId);
+        return t ? t->state : TIMER_STATE_CANCELLED;
+    }
+
+    float Framework_Timer_GetElapsed(int timerId) {
+        auto* t = GetTimer(timerId);
+        return t ? t->elapsed : 0.0f;
+    }
+
+    float Framework_Timer_GetRemaining(int timerId) {
+        auto* t = GetTimer(timerId);
+        if (!t) return 0.0f;
+        if (t->type == TIMER_ONESHOT) {
+            return t->delay - t->elapsed;
+        }
+        else {
+            float targetTime = t->hasInitialDelay && !t->initialDelayDone ? t->delay : t->interval;
+            float cycleElapsed = t->hasInitialDelay && !t->initialDelayDone ? t->elapsed : fmodf(t->elapsed, t->interval);
+            return targetTime - cycleElapsed;
+        }
+    }
+
+    int Framework_Timer_GetRepeatCount(int timerId) {
+        auto* t = GetTimer(timerId);
+        return t ? t->repeatCount : 0;
+    }
+
+    int Framework_Timer_GetCurrentRepeat(int timerId) {
+        auto* t = GetTimer(timerId);
+        return t ? t->currentRepeat : 0;
+    }
+
+    // Timer configuration
+    void Framework_Timer_SetTimeScale(int timerId, float scale) {
+        auto* t = GetTimer(timerId);
+        if (t) t->timeScale = scale;
+    }
+
+    float Framework_Timer_GetTimeScale(int timerId) {
+        auto* t = GetTimer(timerId);
+        return t ? t->timeScale : 1.0f;
+    }
+
+    void Framework_Timer_SetInterval(int timerId, float interval) {
+        auto* t = GetTimer(timerId);
+        if (t) t->interval = interval;
+    }
+
+    float Framework_Timer_GetInterval(int timerId) {
+        auto* t = GetTimer(timerId);
+        return t ? t->interval : 0.0f;
+    }
+
+    // Entity-bound timers
+    int Framework_Timer_AfterEntity(int entity, float delay, TimerCallback callback, void* userData) {
+        return CreateTimer(TIMER_ONESHOT, TIMER_CB_BASIC, (void*)callback, userData, delay, 0, 1, entity);
+    }
+
+    int Framework_Timer_EveryEntity(int entity, float interval, TimerCallback callback, void* userData) {
+        return CreateTimer(TIMER_REPEATING, TIMER_CB_BASIC, (void*)callback, userData, 0, interval, -1, entity);
+    }
+
+    void Framework_Timer_CancelAllForEntity(int entity) {
+        for (auto& pair : g_timers) {
+            if (pair.second.targetEntity == entity) {
+                pair.second.state = TIMER_STATE_CANCELLED;
+            }
+        }
+    }
+
+    // Sequence building
+    int Framework_Timer_CreateSequence() {
+        TimerSequence seq;
+        seq.id = g_nextTimerSeqId++;
+        seq.elapsed = 0.0f;
+        seq.duration = 0.0f;
+        seq.state = TIMER_STATE_PENDING;
+        seq.loop = false;
+        g_timerSequences[seq.id] = seq;
+        return seq.id;
+    }
+
+    void Framework_Timer_SequenceAppend(int seqId, float delay, TimerCallback callback, void* userData) {
+        auto* seq = GetTimerSequence(seqId);
+        if (!seq) return;
+
+        TimerSequenceEntry entry;
+        entry.delay = seq->duration + delay;
+        entry.callbackType = TIMER_CB_BASIC;
+        entry.callback = (void*)callback;
+        entry.userData = userData;
+        entry.intValue = 0;
+        entry.fired = false;
+        seq->entries.push_back(entry);
+        seq->duration = entry.delay;
+    }
+
+    void Framework_Timer_SequenceAppendInt(int seqId, float delay, TimerCallbackInt callback, int value, void* userData) {
+        auto* seq = GetTimerSequence(seqId);
+        if (!seq) return;
+
+        TimerSequenceEntry entry;
+        entry.delay = seq->duration + delay;
+        entry.callbackType = TIMER_CB_INT;
+        entry.callback = (void*)callback;
+        entry.userData = userData;
+        entry.intValue = value;
+        entry.fired = false;
+        seq->entries.push_back(entry);
+        seq->duration = entry.delay;
+    }
+
+    void Framework_Timer_SequenceStart(int seqId) {
+        auto* seq = GetTimerSequence(seqId);
+        if (seq) {
+            seq->state = TIMER_STATE_RUNNING;
+            seq->elapsed = 0.0f;
+            for (auto& e : seq->entries) e.fired = false;
+        }
+    }
+
+    void Framework_Timer_SequencePause(int seqId) {
+        auto* seq = GetTimerSequence(seqId);
+        if (seq && seq->state == TIMER_STATE_RUNNING) seq->state = TIMER_STATE_PAUSED;
+    }
+
+    void Framework_Timer_SequenceResume(int seqId) {
+        auto* seq = GetTimerSequence(seqId);
+        if (seq && seq->state == TIMER_STATE_PAUSED) seq->state = TIMER_STATE_RUNNING;
+    }
+
+    void Framework_Timer_SequenceCancel(int seqId) {
+        auto* seq = GetTimerSequence(seqId);
+        if (seq) seq->state = TIMER_STATE_CANCELLED;
+    }
+
+    void Framework_Timer_SequenceReset(int seqId) {
+        auto* seq = GetTimerSequence(seqId);
+        if (seq) {
+            seq->elapsed = 0.0f;
+            seq->state = TIMER_STATE_PENDING;
+            for (auto& e : seq->entries) e.fired = false;
+        }
+    }
+
+    bool Framework_Timer_SequenceIsValid(int seqId) {
+        return GetTimerSequence(seqId) != nullptr;
+    }
+
+    bool Framework_Timer_SequenceIsRunning(int seqId) {
+        auto* seq = GetTimerSequence(seqId);
+        return seq && seq->state == TIMER_STATE_RUNNING;
+    }
+
+    float Framework_Timer_SequenceGetDuration(int seqId) {
+        auto* seq = GetTimerSequence(seqId);
+        return seq ? seq->duration : 0.0f;
+    }
+
+    float Framework_Timer_SequenceGetElapsed(int seqId) {
+        auto* seq = GetTimerSequence(seqId);
+        return seq ? seq->elapsed : 0.0f;
+    }
+
+    void Framework_Timer_SequenceSetLoop(int seqId, bool loop) {
+        auto* seq = GetTimerSequence(seqId);
+        if (seq) seq->loop = loop;
+    }
+
+    // Fire timer callback
+    void FireTimerCallback(Timer& t) {
+        switch (t.callbackType) {
+        case TIMER_CB_BASIC:
+            ((TimerCallback)t.callback)(t.id, t.userData);
+            break;
+        case TIMER_CB_INT:
+            ((TimerCallbackInt)t.callback)(t.id, t.intValue, t.userData);
+            break;
+        case TIMER_CB_FLOAT:
+            ((TimerCallbackFloat)t.callback)(t.id, t.floatValue, t.userData);
+            break;
+        }
+    }
+
+    // Global timer management
+    void Framework_Timer_Update(float dt) {
+        if (g_timersPaused) return;
+
+        float scaledDt = dt * g_globalTimerTimeScale;
+        std::vector<int> toRemove;
+
+        // Update all timers
+        for (auto& pair : g_timers) {
+            Timer& t = pair.second;
+
+            // Skip inactive timers
+            if (t.state != TIMER_STATE_RUNNING && t.state != TIMER_STATE_PENDING) continue;
+
+            // Check entity-bound timers
+            if (t.targetEntity >= 0 && !Framework_Ecs_IsAlive(t.targetEntity)) {
+                t.state = TIMER_STATE_CANCELLED;
+                continue;
+            }
+
+            float timerDt = scaledDt * t.timeScale;
+
+            // Handle frame-based timers
+            if (t.type == TIMER_FRAME_ONESHOT || t.type == TIMER_FRAME_REPEATING) {
+                t.frameCounter++;
+
+                if (t.type == TIMER_FRAME_ONESHOT) {
+                    if (t.frameCounter >= t.frameDelay) {
+                        FireTimerCallback(t);
+                        t.state = TIMER_STATE_COMPLETED;
+                    }
+                }
+                else {
+                    if (t.frameCounter >= t.frameInterval) {
+                        FireTimerCallback(t);
+                        t.frameCounter = 0;
+                        t.currentRepeat++;
+                        if (t.repeatCount >= 0 && t.currentRepeat >= t.repeatCount) {
+                            t.state = TIMER_STATE_COMPLETED;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Time-based timers
+            t.elapsed += timerDt;
+
+            if (t.type == TIMER_ONESHOT) {
+                if (t.elapsed >= t.delay) {
+                    FireTimerCallback(t);
+                    t.state = TIMER_STATE_COMPLETED;
+                }
+                else if (t.state == TIMER_STATE_PENDING) {
+                    t.state = TIMER_STATE_RUNNING;
+                }
+            }
+            else if (t.type == TIMER_REPEATING) {
+                // Handle initial delay for AfterThenEvery
+                if (t.hasInitialDelay && !t.initialDelayDone) {
+                    if (t.elapsed >= t.delay) {
+                        FireTimerCallback(t);
+                        t.initialDelayDone = true;
+                        t.elapsed = 0.0f;
+                        t.currentRepeat++;
+                    }
+                }
+                else {
+                    // Regular repeating
+                    while (t.elapsed >= t.interval && t.state == TIMER_STATE_RUNNING) {
+                        FireTimerCallback(t);
+                        t.elapsed -= t.interval;
+                        t.currentRepeat++;
+
+                        if (t.repeatCount >= 0 && t.currentRepeat >= t.repeatCount) {
+                            t.state = TIMER_STATE_COMPLETED;
+                            break;
+                        }
+                    }
+                }
+
+                if (t.state == TIMER_STATE_PENDING) {
+                    t.state = TIMER_STATE_RUNNING;
+                }
+            }
+        }
+
+        // Update sequences
+        for (auto& pair : g_timerSequences) {
+            TimerSequence& seq = pair.second;
+            if (seq.state != TIMER_STATE_RUNNING) continue;
+
+            seq.elapsed += scaledDt;
+
+            // Fire callbacks that are due
+            for (auto& entry : seq.entries) {
+                if (!entry.fired && seq.elapsed >= entry.delay) {
+                    entry.fired = true;
+                    switch (entry.callbackType) {
+                    case TIMER_CB_BASIC:
+                        ((TimerCallback)entry.callback)(seq.id, entry.userData);
+                        break;
+                    case TIMER_CB_INT:
+                        ((TimerCallbackInt)entry.callback)(seq.id, entry.intValue, entry.userData);
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
+
+            // Check if sequence is complete
+            if (seq.elapsed >= seq.duration) {
+                if (seq.loop) {
+                    seq.elapsed = 0.0f;
+                    for (auto& e : seq.entries) e.fired = false;
+                }
+                else {
+                    seq.state = TIMER_STATE_COMPLETED;
+                }
+            }
+        }
+    }
+
+    void Framework_Timer_PauseAll() {
+        g_timersPaused = true;
+    }
+
+    void Framework_Timer_ResumeAll() {
+        g_timersPaused = false;
+    }
+
+    void Framework_Timer_CancelAll() {
+        for (auto& pair : g_timers) {
+            pair.second.state = TIMER_STATE_CANCELLED;
+        }
+        for (auto& pair : g_timerSequences) {
+            pair.second.state = TIMER_STATE_CANCELLED;
+        }
+    }
+
+    int Framework_Timer_GetActiveCount() {
+        int count = 0;
+        for (auto& pair : g_timers) {
+            if (pair.second.state == TIMER_STATE_RUNNING || pair.second.state == TIMER_STATE_PENDING) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    void Framework_Timer_SetGlobalTimeScale(float scale) {
+        g_globalTimerTimeScale = scale;
+    }
+
+    float Framework_Timer_GetGlobalTimeScale() {
+        return g_globalTimerTimeScale;
+    }
+
+    // Frame-based timers
+    int Framework_Timer_AfterFrames(int frames, TimerCallback callback, void* userData) {
+        int id = CreateTimer(TIMER_FRAME_ONESHOT, TIMER_CB_BASIC, (void*)callback, userData, 0, 0, 1, -1);
+        if (auto* t = GetTimer(id)) {
+            t->frameDelay = frames;
+        }
+        return id;
+    }
+
+    int Framework_Timer_EveryFrames(int frames, TimerCallback callback, void* userData) {
+        int id = CreateTimer(TIMER_FRAME_REPEATING, TIMER_CB_BASIC, (void*)callback, userData, 0, 0, -1, -1);
+        if (auto* t = GetTimer(id)) {
+            t->frameInterval = frames;
+        }
+        return id;
+    }
+
+    // Utility functions
+    void Framework_Timer_ClearCompleted() {
+        std::vector<int> toRemove;
+        for (auto& pair : g_timers) {
+            if (pair.second.state == TIMER_STATE_COMPLETED || pair.second.state == TIMER_STATE_CANCELLED) {
+                toRemove.push_back(pair.first);
+            }
+        }
+        for (int id : toRemove) {
+            g_timers.erase(id);
+        }
+
+        std::vector<int> seqToRemove;
+        for (auto& pair : g_timerSequences) {
+            if (pair.second.state == TIMER_STATE_COMPLETED || pair.second.state == TIMER_STATE_CANCELLED) {
+                seqToRemove.push_back(pair.first);
+            }
+        }
+        for (int id : seqToRemove) {
+            g_timerSequences.erase(id);
+        }
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {

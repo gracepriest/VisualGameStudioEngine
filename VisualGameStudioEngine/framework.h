@@ -1504,6 +1504,95 @@ extern "C" {
     __declspec(dllexport) int   Framework_Event_GetTotalSubscriptions();
 
     // ========================================================================
+    // TIMER SYSTEM - Delayed execution and scheduling
+    // ========================================================================
+
+    // Timer callback types
+    typedef void (*TimerCallback)(int timerId, void* userData);
+    typedef void (*TimerCallbackInt)(int timerId, int value, void* userData);
+    typedef void (*TimerCallbackFloat)(int timerId, float value, void* userData);
+
+    // Timer states
+    enum TimerState {
+        TIMER_STATE_PENDING = 0,    // Not yet started (has delay)
+        TIMER_STATE_RUNNING = 1,    // Currently active
+        TIMER_STATE_PAUSED = 2,     // Temporarily stopped
+        TIMER_STATE_COMPLETED = 3,  // Finished (for one-shot)
+        TIMER_STATE_CANCELLED = 4   // Manually stopped
+    };
+
+    // Basic timers (one-shot)
+    __declspec(dllexport) int   Framework_Timer_After(float delay, TimerCallback callback, void* userData);
+    __declspec(dllexport) int   Framework_Timer_AfterInt(float delay, TimerCallbackInt callback, int value, void* userData);
+    __declspec(dllexport) int   Framework_Timer_AfterFloat(float delay, TimerCallbackFloat callback, float value, void* userData);
+
+    // Repeating timers
+    __declspec(dllexport) int   Framework_Timer_Every(float interval, TimerCallback callback, void* userData);
+    __declspec(dllexport) int   Framework_Timer_EveryInt(float interval, TimerCallbackInt callback, int value, void* userData);
+    __declspec(dllexport) int   Framework_Timer_EveryLimit(float interval, int repeatCount, TimerCallback callback, void* userData);
+
+    // Timer with initial delay then repeat
+    __declspec(dllexport) int   Framework_Timer_AfterThenEvery(float delay, float interval, TimerCallback callback, void* userData);
+
+    // Timer control
+    __declspec(dllexport) void  Framework_Timer_Cancel(int timerId);
+    __declspec(dllexport) void  Framework_Timer_Pause(int timerId);
+    __declspec(dllexport) void  Framework_Timer_Resume(int timerId);
+    __declspec(dllexport) void  Framework_Timer_Reset(int timerId);  // Restart from beginning
+
+    // Timer state queries
+    __declspec(dllexport) bool  Framework_Timer_IsValid(int timerId);
+    __declspec(dllexport) bool  Framework_Timer_IsRunning(int timerId);
+    __declspec(dllexport) bool  Framework_Timer_IsPaused(int timerId);
+    __declspec(dllexport) int   Framework_Timer_GetState(int timerId);  // Returns TimerState
+    __declspec(dllexport) float Framework_Timer_GetElapsed(int timerId);
+    __declspec(dllexport) float Framework_Timer_GetRemaining(int timerId);
+    __declspec(dllexport) int   Framework_Timer_GetRepeatCount(int timerId);
+    __declspec(dllexport) int   Framework_Timer_GetCurrentRepeat(int timerId);
+
+    // Timer configuration
+    __declspec(dllexport) void  Framework_Timer_SetTimeScale(int timerId, float scale);
+    __declspec(dllexport) float Framework_Timer_GetTimeScale(int timerId);
+    __declspec(dllexport) void  Framework_Timer_SetInterval(int timerId, float interval);
+    __declspec(dllexport) float Framework_Timer_GetInterval(int timerId);
+
+    // Entity-bound timers (auto-cancel when entity destroyed)
+    __declspec(dllexport) int   Framework_Timer_AfterEntity(int entity, float delay, TimerCallback callback, void* userData);
+    __declspec(dllexport) int   Framework_Timer_EveryEntity(int entity, float interval, TimerCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Timer_CancelAllForEntity(int entity);
+
+    // Sequence building (chain timed actions)
+    __declspec(dllexport) int   Framework_Timer_CreateSequence();
+    __declspec(dllexport) void  Framework_Timer_SequenceAppend(int seqId, float delay, TimerCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Timer_SequenceAppendInt(int seqId, float delay, TimerCallbackInt callback, int value, void* userData);
+    __declspec(dllexport) void  Framework_Timer_SequenceStart(int seqId);
+    __declspec(dllexport) void  Framework_Timer_SequencePause(int seqId);
+    __declspec(dllexport) void  Framework_Timer_SequenceResume(int seqId);
+    __declspec(dllexport) void  Framework_Timer_SequenceCancel(int seqId);
+    __declspec(dllexport) void  Framework_Timer_SequenceReset(int seqId);
+    __declspec(dllexport) bool  Framework_Timer_SequenceIsValid(int seqId);
+    __declspec(dllexport) bool  Framework_Timer_SequenceIsRunning(int seqId);
+    __declspec(dllexport) float Framework_Timer_SequenceGetDuration(int seqId);
+    __declspec(dllexport) float Framework_Timer_SequenceGetElapsed(int seqId);
+    __declspec(dllexport) void  Framework_Timer_SequenceSetLoop(int seqId, bool loop);
+
+    // Global timer management
+    __declspec(dllexport) void  Framework_Timer_Update(float dt);  // Call each frame
+    __declspec(dllexport) void  Framework_Timer_PauseAll();
+    __declspec(dllexport) void  Framework_Timer_ResumeAll();
+    __declspec(dllexport) void  Framework_Timer_CancelAll();
+    __declspec(dllexport) int   Framework_Timer_GetActiveCount();
+    __declspec(dllexport) void  Framework_Timer_SetGlobalTimeScale(float scale);
+    __declspec(dllexport) float Framework_Timer_GetGlobalTimeScale();
+
+    // Frame-based timers (for frame-precise timing)
+    __declspec(dllexport) int   Framework_Timer_AfterFrames(int frames, TimerCallback callback, void* userData);
+    __declspec(dllexport) int   Framework_Timer_EveryFrames(int frames, TimerCallback callback, void* userData);
+
+    // Utility functions
+    __declspec(dllexport) void  Framework_Timer_ClearCompleted();  // Remove finished one-shot timers
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();
