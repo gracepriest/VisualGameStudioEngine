@@ -14499,6 +14499,960 @@ extern "C" {
     }
 
     // ========================================================================
+    // QUEST SYSTEM
+    // ========================================================================
+    // Note: Quest states and objective types are defined in framework.h as macros
+
+    struct QuestObjective {
+        int type = OBJECTIVE_TYPE_CUSTOM;
+        std::string description;
+        int requiredCount = 1;
+        int currentProgress = 0;
+        std::string targetId;       // For kill, talk, interact
+        float locationX = 0;        // For reach/explore
+        float locationY = 0;
+        float locationRadius = 50;
+        bool optional = false;
+        bool hidden = false;
+        bool completed = false;
+    };
+
+    struct QuestReward {
+        std::vector<std::pair<int, int>> items;  // itemDefId, quantity
+        int experience = 0;
+        std::unordered_map<int, int> currency;   // currencyType -> amount
+        std::vector<std::string> unlocks;
+    };
+
+    struct Quest {
+        int handle = 0;
+        std::string stringId;
+        std::string name;
+        std::string description;
+        std::string category;
+        int level = 1;
+        int state = QUEST_STATE_NOT_STARTED;
+        bool repeatable = false;
+        bool autoComplete = true;
+        bool hidden = false;
+        float timeLimit = 0;        // 0 = no limit
+        float timeElapsed = 0;
+        int minLevel = 0;
+        std::vector<std::string> prerequisites;
+        std::vector<QuestObjective> objectives;
+        QuestReward rewards;
+        bool tracked = false;
+    };
+
+    struct QuestChain {
+        int handle = 0;
+        std::string stringId;
+        std::vector<int> questHandles;
+        int currentIndex = 0;
+    };
+
+    // Quest system state
+    static std::unordered_map<int, Quest> g_quests;
+    static std::unordered_map<std::string, int> g_questByStringId;
+    static std::unordered_map<int, QuestChain> g_questChains;
+    static std::unordered_map<std::string, int> g_chainByStringId;
+    static int g_nextQuestHandle = 1;
+    static int g_nextChainHandle = 1;
+    static int g_maxTracked = 3;
+    static QuestStateCallback g_questStateCallback = nullptr;
+    static ObjectiveUpdateCallback g_objectiveUpdateCallback = nullptr;
+
+    // Static buffers for string returns
+    static char g_questNameBuf[256];
+    static char g_questDescBuf[1024];
+    static char g_questCatBuf[128];
+    static char g_questIdBuf[128];
+    static char g_objDescBuf[512];
+
+    // Helper: Check if all required objectives are complete
+    static bool AreRequiredObjectivesComplete(const Quest& q) {
+        for (const auto& obj : q.objectives) {
+            if (!obj.optional && !obj.completed) return false;
+        }
+        return true;
+    }
+
+    // Helper: Update objective completion status
+    static void UpdateObjectiveCompletion(Quest& q, int objIndex) {
+        if (objIndex < 0 || objIndex >= (int)q.objectives.size()) return;
+        auto& obj = q.objectives[objIndex];
+        bool wasComplete = obj.completed;
+        obj.completed = (obj.currentProgress >= obj.requiredCount);
+
+        // Fire callback if progress changed
+        if (g_objectiveUpdateCallback) {
+            g_objectiveUpdateCallback(q.handle, objIndex, obj.currentProgress, obj.requiredCount);
+        }
+
+        // Check for auto-complete
+        if (!wasComplete && obj.completed && q.autoComplete && q.state == QUEST_STATE_IN_PROGRESS) {
+            if (AreRequiredObjectivesComplete(q)) {
+                q.state = QUEST_STATE_COMPLETED;
+                if (g_questStateCallback) {
+                    g_questStateCallback(q.handle, QUEST_STATE_COMPLETED);
+                }
+            }
+        }
+    }
+
+    // ---- Quest Definition ----
+    int Framework_Quest_Define(const char* questId) {
+        if (!questId) return -1;
+
+        // Check if already defined
+        auto it = g_questByStringId.find(questId);
+        if (it != g_questByStringId.end()) {
+            return it->second;
+        }
+
+        Quest q;
+        q.handle = g_nextQuestHandle++;
+        q.stringId = questId;
+        q.name = questId;
+        g_quests[q.handle] = q;
+        g_questByStringId[questId] = q.handle;
+        return q.handle;
+    }
+
+    void Framework_Quest_SetName(int questHandle, const char* name) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end() && name) {
+            it->second.name = name;
+        }
+    }
+
+    void Framework_Quest_SetDescription(int questHandle, const char* description) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end() && description) {
+            it->second.description = description;
+        }
+    }
+
+    void Framework_Quest_SetCategory(int questHandle, const char* category) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end() && category) {
+            it->second.category = category;
+        }
+    }
+
+    void Framework_Quest_SetLevel(int questHandle, int level) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.level = level;
+        }
+    }
+
+    void Framework_Quest_SetRepeatable(int questHandle, bool repeatable) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.repeatable = repeatable;
+        }
+    }
+
+    void Framework_Quest_SetAutoComplete(int questHandle, bool autoComplete) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.autoComplete = autoComplete;
+        }
+    }
+
+    void Framework_Quest_SetHidden(int questHandle, bool hidden) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.hidden = hidden;
+        }
+    }
+
+    void Framework_Quest_SetTimeLimit(int questHandle, float seconds) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.timeLimit = seconds;
+        }
+    }
+
+    // ---- Quest Prerequisites ----
+    void Framework_Quest_AddPrerequisite(int questHandle, const char* requiredQuestId) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end() && requiredQuestId) {
+            it->second.prerequisites.push_back(requiredQuestId);
+        }
+    }
+
+    void Framework_Quest_SetMinLevel(int questHandle, int minLevel) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.minLevel = minLevel;
+        }
+    }
+
+    bool Framework_Quest_CheckPrerequisites(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+
+        const Quest& q = it->second;
+        for (const auto& prereqId : q.prerequisites) {
+            auto prereqIt = g_questByStringId.find(prereqId);
+            if (prereqIt == g_questByStringId.end()) return false;
+            auto questIt = g_quests.find(prereqIt->second);
+            if (questIt == g_quests.end()) return false;
+            if (questIt->second.state != QUEST_STATE_COMPLETED) return false;
+        }
+        return true;
+    }
+
+    // ---- Objectives ----
+    int Framework_Quest_AddObjective(int questHandle, int objectiveType, const char* description, int requiredCount) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return -1;
+
+        QuestObjective obj;
+        obj.type = objectiveType;
+        obj.description = description ? description : "";
+        obj.requiredCount = requiredCount > 0 ? requiredCount : 1;
+        it->second.objectives.push_back(obj);
+        return (int)it->second.objectives.size() - 1;
+    }
+
+    void Framework_Quest_SetObjectiveTarget(int questHandle, int objectiveIndex, const char* targetId) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return;
+        if (targetId) {
+            it->second.objectives[objectiveIndex].targetId = targetId;
+        }
+    }
+
+    void Framework_Quest_SetObjectiveLocation(int questHandle, int objectiveIndex, float x, float y, float radius) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return;
+        it->second.objectives[objectiveIndex].locationX = x;
+        it->second.objectives[objectiveIndex].locationY = y;
+        it->second.objectives[objectiveIndex].locationRadius = radius;
+    }
+
+    void Framework_Quest_SetObjectiveOptional(int questHandle, int objectiveIndex, bool optional) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return;
+        it->second.objectives[objectiveIndex].optional = optional;
+    }
+
+    void Framework_Quest_SetObjectiveHidden(int questHandle, int objectiveIndex, bool hidden) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return;
+        it->second.objectives[objectiveIndex].hidden = hidden;
+    }
+
+    int Framework_Quest_GetObjectiveCount(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return 0;
+        return (int)it->second.objectives.size();
+    }
+
+    const char* Framework_Quest_GetObjectiveDescription(int questHandle, int objectiveIndex) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return "";
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return "";
+        strncpy(g_objDescBuf, it->second.objectives[objectiveIndex].description.c_str(), sizeof(g_objDescBuf) - 1);
+        g_objDescBuf[sizeof(g_objDescBuf) - 1] = '\0';
+        return g_objDescBuf;
+    }
+
+    int Framework_Quest_GetObjectiveType(int questHandle, int objectiveIndex) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return -1;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return -1;
+        return it->second.objectives[objectiveIndex].type;
+    }
+
+    int Framework_Quest_GetObjectiveProgress(int questHandle, int objectiveIndex) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return 0;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return 0;
+        return it->second.objectives[objectiveIndex].currentProgress;
+    }
+
+    int Framework_Quest_GetObjectiveRequired(int questHandle, int objectiveIndex) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return 0;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return 0;
+        return it->second.objectives[objectiveIndex].requiredCount;
+    }
+
+    bool Framework_Quest_IsObjectiveComplete(int questHandle, int objectiveIndex) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return false;
+        return it->second.objectives[objectiveIndex].completed;
+    }
+
+    // ---- Rewards ----
+    void Framework_Quest_AddRewardItem(int questHandle, int itemDefId, int quantity) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.rewards.items.push_back({ itemDefId, quantity });
+        }
+    }
+
+    void Framework_Quest_SetRewardExperience(int questHandle, int experience) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.rewards.experience = experience;
+        }
+    }
+
+    void Framework_Quest_SetRewardCurrency(int questHandle, int currencyType, int amount) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end()) {
+            it->second.rewards.currency[currencyType] = amount;
+        }
+    }
+
+    void Framework_Quest_AddRewardUnlock(int questHandle, const char* unlockId) {
+        auto it = g_quests.find(questHandle);
+        if (it != g_quests.end() && unlockId) {
+            it->second.rewards.unlocks.push_back(unlockId);
+        }
+    }
+
+    // ---- Quest State Management ----
+    bool Framework_Quest_Start(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+
+        Quest& q = it->second;
+        if (q.state == QUEST_STATE_IN_PROGRESS) return true;  // Already started
+        if (q.state == QUEST_STATE_COMPLETED && !q.repeatable) return false;
+        if (!Framework_Quest_CheckPrerequisites(questHandle)) return false;
+
+        q.state = QUEST_STATE_IN_PROGRESS;
+        q.timeElapsed = 0;
+
+        // Reset progress for repeatable quests
+        if (q.repeatable) {
+            for (auto& obj : q.objectives) {
+                obj.currentProgress = 0;
+                obj.completed = false;
+            }
+        }
+
+        if (g_questStateCallback) {
+            g_questStateCallback(questHandle, QUEST_STATE_IN_PROGRESS);
+        }
+        return true;
+    }
+
+    bool Framework_Quest_Complete(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+        if (it->second.state != QUEST_STATE_IN_PROGRESS) return false;
+
+        it->second.state = QUEST_STATE_COMPLETED;
+        it->second.tracked = false;
+
+        if (g_questStateCallback) {
+            g_questStateCallback(questHandle, QUEST_STATE_COMPLETED);
+        }
+        return true;
+    }
+
+    bool Framework_Quest_Fail(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+        if (it->second.state != QUEST_STATE_IN_PROGRESS) return false;
+
+        it->second.state = QUEST_STATE_FAILED;
+        it->second.tracked = false;
+
+        if (g_questStateCallback) {
+            g_questStateCallback(questHandle, QUEST_STATE_FAILED);
+        }
+        return true;
+    }
+
+    bool Framework_Quest_Abandon(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+        if (it->second.state != QUEST_STATE_IN_PROGRESS) return false;
+
+        it->second.state = QUEST_STATE_NOT_STARTED;
+        it->second.tracked = false;
+        it->second.timeElapsed = 0;
+
+        // Reset progress
+        for (auto& obj : it->second.objectives) {
+            obj.currentProgress = 0;
+            obj.completed = false;
+        }
+
+        if (g_questStateCallback) {
+            g_questStateCallback(questHandle, QUEST_STATE_NOT_STARTED);
+        }
+        return true;
+    }
+
+    bool Framework_Quest_Reset(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+
+        it->second.state = QUEST_STATE_NOT_STARTED;
+        it->second.tracked = false;
+        it->second.timeElapsed = 0;
+
+        for (auto& obj : it->second.objectives) {
+            obj.currentProgress = 0;
+            obj.completed = false;
+        }
+        return true;
+    }
+
+    int Framework_Quest_GetState(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return -1;
+        return it->second.state;
+    }
+
+    bool Framework_Quest_IsActive(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+        return it->second.state == QUEST_STATE_IN_PROGRESS;
+    }
+
+    bool Framework_Quest_IsCompleted(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+        return it->second.state == QUEST_STATE_COMPLETED;
+    }
+
+    bool Framework_Quest_CanStart(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+
+        const Quest& q = it->second;
+        if (q.state == QUEST_STATE_IN_PROGRESS) return false;
+        if (q.state == QUEST_STATE_COMPLETED && !q.repeatable) return false;
+        return Framework_Quest_CheckPrerequisites(questHandle);
+    }
+
+    // ---- Progress Tracking ----
+    void Framework_Quest_SetObjectiveProgress(int questHandle, int objectiveIndex, int progress) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return;
+
+        it->second.objectives[objectiveIndex].currentProgress = progress;
+        UpdateObjectiveCompletion(it->second, objectiveIndex);
+    }
+
+    void Framework_Quest_AddObjectiveProgress(int questHandle, int objectiveIndex, int amount) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return;
+        if (objectiveIndex < 0 || objectiveIndex >= (int)it->second.objectives.size()) return;
+
+        it->second.objectives[objectiveIndex].currentProgress += amount;
+        UpdateObjectiveCompletion(it->second, objectiveIndex);
+    }
+
+    float Framework_Quest_GetCompletionPercent(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return 0.0f;
+
+        const Quest& q = it->second;
+        if (q.objectives.empty()) return q.state == QUEST_STATE_COMPLETED ? 100.0f : 0.0f;
+
+        int totalRequired = 0;
+        int totalProgress = 0;
+        for (const auto& obj : q.objectives) {
+            if (!obj.optional) {
+                totalRequired += obj.requiredCount;
+                totalProgress += (obj.currentProgress < obj.requiredCount) ? obj.currentProgress : obj.requiredCount;
+            }
+        }
+        if (totalRequired == 0) return 100.0f;
+        return (float)totalProgress / (float)totalRequired * 100.0f;
+    }
+
+    // ---- Auto-Progress Reporting ----
+    void Framework_Quest_ReportKill(const char* targetType, int count) {
+        if (!targetType) return;
+        std::string target = targetType;
+
+        for (auto& kv : g_quests) {
+            Quest& q = kv.second;
+            if (q.state != QUEST_STATE_IN_PROGRESS) continue;
+
+            for (int i = 0; i < (int)q.objectives.size(); i++) {
+                auto& obj = q.objectives[i];
+                if (obj.type == OBJECTIVE_TYPE_KILL && obj.targetId == target && !obj.completed) {
+                    obj.currentProgress += count;
+                    UpdateObjectiveCompletion(q, i);
+                }
+            }
+        }
+    }
+
+    void Framework_Quest_ReportCollect(int itemDefId, int count) {
+        std::string target = std::to_string(itemDefId);
+
+        for (auto& kv : g_quests) {
+            Quest& q = kv.second;
+            if (q.state != QUEST_STATE_IN_PROGRESS) continue;
+
+            for (int i = 0; i < (int)q.objectives.size(); i++) {
+                auto& obj = q.objectives[i];
+                if (obj.type == OBJECTIVE_TYPE_COLLECT && obj.targetId == target && !obj.completed) {
+                    obj.currentProgress += count;
+                    UpdateObjectiveCompletion(q, i);
+                }
+            }
+        }
+    }
+
+    void Framework_Quest_ReportTalk(const char* npcId) {
+        if (!npcId) return;
+        std::string target = npcId;
+
+        for (auto& kv : g_quests) {
+            Quest& q = kv.second;
+            if (q.state != QUEST_STATE_IN_PROGRESS) continue;
+
+            for (int i = 0; i < (int)q.objectives.size(); i++) {
+                auto& obj = q.objectives[i];
+                if (obj.type == OBJECTIVE_TYPE_TALK && obj.targetId == target && !obj.completed) {
+                    obj.currentProgress = obj.requiredCount;
+                    UpdateObjectiveCompletion(q, i);
+                }
+            }
+        }
+    }
+
+    void Framework_Quest_ReportLocation(float x, float y) {
+        for (auto& kv : g_quests) {
+            Quest& q = kv.second;
+            if (q.state != QUEST_STATE_IN_PROGRESS) continue;
+
+            for (int i = 0; i < (int)q.objectives.size(); i++) {
+                auto& obj = q.objectives[i];
+                if ((obj.type == OBJECTIVE_TYPE_REACH || obj.type == OBJECTIVE_TYPE_EXPLORE) && !obj.completed) {
+                    float dx = x - obj.locationX;
+                    float dy = y - obj.locationY;
+                    float dist = sqrtf(dx * dx + dy * dy);
+                    if (dist <= obj.locationRadius) {
+                        obj.currentProgress = obj.requiredCount;
+                        UpdateObjectiveCompletion(q, i);
+                    }
+                }
+            }
+        }
+    }
+
+    void Framework_Quest_ReportInteract(const char* objectId) {
+        if (!objectId) return;
+        std::string target = objectId;
+
+        for (auto& kv : g_quests) {
+            Quest& q = kv.second;
+            if (q.state != QUEST_STATE_IN_PROGRESS) continue;
+
+            for (int i = 0; i < (int)q.objectives.size(); i++) {
+                auto& obj = q.objectives[i];
+                if (obj.type == OBJECTIVE_TYPE_INTERACT && obj.targetId == target && !obj.completed) {
+                    obj.currentProgress++;
+                    UpdateObjectiveCompletion(q, i);
+                }
+            }
+        }
+    }
+
+    void Framework_Quest_ReportCustom(const char* eventType, const char* eventData) {
+        if (!eventType) return;
+        std::string target = eventType;
+        std::string data = eventData ? eventData : "";
+
+        for (auto& kv : g_quests) {
+            Quest& q = kv.second;
+            if (q.state != QUEST_STATE_IN_PROGRESS) continue;
+
+            for (int i = 0; i < (int)q.objectives.size(); i++) {
+                auto& obj = q.objectives[i];
+                if (obj.type == OBJECTIVE_TYPE_CUSTOM && obj.targetId == target && !obj.completed) {
+                    obj.currentProgress++;
+                    UpdateObjectiveCompletion(q, i);
+                }
+            }
+        }
+    }
+
+    // ---- Quest Queries ----
+    int Framework_Quest_GetByStringId(const char* questId) {
+        if (!questId) return -1;
+        auto it = g_questByStringId.find(questId);
+        if (it == g_questByStringId.end()) return -1;
+        return it->second;
+    }
+
+    const char* Framework_Quest_GetName(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return "";
+        strncpy(g_questNameBuf, it->second.name.c_str(), sizeof(g_questNameBuf) - 1);
+        g_questNameBuf[sizeof(g_questNameBuf) - 1] = '\0';
+        return g_questNameBuf;
+    }
+
+    const char* Framework_Quest_GetDescription(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return "";
+        strncpy(g_questDescBuf, it->second.description.c_str(), sizeof(g_questDescBuf) - 1);
+        g_questDescBuf[sizeof(g_questDescBuf) - 1] = '\0';
+        return g_questDescBuf;
+    }
+
+    const char* Framework_Quest_GetCategory(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return "";
+        strncpy(g_questCatBuf, it->second.category.c_str(), sizeof(g_questCatBuf) - 1);
+        g_questCatBuf[sizeof(g_questCatBuf) - 1] = '\0';
+        return g_questCatBuf;
+    }
+
+    const char* Framework_Quest_GetStringId(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return "";
+        strncpy(g_questIdBuf, it->second.stringId.c_str(), sizeof(g_questIdBuf) - 1);
+        g_questIdBuf[sizeof(g_questIdBuf) - 1] = '\0';
+        return g_questIdBuf;
+    }
+
+    int Framework_Quest_GetLevel(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return 0;
+        return it->second.level;
+    }
+
+    float Framework_Quest_GetTimeRemaining(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return 0;
+        if (it->second.timeLimit <= 0) return -1;  // No limit
+        float remaining = it->second.timeLimit - it->second.timeElapsed;
+        return remaining > 0 ? remaining : 0;
+    }
+
+    float Framework_Quest_GetTimeElapsed(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return 0;
+        return it->second.timeElapsed;
+    }
+
+    // ---- Active Quest List ----
+    int Framework_Quest_GetActiveCount() {
+        int count = 0;
+        for (const auto& kv : g_quests) {
+            if (kv.second.state == QUEST_STATE_IN_PROGRESS && !kv.second.hidden) count++;
+        }
+        return count;
+    }
+
+    int Framework_Quest_GetActiveAt(int index) {
+        int count = 0;
+        for (const auto& kv : g_quests) {
+            if (kv.second.state == QUEST_STATE_IN_PROGRESS && !kv.second.hidden) {
+                if (count == index) return kv.first;
+                count++;
+            }
+        }
+        return -1;
+    }
+
+    int Framework_Quest_GetCompletedCount() {
+        int count = 0;
+        for (const auto& kv : g_quests) {
+            if (kv.second.state == QUEST_STATE_COMPLETED) count++;
+        }
+        return count;
+    }
+
+    int Framework_Quest_GetCompletedAt(int index) {
+        int count = 0;
+        for (const auto& kv : g_quests) {
+            if (kv.second.state == QUEST_STATE_COMPLETED) {
+                if (count == index) return kv.first;
+                count++;
+            }
+        }
+        return -1;
+    }
+
+    int Framework_Quest_GetAvailableCount() {
+        int count = 0;
+        for (const auto& kv : g_quests) {
+            if (kv.second.state == QUEST_STATE_NOT_STARTED && !kv.second.hidden) {
+                if (Framework_Quest_CheckPrerequisites(kv.first)) count++;
+            }
+        }
+        return count;
+    }
+
+    int Framework_Quest_GetAvailableAt(int index) {
+        int count = 0;
+        for (const auto& kv : g_quests) {
+            if (kv.second.state == QUEST_STATE_NOT_STARTED && !kv.second.hidden) {
+                if (Framework_Quest_CheckPrerequisites(kv.first)) {
+                    if (count == index) return kv.first;
+                    count++;
+                }
+            }
+        }
+        return -1;
+    }
+
+    // ---- Quest Tracking (HUD) ----
+    void Framework_Quest_SetTracked(int questHandle, bool tracked) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return;
+
+        if (tracked) {
+            // Check max tracked limit
+            int currentTracked = 0;
+            for (const auto& kv : g_quests) {
+                if (kv.second.tracked) currentTracked++;
+            }
+            if (currentTracked >= g_maxTracked && !it->second.tracked) {
+                return;  // Can't track more
+            }
+        }
+        it->second.tracked = tracked;
+    }
+
+    bool Framework_Quest_IsTracked(int questHandle) {
+        auto it = g_quests.find(questHandle);
+        if (it == g_quests.end()) return false;
+        return it->second.tracked;
+    }
+
+    int Framework_Quest_GetTrackedCount() {
+        int count = 0;
+        for (const auto& kv : g_quests) {
+            if (kv.second.tracked) count++;
+        }
+        return count;
+    }
+
+    int Framework_Quest_GetTrackedAt(int index) {
+        int count = 0;
+        for (const auto& kv : g_quests) {
+            if (kv.second.tracked) {
+                if (count == index) return kv.first;
+                count++;
+            }
+        }
+        return -1;
+    }
+
+    void Framework_Quest_SetMaxTracked(int maxTracked) {
+        g_maxTracked = maxTracked > 0 ? maxTracked : 1;
+    }
+
+    // ---- Callbacks ----
+    void Framework_Quest_SetOnStateChange(QuestStateCallback callback) {
+        g_questStateCallback = callback;
+    }
+
+    void Framework_Quest_SetOnObjectiveUpdate(ObjectiveUpdateCallback callback) {
+        g_objectiveUpdateCallback = callback;
+    }
+
+    // ---- Quest Chains ----
+    int Framework_QuestChain_Create(const char* chainId) {
+        if (!chainId) return -1;
+
+        auto it = g_chainByStringId.find(chainId);
+        if (it != g_chainByStringId.end()) {
+            return it->second;
+        }
+
+        QuestChain chain;
+        chain.handle = g_nextChainHandle++;
+        chain.stringId = chainId;
+        g_questChains[chain.handle] = chain;
+        g_chainByStringId[chainId] = chain.handle;
+        return chain.handle;
+    }
+
+    void Framework_QuestChain_AddQuest(int chainHandle, int questHandle) {
+        auto it = g_questChains.find(chainHandle);
+        if (it == g_questChains.end()) return;
+        if (g_quests.find(questHandle) == g_quests.end()) return;
+        it->second.questHandles.push_back(questHandle);
+    }
+
+    int Framework_QuestChain_GetCurrentQuest(int chainHandle) {
+        auto it = g_questChains.find(chainHandle);
+        if (it == g_questChains.end()) return -1;
+
+        const QuestChain& chain = it->second;
+        if (chain.questHandles.empty()) return -1;
+
+        // Find first incomplete quest in chain
+        for (int h : chain.questHandles) {
+            auto qIt = g_quests.find(h);
+            if (qIt != g_quests.end() && qIt->second.state != QUEST_STATE_COMPLETED) {
+                return h;
+            }
+        }
+        return -1;  // All complete
+    }
+
+    int Framework_QuestChain_GetProgress(int chainHandle) {
+        auto it = g_questChains.find(chainHandle);
+        if (it == g_questChains.end()) return 0;
+
+        int completed = 0;
+        for (int h : it->second.questHandles) {
+            auto qIt = g_quests.find(h);
+            if (qIt != g_quests.end() && qIt->second.state == QUEST_STATE_COMPLETED) {
+                completed++;
+            }
+        }
+        return completed;
+    }
+
+    int Framework_QuestChain_GetLength(int chainHandle) {
+        auto it = g_questChains.find(chainHandle);
+        if (it == g_questChains.end()) return 0;
+        return (int)it->second.questHandles.size();
+    }
+
+    bool Framework_QuestChain_IsComplete(int chainHandle) {
+        auto it = g_questChains.find(chainHandle);
+        if (it == g_questChains.end()) return false;
+
+        for (int h : it->second.questHandles) {
+            auto qIt = g_quests.find(h);
+            if (qIt == g_quests.end() || qIt->second.state != QUEST_STATE_COMPLETED) {
+                return false;
+            }
+        }
+        return !it->second.questHandles.empty();
+    }
+
+    // ---- Save/Load ----
+    bool Framework_Quest_SaveProgress(int saveSlot, const char* key) {
+        if (!Framework_Save_BeginSave(saveSlot)) return false;
+
+        // Build save data string: questId:state:obj0progress:obj1progress...;
+        std::string data;
+        for (const auto& kv : g_quests) {
+            const Quest& q = kv.second;
+            data += q.stringId + ":" + std::to_string(q.state);
+            for (const auto& obj : q.objectives) {
+                data += ":" + std::to_string(obj.currentProgress);
+            }
+            data += ";";
+        }
+        Framework_Save_WriteString(key, data.c_str());
+        return Framework_Save_EndSave();
+    }
+
+    bool Framework_Quest_LoadProgress(int saveSlot, const char* key) {
+        if (!Framework_Save_BeginLoad(saveSlot)) return false;
+
+        const char* data = Framework_Save_ReadString(key, "");
+        if (!data || strlen(data) == 0) {
+            Framework_Save_EndLoad();
+            return false;
+        }
+
+        std::string str = data;
+        size_t pos = 0;
+        while ((pos = str.find(';')) != std::string::npos) {
+            std::string entry = str.substr(0, pos);
+            str.erase(0, pos + 1);
+
+            // Parse questId:state:obj0:obj1:...
+            std::vector<std::string> parts;
+            size_t colonPos;
+            while ((colonPos = entry.find(':')) != std::string::npos) {
+                parts.push_back(entry.substr(0, colonPos));
+                entry.erase(0, colonPos + 1);
+            }
+            parts.push_back(entry);
+
+            if (parts.size() >= 2) {
+                std::string questId = parts[0];
+                int state = std::stoi(parts[1]);
+
+                auto idIt = g_questByStringId.find(questId);
+                if (idIt != g_questByStringId.end()) {
+                    auto qIt = g_quests.find(idIt->second);
+                    if (qIt != g_quests.end()) {
+                        qIt->second.state = state;
+                        for (size_t i = 2; i < parts.size() && (i - 2) < qIt->second.objectives.size(); i++) {
+                            qIt->second.objectives[i - 2].currentProgress = std::stoi(parts[i]);
+                            qIt->second.objectives[i - 2].completed =
+                                qIt->second.objectives[i - 2].currentProgress >= qIt->second.objectives[i - 2].requiredCount;
+                        }
+                    }
+                }
+            }
+        }
+        Framework_Save_EndLoad();
+        return true;
+    }
+
+    // ---- Global Management ----
+    void Framework_Quest_Update(float deltaTime) {
+        for (auto& kv : g_quests) {
+            Quest& q = kv.second;
+            if (q.state != QUEST_STATE_IN_PROGRESS) continue;
+
+            // Update time
+            q.timeElapsed += deltaTime;
+
+            // Check time limit
+            if (q.timeLimit > 0 && q.timeElapsed >= q.timeLimit) {
+                q.state = QUEST_STATE_FAILED;
+                q.tracked = false;
+                if (g_questStateCallback) {
+                    g_questStateCallback(q.handle, QUEST_STATE_FAILED);
+                }
+            }
+        }
+    }
+
+    void Framework_Quest_UndefineAll() {
+        g_quests.clear();
+        g_questByStringId.clear();
+        g_questChains.clear();
+        g_chainByStringId.clear();
+        g_nextQuestHandle = 1;
+        g_nextChainHandle = 1;
+    }
+
+    void Framework_Quest_ResetAllProgress() {
+        for (auto& kv : g_quests) {
+            Quest& q = kv.second;
+            q.state = QUEST_STATE_NOT_STARTED;
+            q.tracked = false;
+            q.timeElapsed = 0;
+            for (auto& obj : q.objectives) {
+                obj.currentProgress = 0;
+                obj.completed = false;
+            }
+        }
+    }
+
+    int Framework_Quest_GetDefinedCount() {
+        return (int)g_quests.size();
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {

@@ -5468,6 +5468,389 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Quest System"
+    ' Quest States
+    Public Const QUEST_STATE_NOT_STARTED As Integer = 0
+    Public Const QUEST_STATE_IN_PROGRESS As Integer = 1
+    Public Const QUEST_STATE_COMPLETED As Integer = 2
+    Public Const QUEST_STATE_FAILED As Integer = 3
+
+    ' Objective Types
+    Public Const OBJECTIVE_TYPE_CUSTOM As Integer = 0
+    Public Const OBJECTIVE_TYPE_KILL As Integer = 1
+    Public Const OBJECTIVE_TYPE_COLLECT As Integer = 2
+    Public Const OBJECTIVE_TYPE_TALK As Integer = 3
+    Public Const OBJECTIVE_TYPE_REACH As Integer = 4
+    Public Const OBJECTIVE_TYPE_INTERACT As Integer = 5
+    Public Const OBJECTIVE_TYPE_ESCORT As Integer = 6
+    Public Const OBJECTIVE_TYPE_DEFEND As Integer = 7
+    Public Const OBJECTIVE_TYPE_EXPLORE As Integer = 8
+
+    ' Callback delegates
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub QuestStateCallback(questId As Integer, newState As Integer)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub ObjectiveUpdateCallback(questId As Integer, objectiveIndex As Integer, currentProgress As Integer, requiredProgress As Integer)
+
+    ' ---- Quest Definition ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Quest_Define(questId As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_SetName(questHandle As Integer, name As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_SetDescription(questHandle As Integer, description As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_SetCategory(questHandle As Integer, category As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetLevel(questHandle As Integer, level As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetRepeatable(questHandle As Integer, repeatable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetAutoComplete(questHandle As Integer, autoComplete As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetHidden(questHandle As Integer, hidden As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetTimeLimit(questHandle As Integer, seconds As Single)
+    End Sub
+
+    ' ---- Quest Prerequisites ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_AddPrerequisite(questHandle As Integer, requiredQuestId As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetMinLevel(questHandle As Integer, minLevel As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_CheckPrerequisites(questHandle As Integer) As Boolean
+    End Function
+
+    ' ---- Objectives ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Quest_AddObjective(questHandle As Integer, objectiveType As Integer, description As String, requiredCount As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_SetObjectiveTarget(questHandle As Integer, objectiveIndex As Integer, targetId As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetObjectiveLocation(questHandle As Integer, objectiveIndex As Integer, x As Single, y As Single, radius As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetObjectiveOptional(questHandle As Integer, objectiveIndex As Integer, optional_ As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetObjectiveHidden(questHandle As Integer, objectiveIndex As Integer, hidden As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetObjectiveCount(questHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetObjectiveDescription(questHandle As Integer, objectiveIndex As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetObjectiveType(questHandle As Integer, objectiveIndex As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetObjectiveProgress(questHandle As Integer, objectiveIndex As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetObjectiveRequired(questHandle As Integer, objectiveIndex As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_IsObjectiveComplete(questHandle As Integer, objectiveIndex As Integer) As Boolean
+    End Function
+
+    ' ---- Rewards ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_AddRewardItem(questHandle As Integer, itemDefId As Integer, quantity As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetRewardExperience(questHandle As Integer, experience As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetRewardCurrency(questHandle As Integer, currencyType As Integer, amount As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_AddRewardUnlock(questHandle As Integer, unlockId As String)
+    End Sub
+
+    ' ---- Quest State Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_Start(questHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_Complete(questHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_Fail(questHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_Abandon(questHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_Reset(questHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetState(questHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_IsActive(questHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_IsCompleted(questHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_CanStart(questHandle As Integer) As Boolean
+    End Function
+
+    ' ---- Progress Tracking ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetObjectiveProgress(questHandle As Integer, objectiveIndex As Integer, progress As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_AddObjectiveProgress(questHandle As Integer, objectiveIndex As Integer, amount As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetCompletionPercent(questHandle As Integer) As Single
+    End Function
+
+    ' ---- Auto-Progress Reporting ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_ReportKill(targetType As String, count As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_ReportCollect(itemDefId As Integer, count As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_ReportTalk(npcId As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_ReportLocation(x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_ReportInteract(objectId As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Quest_ReportCustom(eventType As String, eventData As String)
+    End Sub
+
+    ' ---- Quest Queries ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Quest_GetByStringId(questId As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetName(questHandle As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetDescription(questHandle As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetCategory(questHandle As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetStringId(questHandle As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetLevel(questHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetTimeRemaining(questHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetTimeElapsed(questHandle As Integer) As Single
+    End Function
+
+    ' ---- Active Quest List ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetActiveCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetActiveAt(index As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetCompletedCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetCompletedAt(index As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetAvailableCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetAvailableAt(index As Integer) As Integer
+    End Function
+
+    ' ---- Quest Tracking (HUD) ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetTracked(questHandle As Integer, tracked As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_IsTracked(questHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetTrackedCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetTrackedAt(index As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetMaxTracked(maxTracked As Integer)
+    End Sub
+
+    ' ---- Callbacks ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetOnStateChange(callback As QuestStateCallback)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_SetOnObjectiveUpdate(callback As ObjectiveUpdateCallback)
+    End Sub
+
+    ' ---- Quest Chains ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_QuestChain_Create(chainId As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_QuestChain_AddQuest(chainHandle As Integer, questHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_QuestChain_GetCurrentQuest(chainHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_QuestChain_GetProgress(chainHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_QuestChain_GetLength(chainHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_QuestChain_IsComplete(chainHandle As Integer) As Boolean
+    End Function
+
+    ' ---- Save/Load ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Quest_SaveProgress(saveSlot As Integer, key As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Quest_LoadProgress(saveSlot As Integer, key As String) As Boolean
+    End Function
+
+    ' ---- Global Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_Update(deltaTime As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_UndefineAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Quest_ResetAllProgress()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Quest_GetDefinedCount() As Integer
+    End Function
+
+    ' ---- Helper Functions ----
+    Public Function GetQuestName(questHandle As Integer) As String
+        Dim ptr As IntPtr = Framework_Quest_GetName(questHandle)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    Public Function GetQuestDescription(questHandle As Integer) As String
+        Dim ptr As IntPtr = Framework_Quest_GetDescription(questHandle)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    Public Function GetQuestCategory(questHandle As Integer) As String
+        Dim ptr As IntPtr = Framework_Quest_GetCategory(questHandle)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    Public Function GetQuestStringId(questHandle As Integer) As String
+        Dim ptr As IntPtr = Framework_Quest_GetStringId(questHandle)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    Public Function GetObjectiveDescription(questHandle As Integer, objectiveIndex As Integer) As String
+        Dim ptr As IntPtr = Framework_Quest_GetObjectiveDescription(questHandle, objectiveIndex)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

@@ -2283,6 +2283,138 @@ extern "C" {
     __declspec(dllexport) int   Framework_Equipment_GetCount();
 
     // ========================================================================
+    // QUEST SYSTEM
+    // ========================================================================
+    // Quest and objective management for tracking player progress
+
+    // Quest States
+    #define QUEST_STATE_NOT_STARTED  0
+    #define QUEST_STATE_IN_PROGRESS  1
+    #define QUEST_STATE_COMPLETED    2
+    #define QUEST_STATE_FAILED       3
+
+    // Objective Types
+    #define OBJECTIVE_TYPE_CUSTOM    0   // Generic, manual completion
+    #define OBJECTIVE_TYPE_KILL      1   // Kill X of target type
+    #define OBJECTIVE_TYPE_COLLECT   2   // Collect X of item type
+    #define OBJECTIVE_TYPE_TALK      3   // Talk to specific NPC
+    #define OBJECTIVE_TYPE_REACH     4   // Reach a location
+    #define OBJECTIVE_TYPE_INTERACT  5   // Interact with object
+    #define OBJECTIVE_TYPE_ESCORT    6   // Escort entity to location
+    #define OBJECTIVE_TYPE_DEFEND    7   // Defend for X seconds
+    #define OBJECTIVE_TYPE_EXPLORE   8   // Discover X locations
+
+    // Quest callback types
+    typedef void (*QuestStateCallback)(int questId, int newState);
+    typedef void (*ObjectiveUpdateCallback)(int questId, int objectiveIndex, int currentProgress, int requiredProgress);
+
+    // ---- Quest Definition ----
+    __declspec(dllexport) int   Framework_Quest_Define(const char* questId);
+    __declspec(dllexport) void  Framework_Quest_SetName(int questHandle, const char* name);
+    __declspec(dllexport) void  Framework_Quest_SetDescription(int questHandle, const char* description);
+    __declspec(dllexport) void  Framework_Quest_SetCategory(int questHandle, const char* category);
+    __declspec(dllexport) void  Framework_Quest_SetLevel(int questHandle, int level);
+    __declspec(dllexport) void  Framework_Quest_SetRepeatable(int questHandle, bool repeatable);
+    __declspec(dllexport) void  Framework_Quest_SetAutoComplete(int questHandle, bool autoComplete);
+    __declspec(dllexport) void  Framework_Quest_SetHidden(int questHandle, bool hidden);
+    __declspec(dllexport) void  Framework_Quest_SetTimeLimit(int questHandle, float seconds);
+
+    // ---- Quest Prerequisites ----
+    __declspec(dllexport) void  Framework_Quest_AddPrerequisite(int questHandle, const char* requiredQuestId);
+    __declspec(dllexport) void  Framework_Quest_SetMinLevel(int questHandle, int minLevel);
+    __declspec(dllexport) bool  Framework_Quest_CheckPrerequisites(int questHandle);
+
+    // ---- Objectives ----
+    __declspec(dllexport) int   Framework_Quest_AddObjective(int questHandle, int objectiveType, const char* description, int requiredCount);
+    __declspec(dllexport) void  Framework_Quest_SetObjectiveTarget(int questHandle, int objectiveIndex, const char* targetId);
+    __declspec(dllexport) void  Framework_Quest_SetObjectiveLocation(int questHandle, int objectiveIndex, float x, float y, float radius);
+    __declspec(dllexport) void  Framework_Quest_SetObjectiveOptional(int questHandle, int objectiveIndex, bool optional);
+    __declspec(dllexport) void  Framework_Quest_SetObjectiveHidden(int questHandle, int objectiveIndex, bool hidden);
+    __declspec(dllexport) int   Framework_Quest_GetObjectiveCount(int questHandle);
+    __declspec(dllexport) const char* Framework_Quest_GetObjectiveDescription(int questHandle, int objectiveIndex);
+    __declspec(dllexport) int   Framework_Quest_GetObjectiveType(int questHandle, int objectiveIndex);
+    __declspec(dllexport) int   Framework_Quest_GetObjectiveProgress(int questHandle, int objectiveIndex);
+    __declspec(dllexport) int   Framework_Quest_GetObjectiveRequired(int questHandle, int objectiveIndex);
+    __declspec(dllexport) bool  Framework_Quest_IsObjectiveComplete(int questHandle, int objectiveIndex);
+
+    // ---- Rewards ----
+    __declspec(dllexport) void  Framework_Quest_AddRewardItem(int questHandle, int itemDefId, int quantity);
+    __declspec(dllexport) void  Framework_Quest_SetRewardExperience(int questHandle, int experience);
+    __declspec(dllexport) void  Framework_Quest_SetRewardCurrency(int questHandle, int currencyType, int amount);
+    __declspec(dllexport) void  Framework_Quest_AddRewardUnlock(int questHandle, const char* unlockId);
+
+    // ---- Quest State Management ----
+    __declspec(dllexport) bool  Framework_Quest_Start(int questHandle);
+    __declspec(dllexport) bool  Framework_Quest_Complete(int questHandle);
+    __declspec(dllexport) bool  Framework_Quest_Fail(int questHandle);
+    __declspec(dllexport) bool  Framework_Quest_Abandon(int questHandle);
+    __declspec(dllexport) bool  Framework_Quest_Reset(int questHandle);
+    __declspec(dllexport) int   Framework_Quest_GetState(int questHandle);
+    __declspec(dllexport) bool  Framework_Quest_IsActive(int questHandle);
+    __declspec(dllexport) bool  Framework_Quest_IsCompleted(int questHandle);
+    __declspec(dllexport) bool  Framework_Quest_CanStart(int questHandle);
+
+    // ---- Progress Tracking ----
+    __declspec(dllexport) void  Framework_Quest_SetObjectiveProgress(int questHandle, int objectiveIndex, int progress);
+    __declspec(dllexport) void  Framework_Quest_AddObjectiveProgress(int questHandle, int objectiveIndex, int amount);
+    __declspec(dllexport) float Framework_Quest_GetCompletionPercent(int questHandle);
+
+    // ---- Auto-Progress Reporting ----
+    __declspec(dllexport) void  Framework_Quest_ReportKill(const char* targetType, int count);
+    __declspec(dllexport) void  Framework_Quest_ReportCollect(int itemDefId, int count);
+    __declspec(dllexport) void  Framework_Quest_ReportTalk(const char* npcId);
+    __declspec(dllexport) void  Framework_Quest_ReportLocation(float x, float y);
+    __declspec(dllexport) void  Framework_Quest_ReportInteract(const char* objectId);
+    __declspec(dllexport) void  Framework_Quest_ReportCustom(const char* eventType, const char* eventData);
+
+    // ---- Quest Queries ----
+    __declspec(dllexport) int   Framework_Quest_GetByStringId(const char* questId);
+    __declspec(dllexport) const char* Framework_Quest_GetName(int questHandle);
+    __declspec(dllexport) const char* Framework_Quest_GetDescription(int questHandle);
+    __declspec(dllexport) const char* Framework_Quest_GetCategory(int questHandle);
+    __declspec(dllexport) const char* Framework_Quest_GetStringId(int questHandle);
+    __declspec(dllexport) int   Framework_Quest_GetLevel(int questHandle);
+    __declspec(dllexport) float Framework_Quest_GetTimeRemaining(int questHandle);
+    __declspec(dllexport) float Framework_Quest_GetTimeElapsed(int questHandle);
+
+    // ---- Active Quest List ----
+    __declspec(dllexport) int   Framework_Quest_GetActiveCount();
+    __declspec(dllexport) int   Framework_Quest_GetActiveAt(int index);
+    __declspec(dllexport) int   Framework_Quest_GetCompletedCount();
+    __declspec(dllexport) int   Framework_Quest_GetCompletedAt(int index);
+    __declspec(dllexport) int   Framework_Quest_GetAvailableCount();
+    __declspec(dllexport) int   Framework_Quest_GetAvailableAt(int index);
+
+    // ---- Quest Tracking (HUD) ----
+    __declspec(dllexport) void  Framework_Quest_SetTracked(int questHandle, bool tracked);
+    __declspec(dllexport) bool  Framework_Quest_IsTracked(int questHandle);
+    __declspec(dllexport) int   Framework_Quest_GetTrackedCount();
+    __declspec(dllexport) int   Framework_Quest_GetTrackedAt(int index);
+    __declspec(dllexport) void  Framework_Quest_SetMaxTracked(int maxTracked);
+
+    // ---- Callbacks ----
+    __declspec(dllexport) void  Framework_Quest_SetOnStateChange(QuestStateCallback callback);
+    __declspec(dllexport) void  Framework_Quest_SetOnObjectiveUpdate(ObjectiveUpdateCallback callback);
+
+    // ---- Quest Chains ----
+    __declspec(dllexport) int   Framework_QuestChain_Create(const char* chainId);
+    __declspec(dllexport) void  Framework_QuestChain_AddQuest(int chainHandle, int questHandle);
+    __declspec(dllexport) int   Framework_QuestChain_GetCurrentQuest(int chainHandle);
+    __declspec(dllexport) int   Framework_QuestChain_GetProgress(int chainHandle);
+    __declspec(dllexport) int   Framework_QuestChain_GetLength(int chainHandle);
+    __declspec(dllexport) bool  Framework_QuestChain_IsComplete(int chainHandle);
+
+    // ---- Save/Load ----
+    __declspec(dllexport) bool  Framework_Quest_SaveProgress(int saveSlot, const char* key);
+    __declspec(dllexport) bool  Framework_Quest_LoadProgress(int saveSlot, const char* key);
+
+    // ---- Global Management ----
+    __declspec(dllexport) void  Framework_Quest_Update(float deltaTime);
+    __declspec(dllexport) void  Framework_Quest_UndefineAll();
+    __declspec(dllexport) void  Framework_Quest_ResetAllProgress();
+    __declspec(dllexport) int   Framework_Quest_GetDefinedCount();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();
