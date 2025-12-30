@@ -2895,6 +2895,324 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Tweening System"
+    ' Tween Easing Types
+    Public Enum TweenEasing As Integer
+        TWEEN_LINEAR = 0
+        TWEEN_IN_QUAD = 1
+        TWEEN_OUT_QUAD = 2
+        TWEEN_IN_OUT_QUAD = 3
+        TWEEN_IN_CUBIC = 4
+        TWEEN_OUT_CUBIC = 5
+        TWEEN_IN_OUT_CUBIC = 6
+        TWEEN_IN_EXPO = 7
+        TWEEN_OUT_EXPO = 8
+        TWEEN_IN_OUT_EXPO = 9
+        TWEEN_IN_SINE = 10
+        TWEEN_OUT_SINE = 11
+        TWEEN_IN_OUT_SINE = 12
+        TWEEN_IN_BACK = 13
+        TWEEN_OUT_BACK = 14
+        TWEEN_IN_OUT_BACK = 15
+        TWEEN_IN_ELASTIC = 16
+        TWEEN_OUT_ELASTIC = 17
+        TWEEN_IN_OUT_ELASTIC = 18
+        TWEEN_IN_BOUNCE = 19
+        TWEEN_OUT_BOUNCE = 20
+        TWEEN_IN_OUT_BOUNCE = 21
+    End Enum
+
+    ' Tween Loop Mode
+    Public Enum TweenLoopMode As Integer
+        TWEEN_LOOP_NONE = 0
+        TWEEN_LOOP_RESTART = 1
+        TWEEN_LOOP_YOYO = 2
+        TWEEN_LOOP_INCREMENT = 3
+    End Enum
+
+    ' Tween State
+    Public Enum TweenState As Integer
+        TWEEN_STATE_IDLE = 0
+        TWEEN_STATE_PLAYING = 1
+        TWEEN_STATE_PAUSED = 2
+        TWEEN_STATE_COMPLETED = 3
+    End Enum
+
+    ' Tween Callbacks
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub TweenCallback(tweenId As Integer)
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub TweenUpdateCallback(tweenId As Integer, value As Single)
+
+    ' Float Tweens
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_Float(fromValue As Single, toValue As Single, duration As Single, easing As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_FloatTo(ByRef target As Single, toValue As Single, duration As Single, easing As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_FloatFromTo(ByRef target As Single, fromValue As Single, toValue As Single, duration As Single, easing As Integer) As Integer
+    End Function
+
+    ' Vector2 Tweens
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_Vector2(fromX As Single, fromY As Single, toX As Single, toY As Single, duration As Single, easing As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_Vector2To(ByRef targetX As Single, ByRef targetY As Single, toX As Single, toY As Single, duration As Single, easing As Integer) As Integer
+    End Function
+
+    ' Color Tweens
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_Color(fromR As Byte, fromG As Byte, fromB As Byte, fromA As Byte, toR As Byte, toG As Byte, toB As Byte, toA As Byte, duration As Single, easing As Integer) As Integer
+    End Function
+
+    ' Tween Control
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_Play(tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_Pause(tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_Resume(tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_Stop(tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_Restart(tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_Kill(tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_Complete(tweenId As Integer)
+    End Sub
+
+    ' Tween State Queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_IsValid(tweenId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetState(tweenId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_IsPlaying(tweenId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_IsPaused(tweenId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_IsCompleted(tweenId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetProgress(tweenId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetElapsed(tweenId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetDuration(tweenId As Integer) As Single
+    End Function
+
+    ' Tween Value Getters
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetFloat(tweenId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_GetVector2(tweenId As Integer, ByRef x As Single, ByRef y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_GetColor(tweenId As Integer, ByRef r As Byte, ByRef g As Byte, ByRef b As Byte, ByRef a As Byte)
+    End Sub
+
+    ' Tween Configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetDelay(tweenId As Integer, delay As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetDelay(tweenId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetLoopMode(tweenId As Integer, loopMode As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetLoopMode(tweenId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetLoopCount(tweenId As Integer, count As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetLoopCount(tweenId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetCurrentLoop(tweenId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetTimeScale(tweenId As Integer, scale As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetTimeScale(tweenId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetAutoKill(tweenId As Integer, autoKill As Boolean)
+    End Sub
+
+    ' Tween Callbacks
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetOnStart(tweenId As Integer, callback As TweenCallback)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetOnUpdate(tweenId As Integer, callback As TweenUpdateCallback)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetOnComplete(tweenId As Integer, callback As TweenCallback)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetOnLoop(tweenId As Integer, callback As TweenCallback)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetOnKill(tweenId As Integer, callback As TweenCallback)
+    End Sub
+
+    ' Sequence Building
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_CreateSequence() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SequenceAppend(seqId As Integer, tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SequenceJoin(seqId As Integer, tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SequenceInsert(seqId As Integer, atTime As Single, tweenId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SequenceAppendDelay(seqId As Integer, delay As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SequenceAppendCallback(seqId As Integer, callback As TweenCallback)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_PlaySequence(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_PauseSequence(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_StopSequence(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_KillSequence(seqId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_IsSequenceValid(seqId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_IsSequencePlaying(seqId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetSequenceDuration(seqId As Integer) As Single
+    End Function
+
+    ' Entity Property Tweens
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_EntityPosition(entity As Integer, toX As Single, toY As Single, duration As Single, easing As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_EntityRotation(entity As Integer, toRotation As Single, duration As Single, easing As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_EntityScale(entity As Integer, toScaleX As Single, toScaleY As Single, duration As Single, easing As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_EntityAlpha(entity As Integer, toAlpha As Byte, duration As Single, easing As Integer) As Integer
+    End Function
+
+    ' Global Tween Management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_Update(dt As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_PauseAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_ResumeAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_KillAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetActiveCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Tween_SetGlobalTimeScale(scale As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_GetGlobalTimeScale() As Single
+    End Function
+
+    ' Easing Function Utility
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Tween_Ease(t As Single, easing As Integer) As Single
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

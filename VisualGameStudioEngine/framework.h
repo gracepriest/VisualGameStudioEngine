@@ -170,6 +170,54 @@ enum TransitionState {
 };
 
 // ============================================================================
+// TWEEN EASING (extends TransitionEasing with more options)
+// ============================================================================
+enum TweenEasing {
+    TWEEN_LINEAR = 0,
+    TWEEN_IN_QUAD = 1,
+    TWEEN_OUT_QUAD = 2,
+    TWEEN_IN_OUT_QUAD = 3,
+    TWEEN_IN_CUBIC = 4,
+    TWEEN_OUT_CUBIC = 5,
+    TWEEN_IN_OUT_CUBIC = 6,
+    TWEEN_IN_EXPO = 7,
+    TWEEN_OUT_EXPO = 8,
+    TWEEN_IN_OUT_EXPO = 9,
+    TWEEN_IN_SINE = 10,
+    TWEEN_OUT_SINE = 11,
+    TWEEN_IN_OUT_SINE = 12,
+    TWEEN_IN_BACK = 13,
+    TWEEN_OUT_BACK = 14,
+    TWEEN_IN_OUT_BACK = 15,
+    TWEEN_IN_ELASTIC = 16,
+    TWEEN_OUT_ELASTIC = 17,
+    TWEEN_IN_OUT_ELASTIC = 18,
+    TWEEN_IN_BOUNCE = 19,
+    TWEEN_OUT_BOUNCE = 20,
+    TWEEN_IN_OUT_BOUNCE = 21
+};
+
+// ============================================================================
+// TWEEN LOOP MODE
+// ============================================================================
+enum TweenLoopMode {
+    TWEEN_LOOP_NONE = 0,      // Play once
+    TWEEN_LOOP_RESTART = 1,   // Loop from start
+    TWEEN_LOOP_YOYO = 2,      // Ping-pong back and forth
+    TWEEN_LOOP_INCREMENT = 3  // Loop and increment values each time
+};
+
+// ============================================================================
+// TWEEN STATE
+// ============================================================================
+enum TweenState {
+    TWEEN_STATE_IDLE = 0,
+    TWEEN_STATE_PLAYING = 1,
+    TWEEN_STATE_PAUSED = 2,
+    TWEEN_STATE_COMPLETED = 3
+};
+
+// ============================================================================
 // CALLBACK TYPES
 // ============================================================================
 typedef void (*DrawCallback)();
@@ -188,6 +236,10 @@ typedef void (*PhysicsCollisionCallback)(int bodyA, int bodyB, float normalX, fl
 // Scene Manager Callbacks
 typedef void (*LoadingCallback)(float progress);  // Called during loading with 0-1 progress
 typedef void (*LoadingDrawCallback)();            // Custom loading screen draw function
+
+// Tween Callbacks
+typedef void (*TweenCallback)(int tweenId);                    // Called on complete/start/stop
+typedef void (*TweenUpdateCallback)(int tweenId, float value); // Called each update with current value
 
 struct SceneCallbacks {
     SceneVoidFn         onEnter;
@@ -1258,6 +1310,99 @@ extern "C" {
     __declspec(dllexport) bool  Framework_Settings_Save();  // Save settings to disk
     __declspec(dllexport) bool  Framework_Settings_Load();  // Load settings from disk
     __declspec(dllexport) void  Framework_Settings_Clear(); // Clear all settings
+
+    // ========================================================================
+    // TWEENING SYSTEM - Property Animation & Interpolation
+    // ========================================================================
+    // Float tweens
+    __declspec(dllexport) int   Framework_Tween_Float(float from, float to, float duration, int easing);  // Returns tween handle
+    __declspec(dllexport) int   Framework_Tween_FloatTo(float* target, float to, float duration, int easing);  // Tweens pointer directly
+    __declspec(dllexport) int   Framework_Tween_FloatFromTo(float* target, float from, float to, float duration, int easing);
+
+    // Vector2 tweens
+    __declspec(dllexport) int   Framework_Tween_Vector2(float fromX, float fromY, float toX, float toY, float duration, int easing);
+    __declspec(dllexport) int   Framework_Tween_Vector2To(float* targetX, float* targetY, float toX, float toY, float duration, int easing);
+
+    // Color tweens (RGBA bytes)
+    __declspec(dllexport) int   Framework_Tween_Color(unsigned char fromR, unsigned char fromG, unsigned char fromB, unsigned char fromA,
+                                                       unsigned char toR, unsigned char toG, unsigned char toB, unsigned char toA,
+                                                       float duration, int easing);
+
+    // Tween control
+    __declspec(dllexport) void  Framework_Tween_Play(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_Pause(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_Resume(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_Stop(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_Restart(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_Kill(int tweenId);  // Stop and remove
+    __declspec(dllexport) void  Framework_Tween_Complete(int tweenId);  // Jump to end
+
+    // Tween state queries
+    __declspec(dllexport) bool  Framework_Tween_IsValid(int tweenId);
+    __declspec(dllexport) int   Framework_Tween_GetState(int tweenId);  // TweenState enum
+    __declspec(dllexport) bool  Framework_Tween_IsPlaying(int tweenId);
+    __declspec(dllexport) bool  Framework_Tween_IsPaused(int tweenId);
+    __declspec(dllexport) bool  Framework_Tween_IsCompleted(int tweenId);
+    __declspec(dllexport) float Framework_Tween_GetProgress(int tweenId);  // 0-1 normalized time
+    __declspec(dllexport) float Framework_Tween_GetElapsed(int tweenId);   // Elapsed seconds
+    __declspec(dllexport) float Framework_Tween_GetDuration(int tweenId);
+
+    // Tween value getters
+    __declspec(dllexport) float Framework_Tween_GetFloat(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_GetVector2(int tweenId, float* x, float* y);
+    __declspec(dllexport) void  Framework_Tween_GetColor(int tweenId, unsigned char* r, unsigned char* g, unsigned char* b, unsigned char* a);
+
+    // Tween configuration
+    __declspec(dllexport) void  Framework_Tween_SetDelay(int tweenId, float delay);  // Delay before start
+    __declspec(dllexport) float Framework_Tween_GetDelay(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_SetLoopMode(int tweenId, int loopMode);  // TweenLoopMode
+    __declspec(dllexport) int   Framework_Tween_GetLoopMode(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_SetLoopCount(int tweenId, int count);  // -1 = infinite
+    __declspec(dllexport) int   Framework_Tween_GetLoopCount(int tweenId);
+    __declspec(dllexport) int   Framework_Tween_GetCurrentLoop(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_SetTimeScale(int tweenId, float scale);  // 1.0 = normal speed
+    __declspec(dllexport) float Framework_Tween_GetTimeScale(int tweenId);
+    __declspec(dllexport) void  Framework_Tween_SetAutoKill(int tweenId, bool autoKill);  // Remove when complete
+
+    // Tween callbacks
+    __declspec(dllexport) void  Framework_Tween_SetOnStart(int tweenId, TweenCallback callback);
+    __declspec(dllexport) void  Framework_Tween_SetOnUpdate(int tweenId, TweenUpdateCallback callback);
+    __declspec(dllexport) void  Framework_Tween_SetOnComplete(int tweenId, TweenCallback callback);
+    __declspec(dllexport) void  Framework_Tween_SetOnLoop(int tweenId, TweenCallback callback);
+    __declspec(dllexport) void  Framework_Tween_SetOnKill(int tweenId, TweenCallback callback);
+
+    // Sequence building (chain tweens)
+    __declspec(dllexport) int   Framework_Tween_CreateSequence();  // Returns sequence handle
+    __declspec(dllexport) void  Framework_Tween_SequenceAppend(int seqId, int tweenId);  // Add tween to run after previous
+    __declspec(dllexport) void  Framework_Tween_SequenceJoin(int seqId, int tweenId);    // Add tween to run with previous
+    __declspec(dllexport) void  Framework_Tween_SequenceInsert(int seqId, float atTime, int tweenId);  // Insert at specific time
+    __declspec(dllexport) void  Framework_Tween_SequenceAppendDelay(int seqId, float delay);  // Add delay
+    __declspec(dllexport) void  Framework_Tween_SequenceAppendCallback(int seqId, TweenCallback callback);  // Add callback point
+    __declspec(dllexport) void  Framework_Tween_PlaySequence(int seqId);
+    __declspec(dllexport) void  Framework_Tween_PauseSequence(int seqId);
+    __declspec(dllexport) void  Framework_Tween_StopSequence(int seqId);
+    __declspec(dllexport) void  Framework_Tween_KillSequence(int seqId);
+    __declspec(dllexport) bool  Framework_Tween_IsSequenceValid(int seqId);
+    __declspec(dllexport) bool  Framework_Tween_IsSequencePlaying(int seqId);
+    __declspec(dllexport) float Framework_Tween_GetSequenceDuration(int seqId);
+
+    // Entity property tweens (convenience)
+    __declspec(dllexport) int   Framework_Tween_EntityPosition(int entity, float toX, float toY, float duration, int easing);
+    __declspec(dllexport) int   Framework_Tween_EntityRotation(int entity, float toRotation, float duration, int easing);
+    __declspec(dllexport) int   Framework_Tween_EntityScale(int entity, float toScaleX, float toScaleY, float duration, int easing);
+    __declspec(dllexport) int   Framework_Tween_EntityAlpha(int entity, unsigned char toAlpha, float duration, int easing);
+
+    // Global tween management
+    __declspec(dllexport) void  Framework_Tween_Update(float dt);  // Call each frame
+    __declspec(dllexport) void  Framework_Tween_PauseAll();
+    __declspec(dllexport) void  Framework_Tween_ResumeAll();
+    __declspec(dllexport) void  Framework_Tween_KillAll();
+    __declspec(dllexport) int   Framework_Tween_GetActiveCount();
+    __declspec(dllexport) void  Framework_Tween_SetGlobalTimeScale(float scale);
+    __declspec(dllexport) float Framework_Tween_GetGlobalTimeScale();
+
+    // Easing function (standalone utility)
+    __declspec(dllexport) float Framework_Tween_Ease(float t, int easing);  // Apply easing to 0-1 value
 
     // ========================================================================
     // CLEANUP

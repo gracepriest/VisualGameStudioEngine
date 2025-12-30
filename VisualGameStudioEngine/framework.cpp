@@ -8009,6 +8009,837 @@ extern "C" {
     }
 
     // ========================================================================
+    // TWEENING SYSTEM - Property Animation & Interpolation
+    // ========================================================================
+}  // Temporarily close extern "C" for namespace
+
+namespace {
+    // Tween type enumeration
+    enum TweenType {
+        TWEEN_TYPE_FLOAT,
+        TWEEN_TYPE_VECTOR2,
+        TWEEN_TYPE_COLOR
+    };
+
+    // Tween data structure
+    struct Tween {
+        int id = 0;
+        TweenType type = TWEEN_TYPE_FLOAT;
+        TweenState state = TWEEN_STATE_IDLE;
+        TweenEasing easing = TWEEN_LINEAR;
+        TweenLoopMode loopMode = TWEEN_LOOP_NONE;
+
+        // Timing
+        float duration = 1.0f;
+        float elapsed = 0.0f;
+        float delay = 0.0f;
+        float delayElapsed = 0.0f;
+        float timeScale = 1.0f;
+
+        // Loop
+        int loopCount = 0;       // 0 = once, -1 = infinite
+        int currentLoop = 0;
+        bool yoyoReverse = false;
+
+        // Values
+        float fromFloat = 0, toFloat = 0, currentFloat = 0;
+        float fromX = 0, fromY = 0, toX = 0, toY = 0, currentX = 0, currentY = 0;
+        unsigned char fromR = 0, fromG = 0, fromB = 0, fromA = 0;
+        unsigned char toR = 0, toG = 0, toB = 0, toA = 0;
+        unsigned char currentR = 0, currentG = 0, currentB = 0, currentA = 0;
+
+        // Target pointers (for direct tweening)
+        float* targetFloat = nullptr;
+        float* targetX = nullptr;
+        float* targetY = nullptr;
+
+        // Entity target (for convenience tweens)
+        int targetEntity = -1;
+
+        // Callbacks
+        TweenCallback onStart = nullptr;
+        TweenUpdateCallback onUpdate = nullptr;
+        TweenCallback onComplete = nullptr;
+        TweenCallback onLoop = nullptr;
+        TweenCallback onKill = nullptr;
+
+        // Options
+        bool autoKill = true;
+        bool started = false;
+    };
+
+    // Sequence entry
+    struct SequenceEntry {
+        int tweenId = -1;
+        float startTime = 0;
+        TweenCallback callback = nullptr;
+        bool isCallback = false;
+        bool isDelay = false;
+        float delayDuration = 0;
+    };
+
+    // Sequence structure
+    struct TweenSequence {
+        int id = 0;
+        std::vector<SequenceEntry> entries;
+        float duration = 0;
+        float elapsed = 0;
+        TweenState state = TWEEN_STATE_IDLE;
+        bool autoKill = true;
+    };
+
+    // Global tween state
+    std::unordered_map<int, Tween> g_tweens;
+    std::unordered_map<int, TweenSequence> g_sequences;
+    int g_nextTweenId = 1;
+    int g_nextSequenceId = 1;
+    float g_globalTweenTimeScale = 1.0f;
+    bool g_tweensPaused = false;
+
+    // Extended easing function
+    const float TWEEN_PI = 3.14159265358979323846f;
+
+    float ApplyTweenEasing(float t, TweenEasing easing) {
+        const float c1 = 1.70158f;
+        const float c2 = c1 * 1.525f;
+        const float c3 = c1 + 1.0f;
+        const float c4 = (2.0f * TWEEN_PI) / 3.0f;
+        const float c5 = (2.0f * TWEEN_PI) / 4.5f;
+
+        switch (easing) {
+            case TWEEN_LINEAR: return t;
+            case TWEEN_IN_QUAD: return t * t;
+            case TWEEN_OUT_QUAD: return 1.0f - (1.0f - t) * (1.0f - t);
+            case TWEEN_IN_OUT_QUAD: return t < 0.5f ? 2.0f * t * t : 1.0f - powf(-2.0f * t + 2.0f, 2.0f) / 2.0f;
+            case TWEEN_IN_CUBIC: return t * t * t;
+            case TWEEN_OUT_CUBIC: return 1.0f - powf(1.0f - t, 3.0f);
+            case TWEEN_IN_OUT_CUBIC: return t < 0.5f ? 4.0f * t * t * t : 1.0f - powf(-2.0f * t + 2.0f, 3.0f) / 2.0f;
+            case TWEEN_IN_EXPO: return t == 0.0f ? 0.0f : powf(2.0f, 10.0f * t - 10.0f);
+            case TWEEN_OUT_EXPO: return t == 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
+            case TWEEN_IN_OUT_EXPO:
+                if (t == 0.0f) return 0.0f;
+                if (t == 1.0f) return 1.0f;
+                return t < 0.5f ? powf(2.0f, 20.0f * t - 10.0f) / 2.0f : (2.0f - powf(2.0f, -20.0f * t + 10.0f)) / 2.0f;
+            case TWEEN_IN_SINE: return 1.0f - cosf((t * TWEEN_PI) / 2.0f);
+            case TWEEN_OUT_SINE: return sinf((t * TWEEN_PI) / 2.0f);
+            case TWEEN_IN_OUT_SINE: return -(cosf(TWEEN_PI * t) - 1.0f) / 2.0f;
+            case TWEEN_IN_BACK: return c3 * t * t * t - c1 * t * t;
+            case TWEEN_OUT_BACK: return 1.0f + c3 * powf(t - 1.0f, 3.0f) + c1 * powf(t - 1.0f, 2.0f);
+            case TWEEN_IN_OUT_BACK:
+                return t < 0.5f
+                    ? (powf(2.0f * t, 2.0f) * ((c2 + 1.0f) * 2.0f * t - c2)) / 2.0f
+                    : (powf(2.0f * t - 2.0f, 2.0f) * ((c2 + 1.0f) * (t * 2.0f - 2.0f) + c2) + 2.0f) / 2.0f;
+            case TWEEN_IN_ELASTIC:
+                if (t == 0.0f) return 0.0f;
+                if (t == 1.0f) return 1.0f;
+                return -powf(2.0f, 10.0f * t - 10.0f) * sinf((t * 10.0f - 10.75f) * c4);
+            case TWEEN_OUT_ELASTIC:
+                if (t == 0.0f) return 0.0f;
+                if (t == 1.0f) return 1.0f;
+                return powf(2.0f, -10.0f * t) * sinf((t * 10.0f - 0.75f) * c4) + 1.0f;
+            case TWEEN_IN_OUT_ELASTIC:
+                if (t == 0.0f) return 0.0f;
+                if (t == 1.0f) return 1.0f;
+                return t < 0.5f
+                    ? -(powf(2.0f, 20.0f * t - 10.0f) * sinf((20.0f * t - 11.125f) * c5)) / 2.0f
+                    : (powf(2.0f, -20.0f * t + 10.0f) * sinf((20.0f * t - 11.125f) * c5)) / 2.0f + 1.0f;
+            case TWEEN_IN_BOUNCE: return 1.0f - ApplyTweenEasing(1.0f - t, TWEEN_OUT_BOUNCE);
+            case TWEEN_OUT_BOUNCE: {
+                const float n1 = 7.5625f;
+                const float d1 = 2.75f;
+                if (t < 1.0f / d1) return n1 * t * t;
+                if (t < 2.0f / d1) return n1 * (t -= 1.5f / d1) * t + 0.75f;
+                if (t < 2.5f / d1) return n1 * (t -= 2.25f / d1) * t + 0.9375f;
+                return n1 * (t -= 2.625f / d1) * t + 0.984375f;
+            }
+            case TWEEN_IN_OUT_BOUNCE:
+                return t < 0.5f
+                    ? (1.0f - ApplyTweenEasing(1.0f - 2.0f * t, TWEEN_OUT_BOUNCE)) / 2.0f
+                    : (1.0f + ApplyTweenEasing(2.0f * t - 1.0f, TWEEN_OUT_BOUNCE)) / 2.0f;
+            default: return t;
+        }
+    }
+
+    // Update a single tween
+    void UpdateTween(Tween& tw, float dt) {
+        if (tw.state != TWEEN_STATE_PLAYING) return;
+
+        // Handle delay
+        if (tw.delayElapsed < tw.delay) {
+            tw.delayElapsed += dt;
+            if (tw.delayElapsed < tw.delay) return;
+            // Start callback
+            if (!tw.started && tw.onStart) {
+                tw.started = true;
+                tw.onStart(tw.id);
+            }
+        }
+
+        if (!tw.started && tw.onStart) {
+            tw.started = true;
+            tw.onStart(tw.id);
+        }
+
+        // Update elapsed time
+        tw.elapsed += dt * tw.timeScale;
+
+        // Calculate progress
+        float progress = tw.duration > 0.0f ? tw.elapsed / tw.duration : 1.0f;
+        if (progress > 1.0f) progress = 1.0f;
+
+        // Handle yoyo reverse
+        float easedProgress = progress;
+        if (tw.yoyoReverse) {
+            easedProgress = ApplyTweenEasing(1.0f - progress, tw.easing);
+        } else {
+            easedProgress = ApplyTweenEasing(progress, tw.easing);
+        }
+
+        // Update values based on type
+        switch (tw.type) {
+            case TWEEN_TYPE_FLOAT:
+                tw.currentFloat = tw.fromFloat + (tw.toFloat - tw.fromFloat) * easedProgress;
+                if (tw.targetFloat) *tw.targetFloat = tw.currentFloat;
+                break;
+            case TWEEN_TYPE_VECTOR2:
+                tw.currentX = tw.fromX + (tw.toX - tw.fromX) * easedProgress;
+                tw.currentY = tw.fromY + (tw.toY - tw.fromY) * easedProgress;
+                if (tw.targetX) *tw.targetX = tw.currentX;
+                if (tw.targetY) *tw.targetY = tw.currentY;
+                break;
+            case TWEEN_TYPE_COLOR:
+                tw.currentR = (unsigned char)(tw.fromR + (tw.toR - tw.fromR) * easedProgress);
+                tw.currentG = (unsigned char)(tw.fromG + (tw.toG - tw.fromG) * easedProgress);
+                tw.currentB = (unsigned char)(tw.fromB + (tw.toB - tw.fromB) * easedProgress);
+                tw.currentA = (unsigned char)(tw.fromA + (tw.toA - tw.fromA) * easedProgress);
+                break;
+        }
+
+        // Update callback
+        if (tw.onUpdate) {
+            tw.onUpdate(tw.id, tw.currentFloat);
+        }
+
+        // Check completion
+        if (progress >= 1.0f) {
+            // Handle looping
+            bool shouldLoop = false;
+            if (tw.loopCount < 0 || tw.currentLoop < tw.loopCount) {
+                shouldLoop = true;
+            }
+
+            if (shouldLoop && tw.loopMode != TWEEN_LOOP_NONE) {
+                tw.currentLoop++;
+                tw.elapsed = 0.0f;
+
+                if (tw.onLoop) tw.onLoop(tw.id);
+
+                if (tw.loopMode == TWEEN_LOOP_YOYO) {
+                    tw.yoyoReverse = !tw.yoyoReverse;
+                }
+                else if (tw.loopMode == TWEEN_LOOP_INCREMENT) {
+                    // Shift values for incremental loops
+                    float delta = tw.toFloat - tw.fromFloat;
+                    tw.fromFloat = tw.toFloat;
+                    tw.toFloat += delta;
+
+                    float deltaX = tw.toX - tw.fromX;
+                    float deltaY = tw.toY - tw.fromY;
+                    tw.fromX = tw.toX;
+                    tw.fromY = tw.toY;
+                    tw.toX += deltaX;
+                    tw.toY += deltaY;
+                }
+            }
+            else {
+                tw.state = TWEEN_STATE_COMPLETED;
+                if (tw.onComplete) tw.onComplete(tw.id);
+            }
+        }
+    }
+
+    Tween* GetTween(int id) {
+        auto it = g_tweens.find(id);
+        return it != g_tweens.end() ? &it->second : nullptr;
+    }
+
+    TweenSequence* GetSequence(int id) {
+        auto it = g_sequences.find(id);
+        return it != g_sequences.end() ? &it->second : nullptr;
+    }
+}
+
+// Forward declarations for ECS functions used by entity tweens
+extern "C" {
+    bool Framework_Ecs_IsAlive(int entity);
+    bool Framework_Ecs_HasTransform2D(int entity);
+    Vector2 Framework_Ecs_GetTransformPosition(int entity);
+    void Framework_Ecs_SetTransformPosition(int entity, float x, float y);
+    float Framework_Ecs_GetTransformRotation(int entity);
+    void Framework_Ecs_SetTransformRotation(int entity, float rotation);
+    Vector2 Framework_Ecs_GetTransformScale(int entity);
+    void Framework_Ecs_SetTransformScale(int entity, float sx, float sy);
+    bool Framework_Ecs_HasSprite2D(int entity);
+    void Framework_Ecs_SetSpriteTint(int entity, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+}
+
+extern "C" {
+    // Float tweens
+    int Framework_Tween_Float(float from, float to, float duration, int easing) {
+        Tween tw;
+        tw.id = g_nextTweenId++;
+        tw.type = TWEEN_TYPE_FLOAT;
+        tw.fromFloat = from;
+        tw.toFloat = to;
+        tw.currentFloat = from;
+        tw.duration = duration;
+        tw.easing = (TweenEasing)easing;
+        tw.state = TWEEN_STATE_PLAYING;
+        g_tweens[tw.id] = tw;
+        return tw.id;
+    }
+
+    int Framework_Tween_FloatTo(float* target, float to, float duration, int easing) {
+        if (!target) return -1;
+        Tween tw;
+        tw.id = g_nextTweenId++;
+        tw.type = TWEEN_TYPE_FLOAT;
+        tw.targetFloat = target;
+        tw.fromFloat = *target;
+        tw.toFloat = to;
+        tw.currentFloat = *target;
+        tw.duration = duration;
+        tw.easing = (TweenEasing)easing;
+        tw.state = TWEEN_STATE_PLAYING;
+        g_tweens[tw.id] = tw;
+        return tw.id;
+    }
+
+    int Framework_Tween_FloatFromTo(float* target, float from, float to, float duration, int easing) {
+        if (!target) return -1;
+        Tween tw;
+        tw.id = g_nextTweenId++;
+        tw.type = TWEEN_TYPE_FLOAT;
+        tw.targetFloat = target;
+        tw.fromFloat = from;
+        tw.toFloat = to;
+        tw.currentFloat = from;
+        *target = from;
+        tw.duration = duration;
+        tw.easing = (TweenEasing)easing;
+        tw.state = TWEEN_STATE_PLAYING;
+        g_tweens[tw.id] = tw;
+        return tw.id;
+    }
+
+    // Vector2 tweens
+    int Framework_Tween_Vector2(float fromX, float fromY, float toX, float toY, float duration, int easing) {
+        Tween tw;
+        tw.id = g_nextTweenId++;
+        tw.type = TWEEN_TYPE_VECTOR2;
+        tw.fromX = fromX; tw.fromY = fromY;
+        tw.toX = toX; tw.toY = toY;
+        tw.currentX = fromX; tw.currentY = fromY;
+        tw.duration = duration;
+        tw.easing = (TweenEasing)easing;
+        tw.state = TWEEN_STATE_PLAYING;
+        g_tweens[tw.id] = tw;
+        return tw.id;
+    }
+
+    int Framework_Tween_Vector2To(float* targetX, float* targetY, float toX, float toY, float duration, int easing) {
+        if (!targetX || !targetY) return -1;
+        Tween tw;
+        tw.id = g_nextTweenId++;
+        tw.type = TWEEN_TYPE_VECTOR2;
+        tw.targetX = targetX;
+        tw.targetY = targetY;
+        tw.fromX = *targetX; tw.fromY = *targetY;
+        tw.toX = toX; tw.toY = toY;
+        tw.currentX = *targetX; tw.currentY = *targetY;
+        tw.duration = duration;
+        tw.easing = (TweenEasing)easing;
+        tw.state = TWEEN_STATE_PLAYING;
+        g_tweens[tw.id] = tw;
+        return tw.id;
+    }
+
+    // Color tweens
+    int Framework_Tween_Color(unsigned char fromR, unsigned char fromG, unsigned char fromB, unsigned char fromA,
+                              unsigned char toR, unsigned char toG, unsigned char toB, unsigned char toA,
+                              float duration, int easing) {
+        Tween tw;
+        tw.id = g_nextTweenId++;
+        tw.type = TWEEN_TYPE_COLOR;
+        tw.fromR = fromR; tw.fromG = fromG; tw.fromB = fromB; tw.fromA = fromA;
+        tw.toR = toR; tw.toG = toG; tw.toB = toB; tw.toA = toA;
+        tw.currentR = fromR; tw.currentG = fromG; tw.currentB = fromB; tw.currentA = fromA;
+        tw.duration = duration;
+        tw.easing = (TweenEasing)easing;
+        tw.state = TWEEN_STATE_PLAYING;
+        g_tweens[tw.id] = tw;
+        return tw.id;
+    }
+
+    // Tween control
+    void Framework_Tween_Play(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) tw->state = TWEEN_STATE_PLAYING;
+    }
+
+    void Framework_Tween_Pause(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) {
+            if (tw->state == TWEEN_STATE_PLAYING) tw->state = TWEEN_STATE_PAUSED;
+        }
+    }
+
+    void Framework_Tween_Resume(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) {
+            if (tw->state == TWEEN_STATE_PAUSED) tw->state = TWEEN_STATE_PLAYING;
+        }
+    }
+
+    void Framework_Tween_Stop(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) tw->state = TWEEN_STATE_IDLE;
+    }
+
+    void Framework_Tween_Restart(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) {
+            tw->elapsed = 0.0f;
+            tw->delayElapsed = 0.0f;
+            tw->currentLoop = 0;
+            tw->yoyoReverse = false;
+            tw->started = false;
+            tw->state = TWEEN_STATE_PLAYING;
+        }
+    }
+
+    void Framework_Tween_Kill(int tweenId) {
+        auto it = g_tweens.find(tweenId);
+        if (it != g_tweens.end()) {
+            if (it->second.onKill) it->second.onKill(tweenId);
+            g_tweens.erase(it);
+        }
+    }
+
+    void Framework_Tween_Complete(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) {
+            tw->elapsed = tw->duration;
+            UpdateTween(*tw, 0);  // Force final update
+        }
+    }
+
+    // Tween state queries
+    bool Framework_Tween_IsValid(int tweenId) {
+        return g_tweens.find(tweenId) != g_tweens.end();
+    }
+
+    int Framework_Tween_GetState(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return (int)tw->state;
+        return (int)TWEEN_STATE_IDLE;
+    }
+
+    bool Framework_Tween_IsPlaying(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->state == TWEEN_STATE_PLAYING;
+        return false;
+    }
+
+    bool Framework_Tween_IsPaused(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->state == TWEEN_STATE_PAUSED;
+        return false;
+    }
+
+    bool Framework_Tween_IsCompleted(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->state == TWEEN_STATE_COMPLETED;
+        return false;
+    }
+
+    float Framework_Tween_GetProgress(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) {
+            return tw->duration > 0 ? tw->elapsed / tw->duration : 1.0f;
+        }
+        return 0.0f;
+    }
+
+    float Framework_Tween_GetElapsed(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->elapsed;
+        return 0.0f;
+    }
+
+    float Framework_Tween_GetDuration(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->duration;
+        return 0.0f;
+    }
+
+    // Tween value getters
+    float Framework_Tween_GetFloat(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->currentFloat;
+        return 0.0f;
+    }
+
+    void Framework_Tween_GetVector2(int tweenId, float* x, float* y) {
+        if (auto* tw = GetTween(tweenId)) {
+            if (x) *x = tw->currentX;
+            if (y) *y = tw->currentY;
+        }
+    }
+
+    void Framework_Tween_GetColor(int tweenId, unsigned char* r, unsigned char* g, unsigned char* b, unsigned char* a) {
+        if (auto* tw = GetTween(tweenId)) {
+            if (r) *r = tw->currentR;
+            if (g) *g = tw->currentG;
+            if (b) *b = tw->currentB;
+            if (a) *a = tw->currentA;
+        }
+    }
+
+    // Tween configuration
+    void Framework_Tween_SetDelay(int tweenId, float delay) {
+        if (auto* tw = GetTween(tweenId)) tw->delay = delay;
+    }
+
+    float Framework_Tween_GetDelay(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->delay;
+        return 0.0f;
+    }
+
+    void Framework_Tween_SetLoopMode(int tweenId, int loopMode) {
+        if (auto* tw = GetTween(tweenId)) tw->loopMode = (TweenLoopMode)loopMode;
+    }
+
+    int Framework_Tween_GetLoopMode(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return (int)tw->loopMode;
+        return (int)TWEEN_LOOP_NONE;
+    }
+
+    void Framework_Tween_SetLoopCount(int tweenId, int count) {
+        if (auto* tw = GetTween(tweenId)) tw->loopCount = count;
+    }
+
+    int Framework_Tween_GetLoopCount(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->loopCount;
+        return 0;
+    }
+
+    int Framework_Tween_GetCurrentLoop(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->currentLoop;
+        return 0;
+    }
+
+    void Framework_Tween_SetTimeScale(int tweenId, float scale) {
+        if (auto* tw = GetTween(tweenId)) tw->timeScale = scale;
+    }
+
+    float Framework_Tween_GetTimeScale(int tweenId) {
+        if (auto* tw = GetTween(tweenId)) return tw->timeScale;
+        return 1.0f;
+    }
+
+    void Framework_Tween_SetAutoKill(int tweenId, bool autoKill) {
+        if (auto* tw = GetTween(tweenId)) tw->autoKill = autoKill;
+    }
+
+    // Tween callbacks
+    void Framework_Tween_SetOnStart(int tweenId, TweenCallback callback) {
+        if (auto* tw = GetTween(tweenId)) tw->onStart = callback;
+    }
+
+    void Framework_Tween_SetOnUpdate(int tweenId, TweenUpdateCallback callback) {
+        if (auto* tw = GetTween(tweenId)) tw->onUpdate = callback;
+    }
+
+    void Framework_Tween_SetOnComplete(int tweenId, TweenCallback callback) {
+        if (auto* tw = GetTween(tweenId)) tw->onComplete = callback;
+    }
+
+    void Framework_Tween_SetOnLoop(int tweenId, TweenCallback callback) {
+        if (auto* tw = GetTween(tweenId)) tw->onLoop = callback;
+    }
+
+    void Framework_Tween_SetOnKill(int tweenId, TweenCallback callback) {
+        if (auto* tw = GetTween(tweenId)) tw->onKill = callback;
+    }
+
+    // Sequence building
+    int Framework_Tween_CreateSequence() {
+        TweenSequence seq;
+        seq.id = g_nextSequenceId++;
+        g_sequences[seq.id] = seq;
+        return seq.id;
+    }
+
+    void Framework_Tween_SequenceAppend(int seqId, int tweenId) {
+        auto* seq = GetSequence(seqId);
+        auto* tw = GetTween(tweenId);
+        if (!seq || !tw) return;
+
+        SequenceEntry entry;
+        entry.tweenId = tweenId;
+        entry.startTime = seq->duration;
+        seq->entries.push_back(entry);
+        seq->duration += tw->duration + tw->delay;
+
+        // Pause the tween until sequence starts
+        tw->state = TWEEN_STATE_PAUSED;
+    }
+
+    void Framework_Tween_SequenceJoin(int seqId, int tweenId) {
+        auto* seq = GetSequence(seqId);
+        auto* tw = GetTween(tweenId);
+        if (!seq || !tw || seq->entries.empty()) return;
+
+        // Find start time of last entry
+        float lastStart = seq->entries.back().startTime;
+
+        SequenceEntry entry;
+        entry.tweenId = tweenId;
+        entry.startTime = lastStart;
+        seq->entries.push_back(entry);
+
+        // Extend duration if this tween is longer
+        float entryEnd = lastStart + tw->duration + tw->delay;
+        if (entryEnd > seq->duration) seq->duration = entryEnd;
+
+        tw->state = TWEEN_STATE_PAUSED;
+    }
+
+    void Framework_Tween_SequenceInsert(int seqId, float atTime, int tweenId) {
+        auto* seq = GetSequence(seqId);
+        auto* tw = GetTween(tweenId);
+        if (!seq || !tw) return;
+
+        SequenceEntry entry;
+        entry.tweenId = tweenId;
+        entry.startTime = atTime;
+        seq->entries.push_back(entry);
+
+        float entryEnd = atTime + tw->duration + tw->delay;
+        if (entryEnd > seq->duration) seq->duration = entryEnd;
+
+        tw->state = TWEEN_STATE_PAUSED;
+    }
+
+    void Framework_Tween_SequenceAppendDelay(int seqId, float delay) {
+        auto* seq = GetSequence(seqId);
+        if (!seq) return;
+
+        SequenceEntry entry;
+        entry.isDelay = true;
+        entry.delayDuration = delay;
+        entry.startTime = seq->duration;
+        seq->entries.push_back(entry);
+        seq->duration += delay;
+    }
+
+    void Framework_Tween_SequenceAppendCallback(int seqId, TweenCallback callback) {
+        auto* seq = GetSequence(seqId);
+        if (!seq) return;
+
+        SequenceEntry entry;
+        entry.isCallback = true;
+        entry.callback = callback;
+        entry.startTime = seq->duration;
+        seq->entries.push_back(entry);
+    }
+
+    void Framework_Tween_PlaySequence(int seqId) {
+        auto* seq = GetSequence(seqId);
+        if (!seq) return;
+        seq->state = TWEEN_STATE_PLAYING;
+        seq->elapsed = 0;
+    }
+
+    void Framework_Tween_PauseSequence(int seqId) {
+        auto* seq = GetSequence(seqId);
+        if (!seq) return;
+        if (seq->state == TWEEN_STATE_PLAYING) seq->state = TWEEN_STATE_PAUSED;
+    }
+
+    void Framework_Tween_StopSequence(int seqId) {
+        auto* seq = GetSequence(seqId);
+        if (!seq) return;
+        seq->state = TWEEN_STATE_IDLE;
+    }
+
+    void Framework_Tween_KillSequence(int seqId) {
+        auto it = g_sequences.find(seqId);
+        if (it != g_sequences.end()) {
+            // Kill all tweens in sequence
+            for (auto& entry : it->second.entries) {
+                if (entry.tweenId >= 0) {
+                    Framework_Tween_Kill(entry.tweenId);
+                }
+            }
+            g_sequences.erase(it);
+        }
+    }
+
+    bool Framework_Tween_IsSequenceValid(int seqId) {
+        return g_sequences.find(seqId) != g_sequences.end();
+    }
+
+    bool Framework_Tween_IsSequencePlaying(int seqId) {
+        auto* seq = GetSequence(seqId);
+        return seq && seq->state == TWEEN_STATE_PLAYING;
+    }
+
+    float Framework_Tween_GetSequenceDuration(int seqId) {
+        auto* seq = GetSequence(seqId);
+        return seq ? seq->duration : 0.0f;
+    }
+
+    // Entity property tweens
+    int Framework_Tween_EntityPosition(int entity, float toX, float toY, float duration, int easing) {
+        if (!Framework_Ecs_HasTransform2D(entity)) return -1;
+
+        Vector2 pos = Framework_Ecs_GetTransformPosition(entity);
+
+        int tweenId = Framework_Tween_Vector2(pos.x, pos.y, toX, toY, duration, easing);
+        if (auto* tw = GetTween(tweenId)) {
+            tw->targetEntity = entity;
+        }
+        return tweenId;
+    }
+
+    int Framework_Tween_EntityRotation(int entity, float toRotation, float duration, int easing) {
+        if (!Framework_Ecs_HasTransform2D(entity)) return -1;
+
+        float rot = Framework_Ecs_GetTransformRotation(entity);
+        int tweenId = Framework_Tween_Float(rot, toRotation, duration, easing);
+        if (auto* tw = GetTween(tweenId)) {
+            tw->targetEntity = entity;
+        }
+        return tweenId;
+    }
+
+    int Framework_Tween_EntityScale(int entity, float toScaleX, float toScaleY, float duration, int easing) {
+        if (!Framework_Ecs_HasTransform2D(entity)) return -1;
+
+        Vector2 scale = Framework_Ecs_GetTransformScale(entity);
+
+        int tweenId = Framework_Tween_Vector2(scale.x, scale.y, toScaleX, toScaleY, duration, easing);
+        if (auto* tw = GetTween(tweenId)) {
+            tw->targetEntity = entity;
+        }
+        return tweenId;
+    }
+
+    int Framework_Tween_EntityAlpha(int entity, unsigned char toAlpha, float duration, int easing) {
+        if (!Framework_Ecs_HasSprite2D(entity)) return -1;
+
+        // Get current alpha from sprite component directly
+        auto it = g_sprite2D.find(entity);
+        if (it == g_sprite2D.end()) return -1;
+        unsigned char a = it->second.tint.a;
+
+        int tweenId = Framework_Tween_Float((float)a, (float)toAlpha, duration, easing);
+        if (auto* tw = GetTween(tweenId)) {
+            tw->targetEntity = entity;
+        }
+        return tweenId;
+    }
+
+    // Global tween management
+    void Framework_Tween_Update(float dt) {
+        if (g_tweensPaused) return;
+
+        float scaledDt = dt * g_globalTweenTimeScale;
+
+        // Update all tweens
+        std::vector<int> toRemove;
+        for (auto& pair : g_tweens) {
+            UpdateTween(pair.second, scaledDt);
+
+            // Update entity properties if applicable
+            Tween& tw = pair.second;
+            if (tw.targetEntity >= 0 && Framework_Ecs_IsAlive(tw.targetEntity)) {
+                if (tw.type == TWEEN_TYPE_VECTOR2 && Framework_Ecs_HasTransform2D(tw.targetEntity)) {
+                    Framework_Ecs_SetTransformPosition(tw.targetEntity, tw.currentX, tw.currentY);
+                }
+                else if (tw.type == TWEEN_TYPE_FLOAT) {
+                    // Could be rotation or alpha
+                    if (Framework_Ecs_HasTransform2D(tw.targetEntity)) {
+                        Framework_Ecs_SetTransformRotation(tw.targetEntity, tw.currentFloat);
+                    }
+                }
+            }
+
+            if (tw.state == TWEEN_STATE_COMPLETED && tw.autoKill) {
+                toRemove.push_back(pair.first);
+            }
+        }
+
+        // Remove completed auto-kill tweens
+        for (int id : toRemove) {
+            g_tweens.erase(id);
+        }
+
+        // Update sequences
+        std::vector<int> seqToRemove;
+        for (auto& pair : g_sequences) {
+            TweenSequence& seq = pair.second;
+            if (seq.state != TWEEN_STATE_PLAYING) continue;
+
+            float prevElapsed = seq.elapsed;
+            seq.elapsed += scaledDt;
+
+            // Check entries that should start
+            for (auto& entry : seq.entries) {
+                if (entry.startTime >= prevElapsed && entry.startTime < seq.elapsed) {
+                    if (entry.isCallback && entry.callback) {
+                        entry.callback(seq.id);
+                    }
+                    else if (entry.tweenId >= 0) {
+                        Framework_Tween_Play(entry.tweenId);
+                    }
+                }
+            }
+
+            if (seq.elapsed >= seq.duration) {
+                seq.state = TWEEN_STATE_COMPLETED;
+                if (seq.autoKill) seqToRemove.push_back(pair.first);
+            }
+        }
+
+        for (int id : seqToRemove) {
+            Framework_Tween_KillSequence(id);
+        }
+    }
+
+    void Framework_Tween_PauseAll() {
+        g_tweensPaused = true;
+    }
+
+    void Framework_Tween_ResumeAll() {
+        g_tweensPaused = false;
+    }
+
+    void Framework_Tween_KillAll() {
+        g_tweens.clear();
+        g_sequences.clear();
+    }
+
+    int Framework_Tween_GetActiveCount() {
+        int count = 0;
+        for (const auto& pair : g_tweens) {
+            if (pair.second.state == TWEEN_STATE_PLAYING) count++;
+        }
+        return count;
+    }
+
+    void Framework_Tween_SetGlobalTimeScale(float scale) {
+        g_globalTweenTimeScale = scale;
+    }
+
+    float Framework_Tween_GetGlobalTimeScale() {
+        return g_globalTweenTimeScale;
+    }
+
+    // Easing function utility
+    float Framework_Tween_Ease(float t, int easing) {
+        return ApplyTweenEasing(t, (TweenEasing)easing);
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {
