@@ -2415,6 +2415,119 @@ extern "C" {
     __declspec(dllexport) int   Framework_Quest_GetDefinedCount();
 
     // ========================================================================
+    // 2D LIGHTING SYSTEM
+    // ========================================================================
+    // Dynamic 2D lighting with shadows for atmospheric effects
+
+    // Light Types
+    #define LIGHT_TYPE_POINT       0   // Radial light (torch, lamp)
+    #define LIGHT_TYPE_SPOT        1   // Directional cone (flashlight)
+    #define LIGHT_TYPE_DIRECTIONAL 2   // Global directional (sun/moon)
+
+    // Shadow Quality
+    #define SHADOW_QUALITY_NONE    0   // No shadows
+    #define SHADOW_QUALITY_HARD    1   // Hard-edged shadows
+    #define SHADOW_QUALITY_SOFT    2   // Soft shadows with blur
+
+    // Blend Modes for lighting
+    #define LIGHT_BLEND_ADDITIVE   0   // Add light to scene
+    #define LIGHT_BLEND_MULTIPLY   1   // Multiply with scene
+
+    // ---- Lighting System Control ----
+    __declspec(dllexport) void  Framework_Lighting_Initialize(int width, int height);
+    __declspec(dllexport) void  Framework_Lighting_Shutdown();
+    __declspec(dllexport) void  Framework_Lighting_SetEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Lighting_IsEnabled();
+    __declspec(dllexport) void  Framework_Lighting_SetResolution(int width, int height);
+
+    // ---- Ambient Light ----
+    __declspec(dllexport) void  Framework_Lighting_SetAmbientColor(unsigned char r, unsigned char g, unsigned char b);
+    __declspec(dllexport) void  Framework_Lighting_SetAmbientIntensity(float intensity);
+    __declspec(dllexport) float Framework_Lighting_GetAmbientIntensity();
+
+    // ---- Point Lights ----
+    __declspec(dllexport) int   Framework_Light_CreatePoint(float x, float y, float radius);
+    __declspec(dllexport) void  Framework_Light_Destroy(int lightId);
+    __declspec(dllexport) void  Framework_Light_SetPosition(int lightId, float x, float y);
+    __declspec(dllexport) void  Framework_Light_GetPosition(int lightId, float* x, float* y);
+    __declspec(dllexport) void  Framework_Light_SetColor(int lightId, unsigned char r, unsigned char g, unsigned char b);
+    __declspec(dllexport) void  Framework_Light_SetIntensity(int lightId, float intensity);
+    __declspec(dllexport) float Framework_Light_GetIntensity(int lightId);
+    __declspec(dllexport) void  Framework_Light_SetRadius(int lightId, float radius);
+    __declspec(dllexport) float Framework_Light_GetRadius(int lightId);
+    __declspec(dllexport) void  Framework_Light_SetEnabled(int lightId, bool enabled);
+    __declspec(dllexport) bool  Framework_Light_IsEnabled(int lightId);
+
+    // ---- Spot Lights ----
+    __declspec(dllexport) int   Framework_Light_CreateSpot(float x, float y, float radius, float angle, float coneAngle);
+    __declspec(dllexport) void  Framework_Light_SetDirection(int lightId, float angle);
+    __declspec(dllexport) float Framework_Light_GetDirection(int lightId);
+    __declspec(dllexport) void  Framework_Light_SetConeAngle(int lightId, float angle);
+    __declspec(dllexport) float Framework_Light_GetConeAngle(int lightId);
+    __declspec(dllexport) void  Framework_Light_SetSoftEdge(int lightId, float softness);
+
+    // ---- Directional Light (Global) ----
+    __declspec(dllexport) void  Framework_Lighting_SetDirectionalAngle(float angle);
+    __declspec(dllexport) void  Framework_Lighting_SetDirectionalColor(unsigned char r, unsigned char g, unsigned char b);
+    __declspec(dllexport) void  Framework_Lighting_SetDirectionalIntensity(float intensity);
+    __declspec(dllexport) void  Framework_Lighting_SetDirectionalEnabled(bool enabled);
+
+    // ---- Light Properties ----
+    __declspec(dllexport) void  Framework_Light_SetFalloff(int lightId, float falloff);
+    __declspec(dllexport) float Framework_Light_GetFalloff(int lightId);
+    __declspec(dllexport) void  Framework_Light_SetFlicker(int lightId, float amount, float speed);
+    __declspec(dllexport) void  Framework_Light_SetPulse(int lightId, float minIntensity, float maxIntensity, float speed);
+    __declspec(dllexport) void  Framework_Light_SetLayer(int lightId, int layer);
+    __declspec(dllexport) int   Framework_Light_GetLayer(int lightId);
+
+    // ---- Light Attachment ----
+    __declspec(dllexport) void  Framework_Light_AttachToEntity(int lightId, int entityId, float offsetX, float offsetY);
+    __declspec(dllexport) void  Framework_Light_Detach(int lightId);
+
+    // ---- Shadow Occluders ----
+    __declspec(dllexport) int   Framework_Shadow_CreateBox(float x, float y, float width, float height);
+    __declspec(dllexport) int   Framework_Shadow_CreateCircle(float x, float y, float radius);
+    __declspec(dllexport) int   Framework_Shadow_CreatePolygon(const float* points, int pointCount);
+    __declspec(dllexport) void  Framework_Shadow_Destroy(int occluderId);
+    __declspec(dllexport) void  Framework_Shadow_SetPosition(int occluderId, float x, float y);
+    __declspec(dllexport) void  Framework_Shadow_SetRotation(int occluderId, float angle);
+    __declspec(dllexport) void  Framework_Shadow_SetEnabled(int occluderId, bool enabled);
+    __declspec(dllexport) void  Framework_Shadow_AttachToEntity(int occluderId, int entityId, float offsetX, float offsetY);
+    __declspec(dllexport) void  Framework_Shadow_Detach(int occluderId);
+
+    // ---- Shadow Settings ----
+    __declspec(dllexport) void  Framework_Lighting_SetShadowQuality(int quality);
+    __declspec(dllexport) int   Framework_Lighting_GetShadowQuality();
+    __declspec(dllexport) void  Framework_Lighting_SetShadowBlur(float blur);
+    __declspec(dllexport) void  Framework_Lighting_SetShadowColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // ---- Day/Night Cycle ----
+    __declspec(dllexport) void  Framework_Lighting_SetTimeOfDay(float time);  // 0-24 hours
+    __declspec(dllexport) float Framework_Lighting_GetTimeOfDay();
+    __declspec(dllexport) void  Framework_Lighting_SetDayNightSpeed(float speed);  // 1.0 = real time
+    __declspec(dllexport) void  Framework_Lighting_SetDayNightEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Lighting_SetSunriseTime(float hour);
+    __declspec(dllexport) void  Framework_Lighting_SetSunsetTime(float hour);
+    __declspec(dllexport) void  Framework_Lighting_SetDayAmbient(unsigned char r, unsigned char g, unsigned char b, float intensity);
+    __declspec(dllexport) void  Framework_Lighting_SetNightAmbient(unsigned char r, unsigned char g, unsigned char b, float intensity);
+
+    // ---- Rendering ----
+    __declspec(dllexport) void  Framework_Lighting_BeginLightPass();   // Call before drawing lit objects
+    __declspec(dllexport) void  Framework_Lighting_EndLightPass();     // Call after drawing lit objects
+    __declspec(dllexport) void  Framework_Lighting_RenderToScreen();   // Apply lighting to final output
+    __declspec(dllexport) void  Framework_Lighting_Update(float deltaTime);
+
+    // ---- Light Queries ----
+    __declspec(dllexport) int   Framework_Light_GetCount();
+    __declspec(dllexport) int   Framework_Light_GetAt(int index);
+    __declspec(dllexport) int   Framework_Light_GetType(int lightId);
+    __declspec(dllexport) float Framework_Light_GetBrightnessAt(float x, float y);  // Sample light intensity at point
+
+    // ---- Global Management ----
+    __declspec(dllexport) void  Framework_Light_DestroyAll();
+    __declspec(dllexport) void  Framework_Shadow_DestroyAll();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

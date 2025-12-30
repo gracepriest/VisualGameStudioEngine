@@ -15453,6 +15453,762 @@ extern "C" {
     }
 
     // ========================================================================
+    // 2D LIGHTING SYSTEM
+    // ========================================================================
+
+    struct Light2D {
+        int id = 0;
+        int type = LIGHT_TYPE_POINT;
+        float x = 0, y = 0;
+        float radius = 100.0f;
+        unsigned char r = 255, g = 255, b = 255;
+        float intensity = 1.0f;
+        float falloff = 1.0f;
+        bool enabled = true;
+        int layer = 0;
+
+        // Spot light properties
+        float direction = 0;      // Angle in degrees
+        float coneAngle = 45.0f;  // Half-angle of cone
+        float softEdge = 0.1f;    // Soft edge factor
+
+        // Effects
+        float flickerAmount = 0;
+        float flickerSpeed = 0;
+        float flickerPhase = 0;
+        float pulseMin = 1.0f, pulseMax = 1.0f;
+        float pulseSpeed = 0;
+        float pulsePhase = 0;
+
+        // Attachment
+        int attachedEntity = -1;
+        float offsetX = 0, offsetY = 0;
+    };
+
+    struct ShadowOccluder {
+        int id = 0;
+        int type = 0;  // 0=box, 1=circle, 2=polygon
+        float x = 0, y = 0;
+        float rotation = 0;
+        float width = 0, height = 0;
+        float radius = 0;
+        std::vector<float> points;  // For polygon
+        bool enabled = true;
+
+        // Attachment
+        int attachedEntity = -1;
+        float offsetX = 0, offsetY = 0;
+    };
+
+    struct LightingState {
+        bool initialized = false;
+        bool enabled = true;
+        int width = 800, height = 600;
+
+        // Render targets
+        RenderTexture2D lightMap;
+        RenderTexture2D sceneBuffer;
+        bool hasRenderTargets = false;
+
+        // Ambient
+        unsigned char ambientR = 50, ambientG = 50, ambientB = 70;
+        float ambientIntensity = 0.3f;
+
+        // Directional light
+        bool directionalEnabled = false;
+        float directionalAngle = -45.0f;
+        unsigned char dirR = 255, dirG = 255, dirB = 200;
+        float dirIntensity = 0.5f;
+
+        // Shadows
+        int shadowQuality = SHADOW_QUALITY_HARD;
+        float shadowBlur = 2.0f;
+        unsigned char shadowR = 0, shadowG = 0, shadowB = 0, shadowA = 200;
+
+        // Day/Night cycle
+        bool dayNightEnabled = false;
+        float timeOfDay = 12.0f;  // 0-24
+        float dayNightSpeed = 1.0f;
+        float sunriseTime = 6.0f;
+        float sunsetTime = 18.0f;
+        unsigned char dayAmbientR = 200, dayAmbientG = 200, dayAmbientB = 220;
+        float dayAmbientIntensity = 0.8f;
+        unsigned char nightAmbientR = 20, nightAmbientG = 20, nightAmbientB = 50;
+        float nightAmbientIntensity = 0.1f;
+    };
+
+    static LightingState g_lighting;
+    static std::unordered_map<int, Light2D> g_lights;
+    static std::unordered_map<int, ShadowOccluder> g_occluders;
+    static int g_nextLightId = 1;
+    static int g_nextOccluderId = 1;
+
+    // Helper: Draw a single light to the light map
+    static void DrawLight2D(const Light2D& light, float effectiveIntensity) {
+        if (!light.enabled || effectiveIntensity <= 0) return;
+
+        Color lightColor = { light.r, light.g, light.b, (unsigned char)(255 * effectiveIntensity) };
+
+        if (light.type == LIGHT_TYPE_POINT) {
+            // Draw radial gradient
+            for (float r = light.radius; r > 0; r -= 2.0f) {
+                float t = r / light.radius;
+                float falloffFactor = powf(1.0f - t, light.falloff);
+                unsigned char alpha = (unsigned char)(255 * effectiveIntensity * falloffFactor);
+                Color c = { light.r, light.g, light.b, alpha };
+                DrawCircle((int)light.x, (int)light.y, r, c);
+            }
+        }
+        else if (light.type == LIGHT_TYPE_SPOT) {
+            // Draw cone shape
+            float dirRad = light.direction * DEG2RAD;
+            float coneRad = light.coneAngle * DEG2RAD;
+
+            int segments = 32;
+            for (float r = light.radius; r > 0; r -= 3.0f) {
+                float t = r / light.radius;
+                float falloffFactor = powf(1.0f - t, light.falloff);
+                unsigned char alpha = (unsigned char)(255 * effectiveIntensity * falloffFactor);
+                Color c = { light.r, light.g, light.b, alpha };
+
+                // Draw arc segments
+                for (int i = 0; i < segments; i++) {
+                    float a1 = dirRad - coneRad + (2.0f * coneRad * i / segments);
+                    float a2 = dirRad - coneRad + (2.0f * coneRad * (i + 1) / segments);
+
+                    Vector2 p1 = { light.x + cosf(a1) * r, light.y + sinf(a1) * r };
+                    Vector2 p2 = { light.x + cosf(a2) * r, light.y + sinf(a2) * r };
+                    Vector2 center = { light.x, light.y };
+
+                    DrawTriangle(center, p1, p2, c);
+                }
+            }
+        }
+    }
+
+    // ---- Lighting System Control ----
+    void Framework_Lighting_Initialize(int width, int height) {
+        g_lighting.width = width;
+        g_lighting.height = height;
+
+        if (g_lighting.hasRenderTargets) {
+            UnloadRenderTexture(g_lighting.lightMap);
+            UnloadRenderTexture(g_lighting.sceneBuffer);
+        }
+
+        g_lighting.lightMap = LoadRenderTexture(width, height);
+        g_lighting.sceneBuffer = LoadRenderTexture(width, height);
+        g_lighting.hasRenderTargets = true;
+        g_lighting.initialized = true;
+    }
+
+    void Framework_Lighting_Shutdown() {
+        if (g_lighting.hasRenderTargets) {
+            UnloadRenderTexture(g_lighting.lightMap);
+            UnloadRenderTexture(g_lighting.sceneBuffer);
+            g_lighting.hasRenderTargets = false;
+        }
+        g_lights.clear();
+        g_occluders.clear();
+        g_lighting.initialized = false;
+    }
+
+    void Framework_Lighting_SetEnabled(bool enabled) {
+        g_lighting.enabled = enabled;
+    }
+
+    bool Framework_Lighting_IsEnabled() {
+        return g_lighting.enabled;
+    }
+
+    void Framework_Lighting_SetResolution(int width, int height) {
+        if (g_lighting.initialized && (width != g_lighting.width || height != g_lighting.height)) {
+            Framework_Lighting_Initialize(width, height);
+        }
+    }
+
+    // ---- Ambient Light ----
+    void Framework_Lighting_SetAmbientColor(unsigned char r, unsigned char g, unsigned char b) {
+        g_lighting.ambientR = r;
+        g_lighting.ambientG = g;
+        g_lighting.ambientB = b;
+    }
+
+    void Framework_Lighting_SetAmbientIntensity(float intensity) {
+        g_lighting.ambientIntensity = intensity < 0 ? 0 : (intensity > 1 ? 1 : intensity);
+    }
+
+    float Framework_Lighting_GetAmbientIntensity() {
+        return g_lighting.ambientIntensity;
+    }
+
+    // ---- Point Lights ----
+    int Framework_Light_CreatePoint(float x, float y, float radius) {
+        Light2D light;
+        light.id = g_nextLightId++;
+        light.type = LIGHT_TYPE_POINT;
+        light.x = x;
+        light.y = y;
+        light.radius = radius;
+        g_lights[light.id] = light;
+        return light.id;
+    }
+
+    void Framework_Light_Destroy(int lightId) {
+        g_lights.erase(lightId);
+    }
+
+    void Framework_Light_SetPosition(int lightId, float x, float y) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.x = x;
+            it->second.y = y;
+        }
+    }
+
+    void Framework_Light_GetPosition(int lightId, float* x, float* y) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            if (x) *x = it->second.x;
+            if (y) *y = it->second.y;
+        }
+    }
+
+    void Framework_Light_SetColor(int lightId, unsigned char r, unsigned char g, unsigned char b) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.r = r;
+            it->second.g = g;
+            it->second.b = b;
+        }
+    }
+
+    void Framework_Light_SetIntensity(int lightId, float intensity) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.intensity = intensity < 0 ? 0 : intensity;
+        }
+    }
+
+    float Framework_Light_GetIntensity(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            return it->second.intensity;
+        }
+        return 0;
+    }
+
+    void Framework_Light_SetRadius(int lightId, float radius) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.radius = radius > 0 ? radius : 1;
+        }
+    }
+
+    float Framework_Light_GetRadius(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            return it->second.radius;
+        }
+        return 0;
+    }
+
+    void Framework_Light_SetEnabled(int lightId, bool enabled) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.enabled = enabled;
+        }
+    }
+
+    bool Framework_Light_IsEnabled(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            return it->second.enabled;
+        }
+        return false;
+    }
+
+    // ---- Spot Lights ----
+    int Framework_Light_CreateSpot(float x, float y, float radius, float angle, float coneAngle) {
+        Light2D light;
+        light.id = g_nextLightId++;
+        light.type = LIGHT_TYPE_SPOT;
+        light.x = x;
+        light.y = y;
+        light.radius = radius;
+        light.direction = angle;
+        light.coneAngle = coneAngle;
+        g_lights[light.id] = light;
+        return light.id;
+    }
+
+    void Framework_Light_SetDirection(int lightId, float angle) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.direction = angle;
+        }
+    }
+
+    float Framework_Light_GetDirection(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            return it->second.direction;
+        }
+        return 0;
+    }
+
+    void Framework_Light_SetConeAngle(int lightId, float angle) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.coneAngle = angle > 0 ? angle : 1;
+        }
+    }
+
+    float Framework_Light_GetConeAngle(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            return it->second.coneAngle;
+        }
+        return 0;
+    }
+
+    void Framework_Light_SetSoftEdge(int lightId, float softness) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.softEdge = softness < 0 ? 0 : (softness > 1 ? 1 : softness);
+        }
+    }
+
+    // ---- Directional Light (Global) ----
+    void Framework_Lighting_SetDirectionalAngle(float angle) {
+        g_lighting.directionalAngle = angle;
+    }
+
+    void Framework_Lighting_SetDirectionalColor(unsigned char r, unsigned char g, unsigned char b) {
+        g_lighting.dirR = r;
+        g_lighting.dirG = g;
+        g_lighting.dirB = b;
+    }
+
+    void Framework_Lighting_SetDirectionalIntensity(float intensity) {
+        g_lighting.dirIntensity = intensity < 0 ? 0 : intensity;
+    }
+
+    void Framework_Lighting_SetDirectionalEnabled(bool enabled) {
+        g_lighting.directionalEnabled = enabled;
+    }
+
+    // ---- Light Properties ----
+    void Framework_Light_SetFalloff(int lightId, float falloff) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.falloff = falloff > 0 ? falloff : 0.1f;
+        }
+    }
+
+    float Framework_Light_GetFalloff(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            return it->second.falloff;
+        }
+        return 1.0f;
+    }
+
+    void Framework_Light_SetFlicker(int lightId, float amount, float speed) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.flickerAmount = amount;
+            it->second.flickerSpeed = speed;
+        }
+    }
+
+    void Framework_Light_SetPulse(int lightId, float minIntensity, float maxIntensity, float speed) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.pulseMin = minIntensity;
+            it->second.pulseMax = maxIntensity;
+            it->second.pulseSpeed = speed;
+        }
+    }
+
+    void Framework_Light_SetLayer(int lightId, int layer) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.layer = layer;
+        }
+    }
+
+    int Framework_Light_GetLayer(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            return it->second.layer;
+        }
+        return 0;
+    }
+
+    // ---- Light Attachment ----
+    void Framework_Light_AttachToEntity(int lightId, int entityId, float offsetX, float offsetY) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.attachedEntity = entityId;
+            it->second.offsetX = offsetX;
+            it->second.offsetY = offsetY;
+        }
+    }
+
+    void Framework_Light_Detach(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            it->second.attachedEntity = -1;
+        }
+    }
+
+    // ---- Shadow Occluders ----
+    int Framework_Shadow_CreateBox(float x, float y, float width, float height) {
+        ShadowOccluder occ;
+        occ.id = g_nextOccluderId++;
+        occ.type = 0;
+        occ.x = x;
+        occ.y = y;
+        occ.width = width;
+        occ.height = height;
+        g_occluders[occ.id] = occ;
+        return occ.id;
+    }
+
+    int Framework_Shadow_CreateCircle(float x, float y, float radius) {
+        ShadowOccluder occ;
+        occ.id = g_nextOccluderId++;
+        occ.type = 1;
+        occ.x = x;
+        occ.y = y;
+        occ.radius = radius;
+        g_occluders[occ.id] = occ;
+        return occ.id;
+    }
+
+    int Framework_Shadow_CreatePolygon(const float* points, int pointCount) {
+        ShadowOccluder occ;
+        occ.id = g_nextOccluderId++;
+        occ.type = 2;
+        if (points && pointCount > 0) {
+            occ.points.assign(points, points + pointCount * 2);
+        }
+        g_occluders[occ.id] = occ;
+        return occ.id;
+    }
+
+    void Framework_Shadow_Destroy(int occluderId) {
+        g_occluders.erase(occluderId);
+    }
+
+    void Framework_Shadow_SetPosition(int occluderId, float x, float y) {
+        auto it = g_occluders.find(occluderId);
+        if (it != g_occluders.end()) {
+            it->second.x = x;
+            it->second.y = y;
+        }
+    }
+
+    void Framework_Shadow_SetRotation(int occluderId, float angle) {
+        auto it = g_occluders.find(occluderId);
+        if (it != g_occluders.end()) {
+            it->second.rotation = angle;
+        }
+    }
+
+    void Framework_Shadow_SetEnabled(int occluderId, bool enabled) {
+        auto it = g_occluders.find(occluderId);
+        if (it != g_occluders.end()) {
+            it->second.enabled = enabled;
+        }
+    }
+
+    void Framework_Shadow_AttachToEntity(int occluderId, int entityId, float offsetX, float offsetY) {
+        auto it = g_occluders.find(occluderId);
+        if (it != g_occluders.end()) {
+            it->second.attachedEntity = entityId;
+            it->second.offsetX = offsetX;
+            it->second.offsetY = offsetY;
+        }
+    }
+
+    void Framework_Shadow_Detach(int occluderId) {
+        auto it = g_occluders.find(occluderId);
+        if (it != g_occluders.end()) {
+            it->second.attachedEntity = -1;
+        }
+    }
+
+    // ---- Shadow Settings ----
+    void Framework_Lighting_SetShadowQuality(int quality) {
+        g_lighting.shadowQuality = quality;
+    }
+
+    int Framework_Lighting_GetShadowQuality() {
+        return g_lighting.shadowQuality;
+    }
+
+    void Framework_Lighting_SetShadowBlur(float blur) {
+        g_lighting.shadowBlur = blur > 0 ? blur : 0;
+    }
+
+    void Framework_Lighting_SetShadowColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        g_lighting.shadowR = r;
+        g_lighting.shadowG = g;
+        g_lighting.shadowB = b;
+        g_lighting.shadowA = a;
+    }
+
+    // ---- Day/Night Cycle ----
+    void Framework_Lighting_SetTimeOfDay(float time) {
+        while (time < 0) time += 24.0f;
+        while (time >= 24.0f) time -= 24.0f;
+        g_lighting.timeOfDay = time;
+    }
+
+    float Framework_Lighting_GetTimeOfDay() {
+        return g_lighting.timeOfDay;
+    }
+
+    void Framework_Lighting_SetDayNightSpeed(float speed) {
+        g_lighting.dayNightSpeed = speed;
+    }
+
+    void Framework_Lighting_SetDayNightEnabled(bool enabled) {
+        g_lighting.dayNightEnabled = enabled;
+    }
+
+    void Framework_Lighting_SetSunriseTime(float hour) {
+        g_lighting.sunriseTime = hour;
+    }
+
+    void Framework_Lighting_SetSunsetTime(float hour) {
+        g_lighting.sunsetTime = hour;
+    }
+
+    void Framework_Lighting_SetDayAmbient(unsigned char r, unsigned char g, unsigned char b, float intensity) {
+        g_lighting.dayAmbientR = r;
+        g_lighting.dayAmbientG = g;
+        g_lighting.dayAmbientB = b;
+        g_lighting.dayAmbientIntensity = intensity;
+    }
+
+    void Framework_Lighting_SetNightAmbient(unsigned char r, unsigned char g, unsigned char b, float intensity) {
+        g_lighting.nightAmbientR = r;
+        g_lighting.nightAmbientG = g;
+        g_lighting.nightAmbientB = b;
+        g_lighting.nightAmbientIntensity = intensity;
+    }
+
+    // ---- Rendering ----
+    void Framework_Lighting_BeginLightPass() {
+        if (!g_lighting.initialized || !g_lighting.hasRenderTargets) return;
+
+        BeginTextureMode(g_lighting.sceneBuffer);
+        ClearBackground(BLACK);
+    }
+
+    void Framework_Lighting_EndLightPass() {
+        if (!g_lighting.initialized || !g_lighting.hasRenderTargets) return;
+        EndTextureMode();
+    }
+
+    void Framework_Lighting_RenderToScreen() {
+        if (!g_lighting.initialized || !g_lighting.hasRenderTargets || !g_lighting.enabled) return;
+
+        // Render light map
+        BeginTextureMode(g_lighting.lightMap);
+
+        // Start with ambient color
+        unsigned char ambR = g_lighting.ambientR;
+        unsigned char ambG = g_lighting.ambientG;
+        unsigned char ambB = g_lighting.ambientB;
+        float ambInt = g_lighting.ambientIntensity;
+
+        // Apply day/night cycle
+        if (g_lighting.dayNightEnabled) {
+            float t = g_lighting.timeOfDay;
+            float dayFactor = 0;
+
+            if (t >= g_lighting.sunriseTime && t < g_lighting.sunriseTime + 1) {
+                dayFactor = (t - g_lighting.sunriseTime);
+            }
+            else if (t >= g_lighting.sunriseTime + 1 && t < g_lighting.sunsetTime) {
+                dayFactor = 1.0f;
+            }
+            else if (t >= g_lighting.sunsetTime && t < g_lighting.sunsetTime + 1) {
+                dayFactor = 1.0f - (t - g_lighting.sunsetTime);
+            }
+
+            ambR = (unsigned char)(g_lighting.nightAmbientR + dayFactor * (g_lighting.dayAmbientR - g_lighting.nightAmbientR));
+            ambG = (unsigned char)(g_lighting.nightAmbientG + dayFactor * (g_lighting.dayAmbientG - g_lighting.nightAmbientG));
+            ambB = (unsigned char)(g_lighting.nightAmbientB + dayFactor * (g_lighting.dayAmbientB - g_lighting.nightAmbientB));
+            ambInt = g_lighting.nightAmbientIntensity + dayFactor * (g_lighting.dayAmbientIntensity - g_lighting.nightAmbientIntensity);
+        }
+
+        ClearBackground({ (unsigned char)(ambR * ambInt), (unsigned char)(ambG * ambInt), (unsigned char)(ambB * ambInt), 255 });
+
+        // Draw all lights with additive blending
+        BeginBlendMode(BLEND_ADDITIVE);
+
+        for (auto& kv : g_lights) {
+            Light2D& light = kv.second;
+            if (!light.enabled) continue;
+
+            // Calculate effective intensity with flicker/pulse
+            float effectiveIntensity = light.intensity;
+
+            if (light.flickerAmount > 0 && light.flickerSpeed > 0) {
+                float flicker = sinf(light.flickerPhase) * light.flickerAmount;
+                effectiveIntensity *= (1.0f + flicker);
+            }
+
+            if (light.pulseSpeed > 0) {
+                float pulse = (sinf(light.pulsePhase) + 1.0f) * 0.5f;
+                effectiveIntensity *= light.pulseMin + pulse * (light.pulseMax - light.pulseMin);
+            }
+
+            DrawLight2D(light, effectiveIntensity);
+        }
+
+        EndBlendMode();
+        EndTextureMode();
+
+        // Draw scene with lighting applied
+        DrawTextureRec(
+            g_lighting.sceneBuffer.texture,
+            { 0, 0, (float)g_lighting.width, -(float)g_lighting.height },
+            { 0, 0 },
+            WHITE
+        );
+
+        // Apply light map with multiply blend
+        BeginBlendMode(BLEND_MULTIPLIED);
+        DrawTextureRec(
+            g_lighting.lightMap.texture,
+            { 0, 0, (float)g_lighting.width, -(float)g_lighting.height },
+            { 0, 0 },
+            WHITE
+        );
+        EndBlendMode();
+    }
+
+    void Framework_Lighting_Update(float deltaTime) {
+        // Update day/night cycle
+        if (g_lighting.dayNightEnabled) {
+            g_lighting.timeOfDay += deltaTime * g_lighting.dayNightSpeed / 3600.0f;  // Convert to game hours
+            while (g_lighting.timeOfDay >= 24.0f) g_lighting.timeOfDay -= 24.0f;
+        }
+
+        // Update light effects and attachments
+        for (auto& kv : g_lights) {
+            Light2D& light = kv.second;
+
+            // Update flicker
+            if (light.flickerSpeed > 0) {
+                light.flickerPhase += deltaTime * light.flickerSpeed;
+            }
+
+            // Update pulse
+            if (light.pulseSpeed > 0) {
+                light.pulsePhase += deltaTime * light.pulseSpeed;
+            }
+
+            // Update attachment
+            if (light.attachedEntity >= 0) {
+                auto it = g_transform2D.find(light.attachedEntity);
+                if (it != g_transform2D.end()) {
+                    light.x = it->second.position.x + light.offsetX;
+                    light.y = it->second.position.y + light.offsetY;
+                }
+            }
+        }
+
+        // Update occluder attachments
+        for (auto& kv : g_occluders) {
+            ShadowOccluder& occ = kv.second;
+            if (occ.attachedEntity >= 0) {
+                auto it = g_transform2D.find(occ.attachedEntity);
+                if (it != g_transform2D.end()) {
+                    occ.x = it->second.position.x + occ.offsetX;
+                    occ.y = it->second.position.y + occ.offsetY;
+                }
+            }
+        }
+    }
+
+    // ---- Light Queries ----
+    int Framework_Light_GetCount() {
+        return (int)g_lights.size();
+    }
+
+    int Framework_Light_GetAt(int index) {
+        int i = 0;
+        for (const auto& kv : g_lights) {
+            if (i == index) return kv.first;
+            i++;
+        }
+        return -1;
+    }
+
+    int Framework_Light_GetType(int lightId) {
+        auto it = g_lights.find(lightId);
+        if (it != g_lights.end()) {
+            return it->second.type;
+        }
+        return -1;
+    }
+
+    float Framework_Light_GetBrightnessAt(float x, float y) {
+        float totalBrightness = g_lighting.ambientIntensity;
+
+        for (const auto& kv : g_lights) {
+            const Light2D& light = kv.second;
+            if (!light.enabled) continue;
+
+            float dx = x - light.x;
+            float dy = y - light.y;
+            float dist = sqrtf(dx * dx + dy * dy);
+
+            if (dist < light.radius) {
+                float t = dist / light.radius;
+                float contribution = light.intensity * powf(1.0f - t, light.falloff);
+
+                if (light.type == LIGHT_TYPE_SPOT) {
+                    // Check if point is within cone
+                    float angleToPoint = atan2f(dy, dx) * RAD2DEG;
+                    float angleDiff = fabsf(angleToPoint - light.direction);
+                    while (angleDiff > 180) angleDiff -= 360;
+                    angleDiff = fabsf(angleDiff);
+
+                    if (angleDiff > light.coneAngle) {
+                        contribution = 0;
+                    }
+                    else {
+                        contribution *= 1.0f - (angleDiff / light.coneAngle);
+                    }
+                }
+
+                totalBrightness += contribution;
+            }
+        }
+
+        return totalBrightness > 1.0f ? 1.0f : totalBrightness;
+    }
+
+    // ---- Global Management ----
+    void Framework_Light_DestroyAll() {
+        g_lights.clear();
+        g_nextLightId = 1;
+    }
+
+    void Framework_Shadow_DestroyAll() {
+        g_occluders.clear();
+        g_nextOccluderId = 1;
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {
