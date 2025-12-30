@@ -852,6 +852,107 @@ extern "C" {
     __declspec(dllexport) void  Framework_Debug_Render();  // Call after scene draw
 
     // ========================================================================
+    // PROFILING & PERFORMANCE - Frame timing, metrics, and profiling scopes
+    // ========================================================================
+
+    // Log levels for console output
+    enum LogLevel {
+        LOG_LEVEL_TRACE = 0,
+        LOG_LEVEL_DEBUG = 1,
+        LOG_LEVEL_INFO = 2,
+        LOG_LEVEL_WARNING = 3,
+        LOG_LEVEL_ERROR = 4,
+        LOG_LEVEL_FATAL = 5
+    };
+
+    // Frame timing
+    __declspec(dllexport) float Framework_Perf_GetFPS();
+    __declspec(dllexport) float Framework_Perf_GetFrameTime();           // Current frame time in ms
+    __declspec(dllexport) float Framework_Perf_GetFrameTimeAvg();        // Average over last N frames
+    __declspec(dllexport) float Framework_Perf_GetFrameTimeMin();        // Min over last N frames
+    __declspec(dllexport) float Framework_Perf_GetFrameTimeMax();        // Max over last N frames
+    __declspec(dllexport) void  Framework_Perf_SetSampleCount(int count);// How many frames to average
+    __declspec(dllexport) int   Framework_Perf_GetFrameCount();          // Total frames since start
+
+    // Draw call tracking
+    __declspec(dllexport) int   Framework_Perf_GetDrawCalls();
+    __declspec(dllexport) int   Framework_Perf_GetTriangleCount();
+    __declspec(dllexport) void  Framework_Perf_ResetDrawStats();         // Call at frame start
+
+    // Memory tracking
+    __declspec(dllexport) int   Framework_Perf_GetEntityCount();
+    __declspec(dllexport) int   Framework_Perf_GetTextureCount();
+    __declspec(dllexport) int   Framework_Perf_GetSoundCount();
+    __declspec(dllexport) int   Framework_Perf_GetFontCount();
+    __declspec(dllexport) long long Framework_Perf_GetTextureMemory();   // Bytes used by textures
+
+    // Profiling scopes (manual markers)
+    __declspec(dllexport) void  Framework_Perf_BeginScope(const char* name);
+    __declspec(dllexport) void  Framework_Perf_EndScope();
+    __declspec(dllexport) float Framework_Perf_GetScopeTime(const char* name);  // Last recorded time in ms
+    __declspec(dllexport) float Framework_Perf_GetScopeTimeAvg(const char* name);
+    __declspec(dllexport) int   Framework_Perf_GetScopeCallCount(const char* name);
+    __declspec(dllexport) void  Framework_Perf_ResetScopes();
+
+    // Performance graphs
+    __declspec(dllexport) void  Framework_Perf_SetGraphEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Perf_SetGraphPosition(float x, float y);
+    __declspec(dllexport) void  Framework_Perf_SetGraphSize(float width, float height);
+    __declspec(dllexport) void  Framework_Perf_DrawGraph();              // Call to render FPS/frame time graph
+
+    // Console/Logging
+    __declspec(dllexport) void  Framework_Log(int level, const char* message);
+    __declspec(dllexport) void  Framework_Log_SetMinLevel(int level);    // Filter logs below this level
+    __declspec(dllexport) int   Framework_Log_GetMinLevel();
+    __declspec(dllexport) void  Framework_Log_SetFileOutput(const char* filename);  // Log to file
+    __declspec(dllexport) void  Framework_Log_CloseFile();
+
+    // On-screen console
+    __declspec(dllexport) void  Framework_Console_SetEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Console_IsEnabled();
+    __declspec(dllexport) void  Framework_Console_SetPosition(float x, float y);
+    __declspec(dllexport) void  Framework_Console_SetSize(float width, float height);
+    __declspec(dllexport) void  Framework_Console_SetMaxLines(int maxLines);
+    __declspec(dllexport) void  Framework_Console_Clear();
+    __declspec(dllexport) void  Framework_Console_Print(const char* message);
+    __declspec(dllexport) void  Framework_Console_PrintColored(const char* message, unsigned char r, unsigned char g, unsigned char b);
+    __declspec(dllexport) void  Framework_Console_Draw();                // Call to render console
+
+    // Debug drawing (world space)
+    __declspec(dllexport) void  Framework_DebugDraw_Line(float x1, float y1, float x2, float y2, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DebugDraw_Rect(float x, float y, float w, float h, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DebugDraw_RectFilled(float x, float y, float w, float h, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DebugDraw_Circle(float x, float y, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DebugDraw_CircleFilled(float x, float y, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DebugDraw_Point(float x, float y, float size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DebugDraw_Arrow(float x1, float y1, float x2, float y2, float headSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DebugDraw_Text(float x, float y, const char* text, unsigned char r, unsigned char g, unsigned char b);
+    __declspec(dllexport) void  Framework_DebugDraw_Grid(float cellSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DebugDraw_Cross(float x, float y, float size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // Debug draw settings
+    __declspec(dllexport) void  Framework_DebugDraw_SetEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_DebugDraw_IsEnabled();
+    __declspec(dllexport) void  Framework_DebugDraw_SetPersistent(bool persistent);  // Shapes persist across frames
+    __declspec(dllexport) void  Framework_DebugDraw_Clear();             // Clear all debug shapes
+    __declspec(dllexport) void  Framework_DebugDraw_Flush();             // Render and clear
+
+    // System overlays
+    __declspec(dllexport) void  Framework_Debug_SetShowFPS(bool show);
+    __declspec(dllexport) void  Framework_Debug_SetShowFrameTime(bool show);
+    __declspec(dllexport) void  Framework_Debug_SetShowDrawCalls(bool show);
+    __declspec(dllexport) void  Framework_Debug_SetShowEntityCount(bool show);
+    __declspec(dllexport) void  Framework_Debug_SetShowMemory(bool show);
+    __declspec(dllexport) void  Framework_Debug_SetShowPhysics(bool show);       // Draw physics shapes
+    __declspec(dllexport) void  Framework_Debug_SetShowColliders(bool show);     // Draw collision boxes
+    __declspec(dllexport) void  Framework_Debug_SetOverlayPosition(float x, float y);
+    __declspec(dllexport) void  Framework_Debug_SetOverlayColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // Update profiling (call each frame)
+    __declspec(dllexport) void  Framework_Perf_BeginFrame();
+    __declspec(dllexport) void  Framework_Perf_EndFrame();
+
+    // ========================================================================
     // PREFABS & SERIALIZATION
     // ========================================================================
     __declspec(dllexport) bool  Framework_Scene_Save(const char* path);

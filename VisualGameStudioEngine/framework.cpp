@@ -3196,6 +3196,614 @@ extern "C" {
     }
 
     // ========================================================================
+    // PROFILING & PERFORMANCE SYSTEM
+    // ========================================================================
+
+    struct PerfScope {
+        std::string name;
+        double startTime = 0;
+        double lastTime = 0;
+        double totalTime = 0;
+        int callCount = 0;
+    };
+
+    struct ConsoleLine {
+        std::string text;
+        Color color;
+    };
+
+    struct DebugShape {
+        enum Type { LINE, RECT, RECT_FILLED, CIRCLE, CIRCLE_FILLED, POINT, ARROW, TEXT, GRID, CROSS };
+        Type type;
+        float x1, y1, x2, y2;
+        float size;
+        Color color;
+        std::string text;
+    };
+
+    // Performance state
+    static std::vector<float> g_frameTimeHistory;
+    static int g_perfSampleCount = 60;
+    static int g_totalFrameCount = 0;
+    static float g_currentFrameTime = 0;
+    static double g_frameStartTime = 0;
+    static int g_drawCallCount = 0;
+    static int g_triangleCount = 0;
+
+    // Profiling scopes
+    static std::unordered_map<std::string, PerfScope> g_perfScopes;
+    static std::vector<std::string> g_scopeStack;
+
+    // Performance graph
+    static bool g_perfGraphEnabled = false;
+    static float g_perfGraphX = 10;
+    static float g_perfGraphY = 100;
+    static float g_perfGraphWidth = 200;
+    static float g_perfGraphHeight = 60;
+
+    // Logging
+    static int g_logMinLevel = LOG_LEVEL_INFO;
+    static std::ofstream g_logFile;
+    static bool g_logFileOpen = false;
+
+    // Console
+    static bool g_consoleEnabled = false;
+    static float g_consoleX = 10;
+    static float g_consoleY = 200;
+    static float g_consoleWidth = 400;
+    static float g_consoleHeight = 200;
+    static int g_consoleMaxLines = 50;
+    static std::vector<ConsoleLine> g_consoleLines;
+
+    // Debug drawing
+    static bool g_debugDrawEnabled = false;
+    static bool g_debugDrawPersistent = false;
+    static std::vector<DebugShape> g_debugShapes;
+
+    // Debug overlay flags
+    static bool g_showFPS = true;
+    static bool g_showFrameTime = false;
+    static bool g_showDrawCalls = false;
+    static bool g_showEntityCount = true;
+    static bool g_showMemory = false;
+    static bool g_showPhysics = false;
+    static bool g_showColliders = false;
+    static float g_overlayX = 10;
+    static float g_overlayY = 10;
+    static Color g_overlayColor = { 255, 255, 255, 255 };
+
+    // Frame timing
+    float Framework_Perf_GetFPS() {
+        return (float)GetFPS();
+    }
+
+    float Framework_Perf_GetFrameTime() {
+        return g_currentFrameTime;
+    }
+
+    float Framework_Perf_GetFrameTimeAvg() {
+        if (g_frameTimeHistory.empty()) return 0;
+        float sum = 0;
+        for (float t : g_frameTimeHistory) sum += t;
+        return sum / g_frameTimeHistory.size();
+    }
+
+    float Framework_Perf_GetFrameTimeMin() {
+        if (g_frameTimeHistory.empty()) return 0;
+        float minVal = g_frameTimeHistory[0];
+        for (float t : g_frameTimeHistory) if (t < minVal) minVal = t;
+        return minVal;
+    }
+
+    float Framework_Perf_GetFrameTimeMax() {
+        if (g_frameTimeHistory.empty()) return 0;
+        float maxVal = g_frameTimeHistory[0];
+        for (float t : g_frameTimeHistory) if (t > maxVal) maxVal = t;
+        return maxVal;
+    }
+
+    void Framework_Perf_SetSampleCount(int count) {
+        if (count > 0) {
+            g_perfSampleCount = count;
+            while ((int)g_frameTimeHistory.size() > count) {
+                g_frameTimeHistory.erase(g_frameTimeHistory.begin());
+            }
+        }
+    }
+
+    int Framework_Perf_GetFrameCount() {
+        return g_totalFrameCount;
+    }
+
+    // Draw call tracking
+    int Framework_Perf_GetDrawCalls() {
+        return g_drawCallCount;
+    }
+
+    int Framework_Perf_GetTriangleCount() {
+        return g_triangleCount;
+    }
+
+    void Framework_Perf_ResetDrawStats() {
+        g_drawCallCount = 0;
+        g_triangleCount = 0;
+    }
+
+    // Memory tracking
+    int Framework_Perf_GetEntityCount() {
+        return (int)g_entities.size();
+    }
+
+    int Framework_Perf_GetTextureCount() {
+        return (int)g_texByHandle.size();
+    }
+
+    int Framework_Perf_GetSoundCount() {
+        return (int)g_sounds.size();
+    }
+
+    int Framework_Perf_GetFontCount() {
+        return (int)g_fontByHandle.size();
+    }
+
+    long long Framework_Perf_GetTextureMemory() {
+        long long total = 0;
+        for (auto& kv : g_texByHandle) {
+            if (kv.second.valid) {
+                total += kv.second.tex.width * kv.second.tex.height * 4;  // Assume RGBA
+            }
+        }
+        return total;
+    }
+
+    // Profiling scopes
+    void Framework_Perf_BeginScope(const char* name) {
+        if (!name) return;
+        g_scopeStack.push_back(name);
+        g_perfScopes[name].name = name;
+        g_perfScopes[name].startTime = GetTime();
+    }
+
+    void Framework_Perf_EndScope() {
+        if (g_scopeStack.empty()) return;
+        std::string name = g_scopeStack.back();
+        g_scopeStack.pop_back();
+
+        auto it = g_perfScopes.find(name);
+        if (it != g_perfScopes.end()) {
+            double elapsed = (GetTime() - it->second.startTime) * 1000.0;  // Convert to ms
+            it->second.lastTime = elapsed;
+            it->second.totalTime += elapsed;
+            it->second.callCount++;
+        }
+    }
+
+    float Framework_Perf_GetScopeTime(const char* name) {
+        if (!name) return 0;
+        auto it = g_perfScopes.find(name);
+        return (it != g_perfScopes.end()) ? (float)it->second.lastTime : 0;
+    }
+
+    float Framework_Perf_GetScopeTimeAvg(const char* name) {
+        if (!name) return 0;
+        auto it = g_perfScopes.find(name);
+        if (it == g_perfScopes.end() || it->second.callCount == 0) return 0;
+        return (float)(it->second.totalTime / it->second.callCount);
+    }
+
+    int Framework_Perf_GetScopeCallCount(const char* name) {
+        if (!name) return 0;
+        auto it = g_perfScopes.find(name);
+        return (it != g_perfScopes.end()) ? it->second.callCount : 0;
+    }
+
+    void Framework_Perf_ResetScopes() {
+        g_perfScopes.clear();
+        g_scopeStack.clear();
+    }
+
+    // Performance graphs
+    void Framework_Perf_SetGraphEnabled(bool enabled) {
+        g_perfGraphEnabled = enabled;
+    }
+
+    void Framework_Perf_SetGraphPosition(float x, float y) {
+        g_perfGraphX = x;
+        g_perfGraphY = y;
+    }
+
+    void Framework_Perf_SetGraphSize(float width, float height) {
+        g_perfGraphWidth = width;
+        g_perfGraphHeight = height;
+    }
+
+    void Framework_Perf_DrawGraph() {
+        if (!g_perfGraphEnabled || g_frameTimeHistory.empty()) return;
+
+        // Background
+        DrawRectangle((int)g_perfGraphX, (int)g_perfGraphY, (int)g_perfGraphWidth, (int)g_perfGraphHeight, Color{ 0, 0, 0, 180 });
+        DrawRectangleLinesEx(Rectangle{ g_perfGraphX, g_perfGraphY, g_perfGraphWidth, g_perfGraphHeight }, 1, Color{ 100, 100, 100, 255 });
+
+        // Find max frame time for scaling
+        float maxTime = 16.67f;  // Minimum scale of 60 FPS target
+        for (float t : g_frameTimeHistory) {
+            if (t > maxTime) maxTime = t;
+        }
+
+        // Draw frame time bars
+        int count = (int)g_frameTimeHistory.size();
+        float barWidth = g_perfGraphWidth / g_perfSampleCount;
+
+        for (int i = 0; i < count; i++) {
+            float t = g_frameTimeHistory[i];
+            float height = (t / maxTime) * g_perfGraphHeight;
+            float x = g_perfGraphX + i * barWidth;
+            float y = g_perfGraphY + g_perfGraphHeight - height;
+
+            Color col = GREEN;
+            if (t > 16.67f) col = YELLOW;
+            if (t > 33.33f) col = RED;
+
+            DrawRectangle((int)x, (int)y, (int)barWidth - 1, (int)height, col);
+        }
+
+        // Draw 60 FPS line
+        float targetY = g_perfGraphY + g_perfGraphHeight - (16.67f / maxTime) * g_perfGraphHeight;
+        DrawLine((int)g_perfGraphX, (int)targetY, (int)(g_perfGraphX + g_perfGraphWidth), (int)targetY, Color{ 0, 255, 0, 128 });
+
+        // Labels
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.1f ms", g_currentFrameTime);
+        DrawText(buf, (int)g_perfGraphX + 2, (int)g_perfGraphY + 2, 10, WHITE);
+    }
+
+    // Console/Logging
+    void Framework_Log(int level, const char* message) {
+        if (!message || level < g_logMinLevel) return;
+
+        const char* levelStr = "INFO";
+        switch (level) {
+            case LOG_LEVEL_TRACE: levelStr = "TRACE"; break;
+            case LOG_LEVEL_DEBUG: levelStr = "DEBUG"; break;
+            case LOG_LEVEL_INFO: levelStr = "INFO"; break;
+            case LOG_LEVEL_WARNING: levelStr = "WARN"; break;
+            case LOG_LEVEL_ERROR: levelStr = "ERROR"; break;
+            case LOG_LEVEL_FATAL: levelStr = "FATAL"; break;
+        }
+
+        char buf[512];
+        snprintf(buf, sizeof(buf), "[%s] %s", levelStr, message);
+
+        // Output to raylib log
+        TraceLog(LOG_INFO, "%s", buf);
+
+        // Output to file if open
+        if (g_logFileOpen && g_logFile.is_open()) {
+            g_logFile << buf << std::endl;
+        }
+
+        // Add to console
+        Color col = WHITE;
+        switch (level) {
+            case LOG_LEVEL_TRACE: col = GRAY; break;
+            case LOG_LEVEL_DEBUG: col = LIGHTGRAY; break;
+            case LOG_LEVEL_INFO: col = WHITE; break;
+            case LOG_LEVEL_WARNING: col = YELLOW; break;
+            case LOG_LEVEL_ERROR: col = RED; break;
+            case LOG_LEVEL_FATAL: col = MAROON; break;
+        }
+        Framework_Console_PrintColored(buf, col.r, col.g, col.b);
+    }
+
+    void Framework_Log_SetMinLevel(int level) {
+        g_logMinLevel = level;
+    }
+
+    int Framework_Log_GetMinLevel() {
+        return g_logMinLevel;
+    }
+
+    void Framework_Log_SetFileOutput(const char* filename) {
+        if (g_logFileOpen) {
+            g_logFile.close();
+        }
+        if (filename) {
+            g_logFile.open(filename, std::ios::out | std::ios::app);
+            g_logFileOpen = g_logFile.is_open();
+        }
+    }
+
+    void Framework_Log_CloseFile() {
+        if (g_logFileOpen) {
+            g_logFile.close();
+            g_logFileOpen = false;
+        }
+    }
+
+    // On-screen console
+    void Framework_Console_SetEnabled(bool enabled) {
+        g_consoleEnabled = enabled;
+    }
+
+    bool Framework_Console_IsEnabled() {
+        return g_consoleEnabled;
+    }
+
+    void Framework_Console_SetPosition(float x, float y) {
+        g_consoleX = x;
+        g_consoleY = y;
+    }
+
+    void Framework_Console_SetSize(float width, float height) {
+        g_consoleWidth = width;
+        g_consoleHeight = height;
+    }
+
+    void Framework_Console_SetMaxLines(int maxLines) {
+        g_consoleMaxLines = maxLines;
+        while ((int)g_consoleLines.size() > maxLines) {
+            g_consoleLines.erase(g_consoleLines.begin());
+        }
+    }
+
+    void Framework_Console_Clear() {
+        g_consoleLines.clear();
+    }
+
+    void Framework_Console_Print(const char* message) {
+        Framework_Console_PrintColored(message, 255, 255, 255);
+    }
+
+    void Framework_Console_PrintColored(const char* message, unsigned char r, unsigned char g, unsigned char b) {
+        if (!message) return;
+
+        ConsoleLine line;
+        line.text = message;
+        line.color = Color{ r, g, b, 255 };
+        g_consoleLines.push_back(line);
+
+        while ((int)g_consoleLines.size() > g_consoleMaxLines) {
+            g_consoleLines.erase(g_consoleLines.begin());
+        }
+    }
+
+    void Framework_Console_Draw() {
+        if (!g_consoleEnabled) return;
+
+        // Background
+        DrawRectangle((int)g_consoleX, (int)g_consoleY, (int)g_consoleWidth, (int)g_consoleHeight, Color{ 0, 0, 0, 200 });
+        DrawRectangleLinesEx(Rectangle{ g_consoleX, g_consoleY, g_consoleWidth, g_consoleHeight }, 1, Color{ 100, 100, 100, 255 });
+
+        // Draw lines from bottom up
+        int lineHeight = 12;
+        int maxVisible = (int)(g_consoleHeight / lineHeight) - 1;
+        int startLine = std::max(0, (int)g_consoleLines.size() - maxVisible);
+
+        float y = g_consoleY + g_consoleHeight - lineHeight - 2;
+        for (int i = (int)g_consoleLines.size() - 1; i >= startLine && y > g_consoleY; i--) {
+            DrawText(g_consoleLines[i].text.c_str(), (int)g_consoleX + 4, (int)y, 10, g_consoleLines[i].color);
+            y -= lineHeight;
+        }
+    }
+
+    // Debug drawing
+    void Framework_DebugDraw_Line(float x1, float y1, float x2, float y2, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::LINE;
+        shape.x1 = x1; shape.y1 = y1;
+        shape.x2 = x2; shape.y2 = y2;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_Rect(float x, float y, float w, float h, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::RECT;
+        shape.x1 = x; shape.y1 = y;
+        shape.x2 = w; shape.y2 = h;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_RectFilled(float x, float y, float w, float h, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::RECT_FILLED;
+        shape.x1 = x; shape.y1 = y;
+        shape.x2 = w; shape.y2 = h;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_Circle(float x, float y, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::CIRCLE;
+        shape.x1 = x; shape.y1 = y;
+        shape.size = radius;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_CircleFilled(float x, float y, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::CIRCLE_FILLED;
+        shape.x1 = x; shape.y1 = y;
+        shape.size = radius;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_Point(float x, float y, float size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::POINT;
+        shape.x1 = x; shape.y1 = y;
+        shape.size = size;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_Arrow(float x1, float y1, float x2, float y2, float headSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::ARROW;
+        shape.x1 = x1; shape.y1 = y1;
+        shape.x2 = x2; shape.y2 = y2;
+        shape.size = headSize;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_Text(float x, float y, const char* text, unsigned char r, unsigned char g, unsigned char b) {
+        if (!g_debugDrawEnabled || !text) return;
+        DebugShape shape;
+        shape.type = DebugShape::TEXT;
+        shape.x1 = x; shape.y1 = y;
+        shape.text = text;
+        shape.color = Color{ r, g, b, 255 };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_Grid(float cellSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::GRID;
+        shape.size = cellSize;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_Cross(float x, float y, float size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!g_debugDrawEnabled) return;
+        DebugShape shape;
+        shape.type = DebugShape::CROSS;
+        shape.x1 = x; shape.y1 = y;
+        shape.size = size;
+        shape.color = Color{ r, g, b, a };
+        g_debugShapes.push_back(shape);
+    }
+
+    void Framework_DebugDraw_SetEnabled(bool enabled) {
+        g_debugDrawEnabled = enabled;
+    }
+
+    bool Framework_DebugDraw_IsEnabled() {
+        return g_debugDrawEnabled;
+    }
+
+    void Framework_DebugDraw_SetPersistent(bool persistent) {
+        g_debugDrawPersistent = persistent;
+    }
+
+    void Framework_DebugDraw_Clear() {
+        g_debugShapes.clear();
+    }
+
+    void Framework_DebugDraw_Flush() {
+        if (!g_debugDrawEnabled) return;
+
+        for (auto& shape : g_debugShapes) {
+            switch (shape.type) {
+                case DebugShape::LINE:
+                    DrawLineV(Vector2{ shape.x1, shape.y1 }, Vector2{ shape.x2, shape.y2 }, shape.color);
+                    break;
+                case DebugShape::RECT:
+                    DrawRectangleLinesEx(Rectangle{ shape.x1, shape.y1, shape.x2, shape.y2 }, 1, shape.color);
+                    break;
+                case DebugShape::RECT_FILLED:
+                    DrawRectangle((int)shape.x1, (int)shape.y1, (int)shape.x2, (int)shape.y2, shape.color);
+                    break;
+                case DebugShape::CIRCLE:
+                    DrawCircleLines((int)shape.x1, (int)shape.y1, shape.size, shape.color);
+                    break;
+                case DebugShape::CIRCLE_FILLED:
+                    DrawCircle((int)shape.x1, (int)shape.y1, shape.size, shape.color);
+                    break;
+                case DebugShape::POINT:
+                    DrawCircle((int)shape.x1, (int)shape.y1, shape.size, shape.color);
+                    break;
+                case DebugShape::ARROW: {
+                    DrawLineV(Vector2{ shape.x1, shape.y1 }, Vector2{ shape.x2, shape.y2 }, shape.color);
+                    // Draw arrow head
+                    float dx = shape.x2 - shape.x1;
+                    float dy = shape.y2 - shape.y1;
+                    float len = sqrtf(dx * dx + dy * dy);
+                    if (len > 0) {
+                        dx /= len; dy /= len;
+                        float px = -dy, py = dx;  // Perpendicular
+                        float ax = shape.x2 - dx * shape.size;
+                        float ay = shape.y2 - dy * shape.size;
+                        DrawLineV(Vector2{ shape.x2, shape.y2 }, Vector2{ ax + px * shape.size * 0.5f, ay + py * shape.size * 0.5f }, shape.color);
+                        DrawLineV(Vector2{ shape.x2, shape.y2 }, Vector2{ ax - px * shape.size * 0.5f, ay - py * shape.size * 0.5f }, shape.color);
+                    }
+                    break;
+                }
+                case DebugShape::TEXT:
+                    DrawText(shape.text.c_str(), (int)shape.x1, (int)shape.y1, 10, shape.color);
+                    break;
+                case DebugShape::GRID: {
+                    int screenW = GetScreenWidth();
+                    int screenH = GetScreenHeight();
+                    for (float x = 0; x < screenW; x += shape.size) {
+                        DrawLine((int)x, 0, (int)x, screenH, shape.color);
+                    }
+                    for (float y = 0; y < screenH; y += shape.size) {
+                        DrawLine(0, (int)y, screenW, (int)y, shape.color);
+                    }
+                    break;
+                }
+                case DebugShape::CROSS:
+                    DrawLine((int)(shape.x1 - shape.size), (int)shape.y1, (int)(shape.x1 + shape.size), (int)shape.y1, shape.color);
+                    DrawLine((int)shape.x1, (int)(shape.y1 - shape.size), (int)shape.x1, (int)(shape.y1 + shape.size), shape.color);
+                    break;
+            }
+        }
+
+        if (!g_debugDrawPersistent) {
+            g_debugShapes.clear();
+        }
+    }
+
+    // System overlays
+    void Framework_Debug_SetShowFPS(bool show) { g_showFPS = show; }
+    void Framework_Debug_SetShowFrameTime(bool show) { g_showFrameTime = show; }
+    void Framework_Debug_SetShowDrawCalls(bool show) { g_showDrawCalls = show; }
+    void Framework_Debug_SetShowEntityCount(bool show) { g_showEntityCount = show; }
+    void Framework_Debug_SetShowMemory(bool show) { g_showMemory = show; }
+    void Framework_Debug_SetShowPhysics(bool show) { g_showPhysics = show; }
+    void Framework_Debug_SetShowColliders(bool show) { g_showColliders = show; }
+
+    void Framework_Debug_SetOverlayPosition(float x, float y) {
+        g_overlayX = x;
+        g_overlayY = y;
+    }
+
+    void Framework_Debug_SetOverlayColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        g_overlayColor = Color{ r, g, b, a };
+    }
+
+    // Frame profiling
+    void Framework_Perf_BeginFrame() {
+        g_frameStartTime = GetTime();
+        Framework_Perf_ResetDrawStats();
+    }
+
+    void Framework_Perf_EndFrame() {
+        g_currentFrameTime = (float)((GetTime() - g_frameStartTime) * 1000.0);
+        g_totalFrameCount++;
+
+        // Add to history
+        g_frameTimeHistory.push_back(g_currentFrameTime);
+        while ((int)g_frameTimeHistory.size() > g_perfSampleCount) {
+            g_frameTimeHistory.erase(g_frameTimeHistory.begin());
+        }
+    }
+
+    // ========================================================================
     // PREFABS & SERIALIZATION (Basic implementation)
     // ========================================================================
 
