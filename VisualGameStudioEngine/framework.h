@@ -2100,6 +2100,189 @@ extern "C" {
     __declspec(dllexport) int   Framework_Dialogue_GetCount();
 
     // ========================================================================
+    // INVENTORY SYSTEM - Item management and equipment
+    // ========================================================================
+
+    // Item rarity levels
+    enum ItemRarity {
+        ITEM_RARITY_COMMON = 0,
+        ITEM_RARITY_UNCOMMON = 1,
+        ITEM_RARITY_RARE = 2,
+        ITEM_RARITY_EPIC = 3,
+        ITEM_RARITY_LEGENDARY = 4
+    };
+
+    // Equipment slot types
+    enum EquipSlot {
+        EQUIP_SLOT_NONE = 0,
+        EQUIP_SLOT_HEAD = 1,
+        EQUIP_SLOT_CHEST = 2,
+        EQUIP_SLOT_LEGS = 3,
+        EQUIP_SLOT_FEET = 4,
+        EQUIP_SLOT_HANDS = 5,
+        EQUIP_SLOT_MAIN_HAND = 6,
+        EQUIP_SLOT_OFF_HAND = 7,
+        EQUIP_SLOT_ACCESSORY1 = 8,
+        EQUIP_SLOT_ACCESSORY2 = 9
+    };
+
+    // Inventory callbacks
+    typedef void (*InventoryCallback)(int inventoryId, int slotIndex, int itemId, void* userData);
+    typedef void (*ItemUseCallback)(int inventoryId, int slotIndex, int itemId, int quantity, void* userData);
+    typedef bool (*ItemDropCallback)(int inventoryId, int slotIndex, int itemId, int quantity, void* userData);
+
+    // ---- Item Definition (template/prototype) ----
+    __declspec(dllexport) int   Framework_Item_Define(const char* itemName);
+    __declspec(dllexport) void  Framework_Item_Undefine(int itemDefId);
+    __declspec(dllexport) int   Framework_Item_GetDefByName(const char* itemName);
+    __declspec(dllexport) bool  Framework_Item_IsDefValid(int itemDefId);
+
+    // Item definition properties
+    __declspec(dllexport) void  Framework_Item_SetDisplayName(int itemDefId, const char* displayName);
+    __declspec(dllexport) const char* Framework_Item_GetDisplayName(int itemDefId);
+    __declspec(dllexport) void  Framework_Item_SetDescription(int itemDefId, const char* description);
+    __declspec(dllexport) const char* Framework_Item_GetDescription(int itemDefId);
+    __declspec(dllexport) void  Framework_Item_SetIcon(int itemDefId, int textureHandle);
+    __declspec(dllexport) int   Framework_Item_GetIcon(int itemDefId);
+    __declspec(dllexport) void  Framework_Item_SetIconRect(int itemDefId, float x, float y, float w, float h);
+
+    // Stacking
+    __declspec(dllexport) void  Framework_Item_SetStackable(int itemDefId, bool stackable);
+    __declspec(dllexport) bool  Framework_Item_IsStackable(int itemDefId);
+    __declspec(dllexport) void  Framework_Item_SetMaxStack(int itemDefId, int maxStack);
+    __declspec(dllexport) int   Framework_Item_GetMaxStack(int itemDefId);
+
+    // Category and rarity
+    __declspec(dllexport) void  Framework_Item_SetCategory(int itemDefId, const char* category);
+    __declspec(dllexport) const char* Framework_Item_GetCategory(int itemDefId);
+    __declspec(dllexport) void  Framework_Item_SetRarity(int itemDefId, int rarity);
+    __declspec(dllexport) int   Framework_Item_GetRarity(int itemDefId);
+
+    // Equipment properties
+    __declspec(dllexport) void  Framework_Item_SetEquipSlot(int itemDefId, int equipSlot);
+    __declspec(dllexport) int   Framework_Item_GetEquipSlot(int itemDefId);
+    __declspec(dllexport) void  Framework_Item_SetUsable(int itemDefId, bool usable);
+    __declspec(dllexport) bool  Framework_Item_IsUsable(int itemDefId);
+    __declspec(dllexport) void  Framework_Item_SetConsumable(int itemDefId, bool consumable);
+    __declspec(dllexport) bool  Framework_Item_IsConsumable(int itemDefId);
+
+    // Item stats (generic key-value for RPG stats)
+    __declspec(dllexport) void  Framework_Item_SetStatInt(int itemDefId, const char* statName, int value);
+    __declspec(dllexport) int   Framework_Item_GetStatInt(int itemDefId, const char* statName);
+    __declspec(dllexport) void  Framework_Item_SetStatFloat(int itemDefId, const char* statName, float value);
+    __declspec(dllexport) float Framework_Item_GetStatFloat(int itemDefId, const char* statName);
+
+    // Value/price
+    __declspec(dllexport) void  Framework_Item_SetValue(int itemDefId, int value);
+    __declspec(dllexport) int   Framework_Item_GetValue(int itemDefId);
+    __declspec(dllexport) void  Framework_Item_SetWeight(int itemDefId, float weight);
+    __declspec(dllexport) float Framework_Item_GetWeight(int itemDefId);
+
+    // ---- Inventory Container ----
+    __declspec(dllexport) int   Framework_Inventory_Create(const char* name, int slotCount);
+    __declspec(dllexport) void  Framework_Inventory_Destroy(int inventoryId);
+    __declspec(dllexport) int   Framework_Inventory_GetByName(const char* name);
+    __declspec(dllexport) bool  Framework_Inventory_IsValid(int inventoryId);
+
+    // Inventory properties
+    __declspec(dllexport) void  Framework_Inventory_SetSlotCount(int inventoryId, int slotCount);
+    __declspec(dllexport) int   Framework_Inventory_GetSlotCount(int inventoryId);
+    __declspec(dllexport) void  Framework_Inventory_SetMaxWeight(int inventoryId, float maxWeight);
+    __declspec(dllexport) float Framework_Inventory_GetMaxWeight(int inventoryId);
+    __declspec(dllexport) float Framework_Inventory_GetCurrentWeight(int inventoryId);
+    __declspec(dllexport) bool  Framework_Inventory_IsWeightLimited(int inventoryId);
+
+    // Adding items
+    __declspec(dllexport) bool  Framework_Inventory_AddItem(int inventoryId, int itemDefId, int quantity);  // Auto-stack/find slot
+    __declspec(dllexport) bool  Framework_Inventory_AddItemToSlot(int inventoryId, int slotIndex, int itemDefId, int quantity);
+    __declspec(dllexport) int   Framework_Inventory_AddItemGetRemaining(int inventoryId, int itemDefId, int quantity);  // Returns leftover
+
+    // Removing items
+    __declspec(dllexport) bool  Framework_Inventory_RemoveItem(int inventoryId, int itemDefId, int quantity);  // From any slot
+    __declspec(dllexport) bool  Framework_Inventory_RemoveItemFromSlot(int inventoryId, int slotIndex, int quantity);
+    __declspec(dllexport) void  Framework_Inventory_ClearSlot(int inventoryId, int slotIndex);
+    __declspec(dllexport) void  Framework_Inventory_Clear(int inventoryId);
+
+    // Slot queries
+    __declspec(dllexport) int   Framework_Inventory_GetItemAt(int inventoryId, int slotIndex);  // Returns itemDefId or -1
+    __declspec(dllexport) int   Framework_Inventory_GetQuantityAt(int inventoryId, int slotIndex);
+    __declspec(dllexport) bool  Framework_Inventory_IsSlotEmpty(int inventoryId, int slotIndex);
+    __declspec(dllexport) int   Framework_Inventory_GetFirstEmptySlot(int inventoryId);
+    __declspec(dllexport) int   Framework_Inventory_GetEmptySlotCount(int inventoryId);
+
+    // Item queries
+    __declspec(dllexport) bool  Framework_Inventory_HasItem(int inventoryId, int itemDefId);
+    __declspec(dllexport) int   Framework_Inventory_CountItem(int inventoryId, int itemDefId);  // Total quantity
+    __declspec(dllexport) int   Framework_Inventory_FindItem(int inventoryId, int itemDefId);  // Returns first slot index or -1
+    __declspec(dllexport) int   Framework_Inventory_FindItemByCategory(int inventoryId, const char* category);
+
+    // Moving/swapping items
+    __declspec(dllexport) bool  Framework_Inventory_MoveItem(int inventoryId, int fromSlot, int toSlot);
+    __declspec(dllexport) bool  Framework_Inventory_SwapSlots(int inventoryId, int slotA, int slotB);
+    __declspec(dllexport) bool  Framework_Inventory_TransferItem(int fromInvId, int fromSlot, int toInvId, int toSlot, int quantity);
+    __declspec(dllexport) bool  Framework_Inventory_SplitStack(int inventoryId, int slotIndex, int quantity, int targetSlot);
+
+    // Sorting
+    __declspec(dllexport) void  Framework_Inventory_Sort(int inventoryId);  // Sort by category, then name
+    __declspec(dllexport) void  Framework_Inventory_SortByRarity(int inventoryId);
+    __declspec(dllexport) void  Framework_Inventory_Compact(int inventoryId);  // Move items to fill gaps
+
+    // Using items
+    __declspec(dllexport) bool  Framework_Inventory_UseItem(int inventoryId, int slotIndex);
+    __declspec(dllexport) void  Framework_Inventory_SetUseCallback(int inventoryId, ItemUseCallback callback, void* userData);
+
+    // ---- Equipment System ----
+    __declspec(dllexport) int   Framework_Equipment_Create(const char* name);
+    __declspec(dllexport) void  Framework_Equipment_Destroy(int equipId);
+    __declspec(dllexport) int   Framework_Equipment_GetByName(const char* name);
+    __declspec(dllexport) bool  Framework_Equipment_IsValid(int equipId);
+
+    // Equip/unequip
+    __declspec(dllexport) bool  Framework_Equipment_Equip(int equipId, int itemDefId, int slot);
+    __declspec(dllexport) bool  Framework_Equipment_EquipFromInventory(int equipId, int inventoryId, int invSlot, int equipSlot);
+    __declspec(dllexport) int   Framework_Equipment_Unequip(int equipId, int slot);  // Returns itemDefId
+    __declspec(dllexport) bool  Framework_Equipment_UnequipToInventory(int equipId, int slot, int inventoryId);
+    __declspec(dllexport) void  Framework_Equipment_UnequipAll(int equipId);
+
+    // Equipment queries
+    __declspec(dllexport) int   Framework_Equipment_GetItemAt(int equipId, int slot);  // Returns itemDefId or -1
+    __declspec(dllexport) bool  Framework_Equipment_IsSlotEmpty(int equipId, int slot);
+    __declspec(dllexport) bool  Framework_Equipment_CanEquip(int equipId, int itemDefId, int slot);
+
+    // Equipment stats (sum of all equipped item stats)
+    __declspec(dllexport) int   Framework_Equipment_GetTotalStatInt(int equipId, const char* statName);
+    __declspec(dllexport) float Framework_Equipment_GetTotalStatFloat(int equipId, const char* statName);
+
+    // ---- Callbacks ----
+    __declspec(dllexport) void  Framework_Inventory_SetOnAddCallback(int inventoryId, InventoryCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Inventory_SetOnRemoveCallback(int inventoryId, InventoryCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Inventory_SetOnChangeCallback(int inventoryId, InventoryCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Inventory_SetDropCallback(int inventoryId, ItemDropCallback callback, void* userData);
+
+    // ---- Loot Tables ----
+    __declspec(dllexport) int   Framework_LootTable_Create(const char* name);
+    __declspec(dllexport) void  Framework_LootTable_Destroy(int tableId);
+    __declspec(dllexport) void  Framework_LootTable_AddEntry(int tableId, int itemDefId, float weight, int minQty, int maxQty);
+    __declspec(dllexport) void  Framework_LootTable_RemoveEntry(int tableId, int itemDefId);
+    __declspec(dllexport) int   Framework_LootTable_Roll(int tableId, int* outQuantity);  // Returns itemDefId
+    __declspec(dllexport) void  Framework_LootTable_RollMultiple(int tableId, int rolls, int* outItems, int* outQuantities, int bufferSize);
+
+    // ---- Save/Load ----
+    __declspec(dllexport) bool  Framework_Inventory_SaveToSlot(int inventoryId, int saveSlot, const char* key);
+    __declspec(dllexport) bool  Framework_Inventory_LoadFromSlot(int inventoryId, int saveSlot, const char* key);
+    __declspec(dllexport) bool  Framework_Equipment_SaveToSlot(int equipId, int saveSlot, const char* key);
+    __declspec(dllexport) bool  Framework_Equipment_LoadFromSlot(int equipId, int saveSlot, const char* key);
+
+    // ---- Global Management ----
+    __declspec(dllexport) void  Framework_Item_UndefineAll();
+    __declspec(dllexport) void  Framework_Inventory_DestroyAll();
+    __declspec(dllexport) void  Framework_Equipment_DestroyAll();
+    __declspec(dllexport) void  Framework_LootTable_DestroyAll();
+    __declspec(dllexport) int   Framework_Item_GetDefCount();
+    __declspec(dllexport) int   Framework_Inventory_GetCount();
+    __declspec(dllexport) int   Framework_Equipment_GetCount();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

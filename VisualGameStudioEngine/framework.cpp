@@ -13351,6 +13351,1154 @@ extern "C" {
     }
 
     // ========================================================================
+    // INVENTORY SYSTEM
+    // ========================================================================
+
+    // Item definition structure
+    struct ItemDefinition {
+        int id = 0;
+        std::string name;         // Internal name
+        std::string displayName;  // Display name
+        std::string description;
+        int iconTexture = -1;
+        Rectangle iconRect = { 0, 0, 0, 0 };
+        bool stackable = true;
+        int maxStack = 99;
+        std::string category;
+        int rarity = ITEM_RARITY_COMMON;
+        int equipSlot = EQUIP_SLOT_NONE;
+        std::unordered_map<std::string, int> statsInt;
+        std::unordered_map<std::string, float> statsFloat;
+        int value = 0;
+        float weight = 0.0f;
+        bool usable = false;
+        bool consumable = false;
+    };
+
+    // Inventory slot
+    struct InventorySlot {
+        int itemDefId = -1;
+        int quantity = 0;
+    };
+
+    // Inventory container
+    struct Inventory {
+        int id = 0;
+        std::string name;
+        int slotCount = 20;
+        float maxWeight = 0.0f; // 0 = unlimited
+        std::vector<InventorySlot> slots;
+
+        // Callbacks
+        InventoryCallback onAddCallback = nullptr;
+        InventoryCallback onRemoveCallback = nullptr;
+        InventoryCallback onChangeCallback = nullptr;
+        ItemUseCallback onUseCallback = nullptr;
+        ItemDropCallback onDropCallback = nullptr;
+        void* addUserData = nullptr;
+        void* removeUserData = nullptr;
+        void* changeUserData = nullptr;
+        void* useUserData = nullptr;
+        void* dropUserData = nullptr;
+    };
+
+    // Equipment
+    struct Equipment {
+        int id = 0;
+        std::string name;
+        std::unordered_map<int, int> slots; // slot -> itemDefId
+    };
+
+    // Loot entry
+    struct LootEntry {
+        int itemDefId = 0;
+        float weight = 1.0f;
+        int minQuantity = 1;
+        int maxQuantity = 1;
+    };
+
+    // Loot table
+    struct LootTable {
+        int id = 0;
+        std::string name;
+        std::vector<LootEntry> entries;
+    };
+
+    // Global state
+    static std::unordered_map<int, ItemDefinition> g_itemDefs;
+    static std::unordered_map<std::string, int> g_itemDefByName;
+    static int g_nextItemDefId = 1;
+
+    static std::unordered_map<int, Inventory> g_inventories;
+    static std::unordered_map<std::string, int> g_inventoryByName;
+    static int g_nextInventoryId = 1;
+
+    static std::unordered_map<int, Equipment> g_equipments;
+    static std::unordered_map<std::string, int> g_equipmentByName;
+    static int g_nextEquipmentId = 1;
+
+    static std::unordered_map<int, LootTable> g_lootTables;
+    static std::unordered_map<std::string, int> g_lootTableByName;
+    static int g_nextLootTableId = 1;
+
+    // String buffers
+    static char s_itemNameBuf[256];
+    static char s_itemDescBuf[1024];
+    static char s_categoryBuf[256];
+
+    // Helpers
+    static ItemDefinition* GetItemDef(int id) {
+        auto it = g_itemDefs.find(id);
+        return (it != g_itemDefs.end()) ? &it->second : nullptr;
+    }
+
+    static Inventory* GetInventory(int id) {
+        auto it = g_inventories.find(id);
+        return (it != g_inventories.end()) ? &it->second : nullptr;
+    }
+
+    static Equipment* GetEquipment(int id) {
+        auto it = g_equipments.find(id);
+        return (it != g_equipments.end()) ? &it->second : nullptr;
+    }
+
+    static LootTable* GetLootTable(int id) {
+        auto it = g_lootTables.find(id);
+        return (it != g_lootTables.end()) ? &it->second : nullptr;
+    }
+
+    static float GetInventoryWeight(Inventory* inv) {
+        if (!inv) return 0.0f;
+        float weight = 0.0f;
+        for (auto& slot : inv->slots) {
+            if (slot.itemDefId >= 0) {
+                auto* item = GetItemDef(slot.itemDefId);
+                if (item) weight += item->weight * slot.quantity;
+            }
+        }
+        return weight;
+    }
+
+    // ---- Item Definition API ----
+
+    int Framework_Item_Define(const char* itemName) {
+        ItemDefinition item;
+        item.id = g_nextItemDefId++;
+        item.name = itemName ? itemName : "";
+        item.displayName = item.name;
+
+        g_itemDefs[item.id] = item;
+        if (itemName) g_itemDefByName[itemName] = item.id;
+
+        return item.id;
+    }
+
+    void Framework_Item_Undefine(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        if (!item) return;
+        g_itemDefByName.erase(item->name);
+        g_itemDefs.erase(itemDefId);
+    }
+
+    int Framework_Item_GetDefByName(const char* itemName) {
+        if (!itemName) return -1;
+        auto it = g_itemDefByName.find(itemName);
+        return (it != g_itemDefByName.end()) ? it->second : -1;
+    }
+
+    bool Framework_Item_IsDefValid(int itemDefId) {
+        return GetItemDef(itemDefId) != nullptr;
+    }
+
+    void Framework_Item_SetDisplayName(int itemDefId, const char* displayName) {
+        auto* item = GetItemDef(itemDefId);
+        if (item && displayName) item->displayName = displayName;
+    }
+
+    const char* Framework_Item_GetDisplayName(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        if (!item) return "";
+        strncpy(s_itemNameBuf, item->displayName.c_str(), sizeof(s_itemNameBuf) - 1);
+        s_itemNameBuf[sizeof(s_itemNameBuf) - 1] = '\0';
+        return s_itemNameBuf;
+    }
+
+    void Framework_Item_SetDescription(int itemDefId, const char* description) {
+        auto* item = GetItemDef(itemDefId);
+        if (item && description) item->description = description;
+    }
+
+    const char* Framework_Item_GetDescription(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        if (!item) return "";
+        strncpy(s_itemDescBuf, item->description.c_str(), sizeof(s_itemDescBuf) - 1);
+        s_itemDescBuf[sizeof(s_itemDescBuf) - 1] = '\0';
+        return s_itemDescBuf;
+    }
+
+    void Framework_Item_SetIcon(int itemDefId, int textureHandle) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->iconTexture = textureHandle;
+    }
+
+    int Framework_Item_GetIcon(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->iconTexture : -1;
+    }
+
+    void Framework_Item_SetIconRect(int itemDefId, float x, float y, float w, float h) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->iconRect = { x, y, w, h };
+    }
+
+    void Framework_Item_SetStackable(int itemDefId, bool stackable) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->stackable = stackable;
+    }
+
+    bool Framework_Item_IsStackable(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->stackable : false;
+    }
+
+    void Framework_Item_SetMaxStack(int itemDefId, int maxStack) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->maxStack = maxStack;
+    }
+
+    int Framework_Item_GetMaxStack(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->maxStack : 1;
+    }
+
+    void Framework_Item_SetCategory(int itemDefId, const char* category) {
+        auto* item = GetItemDef(itemDefId);
+        if (item && category) item->category = category;
+    }
+
+    const char* Framework_Item_GetCategory(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        if (!item) return "";
+        strncpy(s_categoryBuf, item->category.c_str(), sizeof(s_categoryBuf) - 1);
+        s_categoryBuf[sizeof(s_categoryBuf) - 1] = '\0';
+        return s_categoryBuf;
+    }
+
+    void Framework_Item_SetRarity(int itemDefId, int rarity) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->rarity = rarity;
+    }
+
+    int Framework_Item_GetRarity(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->rarity : ITEM_RARITY_COMMON;
+    }
+
+    void Framework_Item_SetEquipSlot(int itemDefId, int equipSlot) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->equipSlot = equipSlot;
+    }
+
+    int Framework_Item_GetEquipSlot(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->equipSlot : EQUIP_SLOT_NONE;
+    }
+
+    void Framework_Item_SetUsable(int itemDefId, bool usable) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->usable = usable;
+    }
+
+    bool Framework_Item_IsUsable(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->usable : false;
+    }
+
+    void Framework_Item_SetConsumable(int itemDefId, bool consumable) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->consumable = consumable;
+    }
+
+    bool Framework_Item_IsConsumable(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->consumable : false;
+    }
+
+    void Framework_Item_SetStatInt(int itemDefId, const char* statName, int value) {
+        auto* item = GetItemDef(itemDefId);
+        if (item && statName) item->statsInt[statName] = value;
+    }
+
+    int Framework_Item_GetStatInt(int itemDefId, const char* statName) {
+        auto* item = GetItemDef(itemDefId);
+        if (!item || !statName) return 0;
+        auto it = item->statsInt.find(statName);
+        return (it != item->statsInt.end()) ? it->second : 0;
+    }
+
+    void Framework_Item_SetStatFloat(int itemDefId, const char* statName, float value) {
+        auto* item = GetItemDef(itemDefId);
+        if (item && statName) item->statsFloat[statName] = value;
+    }
+
+    float Framework_Item_GetStatFloat(int itemDefId, const char* statName) {
+        auto* item = GetItemDef(itemDefId);
+        if (!item || !statName) return 0.0f;
+        auto it = item->statsFloat.find(statName);
+        return (it != item->statsFloat.end()) ? it->second : 0.0f;
+    }
+
+    void Framework_Item_SetValue(int itemDefId, int value) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->value = value;
+    }
+
+    int Framework_Item_GetValue(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->value : 0;
+    }
+
+    void Framework_Item_SetWeight(int itemDefId, float weight) {
+        auto* item = GetItemDef(itemDefId);
+        if (item) item->weight = weight;
+    }
+
+    float Framework_Item_GetWeight(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        return item ? item->weight : 0.0f;
+    }
+
+    // ---- Inventory Container API ----
+
+    int Framework_Inventory_Create(const char* name, int slotCount) {
+        Inventory inv;
+        inv.id = g_nextInventoryId++;
+        inv.name = name ? name : "";
+        inv.slotCount = slotCount > 0 ? slotCount : 20;
+        inv.slots.resize(inv.slotCount);
+
+        g_inventories[inv.id] = inv;
+        if (name) g_inventoryByName[name] = inv.id;
+
+        return inv.id;
+    }
+
+    void Framework_Inventory_Destroy(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return;
+        g_inventoryByName.erase(inv->name);
+        g_inventories.erase(inventoryId);
+    }
+
+    int Framework_Inventory_GetByName(const char* name) {
+        if (!name) return -1;
+        auto it = g_inventoryByName.find(name);
+        return (it != g_inventoryByName.end()) ? it->second : -1;
+    }
+
+    bool Framework_Inventory_IsValid(int inventoryId) {
+        return GetInventory(inventoryId) != nullptr;
+    }
+
+    void Framework_Inventory_SetSlotCount(int inventoryId, int slotCount) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv || slotCount <= 0) return;
+        inv->slotCount = slotCount;
+        inv->slots.resize(slotCount);
+    }
+
+    int Framework_Inventory_GetSlotCount(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        return inv ? inv->slotCount : 0;
+    }
+
+    void Framework_Inventory_SetMaxWeight(int inventoryId, float maxWeight) {
+        auto* inv = GetInventory(inventoryId);
+        if (inv) inv->maxWeight = maxWeight;
+    }
+
+    float Framework_Inventory_GetMaxWeight(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        return inv ? inv->maxWeight : 0.0f;
+    }
+
+    float Framework_Inventory_GetCurrentWeight(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        return inv ? GetInventoryWeight(inv) : 0.0f;
+    }
+
+    bool Framework_Inventory_IsWeightLimited(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        return inv ? (inv->maxWeight > 0.0f) : false;
+    }
+
+    // Adding items
+    bool Framework_Inventory_AddItem(int inventoryId, int itemDefId, int quantity) {
+        auto* inv = GetInventory(inventoryId);
+        auto* item = GetItemDef(itemDefId);
+        if (!inv || !item || quantity <= 0) return false;
+
+        int remaining = quantity;
+
+        // Try to stack with existing items first
+        if (item->stackable) {
+            for (int i = 0; i < inv->slotCount && remaining > 0; i++) {
+                auto& slot = inv->slots[i];
+                if (slot.itemDefId == itemDefId) {
+                    int spaceInSlot = item->maxStack - slot.quantity;
+                    int toAdd = (remaining < spaceInSlot) ? remaining : spaceInSlot;
+                    if (toAdd > 0) {
+                        slot.quantity += toAdd;
+                        remaining -= toAdd;
+                        if (inv->onChangeCallback) {
+                            inv->onChangeCallback(inventoryId, i, itemDefId, inv->changeUserData);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add to empty slots
+        for (int i = 0; i < inv->slotCount && remaining > 0; i++) {
+            auto& slot = inv->slots[i];
+            if (slot.itemDefId < 0) {
+                int toAdd = item->stackable ? ((remaining < item->maxStack) ? remaining : item->maxStack) : 1;
+                slot.itemDefId = itemDefId;
+                slot.quantity = toAdd;
+                remaining -= toAdd;
+
+                if (inv->onAddCallback) {
+                    inv->onAddCallback(inventoryId, i, itemDefId, inv->addUserData);
+                }
+            }
+        }
+
+        return remaining == 0;
+    }
+
+    bool Framework_Inventory_AddItemToSlot(int inventoryId, int slotIndex, int itemDefId, int quantity) {
+        auto* inv = GetInventory(inventoryId);
+        auto* item = GetItemDef(itemDefId);
+        if (!inv || !item || quantity <= 0) return false;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return false;
+
+        auto& slot = inv->slots[slotIndex];
+        if (slot.itemDefId >= 0 && slot.itemDefId != itemDefId) return false;
+
+        int currentQty = (slot.itemDefId == itemDefId) ? slot.quantity : 0;
+        int maxAdd = item->stackable ? (item->maxStack - currentQty) : (currentQty == 0 ? 1 : 0);
+        if (quantity > maxAdd) return false;
+
+        bool wasEmpty = slot.itemDefId < 0;
+        slot.itemDefId = itemDefId;
+        slot.quantity += quantity;
+
+        if (wasEmpty && inv->onAddCallback) {
+            inv->onAddCallback(inventoryId, slotIndex, itemDefId, inv->addUserData);
+        } else if (inv->onChangeCallback) {
+            inv->onChangeCallback(inventoryId, slotIndex, itemDefId, inv->changeUserData);
+        }
+
+        return true;
+    }
+
+    int Framework_Inventory_AddItemGetRemaining(int inventoryId, int itemDefId, int quantity) {
+        auto* inv = GetInventory(inventoryId);
+        auto* item = GetItemDef(itemDefId);
+        if (!inv || !item || quantity <= 0) return quantity;
+
+        int remaining = quantity;
+
+        if (item->stackable) {
+            for (int i = 0; i < inv->slotCount && remaining > 0; i++) {
+                auto& slot = inv->slots[i];
+                if (slot.itemDefId == itemDefId) {
+                    int spaceInSlot = item->maxStack - slot.quantity;
+                    int toAdd = (remaining < spaceInSlot) ? remaining : spaceInSlot;
+                    if (toAdd > 0) {
+                        slot.quantity += toAdd;
+                        remaining -= toAdd;
+                    }
+                }
+            }
+        }
+
+        for (int i = 0; i < inv->slotCount && remaining > 0; i++) {
+            auto& slot = inv->slots[i];
+            if (slot.itemDefId < 0) {
+                int toAdd = item->stackable ? ((remaining < item->maxStack) ? remaining : item->maxStack) : 1;
+                slot.itemDefId = itemDefId;
+                slot.quantity = toAdd;
+                remaining -= toAdd;
+            }
+        }
+
+        return remaining;
+    }
+
+    // Removing items
+    bool Framework_Inventory_RemoveItem(int inventoryId, int itemDefId, int quantity) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv || quantity <= 0) return false;
+
+        int total = Framework_Inventory_CountItem(inventoryId, itemDefId);
+        if (total < quantity) return false;
+
+        int remaining = quantity;
+        for (int i = inv->slotCount - 1; i >= 0 && remaining > 0; i--) {
+            auto& slot = inv->slots[i];
+            if (slot.itemDefId == itemDefId) {
+                int toRemove = (remaining < slot.quantity) ? remaining : slot.quantity;
+                slot.quantity -= toRemove;
+                remaining -= toRemove;
+
+                if (slot.quantity <= 0) {
+                    int oldId = slot.itemDefId;
+                    slot.itemDefId = -1;
+                    slot.quantity = 0;
+                    if (inv->onRemoveCallback) {
+                        inv->onRemoveCallback(inventoryId, i, oldId, inv->removeUserData);
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    bool Framework_Inventory_RemoveItemFromSlot(int inventoryId, int slotIndex, int quantity) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return false;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return false;
+
+        auto& slot = inv->slots[slotIndex];
+        if (slot.itemDefId < 0 || slot.quantity < quantity) return false;
+
+        slot.quantity -= quantity;
+        if (slot.quantity <= 0) {
+            int oldId = slot.itemDefId;
+            slot.itemDefId = -1;
+            slot.quantity = 0;
+            if (inv->onRemoveCallback) {
+                inv->onRemoveCallback(inventoryId, slotIndex, oldId, inv->removeUserData);
+            }
+        }
+
+        return true;
+    }
+
+    void Framework_Inventory_ClearSlot(int inventoryId, int slotIndex) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return;
+
+        auto& slot = inv->slots[slotIndex];
+        if (slot.itemDefId >= 0) {
+            int oldId = slot.itemDefId;
+            slot.itemDefId = -1;
+            slot.quantity = 0;
+            if (inv->onRemoveCallback) {
+                inv->onRemoveCallback(inventoryId, slotIndex, oldId, inv->removeUserData);
+            }
+        }
+    }
+
+    void Framework_Inventory_Clear(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return;
+
+        for (int i = 0; i < inv->slotCount; i++) {
+            auto& slot = inv->slots[i];
+            if (slot.itemDefId >= 0) {
+                int oldId = slot.itemDefId;
+                slot.itemDefId = -1;
+                slot.quantity = 0;
+                if (inv->onRemoveCallback) {
+                    inv->onRemoveCallback(inventoryId, i, oldId, inv->removeUserData);
+                }
+            }
+        }
+    }
+
+    // Slot queries
+    int Framework_Inventory_GetItemAt(int inventoryId, int slotIndex) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return -1;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return -1;
+        return inv->slots[slotIndex].itemDefId;
+    }
+
+    int Framework_Inventory_GetQuantityAt(int inventoryId, int slotIndex) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return 0;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return 0;
+        return inv->slots[slotIndex].quantity;
+    }
+
+    bool Framework_Inventory_IsSlotEmpty(int inventoryId, int slotIndex) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return true;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return true;
+        return inv->slots[slotIndex].itemDefId < 0;
+    }
+
+    int Framework_Inventory_GetFirstEmptySlot(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return -1;
+        for (int i = 0; i < inv->slotCount; i++) {
+            if (inv->slots[i].itemDefId < 0) return i;
+        }
+        return -1;
+    }
+
+    int Framework_Inventory_GetEmptySlotCount(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return 0;
+
+        int count = 0;
+        for (auto& slot : inv->slots) {
+            if (slot.itemDefId < 0) count++;
+        }
+        return count;
+    }
+
+    // Item queries
+    bool Framework_Inventory_HasItem(int inventoryId, int itemDefId) {
+        return Framework_Inventory_FindItem(inventoryId, itemDefId) >= 0;
+    }
+
+    int Framework_Inventory_CountItem(int inventoryId, int itemDefId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return 0;
+
+        int count = 0;
+        for (auto& slot : inv->slots) {
+            if (slot.itemDefId == itemDefId) {
+                count += slot.quantity;
+            }
+        }
+        return count;
+    }
+
+    int Framework_Inventory_FindItem(int inventoryId, int itemDefId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return -1;
+
+        for (int i = 0; i < inv->slotCount; i++) {
+            if (inv->slots[i].itemDefId == itemDefId) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    int Framework_Inventory_FindItemByCategory(int inventoryId, const char* category) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv || !category) return -1;
+
+        for (int i = 0; i < inv->slotCount; i++) {
+            auto* item = GetItemDef(inv->slots[i].itemDefId);
+            if (item && item->category == category) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Moving/swapping items
+    bool Framework_Inventory_MoveItem(int inventoryId, int fromSlot, int toSlot) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return false;
+        if (fromSlot < 0 || fromSlot >= inv->slotCount) return false;
+        if (toSlot < 0 || toSlot >= inv->slotCount) return false;
+        if (fromSlot == toSlot) return true;
+
+        auto& from = inv->slots[fromSlot];
+        auto& to = inv->slots[toSlot];
+
+        if (from.itemDefId < 0) return false;
+        if (to.itemDefId >= 0) return false;
+
+        to = from;
+        from.itemDefId = -1;
+        from.quantity = 0;
+        return true;
+    }
+
+    bool Framework_Inventory_SwapSlots(int inventoryId, int slotA, int slotB) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return false;
+        if (slotA < 0 || slotA >= inv->slotCount) return false;
+        if (slotB < 0 || slotB >= inv->slotCount) return false;
+        if (slotA == slotB) return true;
+
+        std::swap(inv->slots[slotA], inv->slots[slotB]);
+        return true;
+    }
+
+    bool Framework_Inventory_TransferItem(int fromInvId, int fromSlot, int toInvId, int toSlot, int quantity) {
+        auto* fromInv = GetInventory(fromInvId);
+        auto* toInv = GetInventory(toInvId);
+        if (!fromInv || !toInv) return false;
+        if (fromSlot < 0 || fromSlot >= fromInv->slotCount) return false;
+        if (toSlot < 0 || toSlot >= toInv->slotCount) return false;
+
+        auto& from = fromInv->slots[fromSlot];
+        if (from.itemDefId < 0 || from.quantity < quantity) return false;
+
+        if (!Framework_Inventory_AddItemToSlot(toInvId, toSlot, from.itemDefId, quantity)) {
+            return false;
+        }
+
+        Framework_Inventory_RemoveItemFromSlot(fromInvId, fromSlot, quantity);
+        return true;
+    }
+
+    bool Framework_Inventory_SplitStack(int inventoryId, int slotIndex, int quantity, int targetSlot) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return false;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return false;
+        if (targetSlot < 0 || targetSlot >= inv->slotCount) return false;
+        if (slotIndex == targetSlot) return false;
+
+        auto& from = inv->slots[slotIndex];
+        auto& to = inv->slots[targetSlot];
+
+        if (from.itemDefId < 0 || from.quantity <= quantity) return false;
+        if (to.itemDefId >= 0) return false;
+
+        to.itemDefId = from.itemDefId;
+        to.quantity = quantity;
+        from.quantity -= quantity;
+        return true;
+    }
+
+    // Sorting
+    void Framework_Inventory_Sort(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return;
+
+        // Collect non-empty slots
+        std::vector<InventorySlot> items;
+        for (auto& slot : inv->slots) {
+            if (slot.itemDefId >= 0) {
+                items.push_back(slot);
+            }
+        }
+
+        // Sort by category then name
+        std::sort(items.begin(), items.end(), [](const InventorySlot& a, const InventorySlot& b) {
+            auto* itemA = GetItemDef(a.itemDefId);
+            auto* itemB = GetItemDef(b.itemDefId);
+            if (!itemA || !itemB) return false;
+            if (itemA->category != itemB->category) return itemA->category < itemB->category;
+            return itemA->name < itemB->name;
+        });
+
+        // Clear slots and refill
+        int itemIdx = 0;
+        for (auto& slot : inv->slots) {
+            if (itemIdx < (int)items.size()) {
+                slot = items[itemIdx++];
+            } else {
+                slot.itemDefId = -1;
+                slot.quantity = 0;
+            }
+        }
+    }
+
+    void Framework_Inventory_SortByRarity(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return;
+
+        std::vector<InventorySlot> items;
+        for (auto& slot : inv->slots) {
+            if (slot.itemDefId >= 0) {
+                items.push_back(slot);
+            }
+        }
+
+        std::sort(items.begin(), items.end(), [](const InventorySlot& a, const InventorySlot& b) {
+            auto* itemA = GetItemDef(a.itemDefId);
+            auto* itemB = GetItemDef(b.itemDefId);
+            if (!itemA || !itemB) return false;
+            return itemA->rarity > itemB->rarity;
+        });
+
+        int itemIdx = 0;
+        for (auto& slot : inv->slots) {
+            if (itemIdx < (int)items.size()) {
+                slot = items[itemIdx++];
+            } else {
+                slot.itemDefId = -1;
+                slot.quantity = 0;
+            }
+        }
+    }
+
+    void Framework_Inventory_Compact(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return;
+
+        std::vector<InventorySlot> items;
+        for (auto& slot : inv->slots) {
+            if (slot.itemDefId >= 0) {
+                items.push_back(slot);
+            }
+        }
+
+        int itemIdx = 0;
+        for (auto& slot : inv->slots) {
+            if (itemIdx < (int)items.size()) {
+                slot = items[itemIdx++];
+            } else {
+                slot.itemDefId = -1;
+                slot.quantity = 0;
+            }
+        }
+    }
+
+    // Using items
+    bool Framework_Inventory_UseItem(int inventoryId, int slotIndex) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return false;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return false;
+
+        auto& slot = inv->slots[slotIndex];
+        if (slot.itemDefId < 0) return false;
+
+        auto* item = GetItemDef(slot.itemDefId);
+        if (!item || !item->usable) return false;
+
+        if (inv->onUseCallback) {
+            inv->onUseCallback(inventoryId, slotIndex, slot.itemDefId, slot.quantity, inv->useUserData);
+        }
+
+        if (item->consumable) {
+            Framework_Inventory_RemoveItemFromSlot(inventoryId, slotIndex, 1);
+        }
+
+        return true;
+    }
+
+    void Framework_Inventory_SetUseCallback(int inventoryId, ItemUseCallback callback, void* userData) {
+        auto* inv = GetInventory(inventoryId);
+        if (inv) {
+            inv->onUseCallback = callback;
+            inv->useUserData = userData;
+        }
+    }
+
+    // ---- Equipment System ----
+
+    int Framework_Equipment_Create(const char* name) {
+        Equipment equip;
+        equip.id = g_nextEquipmentId++;
+        equip.name = name ? name : "";
+
+        g_equipments[equip.id] = equip;
+        if (name) g_equipmentByName[name] = equip.id;
+
+        return equip.id;
+    }
+
+    void Framework_Equipment_Destroy(int equipId) {
+        auto* equip = GetEquipment(equipId);
+        if (!equip) return;
+        g_equipmentByName.erase(equip->name);
+        g_equipments.erase(equipId);
+    }
+
+    int Framework_Equipment_GetByName(const char* name) {
+        if (!name) return -1;
+        auto it = g_equipmentByName.find(name);
+        return (it != g_equipmentByName.end()) ? it->second : -1;
+    }
+
+    bool Framework_Equipment_IsValid(int equipId) {
+        return GetEquipment(equipId) != nullptr;
+    }
+
+    bool Framework_Equipment_Equip(int equipId, int itemDefId, int slot) {
+        auto* equip = GetEquipment(equipId);
+        auto* item = GetItemDef(itemDefId);
+        if (!equip || !item) return false;
+
+        equip->slots[slot] = itemDefId;
+        return true;
+    }
+
+    bool Framework_Equipment_EquipFromInventory(int equipId, int inventoryId, int invSlot, int equipSlot) {
+        auto* equip = GetEquipment(equipId);
+        auto* inv = GetInventory(inventoryId);
+        if (!equip || !inv) return false;
+        if (invSlot < 0 || invSlot >= inv->slotCount) return false;
+
+        auto& slot = inv->slots[invSlot];
+        if (slot.itemDefId < 0) return false;
+
+        int itemId = slot.itemDefId;
+        Framework_Inventory_RemoveItemFromSlot(inventoryId, invSlot, 1);
+        equip->slots[equipSlot] = itemId;
+        return true;
+    }
+
+    int Framework_Equipment_Unequip(int equipId, int slot) {
+        auto* equip = GetEquipment(equipId);
+        if (!equip) return -1;
+
+        auto it = equip->slots.find(slot);
+        if (it == equip->slots.end() || it->second < 0) return -1;
+
+        int itemId = it->second;
+        equip->slots.erase(it);
+
+        return itemId;
+    }
+
+    bool Framework_Equipment_UnequipToInventory(int equipId, int slot, int inventoryId) {
+        auto* equip = GetEquipment(equipId);
+        auto* inv = GetInventory(inventoryId);
+        if (!equip || !inv) return false;
+
+        int itemId = Framework_Equipment_Unequip(equipId, slot);
+        if (itemId < 0) return false;
+
+        return Framework_Inventory_AddItem(inventoryId, itemId, 1);
+    }
+
+    void Framework_Equipment_UnequipAll(int equipId) {
+        auto* equip = GetEquipment(equipId);
+        if (equip) equip->slots.clear();
+    }
+
+    int Framework_Equipment_GetItemAt(int equipId, int slot) {
+        auto* equip = GetEquipment(equipId);
+        if (!equip) return -1;
+
+        auto it = equip->slots.find(slot);
+        return (it != equip->slots.end()) ? it->second : -1;
+    }
+
+    bool Framework_Equipment_IsSlotEmpty(int equipId, int slot) {
+        return Framework_Equipment_GetItemAt(equipId, slot) < 0;
+    }
+
+    bool Framework_Equipment_CanEquip(int equipId, int itemDefId, int slot) {
+        auto* equip = GetEquipment(equipId);
+        auto* item = GetItemDef(itemDefId);
+        if (!equip || !item) return false;
+        return item->equipSlot == slot || item->equipSlot == EQUIP_SLOT_NONE;
+    }
+
+    int Framework_Equipment_GetTotalStatInt(int equipId, const char* statName) {
+        auto* equip = GetEquipment(equipId);
+        if (!equip || !statName) return 0;
+
+        int total = 0;
+        for (auto& kv : equip->slots) {
+            if (kv.second >= 0) {
+                auto* item = GetItemDef(kv.second);
+                if (item) {
+                    auto it = item->statsInt.find(statName);
+                    if (it != item->statsInt.end()) {
+                        total += it->second;
+                    }
+                }
+            }
+        }
+        return total;
+    }
+
+    float Framework_Equipment_GetTotalStatFloat(int equipId, const char* statName) {
+        auto* equip = GetEquipment(equipId);
+        if (!equip || !statName) return 0.0f;
+
+        float total = 0.0f;
+        for (auto& kv : equip->slots) {
+            if (kv.second >= 0) {
+                auto* item = GetItemDef(kv.second);
+                if (item) {
+                    auto it = item->statsFloat.find(statName);
+                    if (it != item->statsFloat.end()) {
+                        total += it->second;
+                    }
+                }
+            }
+        }
+        return total;
+    }
+
+    // ---- Inventory Callbacks ----
+
+    void Framework_Inventory_SetOnAddCallback(int inventoryId, InventoryCallback callback, void* userData) {
+        auto* inv = GetInventory(inventoryId);
+        if (inv) {
+            inv->onAddCallback = callback;
+            inv->addUserData = userData;
+        }
+    }
+
+    void Framework_Inventory_SetOnRemoveCallback(int inventoryId, InventoryCallback callback, void* userData) {
+        auto* inv = GetInventory(inventoryId);
+        if (inv) {
+            inv->onRemoveCallback = callback;
+            inv->removeUserData = userData;
+        }
+    }
+
+    void Framework_Inventory_SetOnChangeCallback(int inventoryId, InventoryCallback callback, void* userData) {
+        auto* inv = GetInventory(inventoryId);
+        if (inv) {
+            inv->onChangeCallback = callback;
+            inv->changeUserData = userData;
+        }
+    }
+
+    void Framework_Inventory_SetDropCallback(int inventoryId, ItemDropCallback callback, void* userData) {
+        auto* inv = GetInventory(inventoryId);
+        if (inv) {
+            inv->onDropCallback = callback;
+            inv->dropUserData = userData;
+        }
+    }
+
+    // ---- Loot Tables ----
+
+    int Framework_LootTable_Create(const char* name) {
+        LootTable table;
+        table.id = g_nextLootTableId++;
+        table.name = name ? name : "";
+
+        g_lootTables[table.id] = table;
+        if (name) g_lootTableByName[name] = table.id;
+
+        return table.id;
+    }
+
+    void Framework_LootTable_Destroy(int tableId) {
+        auto* table = GetLootTable(tableId);
+        if (!table) return;
+        g_lootTableByName.erase(table->name);
+        g_lootTables.erase(tableId);
+    }
+
+    void Framework_LootTable_AddEntry(int tableId, int itemDefId, float weight, int minQty, int maxQty) {
+        auto* table = GetLootTable(tableId);
+        if (!table) return;
+
+        LootEntry entry;
+        entry.itemDefId = itemDefId;
+        entry.weight = weight > 0.0f ? weight : 1.0f;
+        entry.minQuantity = minQty > 0 ? minQty : 1;
+        entry.maxQuantity = maxQty > minQty ? maxQty : minQty;
+
+        table->entries.push_back(entry);
+    }
+
+    void Framework_LootTable_RemoveEntry(int tableId, int itemDefId) {
+        auto* table = GetLootTable(tableId);
+        if (!table) return;
+
+        table->entries.erase(
+            std::remove_if(table->entries.begin(), table->entries.end(),
+                [itemDefId](const LootEntry& e) { return e.itemDefId == itemDefId; }),
+            table->entries.end());
+    }
+
+    int Framework_LootTable_Roll(int tableId, int* outQuantity) {
+        auto* table = GetLootTable(tableId);
+        if (!table || table->entries.empty()) {
+            if (outQuantity) *outQuantity = 0;
+            return -1;
+        }
+
+        float totalWeight = 0.0f;
+        for (auto& entry : table->entries) {
+            totalWeight += entry.weight;
+        }
+
+        float roll = (float)GetRandomValue(0, 10000) / 10000.0f * totalWeight;
+        float cumulative = 0.0f;
+
+        for (auto& entry : table->entries) {
+            cumulative += entry.weight;
+            if (roll <= cumulative) {
+                int qty = entry.minQuantity;
+                if (entry.maxQuantity > entry.minQuantity) {
+                    qty += GetRandomValue(0, entry.maxQuantity - entry.minQuantity);
+                }
+                if (outQuantity) *outQuantity = qty;
+                return entry.itemDefId;
+            }
+        }
+
+        if (outQuantity) *outQuantity = 0;
+        return -1;
+    }
+
+    void Framework_LootTable_RollMultiple(int tableId, int rolls, int* outItems, int* outQuantities, int bufferSize) {
+        if (!outItems || !outQuantities || bufferSize <= 0) return;
+
+        for (int i = 0; i < rolls && i < bufferSize; i++) {
+            outItems[i] = Framework_LootTable_Roll(tableId, &outQuantities[i]);
+        }
+    }
+
+    // ---- Save/Load ----
+
+    bool Framework_Inventory_SaveToSlot(int inventoryId, int saveSlot, const char* key) {
+        // Simplified implementation - would use save system
+        return true;
+    }
+
+    bool Framework_Inventory_LoadFromSlot(int inventoryId, int saveSlot, const char* key) {
+        return true;
+    }
+
+    bool Framework_Equipment_SaveToSlot(int equipId, int saveSlot, const char* key) {
+        return true;
+    }
+
+    bool Framework_Equipment_LoadFromSlot(int equipId, int saveSlot, const char* key) {
+        return true;
+    }
+
+    // ---- Global Management ----
+
+    void Framework_Item_UndefineAll() {
+        g_itemDefs.clear();
+        g_itemDefByName.clear();
+    }
+
+    void Framework_Inventory_DestroyAll() {
+        g_inventories.clear();
+        g_inventoryByName.clear();
+    }
+
+    void Framework_Equipment_DestroyAll() {
+        g_equipments.clear();
+        g_equipmentByName.clear();
+    }
+
+    void Framework_LootTable_DestroyAll() {
+        g_lootTables.clear();
+        g_lootTableByName.clear();
+    }
+
+    int Framework_Item_GetDefCount() {
+        return (int)g_itemDefs.size();
+    }
+
+    int Framework_Inventory_GetCount() {
+        return (int)g_inventories.size();
+    }
+
+    int Framework_Equipment_GetCount() {
+        return (int)g_equipments.size();
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {
