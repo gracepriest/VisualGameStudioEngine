@@ -2528,6 +2528,122 @@ extern "C" {
     __declspec(dllexport) void  Framework_Shadow_DestroyAll();
 
     // ========================================================================
+    // SCREEN EFFECTS SYSTEM
+    // ========================================================================
+    // Post-processing visual effects for screen-wide transformations
+
+    // Effect Types (for queries)
+    #define EFFECT_VIGNETTE         0
+    #define EFFECT_BLUR             1
+    #define EFFECT_CHROMATIC        2
+    #define EFFECT_PIXELATE         3
+    #define EFFECT_SCANLINES        4
+    #define EFFECT_CRT              5
+    #define EFFECT_GRAYSCALE        6
+    #define EFFECT_SEPIA            7
+    #define EFFECT_INVERT           8
+    #define EFFECT_TINT             9
+    #define EFFECT_BRIGHTNESS       10
+    #define EFFECT_CONTRAST         11
+    #define EFFECT_SATURATION       12
+    #define EFFECT_FILMGRAIN        13
+
+    // ---- System Control ----
+    __declspec(dllexport) void  Framework_Effects_Initialize(int width, int height);
+    __declspec(dllexport) void  Framework_Effects_Shutdown();
+    __declspec(dllexport) void  Framework_Effects_SetEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Effects_IsEnabled();
+    __declspec(dllexport) void  Framework_Effects_SetResolution(int width, int height);
+
+    // ---- Vignette Effect ----
+    __declspec(dllexport) void  Framework_Effects_SetVignetteEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetVignetteIntensity(float intensity);
+    __declspec(dllexport) void  Framework_Effects_SetVignetteRadius(float radius);
+    __declspec(dllexport) void  Framework_Effects_SetVignetteSoftness(float softness);
+    __declspec(dllexport) void  Framework_Effects_SetVignetteColor(unsigned char r, unsigned char g, unsigned char b);
+
+    // ---- Blur Effect ----
+    __declspec(dllexport) void  Framework_Effects_SetBlurEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetBlurAmount(float amount);
+    __declspec(dllexport) void  Framework_Effects_SetBlurIterations(int iterations);
+
+    // ---- Chromatic Aberration ----
+    __declspec(dllexport) void  Framework_Effects_SetChromaticEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetChromaticOffset(float offset);
+    __declspec(dllexport) void  Framework_Effects_SetChromaticAngle(float angle);
+
+    // ---- Pixelate Effect ----
+    __declspec(dllexport) void  Framework_Effects_SetPixelateEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetPixelateSize(int pixelSize);
+
+    // ---- Scanlines Effect ----
+    __declspec(dllexport) void  Framework_Effects_SetScanlinesEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetScanlinesIntensity(float intensity);
+    __declspec(dllexport) void  Framework_Effects_SetScanlinesCount(int count);
+    __declspec(dllexport) void  Framework_Effects_SetScanlinesSpeed(float speed);
+
+    // ---- CRT Effect ----
+    __declspec(dllexport) void  Framework_Effects_SetCRTEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetCRTCurvature(float curvature);
+    __declspec(dllexport) void  Framework_Effects_SetCRTVignetteIntensity(float intensity);
+
+    // ---- Color Effects ----
+    __declspec(dllexport) void  Framework_Effects_SetGrayscaleEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetGrayscaleAmount(float amount);
+    __declspec(dllexport) void  Framework_Effects_SetSepiaEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetSepiaAmount(float amount);
+    __declspec(dllexport) void  Framework_Effects_SetInvertEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetInvertAmount(float amount);
+
+    // ---- Color Grading ----
+    __declspec(dllexport) void  Framework_Effects_SetTintEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetTintColor(unsigned char r, unsigned char g, unsigned char b);
+    __declspec(dllexport) void  Framework_Effects_SetTintAmount(float amount);
+    __declspec(dllexport) void  Framework_Effects_SetBrightness(float brightness);
+    __declspec(dllexport) void  Framework_Effects_SetContrast(float contrast);
+    __declspec(dllexport) void  Framework_Effects_SetSaturation(float saturation);
+    __declspec(dllexport) void  Framework_Effects_SetGamma(float gamma);
+
+    // ---- Film Grain / Noise ----
+    __declspec(dllexport) void  Framework_Effects_SetFilmGrainEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Effects_SetFilmGrainIntensity(float intensity);
+    __declspec(dllexport) void  Framework_Effects_SetFilmGrainSpeed(float speed);
+
+    // ---- Screen Flash ----
+    __declspec(dllexport) void  Framework_Effects_Flash(unsigned char r, unsigned char g, unsigned char b, float duration);
+    __declspec(dllexport) void  Framework_Effects_FlashWhite(float duration);
+    __declspec(dllexport) void  Framework_Effects_FlashDamage(float duration);
+    __declspec(dllexport) bool  Framework_Effects_IsFlashing();
+
+    // ---- Screen Fade ----
+    __declspec(dllexport) void  Framework_Effects_FadeIn(float duration);
+    __declspec(dllexport) void  Framework_Effects_FadeOut(float duration);
+    __declspec(dllexport) void  Framework_Effects_FadeToColor(unsigned char r, unsigned char g, unsigned char b, float duration);
+    __declspec(dllexport) void  Framework_Effects_SetFadeColor(unsigned char r, unsigned char g, unsigned char b);
+    __declspec(dllexport) float Framework_Effects_GetFadeAmount();
+    __declspec(dllexport) bool  Framework_Effects_IsFading();
+
+    // ---- Screen Shake ----
+    __declspec(dllexport) void  Framework_Effects_Shake(float intensity, float duration);
+    __declspec(dllexport) void  Framework_Effects_ShakeDecay(float intensity, float duration, float decay);
+    __declspec(dllexport) void  Framework_Effects_StopShake();
+    __declspec(dllexport) bool  Framework_Effects_IsShaking();
+    __declspec(dllexport) void  Framework_Effects_GetShakeOffset(float* x, float* y);
+
+    // ---- Rendering ----
+    __declspec(dllexport) void  Framework_Effects_BeginCapture();   // Begin capturing scene to buffer
+    __declspec(dllexport) void  Framework_Effects_EndCapture();     // End capture
+    __declspec(dllexport) void  Framework_Effects_Apply();          // Apply all effects and render to screen
+    __declspec(dllexport) void  Framework_Effects_Update(float deltaTime);
+
+    // ---- Presets ----
+    __declspec(dllexport) void  Framework_Effects_ApplyPresetRetro();
+    __declspec(dllexport) void  Framework_Effects_ApplyPresetDream();
+    __declspec(dllexport) void  Framework_Effects_ApplyPresetHorror();
+    __declspec(dllexport) void  Framework_Effects_ApplyPresetNoir();
+    __declspec(dllexport) void  Framework_Effects_ResetAll();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

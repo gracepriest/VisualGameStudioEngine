@@ -16209,6 +16209,577 @@ extern "C" {
     }
 
     // ========================================================================
+    // SCREEN EFFECTS SYSTEM
+    // ========================================================================
+
+    // Helper function for smooth interpolation
+    static inline float smoothstep(float edge0, float edge1, float x) {
+        float t = (x - edge0) / (edge1 - edge0);
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);  // clamp to [0,1]
+        return t * t * (3.0f - 2.0f * t);
+    }
+
+    struct ScreenEffectsState {
+        bool initialized = false;
+        bool enabled = true;
+        int width = 800, height = 600;
+
+        // Render target
+        RenderTexture2D sceneBuffer;
+        RenderTexture2D effectBuffer;
+        bool hasRenderTargets = false;
+
+        // Vignette
+        bool vignetteEnabled = false;
+        float vignetteIntensity = 0.5f;
+        float vignetteRadius = 0.8f;
+        float vignetteSoftness = 0.4f;
+        unsigned char vignetteR = 0, vignetteG = 0, vignetteB = 0;
+
+        // Blur
+        bool blurEnabled = false;
+        float blurAmount = 2.0f;
+        int blurIterations = 2;
+
+        // Chromatic aberration
+        bool chromaticEnabled = false;
+        float chromaticOffset = 3.0f;
+        float chromaticAngle = 0.0f;
+
+        // Pixelate
+        bool pixelateEnabled = false;
+        int pixelateSize = 4;
+
+        // Scanlines
+        bool scanlinesEnabled = false;
+        float scanlinesIntensity = 0.3f;
+        int scanlinesCount = 240;
+        float scanlinesSpeed = 0.0f;
+        float scanlinesOffset = 0.0f;
+
+        // CRT
+        bool crtEnabled = false;
+        float crtCurvature = 0.1f;
+        float crtVignetteIntensity = 0.3f;
+
+        // Color effects
+        bool grayscaleEnabled = false;
+        float grayscaleAmount = 1.0f;
+        bool sepiaEnabled = false;
+        float sepiaAmount = 1.0f;
+        bool invertEnabled = false;
+        float invertAmount = 1.0f;
+
+        // Color grading
+        bool tintEnabled = false;
+        unsigned char tintR = 255, tintG = 255, tintB = 255;
+        float tintAmount = 0.5f;
+        float brightness = 1.0f;
+        float contrast = 1.0f;
+        float saturation = 1.0f;
+        float gamma = 1.0f;
+
+        // Film grain
+        bool filmGrainEnabled = false;
+        float filmGrainIntensity = 0.1f;
+        float filmGrainSpeed = 10.0f;
+        float filmGrainTime = 0.0f;
+
+        // Flash
+        bool flashActive = false;
+        unsigned char flashR = 255, flashG = 255, flashB = 255;
+        float flashDuration = 0.0f;
+        float flashTimer = 0.0f;
+
+        // Fade
+        bool fadeActive = false;
+        unsigned char fadeR = 0, fadeG = 0, fadeB = 0;
+        float fadeAmount = 0.0f;
+        float fadeTarget = 0.0f;
+        float fadeDuration = 0.0f;
+        float fadeTimer = 0.0f;
+
+        // Shake
+        bool shakeActive = false;
+        float shakeIntensity = 0.0f;
+        float shakeDuration = 0.0f;
+        float shakeTimer = 0.0f;
+        float shakeDecay = 1.0f;
+        float shakeOffsetX = 0.0f;
+        float shakeOffsetY = 0.0f;
+    };
+
+    static ScreenEffectsState g_effects;
+
+    // Helper: Apply color grading to a pixel
+    static Color ApplyColorGrading(Color c) {
+        float r = c.r / 255.0f;
+        float g = c.g / 255.0f;
+        float b = c.b / 255.0f;
+
+        // Brightness
+        r *= g_effects.brightness;
+        g *= g_effects.brightness;
+        b *= g_effects.brightness;
+
+        // Contrast
+        r = ((r - 0.5f) * g_effects.contrast) + 0.5f;
+        g = ((g - 0.5f) * g_effects.contrast) + 0.5f;
+        b = ((b - 0.5f) * g_effects.contrast) + 0.5f;
+
+        // Saturation
+        float gray = 0.299f * r + 0.587f * g + 0.114f * b;
+        r = gray + g_effects.saturation * (r - gray);
+        g = gray + g_effects.saturation * (g - gray);
+        b = gray + g_effects.saturation * (b - gray);
+
+        // Gamma
+        if (g_effects.gamma != 1.0f) {
+            r = powf(r, 1.0f / g_effects.gamma);
+            g = powf(g, 1.0f / g_effects.gamma);
+            b = powf(b, 1.0f / g_effects.gamma);
+        }
+
+        // Clamp
+        r = r < 0 ? 0 : (r > 1 ? 1 : r);
+        g = g < 0 ? 0 : (g > 1 ? 1 : g);
+        b = b < 0 ? 0 : (b > 1 ? 1 : b);
+
+        return { (unsigned char)(r * 255), (unsigned char)(g * 255), (unsigned char)(b * 255), c.a };
+    }
+
+    // ---- System Control ----
+    void Framework_Effects_Initialize(int width, int height) {
+        g_effects.width = width;
+        g_effects.height = height;
+
+        if (g_effects.hasRenderTargets) {
+            UnloadRenderTexture(g_effects.sceneBuffer);
+            UnloadRenderTexture(g_effects.effectBuffer);
+        }
+
+        g_effects.sceneBuffer = LoadRenderTexture(width, height);
+        g_effects.effectBuffer = LoadRenderTexture(width, height);
+        g_effects.hasRenderTargets = true;
+        g_effects.initialized = true;
+    }
+
+    void Framework_Effects_Shutdown() {
+        if (g_effects.hasRenderTargets) {
+            UnloadRenderTexture(g_effects.sceneBuffer);
+            UnloadRenderTexture(g_effects.effectBuffer);
+            g_effects.hasRenderTargets = false;
+        }
+        g_effects.initialized = false;
+    }
+
+    void Framework_Effects_SetEnabled(bool enabled) {
+        g_effects.enabled = enabled;
+    }
+
+    bool Framework_Effects_IsEnabled() {
+        return g_effects.enabled;
+    }
+
+    void Framework_Effects_SetResolution(int width, int height) {
+        if (g_effects.initialized && (width != g_effects.width || height != g_effects.height)) {
+            Framework_Effects_Initialize(width, height);
+        }
+    }
+
+    // ---- Vignette Effect ----
+    void Framework_Effects_SetVignetteEnabled(bool enabled) { g_effects.vignetteEnabled = enabled; }
+    void Framework_Effects_SetVignetteIntensity(float intensity) { g_effects.vignetteIntensity = intensity; }
+    void Framework_Effects_SetVignetteRadius(float radius) { g_effects.vignetteRadius = radius; }
+    void Framework_Effects_SetVignetteSoftness(float softness) { g_effects.vignetteSoftness = softness; }
+    void Framework_Effects_SetVignetteColor(unsigned char r, unsigned char g, unsigned char b) {
+        g_effects.vignetteR = r; g_effects.vignetteG = g; g_effects.vignetteB = b;
+    }
+
+    // ---- Blur Effect ----
+    void Framework_Effects_SetBlurEnabled(bool enabled) { g_effects.blurEnabled = enabled; }
+    void Framework_Effects_SetBlurAmount(float amount) { g_effects.blurAmount = amount; }
+    void Framework_Effects_SetBlurIterations(int iterations) { g_effects.blurIterations = iterations > 0 ? iterations : 1; }
+
+    // ---- Chromatic Aberration ----
+    void Framework_Effects_SetChromaticEnabled(bool enabled) { g_effects.chromaticEnabled = enabled; }
+    void Framework_Effects_SetChromaticOffset(float offset) { g_effects.chromaticOffset = offset; }
+    void Framework_Effects_SetChromaticAngle(float angle) { g_effects.chromaticAngle = angle; }
+
+    // ---- Pixelate Effect ----
+    void Framework_Effects_SetPixelateEnabled(bool enabled) { g_effects.pixelateEnabled = enabled; }
+    void Framework_Effects_SetPixelateSize(int pixelSize) { g_effects.pixelateSize = pixelSize > 1 ? pixelSize : 1; }
+
+    // ---- Scanlines Effect ----
+    void Framework_Effects_SetScanlinesEnabled(bool enabled) { g_effects.scanlinesEnabled = enabled; }
+    void Framework_Effects_SetScanlinesIntensity(float intensity) { g_effects.scanlinesIntensity = intensity; }
+    void Framework_Effects_SetScanlinesCount(int count) { g_effects.scanlinesCount = count > 0 ? count : 1; }
+    void Framework_Effects_SetScanlinesSpeed(float speed) { g_effects.scanlinesSpeed = speed; }
+
+    // ---- CRT Effect ----
+    void Framework_Effects_SetCRTEnabled(bool enabled) { g_effects.crtEnabled = enabled; }
+    void Framework_Effects_SetCRTCurvature(float curvature) { g_effects.crtCurvature = curvature; }
+    void Framework_Effects_SetCRTVignetteIntensity(float intensity) { g_effects.crtVignetteIntensity = intensity; }
+
+    // ---- Color Effects ----
+    void Framework_Effects_SetGrayscaleEnabled(bool enabled) { g_effects.grayscaleEnabled = enabled; }
+    void Framework_Effects_SetGrayscaleAmount(float amount) { g_effects.grayscaleAmount = amount; }
+    void Framework_Effects_SetSepiaEnabled(bool enabled) { g_effects.sepiaEnabled = enabled; }
+    void Framework_Effects_SetSepiaAmount(float amount) { g_effects.sepiaAmount = amount; }
+    void Framework_Effects_SetInvertEnabled(bool enabled) { g_effects.invertEnabled = enabled; }
+    void Framework_Effects_SetInvertAmount(float amount) { g_effects.invertAmount = amount; }
+
+    // ---- Color Grading ----
+    void Framework_Effects_SetTintEnabled(bool enabled) { g_effects.tintEnabled = enabled; }
+    void Framework_Effects_SetTintColor(unsigned char r, unsigned char g, unsigned char b) {
+        g_effects.tintR = r; g_effects.tintG = g; g_effects.tintB = b;
+    }
+    void Framework_Effects_SetTintAmount(float amount) { g_effects.tintAmount = amount; }
+    void Framework_Effects_SetBrightness(float brightness) { g_effects.brightness = brightness; }
+    void Framework_Effects_SetContrast(float contrast) { g_effects.contrast = contrast; }
+    void Framework_Effects_SetSaturation(float saturation) { g_effects.saturation = saturation; }
+    void Framework_Effects_SetGamma(float gamma) { g_effects.gamma = gamma > 0.1f ? gamma : 0.1f; }
+
+    // ---- Film Grain / Noise ----
+    void Framework_Effects_SetFilmGrainEnabled(bool enabled) { g_effects.filmGrainEnabled = enabled; }
+    void Framework_Effects_SetFilmGrainIntensity(float intensity) { g_effects.filmGrainIntensity = intensity; }
+    void Framework_Effects_SetFilmGrainSpeed(float speed) { g_effects.filmGrainSpeed = speed; }
+
+    // ---- Screen Flash ----
+    void Framework_Effects_Flash(unsigned char r, unsigned char g, unsigned char b, float duration) {
+        g_effects.flashR = r;
+        g_effects.flashG = g;
+        g_effects.flashB = b;
+        g_effects.flashDuration = duration;
+        g_effects.flashTimer = duration;
+        g_effects.flashActive = true;
+    }
+
+    void Framework_Effects_FlashWhite(float duration) {
+        Framework_Effects_Flash(255, 255, 255, duration);
+    }
+
+    void Framework_Effects_FlashDamage(float duration) {
+        Framework_Effects_Flash(255, 50, 50, duration);
+    }
+
+    bool Framework_Effects_IsFlashing() {
+        return g_effects.flashActive;
+    }
+
+    // ---- Screen Fade ----
+    void Framework_Effects_FadeIn(float duration) {
+        g_effects.fadeAmount = 1.0f;
+        g_effects.fadeTarget = 0.0f;
+        g_effects.fadeDuration = duration;
+        g_effects.fadeTimer = duration;
+        g_effects.fadeActive = true;
+    }
+
+    void Framework_Effects_FadeOut(float duration) {
+        g_effects.fadeAmount = 0.0f;
+        g_effects.fadeTarget = 1.0f;
+        g_effects.fadeDuration = duration;
+        g_effects.fadeTimer = duration;
+        g_effects.fadeActive = true;
+    }
+
+    void Framework_Effects_FadeToColor(unsigned char r, unsigned char g, unsigned char b, float duration) {
+        g_effects.fadeR = r;
+        g_effects.fadeG = g;
+        g_effects.fadeB = b;
+        Framework_Effects_FadeOut(duration);
+    }
+
+    void Framework_Effects_SetFadeColor(unsigned char r, unsigned char g, unsigned char b) {
+        g_effects.fadeR = r;
+        g_effects.fadeG = g;
+        g_effects.fadeB = b;
+    }
+
+    float Framework_Effects_GetFadeAmount() {
+        return g_effects.fadeAmount;
+    }
+
+    bool Framework_Effects_IsFading() {
+        return g_effects.fadeActive;
+    }
+
+    // ---- Screen Shake ----
+    void Framework_Effects_Shake(float intensity, float duration) {
+        g_effects.shakeIntensity = intensity;
+        g_effects.shakeDuration = duration;
+        g_effects.shakeTimer = duration;
+        g_effects.shakeDecay = 1.0f;
+        g_effects.shakeActive = true;
+    }
+
+    void Framework_Effects_ShakeDecay(float intensity, float duration, float decay) {
+        g_effects.shakeIntensity = intensity;
+        g_effects.shakeDuration = duration;
+        g_effects.shakeTimer = duration;
+        g_effects.shakeDecay = decay;
+        g_effects.shakeActive = true;
+    }
+
+    void Framework_Effects_StopShake() {
+        g_effects.shakeActive = false;
+        g_effects.shakeOffsetX = 0;
+        g_effects.shakeOffsetY = 0;
+    }
+
+    bool Framework_Effects_IsShaking() {
+        return g_effects.shakeActive;
+    }
+
+    void Framework_Effects_GetShakeOffset(float* x, float* y) {
+        if (x) *x = g_effects.shakeOffsetX;
+        if (y) *y = g_effects.shakeOffsetY;
+    }
+
+    // ---- Rendering ----
+    void Framework_Effects_BeginCapture() {
+        if (!g_effects.initialized || !g_effects.hasRenderTargets) return;
+        BeginTextureMode(g_effects.sceneBuffer);
+        ClearBackground(BLACK);
+    }
+
+    void Framework_Effects_EndCapture() {
+        if (!g_effects.initialized || !g_effects.hasRenderTargets) return;
+        EndTextureMode();
+    }
+
+    void Framework_Effects_Apply() {
+        if (!g_effects.initialized || !g_effects.hasRenderTargets || !g_effects.enabled) {
+            // Just draw the scene buffer if effects disabled
+            if (g_effects.hasRenderTargets) {
+                DrawTextureRec(g_effects.sceneBuffer.texture,
+                    { 0, 0, (float)g_effects.width, -(float)g_effects.height },
+                    { g_effects.shakeOffsetX, g_effects.shakeOffsetY }, WHITE);
+            }
+            return;
+        }
+
+        float w = (float)g_effects.width;
+        float h = (float)g_effects.height;
+
+        // Draw scene to screen with shake offset
+        DrawTextureRec(g_effects.sceneBuffer.texture,
+            { 0, 0, w, -h },
+            { g_effects.shakeOffsetX, g_effects.shakeOffsetY }, WHITE);
+
+        // Apply pixelate effect (draws over)
+        if (g_effects.pixelateEnabled && g_effects.pixelateSize > 1) {
+            Image img = LoadImageFromTexture(g_effects.sceneBuffer.texture);
+            ImageFlipVertical(&img);
+            int pw = g_effects.width / g_effects.pixelateSize;
+            int ph = g_effects.height / g_effects.pixelateSize;
+            ImageResize(&img, pw, ph);
+            ImageResizeNN(&img, g_effects.width, g_effects.height);
+            Texture2D pixTex = LoadTextureFromImage(img);
+            DrawTexture(pixTex, (int)g_effects.shakeOffsetX, (int)g_effects.shakeOffsetY, WHITE);
+            UnloadTexture(pixTex);
+            UnloadImage(img);
+        }
+
+        // Apply scanlines
+        if (g_effects.scanlinesEnabled) {
+            float lineHeight = h / g_effects.scanlinesCount;
+            for (int i = 0; i < g_effects.scanlinesCount; i++) {
+                float y = i * lineHeight + g_effects.scanlinesOffset;
+                while (y >= h) y -= h;
+                DrawRectangle(0, (int)y, g_effects.width, (int)(lineHeight * 0.5f),
+                    { 0, 0, 0, (unsigned char)(255 * g_effects.scanlinesIntensity) });
+            }
+        }
+
+        // Apply vignette
+        if (g_effects.vignetteEnabled) {
+            float cx = w * 0.5f;
+            float cy = h * 0.5f;
+            float maxDist = sqrtf(cx * cx + cy * cy);
+
+            for (int y = 0; y < g_effects.height; y += 4) {
+                for (int x = 0; x < g_effects.width; x += 4) {
+                    float dx = (x - cx) / cx;
+                    float dy = (y - cy) / cy;
+                    float dist = sqrtf(dx * dx + dy * dy);
+
+                    float vignette = 1.0f - smoothstep(g_effects.vignetteRadius - g_effects.vignetteSoftness,
+                        g_effects.vignetteRadius + g_effects.vignetteSoftness, dist);
+                    vignette = 1.0f - (1.0f - vignette) * g_effects.vignetteIntensity;
+
+                    if (vignette < 1.0f) {
+                        unsigned char alpha = (unsigned char)((1.0f - vignette) * 255);
+                        DrawRectangle(x, y, 4, 4, { g_effects.vignetteR, g_effects.vignetteG, g_effects.vignetteB, alpha });
+                    }
+                }
+            }
+        }
+
+        // Apply film grain
+        if (g_effects.filmGrainEnabled) {
+            for (int y = 0; y < g_effects.height; y += 2) {
+                for (int x = 0; x < g_effects.width; x += 2) {
+                    float noise = (float)(rand() % 1000) / 1000.0f - 0.5f;
+                    int gray = (int)(128 + noise * 255 * g_effects.filmGrainIntensity);
+                    gray = gray < 0 ? 0 : (gray > 255 ? 255 : gray);
+                    DrawRectangle(x, y, 2, 2, { (unsigned char)gray, (unsigned char)gray, (unsigned char)gray, 30 });
+                }
+            }
+        }
+
+        // Apply flash overlay
+        if (g_effects.flashActive && g_effects.flashTimer > 0) {
+            float alpha = g_effects.flashTimer / g_effects.flashDuration;
+            DrawRectangle(0, 0, g_effects.width, g_effects.height,
+                { g_effects.flashR, g_effects.flashG, g_effects.flashB, (unsigned char)(alpha * 200) });
+        }
+
+        // Apply fade overlay
+        if (g_effects.fadeAmount > 0) {
+            DrawRectangle(0, 0, g_effects.width, g_effects.height,
+                { g_effects.fadeR, g_effects.fadeG, g_effects.fadeB, (unsigned char)(g_effects.fadeAmount * 255) });
+        }
+
+        // Apply tint
+        if (g_effects.tintEnabled) {
+            BeginBlendMode(BLEND_MULTIPLIED);
+            unsigned char tr = (unsigned char)(255 - (255 - g_effects.tintR) * g_effects.tintAmount);
+            unsigned char tg = (unsigned char)(255 - (255 - g_effects.tintG) * g_effects.tintAmount);
+            unsigned char tb = (unsigned char)(255 - (255 - g_effects.tintB) * g_effects.tintAmount);
+            DrawRectangle(0, 0, g_effects.width, g_effects.height, { tr, tg, tb, 255 });
+            EndBlendMode();
+        }
+    }
+
+    void Framework_Effects_Update(float deltaTime) {
+        // Update scanlines offset
+        if (g_effects.scanlinesEnabled && g_effects.scanlinesSpeed != 0) {
+            g_effects.scanlinesOffset += deltaTime * g_effects.scanlinesSpeed;
+        }
+
+        // Update film grain time
+        if (g_effects.filmGrainEnabled) {
+            g_effects.filmGrainTime += deltaTime * g_effects.filmGrainSpeed;
+        }
+
+        // Update flash
+        if (g_effects.flashActive) {
+            g_effects.flashTimer -= deltaTime;
+            if (g_effects.flashTimer <= 0) {
+                g_effects.flashActive = false;
+                g_effects.flashTimer = 0;
+            }
+        }
+
+        // Update fade
+        if (g_effects.fadeActive) {
+            g_effects.fadeTimer -= deltaTime;
+            float t = 1.0f - (g_effects.fadeTimer / g_effects.fadeDuration);
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+
+            if (g_effects.fadeTarget > g_effects.fadeAmount) {
+                g_effects.fadeAmount = t;
+            }
+            else {
+                g_effects.fadeAmount = 1.0f - t;
+            }
+
+            if (g_effects.fadeTimer <= 0) {
+                g_effects.fadeActive = false;
+                g_effects.fadeAmount = g_effects.fadeTarget;
+            }
+        }
+
+        // Update shake
+        if (g_effects.shakeActive) {
+            g_effects.shakeTimer -= deltaTime;
+            float t = g_effects.shakeTimer / g_effects.shakeDuration;
+            t = t < 0 ? 0 : t;
+            float intensity = g_effects.shakeIntensity * powf(t, g_effects.shakeDecay);
+
+            g_effects.shakeOffsetX = ((float)(rand() % 1000) / 500.0f - 1.0f) * intensity;
+            g_effects.shakeOffsetY = ((float)(rand() % 1000) / 500.0f - 1.0f) * intensity;
+
+            if (g_effects.shakeTimer <= 0) {
+                g_effects.shakeActive = false;
+                g_effects.shakeOffsetX = 0;
+                g_effects.shakeOffsetY = 0;
+            }
+        }
+    }
+
+    // ---- Presets ----
+    void Framework_Effects_ApplyPresetRetro() {
+        Framework_Effects_ResetAll();
+        g_effects.pixelateEnabled = true;
+        g_effects.pixelateSize = 3;
+        g_effects.scanlinesEnabled = true;
+        g_effects.scanlinesIntensity = 0.2f;
+        g_effects.scanlinesCount = 240;
+        g_effects.saturation = 1.2f;
+        g_effects.contrast = 1.1f;
+    }
+
+    void Framework_Effects_ApplyPresetDream() {
+        Framework_Effects_ResetAll();
+        g_effects.blurEnabled = true;
+        g_effects.blurAmount = 1.5f;
+        g_effects.vignetteEnabled = true;
+        g_effects.vignetteIntensity = 0.4f;
+        g_effects.vignetteRadius = 0.7f;
+        g_effects.saturation = 0.8f;
+        g_effects.brightness = 1.1f;
+        g_effects.tintEnabled = true;
+        g_effects.tintR = 200; g_effects.tintG = 180; g_effects.tintB = 255;
+        g_effects.tintAmount = 0.2f;
+    }
+
+    void Framework_Effects_ApplyPresetHorror() {
+        Framework_Effects_ResetAll();
+        g_effects.vignetteEnabled = true;
+        g_effects.vignetteIntensity = 0.7f;
+        g_effects.vignetteRadius = 0.5f;
+        g_effects.saturation = 0.5f;
+        g_effects.contrast = 1.3f;
+        g_effects.brightness = 0.8f;
+        g_effects.filmGrainEnabled = true;
+        g_effects.filmGrainIntensity = 0.15f;
+        g_effects.chromaticEnabled = true;
+        g_effects.chromaticOffset = 2.0f;
+    }
+
+    void Framework_Effects_ApplyPresetNoir() {
+        Framework_Effects_ResetAll();
+        g_effects.grayscaleEnabled = true;
+        g_effects.grayscaleAmount = 1.0f;
+        g_effects.contrast = 1.4f;
+        g_effects.vignetteEnabled = true;
+        g_effects.vignetteIntensity = 0.5f;
+        g_effects.filmGrainEnabled = true;
+        g_effects.filmGrainIntensity = 0.1f;
+    }
+
+    void Framework_Effects_ResetAll() {
+        g_effects.vignetteEnabled = false;
+        g_effects.blurEnabled = false;
+        g_effects.chromaticEnabled = false;
+        g_effects.pixelateEnabled = false;
+        g_effects.scanlinesEnabled = false;
+        g_effects.crtEnabled = false;
+        g_effects.grayscaleEnabled = false;
+        g_effects.sepiaEnabled = false;
+        g_effects.invertEnabled = false;
+        g_effects.tintEnabled = false;
+        g_effects.filmGrainEnabled = false;
+        g_effects.brightness = 1.0f;
+        g_effects.contrast = 1.0f;
+        g_effects.saturation = 1.0f;
+        g_effects.gamma = 1.0f;
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {
