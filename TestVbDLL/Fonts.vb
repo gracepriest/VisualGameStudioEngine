@@ -1,4 +1,8 @@
-﻿Public Module Fonts
+﻿Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
+Imports RaylibWrapper.UtiliyClasses
+
+Public Module Fonts
 
     'UI font
     Public RETRO_FONT As FontHandle

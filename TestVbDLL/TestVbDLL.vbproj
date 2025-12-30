@@ -6,6 +6,8 @@
     <TargetFramework>net8.0</TargetFramework>
   </PropertyGroup>
 
+
+
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
     <OutputPath>C:\Users\melvi\source\repos\VisualGameStudioEngine\x64\Release</OutputPath>
   </PropertyGroup>
@@ -16,12 +18,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CPPengineTest\CPPengineTest.vcxproj" />
+    <ProjectReference Include="..\RaylibWrapper\RaylibWrapper.vbproj" />
     <ProjectReference Include="..\VisualGameStudioEngine\VisualGameStudioEngine.vcxproj" />
   </ItemGroup>
 
   <Target Name="CopyNativeDll" AfterTargets="Build">
     <Copy SourceFiles="$(SolutionDir)x64\Release\VisualGameStudioEngine.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(SolutionDir)x64\Release\VisualGameStudioEngine.dll" DestinationFolder="$(OutputPath)net8.0\" SkipUnchangedFiles="true" />
   </Target>
 
   <ItemGroup>

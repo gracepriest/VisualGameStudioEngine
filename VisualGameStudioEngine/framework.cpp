@@ -1025,6 +1025,16 @@ extern "C" {
         DrawRectangleLines(x, y, w, h, Color{ r, g, b, a });
     }
 
+    void Framework_DrawTriangle(int x1, int y1, int x2, int y2, int x3, int y3,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTriangle(Vector2{ (float)x1, (float)y1 }, Vector2{ (float)x2, (float)y2 }, Vector2{ (float)x3, (float)y3 }, Color{ r, g, b, a });
+    }
+
+    void Framework_DrawTriangleLines(int x1, int y1, int x2, int y2, int x3, int y3,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTriangleLines(Vector2{ (float)x1, (float)y1 }, Vector2{ (float)x2, (float)y2 }, Vector2{ (float)x3, (float)y3 }, Color{ r, g, b, a });
+    }
+
     // ========================================================================
     // COLLISIONS
     // ========================================================================
@@ -13420,6 +13430,7 @@ extern "C" {
         std::string name;
         int slotCount = 20;
         float maxWeight = 0.0f; // 0 = unlimited
+        bool autoStack = true;  // Auto-stack items when adding
         std::vector<InventorySlot> slots;
 
         // Callbacks
@@ -13514,11 +13525,12 @@ extern "C" {
 
     // ---- Item Definition API ----
 
-    int Framework_Item_Define(const char* itemName) {
+    int Framework_Item_Define(const char* itemName, const char* description) {
         ItemDefinition item;
         item.id = g_nextItemDefId++;
         item.name = itemName ? itemName : "";
         item.displayName = item.name;
+        item.description = description ? description : "";
 
         g_itemDefs[item.id] = item;
         if (itemName) g_itemDefByName[itemName] = item.id;
@@ -13541,6 +13553,14 @@ extern "C" {
 
     bool Framework_Item_IsDefValid(int itemDefId) {
         return GetItemDef(itemDefId) != nullptr;
+    }
+
+    const char* Framework_Item_GetName(int itemDefId) {
+        auto* item = GetItemDef(itemDefId);
+        if (!item) return "";
+        strncpy(s_itemNameBuf, item->name.c_str(), sizeof(s_itemNameBuf) - 1);
+        s_itemNameBuf[sizeof(s_itemNameBuf) - 1] = '\0';
+        return s_itemNameBuf;
     }
 
     void Framework_Item_SetDisplayName(int itemDefId, const char* displayName) {
@@ -13584,9 +13604,12 @@ extern "C" {
         if (item) item->iconRect = { x, y, w, h };
     }
 
-    void Framework_Item_SetStackable(int itemDefId, bool stackable) {
+    void Framework_Item_SetStackable(int itemDefId, bool stackable, int maxStack) {
         auto* item = GetItemDef(itemDefId);
-        if (item) item->stackable = stackable;
+        if (item) {
+            item->stackable = stackable;
+            item->maxStack = maxStack;
+        }
     }
 
     bool Framework_Item_IsStackable(int itemDefId) {
@@ -13765,6 +13788,20 @@ extern "C" {
         return inv ? (inv->maxWeight > 0.0f) : false;
     }
 
+    int Framework_Inventory_GetCapacity(int inventoryId) {
+        return Framework_Inventory_GetSlotCount(inventoryId);
+    }
+
+    void Framework_Inventory_SetAutoStack(int inventoryId, bool autoStack) {
+        auto* inv = GetInventory(inventoryId);
+        if (inv) inv->autoStack = autoStack;
+    }
+
+    bool Framework_Inventory_GetAutoStack(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        return inv ? inv->autoStack : true;
+    }
+
     // Adding items
     bool Framework_Inventory_AddItem(int inventoryId, int itemDefId, int quantity) {
         auto* inv = GetInventory(inventoryId);
@@ -13920,6 +13957,29 @@ extern "C" {
         return true;
     }
 
+    int Framework_Inventory_RemoveFromSlot(int inventoryId, int slotIndex, int quantity) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return 0;
+        if (slotIndex < 0 || slotIndex >= inv->slotCount) return 0;
+
+        auto& slot = inv->slots[slotIndex];
+        if (slot.itemDefId < 0) return 0;
+
+        int removed = (slot.quantity < quantity) ? slot.quantity : quantity;
+        slot.quantity -= removed;
+
+        if (slot.quantity <= 0) {
+            int oldId = slot.itemDefId;
+            slot.itemDefId = -1;
+            slot.quantity = 0;
+            if (inv->onRemoveCallback) {
+                inv->onRemoveCallback(inventoryId, slotIndex, oldId, inv->removeUserData);
+            }
+        }
+
+        return removed;
+    }
+
     void Framework_Inventory_ClearSlot(int inventoryId, int slotIndex) {
         auto* inv = GetInventory(inventoryId);
         if (!inv) return;
@@ -13961,11 +14021,19 @@ extern "C" {
         return inv->slots[slotIndex].itemDefId;
     }
 
+    int Framework_Inventory_GetSlotItem(int inventoryId, int slotIndex) {
+        return Framework_Inventory_GetItemAt(inventoryId, slotIndex);
+    }
+
     int Framework_Inventory_GetQuantityAt(int inventoryId, int slotIndex) {
         auto* inv = GetInventory(inventoryId);
         if (!inv) return 0;
         if (slotIndex < 0 || slotIndex >= inv->slotCount) return 0;
         return inv->slots[slotIndex].quantity;
+    }
+
+    int Framework_Inventory_GetSlotQuantity(int inventoryId, int slotIndex) {
+        return Framework_Inventory_GetQuantityAt(inventoryId, slotIndex);
     }
 
     bool Framework_Inventory_IsSlotEmpty(int inventoryId, int slotIndex) {
@@ -13991,6 +14059,17 @@ extern "C" {
         int count = 0;
         for (auto& slot : inv->slots) {
             if (slot.itemDefId < 0) count++;
+        }
+        return count;
+    }
+
+    int Framework_Inventory_GetUsedSlotCount(int inventoryId) {
+        auto* inv = GetInventory(inventoryId);
+        if (!inv) return 0;
+
+        int count = 0;
+        for (auto& slot : inv->slots) {
+            if (slot.itemDefId >= 0) count++;
         }
         return count;
     }
@@ -14107,7 +14186,7 @@ extern "C" {
     }
 
     // Sorting
-    void Framework_Inventory_Sort(int inventoryId) {
+    void Framework_Inventory_Sort(int inventoryId, int sortMode) {
         auto* inv = GetInventory(inventoryId);
         if (!inv) return;
 
@@ -14119,13 +14198,23 @@ extern "C" {
             }
         }
 
-        // Sort by category then name
-        std::sort(items.begin(), items.end(), [](const InventorySlot& a, const InventorySlot& b) {
+        // Sort based on mode: 0=name, 1=rarity, 2=value, 3=weight
+        std::sort(items.begin(), items.end(), [sortMode](const InventorySlot& a, const InventorySlot& b) {
             auto* itemA = GetItemDef(a.itemDefId);
             auto* itemB = GetItemDef(b.itemDefId);
             if (!itemA || !itemB) return false;
-            if (itemA->category != itemB->category) return itemA->category < itemB->category;
-            return itemA->name < itemB->name;
+
+            switch (sortMode) {
+                case 1: // Rarity (descending)
+                    return itemA->rarity > itemB->rarity;
+                case 2: // Value (descending)
+                    return itemA->value > itemB->value;
+                case 3: // Weight (ascending)
+                    return itemA->weight < itemB->weight;
+                default: // 0 = Name/Category
+                    if (itemA->category != itemB->category) return itemA->category < itemB->category;
+                    return itemA->name < itemB->name;
+            }
         });
 
         // Clear slots and refill

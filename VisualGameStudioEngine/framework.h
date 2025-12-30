@@ -366,6 +366,8 @@ extern "C" {
     __declspec(dllexport) void  Framework_DrawCircle(int centerX, int centerY, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void  Framework_DrawCircleLines(int centerX, int centerY, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void  Framework_DrawRectangleLines(int x, int y, int width, int height, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawTriangle(int x1, int y1, int x2, int y2, int x3, int y3, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawTriangleLines(int x1, int y1, int x2, int y2, int x3, int y3, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 
     // ========================================================================
     // COLLISIONS
@@ -2132,12 +2134,13 @@ extern "C" {
     typedef bool (*ItemDropCallback)(int inventoryId, int slotIndex, int itemId, int quantity, void* userData);
 
     // ---- Item Definition (template/prototype) ----
-    __declspec(dllexport) int   Framework_Item_Define(const char* itemName);
+    __declspec(dllexport) int   Framework_Item_Define(const char* itemName, const char* description);
     __declspec(dllexport) void  Framework_Item_Undefine(int itemDefId);
     __declspec(dllexport) int   Framework_Item_GetDefByName(const char* itemName);
     __declspec(dllexport) bool  Framework_Item_IsDefValid(int itemDefId);
 
     // Item definition properties
+    __declspec(dllexport) const char* Framework_Item_GetName(int itemDefId);
     __declspec(dllexport) void  Framework_Item_SetDisplayName(int itemDefId, const char* displayName);
     __declspec(dllexport) const char* Framework_Item_GetDisplayName(int itemDefId);
     __declspec(dllexport) void  Framework_Item_SetDescription(int itemDefId, const char* description);
@@ -2147,7 +2150,7 @@ extern "C" {
     __declspec(dllexport) void  Framework_Item_SetIconRect(int itemDefId, float x, float y, float w, float h);
 
     // Stacking
-    __declspec(dllexport) void  Framework_Item_SetStackable(int itemDefId, bool stackable);
+    __declspec(dllexport) void  Framework_Item_SetStackable(int itemDefId, bool stackable, int maxStack);
     __declspec(dllexport) bool  Framework_Item_IsStackable(int itemDefId);
     __declspec(dllexport) void  Framework_Item_SetMaxStack(int itemDefId, int maxStack);
     __declspec(dllexport) int   Framework_Item_GetMaxStack(int itemDefId);
@@ -2187,10 +2190,13 @@ extern "C" {
     // Inventory properties
     __declspec(dllexport) void  Framework_Inventory_SetSlotCount(int inventoryId, int slotCount);
     __declspec(dllexport) int   Framework_Inventory_GetSlotCount(int inventoryId);
+    __declspec(dllexport) int   Framework_Inventory_GetCapacity(int inventoryId);  // Alias for GetSlotCount
     __declspec(dllexport) void  Framework_Inventory_SetMaxWeight(int inventoryId, float maxWeight);
     __declspec(dllexport) float Framework_Inventory_GetMaxWeight(int inventoryId);
     __declspec(dllexport) float Framework_Inventory_GetCurrentWeight(int inventoryId);
     __declspec(dllexport) bool  Framework_Inventory_IsWeightLimited(int inventoryId);
+    __declspec(dllexport) void  Framework_Inventory_SetAutoStack(int inventoryId, bool autoStack);
+    __declspec(dllexport) bool  Framework_Inventory_GetAutoStack(int inventoryId);
 
     // Adding items
     __declspec(dllexport) bool  Framework_Inventory_AddItem(int inventoryId, int itemDefId, int quantity);  // Auto-stack/find slot
@@ -2200,15 +2206,19 @@ extern "C" {
     // Removing items
     __declspec(dllexport) bool  Framework_Inventory_RemoveItem(int inventoryId, int itemDefId, int quantity);  // From any slot
     __declspec(dllexport) bool  Framework_Inventory_RemoveItemFromSlot(int inventoryId, int slotIndex, int quantity);
+    __declspec(dllexport) int   Framework_Inventory_RemoveFromSlot(int inventoryId, int slotIndex, int quantity);  // Alias, returns remaining
     __declspec(dllexport) void  Framework_Inventory_ClearSlot(int inventoryId, int slotIndex);
     __declspec(dllexport) void  Framework_Inventory_Clear(int inventoryId);
 
     // Slot queries
     __declspec(dllexport) int   Framework_Inventory_GetItemAt(int inventoryId, int slotIndex);  // Returns itemDefId or -1
+    __declspec(dllexport) int   Framework_Inventory_GetSlotItem(int inventoryId, int slotIndex);  // Alias for GetItemAt
     __declspec(dllexport) int   Framework_Inventory_GetQuantityAt(int inventoryId, int slotIndex);
+    __declspec(dllexport) int   Framework_Inventory_GetSlotQuantity(int inventoryId, int slotIndex);  // Alias for GetQuantityAt
     __declspec(dllexport) bool  Framework_Inventory_IsSlotEmpty(int inventoryId, int slotIndex);
     __declspec(dllexport) int   Framework_Inventory_GetFirstEmptySlot(int inventoryId);
     __declspec(dllexport) int   Framework_Inventory_GetEmptySlotCount(int inventoryId);
+    __declspec(dllexport) int   Framework_Inventory_GetUsedSlotCount(int inventoryId);
 
     // Item queries
     __declspec(dllexport) bool  Framework_Inventory_HasItem(int inventoryId, int itemDefId);
@@ -2223,7 +2233,7 @@ extern "C" {
     __declspec(dllexport) bool  Framework_Inventory_SplitStack(int inventoryId, int slotIndex, int quantity, int targetSlot);
 
     // Sorting
-    __declspec(dllexport) void  Framework_Inventory_Sort(int inventoryId);  // Sort by category, then name
+    __declspec(dllexport) void  Framework_Inventory_Sort(int inventoryId, int sortMode);  // 0=name, 1=rarity, 2=value, 3=weight
     __declspec(dllexport) void  Framework_Inventory_SortByRarity(int inventoryId);
     __declspec(dllexport) void  Framework_Inventory_Compact(int inventoryId);  // Move items to fill gaps
 

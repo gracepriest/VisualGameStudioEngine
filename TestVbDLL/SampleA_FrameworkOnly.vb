@@ -3,6 +3,8 @@
 ' A simple "Catch the Falling Blocks" game
 
 Imports System.Runtime.InteropServices
+Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
 
 ''' <summary>
 ''' Sample A: Framework-only game demonstrating:

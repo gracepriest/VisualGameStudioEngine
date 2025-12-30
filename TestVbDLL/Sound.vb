@@ -1,4 +1,7 @@
-﻿
+﻿Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
+Imports RaylibWrapper.UtiliyClasses
+
 Module Sound
     ' Game sounds
     Public sfxHit As Integer

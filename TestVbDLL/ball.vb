@@ -1,5 +1,6 @@
-﻿
-Imports RL = TestVbDLL.Utiliy.Rectangle
+﻿Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
+
 Public Class Ball
     Public ballPos As New Vector2(WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2)
     Public ballWidth As Single = 16
@@ -27,7 +28,7 @@ Public Class Ball
 
     End Sub
     Public Function BallCollieded(paddle1 As Paddle) As Boolean
-        Dim gBall As RL
+        Dim gBall As Rectangle
         With gBall
             .x = ballPos.x
             .y = ballPos.y
@@ -35,7 +36,7 @@ Public Class Ball
             .height = ballHeight
         End With
 
-        Dim gPaddle As RL
+        Dim gPaddle As Rectangle
         With gPaddle
             .x = paddle1.paddlePos.x
             .y = paddle1.paddlePos.y

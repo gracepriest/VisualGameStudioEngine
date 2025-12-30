@@ -4,7 +4,10 @@
 '   Framework_CreateScriptScene, Framework_SceneChange, Framework_ScenePush,
 '   Framework_ScenePop, Framework_SceneTick, Framework_SetDrawCallback
 
-' Abstract scene base = C++ “scripted scene” interface
+Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
+
+' Abstract scene base = C++ "scripted scene" interface
 Public MustInherit Class Scene
     Public sceneId As Integer = -1
 

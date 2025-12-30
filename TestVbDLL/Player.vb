@@ -1,4 +1,6 @@
-﻿Public Class Player
+﻿Imports RaylibWrapper.UtiliyClasses
+
+Public Class Player
     Public Property Name As String
     Public Property Score As Integer
     Public Property avatar As TextureHandle

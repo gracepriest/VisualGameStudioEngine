@@ -1,6 +1,9 @@
 ﻿Imports System.Collections.Generic
 Imports System.Runtime.InteropServices
 Imports System.Runtime.CompilerServices
+Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
+Imports RaylibWrapper.UtiliyClasses
 
 
 Class TitleScene
@@ -19,7 +22,11 @@ Class TitleScene
         "UI DEMO", "PHYSICS",
         "SHOWCASE", "TWEEN",
         "CAMERA", "AI PATH",
-        "AUDIO", "EFFECTS"
+        "AUDIO", "EFFECTS",
+        "DIALOGUE", "INVENTORY",
+        "QUEST", "LIGHTING",
+        "TIMER/EVT", "FSM",
+        "SAVE/LOAD", ""
     }
 
     ' Menu item colors (R, G, B)
@@ -29,17 +36,21 @@ Class TitleScene
         {100, 200, 255}, {255, 150, 100},
         {255, 215, 0}, {255, 100, 255},
         {100, 255, 200}, {255, 200, 100},
-        {100, 200, 255}, {255, 100, 200}
+        {100, 200, 255}, {255, 100, 200},
+        {255, 200, 150}, {200, 150, 255},
+        {150, 255, 200}, {255, 255, 150},
+        {150, 200, 255}, {255, 150, 200},
+        {200, 255, 150}, {100, 100, 100}
     }
 
     ' Grid layout constants
     Const MENU_COLS As Integer = 2
-    Const MENU_ROWS As Integer = 6
-    Const MENU_START_Y As Integer = 150
-    Const MENU_ITEM_WIDTH As Integer = 250
-    Const MENU_ITEM_HEIGHT As Integer = 50
-    Const MENU_GAP_X As Integer = 40
-    Const MENU_GAP_Y As Integer = 15
+    Const MENU_ROWS As Integer = 10
+    Const MENU_START_Y As Integer = 100
+    Const MENU_ITEM_WIDTH As Integer = 220
+    Const MENU_ITEM_HEIGHT As Integer = 38
+    Const MENU_GAP_X As Integer = 30
+    Const MENU_GAP_Y As Integer = 8
     'Dim atlas As New TextureHandle("images/blocks.png")
 
     ' Tell it the tile geometry of your sheet:
@@ -152,6 +163,34 @@ Class TitleScene
                     'Screen Effects Demo
                     Framework_PlaySoundH(sfxHit)
                     ChangeTo(New DemoEffectsScene)
+                Case 12
+                    'Dialogue System Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoDialogueScene)
+                Case 13
+                    'Inventory System Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoInventoryScene)
+                Case 14
+                    'Quest System Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoQuestScene)
+                Case 15
+                    'Lighting System Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoLightingScene)
+                Case 16
+                    'Timer/Event System Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoTimerEventScene)
+                Case 17
+                    'FSM State Machine Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoFSMScene)
+                Case 18
+                    'Save/Load System Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoSaveLoadScene)
             End Select
         End If
 
@@ -168,6 +207,9 @@ Class TitleScene
 
         ' Draw menu items in grid
         For i As Integer = 0 To menuItems.Length - 1
+            ' Skip empty menu items
+            If String.IsNullOrEmpty(menuItems(i)) Then Continue For
+
             Dim col As Integer = i Mod MENU_COLS
             Dim row As Integer = i \ MENU_COLS
 
@@ -184,9 +226,9 @@ Class TitleScene
             Framework_DrawRectangle(itemX, itemY, MENU_ITEM_WIDTH, MENU_ITEM_HEIGHT, 30, 40, 60, 200)
 
             ' Draw item text (centered in box)
-            Dim textX As Integer = itemX + 20
-            Dim textY As Integer = itemY + 10
-            Framework_DrawTextExH(RETRO_FONT.Handle, menuItems(i), New Vector2(textX, textY), 28, 1.0F,
+            Dim textX As Integer = itemX + 15
+            Dim textY As Integer = itemY + 8
+            Framework_DrawTextExH(RETRO_FONT.Handle, menuItems(i), New Vector2(textX, textY), 22, 1.0F,
                 menuColors(i, 0), menuColors(i, 1), menuColors(i, 2), 255)
         Next
 
@@ -259,8 +301,8 @@ Class MenuScene
     Protected Overrides Sub OnUpdateFixed(dt As Double)
     End Sub
     Protected Overrides Sub OnUpdateFrame(dt As Single)
-        ' ENTER -> go to Game
-        If Framework_IsKeyPressed(257) Then
+        ' ENTER or BACKSPACE -> go to Title
+        If Framework_IsKeyPressed(Keys.ENTER) OrElse Framework_IsKeyPressed(Keys.BACKSPACE) Then
             SetCurrentScene(New TitleScene)
         End If
         ' Simple physics
@@ -349,7 +391,7 @@ Class Player1Scene
             'Framework_PlaySoundH(sfxHit)
             'reverse x direction
             ball1.dx = -ball1.dx * 1.2F 'increase speed by 3% each hit
-            ball1.ballPos.X = paddle1.paddlePos.X + paddle1.paddleWidth 'move ball outside of paddle to prevent sticking
+            ball1.ballPos.x = paddle1.paddlePos.x + paddle1.paddleWidth 'move ball outside of paddle to prevent sticking
             'randomize y velocity
             If ball1.dy <= 0 Then
                 'draw a hit text for testing
@@ -366,7 +408,7 @@ Class Player1Scene
             'Framework_PlaySoundH(sfxHit)
             'reverse x direction
             ball1.dx = -ball1.dx * 1.2F 'increase speed by 3% each hit
-            ball1.ballPos.X = paddle2.paddlePos.X - ball1.ballWidth 'move ball outside of paddle to prevent sticking
+            ball1.ballPos.x = paddle2.paddlePos.x - ball1.ballWidth 'move ball outside of paddle to prevent sticking
             'randomize y velocity
             If ball1.dy <= 0 Then
                 Framework_DrawText("HIT!", 400, 200, 30, 255, 0, 0, 255)
@@ -687,13 +729,13 @@ Class OptionScene
             'play sound
             Framework_PlaySoundH(sfxWall)
             menuIndex -= 1
-            menuPos.Y -= 50
+            menuPos.y -= 50
 
         ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 2 Then
             'play sound
             Framework_PlaySoundH(sfxWall)
             menuIndex += 1
-            menuPos.Y += 50
+            menuPos.y += 50
 
         End If
 
@@ -757,6 +799,9 @@ Class ServeScene
         If Framework_IsKeyPressed(Keys.SPACE) Then
             'change to play scene
             Pop()
+        ElseIf Framework_IsKeyPressed(Keys.BACKSPACE) Then
+            'return to title
+            ChangeTo(New TitleScene)
         End If
     End Sub
 
@@ -802,8 +847,8 @@ Class EndScene
     End Sub
 
     Protected Overrides Sub OnUpdateFrame(dt As Single)
-        'return to title on space
-        If Framework_IsKeyPressed(Keys.SPACE) Then
+        'return to title on space or backspace
+        If Framework_IsKeyPressed(Keys.SPACE) OrElse Framework_IsKeyPressed(Keys.BACKSPACE) Then
             ChangeTo(New TitleScene)
         End If
     End Sub
@@ -812,7 +857,7 @@ Class EndScene
         'draw the win screen
         Framework_ClearBackground(10, 10, 20, 255)
         Framework_DrawText(winningPlayer.Name & " WINS!", WINDOW_WIDTH / 2 - 275, 250, 50, 255, 255, 255, 255)
-        Framework_DrawText("PRESS SPACE TO RETURN TO TITLE!", WINDOW_WIDTH / 2 - 275, 300, 25, 255, 255, 255, 255)
+        Framework_DrawText("PRESS SPACE OR BACKSPACE TO RETURN!", WINDOW_WIDTH / 2 - 275, 300, 25, 255, 255, 255, 255)
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
     End Sub
 End Class
@@ -1004,6 +1049,7 @@ Class PongShowcaseScene
         End If
 
         Framework_UI_DestroyAll()
+        Framework_Effects_ResetAll()
     End Sub
 
     Protected Overrides Sub OnResume()
@@ -1131,13 +1177,13 @@ Class PongShowcaseScene
 
         ' Move ball outside paddle
         If isPlayer1 Then
-            _ball.ballPos.X = paddle.paddlePos.X + paddle.paddleWidth + 1
+            _ball.ballPos.x = paddle.paddlePos.x + paddle.paddleWidth + 1
         Else
-            _ball.ballPos.X = paddle.paddlePos.X - _ball.ballWidth - 1
+            _ball.ballPos.x = paddle.paddlePos.x - _ball.ballWidth - 1
         End If
 
         ' Randomize Y velocity based on hit position
-        Dim hitOffset As Single = (_ball.ballPos.Y + _ball.ballHeight / 2) - (paddle.paddlePos.Y + paddle.paddleHeight / 2)
+        Dim hitOffset As Single = (_ball.ballPos.y + _ball.ballHeight / 2) - (paddle.paddlePos.y + paddle.paddleHeight / 2)
         _ball.dy = hitOffset * 3
 
         ' Increment rally
@@ -1148,8 +1194,8 @@ Class PongShowcaseScene
         Framework_Effects_Flash(255, 255, 255, 0.05F)
 
         ' Spawn particles at collision
-        Dim particleX As Single = _ball.ballPos.X + _ball.ballWidth / 2
-        Dim particleY As Single = _ball.ballPos.Y + _ball.ballHeight / 2
+        Dim particleX As Single = _ball.ballPos.x + _ball.ballWidth / 2
+        Dim particleY As Single = _ball.ballPos.y + _ball.ballHeight / 2
         If isPlayer1 Then
             SpawnHitParticles(particleX, particleY, 100, 200, 255)
         Else
@@ -1164,30 +1210,30 @@ Class PongShowcaseScene
 
     Private Sub CheckWallCollision()
         ' Top wall
-        If _ball.ballPos.Y < 0 Then
-            _ball.ballPos.Y = 0
+        If _ball.ballPos.y < 0 Then
+            _ball.ballPos.y = 0
             _ball.dy = -_ball.dy
             Framework_PlaySoundH(sfxWall)
-            SpawnHitParticles(_ball.ballPos.X + _ball.ballWidth / 2, 5, 150, 150, 150)
+            SpawnHitParticles(_ball.ballPos.x + _ball.ballWidth / 2, 5, 150, 150, 150)
         End If
 
         ' Bottom wall
-        If _ball.ballPos.Y >= WINDOW_HEIGHT - _ball.ballHeight Then
-            _ball.ballPos.Y = WINDOW_HEIGHT - _ball.ballHeight
+        If _ball.ballPos.y >= WINDOW_HEIGHT - _ball.ballHeight Then
+            _ball.ballPos.y = WINDOW_HEIGHT - _ball.ballHeight
             _ball.dy = -_ball.dy
             Framework_PlaySoundH(sfxWall)
-            SpawnHitParticles(_ball.ballPos.X + _ball.ballWidth / 2, WINDOW_HEIGHT - 5, 150, 150, 150)
+            SpawnHitParticles(_ball.ballPos.x + _ball.ballWidth / 2, WINDOW_HEIGHT - 5, 150, 150, 150)
         End If
     End Sub
 
     Private Sub CheckScoring()
         ' Ball goes off left side - Player 2 scores
-        If _ball.ballPos.X < -_ball.ballWidth Then
+        If _ball.ballPos.x < -_ball.ballWidth Then
             OnScore(2)
         End If
 
         ' Ball goes off right side - Player 1 scores
-        If _ball.ballPos.X > WINDOW_WIDTH Then
+        If _ball.ballPos.x > WINDOW_WIDTH Then
             OnScore(1)
         End If
     End Sub
@@ -2707,8 +2753,9 @@ Public Class DemoEffectsScene
 
     Protected Overrides Sub OnExit()
         Console.WriteLine("DemoEffectsScene OnExit")
-        ' Reset all effects
+        ' Reset all effects and camera
         Framework_Effects_ResetAll()
+        Framework_Camera_Reset()
     End Sub
 
     Protected Overrides Sub OnResume()
@@ -2719,6 +2766,8 @@ Public Class DemoEffectsScene
 
     Protected Overrides Sub OnUpdateFrame(dt As Single)
         If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            Framework_Effects_ResetAll()
+            Framework_Camera_Reset()
             ChangeTo(New TitleScene)
             Return
         End If
@@ -2867,6 +2916,1706 @@ Public Class DemoEffectsScene
         Framework_DrawText("[SPACE] Screen Flash  [ENTER] Screen Shake", 10, WINDOW_HEIGHT - 66, 16, 150, 200, 255, 255)
         Framework_DrawText("[UP/DOWN] Adjust Vignette (when enabled)", 10, WINDOW_HEIGHT - 44, 16, 200, 200, 200, 255)
         Framework_DrawText("[BACKSPACE] Return to menu", 10, WINDOW_HEIGHT - 22, 16, 255, 150, 150, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ==========================================
+' DIALOGUE SYSTEM DEMO
+' ==========================================
+Class DemoDialogueScene
+    Inherits Scene
+
+    Private _dialogueId As Integer = -1
+    Private _isDialogueSetup As Boolean = False
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoDialogueScene OnEnter - Showcasing Dialogue System")
+
+        ' Create a dialogue tree
+        _dialogueId = Framework_Dialogue_Create("DemoDialogue")
+
+        If _dialogueId >= 0 Then
+            ' Add nodes to the dialogue
+            Dim node1 As Integer = Framework_Dialogue_AddNode(_dialogueId, "greeting")
+            Framework_Dialogue_SetNodeSpeaker(_dialogueId, node1, "NPC")
+            Framework_Dialogue_SetNodeText(_dialogueId, node1, "Hello traveler! Welcome to the dialogue demo. How can I help you today?")
+
+            Dim node2 As Integer = Framework_Dialogue_AddNode(_dialogueId, "quest_info")
+            Framework_Dialogue_SetNodeSpeaker(_dialogueId, node2, "NPC")
+            Framework_Dialogue_SetNodeText(_dialogueId, node2, "Ah, looking for adventure? There's a cave to the north with treasure!")
+
+            Dim node3 As Integer = Framework_Dialogue_AddNode(_dialogueId, "shop_info")
+            Framework_Dialogue_SetNodeSpeaker(_dialogueId, node3, "NPC")
+            Framework_Dialogue_SetNodeText(_dialogueId, node3, "My shop has the finest weapons and armor. Feel free to browse!")
+
+            Dim node4 As Integer = Framework_Dialogue_AddNode(_dialogueId, "goodbye")
+            Framework_Dialogue_SetNodeSpeaker(_dialogueId, node4, "NPC")
+            Framework_Dialogue_SetNodeText(_dialogueId, node4, "Safe travels, adventurer! May the winds guide your path.")
+
+            Dim node5 As Integer = Framework_Dialogue_AddNode(_dialogueId, "player_thanks")
+            Framework_Dialogue_SetNodeSpeaker(_dialogueId, node5, "Player")
+            Framework_Dialogue_SetNodeText(_dialogueId, node5, "Thanks for the information!")
+
+            ' Add choices to first node
+            Framework_Dialogue_AddChoice(_dialogueId, node1, "Tell me about quests", node2)
+            Framework_Dialogue_AddChoice(_dialogueId, node1, "What do you sell?", node3)
+            Framework_Dialogue_AddChoice(_dialogueId, node1, "Goodbye", node4)
+
+            ' Add follow-up choices
+            Framework_Dialogue_AddChoice(_dialogueId, node2, "Thanks!", node5)
+            Framework_Dialogue_AddChoice(_dialogueId, node2, "Tell me more", node1)
+            Framework_Dialogue_AddChoice(_dialogueId, node3, "Thanks!", node5)
+            Framework_Dialogue_AddChoice(_dialogueId, node3, "Ask something else", node1)
+            Framework_Dialogue_SetNextNode(_dialogueId, node5, node4)
+
+            ' Set start node and typewriter settings
+            Framework_Dialogue_SetStartNode(_dialogueId, node1)
+            Framework_Dialogue_SetTypewriterEnabled(True)
+            Framework_Dialogue_SetTypewriterSpeed(40.0F)
+            Framework_Dialogue_SetHistoryEnabled(True)
+
+            _isDialogueSetup = True
+        End If
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        If _dialogueId >= 0 Then
+            Framework_Dialogue_Stop()
+            Framework_Dialogue_Destroy(_dialogueId)
+        End If
+        Console.WriteLine("DemoDialogueScene OnExit")
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            Framework_PlaySoundH(sfxHit)
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        Framework_Dialogue_Update(dt)
+
+        ' Start dialogue with SPACE if not active
+        If Not Framework_Dialogue_IsActive() Then
+            If Framework_IsKeyPressed(Keys.SPACE) Then
+                Framework_Dialogue_Start(_dialogueId)
+            End If
+        Else
+            ' Handle dialogue interaction
+            If Framework_IsKeyPressed(Keys.SPACE) Then
+                ' If typewriter not complete, skip it
+                If Not Framework_Dialogue_IsTypewriterComplete() Then
+                    Framework_Dialogue_SkipTypewriter()
+                Else
+                    ' If there are choices, don't auto-continue
+                    Dim choiceCount As Integer = Framework_Dialogue_GetCurrentChoiceCount()
+                    If choiceCount = 0 Then
+                        Framework_Dialogue_Continue()
+                    End If
+                End If
+            End If
+
+            ' Handle choice selection with number keys
+            Dim choiceCount2 As Integer = Framework_Dialogue_GetCurrentChoiceCount()
+            If choiceCount2 > 0 AndAlso Framework_Dialogue_IsTypewriterComplete() Then
+                If Framework_IsKeyPressed(Keys.ONE) AndAlso choiceCount2 >= 1 Then
+                    Framework_Dialogue_SelectChoice(0)
+                ElseIf Framework_IsKeyPressed(Keys.TWO) AndAlso choiceCount2 >= 2 Then
+                    Framework_Dialogue_SelectChoice(1)
+                ElseIf Framework_IsKeyPressed(Keys.THREE) AndAlso choiceCount2 >= 3 Then
+                    Framework_Dialogue_SelectChoice(2)
+                ElseIf Framework_IsKeyPressed(Keys.FOUR) AndAlso choiceCount2 >= 4 Then
+                    Framework_Dialogue_SelectChoice(3)
+                End If
+            End If
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(30, 30, 50, 255)
+
+        ' Draw title
+        Framework_DrawText("DIALOGUE SYSTEM DEMO", 20, 20, 30, 255, 200, 100, 255)
+        Framework_DrawText("Press SPACE to start/continue dialogue | 1-4 to select choices | ESC to exit", 20, 60, 16, 200, 200, 200, 255)
+
+        ' Draw NPC sprite area
+        Framework_DrawRectangle(50, 150, 200, 250, 60, 60, 80, 255)
+        Framework_DrawText("NPC", 130, 270, 24, 255, 255, 255, 255)
+        Framework_DrawCircle(150, 220, 50, 200, 180, 150, 255)
+
+        ' Draw dialogue box
+        Dim boxX As Integer = 280
+        Dim boxY As Integer = 150
+        Dim boxW As Integer = WINDOW_WIDTH - 310
+        Dim boxH As Integer = 300
+
+        Framework_DrawRectangle(boxX, boxY, boxW, boxH, 20, 20, 40, 230)
+        Framework_DrawRectangleLines(boxX, boxY, boxW, boxH, 100, 100, 150, 255)
+
+        If Framework_Dialogue_IsActive() Then
+            ' Get current speaker
+            Dim speakerPtr As IntPtr = Framework_Dialogue_GetCurrentSpeaker()
+            Dim speaker As String = If(speakerPtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(speakerPtr), "???")
+
+            ' Draw speaker name
+            Framework_DrawText(speaker & ":", boxX + 15, boxY + 15, 22, 255, 220, 100, 255)
+
+            ' Get visible text (typewriter effect)
+            Dim textPtr As IntPtr = Framework_Dialogue_GetVisibleText()
+            Dim visibleText As String = If(textPtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(textPtr), "")
+
+            ' Draw dialogue text with word wrap
+            DrawWrappedText(visibleText, boxX + 15, boxY + 50, boxW - 30, 20, 255, 255, 255, 255)
+
+            ' Draw choices if available and typewriter complete
+            Dim choiceCount As Integer = Framework_Dialogue_GetCurrentChoiceCount()
+            If choiceCount > 0 AndAlso Framework_Dialogue_IsTypewriterComplete() Then
+                Dim choiceY As Integer = boxY + 150
+                Framework_DrawText("Choices:", boxX + 15, choiceY, 18, 150, 200, 255, 255)
+                choiceY += 30
+
+                For i As Integer = 0 To choiceCount - 1
+                    Dim choicePtr As IntPtr = Framework_Dialogue_GetCurrentChoiceText(i)
+                    Dim choiceText As String = If(choicePtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(choicePtr), "")
+                    Framework_DrawText((i + 1).ToString() & ". " & choiceText, boxX + 25, choiceY, 18, 200, 255, 200, 255)
+                    choiceY += 28
+                Next
+            ElseIf choiceCount = 0 AndAlso Framework_Dialogue_IsTypewriterComplete() Then
+                Framework_DrawText("[SPACE to continue]", boxX + 15, boxY + boxH - 40, 16, 150, 150, 150, 255)
+            End If
+        Else
+            Framework_DrawText("Press SPACE to talk to the NPC", boxX + 50, boxY + 120, 20, 150, 150, 200, 255)
+        End If
+
+        ' Draw dialogue history panel
+        Framework_DrawRectangle(50, 420, WINDOW_WIDTH - 100, 140, 15, 15, 30, 200)
+        Framework_DrawText("Dialogue History:", 60, 425, 16, 150, 150, 200, 255)
+
+        Dim historyCount As Integer = Framework_Dialogue_GetHistoryCount()
+        Dim histY As Integer = 445
+        Dim startIdx As Integer = Math.Max(0, historyCount - 4)
+        For i As Integer = startIdx To historyCount - 1
+            Dim hSpeakerPtr As IntPtr = Framework_Dialogue_GetHistorySpeaker(i)
+            Dim hTextPtr As IntPtr = Framework_Dialogue_GetHistoryText(i)
+            Dim hSpeaker As String = If(hSpeakerPtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(hSpeakerPtr), "")
+            Dim hText As String = If(hTextPtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(hTextPtr), "")
+            If hText.Length > 60 Then hText = hText.Substring(0, 60) & "..."
+            Framework_DrawText(hSpeaker & ": " & hText, 70, histY, 14, 180, 180, 180, 255)
+            histY += 22
+        Next
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+
+    Private Sub DrawWrappedText(text As String, x As Integer, y As Integer, maxWidth As Integer, fontSize As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+        Dim words() As String = text.Split(" "c)
+        Dim line As String = ""
+        Dim lineY As Integer = y
+        Dim charsPerLine As Integer = maxWidth \ (fontSize \ 2)
+
+        For Each word In words
+            If line.Length + word.Length + 1 > charsPerLine Then
+                Framework_DrawText(line, x, lineY, fontSize, r, g, b, a)
+                line = word
+                lineY += fontSize + 4
+            Else
+                If line.Length > 0 Then line &= " "
+                line &= word
+            End If
+        Next
+        If line.Length > 0 Then
+            Framework_DrawText(line, x, lineY, fontSize, r, g, b, a)
+        End If
+    End Sub
+End Class
+
+' ==========================================
+' INVENTORY SYSTEM DEMO
+' ==========================================
+Class DemoInventoryScene
+    Inherits Scene
+
+    Private _inventoryId As Integer = -1
+    Private _selectedSlot As Integer = 0
+    Private _itemIds As New List(Of Integer)
+
+    ' Item definitions
+    Private _swordId As Integer = -1
+    Private _shieldId As Integer = -1
+    Private _potionId As Integer = -1
+    Private _goldId As Integer = -1
+    Private _gemId As Integer = -1
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoInventoryScene OnEnter - Showcasing Inventory System")
+
+        ' Define items
+        _swordId = Framework_Item_Define("Iron Sword", "A sturdy iron sword for combat")
+        Framework_Item_SetRarity(_swordId, 1) ' Uncommon
+        Framework_Item_SetEquipSlot(_swordId, 5) ' Weapon
+        Framework_Item_SetStatFloat(_swordId, "attack", 15.0F)
+        Framework_Item_SetValue(_swordId, 100)
+        Framework_Item_SetWeight(_swordId, 5.0F)
+        _itemIds.Add(_swordId)
+
+        _shieldId = Framework_Item_Define("Wooden Shield", "Basic protection from attacks")
+        Framework_Item_SetRarity(_shieldId, 0) ' Common
+        Framework_Item_SetEquipSlot(_shieldId, 6) ' Offhand
+        Framework_Item_SetStatFloat(_shieldId, "defense", 10.0F)
+        Framework_Item_SetValue(_shieldId, 50)
+        Framework_Item_SetWeight(_shieldId, 3.0F)
+        _itemIds.Add(_shieldId)
+
+        _potionId = Framework_Item_Define("Health Potion", "Restores 50 health points")
+        Framework_Item_SetRarity(_potionId, 0) ' Common
+        Framework_Item_SetStackable(_potionId, True, 99)
+        Framework_Item_SetUsable(_potionId, True)
+        Framework_Item_SetConsumable(_potionId, True)
+        Framework_Item_SetValue(_potionId, 25)
+        Framework_Item_SetWeight(_potionId, 0.5F)
+        _itemIds.Add(_potionId)
+
+        _goldId = Framework_Item_Define("Gold Coin", "Shiny currency")
+        Framework_Item_SetRarity(_goldId, 0) ' Common
+        Framework_Item_SetStackable(_goldId, True, 9999)
+        Framework_Item_SetValue(_goldId, 1)
+        Framework_Item_SetWeight(_goldId, 0.01F)
+        _itemIds.Add(_goldId)
+
+        _gemId = Framework_Item_Define("Ruby Gem", "A precious red gemstone")
+        Framework_Item_SetRarity(_gemId, 3) ' Epic
+        Framework_Item_SetStackable(_gemId, True, 10)
+        Framework_Item_SetValue(_gemId, 500)
+        Framework_Item_SetWeight(_gemId, 0.2F)
+        _itemIds.Add(_gemId)
+
+        ' Create inventory with 20 slots
+        _inventoryId = Framework_Inventory_Create("PlayerInventory", 20)
+        Framework_Inventory_SetMaxWeight(_inventoryId, 100.0F)
+        Framework_Inventory_SetAutoStack(_inventoryId, True)
+
+        ' Add starting items
+        Framework_Inventory_AddItem(_inventoryId, _swordId, 1)
+        Framework_Inventory_AddItem(_inventoryId, _shieldId, 1)
+        Framework_Inventory_AddItem(_inventoryId, _potionId, 5)
+        Framework_Inventory_AddItem(_inventoryId, _goldId, 100)
+        Framework_Inventory_AddItem(_inventoryId, _gemId, 2)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        If _inventoryId >= 0 Then
+            Framework_Inventory_Destroy(_inventoryId)
+        End If
+        Framework_Item_UndefineAll()
+        Console.WriteLine("DemoInventoryScene OnExit")
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            Framework_PlaySoundH(sfxHit)
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        Dim capacity As Integer = Framework_Inventory_GetCapacity(_inventoryId)
+
+        ' Navigate inventory (5 columns)
+        If Framework_IsKeyPressed(Keys.LEFT) AndAlso _selectedSlot > 0 Then
+            _selectedSlot -= 1
+        ElseIf Framework_IsKeyPressed(Keys.RIGHT) AndAlso _selectedSlot < capacity - 1 Then
+            _selectedSlot += 1
+        ElseIf Framework_IsKeyPressed(Keys.UP) AndAlso _selectedSlot >= 5 Then
+            _selectedSlot -= 5
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso _selectedSlot < capacity - 5 Then
+            _selectedSlot += 5
+        End If
+
+        ' Add random item with A
+        If Framework_IsKeyPressed(Keys.A) Then
+            Dim rnd As New Random()
+            Dim randomItem As Integer = _itemIds(rnd.Next(_itemIds.Count))
+            Dim qty As Integer = If(Framework_Item_IsStackable(randomItem), rnd.Next(1, 10), 1)
+            Framework_Inventory_AddItem(_inventoryId, randomItem, qty)
+        End If
+
+        ' Remove item with D
+        If Framework_IsKeyPressed(Keys.D) Then
+            Dim slotItem As Integer = Framework_Inventory_GetSlotItem(_inventoryId, _selectedSlot)
+            If slotItem >= 0 Then
+                Framework_Inventory_RemoveFromSlot(_inventoryId, _selectedSlot, 1)
+            End If
+        End If
+
+        ' Use item with U
+        If Framework_IsKeyPressed(Keys.U) Then
+            Framework_Inventory_UseItem(_inventoryId, _selectedSlot)
+        End If
+
+        ' Sort inventory with S
+        If Framework_IsKeyPressed(Keys.S) Then
+            Framework_Inventory_Sort(_inventoryId, 1) ' Sort by rarity
+        End If
+
+        ' Clear inventory with C
+        If Framework_IsKeyPressed(Keys.C) Then
+            Framework_Inventory_Clear(_inventoryId)
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(25, 35, 45, 255)
+
+        ' Draw title
+        Framework_DrawText("INVENTORY SYSTEM DEMO", 20, 20, 30, 100, 200, 255, 255)
+        Framework_DrawText("Arrows: Navigate | A: Add Item | D: Delete | U: Use | S: Sort | C: Clear | ESC: Exit", 20, 60, 14, 200, 200, 200, 255)
+
+        ' Draw inventory grid
+        Dim gridX As Integer = 50
+        Dim gridY As Integer = 100
+        Dim slotSize As Integer = 70
+        Dim padding As Integer = 5
+        Dim cols As Integer = 5
+
+        Dim capacity As Integer = Framework_Inventory_GetCapacity(_inventoryId)
+
+        For i As Integer = 0 To capacity - 1
+            Dim col As Integer = i Mod cols
+            Dim row As Integer = i \ cols
+            Dim slotX As Integer = gridX + col * (slotSize + padding)
+            Dim slotY As Integer = gridY + row * (slotSize + padding)
+
+            ' Draw slot background
+            Dim bgR As Byte = 40, bgG As Byte = 50, bgB As Byte = 60
+            If i = _selectedSlot Then
+                bgR = 80 : bgG = 100 : bgB = 150
+            End If
+            Framework_DrawRectangle(slotX, slotY, slotSize, slotSize, bgR, bgG, bgB, 255)
+            Framework_DrawRectangleLines(slotX, slotY, slotSize, slotSize, 100, 100, 100, 255)
+
+            ' Draw item if present
+            Dim itemId As Integer = Framework_Inventory_GetSlotItem(_inventoryId, i)
+            If itemId >= 0 Then
+                Dim qty As Integer = Framework_Inventory_GetSlotQuantity(_inventoryId, i)
+                Dim rarity As Integer = Framework_Item_GetRarity(itemId)
+                Dim namePtr As IntPtr = Framework_Item_GetName(itemId)
+                Dim name As String = If(namePtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(namePtr), "?")
+
+                ' Rarity colors
+                Dim rarityColors(,) As Byte = {
+                    {200, 200, 200}, ' Common - gray
+                    {100, 255, 100}, ' Uncommon - green
+                    {100, 150, 255}, ' Rare - blue
+                    {200, 100, 255}, ' Epic - purple
+                    {255, 200, 50}   ' Legendary - gold
+                }
+                Dim rIdx As Integer = Math.Min(rarity, 4)
+
+                ' Draw item icon placeholder (colored rectangle)
+                Framework_DrawRectangle(slotX + 10, slotY + 10, slotSize - 20, slotSize - 35, rarityColors(rIdx, 0), rarityColors(rIdx, 1), rarityColors(rIdx, 2), 255)
+
+                ' Draw first letter of item
+                Framework_DrawText(name.Substring(0, 1), slotX + 25, slotY + 15, 24, 30, 30, 30, 255)
+
+                ' Draw quantity
+                If qty > 1 Then
+                    Framework_DrawText(qty.ToString(), slotX + 5, slotY + slotSize - 18, 14, 255, 255, 255, 255)
+                End If
+            End If
+        Next
+
+        ' Draw selected item info panel
+        Dim infoX As Integer = 450
+        Dim infoY As Integer = 100
+        Framework_DrawRectangle(infoX, infoY, 300, 200, 30, 40, 50, 255)
+        Framework_DrawRectangleLines(infoX, infoY, 300, 200, 80, 80, 100, 255)
+        Framework_DrawText("Selected Item Info", infoX + 10, infoY + 10, 18, 255, 220, 100, 255)
+
+        Dim selectedItemId As Integer = Framework_Inventory_GetSlotItem(_inventoryId, _selectedSlot)
+        If selectedItemId >= 0 Then
+            Dim namePtr As IntPtr = Framework_Item_GetName(selectedItemId)
+            Dim descPtr As IntPtr = Framework_Item_GetDescription(selectedItemId)
+            Dim name As String = If(namePtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(namePtr), "?")
+            Dim desc As String = If(descPtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(descPtr), "")
+            Dim rarity As Integer = Framework_Item_GetRarity(selectedItemId)
+            Dim value As Integer = Framework_Item_GetValue(selectedItemId)
+            Dim weight As Single = Framework_Item_GetWeight(selectedItemId)
+            Dim qty As Integer = Framework_Inventory_GetSlotQuantity(_inventoryId, _selectedSlot)
+
+            Dim rarityNames() As String = {"Common", "Uncommon", "Rare", "Epic", "Legendary"}
+
+            Framework_DrawText(name, infoX + 15, infoY + 40, 20, 255, 255, 255, 255)
+            Framework_DrawText(desc, infoX + 15, infoY + 70, 14, 180, 180, 180, 255)
+            Framework_DrawText("Rarity: " & rarityNames(Math.Min(rarity, 4)), infoX + 15, infoY + 100, 14, 200, 200, 100, 255)
+            Framework_DrawText("Value: " & value.ToString() & " gold", infoX + 15, infoY + 120, 14, 255, 215, 0, 255)
+            Framework_DrawText("Weight: " & weight.ToString("F1") & " lbs", infoX + 15, infoY + 140, 14, 180, 180, 180, 255)
+            Framework_DrawText("Quantity: " & qty.ToString(), infoX + 15, infoY + 160, 14, 180, 180, 180, 255)
+        Else
+            Framework_DrawText("(Empty Slot)", infoX + 80, infoY + 100, 16, 100, 100, 100, 255)
+        End If
+
+        ' Draw inventory stats
+        Dim statsY As Integer = 320
+        Dim currentWeight As Single = Framework_Inventory_GetCurrentWeight(_inventoryId)
+        Dim maxWeight As Single = Framework_Inventory_GetMaxWeight(_inventoryId)
+        Dim usedSlots As Integer = Framework_Inventory_GetUsedSlotCount(_inventoryId)
+
+        Framework_DrawText("Inventory Stats:", infoX + 10, statsY, 18, 255, 200, 100, 255)
+        Framework_DrawText("Weight: " & currentWeight.ToString("F1") & "/" & maxWeight.ToString("F0"), infoX + 15, statsY + 30, 14, 200, 200, 200, 255)
+        Framework_DrawText("Slots Used: " & usedSlots.ToString() & "/" & capacity.ToString(), infoX + 15, statsY + 50, 14, 200, 200, 200, 255)
+
+        ' Weight bar
+        Dim barX As Integer = infoX + 15
+        Dim barY As Integer = statsY + 75
+        Dim barW As Integer = 200
+        Dim barH As Integer = 15
+        Dim fillW As Integer = CInt((currentWeight / maxWeight) * barW)
+        Framework_DrawRectangle(barX, barY, barW, barH, 50, 50, 50, 255)
+        Dim weightColor As Byte = If(currentWeight > maxWeight * 0.8F, 255, 100)
+        Framework_DrawRectangle(barX, barY, fillW, barH, weightColor, 150, 100, 255)
+        Framework_DrawRectangleLines(barX, barY, barW, barH, 100, 100, 100, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ==========================================
+' QUEST SYSTEM DEMO
+' ==========================================
+Class DemoQuestScene
+    Inherits Scene
+
+    Private _questHandles As New List(Of Integer)
+    Private _selectedQuest As Integer = 0
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoQuestScene OnEnter - Showcasing Quest System")
+
+        ' Define quest 1: Kill quest
+        Dim q1 As Integer = Framework_Quest_Define("slay_goblins")
+        Framework_Quest_SetName(q1, "Goblin Slayer")
+        Framework_Quest_SetDescription(q1, "The village is under threat! Defeat 5 goblins to protect the innocent.")
+        Framework_Quest_SetCategory(q1, "Combat")
+        Framework_Quest_SetLevel(q1, 1)
+        Framework_Quest_AddObjective(q1, 1, "Kill 5 Goblins", 5) ' Type 1 = Kill
+        Framework_Quest_SetRewardExperience(q1, 100)
+        Framework_Quest_SetRewardCurrency(q1, 0, 50)
+        _questHandles.Add(q1)
+
+        ' Define quest 2: Collect quest
+        Dim q2 As Integer = Framework_Quest_Define("gather_herbs")
+        Framework_Quest_SetName(q2, "Herb Gathering")
+        Framework_Quest_SetDescription(q2, "The healer needs medicinal herbs. Collect 3 herbs from the forest.")
+        Framework_Quest_SetCategory(q2, "Gathering")
+        Framework_Quest_SetLevel(q2, 1)
+        Framework_Quest_AddObjective(q2, 2, "Collect 3 Herbs", 3) ' Type 2 = Collect
+        Framework_Quest_SetRewardExperience(q2, 50)
+        _questHandles.Add(q2)
+
+        ' Define quest 3: Talk quest
+        Dim q3 As Integer = Framework_Quest_Define("meet_elder")
+        Framework_Quest_SetName(q3, "Meet the Elder")
+        Framework_Quest_SetDescription(q3, "The village elder wishes to speak with you about an important matter.")
+        Framework_Quest_SetCategory(q3, "Story")
+        Framework_Quest_SetLevel(q3, 2)
+        Framework_Quest_AddObjective(q3, 3, "Talk to Village Elder", 1) ' Type 3 = Talk
+        Framework_Quest_SetRewardExperience(q3, 75)
+        _questHandles.Add(q3)
+
+        ' Define quest 4: Timed quest
+        Dim q4 As Integer = Framework_Quest_Define("time_trial")
+        Framework_Quest_SetName(q4, "Speed Runner")
+        Framework_Quest_SetDescription(q4, "Complete this challenge before time runs out!")
+        Framework_Quest_SetCategory(q4, "Challenge")
+        Framework_Quest_SetLevel(q4, 3)
+        Framework_Quest_SetTimeLimit(q4, 60.0F) ' 60 seconds
+        Framework_Quest_AddObjective(q4, 0, "Reach the finish line", 1) ' Type 0 = Custom
+        Framework_Quest_SetRewardExperience(q4, 200)
+        _questHandles.Add(q4)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Framework_Quest_UndefineAll()
+        Console.WriteLine("DemoQuestScene OnExit")
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            Framework_PlaySoundH(sfxHit)
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        Framework_Quest_Update(dt)
+
+        ' Navigate quests
+        If Framework_IsKeyPressed(Keys.UP) AndAlso _selectedQuest > 0 Then
+            _selectedQuest -= 1
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso _selectedQuest < _questHandles.Count - 1 Then
+            _selectedQuest += 1
+        End If
+
+        ' Start quest with S
+        If Framework_IsKeyPressed(Keys.S) AndAlso _selectedQuest < _questHandles.Count Then
+            Dim qh As Integer = _questHandles(_selectedQuest)
+            If Framework_Quest_CanStart(qh) Then
+                Framework_Quest_Start(qh)
+            End If
+        End If
+
+        ' Simulate progress with P
+        If Framework_IsKeyPressed(Keys.P) AndAlso _selectedQuest < _questHandles.Count Then
+            Dim qh As Integer = _questHandles(_selectedQuest)
+            If Framework_Quest_IsActive(qh) Then
+                Framework_Quest_AddObjectiveProgress(qh, 0, 1)
+            End If
+        End If
+
+        ' Complete quest with C
+        If Framework_IsKeyPressed(Keys.C) AndAlso _selectedQuest < _questHandles.Count Then
+            Dim qh As Integer = _questHandles(_selectedQuest)
+            Framework_Quest_Complete(qh)
+        End If
+
+        ' Abandon quest with A
+        If Framework_IsKeyPressed(Keys.A) AndAlso _selectedQuest < _questHandles.Count Then
+            Dim qh As Integer = _questHandles(_selectedQuest)
+            Framework_Quest_Abandon(qh)
+        End If
+
+        ' Reset quest with R
+        If Framework_IsKeyPressed(Keys.R) AndAlso _selectedQuest < _questHandles.Count Then
+            Dim qh As Integer = _questHandles(_selectedQuest)
+            Framework_Quest_Reset(qh)
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(35, 25, 40, 255)
+
+        ' Draw title
+        Framework_DrawText("QUEST SYSTEM DEMO", 20, 20, 30, 255, 150, 200, 255)
+        Framework_DrawText("UP/DOWN: Select | S: Start | P: Progress | C: Complete | A: Abandon | R: Reset | ESC: Exit", 20, 60, 13, 200, 200, 200, 255)
+
+        ' Draw quest list
+        Dim listX As Integer = 30
+        Dim listY As Integer = 100
+        Dim listW As Integer = 350
+        Dim itemH As Integer = 80
+
+        Framework_DrawText("Available Quests:", listX, listY - 25, 18, 255, 220, 100, 255)
+
+        For i As Integer = 0 To _questHandles.Count - 1
+            Dim qh As Integer = _questHandles(i)
+            Dim itemY As Integer = listY + i * (itemH + 10)
+
+            ' Background
+            Dim bgColor As Byte = If(i = _selectedQuest, 60, 40)
+            Framework_DrawRectangle(listX, itemY, listW, itemH, bgColor, bgColor + 10, bgColor + 20, 255)
+            If i = _selectedQuest Then
+                Framework_DrawRectangleLines(listX, itemY, listW, itemH, 255, 200, 100, 255)
+            End If
+
+            ' Quest name
+            Dim nameStr As String = GetQuestNameSafe(qh)
+            Dim state As Integer = Framework_Quest_GetState(qh)
+            Dim stateNames() As String = {"Not Started", "In Progress", "Completed", "Failed"}
+            Dim stateColors(,) As Byte = {{150, 150, 150}, {255, 200, 100}, {100, 255, 100}, {255, 100, 100}}
+
+            Framework_DrawText(nameStr, listX + 10, itemY + 10, 18, 255, 255, 255, 255)
+            Framework_DrawText("[" & stateNames(Math.Min(state, 3)) & "]", listX + 10, itemY + 35, 14, stateColors(state, 0), stateColors(state, 1), stateColors(state, 2), 255)
+
+            ' Progress bar
+            If state = 1 Then ' In Progress
+                Dim progress As Single = Framework_Quest_GetCompletionPercent(qh)
+                Dim barX As Integer = listX + 10
+                Dim barY As Integer = itemY + 55
+                Dim barW As Integer = listW - 20
+                Framework_DrawRectangle(barX, barY, barW, 10, 50, 50, 50, 255)
+                Framework_DrawRectangle(barX, barY, CInt(progress * barW), 10, 100, 200, 100, 255)
+            End If
+        Next
+
+        ' Draw quest details panel
+        Dim detailX As Integer = 410
+        Dim detailY As Integer = 100
+        Dim detailW As Integer = WINDOW_WIDTH - detailX - 30
+        Dim detailH As Integer = 350
+
+        Framework_DrawRectangle(detailX, detailY, detailW, detailH, 30, 30, 45, 255)
+        Framework_DrawRectangleLines(detailX, detailY, detailW, detailH, 80, 80, 100, 255)
+        Framework_DrawText("Quest Details", detailX + 10, detailY + 10, 20, 255, 200, 100, 255)
+
+        If _selectedQuest < _questHandles.Count Then
+            Dim qh As Integer = _questHandles(_selectedQuest)
+
+            Dim nameStr As String = GetQuestNameSafe(qh)
+            Dim descStr As String = GetQuestDescriptionSafe(qh)
+            Dim catStr As String = GetQuestCategorySafe(qh)
+            Dim level As Integer = Framework_Quest_GetLevel(qh)
+            Dim state As Integer = Framework_Quest_GetState(qh)
+
+            Framework_DrawText(nameStr, detailX + 15, detailY + 45, 22, 255, 255, 255, 255)
+            Framework_DrawText("Category: " & catStr & " | Level: " & level.ToString(), detailX + 15, detailY + 75, 14, 180, 180, 180, 255)
+
+            ' Word wrap description
+            Dim descY As Integer = detailY + 100
+            Dim words() As String = descStr.Split(" "c)
+            Dim line As String = ""
+            For Each word In words
+                If line.Length + word.Length > 45 Then
+                    Framework_DrawText(line, detailX + 15, descY, 14, 200, 200, 200, 255)
+                    line = word
+                    descY += 18
+                Else
+                    If line.Length > 0 Then line &= " "
+                    line &= word
+                End If
+            Next
+            If line.Length > 0 Then Framework_DrawText(line, detailX + 15, descY, 14, 200, 200, 200, 255)
+
+            ' Objectives
+            Dim objY As Integer = detailY + 180
+            Framework_DrawText("Objectives:", detailX + 15, objY, 16, 255, 220, 100, 255)
+            objY += 25
+
+            Dim objCount As Integer = Framework_Quest_GetObjectiveCount(qh)
+            For o As Integer = 0 To objCount - 1
+                Dim objDescPtr As IntPtr = Framework_Quest_GetObjectiveDescription(qh, o)
+                Dim objDesc As String = If(objDescPtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(objDescPtr), "")
+                Dim progress As Integer = Framework_Quest_GetObjectiveProgress(qh, o)
+                Dim required As Integer = Framework_Quest_GetObjectiveRequired(qh, o)
+                Dim complete As Boolean = Framework_Quest_IsObjectiveComplete(qh, o)
+
+                Dim checkMark As String = If(complete, "[X]", "[ ]")
+                Dim objColor As Byte = If(complete, 100, 200)
+                Framework_DrawText(checkMark & " " & objDesc & " (" & progress.ToString() & "/" & required.ToString() & ")", detailX + 20, objY, 14, objColor, 255, objColor, 255)
+                objY += 20
+            Next
+
+            ' Time remaining for timed quests
+            Dim timeRemaining As Single = Framework_Quest_GetTimeRemaining(qh)
+            If timeRemaining > 0 AndAlso state = 1 Then
+                Framework_DrawText("Time Remaining: " & CInt(timeRemaining).ToString() & "s", detailX + 15, detailY + detailH - 40, 16, 255, 100, 100, 255)
+            End If
+        End If
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+
+    Private Function GetQuestNameSafe(qh As Integer) As String
+        Dim ptr As IntPtr = Framework_Quest_GetName(qh)
+        Return If(ptr <> IntPtr.Zero, Marshal.PtrToStringAnsi(ptr), "Unknown Quest")
+    End Function
+
+    Private Function GetQuestDescriptionSafe(qh As Integer) As String
+        Dim ptr As IntPtr = Framework_Quest_GetDescription(qh)
+        Return If(ptr <> IntPtr.Zero, Marshal.PtrToStringAnsi(ptr), "")
+    End Function
+
+    Private Function GetQuestCategorySafe(qh As Integer) As String
+        Dim ptr As IntPtr = Framework_Quest_GetCategory(qh)
+        Return If(ptr <> IntPtr.Zero, Marshal.PtrToStringAnsi(ptr), "General")
+    End Function
+End Class
+
+' ==========================================
+' LIGHTING SYSTEM DEMO
+' ==========================================
+Class DemoLightingScene
+    Inherits Scene
+
+    Private _lights As New List(Of Integer)
+    Private _playerX As Single = 400
+    Private _playerY As Single = 300
+    Private _playerLight As Integer = -1
+    Private _ambientIntensity As Single = 0.2F
+    Private _selectedLight As Integer = 0
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoLightingScene OnEnter - Showcasing 2D Lighting System")
+
+        ' Initialize lighting system
+        Framework_Lighting_Initialize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        Framework_Lighting_SetEnabled(True)
+        Framework_Lighting_SetAmbientColor(20, 30, 50)
+        Framework_Lighting_SetAmbientIntensity(_ambientIntensity)
+
+        ' Create player torch light
+        _playerLight = Framework_Light_CreatePoint(_playerX, _playerY, 150)
+        Framework_Light_SetColor(_playerLight, 255, 200, 100)
+        Framework_Light_SetIntensity(_playerLight, 1.0F)
+        Framework_Light_SetFlicker(_playerLight, 0.1F, 8.0F)
+        _lights.Add(_playerLight)
+
+        ' Create static lights around the scene
+        Dim light1 As Integer = Framework_Light_CreatePoint(100, 100, 100)
+        Framework_Light_SetColor(light1, 255, 100, 100)
+        Framework_Light_SetPulse(light1, 0.5F, 1.0F, 2.0F)
+        _lights.Add(light1)
+
+        Dim light2 As Integer = Framework_Light_CreatePoint(700, 100, 120)
+        Framework_Light_SetColor(light2, 100, 255, 100)
+        _lights.Add(light2)
+
+        Dim light3 As Integer = Framework_Light_CreatePoint(100, 500, 80)
+        Framework_Light_SetColor(light3, 100, 100, 255)
+        _lights.Add(light3)
+
+        ' Create a spotlight
+        Dim spotlight As Integer = Framework_Light_CreateSpot(600, 400, 200, 45, 30)
+        Framework_Light_SetColor(spotlight, 255, 255, 200)
+        _lights.Add(spotlight)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Framework_Light_DestroyAll()
+        Framework_Lighting_Shutdown()
+        Console.WriteLine("DemoLightingScene OnExit")
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            Framework_PlaySoundH(sfxHit)
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Move player with arrow keys
+        Dim speed As Single = 200 * dt
+        If Framework_IsKeyDown(Keys.LEFT) Then _playerX -= speed
+        If Framework_IsKeyDown(Keys.RIGHT) Then _playerX += speed
+        If Framework_IsKeyDown(Keys.UP) Then _playerY -= speed
+        If Framework_IsKeyDown(Keys.DOWN) Then _playerY += speed
+
+        ' Clamp player position
+        _playerX = Math.Max(20, Math.Min(WINDOW_WIDTH - 20, _playerX))
+        _playerY = Math.Max(20, Math.Min(WINDOW_HEIGHT - 20, _playerY))
+
+        ' Update player light position
+        Framework_Light_SetPosition(_playerLight, _playerX, _playerY)
+
+        ' Adjust ambient with A/Z
+        If Framework_IsKeyDown(Keys.A) Then
+            _ambientIntensity = Math.Min(1.0F, _ambientIntensity + 0.5F * dt)
+            Framework_Lighting_SetAmbientIntensity(_ambientIntensity)
+        ElseIf Framework_IsKeyDown(Keys.Z) Then
+            _ambientIntensity = Math.Max(0.0F, _ambientIntensity - 0.5F * dt)
+            Framework_Lighting_SetAmbientIntensity(_ambientIntensity)
+        End If
+
+        ' Select light with 1-5
+        If Framework_IsKeyPressed(Keys.ONE) Then _selectedLight = 0
+        If Framework_IsKeyPressed(Keys.TWO) AndAlso _lights.Count > 1 Then _selectedLight = 1
+        If Framework_IsKeyPressed(Keys.THREE) AndAlso _lights.Count > 2 Then _selectedLight = 2
+        If Framework_IsKeyPressed(Keys.FOUR) AndAlso _lights.Count > 3 Then _selectedLight = 3
+        If Framework_IsKeyPressed(Keys.FIVE) AndAlso _lights.Count > 4 Then _selectedLight = 4
+
+        ' Toggle selected light with T
+        If Framework_IsKeyPressed(Keys.T) AndAlso _selectedLight < _lights.Count Then
+            Dim lid As Integer = _lights(_selectedLight)
+            Dim enabled As Boolean = Framework_Light_IsEnabled(lid)
+            Framework_Light_SetEnabled(lid, Not enabled)
+        End If
+
+        ' Adjust selected light radius with Q/W
+        If _selectedLight < _lights.Count Then
+            Dim lid As Integer = _lights(_selectedLight)
+            Dim radius As Single = Framework_Light_GetRadius(lid)
+            If Framework_IsKeyDown(Keys.Q) Then
+                Framework_Light_SetRadius(lid, Math.Max(20, radius - 100 * dt))
+            ElseIf Framework_IsKeyDown(Keys.W) Then
+                Framework_Light_SetRadius(lid, Math.Min(400, radius + 100 * dt))
+            End If
+        End If
+
+        Framework_Lighting_Update(dt)
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(10, 15, 25, 255)
+
+        ' Begin lighting pass
+        Framework_Lighting_BeginLightPass()
+
+        ' Draw scene objects (will be affected by lighting)
+        ' Draw some crates/objects
+        For x As Integer = 0 To 3
+            For y As Integer = 0 To 2
+                Dim objX As Integer = 150 + x * 150
+                Dim objY As Integer = 180 + y * 150
+                Framework_DrawRectangle(objX, objY, 60, 60, 139, 90, 43, 255)
+                Framework_DrawRectangleLines(objX, objY, 60, 60, 101, 67, 33, 255)
+            Next
+        Next
+
+        ' Draw floor tiles
+        For tx As Integer = 0 To WINDOW_WIDTH Step 80
+            For ty As Integer = 0 To WINDOW_HEIGHT Step 80
+                Dim shade As Byte = CByte(40 + ((tx \ 80 + ty \ 80) Mod 2) * 15)
+                Framework_DrawRectangle(tx, ty, 80, 80, shade, shade + 5, shade + 10, 255)
+            Next
+        Next
+
+        ' Draw player
+        Framework_DrawCircle(CInt(_playerX), CInt(_playerY), 15, 200, 150, 100, 255)
+        Framework_DrawCircleLines(CInt(_playerX), CInt(_playerY), 15, 255, 200, 150, 255)
+
+        ' End lighting pass and render
+        Framework_Lighting_EndLightPass()
+        Framework_Lighting_RenderToScreen()
+
+        ' Draw UI (not affected by lighting)
+        Framework_DrawText("2D LIGHTING SYSTEM DEMO", 20, 20, 24, 255, 200, 100, 255)
+        Framework_DrawText("Arrows: Move Player | A/Z: Ambient | 1-5: Select Light | T: Toggle | Q/W: Radius | ESC: Exit", 20, 50, 12, 200, 200, 200, 255)
+
+        ' Light info
+        Framework_DrawText("Ambient: " & (_ambientIntensity * 100).ToString("F0") & "%", 20, 530, 14, 180, 180, 180, 255)
+        Framework_DrawText("Light Count: " & _lights.Count.ToString(), 20, 550, 14, 180, 180, 180, 255)
+
+        If _selectedLight < _lights.Count Then
+            Dim lid As Integer = _lights(_selectedLight)
+            Dim radius As Single = Framework_Light_GetRadius(lid)
+            Dim enabled As Boolean = Framework_Light_IsEnabled(lid)
+            Framework_DrawText("Selected: Light " & (_selectedLight + 1).ToString() & " | Radius: " & radius.ToString("F0") & " | " & If(enabled, "ON", "OFF"), 20, 570, 14, 255, 200, 100, 255)
+        End If
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ==========================================
+' TIMER/EVENT SYSTEM DEMO
+' ==========================================
+Class DemoTimerEventScene
+    Inherits Scene
+
+    Private _timerIds As New List(Of Integer)
+    Private _eventLog As New List(Of String)
+    Private _eventCounter As Integer = 0
+    Private _timerCounter As Integer = 0
+    Private _damageEventId As Integer = -1
+    Private _healEventId As Integer = -1
+    Private _playerHealth As Integer = 100
+    Private _sequenceId As Integer = -1
+    Private _sequenceRunning As Boolean = False
+
+    ' Callbacks need to be stored to prevent garbage collection
+    Private _timerCallback As TimerCallback
+    Private _eventCallback As EventCallback
+    Private _eventCallbackInt As EventCallbackInt
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoTimerEventScene OnEnter - Showcasing Timer and Event Systems")
+
+        ' Initialize callbacks
+        _timerCallback = AddressOf OnTimerFired
+        _eventCallback = AddressOf OnBasicEvent
+        _eventCallbackInt = AddressOf OnIntEvent
+
+        ' Register events
+        _damageEventId = Framework_Event_Register("player_damage")
+        _healEventId = Framework_Event_Register("player_heal")
+
+        ' Subscribe to events
+        Framework_Event_SubscribeInt(_damageEventId, _eventCallbackInt, IntPtr.Zero)
+        Framework_Event_SubscribeInt(_healEventId, _eventCallbackInt, IntPtr.Zero)
+
+        ' Create a repeating timer
+        Dim repeatTimer As Integer = Framework_Timer_Every(2.0F, _timerCallback, IntPtr.Zero)
+        _timerIds.Add(repeatTimer)
+
+        AddLog("Demo started! Timer and Event systems ready.")
+    End Sub
+
+    Private Sub OnTimerFired(timerId As Integer, userData As IntPtr)
+        _timerCounter += 1
+        AddLog("Timer fired! Count: " & _timerCounter.ToString())
+    End Sub
+
+    Private Sub OnBasicEvent(eventId As Integer, userData As IntPtr)
+        AddLog("Basic event " & eventId.ToString() & " received")
+    End Sub
+
+    Private Sub OnIntEvent(eventId As Integer, value As Integer, userData As IntPtr)
+        If eventId = _damageEventId Then
+            _playerHealth = Math.Max(0, _playerHealth - value)
+            AddLog("DAMAGE! -" & value.ToString() & " HP (Health: " & _playerHealth.ToString() & ")")
+        ElseIf eventId = _healEventId Then
+            _playerHealth = Math.Min(100, _playerHealth + value)
+            AddLog("HEAL! +" & value.ToString() & " HP (Health: " & _playerHealth.ToString() & ")")
+        End If
+    End Sub
+
+    Private Sub AddLog(msg As String)
+        _eventLog.Add("[" & Framework_GetTime().ToString("F1") & "s] " & msg)
+        If _eventLog.Count > 12 Then
+            _eventLog.RemoveAt(0)
+        End If
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Framework_Timer_CancelAll()
+        Framework_Event_Clear()
+        Console.WriteLine("DemoTimerEventScene OnExit")
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            Framework_PlaySoundH(sfxHit)
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        Framework_Timer_Update(dt)
+        Framework_Event_ProcessQueue(dt)
+
+        ' Create one-shot timer with 1
+        If Framework_IsKeyPressed(Keys.ONE) Then
+            Dim timerId As Integer = Framework_Timer_After(1.0F, _timerCallback, IntPtr.Zero)
+            _timerIds.Add(timerId)
+            AddLog("Created 1-second one-shot timer")
+        End If
+
+        ' Publish damage event with D
+        If Framework_IsKeyPressed(Keys.D) Then
+            Dim damage As Integer = New Random().Next(5, 20)
+            Framework_Event_PublishInt(_damageEventId, damage)
+        End If
+
+        ' Publish heal event with H
+        If Framework_IsKeyPressed(Keys.H) Then
+            Dim heal As Integer = New Random().Next(10, 30)
+            Framework_Event_PublishInt(_healEventId, heal)
+        End If
+
+        ' Queue delayed event with Q
+        If Framework_IsKeyPressed(Keys.Q) Then
+            Framework_Event_QueueDelayedInt(_damageEventId, 15, 2.0F)
+            AddLog("Queued delayed damage event (2s)")
+        End If
+
+        ' Start/stop timer sequence with S
+        If Framework_IsKeyPressed(Keys.S) Then
+            If Not _sequenceRunning Then
+                _sequenceId = Framework_Timer_CreateSequence()
+                Framework_Timer_SequenceAppend(_sequenceId, 0.5F, _timerCallback, IntPtr.Zero)
+                Framework_Timer_SequenceAppend(_sequenceId, 0.5F, _timerCallback, IntPtr.Zero)
+                Framework_Timer_SequenceAppend(_sequenceId, 0.5F, _timerCallback, IntPtr.Zero)
+                Framework_Timer_SequenceSetLoop(_sequenceId, False)
+                Framework_Timer_SequenceStart(_sequenceId)
+                _sequenceRunning = True
+                AddLog("Started timer sequence (3 steps)")
+            Else
+                Framework_Timer_SequenceCancel(_sequenceId)
+                _sequenceRunning = False
+                AddLog("Cancelled timer sequence")
+            End If
+        End If
+
+        ' Pause/resume all timers with P
+        If Framework_IsKeyPressed(Keys.P) Then
+            Static paused As Boolean = False
+            If paused Then
+                Framework_Timer_ResumeAll()
+                AddLog("Resumed all timers")
+            Else
+                Framework_Timer_PauseAll()
+                AddLog("Paused all timers")
+            End If
+            paused = Not paused
+        End If
+
+        ' Clear all with C
+        If Framework_IsKeyPressed(Keys.C) Then
+            Framework_Timer_CancelAll()
+            _timerIds.Clear()
+            _timerCounter = 0
+            AddLog("Cleared all timers")
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(30, 35, 45, 255)
+
+        ' Draw title
+        Framework_DrawText("TIMER & EVENT SYSTEM DEMO", 20, 20, 28, 100, 255, 200, 255)
+        Framework_DrawText("1: One-shot Timer | D: Damage | H: Heal | Q: Delayed Event | S: Sequence | P: Pause | C: Clear | ESC: Exit", 20, 55, 12, 200, 200, 200, 255)
+
+        ' Draw player health bar
+        Dim healthX As Integer = 50
+        Dim healthY As Integer = 100
+        Framework_DrawText("Player Health:", healthX, healthY, 18, 255, 255, 255, 255)
+        Framework_DrawRectangle(healthX, healthY + 25, 300, 30, 50, 50, 50, 255)
+        Dim healthWidth As Integer = CInt((_playerHealth / 100.0F) * 300)
+        Dim healthR As Byte = CByte(255 - _playerHealth * 2)
+        Dim healthG As Byte = CByte(_playerHealth * 2.5)
+        Framework_DrawRectangle(healthX, healthY + 25, healthWidth, 30, healthR, healthG, 50, 255)
+        Framework_DrawRectangleLines(healthX, healthY + 25, 300, 30, 100, 100, 100, 255)
+        Framework_DrawText(_playerHealth.ToString() & "/100", healthX + 120, healthY + 30, 18, 255, 255, 255, 255)
+
+        ' Draw stats panel
+        Dim statsX As Integer = 400
+        Dim statsY As Integer = 100
+        Framework_DrawRectangle(statsX, statsY, 350, 100, 40, 45, 55, 255)
+        Framework_DrawText("System Stats:", statsX + 10, statsY + 10, 18, 255, 200, 100, 255)
+        Framework_DrawText("Active Timers: " & Framework_Timer_GetActiveCount().ToString(), statsX + 15, statsY + 40, 14, 200, 200, 200, 255)
+        Framework_DrawText("Timer Counter: " & _timerCounter.ToString(), statsX + 15, statsY + 60, 14, 200, 200, 200, 255)
+        Framework_DrawText("Queued Events: " & Framework_Event_GetQueuedCount().ToString(), statsX + 15, statsY + 80, 14, 200, 200, 200, 255)
+
+        ' Draw event log
+        Dim logX As Integer = 50
+        Dim logY As Integer = 220
+        Framework_DrawRectangle(logX, logY, WINDOW_WIDTH - 100, 330, 25, 30, 40, 255)
+        Framework_DrawRectangleLines(logX, logY, WINDOW_WIDTH - 100, 330, 60, 60, 80, 255)
+        Framework_DrawText("Event Log:", logX + 10, logY + 10, 18, 255, 200, 100, 255)
+
+        Dim logLineY As Integer = logY + 40
+        For Each logEntry In _eventLog
+            Dim color As Byte = 200
+            If logEntry.Contains("DAMAGE") Then
+                Framework_DrawText(logEntry, logX + 15, logLineY, 14, 255, 100, 100, 255)
+            ElseIf logEntry.Contains("HEAL") Then
+                Framework_DrawText(logEntry, logX + 15, logLineY, 14, 100, 255, 100, 255)
+            ElseIf logEntry.Contains("Timer") Then
+                Framework_DrawText(logEntry, logX + 15, logLineY, 14, 255, 200, 100, 255)
+            Else
+                Framework_DrawText(logEntry, logX + 15, logLineY, 14, 180, 180, 180, 255)
+            End If
+            logLineY += 22
+        Next
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ==========================================
+' STATE MACHINE (FSM) DEMO
+' ==========================================
+Class DemoFSMScene
+    Inherits Scene
+
+    Private _fsmId As Integer = -1
+    Private _idleState As Integer = -1
+    Private _walkState As Integer = -1
+    Private _jumpState As Integer = -1
+    Private _attackState As Integer = -1
+    Private _dieState As Integer = -1
+
+    Private _playerX As Single = 400
+    Private _playerY As Single = 400
+    Private _playerVelY As Single = 0
+    Private _groundY As Single = 400
+    Private _isGrounded As Boolean = True
+    Private _facingRight As Boolean = True
+    Private _health As Integer = 100
+
+    Private _stateLog As New List(Of String)
+
+    ' Callbacks
+    Private _idleEnter As StateEnterCallback
+    Private _idleUpdate As StateUpdateCallback
+    Private _walkEnter As StateEnterCallback
+    Private _walkUpdate As StateUpdateCallback
+    Private _jumpEnter As StateEnterCallback
+    Private _jumpUpdate As StateUpdateCallback
+    Private _attackEnter As StateEnterCallback
+    Private _attackUpdate As StateUpdateCallback
+    Private _dieEnter As StateEnterCallback
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoFSMScene OnEnter - Showcasing State Machine System")
+
+        ' Initialize callbacks
+        _idleEnter = AddressOf OnIdleEnter
+        _idleUpdate = AddressOf OnIdleUpdate
+        _walkEnter = AddressOf OnWalkEnter
+        _walkUpdate = AddressOf OnWalkUpdate
+        _jumpEnter = AddressOf OnJumpEnter
+        _jumpUpdate = AddressOf OnJumpUpdate
+        _attackEnter = AddressOf OnAttackEnter
+        _attackUpdate = AddressOf OnAttackUpdate
+        _dieEnter = AddressOf OnDieEnter
+
+        ' Create FSM
+        _fsmId = Framework_FSM_Create("PlayerFSM")
+        Framework_FSM_SetDebugEnabled(_fsmId, True)
+
+        ' Add states
+        _idleState = Framework_FSM_AddState(_fsmId, "Idle")
+        _walkState = Framework_FSM_AddState(_fsmId, "Walk")
+        _jumpState = Framework_FSM_AddState(_fsmId, "Jump")
+        _attackState = Framework_FSM_AddState(_fsmId, "Attack")
+        _dieState = Framework_FSM_AddState(_fsmId, "Die")
+
+        ' Set state callbacks
+        Framework_FSM_SetStateEnter(_fsmId, _idleState, _idleEnter, IntPtr.Zero)
+        Framework_FSM_SetStateUpdate(_fsmId, _idleState, _idleUpdate, IntPtr.Zero)
+        Framework_FSM_SetStateEnter(_fsmId, _walkState, _walkEnter, IntPtr.Zero)
+        Framework_FSM_SetStateUpdate(_fsmId, _walkState, _walkUpdate, IntPtr.Zero)
+        Framework_FSM_SetStateEnter(_fsmId, _jumpState, _jumpEnter, IntPtr.Zero)
+        Framework_FSM_SetStateUpdate(_fsmId, _jumpState, _jumpUpdate, IntPtr.Zero)
+        Framework_FSM_SetStateEnter(_fsmId, _attackState, _attackEnter, IntPtr.Zero)
+        Framework_FSM_SetStateUpdate(_fsmId, _attackState, _attackUpdate, IntPtr.Zero)
+        Framework_FSM_SetStateEnter(_fsmId, _dieState, _dieEnter, IntPtr.Zero)
+
+        ' Add transitions (all states can go to each other)
+        Framework_FSM_AddTransition(_fsmId, _idleState, _walkState)
+        Framework_FSM_AddTransition(_fsmId, _idleState, _jumpState)
+        Framework_FSM_AddTransition(_fsmId, _idleState, _attackState)
+        Framework_FSM_AddTransition(_fsmId, _walkState, _idleState)
+        Framework_FSM_AddTransition(_fsmId, _walkState, _jumpState)
+        Framework_FSM_AddTransition(_fsmId, _walkState, _attackState)
+        Framework_FSM_AddTransition(_fsmId, _jumpState, _idleState)
+        Framework_FSM_AddTransition(_fsmId, _jumpState, _walkState)
+        Framework_FSM_AddTransition(_fsmId, _attackState, _idleState)
+        Framework_FSM_AddTransition(_fsmId, _attackState, _walkState)
+
+        ' Any state can go to Die
+        Framework_FSM_AddAnyTransition(_fsmId, _dieState)
+
+        ' Add triggers
+        Framework_FSM_AddTrigger(_fsmId, "damage", -1, _dieState)
+
+        ' Set initial state and start
+        Framework_FSM_SetInitialState(_fsmId, _idleState)
+        Framework_FSM_SetHistorySize(_fsmId, 10)
+        Framework_FSM_Start(_fsmId)
+
+        AddStateLog("FSM Started in Idle state")
+    End Sub
+
+    Private Sub OnIdleEnter(fsmId As Integer, stateId As Integer, previousState As Integer, userData As IntPtr)
+        AddStateLog("-> Entered IDLE state")
+    End Sub
+
+    Private Sub OnIdleUpdate(fsmId As Integer, stateId As Integer, dt As Single, userData As IntPtr)
+        ' Idle animation (slight bob)
+    End Sub
+
+    Private Sub OnWalkEnter(fsmId As Integer, stateId As Integer, previousState As Integer, userData As IntPtr)
+        AddStateLog("-> Entered WALK state")
+    End Sub
+
+    Private Sub OnWalkUpdate(fsmId As Integer, stateId As Integer, dt As Single, userData As IntPtr)
+        ' Walking movement handled in main update
+    End Sub
+
+    Private Sub OnJumpEnter(fsmId As Integer, stateId As Integer, previousState As Integer, userData As IntPtr)
+        _playerVelY = -400
+        _isGrounded = False
+        AddStateLog("-> Entered JUMP state")
+    End Sub
+
+    Private Sub OnJumpUpdate(fsmId As Integer, stateId As Integer, dt As Single, userData As IntPtr)
+        ' Gravity and jump physics handled in main update
+    End Sub
+
+    Private Sub OnAttackEnter(fsmId As Integer, stateId As Integer, previousState As Integer, userData As IntPtr)
+        AddStateLog("-> Entered ATTACK state")
+    End Sub
+
+    Private Sub OnAttackUpdate(fsmId As Integer, stateId As Integer, dt As Single, userData As IntPtr)
+        ' Attack animation timing
+    End Sub
+
+    Private Sub OnDieEnter(fsmId As Integer, stateId As Integer, previousState As Integer, userData As IntPtr)
+        AddStateLog("-> Entered DIE state - Game Over!")
+    End Sub
+
+    Private Sub AddStateLog(msg As String)
+        _stateLog.Add("[" & Framework_GetTime().ToString("F1") & "s] " & msg)
+        If _stateLog.Count > 8 Then _stateLog.RemoveAt(0)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Framework_FSM_Destroy(_fsmId)
+        Console.WriteLine("DemoFSMScene OnExit")
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            Framework_PlaySoundH(sfxHit)
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        Dim currentState As Integer = Framework_FSM_GetCurrentState(_fsmId)
+
+        ' Don't process input if dead
+        If currentState = _dieState Then
+            If Framework_IsKeyPressed(Keys.R) Then
+                ' Restart
+                _health = 100
+                _playerX = 400
+                _playerY = _groundY
+                _playerVelY = 0
+                _isGrounded = True
+                Framework_FSM_TransitionTo(_fsmId, _idleState)
+                AddStateLog("Player revived!")
+            End If
+            Framework_FSM_Update(_fsmId, dt)
+            Return
+        End If
+
+        ' Handle input based on current state
+        Dim moving As Boolean = False
+        If Framework_IsKeyDown(Keys.LEFT) Then
+            _playerX -= 200 * dt
+            _facingRight = False
+            moving = True
+        ElseIf Framework_IsKeyDown(Keys.RIGHT) Then
+            _playerX += 200 * dt
+            _facingRight = True
+            moving = True
+        End If
+
+        ' Clamp position
+        _playerX = Math.Max(30, Math.Min(WINDOW_WIDTH - 30, _playerX))
+
+        ' Jump
+        If Framework_IsKeyPressed(Keys.SPACE) AndAlso _isGrounded Then
+            Framework_FSM_TransitionTo(_fsmId, _jumpState)
+        End If
+
+        ' Attack
+        If Framework_IsKeyPressed(Keys.X) AndAlso currentState <> _jumpState Then
+            Framework_FSM_TransitionTo(_fsmId, _attackState)
+        End If
+
+        ' Damage self (for testing)
+        If Framework_IsKeyPressed(Keys.D) Then
+            _health -= 25
+            AddStateLog("Took 25 damage! Health: " & _health.ToString())
+            If _health <= 0 Then
+                Framework_FSM_FireTrigger(_fsmId, "damage")
+            End If
+        End If
+
+        ' Handle jump physics
+        If currentState = _jumpState Then
+            _playerVelY += 800 * dt ' Gravity
+            _playerY += _playerVelY * dt
+
+            If _playerY >= _groundY Then
+                _playerY = _groundY
+                _playerVelY = 0
+                _isGrounded = True
+                If moving Then
+                    Framework_FSM_TransitionTo(_fsmId, _walkState)
+                Else
+                    Framework_FSM_TransitionTo(_fsmId, _idleState)
+                End If
+            End If
+        End If
+
+        ' Handle attack state (auto-return after time)
+        If currentState = _attackState Then
+            Dim timeInState As Single = Framework_FSM_GetTimeInState(_fsmId)
+            If timeInState > 0.3F Then
+                If moving Then
+                    Framework_FSM_TransitionTo(_fsmId, _walkState)
+                Else
+                    Framework_FSM_TransitionTo(_fsmId, _idleState)
+                End If
+            End If
+        End If
+
+        ' Handle idle/walk transitions
+        If currentState = _idleState AndAlso moving Then
+            Framework_FSM_TransitionTo(_fsmId, _walkState)
+        ElseIf currentState = _walkState AndAlso Not moving AndAlso _isGrounded Then
+            Framework_FSM_TransitionTo(_fsmId, _idleState)
+        End If
+
+        Framework_FSM_Update(_fsmId, dt)
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(40, 45, 55, 255)
+
+        ' Draw title
+        Framework_DrawText("STATE MACHINE (FSM) DEMO", 20, 20, 28, 255, 150, 100, 255)
+        Framework_DrawText("Arrows: Move | SPACE: Jump | X: Attack | D: Damage | R: Revive | ESC: Exit", 20, 55, 12, 200, 200, 200, 255)
+
+        ' Draw ground
+        Framework_DrawRectangle(0, CInt(_groundY) + 25, WINDOW_WIDTH, 100, 60, 80, 50, 255)
+
+        ' Draw player
+        Dim currentState As Integer = Framework_FSM_GetCurrentState(_fsmId)
+        Dim playerW As Integer = 40
+        Dim playerH As Integer = 50
+        Dim drawX As Integer = CInt(_playerX) - playerW \ 2
+        Dim drawY As Integer = CInt(_playerY) - playerH + 25
+
+        ' Color based on state
+        Dim r As Byte = 100, g As Byte = 150, b As Byte = 200
+        If currentState = _walkState Then
+            r = 100 : g = 200 : b = 100
+        ElseIf currentState = _jumpState Then
+            r = 200 : g = 200 : b = 100
+        ElseIf currentState = _attackState Then
+            r = 255 : g = 100 : b = 100
+        ElseIf currentState = _dieState Then
+            r = 100 : g = 100 : b = 100
+        End If
+
+        ' Draw body
+        Framework_DrawRectangle(drawX, drawY, playerW, playerH, r, g, b, 255)
+        Framework_DrawRectangleLines(drawX, drawY, playerW, playerH, 255, 255, 255, 255)
+
+        ' Draw direction indicator
+        If _facingRight Then
+            Framework_DrawTriangle(drawX + playerW, drawY + playerH \ 2, drawX + playerW + 15, drawY + playerH \ 2, drawX + playerW, drawY + playerH \ 2 - 10, 255, 255, 255, 255)
+        Else
+            Framework_DrawTriangle(drawX, drawY + playerH \ 2, drawX - 15, drawY + playerH \ 2, drawX, drawY + playerH \ 2 - 10, 255, 255, 255, 255)
+        End If
+
+        ' Attack effect
+        If currentState = _attackState Then
+            Dim attackX As Integer = If(_facingRight, drawX + playerW + 5, drawX - 35)
+            Framework_DrawRectangle(attackX, drawY + 10, 30, 30, 255, 200, 50, 200)
+        End If
+
+        ' Draw health bar
+        Dim healthX As Integer = 50
+        Dim healthY As Integer = 100
+        Framework_DrawText("Health:", healthX, healthY, 16, 255, 255, 255, 255)
+        Framework_DrawRectangle(healthX + 70, healthY, 150, 20, 50, 50, 50, 255)
+        Framework_DrawRectangle(healthX + 70, healthY, CInt(_health * 1.5F), 20, 255 - CByte(_health * 2), CByte(_health * 2), 50, 255)
+        Framework_DrawText(_health.ToString() & "%", healthX + 130, healthY + 2, 14, 255, 255, 255, 255)
+
+        ' Draw FSM info panel
+        Dim infoX As Integer = 500
+        Dim infoY As Integer = 100
+        Framework_DrawRectangle(infoX, infoY, 280, 180, 35, 40, 50, 255)
+        Framework_DrawRectangleLines(infoX, infoY, 280, 180, 80, 80, 100, 255)
+        Framework_DrawText("FSM Info:", infoX + 10, infoY + 10, 18, 255, 200, 100, 255)
+
+        ' Current state
+        Dim stateNamePtr As IntPtr = Framework_FSM_GetStateName(_fsmId, currentState)
+        Dim stateName As String = If(stateNamePtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(stateNamePtr), "?")
+        Framework_DrawText("Current: " & stateName, infoX + 15, infoY + 40, 16, 255, 255, 255, 255)
+
+        ' Time in state
+        Dim timeInState As Single = Framework_FSM_GetTimeInState(_fsmId)
+        Framework_DrawText("Time in State: " & timeInState.ToString("F2") & "s", infoX + 15, infoY + 65, 14, 180, 180, 180, 255)
+
+        ' State changes
+        Dim changes As Integer = Framework_FSM_GetStateChangeCount(_fsmId)
+        Framework_DrawText("State Changes: " & changes.ToString(), infoX + 15, infoY + 85, 14, 180, 180, 180, 255)
+
+        ' History count
+        Dim histCount As Integer = Framework_FSM_GetHistoryCount(_fsmId)
+        Framework_DrawText("History Size: " & histCount.ToString(), infoX + 15, infoY + 105, 14, 180, 180, 180, 255)
+
+        ' Running status
+        Dim running As Boolean = Framework_FSM_IsRunning(_fsmId)
+        Framework_DrawText("Running: " & If(running, "Yes", "No"), infoX + 15, infoY + 125, 14, If(running, CByte(100), CByte(255)), If(running, CByte(255), CByte(100)), 100, 255)
+
+        ' State colors legend
+        Framework_DrawText("States: ", infoX + 15, infoY + 150, 12, 150, 150, 150, 255)
+        Framework_DrawRectangle(infoX + 70, infoY + 150, 12, 12, 100, 150, 200, 255)
+        Framework_DrawText("Idle", infoX + 85, infoY + 150, 10, 150, 150, 150, 255)
+        Framework_DrawRectangle(infoX + 115, infoY + 150, 12, 12, 100, 200, 100, 255)
+        Framework_DrawText("Walk", infoX + 130, infoY + 150, 10, 150, 150, 150, 255)
+        Framework_DrawRectangle(infoX + 165, infoY + 150, 12, 12, 200, 200, 100, 255)
+        Framework_DrawText("Jump", infoX + 180, infoY + 150, 10, 150, 150, 150, 255)
+        Framework_DrawRectangle(infoX + 215, infoY + 150, 12, 12, 255, 100, 100, 255)
+        Framework_DrawText("Atk", infoX + 230, infoY + 150, 10, 150, 150, 150, 255)
+
+        ' Draw state log
+        Dim logX As Integer = 50
+        Dim logY As Integer = 450
+        Framework_DrawRectangle(logX, logY, WINDOW_WIDTH - 100, 120, 30, 35, 45, 255)
+        Framework_DrawText("State Log:", logX + 10, logY + 5, 14, 255, 200, 100, 255)
+
+        Dim logLineY As Integer = logY + 25
+        For Each entry In _stateLog
+            Framework_DrawText(entry, logX + 15, logLineY, 12, 180, 180, 180, 255)
+            logLineY += 14
+        Next
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ==========================================
+' SAVE/LOAD SYSTEM DEMO
+' ==========================================
+Class DemoSaveLoadScene
+    Inherits Scene
+
+    Private _playerName As String = "Hero"
+    Private _playerLevel As Integer = 1
+    Private _playerGold As Integer = 100
+    Private _playerX As Single = 400
+    Private _playerY As Single = 300
+    Private _playTime As Single = 0
+    Private _selectedSlot As Integer = 0
+    Private _statusMessage As String = "Press S to save, L to load"
+    Private _statusTimer As Single = 0
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoSaveLoadScene OnEnter - Showcasing Save/Load System")
+
+        ' Set save directory
+        Framework_Save_SetDirectory("saves")
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("DemoSaveLoadScene OnExit")
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            Framework_PlaySoundH(sfxHit)
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        _playTime += dt
+        _statusTimer -= dt
+
+        ' Move player
+        Dim speed As Single = 150 * dt
+        If Framework_IsKeyDown(Keys.LEFT) Then _playerX -= speed
+        If Framework_IsKeyDown(Keys.RIGHT) Then _playerX += speed
+        If Framework_IsKeyDown(Keys.UP) Then _playerY -= speed
+        If Framework_IsKeyDown(Keys.DOWN) Then _playerY += speed
+
+        _playerX = Math.Max(20, Math.Min(WINDOW_WIDTH - 20, _playerX))
+        _playerY = Math.Max(100, Math.Min(WINDOW_HEIGHT - 20, _playerY))
+
+        ' Select slot with 1-3
+        If Framework_IsKeyPressed(Keys.ONE) Then _selectedSlot = 0
+        If Framework_IsKeyPressed(Keys.TWO) Then _selectedSlot = 1
+        If Framework_IsKeyPressed(Keys.THREE) Then _selectedSlot = 2
+
+        ' Add gold with G
+        If Framework_IsKeyPressed(Keys.G) Then
+            _playerGold += 50
+            ShowStatus("Gained 50 gold!")
+        End If
+
+        ' Level up with U
+        If Framework_IsKeyPressed(Keys.U) Then
+            _playerLevel += 1
+            ShowStatus("Level up! Now level " & _playerLevel.ToString())
+        End If
+
+        ' Save with S
+        If Framework_IsKeyPressed(Keys.S) Then
+            If Framework_Save_BeginSave(_selectedSlot) Then
+                Framework_Save_WriteString("playerName", _playerName)
+                Framework_Save_WriteInt("playerLevel", _playerLevel)
+                Framework_Save_WriteInt("playerGold", _playerGold)
+                Framework_Save_WriteVector2("playerPos", _playerX, _playerY)
+                Framework_Save_WriteFloat("playTime", _playTime)
+                Framework_Save_SetMetadata("version", "1.0")
+                Framework_Save_SetMetadata("character", _playerName)
+
+                If Framework_Save_EndSave() Then
+                    ShowStatus("Saved to slot " & (_selectedSlot + 1).ToString() & "!")
+                Else
+                    ShowStatus("Save failed!")
+                End If
+            End If
+        End If
+
+        ' Load with L
+        If Framework_IsKeyPressed(Keys.L) Then
+            If Framework_Save_SlotExists(_selectedSlot) Then
+                If Framework_Save_BeginLoad(_selectedSlot) Then
+                    Dim namePtr As IntPtr = Framework_Save_ReadString("playerName", "Unknown")
+                    _playerName = If(namePtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(namePtr), "Unknown")
+                    _playerLevel = Framework_Save_ReadInt("playerLevel", 1)
+                    _playerGold = Framework_Save_ReadInt("playerGold", 0)
+                    Framework_Save_ReadVector2("playerPos", _playerX, _playerY, 400, 300)
+                    _playTime = Framework_Save_ReadFloat("playTime", 0)
+
+                    Framework_Save_EndLoad()
+                    ShowStatus("Loaded from slot " & (_selectedSlot + 1).ToString() & "!")
+                Else
+                    ShowStatus("Load failed!")
+                End If
+            Else
+                ShowStatus("Slot " & (_selectedSlot + 1).ToString() & " is empty!")
+            End If
+        End If
+
+        ' Delete with D
+        If Framework_IsKeyPressed(Keys.D) Then
+            If Framework_Save_DeleteSlot(_selectedSlot) Then
+                ShowStatus("Deleted slot " & (_selectedSlot + 1).ToString())
+            Else
+                ShowStatus("Delete failed or slot empty")
+            End If
+        End If
+
+        ' Quick save with Q
+        If Framework_IsKeyPressed(Keys.Q) Then
+            ' Save to slot 0 first
+            If Framework_Save_BeginSave(0) Then
+                Framework_Save_WriteString("playerName", _playerName)
+                Framework_Save_WriteInt("playerLevel", _playerLevel)
+                Framework_Save_WriteInt("playerGold", _playerGold)
+                Framework_Save_WriteVector2("playerPos", _playerX, _playerY)
+                Framework_Save_WriteFloat("playTime", _playTime)
+                Framework_Save_EndSave()
+                ShowStatus("Quick saved!")
+            End If
+        End If
+
+        ' Quick load with W
+        If Framework_IsKeyPressed(Keys.W) Then
+            If Framework_Save_SlotExists(0) Then
+                If Framework_Save_BeginLoad(0) Then
+                    Dim namePtr As IntPtr = Framework_Save_ReadString("playerName", "Unknown")
+                    _playerName = If(namePtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(namePtr), "Unknown")
+                    _playerLevel = Framework_Save_ReadInt("playerLevel", 1)
+                    _playerGold = Framework_Save_ReadInt("playerGold", 0)
+                    Framework_Save_ReadVector2("playerPos", _playerX, _playerY, 400, 300)
+                    _playTime = Framework_Save_ReadFloat("playTime", 0)
+                    Framework_Save_EndLoad()
+                    ShowStatus("Quick loaded!")
+                End If
+            Else
+                ShowStatus("No quick save found!")
+            End If
+        End If
+    End Sub
+
+    Private Sub ShowStatus(msg As String)
+        _statusMessage = msg
+        _statusTimer = 3.0F
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(35, 40, 50, 255)
+
+        ' Draw title
+        Framework_DrawText("SAVE/LOAD SYSTEM DEMO", 20, 20, 28, 100, 200, 150, 255)
+        Framework_DrawText("Arrows: Move | 1-3: Select Slot | S: Save | L: Load | D: Delete | Q: QuickSave | W: QuickLoad | G: Gold | U: Level | ESC: Exit", 20, 55, 11, 200, 200, 200, 255)
+
+        ' Draw player character
+        Framework_DrawCircle(CInt(_playerX), CInt(_playerY), 20, 100, 150, 200, 255)
+        Framework_DrawCircleLines(CInt(_playerX), CInt(_playerY), 20, 200, 220, 255, 255)
+        Framework_DrawText(_playerName, CInt(_playerX) - 20, CInt(_playerY) - 35, 14, 255, 255, 255, 255)
+
+        ' Draw game state panel
+        Dim stateX As Integer = 50
+        Dim stateY As Integer = 100
+        Framework_DrawRectangle(stateX, stateY, 250, 150, 40, 45, 55, 255)
+        Framework_DrawRectangleLines(stateX, stateY, 250, 150, 80, 80, 100, 255)
+        Framework_DrawText("Current Game State:", stateX + 10, stateY + 10, 16, 255, 200, 100, 255)
+
+        Framework_DrawText("Name: " & _playerName, stateX + 15, stateY + 40, 14, 200, 200, 200, 255)
+        Framework_DrawText("Level: " & _playerLevel.ToString(), stateX + 15, stateY + 60, 14, 200, 200, 200, 255)
+        Framework_DrawText("Gold: " & _playerGold.ToString(), stateX + 15, stateY + 80, 14, 255, 215, 0, 255)
+        Framework_DrawText("Position: " & CInt(_playerX).ToString() & ", " & CInt(_playerY).ToString(), stateX + 15, stateY + 100, 14, 200, 200, 200, 255)
+
+        Dim minutes As Integer = CInt(_playTime) \ 60
+        Dim seconds As Integer = CInt(_playTime) Mod 60
+        Framework_DrawText("Play Time: " & minutes.ToString() & "m " & seconds.ToString() & "s", stateX + 15, stateY + 120, 14, 200, 200, 200, 255)
+
+        ' Draw save slots panel
+        Dim slotX As Integer = 350
+        Dim slotY As Integer = 100
+        Dim slotW As Integer = 200
+        Dim slotH As Integer = 70
+
+        Framework_DrawText("Save Slots:", slotX, slotY - 25, 18, 255, 200, 100, 255)
+
+        For i As Integer = 0 To 2
+            Dim itemY As Integer = slotY + i * (slotH + 10)
+
+            ' Slot background
+            Dim bgColor As Byte = If(i = _selectedSlot, 60, 40)
+            Framework_DrawRectangle(slotX, itemY, slotW, slotH, bgColor, bgColor + 10, bgColor + 20, 255)
+            If i = _selectedSlot Then
+                Framework_DrawRectangleLines(slotX, itemY, slotW, slotH, 255, 200, 100, 255)
+            Else
+                Framework_DrawRectangleLines(slotX, itemY, slotW, slotH, 80, 80, 100, 255)
+            End If
+
+            ' Slot number
+            Framework_DrawText("Slot " & (i + 1).ToString(), slotX + 10, itemY + 10, 16, 255, 255, 255, 255)
+
+            ' Slot contents
+            If Framework_Save_SlotExists(i) Then
+                ' Try to read metadata
+                Dim charPtr As IntPtr = Framework_Save_GetMetadata(i, "character")
+                Dim charName As String = If(charPtr <> IntPtr.Zero, Marshal.PtrToStringAnsi(charPtr), "Unknown")
+                Framework_DrawText("Character: " & charName, slotX + 15, itemY + 35, 12, 150, 200, 150, 255)
+                Framework_DrawText("[Has Data]", slotX + 120, itemY + 10, 12, 100, 255, 100, 255)
+            Else
+                Framework_DrawText("(Empty)", slotX + 60, itemY + 35, 14, 100, 100, 100, 255)
+            End If
+        Next
+
+        ' Draw status message
+        If _statusTimer > 0 Then
+            Dim alpha As Byte = CByte(Math.Min(255, _statusTimer * 255))
+            Framework_DrawRectangle(WINDOW_WIDTH \ 2 - 150, WINDOW_HEIGHT - 80, 300, 40, 50, 100, 50, alpha)
+            Framework_DrawText(_statusMessage, WINDOW_WIDTH \ 2 - 140, WINDOW_HEIGHT - 70, 18, 200, 255, 200, alpha)
+        End If
+
+        ' Draw instructions box
+        Dim instrX As Integer = 580
+        Dim instrY As Integer = 100
+        Framework_DrawRectangle(instrX, instrY, 200, 150, 40, 40, 50, 255)
+        Framework_DrawText("Controls:", instrX + 10, instrY + 10, 16, 255, 200, 100, 255)
+        Framework_DrawText("S - Save to slot", instrX + 15, instrY + 35, 12, 180, 180, 180, 255)
+        Framework_DrawText("L - Load from slot", instrX + 15, instrY + 50, 12, 180, 180, 180, 255)
+        Framework_DrawText("D - Delete slot", instrX + 15, instrY + 65, 12, 180, 180, 180, 255)
+        Framework_DrawText("Q - Quick save", instrX + 15, instrY + 80, 12, 180, 180, 180, 255)
+        Framework_DrawText("W - Quick load", instrX + 15, instrY + 95, 12, 180, 180, 180, 255)
+        Framework_DrawText("G - Add gold", instrX + 15, instrY + 110, 12, 180, 180, 180, 255)
+        Framework_DrawText("U - Level up", instrX + 15, instrY + 125, 12, 180, 180, 180, 255)
 
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
     End Sub

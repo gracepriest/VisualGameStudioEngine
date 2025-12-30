@@ -1,4 +1,8 @@
-﻿Public Class Paddle
+﻿Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
+Imports RaylibWrapper.UtiliyClasses
+
+Public Class Paddle
     Public paddlePos As New Vector2(50.0F, 250.0F)
     Public paddleSpeed As Single = 35.0F
     Public paddleWidth As Single = 20

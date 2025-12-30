@@ -1,4 +1,5 @@
-﻿
+﻿Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
 
 Public Class Game
     'a function Init the game window

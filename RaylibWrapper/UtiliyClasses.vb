@@ -1,4 +1,7 @@
-﻿Public Module UtiliyClasses
+﻿Imports RaylibWrapper.FrameworkWrapper
+Imports RaylibWrapper.Utiliy
+
+Public Module UtiliyClasses
     Public NotInheritable Class TextureHandle
         Implements IDisposable
 

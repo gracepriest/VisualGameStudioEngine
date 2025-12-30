@@ -103,6 +103,10 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_DrawTriangle(x1 As Integer, y1 As Integer, x2 As Integer, y2 As Integer, x3 As Integer, y3 As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
     End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTriangleLines(x1 As Integer, y1 As Integer, x2 As Integer, y2 As Integer, x3 As Integer, y3 As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
 #End Region
 
 #Region "Timing"
@@ -4714,7 +4718,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Dialogue_IsValid(dialogueId As Integer) As Boolean
+    Public Function Framework_Dialogue_IsValid(dialogueId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4882,7 +4886,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Dialogue_IsActive() As Boolean
+    Public Function Framework_Dialogue_IsActive() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4895,11 +4899,11 @@ Public Module FrameworkWrapper
 
     ' ---- Advance Dialogue ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Dialogue_Continue() As Boolean
+    Public Function Framework_Dialogue_Continue() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Dialogue_SelectChoice(choiceIndex As Integer) As Boolean
+    Public Function Framework_Dialogue_SelectChoice(choiceIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Current Node Queries ----
@@ -4924,16 +4928,16 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Dialogue_IsCurrentChoiceAvailable(choiceIndex As Integer) As Boolean
+    Public Function Framework_Dialogue_IsCurrentChoiceAvailable(choiceIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Typewriter Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Dialogue_SetTypewriterEnabled(enabled As Boolean)
+    Public Sub Framework_Dialogue_SetTypewriterEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Dialogue_IsTypewriterEnabled() As Boolean
+    Public Function Framework_Dialogue_IsTypewriterEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4949,7 +4953,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Dialogue_IsTypewriterComplete() As Boolean
+    Public Function Framework_Dialogue_IsTypewriterComplete() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5013,11 +5017,11 @@ Public Module FrameworkWrapper
 
     ' ---- History ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Dialogue_SetHistoryEnabled(enabled As Boolean)
+    Public Sub Framework_Dialogue_SetHistoryEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Dialogue_IsHistoryEnabled() As Boolean
+    Public Function Framework_Dialogue_IsHistoryEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5121,11 +5125,19 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Sub Framework_Item_SetStat(itemId As Integer, statName As String, value As Single)
+    Public Sub Framework_Item_SetStatFloat(itemId As Integer, statName As String, value As Single)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Item_GetStat(itemId As Integer, statName As String) As Single
+    Public Sub Framework_Item_SetStatInt(itemId As Integer, statName As String, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Item_GetStatFloat(itemId As Integer, statName As String) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Item_GetStatInt(itemId As Integer, statName As String) As Integer
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5138,6 +5150,10 @@ Public Module FrameworkWrapper
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_Item_SetConsumable(itemId As Integer, consumable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Item_SetUsable(itemId As Integer, usable As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
