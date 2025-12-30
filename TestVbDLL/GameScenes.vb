@@ -20,6 +20,11 @@ Class TitleScene
     Dim txtUIDemo As String = "  UI DEMO"
     Dim txtPhysicsDemo As String = "PHYSICS DEMO"
     Dim txtShowcase As String = "SHOWCASE PONG"
+    Dim txtTweenDemo As String = " TWEEN DEMO"
+    Dim txtCameraDemo As String = "CAMERA DEMO"
+    Dim txtAIDemo As String = "  AI DEMO"
+    Dim txtAudioDemo As String = " AUDIO DEMO"
+    Dim txtEffectsDemo As String = "EFFECTS DEMO"
     'locations
     Dim textWidth As Integer = 10 * (temp.Length())
     Dim x As Integer = (800 - textWidth) / 2
@@ -79,7 +84,7 @@ Class TitleScene
             menuIndex -= 1
             menuPos.Y -= 50
 
-        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 6 Then
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) AndAlso menuIndex < 11 Then
             'play sound
             Framework_PlaySoundH(sfxWall)
             menuIndex += 1
@@ -116,6 +121,26 @@ Class TitleScene
                     'Showcase Pong - ALL Framework Features
                     Framework_PlaySoundH(sfxHit)
                     ChangeTo(New PongShowcaseScene)
+                Case 7
+                    'Tweening Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoTweenScene)
+                Case 8
+                    'Camera Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoCameraScene)
+                Case 9
+                    'AI/Pathfinding Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoAIScene)
+                Case 10
+                    'Audio Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoAudioScene)
+                Case 11
+                    'Screen Effects Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoEffectsScene)
             End Select
         End If
 
@@ -136,7 +161,12 @@ Class TitleScene
         Framework_DrawTextExH(RETRO_FONT.Handle, txtUIDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 200), 40, 1.0F, 100, 200, 255, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txtPhysicsDemo, New Vector2(WINDOW_WIDTH / 2.85, y + 250), 40, 1.0F, 255, 150, 100, 255)
         Framework_DrawTextExH(RETRO_FONT.Handle, txtShowcase, New Vector2(WINDOW_WIDTH / 2.8, y + 300), 40, 1.0F, 255, 215, 0, 255)
-        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 370), 20, 1.0F, 255, 255, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtTweenDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 350), 40, 1.0F, 255, 100, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtCameraDemo, New Vector2(WINDOW_WIDTH / 2.8, y + 400), 40, 1.0F, 100, 255, 200, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtAIDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 450), 40, 1.0F, 255, 200, 100, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtAudioDemo, New Vector2(WINDOW_WIDTH / 2.6, y + 500), 40, 1.0F, 100, 200, 255, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, txtEffectsDemo, New Vector2(WINDOW_WIDTH / 2.85, y + 550), 40, 1.0F, 255, 100, 200, 255)
+        Framework_DrawTextExH(RETRO_FONT.Handle, temp, New Vector2(WINDOW_WIDTH / 3.8, y + 620), 20, 1.0F, 255, 255, 255, 255)
         menuPos.DrawRectangle(255, 0, 0, 90)
         'draw tile #0 at (50, 50)
         'atlas.DrawRec(pong(0), New Vector2(50, 80))
@@ -1944,6 +1974,785 @@ Class DemoPhysicsScene
         Framework_DrawText("[SPACE] Apply Upward Force  [D] Toggle Debug", 10, 30, 16, 200, 200, 200, 255)
         Framework_DrawText("[BACKSPACE] Return to menu", 10, 50, 16, 255, 150, 150, 255)
         Framework_DrawText("Bodies: " & (_ballBodies.Count + _boxBodies.Count).ToString(), 10, WINDOW_HEIGHT - 30, 16, 150, 255, 150, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' =============================================================================
+' DEMO TWEEN SCENE - Showcases the Tweening System
+' =============================================================================
+Public Class DemoTweenScene
+    Inherits Scene
+
+    ' Tweened objects
+    Private _boxX As Single = 100
+    Private _boxY As Single = 300
+    Private _boxScale As Single = 1.0F
+    Private _boxRotation As Single = 0
+    Private _boxAlpha As Single = 255
+
+    ' Circle for color tweening
+    Private _circleR As Single = 255
+    Private _circleG As Single = 100
+    Private _circleB As Single = 100
+
+    ' Active tweens
+    Private _positionTweenId As Integer = -1
+    Private _scaleTweenId As Integer = -1
+    Private _rotationTweenId As Integer = -1
+    Private _colorTweenId As Integer = -1
+
+    ' Current easing type for display
+    Private _currentEasing As Integer = 0
+    Private ReadOnly _easingNames() As String = {
+        "Linear", "QuadIn", "QuadOut", "QuadInOut",
+        "CubicIn", "CubicOut", "CubicInOut",
+        "BackIn", "BackOut", "BackInOut",
+        "ElasticIn", "ElasticOut", "ElasticInOut",
+        "BounceIn", "BounceOut", "BounceInOut"
+    }
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoTweenScene OnEnter - Showcasing Tweening System")
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("DemoTweenScene OnExit")
+        Framework_Tween_KillAll()
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Change easing type
+        If Framework_IsKeyPressed(Keys.LEFT) Then
+            _currentEasing = (_currentEasing - 1 + _easingNames.Length) Mod _easingNames.Length
+        End If
+        If Framework_IsKeyPressed(Keys.RIGHT) Then
+            _currentEasing = (_currentEasing + 1) Mod _easingNames.Length
+        End If
+
+        ' Start position tween (1 key)
+        If Framework_IsKeyPressed(Keys.ONE) Then
+            If _positionTweenId >= 0 Then Framework_Tween_Kill(_positionTweenId)
+            _boxX = 100
+            _positionTweenId = Framework_Tween_FloatTo(_boxX, 900, 2.0F, _currentEasing)
+        End If
+
+        ' Start scale tween (2 key)
+        If Framework_IsKeyPressed(Keys.TWO) Then
+            If _scaleTweenId >= 0 Then Framework_Tween_Kill(_scaleTweenId)
+            _boxScale = 0.5F
+            _scaleTweenId = Framework_Tween_FloatTo(_boxScale, 2.0F, 1.5F, _currentEasing)
+        End If
+
+        ' Start rotation tween (3 key)
+        If Framework_IsKeyPressed(Keys.THREE) Then
+            If _rotationTweenId >= 0 Then Framework_Tween_Kill(_rotationTweenId)
+            _boxRotation = 0
+            _rotationTweenId = Framework_Tween_FloatTo(_boxRotation, 360, 2.0F, _currentEasing)
+        End If
+
+        ' Start color tween (4 key)
+        If Framework_IsKeyPressed(Keys.FOUR) Then
+            _circleR = 255 : _circleG = 100 : _circleB = 100
+            ' Tween to blue
+            Framework_Tween_FloatTo(_circleR, 100, 1.5F, _currentEasing)
+            Framework_Tween_FloatTo(_circleG, 100, 1.5F, _currentEasing)
+            Framework_Tween_FloatTo(_circleB, 255, 1.5F, _currentEasing)
+        End If
+
+        ' Update all tweens
+        Framework_Tween_Update(dt)
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(25, 25, 40, 255)
+
+        ' Draw title
+        Framework_DrawText("TWEENING SYSTEM DEMO", 10, 10, 24, 255, 255, 255, 255)
+        Framework_DrawText("Current Easing: " & _easingNames(_currentEasing), 10, 40, 18, 255, 200, 100, 255)
+
+        ' Draw instructions
+        Framework_DrawText("[LEFT/RIGHT] Change Easing Type", 10, WINDOW_HEIGHT - 110, 16, 200, 200, 200, 255)
+        Framework_DrawText("[1] Position Tween  [2] Scale Tween", 10, WINDOW_HEIGHT - 88, 16, 150, 255, 150, 255)
+        Framework_DrawText("[3] Rotation Tween  [4] Color Tween", 10, WINDOW_HEIGHT - 66, 16, 150, 255, 150, 255)
+        Framework_DrawText("[BACKSPACE] Return to menu", 10, WINDOW_HEIGHT - 44, 16, 255, 150, 150, 255)
+
+        ' Draw position-tweened box
+        Dim boxSize As Integer = CInt(50 * _boxScale)
+        Dim boxCenterX As Integer = CInt(_boxX)
+        Dim boxCenterY As Integer = 200
+        Framework_DrawRectangle(boxCenterX - boxSize \ 2, boxCenterY - boxSize \ 2, boxSize, boxSize, 100, 200, 255, 255)
+        Framework_DrawText("Position", CInt(_boxX) - 25, 260, 14, 200, 200, 200, 255)
+
+        ' Draw scale-tweened box
+        Dim scaleBoxSize As Integer = CInt(50 * _boxScale)
+        Framework_DrawRectangle(500 - scaleBoxSize \ 2, 350 - scaleBoxSize \ 2, scaleBoxSize, scaleBoxSize, 255, 200, 100, 255)
+        Framework_DrawText("Scale: " & _boxScale.ToString("F2"), 460, 400, 14, 200, 200, 200, 255)
+
+        ' Draw rotation indicator (simplified - just show angle value)
+        Framework_DrawCircle(800, 350, 40, 100, 255, 150, 255)
+        Framework_DrawText("Rotation: " & CInt(_boxRotation).ToString() & "°", 750, 400, 14, 200, 200, 200, 255)
+
+        ' Draw color-tweened circle
+        Framework_DrawCircle(300, 500, 50, CByte(_circleR), CByte(_circleG), CByte(_circleB), 255)
+        Framework_DrawText("Color Tween", 255, 560, 14, 200, 200, 200, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' =============================================================================
+' DEMO CAMERA SCENE - Showcases the Camera System
+' =============================================================================
+Public Class DemoCameraScene
+    Inherits Scene
+
+    Private _playerX As Single = 600
+    Private _playerY As Single = 360
+    Private _playerSpeed As Single = 200
+
+    Private _targetZoom As Single = 1.0F
+    Private _shakeIntensity As Single = 0
+
+    ' World objects to show camera movement
+    Private ReadOnly _worldObjects As New List(Of (x As Integer, y As Integer, w As Integer, h As Integer, r As Byte, g As Byte, b As Byte))
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoCameraScene OnEnter - Showcasing Camera System")
+
+        ' Initialize camera position
+        Framework_Camera_SetPosition(_playerX, _playerY)
+
+        ' Create some world objects
+        Dim rnd As New Random(42)
+        For i As Integer = 0 To 29
+            _worldObjects.Add((
+                rnd.Next(-500, 1700),
+                rnd.Next(-300, 1000),
+                rnd.Next(30, 100),
+                rnd.Next(30, 100),
+                CByte(rnd.Next(50, 200)),
+                CByte(rnd.Next(50, 200)),
+                CByte(rnd.Next(50, 200))
+            ))
+        Next
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("DemoCameraScene OnExit")
+        Framework_Camera_Reset()
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Player movement
+        Dim moveX As Single = 0
+        Dim moveY As Single = 0
+        If Framework_IsKeyDown(Keys.W) OrElse Framework_IsKeyDown(Keys.UP) Then moveY = -1
+        If Framework_IsKeyDown(Keys.S) OrElse Framework_IsKeyDown(Keys.DOWN) Then moveY = 1
+        If Framework_IsKeyDown(Keys.A) OrElse Framework_IsKeyDown(Keys.LEFT) Then moveX = -1
+        If Framework_IsKeyDown(Keys.D) OrElse Framework_IsKeyDown(Keys.RIGHT) Then moveX = 1
+
+        _playerX += moveX * _playerSpeed * dt
+        _playerY += moveY * _playerSpeed * dt
+
+        ' Camera follow
+        Framework_Camera_SetTarget(_playerX, _playerY)
+        Framework_Camera_SetFollowLerp(0.05F)
+
+        ' Zoom controls
+        If Framework_IsKeyDown(Keys.Q) Then _targetZoom = Math.Min(2.0F, _targetZoom + dt)
+        If Framework_IsKeyDown(Keys.E) Then _targetZoom = Math.Max(0.5F, _targetZoom - dt)
+        Framework_Camera_SetZoom(_targetZoom)
+
+        ' Screen shake
+        If Framework_IsKeyPressed(Keys.SPACE) Then
+            Framework_Camera_Shake(10, 0.5F)
+        End If
+
+        ' Update camera
+        Framework_Camera_Update(dt)
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(30, 30, 45, 255)
+
+        ' Begin camera transform
+        Framework_Camera_BeginMode()
+
+        ' Draw world grid
+        For x As Integer = -10 To 30
+            For y As Integer = -5 To 15
+                Dim gridX As Integer = x * 100
+                Dim gridY As Integer = y * 100
+                Framework_DrawRectangle(gridX, gridY, 98, 98, 40, 40, 55, 255)
+            Next
+        Next
+
+        ' Draw world objects
+        For Each obj In _worldObjects
+            Framework_DrawRectangle(obj.x, obj.y, obj.w, obj.h, obj.r, obj.g, obj.b, 255)
+        Next
+
+        ' Draw player
+        Framework_DrawCircle(CInt(_playerX), CInt(_playerY), 20, 255, 200, 100, 255)
+        Framework_DrawCircle(CInt(_playerX), CInt(_playerY), 15, 255, 150, 50, 255)
+
+        ' End camera transform
+        Framework_Camera_EndMode()
+
+        ' Draw UI (screen space)
+        Framework_DrawText("CAMERA SYSTEM DEMO", 10, 10, 24, 255, 255, 255, 255)
+        Framework_DrawText("[WASD/Arrows] Move Player", 10, WINDOW_HEIGHT - 110, 16, 200, 200, 200, 255)
+        Framework_DrawText("[Q/E] Zoom In/Out  [SPACE] Screen Shake", 10, WINDOW_HEIGHT - 88, 16, 150, 255, 150, 255)
+        Framework_DrawText("[BACKSPACE] Return to menu", 10, WINDOW_HEIGHT - 66, 16, 255, 150, 150, 255)
+        Framework_DrawText("Zoom: " & _targetZoom.ToString("F2") & "x", 10, 45, 16, 150, 255, 150, 255)
+        Framework_DrawText("Player: (" & CInt(_playerX) & ", " & CInt(_playerY) & ")", 10, 65, 16, 150, 200, 255, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' =============================================================================
+' DEMO AI SCENE - Showcases the AI/Pathfinding System
+' =============================================================================
+Public Class DemoAIScene
+    Inherits Scene
+
+    Private Const GRID_SIZE As Integer = 20
+    Private Const CELL_SIZE As Integer = 30
+
+    Private _gridHandle As Integer = -1
+    Private _pathHandle As Integer = -1
+
+    Private _agentX As Single = 60
+    Private _agentY As Single = 60
+    Private _targetX As Single = 540
+    Private _targetY As Single = 540
+
+    ' Path following
+    Private _currentPath As New List(Of (x As Single, y As Single))
+    Private _pathIndex As Integer = 0
+    Private _agentSpeed As Single = 150
+
+    ' Obstacles
+    Private ReadOnly _obstacles As New List(Of (x As Integer, y As Integer))
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoAIScene OnEnter - Showcasing AI/Pathfinding System")
+
+        ' Create navigation grid
+        _gridHandle = Framework_NavGrid_Create(GRID_SIZE, GRID_SIZE, CELL_SIZE)
+
+        ' Add some obstacles
+        Dim rnd As New Random(123)
+        For i As Integer = 0 To 39
+            Dim ox As Integer = rnd.Next(2, GRID_SIZE - 2)
+            Dim oy As Integer = rnd.Next(2, GRID_SIZE - 2)
+            ' Don't block start or end areas
+            If (ox < 4 AndAlso oy < 4) OrElse (ox > GRID_SIZE - 5 AndAlso oy > GRID_SIZE - 5) Then Continue For
+            _obstacles.Add((ox, oy))
+            Framework_NavGrid_SetWalkable(_gridHandle, ox, oy, False)
+        Next
+
+        ' Find initial path
+        FindPath()
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("DemoAIScene OnExit")
+        If _pathHandle >= 0 Then Framework_Path_Destroy(_pathHandle)
+        If _gridHandle >= 0 Then Framework_NavGrid_Destroy(_gridHandle)
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Private Sub FindPath()
+        _currentPath.Clear()
+        _pathIndex = 0
+
+        ' Destroy previous path if exists
+        If _pathHandle >= 0 Then Framework_Path_Destroy(_pathHandle)
+
+        ' Convert positions to grid coordinates
+        Dim startCellX As Integer = CInt(_agentX / CELL_SIZE)
+        Dim startCellY As Integer = CInt(_agentY / CELL_SIZE)
+        Dim endCellX As Integer = CInt(_targetX / CELL_SIZE)
+        Dim endCellY As Integer = CInt(_targetY / CELL_SIZE)
+
+        ' Find path using A*
+        _pathHandle = Framework_Path_FindCell(_gridHandle, startCellX, startCellY, endCellX, endCellY)
+
+        If _pathHandle >= 0 Then
+            Dim pathLength As Integer = Framework_Path_GetLength(_pathHandle)
+            For i As Integer = 0 To pathLength - 1
+                Dim px As Single = 0, py As Single = 0
+                Framework_Path_GetWaypoint(_pathHandle, i, px, py)
+                _currentPath.Add((px, py))
+            Next
+        End If
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Set new target with mouse click
+        If Framework_IsMouseButtonPressed(0) Then
+            Dim mx As Integer = Framework_GetMouseX()
+            Dim my As Integer = Framework_GetMouseY()
+            Dim cellX As Integer = mx \ CELL_SIZE
+            Dim cellY As Integer = my \ CELL_SIZE
+
+            ' Check if clicked cell is walkable
+            If cellX >= 0 AndAlso cellX < GRID_SIZE AndAlso cellY >= 0 AndAlso cellY < GRID_SIZE Then
+                If Framework_NavGrid_IsWalkable(_gridHandle, cellX, cellY) Then
+                    _targetX = mx
+                    _targetY = my
+                    FindPath()
+                End If
+            End If
+        End If
+
+        ' Toggle obstacle with right click
+        If Framework_IsMouseButtonPressed(1) Then
+            Dim mx As Integer = Framework_GetMouseX()
+            Dim my As Integer = Framework_GetMouseY()
+            Dim cellX As Integer = mx \ CELL_SIZE
+            Dim cellY As Integer = my \ CELL_SIZE
+
+            If cellX >= 0 AndAlso cellX < GRID_SIZE AndAlso cellY >= 0 AndAlso cellY < GRID_SIZE Then
+                Dim isWalkable As Boolean = Framework_NavGrid_IsWalkable(_gridHandle, cellX, cellY)
+                Framework_NavGrid_SetWalkable(_gridHandle, cellX, cellY, Not isWalkable)
+
+                If isWalkable Then
+                    _obstacles.Add((cellX, cellY))
+                Else
+                    _obstacles.Remove((cellX, cellY))
+                End If
+                FindPath()
+            End If
+        End If
+
+        ' Follow path
+        If _currentPath.Count > 0 AndAlso _pathIndex < _currentPath.Count Then
+            Dim targetPoint = _currentPath(_pathIndex)
+            Dim dx As Single = targetPoint.x - _agentX
+            Dim dy As Single = targetPoint.y - _agentY
+            Dim dist As Single = CSng(Math.Sqrt(dx * dx + dy * dy))
+
+            If dist < 5 Then
+                _pathIndex += 1
+            Else
+                dx /= dist
+                dy /= dist
+                _agentX += dx * _agentSpeed * dt
+                _agentY += dy * _agentSpeed * dt
+            End If
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(20, 25, 35, 255)
+
+        ' Draw grid
+        For x As Integer = 0 To GRID_SIZE - 1
+            For y As Integer = 0 To GRID_SIZE - 1
+                Dim px As Integer = x * CELL_SIZE
+                Dim py As Integer = y * CELL_SIZE
+                Dim isWalkable As Boolean = Framework_NavGrid_IsWalkable(_gridHandle, x, y)
+
+                If isWalkable Then
+                    Framework_DrawRectangle(px + 1, py + 1, CELL_SIZE - 2, CELL_SIZE - 2, 45, 50, 60, 255)
+                Else
+                    Framework_DrawRectangle(px + 1, py + 1, CELL_SIZE - 2, CELL_SIZE - 2, 80, 40, 40, 255)
+                End If
+            Next
+        Next
+
+        ' Draw path
+        If _currentPath.Count > 1 Then
+            For i As Integer = 0 To _currentPath.Count - 2
+                Dim p1 = _currentPath(i)
+                Dim p2 = _currentPath(i + 1)
+                Framework_DrawLine(CInt(p1.x), CInt(p1.y), CInt(p2.x), CInt(p2.y), 100, 200, 100, 200)
+            Next
+        End If
+
+        ' Draw target
+        Framework_DrawCircle(CInt(_targetX), CInt(_targetY), 12, 100, 255, 100, 255)
+        Framework_DrawCircle(CInt(_targetX), CInt(_targetY), 6, 50, 200, 50, 255)
+
+        ' Draw agent
+        Framework_DrawCircle(CInt(_agentX), CInt(_agentY), 15, 255, 200, 100, 255)
+        Framework_DrawCircle(CInt(_agentX), CInt(_agentY), 10, 255, 150, 50, 255)
+
+        ' Draw UI
+        Framework_DrawText("AI/PATHFINDING DEMO", GRID_SIZE * CELL_SIZE + 20, 10, 20, 255, 255, 255, 255)
+        Framework_DrawText("[Left Click] Set Target", GRID_SIZE * CELL_SIZE + 20, 50, 14, 150, 255, 150, 255)
+        Framework_DrawText("[Right Click] Toggle Wall", GRID_SIZE * CELL_SIZE + 20, 70, 14, 150, 255, 150, 255)
+        Framework_DrawText("[BACKSPACE] Return", GRID_SIZE * CELL_SIZE + 20, 90, 14, 255, 150, 150, 255)
+        Framework_DrawText("Path Length: " & _currentPath.Count.ToString(), GRID_SIZE * CELL_SIZE + 20, 130, 14, 200, 200, 200, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' =============================================================================
+' DEMO AUDIO SCENE - Showcases the Audio System
+' =============================================================================
+Public Class DemoAudioScene
+    Inherits Scene
+
+    Private _sfxHit As Integer = -1
+    Private _sfxWall As Integer = -1
+
+    Private _masterVolume As Single = 1.0F
+    Private _sfxVolume As Single = 1.0F
+    Private _pitch As Single = 1.0F
+
+    ' Sound source position for spatial audio
+    Private _soundSourceX As Single = 600
+    Private _soundSourceY As Single = 360
+
+    ' Listener position
+    Private _listenerX As Single = 600
+    Private _listenerY As Single = 360
+
+    Private _spatialEnabled As Boolean = False
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoAudioScene OnEnter - Showcasing Audio System")
+
+        ' Load sounds
+        _sfxHit = Framework_Audio_LoadSound("sounds/hit.wav", 1) ' SFX group
+        _sfxWall = Framework_Audio_LoadSound("sounds/wall.wav", 1)
+
+        ' Set initial volumes
+        Framework_Audio_SetGroupVolume(0, _masterVolume) ' Master
+        Framework_Audio_SetGroupVolume(1, _sfxVolume) ' SFX
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("DemoAudioScene OnExit")
+        If _sfxHit >= 0 Then Framework_Audio_UnloadSound(_sfxHit)
+        If _sfxWall >= 0 Then Framework_Audio_UnloadSound(_sfxWall)
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Play sounds
+        If Framework_IsKeyPressed(Keys.ONE) Then
+            If _spatialEnabled Then
+                Framework_Audio_PlaySoundAt(_sfxHit, _soundSourceX, _soundSourceY)
+            Else
+                Framework_Audio_PlaySound(_sfxHit)
+            End If
+        End If
+
+        If Framework_IsKeyPressed(Keys.TWO) Then
+            If _spatialEnabled Then
+                Framework_Audio_PlaySoundAt(_sfxWall, _soundSourceX, _soundSourceY)
+            Else
+                Framework_Audio_PlaySound(_sfxWall)
+            End If
+        End If
+
+        ' Volume controls
+        If Framework_IsKeyDown(Keys.UP) Then
+            _masterVolume = Math.Min(1.0F, _masterVolume + dt)
+            Framework_Audio_SetGroupVolume(0, _masterVolume)
+        End If
+        If Framework_IsKeyDown(Keys.DOWN) Then
+            _masterVolume = Math.Max(0.0F, _masterVolume - dt)
+            Framework_Audio_SetGroupVolume(0, _masterVolume)
+        End If
+
+        ' Pitch controls
+        If Framework_IsKeyDown(Keys.LEFT) Then
+            _pitch = Math.Max(0.5F, _pitch - dt)
+        End If
+        If Framework_IsKeyDown(Keys.RIGHT) Then
+            _pitch = Math.Min(2.0F, _pitch + dt)
+        End If
+
+        ' Toggle spatial audio
+        If Framework_IsKeyPressed(Keys.SPACE) Then
+            _spatialEnabled = Not _spatialEnabled
+            Framework_Audio_SetSpatialEnabled(_spatialEnabled)
+        End If
+
+        ' Move sound source with mouse
+        If _spatialEnabled Then
+            _soundSourceX = Framework_GetMouseX()
+            _soundSourceY = Framework_GetMouseY()
+        End If
+
+        ' Move listener with WASD
+        If Framework_IsKeyDown(Keys.W) Then _listenerY -= 200 * dt
+        If Framework_IsKeyDown(Keys.S) Then _listenerY += 200 * dt
+        If Framework_IsKeyDown(Keys.A) Then _listenerX -= 200 * dt
+        If Framework_IsKeyDown(Keys.D) Then _listenerX += 200 * dt
+        Framework_Audio_SetListenerPosition(_listenerX, _listenerY)
+
+        Framework_Audio_Update(dt)
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(25, 30, 40, 255)
+
+        ' Draw spatial visualization if enabled
+        If _spatialEnabled Then
+            ' Draw listener
+            Framework_DrawCircle(CInt(_listenerX), CInt(_listenerY), 20, 100, 200, 255, 255)
+            Framework_DrawText("LISTENER", CInt(_listenerX) - 30, CInt(_listenerY) + 25, 12, 100, 200, 255, 255)
+
+            ' Draw sound source
+            Framework_DrawCircle(CInt(_soundSourceX), CInt(_soundSourceY), 15, 255, 150, 100, 255)
+            Framework_DrawText("SOURCE", CInt(_soundSourceX) - 25, CInt(_soundSourceY) + 20, 12, 255, 150, 100, 255)
+
+            ' Draw distance line
+            Framework_DrawLine(CInt(_listenerX), CInt(_listenerY), CInt(_soundSourceX), CInt(_soundSourceY), 100, 100, 100, 100)
+        End If
+
+        ' Draw UI
+        Framework_DrawText("AUDIO SYSTEM DEMO", 10, 10, 24, 255, 255, 255, 255)
+
+        Framework_DrawText("Master Volume: " & (_masterVolume * 100).ToString("F0") & "%", 10, 50, 16, 200, 200, 200, 255)
+        Framework_DrawRectangle(10, 70, CInt(200 * _masterVolume), 20, 100, 200, 100, 255)
+        Framework_DrawRectangle(10, 70, 200, 20, 80, 80, 80, 100)
+
+        Framework_DrawText("Pitch: " & _pitch.ToString("F2") & "x", 10, 100, 16, 200, 200, 200, 255)
+        Framework_DrawRectangle(10, 120, CInt(200 * (_pitch - 0.5F) / 1.5F), 20, 200, 150, 100, 255)
+        Framework_DrawRectangle(10, 120, 200, 20, 80, 80, 80, 100)
+
+        Framework_DrawText("Spatial Audio: " & If(_spatialEnabled, "ON", "OFF"), 10, 150, 16, If(_spatialEnabled, CByte(100), CByte(200)), If(_spatialEnabled, CByte(255), CByte(100)), If(_spatialEnabled, CByte(100), CByte(100)), 255)
+
+        ' Instructions
+        Framework_DrawText("[1] Play Hit Sound  [2] Play Wall Sound", 10, WINDOW_HEIGHT - 110, 16, 150, 255, 150, 255)
+        Framework_DrawText("[UP/DOWN] Volume  [LEFT/RIGHT] Pitch", 10, WINDOW_HEIGHT - 88, 16, 150, 255, 150, 255)
+        Framework_DrawText("[SPACE] Toggle Spatial Audio", 10, WINDOW_HEIGHT - 66, 16, 150, 200, 255, 255)
+        Framework_DrawText("[WASD] Move Listener (when spatial)", 10, WINDOW_HEIGHT - 44, 16, 200, 200, 200, 255)
+        Framework_DrawText("[BACKSPACE] Return to menu", 10, WINDOW_HEIGHT - 22, 16, 255, 150, 150, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' =============================================================================
+' DEMO EFFECTS SCENE - Showcases the Screen Effects System
+' =============================================================================
+Public Class DemoEffectsScene
+    Inherits Scene
+
+    ' Effect states
+    Private _vignetteEnabled As Boolean = False
+    Private _vignetteIntensity As Single = 0.5F
+
+    Private _grayscaleEnabled As Boolean = False
+    Private _grayscaleAmount As Single = 1.0F
+
+    Private _sepiaEnabled As Boolean = False
+    Private _sepiaAmount As Single = 1.0F
+
+    Private _scanlineEnabled As Boolean = False
+    Private _pixelateEnabled As Boolean = False
+    Private _pixelSize As Integer = 4
+
+    ' Demo objects to see effects on
+    Private ReadOnly _particles As New List(Of (x As Single, y As Single, vx As Single, vy As Single, r As Byte, g As Byte, b As Byte))
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoEffectsScene OnEnter - Showcasing Screen Effects")
+
+        ' Create some colorful particles to see effects on
+        Dim rnd As New Random()
+        For i As Integer = 0 To 49
+            _particles.Add((
+                rnd.Next(100, WINDOW_WIDTH - 100),
+                rnd.Next(100, WINDOW_HEIGHT - 100),
+                CSng(rnd.NextDouble() * 100 - 50),
+                CSng(rnd.NextDouble() * 100 - 50),
+                CByte(rnd.Next(100, 255)),
+                CByte(rnd.Next(100, 255)),
+                CByte(rnd.Next(100, 255))
+            ))
+        Next
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("DemoEffectsScene OnExit")
+        ' Reset all effects
+        Framework_Effects_ResetAll()
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Toggle effects
+        If Framework_IsKeyPressed(Keys.ONE) Then
+            _vignetteEnabled = Not _vignetteEnabled
+            Framework_Effects_SetVignetteEnabled(_vignetteEnabled)
+            If _vignetteEnabled Then
+                Framework_Effects_SetVignetteIntensity(_vignetteIntensity)
+                Framework_Effects_SetVignetteRadius(0.3F)
+                Framework_Effects_SetVignetteSoftness(0.5F)
+            End If
+        End If
+
+        If Framework_IsKeyPressed(Keys.TWO) Then
+            _grayscaleEnabled = Not _grayscaleEnabled
+            Framework_Effects_SetGrayscaleEnabled(_grayscaleEnabled)
+            Framework_Effects_SetGrayscaleAmount(_grayscaleAmount)
+        End If
+
+        If Framework_IsKeyPressed(Keys.THREE) Then
+            _sepiaEnabled = Not _sepiaEnabled
+            Framework_Effects_SetSepiaEnabled(_sepiaEnabled)
+            Framework_Effects_SetSepiaAmount(_sepiaAmount)
+        End If
+
+        If Framework_IsKeyPressed(Keys.FOUR) Then
+            _scanlineEnabled = Not _scanlineEnabled
+            Framework_Effects_SetScanlinesEnabled(_scanlineEnabled)
+            Framework_Effects_SetScanlinesIntensity(0.3F)
+            Framework_Effects_SetScanlinesCount(200)
+        End If
+
+        If Framework_IsKeyPressed(Keys.FIVE) Then
+            _pixelateEnabled = Not _pixelateEnabled
+            Framework_Effects_SetPixelateEnabled(_pixelateEnabled)
+            Framework_Effects_SetPixelateSize(_pixelSize)
+        End If
+
+        ' Adjust vignette intensity
+        If _vignetteEnabled Then
+            If Framework_IsKeyDown(Keys.UP) Then
+                _vignetteIntensity = Math.Min(1.0F, _vignetteIntensity + dt)
+                Framework_Effects_SetVignetteIntensity(_vignetteIntensity)
+            End If
+            If Framework_IsKeyDown(Keys.DOWN) Then
+                _vignetteIntensity = Math.Max(0.0F, _vignetteIntensity - dt)
+                Framework_Effects_SetVignetteIntensity(_vignetteIntensity)
+            End If
+        End If
+
+        ' Screen flash on SPACE
+        If Framework_IsKeyPressed(Keys.SPACE) Then
+            Framework_Effects_FlashWhite(0.2F)
+        End If
+
+        ' Screen shake on ENTER
+        If Framework_IsKeyPressed(Keys.ENTER) Then
+            Framework_Camera_Shake(8, 0.3F)
+        End If
+
+        ' Update particles
+        For i As Integer = 0 To _particles.Count - 1
+            Dim p = _particles(i)
+            p.x += p.vx * dt
+            p.y += p.vy * dt
+
+            ' Bounce off walls
+            If p.x < 50 OrElse p.x > WINDOW_WIDTH - 50 Then p.vx = -p.vx
+            If p.y < 80 OrElse p.y > WINDOW_HEIGHT - 130 Then p.vy = -p.vy
+
+            _particles(i) = p
+        Next
+
+        Framework_Camera_Update(dt)
+        Framework_Effects_Update(dt)
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(40, 50, 70, 255)
+
+        ' Draw colorful background pattern
+        For x As Integer = 0 To 11
+            For y As Integer = 0 To 7
+                Dim hue As Integer = (x * 30 + y * 45) Mod 360
+                Dim r As Byte = CByte(128 + 64 * Math.Sin(hue * Math.PI / 180))
+                Dim g As Byte = CByte(128 + 64 * Math.Sin((hue + 120) * Math.PI / 180))
+                Dim b As Byte = CByte(128 + 64 * Math.Sin((hue + 240) * Math.PI / 180))
+                Framework_DrawRectangle(x * 100, y * 90, 98, 88, r, g, b, 100)
+            Next
+        Next
+
+        ' Draw particles
+        For Each p In _particles
+            Framework_DrawCircle(CInt(p.x), CInt(p.y), 15, p.r, p.g, p.b, 255)
+        Next
+
+        ' Draw effects overlays
+        Framework_Effects_DrawOverlays(WINDOW_WIDTH, WINDOW_HEIGHT)
+
+        ' Draw UI
+        Framework_DrawText("SCREEN EFFECTS DEMO", 10, 10, 24, 255, 255, 255, 255)
+
+        ' Effect status
+        Dim statusY As Integer = 50
+        Framework_DrawText("[1] Vignette: " & If(_vignetteEnabled, "ON (" & (_vignetteIntensity * 100).ToString("F0") & "%)", "OFF"), 10, statusY, 14,
+            If(_vignetteEnabled, CByte(100), CByte(150)), If(_vignetteEnabled, CByte(255), CByte(150)), If(_vignetteEnabled, CByte(100), CByte(150)), 255)
+        Framework_DrawText("[2] Grayscale: " & If(_grayscaleEnabled, "ON", "OFF"), 10, statusY + 18, 14,
+            If(_grayscaleEnabled, CByte(100), CByte(150)), If(_grayscaleEnabled, CByte(255), CByte(150)), If(_grayscaleEnabled, CByte(100), CByte(150)), 255)
+        Framework_DrawText("[3] Sepia: " & If(_sepiaEnabled, "ON", "OFF"), 10, statusY + 36, 14,
+            If(_sepiaEnabled, CByte(100), CByte(150)), If(_sepiaEnabled, CByte(255), CByte(150)), If(_sepiaEnabled, CByte(100), CByte(150)), 255)
+        Framework_DrawText("[4] Scanlines: " & If(_scanlineEnabled, "ON", "OFF"), 10, statusY + 54, 14,
+            If(_scanlineEnabled, CByte(100), CByte(150)), If(_scanlineEnabled, CByte(255), CByte(150)), If(_scanlineEnabled, CByte(100), CByte(150)), 255)
+        Framework_DrawText("[5] Pixelate: " & If(_pixelateEnabled, "ON", "OFF"), 10, statusY + 72, 14,
+            If(_pixelateEnabled, CByte(100), CByte(150)), If(_pixelateEnabled, CByte(255), CByte(150)), If(_pixelateEnabled, CByte(100), CByte(150)), 255)
+
+        ' Instructions
+        Framework_DrawText("[SPACE] Screen Flash  [ENTER] Screen Shake", 10, WINDOW_HEIGHT - 66, 16, 150, 200, 255, 255)
+        Framework_DrawText("[UP/DOWN] Adjust Vignette (when enabled)", 10, WINDOW_HEIGHT - 44, 16, 200, 200, 200, 255)
+        Framework_DrawText("[BACKSPACE] Return to menu", 10, WINDOW_HEIGHT - 22, 16, 255, 150, 150, 255)
 
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
     End Sub
