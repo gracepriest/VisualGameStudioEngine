@@ -2296,6 +2296,219 @@ Public Module FrameworkWrapper
     Public Const AUDIO_GROUP_AMBIENT As Integer = 4
 #End Region
 
+#Region "Input Manager"
+    ' Input source type constants
+    Public Const INPUT_SOURCE_KEYBOARD As Integer = 0
+    Public Const INPUT_SOURCE_MOUSE_BUTTON As Integer = 1
+    Public Const INPUT_SOURCE_MOUSE_AXIS As Integer = 2
+    Public Const INPUT_SOURCE_GAMEPAD_BUTTON As Integer = 3
+    Public Const INPUT_SOURCE_GAMEPAD_AXIS As Integer = 4
+    Public Const INPUT_SOURCE_GAMEPAD_TRIGGER As Integer = 5
+
+    ' Mouse axis constants
+    Public Const MOUSE_AXIS_X As Integer = 0
+    Public Const MOUSE_AXIS_Y As Integer = 1
+    Public Const MOUSE_AXIS_WHEEL As Integer = 2
+    Public Const MOUSE_AXIS_WHEEL_H As Integer = 3
+
+    ' Gamepad axis constants (FW_ prefix to avoid raylib conflict)
+    Public Const FW_GAMEPAD_AXIS_LEFT_X As Integer = 0
+    Public Const FW_GAMEPAD_AXIS_LEFT_Y As Integer = 1
+    Public Const FW_GAMEPAD_AXIS_RIGHT_X As Integer = 2
+    Public Const FW_GAMEPAD_AXIS_RIGHT_Y As Integer = 3
+    Public Const FW_GAMEPAD_AXIS_LEFT_TRIGGER As Integer = 4
+    Public Const FW_GAMEPAD_AXIS_RIGHT_TRIGGER As Integer = 5
+
+    ' Action management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Input_CreateAction(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_DestroyAction(actionHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Input_GetAction(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsActionValid(actionHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_ClearAllActions()
+    End Sub
+
+    ' Keyboard bindings
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_BindKey(actionHandle As Integer, keyCode As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_UnbindKey(actionHandle As Integer, keyCode As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_ClearKeyBindings(actionHandle As Integer)
+    End Sub
+
+    ' Mouse button bindings
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_BindMouseButton(actionHandle As Integer, button As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_UnbindMouseButton(actionHandle As Integer, button As Integer)
+    End Sub
+
+    ' Gamepad button bindings
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_BindGamepadButton(actionHandle As Integer, button As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_UnbindGamepadButton(actionHandle As Integer, button As Integer)
+    End Sub
+
+    ' Axis bindings
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_BindMouseAxis(actionHandle As Integer, axis As Integer, scale As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_BindGamepadAxis(actionHandle As Integer, axis As Integer, scale As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_ClearAxisBindings(actionHandle As Integer)
+    End Sub
+
+    ' Action state queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsActionPressed(actionHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsActionDown(actionHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsActionReleased(actionHandle As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetActionValue(actionHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetActionRawValue(actionHandle As Integer) As Single
+    End Function
+
+    ' Action configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_SetActionDeadzone(actionHandle As Integer, deadzone As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetActionDeadzone(actionHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_SetActionSensitivity(actionHandle As Integer, sensitivity As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetActionSensitivity(actionHandle As Integer) As Single
+    End Function
+
+    ' Gamepad management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsGamepadAvailable(gamepadId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetGamepadName(gamepadId As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetGamepadCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_SetActiveGamepad(gamepadId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetActiveGamepad() As Integer
+    End Function
+
+    ' Direct gamepad queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsGamepadButtonPressed(gamepadId As Integer, button As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsGamepadButtonDown(gamepadId As Integer, button As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsGamepadButtonReleased(gamepadId As Integer, button As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetGamepadAxisValue(gamepadId As Integer, axis As Integer) As Single
+    End Function
+
+    ' Rebinding support
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_StartListening(actionHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsListening() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_StopListening()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_WasBindingCaptured() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetCapturedSourceType() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetCapturedCode() As Integer
+    End Function
+
+    ' Rumble/vibration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_SetGamepadVibration(gamepadId As Integer, leftMotor As Single, rightMotor As Single, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_StopGamepadVibration(gamepadId As Integer)
+    End Sub
+
+    ' Input system update
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_Update()
+    End Sub
+
+    ' Serialization
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Input_SaveBindings(filename As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Input_LoadBindings(filename As String) As Boolean
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

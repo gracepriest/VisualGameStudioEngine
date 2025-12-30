@@ -990,6 +990,107 @@ extern "C" {
     __declspec(dllexport) void  Framework_Physics_DrawDebug();  // Draw all collision shapes
 
     // ========================================================================
+    // INPUT MANAGER - Action-based Input System
+    // ========================================================================
+    // Input source types for binding
+    enum InputSourceType {
+        INPUT_SOURCE_KEYBOARD = 0,
+        INPUT_SOURCE_MOUSE_BUTTON = 1,
+        INPUT_SOURCE_MOUSE_AXIS = 2,
+        INPUT_SOURCE_GAMEPAD_BUTTON = 3,
+        INPUT_SOURCE_GAMEPAD_AXIS = 4,
+        INPUT_SOURCE_GAMEPAD_TRIGGER = 5
+    };
+
+    // Mouse axes
+    enum MouseAxis {
+        MOUSE_AXIS_X = 0,
+        MOUSE_AXIS_Y = 1,
+        MOUSE_AXIS_WHEEL = 2,
+        MOUSE_AXIS_WHEEL_H = 3
+    };
+
+    // Gamepad axes (FW_ prefix to avoid conflict with raylib)
+    enum FW_GamepadAxis {
+        FW_GAMEPAD_AXIS_LEFT_X = 0,
+        FW_GAMEPAD_AXIS_LEFT_Y = 1,
+        FW_GAMEPAD_AXIS_RIGHT_X = 2,
+        FW_GAMEPAD_AXIS_RIGHT_Y = 3,
+        FW_GAMEPAD_AXIS_LEFT_TRIGGER = 4,
+        FW_GAMEPAD_AXIS_RIGHT_TRIGGER = 5
+    };
+
+    // Action management
+    __declspec(dllexport) int   Framework_Input_CreateAction(const char* name);  // Returns action handle
+    __declspec(dllexport) void  Framework_Input_DestroyAction(int actionHandle);
+    __declspec(dllexport) int   Framework_Input_GetAction(const char* name);  // Returns -1 if not found
+    __declspec(dllexport) bool  Framework_Input_IsActionValid(int actionHandle);
+    __declspec(dllexport) void  Framework_Input_ClearAllActions();
+
+    // Keyboard bindings
+    __declspec(dllexport) void  Framework_Input_BindKey(int actionHandle, int keyCode);
+    __declspec(dllexport) void  Framework_Input_UnbindKey(int actionHandle, int keyCode);
+    __declspec(dllexport) void  Framework_Input_ClearKeyBindings(int actionHandle);
+
+    // Mouse button bindings
+    __declspec(dllexport) void  Framework_Input_BindMouseButton(int actionHandle, int button);  // 0=left, 1=right, 2=middle
+    __declspec(dllexport) void  Framework_Input_UnbindMouseButton(int actionHandle, int button);
+
+    // Gamepad button bindings
+    __declspec(dllexport) void  Framework_Input_BindGamepadButton(int actionHandle, int button);
+    __declspec(dllexport) void  Framework_Input_UnbindGamepadButton(int actionHandle, int button);
+
+    // Axis bindings (for analog input actions)
+    __declspec(dllexport) void  Framework_Input_BindMouseAxis(int actionHandle, int axis, float scale);  // MouseAxis enum
+    __declspec(dllexport) void  Framework_Input_BindGamepadAxis(int actionHandle, int axis, float scale);  // GamepadAxis enum
+    __declspec(dllexport) void  Framework_Input_ClearAxisBindings(int actionHandle);
+
+    // Action state queries
+    __declspec(dllexport) bool  Framework_Input_IsActionPressed(int actionHandle);   // Just pressed this frame
+    __declspec(dllexport) bool  Framework_Input_IsActionDown(int actionHandle);      // Currently held
+    __declspec(dllexport) bool  Framework_Input_IsActionReleased(int actionHandle);  // Just released this frame
+    __declspec(dllexport) float Framework_Input_GetActionValue(int actionHandle);    // Analog value (-1 to 1)
+    __declspec(dllexport) float Framework_Input_GetActionRawValue(int actionHandle); // Raw unprocessed value
+
+    // Action configuration
+    __declspec(dllexport) void  Framework_Input_SetActionDeadzone(int actionHandle, float deadzone);  // For analog
+    __declspec(dllexport) float Framework_Input_GetActionDeadzone(int actionHandle);
+    __declspec(dllexport) void  Framework_Input_SetActionSensitivity(int actionHandle, float sensitivity);
+    __declspec(dllexport) float Framework_Input_GetActionSensitivity(int actionHandle);
+
+    // Gamepad management
+    __declspec(dllexport) bool  Framework_Input_IsGamepadAvailable(int gamepadId);  // 0-3
+    __declspec(dllexport) const char* Framework_Input_GetGamepadName(int gamepadId);
+    __declspec(dllexport) int   Framework_Input_GetGamepadCount();
+    __declspec(dllexport) void  Framework_Input_SetActiveGamepad(int gamepadId);
+    __declspec(dllexport) int   Framework_Input_GetActiveGamepad();
+
+    // Direct gamepad queries (bypass action system)
+    __declspec(dllexport) bool  Framework_Input_IsGamepadButtonPressed(int gamepadId, int button);
+    __declspec(dllexport) bool  Framework_Input_IsGamepadButtonDown(int gamepadId, int button);
+    __declspec(dllexport) bool  Framework_Input_IsGamepadButtonReleased(int gamepadId, int button);
+    __declspec(dllexport) float Framework_Input_GetGamepadAxisValue(int gamepadId, int axis);
+
+    // Rebinding support
+    __declspec(dllexport) void  Framework_Input_StartListening(int actionHandle);  // Start listening for next input
+    __declspec(dllexport) bool  Framework_Input_IsListening();
+    __declspec(dllexport) void  Framework_Input_StopListening();
+    __declspec(dllexport) bool  Framework_Input_WasBindingCaptured();  // True if new binding was captured
+    __declspec(dllexport) int   Framework_Input_GetCapturedSourceType();  // InputSourceType
+    __declspec(dllexport) int   Framework_Input_GetCapturedCode();  // Key/button code that was captured
+
+    // Rumble/vibration (gamepad)
+    __declspec(dllexport) void  Framework_Input_SetGamepadVibration(int gamepadId, float leftMotor, float rightMotor, float duration);
+    __declspec(dllexport) void  Framework_Input_StopGamepadVibration(int gamepadId);
+
+    // Input system update
+    __declspec(dllexport) void  Framework_Input_Update();  // Call each frame to update action states
+
+    // Serialization (save/load bindings)
+    __declspec(dllexport) bool  Framework_Input_SaveBindings(const char* filename);
+    __declspec(dllexport) bool  Framework_Input_LoadBindings(const char* filename);
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

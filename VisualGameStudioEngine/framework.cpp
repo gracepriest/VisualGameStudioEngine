@@ -6361,6 +6361,593 @@ extern "C" {
     }
 
     // ========================================================================
+    // INPUT MANAGER - Action-based Input System Implementation
+    // ========================================================================
+
+    // Binding structures
+    struct KeyBinding {
+        int keyCode;
+    };
+
+    struct MouseButtonBinding {
+        int button;  // 0=left, 1=right, 2=middle
+    };
+
+    struct GamepadButtonBinding {
+        int button;
+    };
+
+    struct AxisBinding {
+        int sourceType;  // InputSourceType
+        int axis;
+        float scale;
+    };
+
+    // Input action
+    struct InputAction {
+        std::string name;
+        std::vector<KeyBinding> keyBindings;
+        std::vector<MouseButtonBinding> mouseBindings;
+        std::vector<GamepadButtonBinding> gamepadBindings;
+        std::vector<AxisBinding> axisBindings;
+
+        float deadzone = 0.1f;
+        float sensitivity = 1.0f;
+
+        // Current frame state
+        bool pressed = false;    // Just pressed
+        bool down = false;       // Currently held
+        bool released = false;   // Just released
+        float value = 0.0f;      // Analog value
+        float rawValue = 0.0f;   // Raw unprocessed
+
+        // Previous frame state
+        bool wasDown = false;
+
+        bool valid = true;
+    };
+
+    static std::unordered_map<int, InputAction> g_inputActions;
+    static std::unordered_map<std::string, int> g_actionByName;
+    static int g_nextActionHandle = 1;
+    static int g_activeGamepad = 0;
+
+    // Rebinding state
+    static bool g_isListening = false;
+    static int g_listeningAction = -1;
+    static bool g_bindingCaptured = false;
+    static int g_capturedSourceType = 0;
+    static int g_capturedCode = 0;
+
+    // Vibration state
+    struct VibrationState {
+        float leftMotor = 0;
+        float rightMotor = 0;
+        float duration = 0;
+        float timer = 0;
+    };
+    static VibrationState g_vibration[4];
+
+    // Action management
+    int Framework_Input_CreateAction(const char* name) {
+        if (!name) return -1;
+
+        std::string actionName(name);
+
+        // Check if already exists
+        auto it = g_actionByName.find(actionName);
+        if (it != g_actionByName.end()) {
+            return it->second;
+        }
+
+        int handle = g_nextActionHandle++;
+        InputAction& action = g_inputActions[handle];
+        action.name = actionName;
+        action.valid = true;
+        g_actionByName[actionName] = handle;
+
+        return handle;
+    }
+
+    void Framework_Input_DestroyAction(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it != g_inputActions.end()) {
+            g_actionByName.erase(it->second.name);
+            g_inputActions.erase(it);
+        }
+    }
+
+    int Framework_Input_GetAction(const char* name) {
+        if (!name) return -1;
+        auto it = g_actionByName.find(std::string(name));
+        return (it != g_actionByName.end()) ? it->second : -1;
+    }
+
+    bool Framework_Input_IsActionValid(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        return it != g_inputActions.end() && it->second.valid;
+    }
+
+    void Framework_Input_ClearAllActions() {
+        g_inputActions.clear();
+        g_actionByName.clear();
+        g_nextActionHandle = 1;
+    }
+
+    // Keyboard bindings
+    void Framework_Input_BindKey(int actionHandle, int keyCode) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it == g_inputActions.end()) return;
+
+        // Check if already bound
+        for (const auto& kb : it->second.keyBindings) {
+            if (kb.keyCode == keyCode) return;
+        }
+        it->second.keyBindings.push_back({ keyCode });
+    }
+
+    void Framework_Input_UnbindKey(int actionHandle, int keyCode) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it == g_inputActions.end()) return;
+
+        auto& bindings = it->second.keyBindings;
+        bindings.erase(std::remove_if(bindings.begin(), bindings.end(),
+            [keyCode](const KeyBinding& kb) { return kb.keyCode == keyCode; }), bindings.end());
+    }
+
+    void Framework_Input_ClearKeyBindings(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it != g_inputActions.end()) {
+            it->second.keyBindings.clear();
+        }
+    }
+
+    // Mouse button bindings
+    void Framework_Input_BindMouseButton(int actionHandle, int button) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it == g_inputActions.end()) return;
+
+        for (const auto& mb : it->second.mouseBindings) {
+            if (mb.button == button) return;
+        }
+        it->second.mouseBindings.push_back({ button });
+    }
+
+    void Framework_Input_UnbindMouseButton(int actionHandle, int button) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it == g_inputActions.end()) return;
+
+        auto& bindings = it->second.mouseBindings;
+        bindings.erase(std::remove_if(bindings.begin(), bindings.end(),
+            [button](const MouseButtonBinding& mb) { return mb.button == button; }), bindings.end());
+    }
+
+    // Gamepad button bindings
+    void Framework_Input_BindGamepadButton(int actionHandle, int button) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it == g_inputActions.end()) return;
+
+        for (const auto& gb : it->second.gamepadBindings) {
+            if (gb.button == button) return;
+        }
+        it->second.gamepadBindings.push_back({ button });
+    }
+
+    void Framework_Input_UnbindGamepadButton(int actionHandle, int button) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it == g_inputActions.end()) return;
+
+        auto& bindings = it->second.gamepadBindings;
+        bindings.erase(std::remove_if(bindings.begin(), bindings.end(),
+            [button](const GamepadButtonBinding& gb) { return gb.button == button; }), bindings.end());
+    }
+
+    // Axis bindings
+    void Framework_Input_BindMouseAxis(int actionHandle, int axis, float scale) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it == g_inputActions.end()) return;
+
+        it->second.axisBindings.push_back({ INPUT_SOURCE_MOUSE_AXIS, axis, scale });
+    }
+
+    void Framework_Input_BindGamepadAxis(int actionHandle, int axis, float scale) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it == g_inputActions.end()) return;
+
+        it->second.axisBindings.push_back({ INPUT_SOURCE_GAMEPAD_AXIS, axis, scale });
+    }
+
+    void Framework_Input_ClearAxisBindings(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it != g_inputActions.end()) {
+            it->second.axisBindings.clear();
+        }
+    }
+
+    // Action state queries
+    bool Framework_Input_IsActionPressed(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        return it != g_inputActions.end() && it->second.pressed;
+    }
+
+    bool Framework_Input_IsActionDown(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        return it != g_inputActions.end() && it->second.down;
+    }
+
+    bool Framework_Input_IsActionReleased(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        return it != g_inputActions.end() && it->second.released;
+    }
+
+    float Framework_Input_GetActionValue(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        return it != g_inputActions.end() ? it->second.value : 0.0f;
+    }
+
+    float Framework_Input_GetActionRawValue(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        return it != g_inputActions.end() ? it->second.rawValue : 0.0f;
+    }
+
+    // Action configuration
+    void Framework_Input_SetActionDeadzone(int actionHandle, float deadzone) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it != g_inputActions.end()) {
+            it->second.deadzone = deadzone < 0 ? 0 : (deadzone > 1 ? 1 : deadzone);
+        }
+    }
+
+    float Framework_Input_GetActionDeadzone(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        return it != g_inputActions.end() ? it->second.deadzone : 0.1f;
+    }
+
+    void Framework_Input_SetActionSensitivity(int actionHandle, float sensitivity) {
+        auto it = g_inputActions.find(actionHandle);
+        if (it != g_inputActions.end()) {
+            it->second.sensitivity = sensitivity > 0 ? sensitivity : 1.0f;
+        }
+    }
+
+    float Framework_Input_GetActionSensitivity(int actionHandle) {
+        auto it = g_inputActions.find(actionHandle);
+        return it != g_inputActions.end() ? it->second.sensitivity : 1.0f;
+    }
+
+    // Gamepad management
+    bool Framework_Input_IsGamepadAvailable(int gamepadId) {
+        return IsGamepadAvailable(gamepadId);
+    }
+
+    const char* Framework_Input_GetGamepadName(int gamepadId) {
+        if (!IsGamepadAvailable(gamepadId)) return "";
+        return GetGamepadName(gamepadId);
+    }
+
+    int Framework_Input_GetGamepadCount() {
+        int count = 0;
+        for (int i = 0; i < 4; i++) {
+            if (IsGamepadAvailable(i)) count++;
+        }
+        return count;
+    }
+
+    void Framework_Input_SetActiveGamepad(int gamepadId) {
+        g_activeGamepad = (gamepadId >= 0 && gamepadId < 4) ? gamepadId : 0;
+    }
+
+    int Framework_Input_GetActiveGamepad() {
+        return g_activeGamepad;
+    }
+
+    // Direct gamepad queries
+    bool Framework_Input_IsGamepadButtonPressed(int gamepadId, int button) {
+        return IsGamepadAvailable(gamepadId) && IsGamepadButtonPressed(gamepadId, button);
+    }
+
+    bool Framework_Input_IsGamepadButtonDown(int gamepadId, int button) {
+        return IsGamepadAvailable(gamepadId) && IsGamepadButtonDown(gamepadId, button);
+    }
+
+    bool Framework_Input_IsGamepadButtonReleased(int gamepadId, int button) {
+        return IsGamepadAvailable(gamepadId) && IsGamepadButtonReleased(gamepadId, button);
+    }
+
+    float Framework_Input_GetGamepadAxisValue(int gamepadId, int axis) {
+        if (!IsGamepadAvailable(gamepadId)) return 0.0f;
+        return GetGamepadAxisMovement(gamepadId, axis);
+    }
+
+    // Rebinding support
+    void Framework_Input_StartListening(int actionHandle) {
+        if (!Framework_Input_IsActionValid(actionHandle)) return;
+        g_isListening = true;
+        g_listeningAction = actionHandle;
+        g_bindingCaptured = false;
+        g_capturedSourceType = 0;
+        g_capturedCode = 0;
+    }
+
+    bool Framework_Input_IsListening() {
+        return g_isListening;
+    }
+
+    void Framework_Input_StopListening() {
+        g_isListening = false;
+        g_listeningAction = -1;
+    }
+
+    bool Framework_Input_WasBindingCaptured() {
+        return g_bindingCaptured;
+    }
+
+    int Framework_Input_GetCapturedSourceType() {
+        return g_capturedSourceType;
+    }
+
+    int Framework_Input_GetCapturedCode() {
+        return g_capturedCode;
+    }
+
+    // Rumble/vibration
+    void Framework_Input_SetGamepadVibration(int gamepadId, float leftMotor, float rightMotor, float duration) {
+        if (gamepadId < 0 || gamepadId >= 4) return;
+        g_vibration[gamepadId].leftMotor = leftMotor < 0 ? 0 : (leftMotor > 1 ? 1 : leftMotor);
+        g_vibration[gamepadId].rightMotor = rightMotor < 0 ? 0 : (rightMotor > 1 ? 1 : rightMotor);
+        g_vibration[gamepadId].duration = duration;
+        g_vibration[gamepadId].timer = duration;
+        // Note: raylib doesn't have built-in vibration, this is a placeholder
+        // Could be extended with platform-specific code
+    }
+
+    void Framework_Input_StopGamepadVibration(int gamepadId) {
+        if (gamepadId < 0 || gamepadId >= 4) return;
+        g_vibration[gamepadId].leftMotor = 0;
+        g_vibration[gamepadId].rightMotor = 0;
+        g_vibration[gamepadId].timer = 0;
+    }
+
+    // Input system update
+    void Framework_Input_Update() {
+        float dt = GetFrameTime();
+
+        // Handle rebinding mode
+        if (g_isListening) {
+            // Check keyboard
+            for (int key = 0; key < 350; key++) {
+                if (IsKeyPressed(key)) {
+                    g_capturedSourceType = INPUT_SOURCE_KEYBOARD;
+                    g_capturedCode = key;
+                    g_bindingCaptured = true;
+                    Framework_Input_BindKey(g_listeningAction, key);
+                    g_isListening = false;
+                    g_listeningAction = -1;
+                    return;
+                }
+            }
+
+            // Check mouse buttons
+            for (int btn = 0; btn < 3; btn++) {
+                if (IsMouseButtonPressed(btn)) {
+                    g_capturedSourceType = INPUT_SOURCE_MOUSE_BUTTON;
+                    g_capturedCode = btn;
+                    g_bindingCaptured = true;
+                    Framework_Input_BindMouseButton(g_listeningAction, btn);
+                    g_isListening = false;
+                    g_listeningAction = -1;
+                    return;
+                }
+            }
+
+            // Check gamepad buttons
+            if (IsGamepadAvailable(g_activeGamepad)) {
+                for (int btn = 0; btn < 18; btn++) {
+                    if (IsGamepadButtonPressed(g_activeGamepad, btn)) {
+                        g_capturedSourceType = INPUT_SOURCE_GAMEPAD_BUTTON;
+                        g_capturedCode = btn;
+                        g_bindingCaptured = true;
+                        Framework_Input_BindGamepadButton(g_listeningAction, btn);
+                        g_isListening = false;
+                        g_listeningAction = -1;
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Update vibration timers
+        for (int i = 0; i < 4; i++) {
+            if (g_vibration[i].timer > 0) {
+                g_vibration[i].timer -= dt;
+                if (g_vibration[i].timer <= 0) {
+                    g_vibration[i].leftMotor = 0;
+                    g_vibration[i].rightMotor = 0;
+                }
+            }
+        }
+
+        // Update all actions
+        for (auto& kv : g_inputActions) {
+            InputAction& action = kv.second;
+
+            // Store previous state
+            action.wasDown = action.down;
+
+            // Check digital inputs (keyboard, mouse, gamepad buttons)
+            bool isDown = false;
+
+            // Keyboard
+            for (const auto& kb : action.keyBindings) {
+                if (IsKeyDown(kb.keyCode)) {
+                    isDown = true;
+                    break;
+                }
+            }
+
+            // Mouse buttons
+            if (!isDown) {
+                for (const auto& mb : action.mouseBindings) {
+                    if (IsMouseButtonDown(mb.button)) {
+                        isDown = true;
+                        break;
+                    }
+                }
+            }
+
+            // Gamepad buttons
+            if (!isDown && IsGamepadAvailable(g_activeGamepad)) {
+                for (const auto& gb : action.gamepadBindings) {
+                    if (IsGamepadButtonDown(g_activeGamepad, gb.button)) {
+                        isDown = true;
+                        break;
+                    }
+                }
+            }
+
+            action.down = isDown;
+            action.pressed = isDown && !action.wasDown;
+            action.released = !isDown && action.wasDown;
+
+            // Calculate analog value from axis bindings
+            float analogValue = 0.0f;
+
+            for (const auto& ab : action.axisBindings) {
+                float axisValue = 0.0f;
+
+                if (ab.sourceType == INPUT_SOURCE_MOUSE_AXIS) {
+                    Vector2 delta = GetMouseDelta();
+                    switch (ab.axis) {
+                        case MOUSE_AXIS_X: axisValue = delta.x; break;
+                        case MOUSE_AXIS_Y: axisValue = delta.y; break;
+                        case MOUSE_AXIS_WHEEL: axisValue = GetMouseWheelMove(); break;
+                        case MOUSE_AXIS_WHEEL_H: axisValue = GetMouseWheelMoveV().x; break;
+                    }
+                } else if (ab.sourceType == INPUT_SOURCE_GAMEPAD_AXIS && IsGamepadAvailable(g_activeGamepad)) {
+                    axisValue = GetGamepadAxisMovement(g_activeGamepad, ab.axis);
+                }
+
+                analogValue += axisValue * ab.scale;
+            }
+
+            // If digital input is active, use 1.0/-1.0
+            if (isDown && fabsf(analogValue) < 0.001f) {
+                analogValue = 1.0f;
+            }
+
+            action.rawValue = analogValue;
+
+            // Apply deadzone
+            if (fabsf(analogValue) < action.deadzone) {
+                analogValue = 0.0f;
+            } else {
+                // Remap to 0-1 range after deadzone
+                float sign = analogValue > 0 ? 1.0f : -1.0f;
+                analogValue = sign * ((fabsf(analogValue) - action.deadzone) / (1.0f - action.deadzone));
+            }
+
+            // Apply sensitivity
+            analogValue *= action.sensitivity;
+
+            // Clamp to -1 to 1
+            action.value = analogValue < -1.0f ? -1.0f : (analogValue > 1.0f ? 1.0f : analogValue);
+        }
+    }
+
+    // Serialization
+    bool Framework_Input_SaveBindings(const char* filename) {
+        if (!filename) return false;
+
+        std::string path = ResolveAssetPath(filename);
+        FILE* f = nullptr;
+        if (fopen_s(&f, path.c_str(), "w") != 0 || !f) return false;
+
+        fprintf(f, "# Input Bindings\n");
+        fprintf(f, "version 1\n\n");
+
+        for (const auto& kv : g_inputActions) {
+            const InputAction& action = kv.second;
+            fprintf(f, "action %s\n", action.name.c_str());
+
+            for (const auto& kb : action.keyBindings) {
+                fprintf(f, "  key %d\n", kb.keyCode);
+            }
+            for (const auto& mb : action.mouseBindings) {
+                fprintf(f, "  mouse %d\n", mb.button);
+            }
+            for (const auto& gb : action.gamepadBindings) {
+                fprintf(f, "  gamepad %d\n", gb.button);
+            }
+            for (const auto& ab : action.axisBindings) {
+                fprintf(f, "  axis %d %d %f\n", ab.sourceType, ab.axis, ab.scale);
+            }
+
+            fprintf(f, "  deadzone %f\n", action.deadzone);
+            fprintf(f, "  sensitivity %f\n", action.sensitivity);
+            fprintf(f, "end\n\n");
+        }
+
+        fclose(f);
+        return true;
+    }
+
+    bool Framework_Input_LoadBindings(const char* filename) {
+        if (!filename) return false;
+
+        std::string path = ResolveAssetPath(filename);
+        FILE* f = nullptr;
+        if (fopen_s(&f, path.c_str(), "r") != 0 || !f) return false;
+
+        char line[256];
+        int currentAction = -1;
+
+        while (fgets(line, sizeof(line), f)) {
+            // Skip comments and empty lines
+            if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
+
+            char arg1[128];
+            int i1, i2;
+            float f1;
+
+            if (sscanf_s(line, "action %127s", arg1, (unsigned)sizeof(arg1)) == 1) {
+                currentAction = Framework_Input_CreateAction(arg1);
+                // Clear existing bindings
+                if (currentAction != -1) {
+                    auto it = g_inputActions.find(currentAction);
+                    if (it != g_inputActions.end()) {
+                        it->second.keyBindings.clear();
+                        it->second.mouseBindings.clear();
+                        it->second.gamepadBindings.clear();
+                        it->second.axisBindings.clear();
+                    }
+                }
+            } else if (sscanf_s(line, " key %d", &i1) == 1) {
+                if (currentAction != -1) Framework_Input_BindKey(currentAction, i1);
+            } else if (sscanf_s(line, " mouse %d", &i1) == 1) {
+                if (currentAction != -1) Framework_Input_BindMouseButton(currentAction, i1);
+            } else if (sscanf_s(line, " gamepad %d", &i1) == 1) {
+                if (currentAction != -1) Framework_Input_BindGamepadButton(currentAction, i1);
+            } else if (sscanf_s(line, " axis %d %d %f", &i1, &i2, &f1) == 3) {
+                if (currentAction != -1) {
+                    auto it = g_inputActions.find(currentAction);
+                    if (it != g_inputActions.end()) {
+                        it->second.axisBindings.push_back({ i1, i2, f1 });
+                    }
+                }
+            } else if (sscanf_s(line, " deadzone %f", &f1) == 1) {
+                if (currentAction != -1) Framework_Input_SetActionDeadzone(currentAction, f1);
+            } else if (sscanf_s(line, " sensitivity %f", &f1) == 1) {
+                if (currentAction != -1) Framework_Input_SetActionSensitivity(currentAction, f1);
+            } else if (strstr(line, "end")) {
+                currentAction = -1;
+            }
+        }
+
+        fclose(f);
+        return true;
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {
