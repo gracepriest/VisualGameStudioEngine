@@ -6990,6 +6990,392 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Sprite Batching System"
+    ' ---- Batch Creation/Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Batch_Create(maxSprites As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Batch_Destroy(batchId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Batch_Clear(batchId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Batch_IsValid(batchId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Adding Sprites ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Batch_AddSprite(batchId As Integer, textureHandle As Integer, x As Single, y As Single, width As Single, height As Single, srcX As Single, srcY As Single, srcW As Single, srcH As Single, rotation As Single, originX As Single, originY As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Batch_AddSpriteSimple(batchId As Integer, textureHandle As Integer, x As Single, y As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ' ---- Rendering ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Batch_Draw(batchId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Batch_DrawSorted(batchId As Integer)
+    End Sub
+
+    ' ---- Statistics ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Batch_GetSpriteCount(batchId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Batch_GetDrawCallCount(batchId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Batch_SetAutoCull(batchId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Batch_GetAutoCull(batchId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+#End Region
+
+#Region "Texture Atlas System"
+    ' ---- Atlas Creation ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Atlas_Create(width As Integer, height As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Atlas_Destroy(atlasId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Atlas_IsValid(atlasId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Adding Sprites ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Atlas_AddImage(atlasId As Integer, imagePath As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Atlas_AddRegion(atlasId As Integer, textureHandle As Integer, srcX As Integer, srcY As Integer, srcW As Integer, srcH As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Atlas_Pack(atlasId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Querying ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Atlas_GetSpriteRect(atlasId As Integer, spriteIndex As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Atlas_GetSpriteCount(atlasId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Atlas_GetTextureHandle(atlasId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Atlas_GetSpriteByName(atlasId As Integer, name As String) As Integer
+    End Function
+
+    ' ---- Drawing ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Atlas_DrawSprite(atlasId As Integer, spriteIndex As Integer, x As Single, y As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Atlas_DrawSpriteEx(atlasId As Integer, spriteIndex As Integer, x As Single, y As Single, rotation As Single, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Atlas_DrawSpritePro(atlasId As Integer, spriteIndex As Integer, destX As Single, destY As Single, destW As Single, destH As Single, originX As Single, originY As Single, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ' ---- Persistence ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Atlas_LoadFromFile(jsonPath As String, imagePath As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Atlas_SaveToFile(atlasId As Integer, jsonPath As String, imagePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+#End Region
+
+#Region "Level Editor System"
+    ' ---- Level Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Level_Create(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_Destroy(levelId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Level_GetByName(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_IsValid(levelId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Level Properties ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetSize(levelId As Integer, widthTiles As Integer, heightTiles As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_GetSize(levelId As Integer, ByRef widthTiles As Integer, ByRef heightTiles As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetTileSize(levelId As Integer, tileWidth As Integer, tileHeight As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_GetTileSize(levelId As Integer, ByRef tileWidth As Integer, ByRef tileHeight As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetBackground(levelId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ' ---- Tile Layers ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Level_AddLayer(levelId As Integer, layerName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_RemoveLayer(levelId As Integer, layerIndex As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_GetLayerCount(levelId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetLayerVisible(levelId As Integer, layerIndex As Integer, <MarshalAs(UnmanagedType.I1)> visible As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_GetLayerVisible(levelId As Integer, layerIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Tiles ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetTile(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, tileId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_GetTile(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_FillTiles(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, w As Integer, h As Integer, tileId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_ClearLayer(levelId As Integer, layerIndex As Integer)
+    End Sub
+
+    ' ---- Objects ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Level_AddObject(levelId As Integer, objectType As String, x As Single, y As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_RemoveObject(levelId As Integer, objectId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetObjectPosition(levelId As Integer, objectId As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_GetObjectPosition(levelId As Integer, objectId As Integer, ByRef x As Single, ByRef y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetObjectRotation(levelId As Integer, objectId As Integer, rotation As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetObjectScale(levelId As Integer, objectId As Integer, scaleX As Single, scaleY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Level_SetObjectProperty(levelId As Integer, objectId As Integer, key As String, value As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Level_GetObjectProperty(levelId As Integer, objectId As Integer, key As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_GetObjectCount(levelId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_GetObjectType(levelId As Integer, objectId As Integer) As IntPtr
+    End Function
+
+    ' ---- Collisions ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_AddCollisionRect(levelId As Integer, x As Single, y As Single, w As Single, h As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_AddCollisionCircle(levelId As Integer, x As Single, y As Single, radius As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_ClearCollisions(levelId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_GetCollisionCount(levelId As Integer) As Integer
+    End Function
+
+    ' ---- Load/Save ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Level_SaveToFile(levelId As Integer, filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Level_LoadFromFile(filePath As String) As Integer
+    End Function
+
+    ' ---- Rendering ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_Draw(levelId As Integer, tilesetHandle As Integer, tilesPerRow As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_DrawLayer(levelId As Integer, layerIndex As Integer, tilesetHandle As Integer, tilesPerRow As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_DrawCollisions(levelId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+#End Region
+
+#Region "Networking System"
+    ' ---- Server ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Net_CreateServer(port As Integer, maxClients As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_DestroyServer(serverId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Net_ServerIsRunning(serverId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Net_GetClientCount(serverId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_DisconnectClient(serverId As Integer, clientId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Net_BroadcastMessage(serverId As Integer, channel As String, data As IntPtr, dataSize As Integer, <MarshalAs(UnmanagedType.I1)> reliable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Net_SendToClient(serverId As Integer, clientId As Integer, channel As String, data As IntPtr, dataSize As Integer, <MarshalAs(UnmanagedType.I1)> reliable As Boolean)
+    End Sub
+
+    ' ---- Client ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Net_CreateClient() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_DestroyClient(clientId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Net_Connect(clientId As Integer, host As String, port As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_Disconnect(clientId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Net_IsConnected(clientId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Net_SendMessage(clientId As Integer, channel As String, data As IntPtr, dataSize As Integer, <MarshalAs(UnmanagedType.I1)> reliable As Boolean)
+    End Sub
+
+    ' ---- Update ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_UpdateServer(serverId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_UpdateClient(clientId As Integer)
+    End Sub
+
+    ' ---- Callbacks ----
+    Public Delegate Sub NetConnectCallback(connectionId As Integer, userData As IntPtr)
+    Public Delegate Sub NetDisconnectCallback(connectionId As Integer, userData As IntPtr)
+    Public Delegate Sub NetMessageCallback(connectionId As Integer, <MarshalAs(UnmanagedType.LPStr)> channel As String, data As IntPtr, dataSize As Integer, userData As IntPtr)
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_SetOnClientConnected(serverId As Integer, callback As NetConnectCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_SetOnClientDisconnected(serverId As Integer, callback As NetDisconnectCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_SetOnServerMessage(serverId As Integer, callback As NetMessageCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_SetOnConnected(clientId As Integer, callback As NetConnectCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_SetOnDisconnected(clientId As Integer, callback As NetDisconnectCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Net_SetOnMessage(clientId As Integer, callback As NetMessageCallback, userData As IntPtr)
+    End Sub
+
+    ' ---- Stats ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Net_GetPing(clientId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Net_GetBytesSent(connectionId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Net_GetBytesReceived(connectionId As Integer) As Integer
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

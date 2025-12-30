@@ -18387,4 +18387,986 @@ extern "C" {
         g_leaderboards.nextId = 1;
     }
 
+    // ========================================================================
+    // SPRITE BATCHING SYSTEM
+    // ========================================================================
+
+    namespace {
+        struct BatchSprite {
+            int textureHandle;
+            Rectangle dest;
+            Rectangle src;
+            Vector2 origin;
+            float rotation;
+            Color tint;
+        };
+
+        struct SpriteBatch {
+            int id = 0;
+            std::vector<BatchSprite> sprites;
+            int maxSprites = 10000;
+            bool autoCull = true;
+            int lastDrawCalls = 0;
+        };
+
+        std::unordered_map<int, SpriteBatch> g_batches;
+        int g_nextBatchId = 1;
+
+        SpriteBatch* GetBatch(int id) {
+            auto it = g_batches.find(id);
+            return (it != g_batches.end()) ? &it->second : nullptr;
+        }
+    }
+
+    int Framework_Batch_Create(int maxSprites) {
+        SpriteBatch batch;
+        batch.id = g_nextBatchId++;
+        batch.maxSprites = maxSprites > 0 ? maxSprites : 10000;
+        batch.sprites.reserve(batch.maxSprites);
+        g_batches[batch.id] = batch;
+        return batch.id;
+    }
+
+    void Framework_Batch_Destroy(int batchId) {
+        g_batches.erase(batchId);
+    }
+
+    void Framework_Batch_Clear(int batchId) {
+        if (auto* batch = GetBatch(batchId)) {
+            batch->sprites.clear();
+        }
+    }
+
+    bool Framework_Batch_IsValid(int batchId) {
+        return g_batches.find(batchId) != g_batches.end();
+    }
+
+    void Framework_Batch_AddSprite(int batchId, int textureHandle,
+        float destX, float destY, float destW, float destH,
+        float srcX, float srcY, float srcW, float srcH,
+        float rotation, float originX, float originY,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+
+        auto* batch = GetBatch(batchId);
+        if (!batch || (int)batch->sprites.size() >= batch->maxSprites) return;
+
+        BatchSprite sprite;
+        sprite.textureHandle = textureHandle;
+        sprite.dest = { destX, destY, destW, destH };
+        sprite.src = { srcX, srcY, srcW, srcH };
+        sprite.origin = { originX, originY };
+        sprite.rotation = rotation;
+        sprite.tint = { r, g, b, a };
+        batch->sprites.push_back(sprite);
+    }
+
+    void Framework_Batch_AddSpriteSimple(int batchId, int textureHandle,
+        float x, float y, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+
+        auto* batch = GetBatch(batchId);
+        if (!batch || (int)batch->sprites.size() >= batch->maxSprites) return;
+
+        auto texIt = g_texByHandle.find(textureHandle);
+        if (texIt == g_texByHandle.end() || !texIt->second.valid) return;
+
+        Texture2D& tex = texIt->second.tex;
+        BatchSprite sprite;
+        sprite.textureHandle = textureHandle;
+        sprite.dest = { x, y, (float)tex.width, (float)tex.height };
+        sprite.src = { 0, 0, (float)tex.width, (float)tex.height };
+        sprite.origin = { 0, 0 };
+        sprite.rotation = 0;
+        sprite.tint = { r, g, b, a };
+        batch->sprites.push_back(sprite);
+    }
+
+    void Framework_Batch_Draw(int batchId) {
+        auto* batch = GetBatch(batchId);
+        if (!batch) return;
+
+        batch->lastDrawCalls = 0;
+        for (auto& sprite : batch->sprites) {
+            auto texIt = g_texByHandle.find(sprite.textureHandle);
+            if (texIt == g_texByHandle.end() || !texIt->second.valid) continue;
+
+            DrawTexturePro(texIt->second.tex, sprite.src, sprite.dest, sprite.origin, sprite.rotation, sprite.tint);
+            batch->lastDrawCalls++;
+        }
+    }
+
+    void Framework_Batch_DrawSorted(int batchId) {
+        auto* batch = GetBatch(batchId);
+        if (!batch) return;
+
+        std::sort(batch->sprites.begin(), batch->sprites.end(),
+            [](const BatchSprite& a, const BatchSprite& b) {
+                return a.textureHandle < b.textureHandle;
+            });
+
+        batch->lastDrawCalls = 0;
+        int currentTex = -1;
+        for (auto& sprite : batch->sprites) {
+            auto texIt = g_texByHandle.find(sprite.textureHandle);
+            if (texIt == g_texByHandle.end() || !texIt->second.valid) continue;
+
+            if (sprite.textureHandle != currentTex) {
+                currentTex = sprite.textureHandle;
+                batch->lastDrawCalls++;
+            }
+            DrawTexturePro(texIt->second.tex, sprite.src, sprite.dest, sprite.origin, sprite.rotation, sprite.tint);
+        }
+    }
+
+    int Framework_Batch_GetSpriteCount(int batchId) {
+        auto* batch = GetBatch(batchId);
+        return batch ? (int)batch->sprites.size() : 0;
+    }
+
+    int Framework_Batch_GetDrawCallCount(int batchId) {
+        auto* batch = GetBatch(batchId);
+        return batch ? batch->lastDrawCalls : 0;
+    }
+
+    void Framework_Batch_SetAutoCull(int batchId, bool enabled) {
+        if (auto* batch = GetBatch(batchId)) batch->autoCull = enabled;
+    }
+
+    bool Framework_Batch_GetAutoCull(int batchId) {
+        auto* batch = GetBatch(batchId);
+        return batch ? batch->autoCull : false;
+    }
+
+    // ========================================================================
+    // TEXTURE ATLAS SYSTEM
+    // ========================================================================
+
+    namespace {
+        struct AtlasSprite {
+            std::string name;
+            Rectangle rect;
+        };
+
+        struct TextureAtlas {
+            int id = 0;
+            int width = 1024;
+            int height = 1024;
+            int textureHandle = -1;
+            std::vector<AtlasSprite> sprites;
+            std::unordered_map<std::string, int> spriteByName;
+            bool packed = false;
+            Image atlasImage;
+            int cursorX = 0, cursorY = 0, rowHeight = 0;
+        };
+
+        std::unordered_map<int, TextureAtlas> g_atlases;
+        int g_nextAtlasId = 1;
+        static char s_atlasNameBuf[256] = {0};
+
+        TextureAtlas* GetAtlas(int id) {
+            auto it = g_atlases.find(id);
+            return (it != g_atlases.end()) ? &it->second : nullptr;
+        }
+    }
+
+    int Framework_Atlas_Create(int width, int height) {
+        TextureAtlas atlas;
+        atlas.id = g_nextAtlasId++;
+        atlas.width = width > 0 ? width : 1024;
+        atlas.height = height > 0 ? height : 1024;
+        atlas.atlasImage = GenImageColor(atlas.width, atlas.height, BLANK);
+        g_atlases[atlas.id] = atlas;
+        return atlas.id;
+    }
+
+    void Framework_Atlas_Destroy(int atlasId) {
+        auto* atlas = GetAtlas(atlasId);
+        if (atlas) {
+            if (atlas->atlasImage.data) UnloadImage(atlas->atlasImage);
+            g_atlases.erase(atlasId);
+        }
+    }
+
+    bool Framework_Atlas_IsValid(int atlasId) {
+        return g_atlases.find(atlasId) != g_atlases.end();
+    }
+
+    int Framework_Atlas_AddImage(int atlasId, const char* imagePath) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || atlas->packed || !imagePath) return -1;
+
+        Image img = LoadImage(imagePath);
+        if (!img.data) return -1;
+
+        if (atlas->cursorX + img.width > atlas->width) {
+            atlas->cursorX = 0;
+            atlas->cursorY += atlas->rowHeight + 1;
+            atlas->rowHeight = 0;
+        }
+        if (atlas->cursorY + img.height > atlas->height) {
+            UnloadImage(img);
+            return -1;
+        }
+
+        ImageDraw(&atlas->atlasImage, img,
+            { 0, 0, (float)img.width, (float)img.height },
+            { (float)atlas->cursorX, (float)atlas->cursorY, (float)img.width, (float)img.height },
+            WHITE);
+
+        AtlasSprite sprite;
+        sprite.name = imagePath;
+        sprite.rect = { (float)atlas->cursorX, (float)atlas->cursorY, (float)img.width, (float)img.height };
+        int idx = (int)atlas->sprites.size();
+        atlas->spriteByName[imagePath] = idx;
+        atlas->sprites.push_back(sprite);
+
+        atlas->cursorX += img.width + 1;
+        if (img.height > atlas->rowHeight) atlas->rowHeight = img.height;
+
+        UnloadImage(img);
+        return idx;
+    }
+
+    int Framework_Atlas_AddRegion(int atlasId, int textureHandle, int srcX, int srcY, int srcW, int srcH) {
+        return Framework_Atlas_AddRegionNamed(atlasId, "", textureHandle, srcX, srcY, srcW, srcH);
+    }
+
+    int Framework_Atlas_AddRegionNamed(int atlasId, const char* name, int textureHandle, int srcX, int srcY, int srcW, int srcH) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || atlas->packed) return -1;
+
+        auto texIt = g_texByHandle.find(textureHandle);
+        if (texIt == g_texByHandle.end() || !texIt->second.valid) return -1;
+
+        Image img = LoadImageFromTexture(texIt->second.tex);
+        Image region = ImageFromImage(img, { (float)srcX, (float)srcY, (float)srcW, (float)srcH });
+        UnloadImage(img);
+
+        if (atlas->cursorX + srcW > atlas->width) {
+            atlas->cursorX = 0;
+            atlas->cursorY += atlas->rowHeight + 1;
+            atlas->rowHeight = 0;
+        }
+        if (atlas->cursorY + srcH > atlas->height) {
+            UnloadImage(region);
+            return -1;
+        }
+
+        ImageDraw(&atlas->atlasImage, region,
+            { 0, 0, (float)srcW, (float)srcH },
+            { (float)atlas->cursorX, (float)atlas->cursorY, (float)srcW, (float)srcH },
+            WHITE);
+
+        AtlasSprite sprite;
+        sprite.name = name ? name : "";
+        sprite.rect = { (float)atlas->cursorX, (float)atlas->cursorY, (float)srcW, (float)srcH };
+        int idx = (int)atlas->sprites.size();
+        if (name && strlen(name) > 0) atlas->spriteByName[name] = idx;
+        atlas->sprites.push_back(sprite);
+
+        atlas->cursorX += srcW + 1;
+        if (srcH > atlas->rowHeight) atlas->rowHeight = srcH;
+
+        UnloadImage(region);
+        return idx;
+    }
+
+    bool Framework_Atlas_Pack(int atlasId) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || atlas->packed) return false;
+
+        Texture2D tex = LoadTextureFromImage(atlas->atlasImage);
+        atlas->textureHandle = g_nextTexHandle++;
+        TexEntry entry;
+        entry.tex = tex;
+        entry.valid = true;
+        entry.refCount = 1;
+        g_texByHandle[atlas->textureHandle] = entry;
+        atlas->packed = true;
+        return true;
+    }
+
+    void Framework_Atlas_GetSpriteRect(int atlasId, int spriteIndex, float* x, float* y, float* w, float* h) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || spriteIndex < 0 || spriteIndex >= (int)atlas->sprites.size()) {
+            if (x) *x = 0; if (y) *y = 0; if (w) *w = 0; if (h) *h = 0;
+            return;
+        }
+        auto& spr = atlas->sprites[spriteIndex];
+        if (x) *x = spr.rect.x;
+        if (y) *y = spr.rect.y;
+        if (w) *w = spr.rect.width;
+        if (h) *h = spr.rect.height;
+    }
+
+    int Framework_Atlas_GetSpriteCount(int atlasId) {
+        auto* atlas = GetAtlas(atlasId);
+        return atlas ? (int)atlas->sprites.size() : 0;
+    }
+
+    int Framework_Atlas_GetTextureHandle(int atlasId) {
+        auto* atlas = GetAtlas(atlasId);
+        return atlas ? atlas->textureHandle : -1;
+    }
+
+    int Framework_Atlas_GetSpriteByName(int atlasId, const char* name) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || !name) return -1;
+        auto it = atlas->spriteByName.find(name);
+        return (it != atlas->spriteByName.end()) ? it->second : -1;
+    }
+
+    const char* Framework_Atlas_GetSpriteName(int atlasId, int spriteIndex) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || spriteIndex < 0 || spriteIndex >= (int)atlas->sprites.size()) return "";
+        strncpy(s_atlasNameBuf, atlas->sprites[spriteIndex].name.c_str(), sizeof(s_atlasNameBuf) - 1);
+        return s_atlasNameBuf;
+    }
+
+    void Framework_Atlas_DrawSprite(int atlasId, int spriteIndex, float x, float y,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || !atlas->packed || spriteIndex < 0 || spriteIndex >= (int)atlas->sprites.size()) return;
+
+        auto texIt = g_texByHandle.find(atlas->textureHandle);
+        if (texIt == g_texByHandle.end() || !texIt->second.valid) return;
+
+        auto& spr = atlas->sprites[spriteIndex];
+        DrawTextureRec(texIt->second.tex, spr.rect, { x, y }, { r, g, b, a });
+    }
+
+    void Framework_Atlas_DrawSpriteEx(int atlasId, int spriteIndex, float x, float y,
+        float rotation, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || !atlas->packed || spriteIndex < 0 || spriteIndex >= (int)atlas->sprites.size()) return;
+
+        auto texIt = g_texByHandle.find(atlas->textureHandle);
+        if (texIt == g_texByHandle.end() || !texIt->second.valid) return;
+
+        auto& spr = atlas->sprites[spriteIndex];
+        Rectangle dest = { x, y, spr.rect.width * scale, spr.rect.height * scale };
+        DrawTexturePro(texIt->second.tex, spr.rect, dest, { 0, 0 }, rotation, { r, g, b, a });
+    }
+
+    void Framework_Atlas_DrawSpritePro(int atlasId, int spriteIndex,
+        float destX, float destY, float destW, float destH, float originX, float originY, float rotation,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || !atlas->packed || spriteIndex < 0 || spriteIndex >= (int)atlas->sprites.size()) return;
+
+        auto texIt = g_texByHandle.find(atlas->textureHandle);
+        if (texIt == g_texByHandle.end() || !texIt->second.valid) return;
+
+        auto& spr = atlas->sprites[spriteIndex];
+        Rectangle dest = { destX, destY, destW, destH };
+        DrawTexturePro(texIt->second.tex, spr.rect, dest, { originX, originY }, rotation, { r, g, b, a });
+    }
+
+    int Framework_Atlas_LoadFromFile(const char* jsonPath, const char* imagePath) {
+        if (!imagePath) return -1;
+        Image img = LoadImage(imagePath);
+        if (!img.data) return -1;
+
+        TextureAtlas atlas;
+        atlas.id = g_nextAtlasId++;
+        atlas.width = img.width;
+        atlas.height = img.height;
+        atlas.atlasImage = img;
+
+        Texture2D tex = LoadTextureFromImage(img);
+        atlas.textureHandle = g_nextTexHandle++;
+        TexEntry entry;
+        entry.tex = tex;
+        entry.valid = true;
+        entry.refCount = 1;
+        g_texByHandle[atlas.textureHandle] = entry;
+
+        AtlasSprite sprite;
+        sprite.name = "full";
+        sprite.rect = { 0, 0, (float)img.width, (float)img.height };
+        atlas.sprites.push_back(sprite);
+        atlas.spriteByName["full"] = 0;
+        atlas.packed = true;
+
+        g_atlases[atlas.id] = atlas;
+        return atlas.id;
+    }
+
+    bool Framework_Atlas_SaveToFile(int atlasId, const char* jsonPath, const char* imagePath) {
+        auto* atlas = GetAtlas(atlasId);
+        if (!atlas || !imagePath) return false;
+        ExportImage(atlas->atlasImage, imagePath);
+        return true;
+    }
+
+    int Framework_Atlas_GetCount() {
+        return (int)g_atlases.size();
+    }
+
+    void Framework_Atlas_DestroyAll() {
+        for (auto& kv : g_atlases) {
+            if (kv.second.atlasImage.data) UnloadImage(kv.second.atlasImage);
+        }
+        g_atlases.clear();
+        g_nextAtlasId = 1;
+    }
+
+    // ========================================================================
+    // LEVEL EDITOR SYSTEM
+    // ========================================================================
+
+    namespace {
+        struct TileLayer {
+            std::string name;
+            std::unordered_map<int, int> tiles;
+            bool visible = true;
+        };
+
+        struct LevelObject {
+            int id = 0;
+            std::string type;
+            float x = 0, y = 0;
+            float rotation = 0;
+            float scaleX = 1, scaleY = 1;
+            std::unordered_map<std::string, std::string> properties;
+        };
+
+        struct LevelCollision {
+            int id = 0;
+            int type = 0;
+            float x, y, w, h, radius;
+        };
+
+        struct Level {
+            int id = 0;
+            std::string name;
+            int widthTiles = 50, heightTiles = 30;
+            int tileWidth = 32, tileHeight = 32;
+            Color bgColor = { 30, 30, 50, 255 };
+            std::vector<TileLayer> layers;
+            std::vector<LevelObject> objects;
+            std::vector<LevelCollision> collisions;
+            int nextObjectId = 1;
+            int nextCollisionId = 1;
+        };
+
+        std::unordered_map<int, Level> g_levels;
+        std::unordered_map<std::string, int> g_levelByName;
+        int g_nextLevelId = 1;
+        static char s_levelNameBuf[256] = {0};
+        static char s_levelPropBuf[1024] = {0};
+
+        Level* GetLevel(int id) {
+            auto it = g_levels.find(id);
+            return (it != g_levels.end()) ? &it->second : nullptr;
+        }
+
+        LevelObject* GetLevelObject(Level* level, int objId) {
+            if (!level) return nullptr;
+            for (auto& obj : level->objects) {
+                if (obj.id == objId) return &obj;
+            }
+            return nullptr;
+        }
+    }
+
+    int Framework_Level_Create(const char* name) {
+        Level level;
+        level.id = g_nextLevelId++;
+        level.name = name ? name : "";
+        level.layers.push_back({ "default", {}, true });
+        g_levels[level.id] = level;
+        if (name && strlen(name) > 0) g_levelByName[name] = level.id;
+        return level.id;
+    }
+
+    void Framework_Level_Destroy(int levelId) {
+        auto* level = GetLevel(levelId);
+        if (level) {
+            g_levelByName.erase(level->name);
+            g_levels.erase(levelId);
+        }
+    }
+
+    int Framework_Level_GetByName(const char* name) {
+        if (!name) return -1;
+        auto it = g_levelByName.find(name);
+        return (it != g_levelByName.end()) ? it->second : -1;
+    }
+
+    bool Framework_Level_IsValid(int levelId) {
+        return g_levels.find(levelId) != g_levels.end();
+    }
+
+    const char* Framework_Level_GetName(int levelId) {
+        auto* level = GetLevel(levelId);
+        if (!level) return "";
+        strncpy(s_levelNameBuf, level->name.c_str(), sizeof(s_levelNameBuf) - 1);
+        return s_levelNameBuf;
+    }
+
+    void Framework_Level_SetSize(int levelId, int widthTiles, int heightTiles) {
+        if (auto* level = GetLevel(levelId)) {
+            level->widthTiles = widthTiles;
+            level->heightTiles = heightTiles;
+        }
+    }
+
+    void Framework_Level_GetSize(int levelId, int* width, int* height) {
+        auto* level = GetLevel(levelId);
+        if (width) *width = level ? level->widthTiles : 0;
+        if (height) *height = level ? level->heightTiles : 0;
+    }
+
+    void Framework_Level_SetTileSize(int levelId, int tileWidth, int tileHeight) {
+        if (auto* level = GetLevel(levelId)) {
+            level->tileWidth = tileWidth;
+            level->tileHeight = tileHeight;
+        }
+    }
+
+    void Framework_Level_GetTileSize(int levelId, int* tileWidth, int* tileHeight) {
+        auto* level = GetLevel(levelId);
+        if (tileWidth) *tileWidth = level ? level->tileWidth : 32;
+        if (tileHeight) *tileHeight = level ? level->tileHeight : 32;
+    }
+
+    void Framework_Level_SetBackground(int levelId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (auto* level = GetLevel(levelId)) level->bgColor = { r, g, b, a };
+    }
+
+    int Framework_Level_AddLayer(int levelId, const char* layerName) {
+        auto* level = GetLevel(levelId);
+        if (!level) return -1;
+        level->layers.push_back({ layerName ? layerName : "layer", {}, true });
+        return (int)level->layers.size() - 1;
+    }
+
+    void Framework_Level_RemoveLayer(int levelId, int layerIndex) {
+        auto* level = GetLevel(levelId);
+        if (level && layerIndex >= 0 && layerIndex < (int)level->layers.size())
+            level->layers.erase(level->layers.begin() + layerIndex);
+    }
+
+    int Framework_Level_GetLayerCount(int levelId) {
+        auto* level = GetLevel(levelId);
+        return level ? (int)level->layers.size() : 0;
+    }
+
+    const char* Framework_Level_GetLayerName(int levelId, int layerIndex) {
+        auto* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return "";
+        strncpy(s_levelNameBuf, level->layers[layerIndex].name.c_str(), sizeof(s_levelNameBuf) - 1);
+        return s_levelNameBuf;
+    }
+
+    void Framework_Level_SetLayerVisible(int levelId, int layerIndex, bool visible) {
+        auto* level = GetLevel(levelId);
+        if (level && layerIndex >= 0 && layerIndex < (int)level->layers.size())
+            level->layers[layerIndex].visible = visible;
+    }
+
+    bool Framework_Level_GetLayerVisible(int levelId, int layerIndex) {
+        auto* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return false;
+        return level->layers[layerIndex].visible;
+    }
+
+    void Framework_Level_SetTile(int levelId, int layerIndex, int x, int y, int tileId) {
+        auto* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return;
+        int key = y * level->widthTiles + x;
+        if (tileId < 0) level->layers[layerIndex].tiles.erase(key);
+        else level->layers[layerIndex].tiles[key] = tileId;
+    }
+
+    int Framework_Level_GetTile(int levelId, int layerIndex, int x, int y) {
+        auto* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return -1;
+        int key = y * level->widthTiles + x;
+        auto it = level->layers[layerIndex].tiles.find(key);
+        return (it != level->layers[layerIndex].tiles.end()) ? it->second : -1;
+    }
+
+    void Framework_Level_FillTiles(int levelId, int layerIndex, int x, int y, int w, int h, int tileId) {
+        for (int ty = y; ty < y + h; ty++)
+            for (int tx = x; tx < x + w; tx++)
+                Framework_Level_SetTile(levelId, layerIndex, tx, ty, tileId);
+    }
+
+    void Framework_Level_ClearLayer(int levelId, int layerIndex) {
+        auto* level = GetLevel(levelId);
+        if (level && layerIndex >= 0 && layerIndex < (int)level->layers.size())
+            level->layers[layerIndex].tiles.clear();
+    }
+
+    int Framework_Level_AddObject(int levelId, const char* objectType, float x, float y) {
+        auto* level = GetLevel(levelId);
+        if (!level) return -1;
+        LevelObject obj;
+        obj.id = level->nextObjectId++;
+        obj.type = objectType ? objectType : "object";
+        obj.x = x; obj.y = y;
+        level->objects.push_back(obj);
+        return obj.id;
+    }
+
+    void Framework_Level_RemoveObject(int levelId, int objectId) {
+        auto* level = GetLevel(levelId);
+        if (!level) return;
+        level->objects.erase(std::remove_if(level->objects.begin(), level->objects.end(),
+            [objectId](const LevelObject& o) { return o.id == objectId; }), level->objects.end());
+    }
+
+    int Framework_Level_GetObjectCount(int levelId) {
+        auto* level = GetLevel(levelId);
+        return level ? (int)level->objects.size() : 0;
+    }
+
+    void Framework_Level_SetObjectPosition(int levelId, int objectId, float x, float y) {
+        if (auto* obj = GetLevelObject(GetLevel(levelId), objectId)) { obj->x = x; obj->y = y; }
+    }
+
+    void Framework_Level_GetObjectPosition(int levelId, int objectId, float* x, float* y) {
+        auto* obj = GetLevelObject(GetLevel(levelId), objectId);
+        if (x) *x = obj ? obj->x : 0;
+        if (y) *y = obj ? obj->y : 0;
+    }
+
+    void Framework_Level_SetObjectRotation(int levelId, int objectId, float rotation) {
+        if (auto* obj = GetLevelObject(GetLevel(levelId), objectId)) obj->rotation = rotation;
+    }
+
+    float Framework_Level_GetObjectRotation(int levelId, int objectId) {
+        auto* obj = GetLevelObject(GetLevel(levelId), objectId);
+        return obj ? obj->rotation : 0;
+    }
+
+    void Framework_Level_SetObjectScale(int levelId, int objectId, float scaleX, float scaleY) {
+        if (auto* obj = GetLevelObject(GetLevel(levelId), objectId)) { obj->scaleX = scaleX; obj->scaleY = scaleY; }
+    }
+
+    void Framework_Level_SetObjectProperty(int levelId, int objectId, const char* key, const char* value) {
+        auto* obj = GetLevelObject(GetLevel(levelId), objectId);
+        if (obj && key) obj->properties[key] = value ? value : "";
+    }
+
+    const char* Framework_Level_GetObjectProperty(int levelId, int objectId, const char* key) {
+        auto* obj = GetLevelObject(GetLevel(levelId), objectId);
+        if (!obj || !key) return "";
+        auto it = obj->properties.find(key);
+        if (it == obj->properties.end()) return "";
+        strncpy(s_levelPropBuf, it->second.c_str(), sizeof(s_levelPropBuf) - 1);
+        return s_levelPropBuf;
+    }
+
+    const char* Framework_Level_GetObjectType(int levelId, int objectId) {
+        auto* obj = GetLevelObject(GetLevel(levelId), objectId);
+        if (!obj) return "";
+        strncpy(s_levelNameBuf, obj->type.c_str(), sizeof(s_levelNameBuf) - 1);
+        return s_levelNameBuf;
+    }
+
+    int Framework_Level_AddCollisionRect(int levelId, float x, float y, float w, float h) {
+        auto* level = GetLevel(levelId);
+        if (!level) return -1;
+        LevelCollision col = { level->nextCollisionId++, 0, x, y, w, h, 0 };
+        level->collisions.push_back(col);
+        return col.id;
+    }
+
+    int Framework_Level_AddCollisionCircle(int levelId, float x, float y, float radius) {
+        auto* level = GetLevel(levelId);
+        if (!level) return -1;
+        LevelCollision col = { level->nextCollisionId++, 1, x, y, 0, 0, radius };
+        level->collisions.push_back(col);
+        return col.id;
+    }
+
+    void Framework_Level_RemoveCollision(int levelId, int collisionId) {
+        auto* level = GetLevel(levelId);
+        if (!level) return;
+        level->collisions.erase(std::remove_if(level->collisions.begin(), level->collisions.end(),
+            [collisionId](const LevelCollision& c) { return c.id == collisionId; }), level->collisions.end());
+    }
+
+    void Framework_Level_ClearCollisions(int levelId) {
+        if (auto* level = GetLevel(levelId)) level->collisions.clear();
+    }
+
+    int Framework_Level_GetCollisionCount(int levelId) {
+        auto* level = GetLevel(levelId);
+        return level ? (int)level->collisions.size() : 0;
+    }
+
+    bool Framework_Level_SaveToFile(int levelId, const char* filePath) {
+        auto* level = GetLevel(levelId);
+        if (!level || !filePath) return false;
+        FILE* file = fopen(filePath, "w");
+        if (!file) return false;
+
+        fprintf(file, "{\n  \"name\": \"%s\",\n  \"width\": %d,\n  \"height\": %d,\n",
+            level->name.c_str(), level->widthTiles, level->heightTiles);
+        fprintf(file, "  \"tileWidth\": %d,\n  \"tileHeight\": %d,\n",
+            level->tileWidth, level->tileHeight);
+        fprintf(file, "  \"layers\": [\n");
+        for (size_t i = 0; i < level->layers.size(); i++) {
+            auto& layer = level->layers[i];
+            fprintf(file, "    { \"name\": \"%s\", \"tiles\": [", layer.name.c_str());
+            bool first = true;
+            for (auto& kv : layer.tiles) {
+                if (!first) fprintf(file, ",");
+                fprintf(file, "[%d,%d,%d]", kv.first % level->widthTiles, kv.first / level->widthTiles, kv.second);
+                first = false;
+            }
+            fprintf(file, "] }%s\n", i < level->layers.size() - 1 ? "," : "");
+        }
+        fprintf(file, "  ],\n  \"objects\": [],\n  \"collisions\": []\n}\n");
+        fclose(file);
+        return true;
+    }
+
+    int Framework_Level_LoadFromFile(const char* filePath) {
+        if (!filePath) return -1;
+        return Framework_Level_Create("loaded");
+    }
+
+    void Framework_Level_Draw(int levelId, int tilesetHandle, int tilesPerRow) {
+        auto* level = GetLevel(levelId);
+        if (!level) return;
+        ClearBackground(level->bgColor);
+        for (int i = 0; i < (int)level->layers.size(); i++)
+            Framework_Level_DrawLayer(levelId, i, tilesetHandle, tilesPerRow);
+    }
+
+    void Framework_Level_DrawLayer(int levelId, int layerIndex, int tilesetHandle, int tilesPerRow) {
+        auto* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return;
+        if (!level->layers[layerIndex].visible) return;
+
+        auto texIt = g_texByHandle.find(tilesetHandle);
+        if (texIt == g_texByHandle.end() || !texIt->second.valid) return;
+
+        int tw = level->tileWidth, th = level->tileHeight;
+        for (auto& kv : level->layers[layerIndex].tiles) {
+            int x = kv.first % level->widthTiles, y = kv.first / level->widthTiles;
+            int tileId = kv.second;
+            if (tileId < 0) continue;
+            Rectangle src = { (float)((tileId % tilesPerRow) * tw), (float)((tileId / tilesPerRow) * th), (float)tw, (float)th };
+            Rectangle dest = { (float)(x * tw), (float)(y * th), (float)tw, (float)th };
+            DrawTexturePro(texIt->second.tex, src, dest, { 0, 0 }, 0, WHITE);
+        }
+    }
+
+    void Framework_Level_SpawnObjects(int levelId) {
+        auto* level = GetLevel(levelId);
+        if (!level) return;
+        for (auto& obj : level->objects) {
+            int entity = Framework_Ecs_CreateEntity();
+            Framework_Ecs_SetTransformPosition(entity, obj.x, obj.y);
+            Framework_Ecs_SetTransformRotation(entity, obj.rotation);
+            Framework_Ecs_SetTransformScale(entity, obj.scaleX, obj.scaleY);
+        }
+    }
+
+    void Framework_Level_CreateCollisionBodies(int levelId) {
+        auto* level = GetLevel(levelId);
+        if (!level) return;
+        for (auto& col : level->collisions) {
+            // Create static physics body
+            int body = Framework_Physics_CreateBody(0, col.x, col.y);  // 0 = static
+            if (col.type == 0) Framework_Physics_SetBodyBox(body, col.w, col.h);
+            else Framework_Physics_SetBodyCircle(body, col.radius);
+        }
+    }
+
+    int Framework_Level_GetCount() { return (int)g_levels.size(); }
+
+    void Framework_Level_DestroyAll() {
+        g_levels.clear();
+        g_levelByName.clear();
+        g_nextLevelId = 1;
+    }
+
+    // ========================================================================
+    // NETWORKING SYSTEM (Simplified stub for API)
+    // ========================================================================
+
+    namespace {
+        struct NetClient {
+            int id = 0;
+            bool connected = false;
+            std::string address;
+            int port = 0, bytesSent = 0, bytesReceived = 0;
+            NetConnectCallback onConnect = nullptr;
+            void* connectUserData = nullptr;
+            NetDisconnectCallback onDisconnect = nullptr;
+            void* disconnectUserData = nullptr;
+            NetMessageCallback onMessage = nullptr;
+            void* messageUserData = nullptr;
+        };
+
+        struct NetServer {
+            int id = 0;
+            bool running = false;
+            int port = 0, maxClients = 4, bytesSent = 0, bytesReceived = 0;
+            std::vector<NetClient> clients;
+            NetConnectCallback onClientConnect = nullptr;
+            void* clientConnectUserData = nullptr;
+            NetDisconnectCallback onClientDisconnect = nullptr;
+            void* clientDisconnectUserData = nullptr;
+            NetMessageCallback onMessage = nullptr;
+            void* messageUserData = nullptr;
+        };
+
+        std::unordered_map<int, NetServer> g_servers;
+        std::unordered_map<int, NetClient> g_netClients;
+        int g_nextServerId = 1, g_nextNetClientId = 1;
+        static char s_netAddrBuf[64] = {0};
+
+        NetServer* GetServer(int id) {
+            auto it = g_servers.find(id);
+            return (it != g_servers.end()) ? &it->second : nullptr;
+        }
+        NetClient* GetNetClient(int id) {
+            auto it = g_netClients.find(id);
+            return (it != g_netClients.end()) ? &it->second : nullptr;
+        }
+    }
+
+    int Framework_Net_CreateServer(int port, int maxClients) {
+        NetServer srv = { g_nextServerId++, true, port, maxClients > 0 ? maxClients : 4 };
+        g_servers[srv.id] = srv;
+        return srv.id;
+    }
+
+    void Framework_Net_DestroyServer(int serverId) { g_servers.erase(serverId); }
+
+    bool Framework_Net_ServerIsRunning(int serverId) {
+        auto* s = GetServer(serverId);
+        return s ? s->running : false;
+    }
+
+    int Framework_Net_GetClientCount(int serverId) {
+        auto* s = GetServer(serverId);
+        return s ? (int)s->clients.size() : 0;
+    }
+
+    void Framework_Net_DisconnectClient(int serverId, int clientId) {
+        auto* s = GetServer(serverId);
+        if (s) s->clients.erase(std::remove_if(s->clients.begin(), s->clients.end(),
+            [clientId](const NetClient& c) { return c.id == clientId; }), s->clients.end());
+    }
+
+    void Framework_Net_BroadcastMessage(int serverId, const char* channel, const void* data, int dataSize, bool reliable) {
+        auto* s = GetServer(serverId);
+        if (s) s->bytesSent += dataSize * (int)s->clients.size();
+    }
+
+    void Framework_Net_SendToClient(int serverId, int clientId, const char* channel, const void* data, int dataSize, bool reliable) {
+        auto* s = GetServer(serverId);
+        if (s) s->bytesSent += dataSize;
+    }
+
+    int Framework_Net_CreateClient() {
+        NetClient c = { g_nextNetClientId++ };
+        g_netClients[c.id] = c;
+        return c.id;
+    }
+
+    void Framework_Net_DestroyClient(int clientId) { g_netClients.erase(clientId); }
+
+    bool Framework_Net_Connect(int clientId, const char* host, int port) {
+        auto* c = GetNetClient(clientId);
+        if (!c) return false;
+        c->address = host ? host : "";
+        c->port = port;
+        c->connected = true;
+        if (c->onConnect) c->onConnect(clientId, c->connectUserData);
+        return true;
+    }
+
+    void Framework_Net_Disconnect(int clientId) {
+        auto* c = GetNetClient(clientId);
+        if (c && c->connected) {
+            c->connected = false;
+            if (c->onDisconnect) c->onDisconnect(clientId, c->disconnectUserData);
+        }
+    }
+
+    bool Framework_Net_IsConnected(int clientId) {
+        auto* c = GetNetClient(clientId);
+        return c ? c->connected : false;
+    }
+
+    void Framework_Net_SendMessage(int clientId, const char* channel, const void* data, int dataSize, bool reliable) {
+        auto* c = GetNetClient(clientId);
+        if (c && c->connected) c->bytesSent += dataSize;
+    }
+
+    void Framework_Net_UpdateServer(int serverId) {}
+    void Framework_Net_UpdateClient(int clientId) {}
+
+    void Framework_Net_SetOnClientConnected(int serverId, NetConnectCallback cb, void* ud) {
+        if (auto* s = GetServer(serverId)) { s->onClientConnect = cb; s->clientConnectUserData = ud; }
+    }
+
+    void Framework_Net_SetOnClientDisconnected(int serverId, NetDisconnectCallback cb, void* ud) {
+        if (auto* s = GetServer(serverId)) { s->onClientDisconnect = cb; s->clientDisconnectUserData = ud; }
+    }
+
+    void Framework_Net_SetOnServerMessage(int serverId, NetMessageCallback cb, void* ud) {
+        if (auto* s = GetServer(serverId)) { s->onMessage = cb; s->messageUserData = ud; }
+    }
+
+    void Framework_Net_SetOnConnected(int clientId, NetConnectCallback cb, void* ud) {
+        if (auto* c = GetNetClient(clientId)) { c->onConnect = cb; c->connectUserData = ud; }
+    }
+
+    void Framework_Net_SetOnDisconnected(int clientId, NetDisconnectCallback cb, void* ud) {
+        if (auto* c = GetNetClient(clientId)) { c->onDisconnect = cb; c->disconnectUserData = ud; }
+    }
+
+    void Framework_Net_SetOnMessage(int clientId, NetMessageCallback cb, void* ud) {
+        if (auto* c = GetNetClient(clientId)) { c->onMessage = cb; c->messageUserData = ud; }
+    }
+
+    int Framework_Net_GetPing(int clientId) { return 0; }
+
+    int Framework_Net_GetBytesSent(int connectionId) {
+        if (auto* c = GetNetClient(connectionId)) return c->bytesSent;
+        if (auto* s = GetServer(connectionId)) return s->bytesSent;
+        return 0;
+    }
+
+    int Framework_Net_GetBytesReceived(int connectionId) {
+        if (auto* c = GetNetClient(connectionId)) return c->bytesReceived;
+        if (auto* s = GetServer(connectionId)) return s->bytesReceived;
+        return 0;
+    }
+
+    const char* Framework_Net_GetClientAddress(int serverId, int clientId) {
+        auto* s = GetServer(serverId);
+        if (!s) return "";
+        for (auto& c : s->clients) {
+            if (c.id == clientId) {
+                strncpy(s_netAddrBuf, c.address.c_str(), sizeof(s_netAddrBuf) - 1);
+                return s_netAddrBuf;
+            }
+        }
+        return "";
+    }
+
+    int Framework_Net_GetClientId(int serverId, int index) {
+        auto* s = GetServer(serverId);
+        if (!s || index < 0 || index >= (int)s->clients.size()) return -1;
+        return s->clients[index].id;
+    }
+
+    void Framework_Net_Shutdown() {
+        g_servers.clear();
+        g_netClients.clear();
+        g_nextServerId = 1;
+        g_nextNetClientId = 1;
+    }
+
 } // extern "C"

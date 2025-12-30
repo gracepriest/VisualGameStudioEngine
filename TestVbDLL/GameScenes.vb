@@ -26,7 +26,9 @@ Class TitleScene
         "DIALOGUE", "INVENTORY",
         "QUEST", "LIGHTING",
         "TIMER/EVT", "FSM",
-        "SAVE/LOAD", ""
+        "SAVE/LOAD", "BATCHING",
+        "ATLAS", "LEVEL ED",
+        "NETWORK", ""
     }
 
     ' Menu item colors (R, G, B)
@@ -40,12 +42,14 @@ Class TitleScene
         {255, 200, 150}, {200, 150, 255},
         {150, 255, 200}, {255, 255, 150},
         {150, 200, 255}, {255, 150, 200},
-        {200, 255, 150}, {100, 100, 100}
+        {200, 255, 150}, {100, 200, 255},
+        {255, 180, 100}, {150, 255, 150},
+        {200, 150, 255}, {100, 100, 100}
     }
 
     ' Grid layout constants
     Const MENU_COLS As Integer = 2
-    Const MENU_ROWS As Integer = 10
+    Const MENU_ROWS As Integer = 12
     Const MENU_START_Y As Integer = 100
     Const MENU_ITEM_WIDTH As Integer = 220
     Const MENU_ITEM_HEIGHT As Integer = 38
@@ -191,6 +195,22 @@ Class TitleScene
                     'Save/Load System Demo
                     Framework_PlaySoundH(sfxHit)
                     ChangeTo(New DemoSaveLoadScene)
+                Case 19
+                    'Sprite Batching Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoBatchingScene)
+                Case 20
+                    'Texture Atlas Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoAtlasScene)
+                Case 21
+                    'Level Editor Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoLevelScene)
+                Case 22
+                    'Networking Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoNetworkScene)
             End Select
         End If
 
@@ -4616,6 +4636,469 @@ Class DemoSaveLoadScene
         Framework_DrawText("W - Quick load", instrX + 15, instrY + 95, 12, 180, 180, 180, 255)
         Framework_DrawText("G - Add gold", instrX + 15, instrY + 110, 12, 180, 180, 180, 255)
         Framework_DrawText("U - Level up", instrX + 15, instrY + 125, 12, 180, 180, 180, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ============================================================================
+' DEMO: Sprite Batching System
+' ============================================================================
+Class DemoBatchingScene
+    Inherits Scene
+    Private _batchId As Integer = 0
+    Private _spriteCount As Integer = 1000
+    Private _useBatching As Boolean = True
+    Private _positions As List(Of Vector2)
+    Private _velocities As List(Of Vector2)
+    Private _rotations As List(Of Single)
+    Private _textureHandle As Integer = 0
+    Private _rnd As New Random()
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoBatchingScene OnEnter")
+        ' Create a batch with max 10000 sprites
+        _batchId = Framework_Batch_Create(10000)
+
+        ' Load a simple texture
+        _textureHandle = Framework_AcquireTextureH("images/blocks.png")
+
+        ' Initialize sprite data
+        _positions = New List(Of Vector2)
+        _velocities = New List(Of Vector2)
+        _rotations = New List(Of Single)
+
+        For i As Integer = 0 To _spriteCount - 1
+            _positions.Add(New Vector2(_rnd.Next(0, WINDOW_WIDTH), _rnd.Next(0, WINDOW_HEIGHT)))
+            _velocities.Add(New Vector2(CSng(_rnd.NextDouble() * 200 - 100), CSng(_rnd.NextDouble() * 200 - 100)))
+            _rotations.Add(CSng(_rnd.NextDouble() * 360))
+        Next
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        If _batchId > 0 Then Framework_Batch_Destroy(_batchId)
+        If _textureHandle > 0 Then Framework_ReleaseTextureH(_textureHandle)
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        ' ESC to return
+        If Framework_IsKeyPressed(Keys.ESCAPE) Then
+            SetCurrentScene(New TitleScene)
+            Return
+        End If
+
+        ' Toggle batching
+        If Framework_IsKeyPressed(Keys.B) Then
+            _useBatching = Not _useBatching
+        End If
+
+        ' Adjust sprite count
+        If Framework_IsKeyPressed(Keys.UP) AndAlso _spriteCount < 10000 Then
+            _spriteCount += 500
+            AddMoreSprites(500)
+        End If
+        If Framework_IsKeyPressed(Keys.DOWN) AndAlso _spriteCount > 100 Then
+            _spriteCount -= 500
+            RemoveSprites(500)
+        End If
+
+        ' Update sprite positions
+        For i As Integer = 0 To _positions.Count - 1
+            Dim p As Vector2 = _positions(i)
+            Dim v As Vector2 = _velocities(i)
+            p.x += v.x * dt
+            p.y += v.y * dt
+            _rotations(i) += 90 * dt
+
+            ' Bounce off edges
+            If p.x < 0 OrElse p.x > WINDOW_WIDTH Then v.x = -v.x
+            If p.y < 0 OrElse p.y > WINDOW_HEIGHT Then v.y = -v.y
+
+            _positions(i) = p
+            _velocities(i) = v
+        Next
+    End Sub
+
+    Private Sub AddMoreSprites(count As Integer)
+        For i As Integer = 0 To count - 1
+            _positions.Add(New Vector2(_rnd.Next(0, WINDOW_WIDTH), _rnd.Next(0, WINDOW_HEIGHT)))
+            _velocities.Add(New Vector2(CSng(_rnd.NextDouble() * 200 - 100), CSng(_rnd.NextDouble() * 200 - 100)))
+            _rotations.Add(CSng(_rnd.NextDouble() * 360))
+        Next
+    End Sub
+
+    Private Sub RemoveSprites(count As Integer)
+        For i As Integer = 0 To count - 1
+            If _positions.Count > 0 Then
+                _positions.RemoveAt(_positions.Count - 1)
+                _velocities.RemoveAt(_velocities.Count - 1)
+                _rotations.RemoveAt(_rotations.Count - 1)
+            End If
+        Next
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(20, 25, 30, 255)
+
+        If _useBatching AndAlso _batchId > 0 Then
+            ' Use sprite batching
+            Framework_Batch_Clear(_batchId)
+            For i As Integer = 0 To _positions.Count - 1
+                Dim p As Vector2 = _positions(i)
+                Framework_Batch_AddSprite(_batchId, _textureHandle, p.x, p.y, 32, 16, 0, 0, 32, 16, _rotations(i), 16, 8, 255, 255, 255, 255)
+            Next
+            Framework_Batch_DrawSorted(_batchId)
+        Else
+            ' Draw individually (no batching)
+            For i As Integer = 0 To _positions.Count - 1
+                Dim p As Vector2 = _positions(i)
+                Dim src As New Rectangle(0, 0, 32, 16)
+                Dim dest As New Rectangle(p.x, p.y, 32, 16)
+                Dim origin As New Vector2(16, 8)
+                Framework_DrawTextureProH(_textureHandle, src, dest, origin, _rotations(i), 255, 255, 255, 255)
+            Next
+        End If
+
+        ' Draw info
+        Framework_DrawRectangle(10, 10, 300, 130, 30, 30, 40, 220)
+        Framework_DrawText("SPRITE BATCHING DEMO", 20, 20, 20, 255, 200, 100, 255)
+        Framework_DrawText("Sprites: " & _positions.Count.ToString(), 20, 50, 16, 200, 200, 200, 255)
+        Framework_DrawText("Batching: " & If(_useBatching, "ON", "OFF"), 20, 70, 16, If(_useBatching, CByte(100), CByte(255)), If(_useBatching, CByte(255), CByte(100)), 100, 255)
+        Framework_DrawText("B - Toggle Batching", 20, 95, 14, 150, 150, 150, 255)
+        Framework_DrawText("UP/DOWN - Adjust count (+/-500)", 20, 115, 14, 150, 150, 150, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ============================================================================
+' DEMO: Texture Atlas System
+' ============================================================================
+Class DemoAtlasScene
+    Inherits Scene
+    Private _atlasId As Integer = 0
+    Private _spriteIndices As New List(Of Integer)
+    Private _selectedSprite As Integer = 0
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoAtlasScene OnEnter")
+        ' Create a 1024x1024 atlas
+        _atlasId = Framework_Atlas_Create(1024, 1024)
+
+        ' Add some images to the atlas
+        Dim idx1 As Integer = Framework_Atlas_AddImage(_atlasId, "images/blocks.png")
+        If idx1 >= 0 Then _spriteIndices.Add(idx1)
+
+        ' Pack the atlas to generate the texture
+        Framework_Atlas_Pack(_atlasId)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        If _atlasId > 0 Then Framework_Atlas_Destroy(_atlasId)
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.ESCAPE) Then
+            SetCurrentScene(New TitleScene)
+            Return
+        End If
+
+        ' Cycle through sprites
+        If Framework_IsKeyPressed(Keys.LEFT) AndAlso _selectedSprite > 0 Then
+            _selectedSprite -= 1
+        End If
+        If Framework_IsKeyPressed(Keys.RIGHT) AndAlso _selectedSprite < _spriteIndices.Count - 1 Then
+            _selectedSprite += 1
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(25, 30, 35, 255)
+
+        ' Draw atlas info
+        Framework_DrawRectangle(10, 10, 300, 100, 30, 30, 40, 220)
+        Framework_DrawText("TEXTURE ATLAS DEMO", 20, 20, 20, 255, 200, 100, 255)
+        Framework_DrawText("Sprites in atlas: " & Framework_Atlas_GetSpriteCount(_atlasId).ToString(), 20, 50, 16, 200, 200, 200, 255)
+        Framework_DrawText("LEFT/RIGHT - Select sprite", 20, 75, 14, 150, 150, 150, 255)
+
+        ' Draw all sprites from atlas in a grid
+        If _atlasId > 0 AndAlso _spriteIndices.Count > 0 Then
+            Dim x As Single = 100
+            Dim y As Single = 150
+            Dim idx As Integer = 0
+            For Each spriteIdx In _spriteIndices
+                ' Draw the sprite
+                Framework_Atlas_DrawSpriteEx(_atlasId, spriteIdx, x, y, 0, 2, 255, 255, 255, 255)
+
+                ' Highlight selected
+                If idx = _selectedSprite Then
+                    Framework_DrawRectangleLines(CInt(x - 5), CInt(y - 5), 80, 50, 255, 255, 0, 255)
+                End If
+
+                x += 100
+                If x > WINDOW_WIDTH - 100 Then
+                    x = 100
+                    y += 80
+                End If
+                idx += 1
+            Next
+        End If
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ============================================================================
+' DEMO: Level Editor System
+' ============================================================================
+Class DemoLevelScene
+    Inherits Scene
+    Private _levelId As Integer = 0
+    Private _tilesetHandle As Integer = 0
+    Private _selectedTile As Integer = 0
+    Private _cursorX As Integer = 5
+    Private _cursorY As Integer = 5
+    Private Const TILE_SIZE As Integer = 32
+    Private Const TILES_PER_ROW As Integer = 6
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoLevelScene OnEnter")
+        ' Create a new level
+        _levelId = Framework_Level_Create("DemoLevel")
+        Framework_Level_SetSize(_levelId, 30, 18)
+        Framework_Level_SetTileSize(_levelId, TILE_SIZE, TILE_SIZE)
+        Framework_Level_SetBackground(_levelId, 30, 40, 50, 255)
+
+        ' Add a tile layer
+        Framework_Level_AddLayer(_levelId, "ground")
+
+        ' Load tileset
+        _tilesetHandle = Framework_AcquireTextureH("images/blocks.png")
+
+        ' Create some initial tiles (floor)
+        For x As Integer = 0 To 29
+            Framework_Level_SetTile(_levelId, 0, x, 17, 0)
+        Next
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        If _levelId > 0 Then Framework_Level_Destroy(_levelId)
+        If _tilesetHandle > 0 Then Framework_ReleaseTextureH(_tilesetHandle)
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.ESCAPE) Then
+            SetCurrentScene(New TitleScene)
+            Return
+        End If
+
+        ' Move cursor
+        If Framework_IsKeyPressed(Keys.LEFT) AndAlso _cursorX > 0 Then _cursorX -= 1
+        If Framework_IsKeyPressed(Keys.RIGHT) AndAlso _cursorX < 29 Then _cursorX += 1
+        If Framework_IsKeyPressed(Keys.UP) AndAlso _cursorY > 0 Then _cursorY -= 1
+        If Framework_IsKeyPressed(Keys.DOWN) AndAlso _cursorY < 17 Then _cursorY += 1
+
+        ' Select tile type
+        If Framework_IsKeyPressed(Keys.ONE) Then _selectedTile = 0
+        If Framework_IsKeyPressed(Keys.TWO) Then _selectedTile = 1
+        If Framework_IsKeyPressed(Keys.THREE) Then _selectedTile = 2
+        If Framework_IsKeyPressed(Keys.FOUR) Then _selectedTile = 3
+        If Framework_IsKeyPressed(Keys.FIVE) Then _selectedTile = 4
+        If Framework_IsKeyPressed(Keys.SIX) Then _selectedTile = 5
+
+        ' Place/remove tile
+        If Framework_IsKeyPressed(Keys.SPACE) Then
+            Framework_Level_SetTile(_levelId, 0, _cursorX, _cursorY, _selectedTile)
+        End If
+        If Framework_IsKeyPressed(Keys.X) Then
+            Framework_Level_SetTile(_levelId, 0, _cursorX, _cursorY, -1)
+        End If
+
+        ' Save/Load
+        If Framework_IsKeyPressed(Keys.S) Then
+            Framework_Level_SaveToFile(_levelId, "demo_level.json")
+            Console.WriteLine("Level saved!")
+        End If
+        If Framework_IsKeyPressed(Keys.L) Then
+            Dim loaded As Integer = Framework_Level_LoadFromFile("demo_level.json")
+            If loaded > 0 Then
+                If _levelId > 0 Then Framework_Level_Destroy(_levelId)
+                _levelId = loaded
+                Console.WriteLine("Level loaded!")
+            End If
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(30, 40, 50, 255)
+
+        ' Draw the level
+        If _levelId > 0 AndAlso _tilesetHandle > 0 Then
+            Framework_Level_Draw(_levelId, _tilesetHandle, TILES_PER_ROW)
+        End If
+
+        ' Draw cursor
+        Framework_DrawRectangleLines(_cursorX * TILE_SIZE, _cursorY * TILE_SIZE, TILE_SIZE, TILE_SIZE, 255, 255, 0, 255)
+
+        ' Draw info panel
+        Framework_DrawRectangle(10, 10, 250, 170, 30, 30, 40, 220)
+        Framework_DrawText("LEVEL EDITOR DEMO", 20, 20, 18, 255, 200, 100, 255)
+        Framework_DrawText("Cursor: " & _cursorX.ToString() & ", " & _cursorY.ToString(), 20, 45, 14, 200, 200, 200, 255)
+        Framework_DrawText("Selected Tile: " & _selectedTile.ToString(), 20, 65, 14, 200, 200, 200, 255)
+        Framework_DrawText("Arrows - Move cursor", 20, 90, 12, 150, 150, 150, 255)
+        Framework_DrawText("1-6 - Select tile type", 20, 105, 12, 150, 150, 150, 255)
+        Framework_DrawText("SPACE - Place tile", 20, 120, 12, 150, 150, 150, 255)
+        Framework_DrawText("X - Remove tile", 20, 135, 12, 150, 150, 150, 255)
+        Framework_DrawText("S - Save / L - Load", 20, 150, 12, 150, 150, 150, 255)
+
+        ' Draw tile palette
+        Framework_DrawRectangle(WINDOW_WIDTH - 220, 10, 210, 80, 30, 30, 40, 220)
+        Framework_DrawText("Tile Palette:", WINDOW_WIDTH - 210, 20, 14, 255, 200, 100, 255)
+        For i As Integer = 0 To 5
+            Dim px As Integer = WINDOW_WIDTH - 210 + i * 32
+            Dim py As Integer = 45
+            ' Draw tile preview
+            Dim src As New Rectangle(i * 32, 0, 32, 16)
+            Dim dest As New Rectangle(px, py, 32, 16)
+            Framework_DrawTextureProH(_tilesetHandle, src, dest, New Vector2(0, 0), 0, 255, 255, 255, 255)
+            If i = _selectedTile Then
+                Framework_DrawRectangleLines(px - 2, py - 2, 36, 20, 255, 255, 0, 255)
+            End If
+        Next
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, WINDOW_HEIGHT - 30)
+    End Sub
+End Class
+
+' ============================================================================
+' DEMO: Networking System (Stub API Demo)
+' ============================================================================
+Class DemoNetworkScene
+    Inherits Scene
+    Private _isServer As Boolean = False
+    Private _isClient As Boolean = False
+    Private _serverId As Integer = 0
+    Private _clientId As Integer = 0
+    Private _statusMessage As String = "Press H to Host or J to Join"
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoNetworkScene OnEnter")
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        If _serverId > 0 Then Framework_Net_DestroyServer(_serverId)
+        If _clientId > 0 Then Framework_Net_DestroyClient(_clientId)
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.ESCAPE) Then
+            SetCurrentScene(New TitleScene)
+            Return
+        End If
+
+        ' Host server
+        If Framework_IsKeyPressed(Keys.H) AndAlso Not _isServer AndAlso Not _isClient Then
+            _serverId = Framework_Net_CreateServer(7777, 4)
+            If _serverId > 0 Then
+                _isServer = True
+                _statusMessage = "Server started on port 7777"
+            End If
+        End If
+
+        ' Join as client
+        If Framework_IsKeyPressed(Keys.J) AndAlso Not _isServer AndAlso Not _isClient Then
+            _clientId = Framework_Net_CreateClient()
+            If _clientId > 0 Then
+                If Framework_Net_Connect(_clientId, "127.0.0.1", 7777) Then
+                    _isClient = True
+                    _statusMessage = "Connected to server!"
+                Else
+                    _statusMessage = "Failed to connect"
+                End If
+            End If
+        End If
+
+        ' Update network
+        If _isServer AndAlso _serverId > 0 Then
+            Framework_Net_UpdateServer(_serverId)
+        End If
+        If _isClient AndAlso _clientId > 0 Then
+            Framework_Net_UpdateClient(_clientId)
+        End If
+
+        ' Disconnect
+        If Framework_IsKeyPressed(Keys.D) Then
+            If _isServer Then
+                Framework_Net_DestroyServer(_serverId)
+                _serverId = 0
+                _isServer = False
+                _statusMessage = "Server stopped"
+            End If
+            If _isClient Then
+                Framework_Net_Disconnect(_clientId)
+                Framework_Net_DestroyClient(_clientId)
+                _clientId = 0
+                _isClient = False
+                _statusMessage = "Disconnected"
+            End If
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(25, 30, 40, 255)
+
+        ' Draw info panel
+        Framework_DrawRectangle(WINDOW_WIDTH \ 2 - 200, 100, 400, 300, 30, 35, 45, 220)
+        Framework_DrawText("NETWORKING DEMO", WINDOW_WIDTH \ 2 - 90, 120, 22, 255, 200, 100, 255)
+
+        ' Status
+        Framework_DrawText(_statusMessage, WINDOW_WIDTH \ 2 - 180, 170, 16, 200, 200, 200, 255)
+
+        ' Connection info
+        If _isServer Then
+            Framework_DrawText("Mode: SERVER", WINDOW_WIDTH \ 2 - 180, 210, 18, 100, 255, 100, 255)
+            Framework_DrawText("Clients: " & Framework_Net_GetClientCount(_serverId).ToString(), WINDOW_WIDTH \ 2 - 180, 240, 16, 200, 200, 200, 255)
+            Framework_DrawText("Running: " & Framework_Net_ServerIsRunning(_serverId).ToString(), WINDOW_WIDTH \ 2 - 180, 260, 16, 200, 200, 200, 255)
+        ElseIf _isClient Then
+            Framework_DrawText("Mode: CLIENT", WINDOW_WIDTH \ 2 - 180, 210, 18, 100, 200, 255, 255)
+            Framework_DrawText("Connected: " & Framework_Net_IsConnected(_clientId).ToString(), WINDOW_WIDTH \ 2 - 180, 240, 16, 200, 200, 200, 255)
+            Framework_DrawText("Ping: " & Framework_Net_GetPing(_clientId).ToString() & " ms", WINDOW_WIDTH \ 2 - 180, 260, 16, 200, 200, 200, 255)
+        Else
+            Framework_DrawText("Mode: DISCONNECTED", WINDOW_WIDTH \ 2 - 180, 210, 18, 150, 150, 150, 255)
+        End If
+
+        ' Controls
+        Framework_DrawText("H - Host Server", WINDOW_WIDTH \ 2 - 180, 300, 14, 150, 150, 150, 255)
+        Framework_DrawText("J - Join Server", WINDOW_WIDTH \ 2 - 180, 320, 14, 150, 150, 150, 255)
+        Framework_DrawText("D - Disconnect", WINDOW_WIDTH \ 2 - 180, 340, 14, 150, 150, 150, 255)
+
+        ' Note about stub
+        Framework_DrawRectangle(WINDOW_WIDTH \ 2 - 180, 370, 360, 20, 50, 40, 40, 255)
+        Framework_DrawText("(Networking is a stub API for demonstration)", WINDOW_WIDTH \ 2 - 175, 373, 12, 200, 150, 100, 255)
 
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
     End Sub

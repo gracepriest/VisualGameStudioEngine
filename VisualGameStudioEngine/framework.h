@@ -2875,6 +2875,198 @@ extern "C" {
     __declspec(dllexport) void  Framework_Leaderboard_DestroyAll();
 
     // ========================================================================
+    // SPRITE BATCHING SYSTEM
+    // ========================================================================
+    // Reduce draw calls by grouping sprites with same texture
+
+    // Batch management
+    __declspec(dllexport) int   Framework_Batch_Create(int maxSprites);
+    __declspec(dllexport) void  Framework_Batch_Destroy(int batchId);
+    __declspec(dllexport) void  Framework_Batch_Clear(int batchId);
+    __declspec(dllexport) bool  Framework_Batch_IsValid(int batchId);
+
+    // Adding sprites
+    __declspec(dllexport) void  Framework_Batch_AddSprite(int batchId, int textureHandle,
+        float destX, float destY, float destW, float destH,
+        float srcX, float srcY, float srcW, float srcH,
+        float rotation, float originX, float originY,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Batch_AddSpriteSimple(int batchId, int textureHandle,
+        float x, float y, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // Rendering
+    __declspec(dllexport) void  Framework_Batch_Draw(int batchId);
+    __declspec(dllexport) void  Framework_Batch_DrawSorted(int batchId);
+
+    // Statistics & settings
+    __declspec(dllexport) int   Framework_Batch_GetSpriteCount(int batchId);
+    __declspec(dllexport) int   Framework_Batch_GetDrawCallCount(int batchId);
+    __declspec(dllexport) void  Framework_Batch_SetAutoCull(int batchId, bool enabled);
+    __declspec(dllexport) bool  Framework_Batch_GetAutoCull(int batchId);
+
+    // ========================================================================
+    // TEXTURE ATLAS SYSTEM
+    // ========================================================================
+    // Pack multiple sprites into single textures for efficiency
+
+    // Atlas creation
+    __declspec(dllexport) int   Framework_Atlas_Create(int width, int height);
+    __declspec(dllexport) void  Framework_Atlas_Destroy(int atlasId);
+    __declspec(dllexport) bool  Framework_Atlas_IsValid(int atlasId);
+
+    // Adding sprites to atlas
+    __declspec(dllexport) int   Framework_Atlas_AddImage(int atlasId, const char* imagePath);
+    __declspec(dllexport) int   Framework_Atlas_AddRegion(int atlasId, int textureHandle, int srcX, int srcY, int srcW, int srcH);
+    __declspec(dllexport) int   Framework_Atlas_AddRegionNamed(int atlasId, const char* name, int textureHandle, int srcX, int srcY, int srcW, int srcH);
+    __declspec(dllexport) bool  Framework_Atlas_Pack(int atlasId);
+
+    // Querying sprites
+    __declspec(dllexport) void  Framework_Atlas_GetSpriteRect(int atlasId, int spriteIndex, float* x, float* y, float* w, float* h);
+    __declspec(dllexport) int   Framework_Atlas_GetSpriteCount(int atlasId);
+    __declspec(dllexport) int   Framework_Atlas_GetTextureHandle(int atlasId);
+    __declspec(dllexport) int   Framework_Atlas_GetSpriteByName(int atlasId, const char* name);
+    __declspec(dllexport) const char* Framework_Atlas_GetSpriteName(int atlasId, int spriteIndex);
+
+    // Drawing
+    __declspec(dllexport) void  Framework_Atlas_DrawSprite(int atlasId, int spriteIndex, float x, float y,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Atlas_DrawSpriteEx(int atlasId, int spriteIndex, float x, float y,
+        float rotation, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Atlas_DrawSpritePro(int atlasId, int spriteIndex,
+        float destX, float destY, float destW, float destH, float originX, float originY, float rotation,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // Load/Save
+    __declspec(dllexport) int   Framework_Atlas_LoadFromFile(const char* jsonPath, const char* imagePath);
+    __declspec(dllexport) bool  Framework_Atlas_SaveToFile(int atlasId, const char* jsonPath, const char* imagePath);
+
+    // Global
+    __declspec(dllexport) int   Framework_Atlas_GetCount();
+    __declspec(dllexport) void  Framework_Atlas_DestroyAll();
+
+    // ========================================================================
+    // LEVEL EDITOR SYSTEM
+    // ========================================================================
+    // Runtime level loading/saving with JSON format
+
+    // Level management
+    __declspec(dllexport) int   Framework_Level_Create(const char* name);
+    __declspec(dllexport) void  Framework_Level_Destroy(int levelId);
+    __declspec(dllexport) int   Framework_Level_GetByName(const char* name);
+    __declspec(dllexport) bool  Framework_Level_IsValid(int levelId);
+    __declspec(dllexport) const char* Framework_Level_GetName(int levelId);
+
+    // Level properties
+    __declspec(dllexport) void  Framework_Level_SetSize(int levelId, int widthTiles, int heightTiles);
+    __declspec(dllexport) void  Framework_Level_GetSize(int levelId, int* width, int* height);
+    __declspec(dllexport) void  Framework_Level_SetTileSize(int levelId, int tileWidth, int tileHeight);
+    __declspec(dllexport) void  Framework_Level_GetTileSize(int levelId, int* tileWidth, int* tileHeight);
+    __declspec(dllexport) void  Framework_Level_SetBackground(int levelId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // Tile layers
+    __declspec(dllexport) int   Framework_Level_AddLayer(int levelId, const char* layerName);
+    __declspec(dllexport) void  Framework_Level_RemoveLayer(int levelId, int layerIndex);
+    __declspec(dllexport) int   Framework_Level_GetLayerCount(int levelId);
+    __declspec(dllexport) const char* Framework_Level_GetLayerName(int levelId, int layerIndex);
+    __declspec(dllexport) void  Framework_Level_SetLayerVisible(int levelId, int layerIndex, bool visible);
+    __declspec(dllexport) bool  Framework_Level_GetLayerVisible(int levelId, int layerIndex);
+
+    // Tile operations
+    __declspec(dllexport) void  Framework_Level_SetTile(int levelId, int layerIndex, int x, int y, int tileId);
+    __declspec(dllexport) int   Framework_Level_GetTile(int levelId, int layerIndex, int x, int y);
+    __declspec(dllexport) void  Framework_Level_FillTiles(int levelId, int layerIndex, int x, int y, int w, int h, int tileId);
+    __declspec(dllexport) void  Framework_Level_ClearLayer(int levelId, int layerIndex);
+
+    // Level objects
+    __declspec(dllexport) int   Framework_Level_AddObject(int levelId, const char* objectType, float x, float y);
+    __declspec(dllexport) void  Framework_Level_RemoveObject(int levelId, int objectId);
+    __declspec(dllexport) int   Framework_Level_GetObjectCount(int levelId);
+    __declspec(dllexport) void  Framework_Level_SetObjectPosition(int levelId, int objectId, float x, float y);
+    __declspec(dllexport) void  Framework_Level_GetObjectPosition(int levelId, int objectId, float* x, float* y);
+    __declspec(dllexport) void  Framework_Level_SetObjectRotation(int levelId, int objectId, float rotation);
+    __declspec(dllexport) float Framework_Level_GetObjectRotation(int levelId, int objectId);
+    __declspec(dllexport) void  Framework_Level_SetObjectScale(int levelId, int objectId, float scaleX, float scaleY);
+    __declspec(dllexport) void  Framework_Level_SetObjectProperty(int levelId, int objectId, const char* key, const char* value);
+    __declspec(dllexport) const char* Framework_Level_GetObjectProperty(int levelId, int objectId, const char* key);
+    __declspec(dllexport) const char* Framework_Level_GetObjectType(int levelId, int objectId);
+
+    // Collision shapes
+    __declspec(dllexport) int   Framework_Level_AddCollisionRect(int levelId, float x, float y, float w, float h);
+    __declspec(dllexport) int   Framework_Level_AddCollisionCircle(int levelId, float x, float y, float radius);
+    __declspec(dllexport) void  Framework_Level_RemoveCollision(int levelId, int collisionId);
+    __declspec(dllexport) void  Framework_Level_ClearCollisions(int levelId);
+    __declspec(dllexport) int   Framework_Level_GetCollisionCount(int levelId);
+
+    // Load/Save
+    __declspec(dllexport) bool  Framework_Level_SaveToFile(int levelId, const char* filePath);
+    __declspec(dllexport) int   Framework_Level_LoadFromFile(const char* filePath);
+
+    // Rendering
+    __declspec(dllexport) void  Framework_Level_Draw(int levelId, int tilesetHandle, int tilesPerRow);
+    __declspec(dllexport) void  Framework_Level_DrawLayer(int levelId, int layerIndex, int tilesetHandle, int tilesPerRow);
+
+    // ECS Integration
+    __declspec(dllexport) void  Framework_Level_SpawnObjects(int levelId);
+    __declspec(dllexport) void  Framework_Level_CreateCollisionBodies(int levelId);
+
+    // Global
+    __declspec(dllexport) int   Framework_Level_GetCount();
+    __declspec(dllexport) void  Framework_Level_DestroyAll();
+
+    // ========================================================================
+    // NETWORKING SYSTEM
+    // ========================================================================
+    // Client-server multiplayer support
+
+    // Callback types
+    typedef void (*NetConnectCallback)(int connectionId, void* userData);
+    typedef void (*NetDisconnectCallback)(int connectionId, void* userData);
+    typedef void (*NetMessageCallback)(int connectionId, const char* channel, const void* data, int dataSize, void* userData);
+
+    // Server
+    __declspec(dllexport) int   Framework_Net_CreateServer(int port, int maxClients);
+    __declspec(dllexport) void  Framework_Net_DestroyServer(int serverId);
+    __declspec(dllexport) bool  Framework_Net_ServerIsRunning(int serverId);
+    __declspec(dllexport) int   Framework_Net_GetClientCount(int serverId);
+    __declspec(dllexport) void  Framework_Net_DisconnectClient(int serverId, int clientId);
+    __declspec(dllexport) void  Framework_Net_BroadcastMessage(int serverId, const char* channel, const void* data, int dataSize, bool reliable);
+    __declspec(dllexport) void  Framework_Net_SendToClient(int serverId, int clientId, const char* channel, const void* data, int dataSize, bool reliable);
+
+    // Client
+    __declspec(dllexport) int   Framework_Net_CreateClient();
+    __declspec(dllexport) void  Framework_Net_DestroyClient(int clientId);
+    __declspec(dllexport) bool  Framework_Net_Connect(int clientId, const char* host, int port);
+    __declspec(dllexport) void  Framework_Net_Disconnect(int clientId);
+    __declspec(dllexport) bool  Framework_Net_IsConnected(int clientId);
+    __declspec(dllexport) void  Framework_Net_SendMessage(int clientId, const char* channel, const void* data, int dataSize, bool reliable);
+
+    // Update
+    __declspec(dllexport) void  Framework_Net_UpdateServer(int serverId);
+    __declspec(dllexport) void  Framework_Net_UpdateClient(int clientId);
+
+    // Server callbacks
+    __declspec(dllexport) void  Framework_Net_SetOnClientConnected(int serverId, NetConnectCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Net_SetOnClientDisconnected(int serverId, NetDisconnectCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Net_SetOnServerMessage(int serverId, NetMessageCallback callback, void* userData);
+
+    // Client callbacks
+    __declspec(dllexport) void  Framework_Net_SetOnConnected(int clientId, NetConnectCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Net_SetOnDisconnected(int clientId, NetDisconnectCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Net_SetOnMessage(int clientId, NetMessageCallback callback, void* userData);
+
+    // Stats
+    __declspec(dllexport) int   Framework_Net_GetPing(int clientId);
+    __declspec(dllexport) int   Framework_Net_GetBytesSent(int connectionId);
+    __declspec(dllexport) int   Framework_Net_GetBytesReceived(int connectionId);
+
+    // Utility
+    __declspec(dllexport) const char* Framework_Net_GetClientAddress(int serverId, int clientId);
+    __declspec(dllexport) int   Framework_Net_GetClientId(int serverId, int index);
+
+    // Global
+    __declspec(dllexport) void  Framework_Net_Shutdown();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

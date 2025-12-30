@@ -198,6 +198,8 @@ Public Module Utiliy
         U = 85
         X = 88
         Z = 90
+        B = 66
+        J = 74
         ONE = 49
         TWO = 50
         THREE = 51
