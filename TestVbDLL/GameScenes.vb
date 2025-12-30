@@ -4687,8 +4687,8 @@ Class DemoBatchingScene
     End Sub
 
     Protected Overrides Sub OnUpdateFrame(dt As Single)
-        ' ESC to return
-        If Framework_IsKeyPressed(Keys.ESCAPE) Then
+        ' ESC or BACKSPACE to return
+        If Framework_IsKeyPressed(Keys.ESCAPE) OrElse Framework_IsKeyPressed(Keys.BACKSPACE) Then
             SetCurrentScene(New TitleScene)
             Return
         End If
@@ -4783,24 +4783,41 @@ End Class
 Class DemoAtlasScene
     Inherits Scene
     Private _atlasId As Integer = 0
-    Private _spriteIndices As New List(Of Integer)
+    Private _textureHandle As Integer = 0
+    Private _spriteCount As Integer = 0
     Private _selectedSprite As Integer = 0
+    Private _packed As Boolean = False
 
     Protected Overrides Sub OnEnter()
         Console.WriteLine("DemoAtlasScene OnEnter")
-        ' Create a 1024x1024 atlas
-        _atlasId = Framework_Atlas_Create(1024, 1024)
 
-        ' Add some images to the atlas
-        Dim idx1 As Integer = Framework_Atlas_AddImage(_atlasId, "images/blocks.png")
-        If idx1 >= 0 Then _spriteIndices.Add(idx1)
+        ' First load the source texture
+        _textureHandle = Framework_AcquireTextureH("images/blocks.png")
+        Console.WriteLine("Loaded texture handle: " & _textureHandle.ToString())
 
-        ' Pack the atlas to generate the texture
-        Framework_Atlas_Pack(_atlasId)
+        ' Create a 512x512 atlas
+        _atlasId = Framework_Atlas_Create(512, 512)
+        Console.WriteLine("Created atlas: " & _atlasId.ToString())
+
+        If _atlasId > 0 AndAlso _textureHandle > 0 Then
+            ' Add individual regions from the tileset (32x16 tiles)
+            For row As Integer = 0 To 5
+                For col As Integer = 0 To 5
+                    Dim idx As Integer = Framework_Atlas_AddRegion(_atlasId, _textureHandle, col * 32, row * 16, 32, 16)
+                    If idx >= 0 Then _spriteCount += 1
+                Next
+            Next
+            Console.WriteLine("Added " & _spriteCount.ToString() & " regions")
+
+            ' Pack the atlas
+            _packed = Framework_Atlas_Pack(_atlasId)
+            Console.WriteLine("Pack result: " & _packed.ToString())
+        End If
     End Sub
 
     Protected Overrides Sub OnExit()
         If _atlasId > 0 Then Framework_Atlas_Destroy(_atlasId)
+        If _textureHandle > 0 Then Framework_ReleaseTextureH(_textureHandle)
     End Sub
 
     Protected Overrides Sub OnResume()
@@ -4810,7 +4827,8 @@ Class DemoAtlasScene
     End Sub
 
     Protected Overrides Sub OnUpdateFrame(dt As Single)
-        If Framework_IsKeyPressed(Keys.ESCAPE) Then
+        ' ESC or BACKSPACE to return
+        If Framework_IsKeyPressed(Keys.ESCAPE) OrElse Framework_IsKeyPressed(Keys.BACKSPACE) Then
             SetCurrentScene(New TitleScene)
             Return
         End If
@@ -4819,7 +4837,7 @@ Class DemoAtlasScene
         If Framework_IsKeyPressed(Keys.LEFT) AndAlso _selectedSprite > 0 Then
             _selectedSprite -= 1
         End If
-        If Framework_IsKeyPressed(Keys.RIGHT) AndAlso _selectedSprite < _spriteIndices.Count - 1 Then
+        If Framework_IsKeyPressed(Keys.RIGHT) AndAlso _selectedSprite < _spriteCount - 1 Then
             _selectedSprite += 1
         End If
     End Sub
@@ -4828,32 +4846,39 @@ Class DemoAtlasScene
         Framework_ClearBackground(25, 30, 35, 255)
 
         ' Draw atlas info
-        Framework_DrawRectangle(10, 10, 300, 100, 30, 30, 40, 220)
+        Framework_DrawRectangle(10, 10, 350, 130, 30, 30, 40, 220)
         Framework_DrawText("TEXTURE ATLAS DEMO", 20, 20, 20, 255, 200, 100, 255)
-        Framework_DrawText("Sprites in atlas: " & Framework_Atlas_GetSpriteCount(_atlasId).ToString(), 20, 50, 16, 200, 200, 200, 255)
-        Framework_DrawText("LEFT/RIGHT - Select sprite", 20, 75, 14, 150, 150, 150, 255)
+        Framework_DrawText("Atlas ID: " & _atlasId.ToString() & "  Packed: " & _packed.ToString(), 20, 50, 14, 200, 200, 200, 255)
+        Framework_DrawText("Sprites in atlas: " & _spriteCount.ToString(), 20, 70, 14, 200, 200, 200, 255)
+        Framework_DrawText("Selected: " & _selectedSprite.ToString(), 20, 90, 14, 255, 255, 100, 255)
+        Framework_DrawText("LEFT/RIGHT - Select sprite", 20, 115, 12, 150, 150, 150, 255)
 
-        ' Draw all sprites from atlas in a grid
-        If _atlasId > 0 AndAlso _spriteIndices.Count > 0 Then
-            Dim x As Single = 100
-            Dim y As Single = 150
-            Dim idx As Integer = 0
-            For Each spriteIdx In _spriteIndices
-                ' Draw the sprite
-                Framework_Atlas_DrawSpriteEx(_atlasId, spriteIdx, x, y, 0, 2, 255, 255, 255, 255)
+        ' Draw sprites from atlas in a grid
+        If _atlasId > 0 AndAlso _spriteCount > 0 Then
+            Dim startX As Single = 50
+            Dim startY As Single = 180
+            Dim spacing As Single = 50
+
+            For i As Integer = 0 To _spriteCount - 1
+                Dim col As Integer = i Mod 12
+                Dim row As Integer = i \ 12
+                Dim x As Single = startX + col * spacing
+                Dim y As Single = startY + row * spacing
+
+                ' Draw sprite from atlas
+                Framework_Atlas_DrawSpriteEx(_atlasId, i, x, y, 0, 1.0F, 255, 255, 255, 255)
 
                 ' Highlight selected
-                If idx = _selectedSprite Then
-                    Framework_DrawRectangleLines(CInt(x - 5), CInt(y - 5), 80, 50, 255, 255, 0, 255)
+                If i = _selectedSprite Then
+                    Framework_DrawRectangleLines(CInt(x - 2), CInt(y - 2), 36, 20, 255, 255, 0, 255)
                 End If
-
-                x += 100
-                If x > WINDOW_WIDTH - 100 Then
-                    x = 100
-                    y += 80
-                End If
-                idx += 1
             Next
+
+            ' Draw selected sprite larger
+            Framework_DrawText("Selected Sprite (2x):", 400, 160, 16, 255, 200, 100, 255)
+            Framework_Atlas_DrawSpriteEx(_atlasId, _selectedSprite, 400, 200, 0, 2.0F, 255, 255, 255, 255)
+        Else
+            Framework_DrawText("No sprites loaded - check console for errors", 50, 200, 18, 255, 100, 100, 255)
         End If
 
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
@@ -4905,7 +4930,8 @@ Class DemoLevelScene
     End Sub
 
     Protected Overrides Sub OnUpdateFrame(dt As Single)
-        If Framework_IsKeyPressed(Keys.ESCAPE) Then
+        ' ESC or BACKSPACE to return
+        If Framework_IsKeyPressed(Keys.ESCAPE) OrElse Framework_IsKeyPressed(Keys.BACKSPACE) Then
             SetCurrentScene(New TitleScene)
             Return
         End If
@@ -5015,7 +5041,8 @@ Class DemoNetworkScene
     End Sub
 
     Protected Overrides Sub OnUpdateFrame(dt As Single)
-        If Framework_IsKeyPressed(Keys.ESCAPE) Then
+        ' ESC or BACKSPACE to return
+        If Framework_IsKeyPressed(Keys.ESCAPE) OrElse Framework_IsKeyPressed(Keys.BACKSPACE) Then
             SetCurrentScene(New TitleScene)
             Return
         End If
