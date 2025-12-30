@@ -2644,6 +2644,226 @@ extern "C" {
     __declspec(dllexport) void  Framework_Effects_ResetAll();
 
     // ========================================================================
+    // LOCALIZATION SYSTEM
+    // ========================================================================
+    // Multi-language support with string tables and language switching
+
+    // ---- System Control ----
+    __declspec(dllexport) void  Framework_Locale_Initialize();
+    __declspec(dllexport) void  Framework_Locale_Shutdown();
+    __declspec(dllexport) bool  Framework_Locale_LoadLanguage(const char* languageCode, const char* filePath);
+    __declspec(dllexport) bool  Framework_Locale_SetLanguage(const char* languageCode);
+    __declspec(dllexport) const char* Framework_Locale_GetCurrentLanguage();
+    __declspec(dllexport) int   Framework_Locale_GetLanguageCount();
+    __declspec(dllexport) const char* Framework_Locale_GetLanguageAt(int index);
+
+    // ---- String Retrieval ----
+    __declspec(dllexport) const char* Framework_Locale_GetString(const char* key);
+    __declspec(dllexport) const char* Framework_Locale_GetStringDefault(const char* key, const char* defaultValue);
+    __declspec(dllexport) const char* Framework_Locale_Format(const char* key, const char* arg1);
+    __declspec(dllexport) const char* Framework_Locale_Format2(const char* key, const char* arg1, const char* arg2);
+    __declspec(dllexport) const char* Framework_Locale_Format3(const char* key, const char* arg1, const char* arg2, const char* arg3);
+    __declspec(dllexport) bool  Framework_Locale_HasString(const char* key);
+
+    // ---- String Table Management ----
+    __declspec(dllexport) void  Framework_Locale_SetString(const char* key, const char* value);
+    __declspec(dllexport) void  Framework_Locale_RemoveString(const char* key);
+    __declspec(dllexport) int   Framework_Locale_GetStringCount();
+    __declspec(dllexport) void  Framework_Locale_ClearStrings();
+
+    // ---- File Operations ----
+    __declspec(dllexport) bool  Framework_Locale_SaveLanguage(const char* languageCode, const char* filePath);
+    __declspec(dllexport) bool  Framework_Locale_ReloadCurrent();
+
+    // ---- Callbacks ----
+    typedef void (*LocaleChangedCallback)(const char* newLanguage);
+    __declspec(dllexport) void  Framework_Locale_SetOnLanguageChanged(LocaleChangedCallback callback);
+
+    // ========================================================================
+    // ACHIEVEMENT SYSTEM
+    // ========================================================================
+    // Unlock achievements, track progress, and display notifications
+
+    // Achievement State
+    #define ACHIEVEMENT_LOCKED      0
+    #define ACHIEVEMENT_UNLOCKED    1
+    #define ACHIEVEMENT_HIDDEN      2
+
+    // ---- Achievement Definition ----
+    __declspec(dllexport) int   Framework_Achievement_Create(const char* id, const char* name, const char* description);
+    __declspec(dllexport) void  Framework_Achievement_SetIcon(int achievementId, int textureHandle);
+    __declspec(dllexport) void  Framework_Achievement_SetHidden(int achievementId, bool hidden);
+    __declspec(dllexport) void  Framework_Achievement_SetPoints(int achievementId, int points);
+
+    // ---- Progress Achievements ----
+    __declspec(dllexport) void  Framework_Achievement_SetProgressTarget(int achievementId, int target);
+    __declspec(dllexport) void  Framework_Achievement_SetProgress(int achievementId, int progress);
+    __declspec(dllexport) void  Framework_Achievement_AddProgress(int achievementId, int amount);
+    __declspec(dllexport) int   Framework_Achievement_GetProgress(int achievementId);
+    __declspec(dllexport) int   Framework_Achievement_GetProgressTarget(int achievementId);
+    __declspec(dllexport) float Framework_Achievement_GetProgressPercent(int achievementId);
+
+    // ---- Unlock/Lock ----
+    __declspec(dllexport) void  Framework_Achievement_Unlock(int achievementId);
+    __declspec(dllexport) void  Framework_Achievement_Lock(int achievementId);
+    __declspec(dllexport) bool  Framework_Achievement_IsUnlocked(int achievementId);
+    __declspec(dllexport) int   Framework_Achievement_GetState(int achievementId);
+
+    // ---- Queries ----
+    __declspec(dllexport) int   Framework_Achievement_GetByName(const char* id);
+    __declspec(dllexport) const char* Framework_Achievement_GetName(int achievementId);
+    __declspec(dllexport) const char* Framework_Achievement_GetDescription(int achievementId);
+    __declspec(dllexport) int   Framework_Achievement_GetPoints(int achievementId);
+    __declspec(dllexport) int   Framework_Achievement_GetCount();
+    __declspec(dllexport) int   Framework_Achievement_GetUnlockedCount();
+    __declspec(dllexport) int   Framework_Achievement_GetTotalPoints();
+    __declspec(dllexport) int   Framework_Achievement_GetEarnedPoints();
+
+    // ---- Notifications ----
+    __declspec(dllexport) void  Framework_Achievement_SetNotificationsEnabled(bool enabled);
+    __declspec(dllexport) void  Framework_Achievement_SetNotificationDuration(float seconds);
+    __declspec(dllexport) void  Framework_Achievement_SetNotificationPosition(int x, int y);
+    __declspec(dllexport) void  Framework_Achievement_Update(float deltaTime);
+    __declspec(dllexport) void  Framework_Achievement_DrawNotifications();
+
+    // ---- Persistence ----
+    __declspec(dllexport) bool  Framework_Achievement_Save(const char* filePath);
+    __declspec(dllexport) bool  Framework_Achievement_Load(const char* filePath);
+    __declspec(dllexport) void  Framework_Achievement_ResetAll();
+
+    // ---- Callbacks ----
+    typedef void (*AchievementUnlockedCallback)(int achievementId, const char* name);
+    __declspec(dllexport) void  Framework_Achievement_SetOnUnlocked(AchievementUnlockedCallback callback);
+
+    // ========================================================================
+    // CUTSCENE SYSTEM
+    // ========================================================================
+    // Scripted sequences with actor commands and camera control
+
+    // Command Types
+    #define CUTSCENE_CMD_WAIT           0
+    #define CUTSCENE_CMD_DIALOGUE       1
+    #define CUTSCENE_CMD_MOVE_ACTOR     2
+    #define CUTSCENE_CMD_FADE_IN        3
+    #define CUTSCENE_CMD_FADE_OUT       4
+    #define CUTSCENE_CMD_PLAY_SOUND     5
+    #define CUTSCENE_CMD_PLAY_MUSIC     6
+    #define CUTSCENE_CMD_STOP_MUSIC     7
+    #define CUTSCENE_CMD_CAMERA_PAN     8
+    #define CUTSCENE_CMD_CAMERA_ZOOM    9
+    #define CUTSCENE_CMD_SHAKE          10
+    #define CUTSCENE_CMD_SET_VISIBLE    11
+    #define CUTSCENE_CMD_ANIMATE        12
+    #define CUTSCENE_CMD_CALLBACK       13
+
+    // Cutscene State
+    #define CUTSCENE_STATE_IDLE         0
+    #define CUTSCENE_STATE_PLAYING      1
+    #define CUTSCENE_STATE_PAUSED       2
+    #define CUTSCENE_STATE_FINISHED     3
+
+    // ---- Cutscene Management ----
+    __declspec(dllexport) int   Framework_Cutscene_Create(const char* name);
+    __declspec(dllexport) void  Framework_Cutscene_Destroy(int cutsceneId);
+    __declspec(dllexport) int   Framework_Cutscene_GetByName(const char* name);
+
+    // ---- Adding Commands ----
+    __declspec(dllexport) void  Framework_Cutscene_AddWait(int cutsceneId, float duration);
+    __declspec(dllexport) void  Framework_Cutscene_AddDialogue(int cutsceneId, const char* speaker, const char* text, float duration);
+    __declspec(dllexport) void  Framework_Cutscene_AddMoveActor(int cutsceneId, int entityId, float targetX, float targetY, float duration);
+    __declspec(dllexport) void  Framework_Cutscene_AddFadeIn(int cutsceneId, float duration);
+    __declspec(dllexport) void  Framework_Cutscene_AddFadeOut(int cutsceneId, float duration);
+    __declspec(dllexport) void  Framework_Cutscene_AddPlaySound(int cutsceneId, int soundHandle);
+    __declspec(dllexport) void  Framework_Cutscene_AddPlayMusic(int cutsceneId, const char* musicPath);
+    __declspec(dllexport) void  Framework_Cutscene_AddStopMusic(int cutsceneId, float fadeTime);
+    __declspec(dllexport) void  Framework_Cutscene_AddCameraPan(int cutsceneId, float targetX, float targetY, float duration);
+    __declspec(dllexport) void  Framework_Cutscene_AddCameraZoom(int cutsceneId, float targetZoom, float duration);
+    __declspec(dllexport) void  Framework_Cutscene_AddShake(int cutsceneId, float intensity, float duration);
+    __declspec(dllexport) void  Framework_Cutscene_AddSetVisible(int cutsceneId, int entityId, bool visible);
+    __declspec(dllexport) void  Framework_Cutscene_AddAnimate(int cutsceneId, int entityId, const char* animationName);
+    typedef void (*CutsceneCallback)();
+    __declspec(dllexport) void  Framework_Cutscene_AddCallback(int cutsceneId, CutsceneCallback callback);
+
+    // ---- Playback Control ----
+    __declspec(dllexport) void  Framework_Cutscene_Play(int cutsceneId);
+    __declspec(dllexport) void  Framework_Cutscene_Pause(int cutsceneId);
+    __declspec(dllexport) void  Framework_Cutscene_Resume(int cutsceneId);
+    __declspec(dllexport) void  Framework_Cutscene_Stop(int cutsceneId);
+    __declspec(dllexport) void  Framework_Cutscene_Skip(int cutsceneId);
+    __declspec(dllexport) void  Framework_Cutscene_SetSkippable(int cutsceneId, bool skippable);
+
+    // ---- State Queries ----
+    __declspec(dllexport) int   Framework_Cutscene_GetState(int cutsceneId);
+    __declspec(dllexport) bool  Framework_Cutscene_IsPlaying(int cutsceneId);
+    __declspec(dllexport) bool  Framework_Cutscene_IsPaused(int cutsceneId);
+    __declspec(dllexport) bool  Framework_Cutscene_IsFinished(int cutsceneId);
+    __declspec(dllexport) float Framework_Cutscene_GetProgress(int cutsceneId);
+    __declspec(dllexport) int   Framework_Cutscene_GetCurrentCommand(int cutsceneId);
+    __declspec(dllexport) int   Framework_Cutscene_GetCommandCount(int cutsceneId);
+
+    // ---- Update & Render ----
+    __declspec(dllexport) void  Framework_Cutscene_Update(float deltaTime);
+    __declspec(dllexport) void  Framework_Cutscene_DrawDialogue();
+
+    // ---- Dialogue Display Settings ----
+    __declspec(dllexport) void  Framework_Cutscene_SetDialogueFont(int fontHandle);
+    __declspec(dllexport) void  Framework_Cutscene_SetDialogueBox(int x, int y, int width, int height);
+    __declspec(dllexport) void  Framework_Cutscene_SetDialogueColors(unsigned char bgR, unsigned char bgG, unsigned char bgB, unsigned char bgA,
+                                                                      unsigned char textR, unsigned char textG, unsigned char textB);
+    __declspec(dllexport) void  Framework_Cutscene_SetTypewriterSpeed(float charsPerSecond);
+
+    // ---- Callbacks ----
+    typedef void (*CutsceneFinishedCallback)(int cutsceneId);
+    __declspec(dllexport) void  Framework_Cutscene_SetOnFinished(CutsceneFinishedCallback callback);
+
+    // ========================================================================
+    // LEADERBOARD SYSTEM
+    // ========================================================================
+    // Score tracking with sorting and persistence
+
+    // Sort Order
+    #define LEADERBOARD_SORT_DESC   0   // Higher is better
+    #define LEADERBOARD_SORT_ASC    1   // Lower is better
+
+    // ---- Leaderboard Management ----
+    __declspec(dllexport) int   Framework_Leaderboard_Create(const char* name, int sortOrder, int maxEntries);
+    __declspec(dllexport) void  Framework_Leaderboard_Destroy(int leaderboardId);
+    __declspec(dllexport) int   Framework_Leaderboard_GetByName(const char* name);
+    __declspec(dllexport) void  Framework_Leaderboard_Clear(int leaderboardId);
+
+    // ---- Score Submission ----
+    __declspec(dllexport) int   Framework_Leaderboard_SubmitScore(int leaderboardId, const char* playerName, int score);
+    __declspec(dllexport) int   Framework_Leaderboard_SubmitScoreEx(int leaderboardId, const char* playerName, int score, const char* metadata);
+    __declspec(dllexport) bool  Framework_Leaderboard_IsHighScore(int leaderboardId, int score);
+    __declspec(dllexport) int   Framework_Leaderboard_GetRankForScore(int leaderboardId, int score);
+
+    // ---- Entry Queries ----
+    __declspec(dllexport) int   Framework_Leaderboard_GetEntryCount(int leaderboardId);
+    __declspec(dllexport) const char* Framework_Leaderboard_GetEntryName(int leaderboardId, int rank);
+    __declspec(dllexport) int   Framework_Leaderboard_GetEntryScore(int leaderboardId, int rank);
+    __declspec(dllexport) const char* Framework_Leaderboard_GetEntryMetadata(int leaderboardId, int rank);
+    __declspec(dllexport) const char* Framework_Leaderboard_GetEntryDate(int leaderboardId, int rank);
+
+    // ---- Player Queries ----
+    __declspec(dllexport) int   Framework_Leaderboard_GetPlayerRank(int leaderboardId, const char* playerName);
+    __declspec(dllexport) int   Framework_Leaderboard_GetPlayerBestScore(int leaderboardId, const char* playerName);
+    __declspec(dllexport) int   Framework_Leaderboard_GetPlayerEntryCount(int leaderboardId, const char* playerName);
+
+    // ---- Top Scores ----
+    __declspec(dllexport) int   Framework_Leaderboard_GetTopScore(int leaderboardId);
+    __declspec(dllexport) const char* Framework_Leaderboard_GetTopPlayer(int leaderboardId);
+
+    // ---- Persistence ----
+    __declspec(dllexport) bool  Framework_Leaderboard_Save(int leaderboardId, const char* filePath);
+    __declspec(dllexport) bool  Framework_Leaderboard_Load(int leaderboardId, const char* filePath);
+    __declspec(dllexport) bool  Framework_Leaderboard_SaveAll(const char* filePath);
+    __declspec(dllexport) bool  Framework_Leaderboard_LoadAll(const char* filePath);
+
+    // ---- Global Management ----
+    __declspec(dllexport) int   Framework_Leaderboard_GetCount();
+    __declspec(dllexport) void  Framework_Leaderboard_DestroyAll();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

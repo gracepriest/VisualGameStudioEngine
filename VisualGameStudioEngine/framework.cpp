@@ -16811,4 +16811,1400 @@ extern "C" {
         g_prefabs.clear();
     }
 
+    // ========================================================================
+    // LOCALIZATION SYSTEM
+    // ========================================================================
+
+    struct LocaleLanguage {
+        std::string code;
+        std::unordered_map<std::string, std::string> strings;
+        std::string filePath;
+    };
+
+    struct LocaleState {
+        bool initialized = false;
+        std::string currentLanguage;
+        std::unordered_map<std::string, LocaleLanguage> languages;
+        LocaleChangedCallback onLanguageChanged = nullptr;
+    };
+
+    static LocaleState g_locale;
+    static char g_localeStringBuffer[4096];
+    static char g_localeFormatBuffer[4096];
+    static char g_localeLanguageBuffer[64];
+
+    void Framework_Locale_Initialize() {
+        g_locale.initialized = true;
+        g_locale.currentLanguage = "";
+        g_locale.languages.clear();
+    }
+
+    void Framework_Locale_Shutdown() {
+        g_locale.languages.clear();
+        g_locale.currentLanguage = "";
+        g_locale.initialized = false;
+    }
+
+    bool Framework_Locale_LoadLanguage(const char* languageCode, const char* filePath) {
+        if (!languageCode || !filePath) return false;
+
+        LocaleLanguage lang;
+        lang.code = languageCode;
+        lang.filePath = filePath;
+
+        // Simple key=value file format
+        FILE* file = fopen(filePath, "r");
+        if (!file) return false;
+
+        char line[1024];
+        while (fgets(line, sizeof(line), file)) {
+            // Skip comments and empty lines
+            if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
+
+            // Find = separator
+            char* eq = strchr(line, '=');
+            if (!eq) continue;
+
+            *eq = '\0';
+            char* key = line;
+            char* value = eq + 1;
+
+            // Trim whitespace from key
+            while (*key == ' ' || *key == '\t') key++;
+            char* keyEnd = eq - 1;
+            while (keyEnd > key && (*keyEnd == ' ' || *keyEnd == '\t')) keyEnd--;
+            *(keyEnd + 1) = '\0';
+
+            // Trim whitespace and newline from value
+            while (*value == ' ' || *value == '\t') value++;
+            size_t valueLen = strlen(value);
+            while (valueLen > 0 && (value[valueLen - 1] == '\n' || value[valueLen - 1] == '\r' || value[valueLen - 1] == ' ')) {
+                value[--valueLen] = '\0';
+            }
+
+            if (strlen(key) > 0) {
+                lang.strings[key] = value;
+            }
+        }
+        fclose(file);
+
+        g_locale.languages[languageCode] = lang;
+
+        // If no current language, set this one
+        if (g_locale.currentLanguage.empty()) {
+            g_locale.currentLanguage = languageCode;
+        }
+
+        return true;
+    }
+
+    bool Framework_Locale_SetLanguage(const char* languageCode) {
+        if (!languageCode) return false;
+
+        auto it = g_locale.languages.find(languageCode);
+        if (it == g_locale.languages.end()) return false;
+
+        std::string oldLang = g_locale.currentLanguage;
+        g_locale.currentLanguage = languageCode;
+
+        if (g_locale.onLanguageChanged && oldLang != languageCode) {
+            g_locale.onLanguageChanged(languageCode);
+        }
+
+        return true;
+    }
+
+    const char* Framework_Locale_GetCurrentLanguage() {
+        strncpy(g_localeLanguageBuffer, g_locale.currentLanguage.c_str(), sizeof(g_localeLanguageBuffer) - 1);
+        g_localeLanguageBuffer[sizeof(g_localeLanguageBuffer) - 1] = '\0';
+        return g_localeLanguageBuffer;
+    }
+
+    int Framework_Locale_GetLanguageCount() {
+        return (int)g_locale.languages.size();
+    }
+
+    const char* Framework_Locale_GetLanguageAt(int index) {
+        if (index < 0 || index >= (int)g_locale.languages.size()) return "";
+
+        auto it = g_locale.languages.begin();
+        std::advance(it, index);
+        strncpy(g_localeLanguageBuffer, it->first.c_str(), sizeof(g_localeLanguageBuffer) - 1);
+        g_localeLanguageBuffer[sizeof(g_localeLanguageBuffer) - 1] = '\0';
+        return g_localeLanguageBuffer;
+    }
+
+    const char* Framework_Locale_GetString(const char* key) {
+        return Framework_Locale_GetStringDefault(key, key);
+    }
+
+    const char* Framework_Locale_GetStringDefault(const char* key, const char* defaultValue) {
+        if (!key) return defaultValue ? defaultValue : "";
+
+        auto langIt = g_locale.languages.find(g_locale.currentLanguage);
+        if (langIt == g_locale.languages.end()) return defaultValue ? defaultValue : key;
+
+        auto strIt = langIt->second.strings.find(key);
+        if (strIt == langIt->second.strings.end()) return defaultValue ? defaultValue : key;
+
+        strncpy(g_localeStringBuffer, strIt->second.c_str(), sizeof(g_localeStringBuffer) - 1);
+        g_localeStringBuffer[sizeof(g_localeStringBuffer) - 1] = '\0';
+        return g_localeStringBuffer;
+    }
+
+    const char* Framework_Locale_Format(const char* key, const char* arg1) {
+        const char* format = Framework_Locale_GetString(key);
+        snprintf(g_localeFormatBuffer, sizeof(g_localeFormatBuffer), format, arg1 ? arg1 : "");
+        return g_localeFormatBuffer;
+    }
+
+    const char* Framework_Locale_Format2(const char* key, const char* arg1, const char* arg2) {
+        const char* format = Framework_Locale_GetString(key);
+        snprintf(g_localeFormatBuffer, sizeof(g_localeFormatBuffer), format, arg1 ? arg1 : "", arg2 ? arg2 : "");
+        return g_localeFormatBuffer;
+    }
+
+    const char* Framework_Locale_Format3(const char* key, const char* arg1, const char* arg2, const char* arg3) {
+        const char* format = Framework_Locale_GetString(key);
+        snprintf(g_localeFormatBuffer, sizeof(g_localeFormatBuffer), format, arg1 ? arg1 : "", arg2 ? arg2 : "", arg3 ? arg3 : "");
+        return g_localeFormatBuffer;
+    }
+
+    bool Framework_Locale_HasString(const char* key) {
+        if (!key) return false;
+        auto langIt = g_locale.languages.find(g_locale.currentLanguage);
+        if (langIt == g_locale.languages.end()) return false;
+        return langIt->second.strings.find(key) != langIt->second.strings.end();
+    }
+
+    void Framework_Locale_SetString(const char* key, const char* value) {
+        if (!key || !value) return;
+        auto langIt = g_locale.languages.find(g_locale.currentLanguage);
+        if (langIt == g_locale.languages.end()) return;
+        langIt->second.strings[key] = value;
+    }
+
+    void Framework_Locale_RemoveString(const char* key) {
+        if (!key) return;
+        auto langIt = g_locale.languages.find(g_locale.currentLanguage);
+        if (langIt == g_locale.languages.end()) return;
+        langIt->second.strings.erase(key);
+    }
+
+    int Framework_Locale_GetStringCount() {
+        auto langIt = g_locale.languages.find(g_locale.currentLanguage);
+        if (langIt == g_locale.languages.end()) return 0;
+        return (int)langIt->second.strings.size();
+    }
+
+    void Framework_Locale_ClearStrings() {
+        auto langIt = g_locale.languages.find(g_locale.currentLanguage);
+        if (langIt == g_locale.languages.end()) return;
+        langIt->second.strings.clear();
+    }
+
+    bool Framework_Locale_SaveLanguage(const char* languageCode, const char* filePath) {
+        if (!languageCode || !filePath) return false;
+
+        auto langIt = g_locale.languages.find(languageCode);
+        if (langIt == g_locale.languages.end()) return false;
+
+        FILE* file = fopen(filePath, "w");
+        if (!file) return false;
+
+        fprintf(file, "# Language: %s\n", languageCode);
+        for (const auto& kv : langIt->second.strings) {
+            fprintf(file, "%s=%s\n", kv.first.c_str(), kv.second.c_str());
+        }
+
+        fclose(file);
+        return true;
+    }
+
+    bool Framework_Locale_ReloadCurrent() {
+        auto langIt = g_locale.languages.find(g_locale.currentLanguage);
+        if (langIt == g_locale.languages.end()) return false;
+
+        std::string path = langIt->second.filePath;
+        std::string code = langIt->second.code;
+
+        return Framework_Locale_LoadLanguage(code.c_str(), path.c_str());
+    }
+
+    void Framework_Locale_SetOnLanguageChanged(LocaleChangedCallback callback) {
+        g_locale.onLanguageChanged = callback;
+    }
+
+    // ========================================================================
+    // ACHIEVEMENT SYSTEM
+    // ========================================================================
+
+    struct Achievement {
+        int id;
+        std::string stringId;
+        std::string name;
+        std::string description;
+        int iconTexture = 0;
+        bool hidden = false;
+        int points = 0;
+        int progress = 0;
+        int progressTarget = 0;  // 0 = no progress tracking
+        bool unlocked = false;
+        float unlockTime = 0.0f;
+    };
+
+    struct AchievementNotification {
+        int achievementId;
+        float timer;
+        float duration;
+    };
+
+    struct AchievementState {
+        std::unordered_map<int, Achievement> achievements;
+        int nextId = 1;
+        bool notificationsEnabled = true;
+        float notificationDuration = 3.0f;
+        int notificationX = 20;
+        int notificationY = 20;
+        std::vector<AchievementNotification> notifications;
+        AchievementUnlockedCallback onUnlocked = nullptr;
+    };
+
+    static AchievementState g_achievements;
+    static char g_achievementStringBuffer[512];
+
+    int Framework_Achievement_Create(const char* id, const char* name, const char* description) {
+        Achievement ach;
+        ach.id = g_achievements.nextId++;
+        ach.stringId = id ? id : "";
+        ach.name = name ? name : "";
+        ach.description = description ? description : "";
+        g_achievements.achievements[ach.id] = ach;
+        return ach.id;
+    }
+
+    void Framework_Achievement_SetIcon(int achievementId, int textureHandle) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it != g_achievements.achievements.end()) {
+            it->second.iconTexture = textureHandle;
+        }
+    }
+
+    void Framework_Achievement_SetHidden(int achievementId, bool hidden) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it != g_achievements.achievements.end()) {
+            it->second.hidden = hidden;
+        }
+    }
+
+    void Framework_Achievement_SetPoints(int achievementId, int points) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it != g_achievements.achievements.end()) {
+            it->second.points = points;
+        }
+    }
+
+    void Framework_Achievement_SetProgressTarget(int achievementId, int target) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it != g_achievements.achievements.end()) {
+            it->second.progressTarget = target;
+        }
+    }
+
+    void Framework_Achievement_SetProgress(int achievementId, int progress) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it != g_achievements.achievements.end()) {
+            it->second.progress = progress;
+            // Auto-unlock if target reached
+            if (it->second.progressTarget > 0 && it->second.progress >= it->second.progressTarget && !it->second.unlocked) {
+                Framework_Achievement_Unlock(achievementId);
+            }
+        }
+    }
+
+    void Framework_Achievement_AddProgress(int achievementId, int amount) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it != g_achievements.achievements.end()) {
+            Framework_Achievement_SetProgress(achievementId, it->second.progress + amount);
+        }
+    }
+
+    int Framework_Achievement_GetProgress(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        return (it != g_achievements.achievements.end()) ? it->second.progress : 0;
+    }
+
+    int Framework_Achievement_GetProgressTarget(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        return (it != g_achievements.achievements.end()) ? it->second.progressTarget : 0;
+    }
+
+    float Framework_Achievement_GetProgressPercent(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it == g_achievements.achievements.end() || it->second.progressTarget <= 0) return 0.0f;
+        return (float)it->second.progress / (float)it->second.progressTarget * 100.0f;
+    }
+
+    void Framework_Achievement_Unlock(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it != g_achievements.achievements.end() && !it->second.unlocked) {
+            it->second.unlocked = true;
+            it->second.unlockTime = (float)GetTime();
+
+            // Add notification
+            if (g_achievements.notificationsEnabled) {
+                AchievementNotification notif;
+                notif.achievementId = achievementId;
+                notif.timer = 0.0f;
+                notif.duration = g_achievements.notificationDuration;
+                g_achievements.notifications.push_back(notif);
+            }
+
+            // Callback
+            if (g_achievements.onUnlocked) {
+                g_achievements.onUnlocked(achievementId, it->second.name.c_str());
+            }
+        }
+    }
+
+    void Framework_Achievement_Lock(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it != g_achievements.achievements.end()) {
+            it->second.unlocked = false;
+            it->second.progress = 0;
+        }
+    }
+
+    bool Framework_Achievement_IsUnlocked(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        return (it != g_achievements.achievements.end()) ? it->second.unlocked : false;
+    }
+
+    int Framework_Achievement_GetState(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it == g_achievements.achievements.end()) return ACHIEVEMENT_LOCKED;
+        if (it->second.unlocked) return ACHIEVEMENT_UNLOCKED;
+        if (it->second.hidden) return ACHIEVEMENT_HIDDEN;
+        return ACHIEVEMENT_LOCKED;
+    }
+
+    int Framework_Achievement_GetByName(const char* id) {
+        if (!id) return 0;
+        for (const auto& kv : g_achievements.achievements) {
+            if (kv.second.stringId == id) return kv.first;
+        }
+        return 0;
+    }
+
+    const char* Framework_Achievement_GetName(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it == g_achievements.achievements.end()) return "";
+        strncpy(g_achievementStringBuffer, it->second.name.c_str(), sizeof(g_achievementStringBuffer) - 1);
+        return g_achievementStringBuffer;
+    }
+
+    const char* Framework_Achievement_GetDescription(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        if (it == g_achievements.achievements.end()) return "";
+        strncpy(g_achievementStringBuffer, it->second.description.c_str(), sizeof(g_achievementStringBuffer) - 1);
+        return g_achievementStringBuffer;
+    }
+
+    int Framework_Achievement_GetPoints(int achievementId) {
+        auto it = g_achievements.achievements.find(achievementId);
+        return (it != g_achievements.achievements.end()) ? it->second.points : 0;
+    }
+
+    int Framework_Achievement_GetCount() {
+        return (int)g_achievements.achievements.size();
+    }
+
+    int Framework_Achievement_GetUnlockedCount() {
+        int count = 0;
+        for (const auto& kv : g_achievements.achievements) {
+            if (kv.second.unlocked) count++;
+        }
+        return count;
+    }
+
+    int Framework_Achievement_GetTotalPoints() {
+        int total = 0;
+        for (const auto& kv : g_achievements.achievements) {
+            total += kv.second.points;
+        }
+        return total;
+    }
+
+    int Framework_Achievement_GetEarnedPoints() {
+        int earned = 0;
+        for (const auto& kv : g_achievements.achievements) {
+            if (kv.second.unlocked) earned += kv.second.points;
+        }
+        return earned;
+    }
+
+    void Framework_Achievement_SetNotificationsEnabled(bool enabled) {
+        g_achievements.notificationsEnabled = enabled;
+    }
+
+    void Framework_Achievement_SetNotificationDuration(float seconds) {
+        g_achievements.notificationDuration = seconds;
+    }
+
+    void Framework_Achievement_SetNotificationPosition(int x, int y) {
+        g_achievements.notificationX = x;
+        g_achievements.notificationY = y;
+    }
+
+    void Framework_Achievement_Update(float deltaTime) {
+        for (auto it = g_achievements.notifications.begin(); it != g_achievements.notifications.end(); ) {
+            it->timer += deltaTime;
+            if (it->timer >= it->duration) {
+                it = g_achievements.notifications.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    void Framework_Achievement_DrawNotifications() {
+        int y = g_achievements.notificationY;
+        for (const auto& notif : g_achievements.notifications) {
+            auto it = g_achievements.achievements.find(notif.achievementId);
+            if (it == g_achievements.achievements.end()) continue;
+
+            // Calculate fade
+            float alpha = 1.0f;
+            if (notif.timer < 0.3f) alpha = notif.timer / 0.3f;
+            else if (notif.timer > notif.duration - 0.3f) alpha = (notif.duration - notif.timer) / 0.3f;
+
+            unsigned char a = (unsigned char)(alpha * 255);
+
+            // Draw notification box
+            int boxWidth = 300;
+            int boxHeight = 60;
+            DrawRectangle(g_achievements.notificationX, y, boxWidth, boxHeight, { 40, 40, 40, a });
+            DrawRectangleLines(g_achievements.notificationX, y, boxWidth, boxHeight, { 255, 215, 0, a });
+
+            // Draw text
+            DrawText("Achievement Unlocked!", g_achievements.notificationX + 10, y + 5, 12, { 255, 215, 0, a });
+            DrawText(it->second.name.c_str(), g_achievements.notificationX + 10, y + 22, 16, { 255, 255, 255, a });
+            DrawText(it->second.description.c_str(), g_achievements.notificationX + 10, y + 42, 10, { 180, 180, 180, a });
+
+            y += boxHeight + 10;
+        }
+    }
+
+    bool Framework_Achievement_Save(const char* filePath) {
+        if (!filePath) return false;
+        FILE* file = fopen(filePath, "w");
+        if (!file) return false;
+
+        for (const auto& kv : g_achievements.achievements) {
+            fprintf(file, "%s:%d:%d\n", kv.second.stringId.c_str(), kv.second.unlocked ? 1 : 0, kv.second.progress);
+        }
+
+        fclose(file);
+        return true;
+    }
+
+    bool Framework_Achievement_Load(const char* filePath) {
+        if (!filePath) return false;
+        FILE* file = fopen(filePath, "r");
+        if (!file) return false;
+
+        char line[256];
+        while (fgets(line, sizeof(line), file)) {
+            char stringId[128];
+            int unlocked, progress;
+            if (sscanf(line, "%127[^:]:%d:%d", stringId, &unlocked, &progress) == 3) {
+                int achId = Framework_Achievement_GetByName(stringId);
+                if (achId > 0) {
+                    auto it = g_achievements.achievements.find(achId);
+                    if (it != g_achievements.achievements.end()) {
+                        it->second.unlocked = (unlocked != 0);
+                        it->second.progress = progress;
+                    }
+                }
+            }
+        }
+
+        fclose(file);
+        return true;
+    }
+
+    void Framework_Achievement_ResetAll() {
+        for (auto& kv : g_achievements.achievements) {
+            kv.second.unlocked = false;
+            kv.second.progress = 0;
+        }
+        g_achievements.notifications.clear();
+    }
+
+    void Framework_Achievement_SetOnUnlocked(AchievementUnlockedCallback callback) {
+        g_achievements.onUnlocked = callback;
+    }
+
+    // ========================================================================
+    // CUTSCENE SYSTEM
+    // ========================================================================
+
+    struct CutsceneCommand {
+        int type;
+        float duration;
+        std::string stringParam1;
+        std::string stringParam2;
+        int intParam1 = 0;
+        float floatParam1 = 0.0f;
+        float floatParam2 = 0.0f;
+        float floatParam3 = 0.0f;
+        bool boolParam1 = false;
+        CutsceneCallback callback = nullptr;
+    };
+
+    struct Cutscene {
+        int id;
+        std::string name;
+        std::vector<CutsceneCommand> commands;
+        int currentCommand = 0;
+        float commandTimer = 0.0f;
+        int state = CUTSCENE_STATE_IDLE;
+        bool skippable = true;
+
+        // Dialogue state
+        std::string currentSpeaker;
+        std::string currentText;
+        float dialogueTimer = 0.0f;
+        int displayedChars = 0;
+
+        // Movement interpolation
+        int movingEntity = 0;
+        float moveStartX = 0, moveStartY = 0;
+        float moveTargetX = 0, moveTargetY = 0;
+        float moveDuration = 0;
+        float moveTimer = 0;
+    };
+
+    struct CutsceneState {
+        std::unordered_map<int, Cutscene> cutscenes;
+        int nextId = 1;
+        int activeCutscene = 0;
+        CutsceneFinishedCallback onFinished = nullptr;
+
+        // Dialogue display settings
+        int dialogueFontHandle = 0;
+        int dialogueBoxX = 50;
+        int dialogueBoxY = 500;
+        int dialogueBoxWidth = 700;
+        int dialogueBoxHeight = 150;
+        unsigned char dialogueBgR = 20, dialogueBgG = 20, dialogueBgB = 30, dialogueBgA = 230;
+        unsigned char dialogueTextR = 255, dialogueTextG = 255, dialogueTextB = 255;
+        float typewriterSpeed = 30.0f;
+    };
+
+    static CutsceneState g_cutscene;
+    static char g_cutsceneStringBuffer[256];
+
+    int Framework_Cutscene_Create(const char* name) {
+        Cutscene cs;
+        cs.id = g_cutscene.nextId++;
+        cs.name = name ? name : "";
+        g_cutscene.cutscenes[cs.id] = cs;
+        return cs.id;
+    }
+
+    void Framework_Cutscene_Destroy(int cutsceneId) {
+        g_cutscene.cutscenes.erase(cutsceneId);
+        if (g_cutscene.activeCutscene == cutsceneId) {
+            g_cutscene.activeCutscene = 0;
+        }
+    }
+
+    int Framework_Cutscene_GetByName(const char* name) {
+        if (!name) return 0;
+        for (const auto& kv : g_cutscene.cutscenes) {
+            if (kv.second.name == name) return kv.first;
+        }
+        return 0;
+    }
+
+    static Cutscene* GetCutscene(int id) {
+        auto it = g_cutscene.cutscenes.find(id);
+        return (it != g_cutscene.cutscenes.end()) ? &it->second : nullptr;
+    }
+
+    void Framework_Cutscene_AddWait(int cutsceneId, float duration) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_WAIT;
+        cmd.duration = duration;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddDialogue(int cutsceneId, const char* speaker, const char* text, float duration) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_DIALOGUE;
+        cmd.stringParam1 = speaker ? speaker : "";
+        cmd.stringParam2 = text ? text : "";
+        cmd.duration = duration;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddMoveActor(int cutsceneId, int entityId, float targetX, float targetY, float duration) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_MOVE_ACTOR;
+        cmd.intParam1 = entityId;
+        cmd.floatParam1 = targetX;
+        cmd.floatParam2 = targetY;
+        cmd.duration = duration;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddFadeIn(int cutsceneId, float duration) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_FADE_IN;
+        cmd.duration = duration;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddFadeOut(int cutsceneId, float duration) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_FADE_OUT;
+        cmd.duration = duration;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddPlaySound(int cutsceneId, int soundHandle) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_PLAY_SOUND;
+        cmd.intParam1 = soundHandle;
+        cmd.duration = 0.0f;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddPlayMusic(int cutsceneId, const char* musicPath) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_PLAY_MUSIC;
+        cmd.stringParam1 = musicPath ? musicPath : "";
+        cmd.duration = 0.0f;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddStopMusic(int cutsceneId, float fadeTime) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_STOP_MUSIC;
+        cmd.duration = fadeTime;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddCameraPan(int cutsceneId, float targetX, float targetY, float duration) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_CAMERA_PAN;
+        cmd.floatParam1 = targetX;
+        cmd.floatParam2 = targetY;
+        cmd.duration = duration;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddCameraZoom(int cutsceneId, float targetZoom, float duration) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_CAMERA_ZOOM;
+        cmd.floatParam1 = targetZoom;
+        cmd.duration = duration;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddShake(int cutsceneId, float intensity, float duration) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_SHAKE;
+        cmd.floatParam1 = intensity;
+        cmd.duration = duration;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddSetVisible(int cutsceneId, int entityId, bool visible) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_SET_VISIBLE;
+        cmd.intParam1 = entityId;
+        cmd.boolParam1 = visible;
+        cmd.duration = 0.0f;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddAnimate(int cutsceneId, int entityId, const char* animationName) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_ANIMATE;
+        cmd.intParam1 = entityId;
+        cmd.stringParam1 = animationName ? animationName : "";
+        cmd.duration = 0.0f;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_AddCallback(int cutsceneId, CutsceneCallback callback) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs) return;
+        CutsceneCommand cmd;
+        cmd.type = CUTSCENE_CMD_CALLBACK;
+        cmd.callback = callback;
+        cmd.duration = 0.0f;
+        cs->commands.push_back(cmd);
+    }
+
+    void Framework_Cutscene_Play(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs || cs->commands.empty()) return;
+
+        cs->state = CUTSCENE_STATE_PLAYING;
+        cs->currentCommand = 0;
+        cs->commandTimer = 0.0f;
+        cs->dialogueTimer = 0.0f;
+        cs->displayedChars = 0;
+        g_cutscene.activeCutscene = cutsceneId;
+    }
+
+    void Framework_Cutscene_Pause(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (cs && cs->state == CUTSCENE_STATE_PLAYING) {
+            cs->state = CUTSCENE_STATE_PAUSED;
+        }
+    }
+
+    void Framework_Cutscene_Resume(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (cs && cs->state == CUTSCENE_STATE_PAUSED) {
+            cs->state = CUTSCENE_STATE_PLAYING;
+        }
+    }
+
+    void Framework_Cutscene_Stop(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (cs) {
+            cs->state = CUTSCENE_STATE_IDLE;
+            cs->currentCommand = 0;
+            cs->commandTimer = 0.0f;
+            if (g_cutscene.activeCutscene == cutsceneId) {
+                g_cutscene.activeCutscene = 0;
+            }
+        }
+    }
+
+    void Framework_Cutscene_Skip(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (cs && cs->skippable) {
+            cs->state = CUTSCENE_STATE_FINISHED;
+            if (g_cutscene.onFinished) {
+                g_cutscene.onFinished(cutsceneId);
+            }
+            if (g_cutscene.activeCutscene == cutsceneId) {
+                g_cutscene.activeCutscene = 0;
+            }
+        }
+    }
+
+    void Framework_Cutscene_SetSkippable(int cutsceneId, bool skippable) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (cs) cs->skippable = skippable;
+    }
+
+    int Framework_Cutscene_GetState(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        return cs ? cs->state : CUTSCENE_STATE_IDLE;
+    }
+
+    bool Framework_Cutscene_IsPlaying(int cutsceneId) {
+        return Framework_Cutscene_GetState(cutsceneId) == CUTSCENE_STATE_PLAYING;
+    }
+
+    bool Framework_Cutscene_IsPaused(int cutsceneId) {
+        return Framework_Cutscene_GetState(cutsceneId) == CUTSCENE_STATE_PAUSED;
+    }
+
+    bool Framework_Cutscene_IsFinished(int cutsceneId) {
+        return Framework_Cutscene_GetState(cutsceneId) == CUTSCENE_STATE_FINISHED;
+    }
+
+    float Framework_Cutscene_GetProgress(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        if (!cs || cs->commands.empty()) return 0.0f;
+        return (float)cs->currentCommand / (float)cs->commands.size();
+    }
+
+    int Framework_Cutscene_GetCurrentCommand(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        return cs ? cs->currentCommand : 0;
+    }
+
+    int Framework_Cutscene_GetCommandCount(int cutsceneId) {
+        Cutscene* cs = GetCutscene(cutsceneId);
+        return cs ? (int)cs->commands.size() : 0;
+    }
+
+    void Framework_Cutscene_Update(float deltaTime) {
+        if (g_cutscene.activeCutscene == 0) return;
+
+        Cutscene* cs = GetCutscene(g_cutscene.activeCutscene);
+        if (!cs || cs->state != CUTSCENE_STATE_PLAYING) return;
+
+        if (cs->currentCommand >= (int)cs->commands.size()) {
+            cs->state = CUTSCENE_STATE_FINISHED;
+            if (g_cutscene.onFinished) {
+                g_cutscene.onFinished(cs->id);
+            }
+            g_cutscene.activeCutscene = 0;
+            return;
+        }
+
+        CutsceneCommand& cmd = cs->commands[cs->currentCommand];
+        cs->commandTimer += deltaTime;
+
+        // Handle command types
+        switch (cmd.type) {
+            case CUTSCENE_CMD_WAIT:
+                if (cs->commandTimer >= cmd.duration) {
+                    cs->currentCommand++;
+                    cs->commandTimer = 0.0f;
+                }
+                break;
+
+            case CUTSCENE_CMD_DIALOGUE:
+                cs->currentSpeaker = cmd.stringParam1;
+                cs->currentText = cmd.stringParam2;
+                cs->dialogueTimer += deltaTime;
+                cs->displayedChars = (int)(cs->dialogueTimer * g_cutscene.typewriterSpeed);
+                if (cs->displayedChars > (int)cs->currentText.length()) {
+                    cs->displayedChars = (int)cs->currentText.length();
+                }
+                if (cs->commandTimer >= cmd.duration) {
+                    cs->currentCommand++;
+                    cs->commandTimer = 0.0f;
+                    cs->dialogueTimer = 0.0f;
+                    cs->currentSpeaker.clear();
+                    cs->currentText.clear();
+                }
+                break;
+
+            case CUTSCENE_CMD_MOVE_ACTOR:
+                if (cs->commandTimer == deltaTime) {
+                    // Start of move
+                    cs->movingEntity = cmd.intParam1;
+                    auto it = g_transform2D.find(cmd.intParam1);
+                    if (it != g_transform2D.end()) {
+                        cs->moveStartX = it->second.position.x;
+                        cs->moveStartY = it->second.position.y;
+                    }
+                    cs->moveTargetX = cmd.floatParam1;
+                    cs->moveTargetY = cmd.floatParam2;
+                    cs->moveDuration = cmd.duration;
+                    cs->moveTimer = 0.0f;
+                }
+                cs->moveTimer += deltaTime;
+                {
+                    float t = cs->moveTimer / cs->moveDuration;
+                    if (t > 1.0f) t = 1.0f;
+                    float x = cs->moveStartX + (cs->moveTargetX - cs->moveStartX) * t;
+                    float y = cs->moveStartY + (cs->moveTargetY - cs->moveStartY) * t;
+                    auto it = g_transform2D.find(cs->movingEntity);
+                    if (it != g_transform2D.end()) {
+                        it->second.position.x = x;
+                        it->second.position.y = y;
+                    }
+                }
+                if (cs->commandTimer >= cmd.duration) {
+                    cs->currentCommand++;
+                    cs->commandTimer = 0.0f;
+                }
+                break;
+
+            case CUTSCENE_CMD_FADE_IN:
+                Framework_Effects_FadeIn(cmd.duration);
+                cs->currentCommand++;
+                cs->commandTimer = 0.0f;
+                break;
+
+            case CUTSCENE_CMD_FADE_OUT:
+                Framework_Effects_FadeOut(cmd.duration);
+                cs->currentCommand++;
+                cs->commandTimer = 0.0f;
+                break;
+
+            case CUTSCENE_CMD_PLAY_SOUND:
+                // Play sound via handle
+                {
+                    auto sit = g_sounds.find(cmd.intParam1);
+                    if (sit != g_sounds.end() && sit->second.valid) {
+                        PlaySound(sit->second.snd);
+                    }
+                }
+                cs->currentCommand++;
+                cs->commandTimer = 0.0f;
+                break;
+
+            case CUTSCENE_CMD_SHAKE:
+                Framework_Effects_Shake(cmd.floatParam1, cmd.duration);
+                cs->currentCommand++;
+                cs->commandTimer = 0.0f;
+                break;
+
+            case CUTSCENE_CMD_SET_VISIBLE:
+                // Toggle visibility would need entity visibility component
+                cs->currentCommand++;
+                cs->commandTimer = 0.0f;
+                break;
+
+            case CUTSCENE_CMD_CALLBACK:
+                if (cmd.callback) cmd.callback();
+                cs->currentCommand++;
+                cs->commandTimer = 0.0f;
+                break;
+
+            default:
+                cs->currentCommand++;
+                cs->commandTimer = 0.0f;
+                break;
+        }
+    }
+
+    void Framework_Cutscene_DrawDialogue() {
+        if (g_cutscene.activeCutscene == 0) return;
+
+        Cutscene* cs = GetCutscene(g_cutscene.activeCutscene);
+        if (!cs || cs->currentText.empty()) return;
+
+        // Draw dialogue box
+        DrawRectangle(g_cutscene.dialogueBoxX, g_cutscene.dialogueBoxY,
+                      g_cutscene.dialogueBoxWidth, g_cutscene.dialogueBoxHeight,
+                      { g_cutscene.dialogueBgR, g_cutscene.dialogueBgG, g_cutscene.dialogueBgB, g_cutscene.dialogueBgA });
+        DrawRectangleLines(g_cutscene.dialogueBoxX, g_cutscene.dialogueBoxY,
+                           g_cutscene.dialogueBoxWidth, g_cutscene.dialogueBoxHeight, WHITE);
+
+        // Draw speaker name
+        if (!cs->currentSpeaker.empty()) {
+            DrawText(cs->currentSpeaker.c_str(), g_cutscene.dialogueBoxX + 15, g_cutscene.dialogueBoxY + 10, 20,
+                     { g_cutscene.dialogueTextR, g_cutscene.dialogueTextG, g_cutscene.dialogueTextB, 255 });
+        }
+
+        // Draw text with typewriter effect
+        std::string displayText = cs->currentText.substr(0, cs->displayedChars);
+        DrawText(displayText.c_str(), g_cutscene.dialogueBoxX + 15, g_cutscene.dialogueBoxY + 40, 16,
+                 { g_cutscene.dialogueTextR, g_cutscene.dialogueTextG, g_cutscene.dialogueTextB, 255 });
+    }
+
+    void Framework_Cutscene_SetDialogueFont(int fontHandle) {
+        g_cutscene.dialogueFontHandle = fontHandle;
+    }
+
+    void Framework_Cutscene_SetDialogueBox(int x, int y, int width, int height) {
+        g_cutscene.dialogueBoxX = x;
+        g_cutscene.dialogueBoxY = y;
+        g_cutscene.dialogueBoxWidth = width;
+        g_cutscene.dialogueBoxHeight = height;
+    }
+
+    void Framework_Cutscene_SetDialogueColors(unsigned char bgR, unsigned char bgG, unsigned char bgB, unsigned char bgA,
+                                               unsigned char textR, unsigned char textG, unsigned char textB) {
+        g_cutscene.dialogueBgR = bgR;
+        g_cutscene.dialogueBgG = bgG;
+        g_cutscene.dialogueBgB = bgB;
+        g_cutscene.dialogueBgA = bgA;
+        g_cutscene.dialogueTextR = textR;
+        g_cutscene.dialogueTextG = textG;
+        g_cutscene.dialogueTextB = textB;
+    }
+
+    void Framework_Cutscene_SetTypewriterSpeed(float charsPerSecond) {
+        g_cutscene.typewriterSpeed = charsPerSecond;
+    }
+
+    void Framework_Cutscene_SetOnFinished(CutsceneFinishedCallback callback) {
+        g_cutscene.onFinished = callback;
+    }
+
+    // ========================================================================
+    // LEADERBOARD SYSTEM
+    // ========================================================================
+
+    struct LeaderboardEntry {
+        std::string playerName;
+        int score;
+        std::string metadata;
+        std::string date;
+    };
+
+    struct Leaderboard {
+        int id;
+        std::string name;
+        int sortOrder;
+        int maxEntries;
+        std::vector<LeaderboardEntry> entries;
+    };
+
+    struct LeaderboardState {
+        std::unordered_map<int, Leaderboard> leaderboards;
+        int nextId = 1;
+    };
+
+    static LeaderboardState g_leaderboards;
+    static char g_leaderboardStringBuffer[256];
+
+    static std::string GetCurrentDateString() {
+        time_t now = time(nullptr);
+        struct tm* t = localtime(&now);
+        char buf[64];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", t);
+        return buf;
+    }
+
+    int Framework_Leaderboard_Create(const char* name, int sortOrder, int maxEntries) {
+        Leaderboard lb;
+        lb.id = g_leaderboards.nextId++;
+        lb.name = name ? name : "";
+        lb.sortOrder = sortOrder;
+        lb.maxEntries = maxEntries > 0 ? maxEntries : 100;
+        g_leaderboards.leaderboards[lb.id] = lb;
+        return lb.id;
+    }
+
+    void Framework_Leaderboard_Destroy(int leaderboardId) {
+        g_leaderboards.leaderboards.erase(leaderboardId);
+    }
+
+    int Framework_Leaderboard_GetByName(const char* name) {
+        if (!name) return 0;
+        for (const auto& kv : g_leaderboards.leaderboards) {
+            if (kv.second.name == name) return kv.first;
+        }
+        return 0;
+    }
+
+    void Framework_Leaderboard_Clear(int leaderboardId) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it != g_leaderboards.leaderboards.end()) {
+            it->second.entries.clear();
+        }
+    }
+
+    static void SortLeaderboard(Leaderboard& lb) {
+        if (lb.sortOrder == LEADERBOARD_SORT_DESC) {
+            std::sort(lb.entries.begin(), lb.entries.end(),
+                      [](const LeaderboardEntry& a, const LeaderboardEntry& b) { return a.score > b.score; });
+        } else {
+            std::sort(lb.entries.begin(), lb.entries.end(),
+                      [](const LeaderboardEntry& a, const LeaderboardEntry& b) { return a.score < b.score; });
+        }
+        // Trim to max entries
+        if ((int)lb.entries.size() > lb.maxEntries) {
+            lb.entries.resize(lb.maxEntries);
+        }
+    }
+
+    int Framework_Leaderboard_SubmitScore(int leaderboardId, const char* playerName, int score) {
+        return Framework_Leaderboard_SubmitScoreEx(leaderboardId, playerName, score, "");
+    }
+
+    int Framework_Leaderboard_SubmitScoreEx(int leaderboardId, const char* playerName, int score, const char* metadata) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return -1;
+
+        LeaderboardEntry entry;
+        entry.playerName = playerName ? playerName : "Anonymous";
+        entry.score = score;
+        entry.metadata = metadata ? metadata : "";
+        entry.date = GetCurrentDateString();
+
+        it->second.entries.push_back(entry);
+        SortLeaderboard(it->second);
+
+        // Return rank (1-based)
+        for (int i = 0; i < (int)it->second.entries.size(); i++) {
+            if (it->second.entries[i].playerName == entry.playerName &&
+                it->second.entries[i].score == entry.score &&
+                it->second.entries[i].date == entry.date) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    bool Framework_Leaderboard_IsHighScore(int leaderboardId, int score) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return false;
+
+        if (it->second.entries.empty()) return true;
+        if ((int)it->second.entries.size() < it->second.maxEntries) return true;
+
+        // Check if score would make the leaderboard
+        int worstScore = it->second.entries.back().score;
+        if (it->second.sortOrder == LEADERBOARD_SORT_DESC) {
+            return score > worstScore;
+        } else {
+            return score < worstScore;
+        }
+    }
+
+    int Framework_Leaderboard_GetRankForScore(int leaderboardId, int score) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return -1;
+
+        int rank = 1;
+        for (const auto& entry : it->second.entries) {
+            if (it->second.sortOrder == LEADERBOARD_SORT_DESC) {
+                if (score > entry.score) return rank;
+            } else {
+                if (score < entry.score) return rank;
+            }
+            rank++;
+        }
+        return rank;
+    }
+
+    int Framework_Leaderboard_GetEntryCount(int leaderboardId) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        return (it != g_leaderboards.leaderboards.end()) ? (int)it->second.entries.size() : 0;
+    }
+
+    const char* Framework_Leaderboard_GetEntryName(int leaderboardId, int rank) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return "";
+        int idx = rank - 1;
+        if (idx < 0 || idx >= (int)it->second.entries.size()) return "";
+        strncpy(g_leaderboardStringBuffer, it->second.entries[idx].playerName.c_str(), sizeof(g_leaderboardStringBuffer) - 1);
+        return g_leaderboardStringBuffer;
+    }
+
+    int Framework_Leaderboard_GetEntryScore(int leaderboardId, int rank) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return 0;
+        int idx = rank - 1;
+        if (idx < 0 || idx >= (int)it->second.entries.size()) return 0;
+        return it->second.entries[idx].score;
+    }
+
+    const char* Framework_Leaderboard_GetEntryMetadata(int leaderboardId, int rank) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return "";
+        int idx = rank - 1;
+        if (idx < 0 || idx >= (int)it->second.entries.size()) return "";
+        strncpy(g_leaderboardStringBuffer, it->second.entries[idx].metadata.c_str(), sizeof(g_leaderboardStringBuffer) - 1);
+        return g_leaderboardStringBuffer;
+    }
+
+    const char* Framework_Leaderboard_GetEntryDate(int leaderboardId, int rank) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return "";
+        int idx = rank - 1;
+        if (idx < 0 || idx >= (int)it->second.entries.size()) return "";
+        strncpy(g_leaderboardStringBuffer, it->second.entries[idx].date.c_str(), sizeof(g_leaderboardStringBuffer) - 1);
+        return g_leaderboardStringBuffer;
+    }
+
+    int Framework_Leaderboard_GetPlayerRank(int leaderboardId, const char* playerName) {
+        if (!playerName) return -1;
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return -1;
+
+        for (int i = 0; i < (int)it->second.entries.size(); i++) {
+            if (it->second.entries[i].playerName == playerName) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    int Framework_Leaderboard_GetPlayerBestScore(int leaderboardId, const char* playerName) {
+        if (!playerName) return 0;
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return 0;
+
+        bool found = false;
+        int best = 0;
+        for (const auto& entry : it->second.entries) {
+            if (entry.playerName == playerName) {
+                if (!found) {
+                    best = entry.score;
+                    found = true;
+                } else if (it->second.sortOrder == LEADERBOARD_SORT_DESC) {
+                    if (entry.score > best) best = entry.score;
+                } else {
+                    if (entry.score < best) best = entry.score;
+                }
+            }
+        }
+        return best;
+    }
+
+    int Framework_Leaderboard_GetPlayerEntryCount(int leaderboardId, const char* playerName) {
+        if (!playerName) return 0;
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return 0;
+
+        int count = 0;
+        for (const auto& entry : it->second.entries) {
+            if (entry.playerName == playerName) count++;
+        }
+        return count;
+    }
+
+    int Framework_Leaderboard_GetTopScore(int leaderboardId) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end() || it->second.entries.empty()) return 0;
+        return it->second.entries[0].score;
+    }
+
+    const char* Framework_Leaderboard_GetTopPlayer(int leaderboardId) {
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end() || it->second.entries.empty()) return "";
+        strncpy(g_leaderboardStringBuffer, it->second.entries[0].playerName.c_str(), sizeof(g_leaderboardStringBuffer) - 1);
+        return g_leaderboardStringBuffer;
+    }
+
+    bool Framework_Leaderboard_Save(int leaderboardId, const char* filePath) {
+        if (!filePath) return false;
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return false;
+
+        FILE* file = fopen(filePath, "w");
+        if (!file) return false;
+
+        fprintf(file, "# Leaderboard: %s\n", it->second.name.c_str());
+        fprintf(file, "# SortOrder: %d\n", it->second.sortOrder);
+        for (const auto& entry : it->second.entries) {
+            fprintf(file, "%s|%d|%s|%s\n", entry.playerName.c_str(), entry.score, entry.metadata.c_str(), entry.date.c_str());
+        }
+
+        fclose(file);
+        return true;
+    }
+
+    bool Framework_Leaderboard_Load(int leaderboardId, const char* filePath) {
+        if (!filePath) return false;
+        auto it = g_leaderboards.leaderboards.find(leaderboardId);
+        if (it == g_leaderboards.leaderboards.end()) return false;
+
+        FILE* file = fopen(filePath, "r");
+        if (!file) return false;
+
+        it->second.entries.clear();
+
+        char line[512];
+        while (fgets(line, sizeof(line), file)) {
+            if (line[0] == '#' || line[0] == '\n') continue;
+
+            char name[128], metadata[128], date[64];
+            int score;
+            if (sscanf(line, "%127[^|]|%d|%127[^|]|%63[^\n]", name, &score, metadata, date) >= 2) {
+                LeaderboardEntry entry;
+                entry.playerName = name;
+                entry.score = score;
+                entry.metadata = metadata;
+                entry.date = date;
+                it->second.entries.push_back(entry);
+            }
+        }
+
+        fclose(file);
+        SortLeaderboard(it->second);
+        return true;
+    }
+
+    bool Framework_Leaderboard_SaveAll(const char* filePath) {
+        if (!filePath) return false;
+        FILE* file = fopen(filePath, "w");
+        if (!file) return false;
+
+        for (const auto& kv : g_leaderboards.leaderboards) {
+            fprintf(file, "[%s]\n", kv.second.name.c_str());
+            fprintf(file, "sortOrder=%d\n", kv.second.sortOrder);
+            fprintf(file, "maxEntries=%d\n", kv.second.maxEntries);
+            for (const auto& entry : kv.second.entries) {
+                fprintf(file, "entry=%s|%d|%s|%s\n", entry.playerName.c_str(), entry.score, entry.metadata.c_str(), entry.date.c_str());
+            }
+            fprintf(file, "\n");
+        }
+
+        fclose(file);
+        return true;
+    }
+
+    bool Framework_Leaderboard_LoadAll(const char* filePath) {
+        if (!filePath) return false;
+        FILE* file = fopen(filePath, "r");
+        if (!file) return false;
+
+        char line[512];
+        Leaderboard* currentLb = nullptr;
+
+        while (fgets(line, sizeof(line), file)) {
+            // Remove newline
+            size_t len = strlen(line);
+            while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
+
+            if (line[0] == '[') {
+                // New leaderboard
+                char name[128];
+                if (sscanf(line, "[%127[^]]]", name) == 1) {
+                    int id = Framework_Leaderboard_Create(name, LEADERBOARD_SORT_DESC, 100);
+                    currentLb = &g_leaderboards.leaderboards[id];
+                }
+            } else if (currentLb && strncmp(line, "sortOrder=", 10) == 0) {
+                currentLb->sortOrder = atoi(line + 10);
+            } else if (currentLb && strncmp(line, "maxEntries=", 11) == 0) {
+                currentLb->maxEntries = atoi(line + 11);
+            } else if (currentLb && strncmp(line, "entry=", 6) == 0) {
+                char name[128], metadata[128], date[64];
+                int score;
+                if (sscanf(line + 6, "%127[^|]|%d|%127[^|]|%63s", name, &score, metadata, date) >= 2) {
+                    LeaderboardEntry entry;
+                    entry.playerName = name;
+                    entry.score = score;
+                    entry.metadata = metadata;
+                    entry.date = date;
+                    currentLb->entries.push_back(entry);
+                }
+            }
+        }
+
+        fclose(file);
+
+        // Sort all loaded leaderboards
+        for (auto& kv : g_leaderboards.leaderboards) {
+            SortLeaderboard(kv.second);
+        }
+
+        return true;
+    }
+
+    int Framework_Leaderboard_GetCount() {
+        return (int)g_leaderboards.leaderboards.size();
+    }
+
+    void Framework_Leaderboard_DestroyAll() {
+        g_leaderboards.leaderboards.clear();
+        g_leaderboards.nextId = 1;
+    }
+
 } // extern "C"

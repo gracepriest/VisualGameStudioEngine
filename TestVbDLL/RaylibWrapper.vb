@@ -6445,6 +6445,531 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Localization System"
+    ' ---- System Control ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Locale_Initialize()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Locale_Shutdown()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_LoadLanguage(languageCode As String, filePath As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_SetLanguage(languageCode As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Locale_GetCurrentLanguage() As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Locale_GetLanguageCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Locale_GetLanguageAt(index As Integer) As IntPtr
+    End Function
+
+    ' ---- String Retrieval ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_GetString(key As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_GetStringDefault(key As String, defaultValue As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_Format(key As String, arg1 As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_Format2(key As String, arg1 As String, arg2 As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_Format3(key As String, arg1 As String, arg2 As String, arg3 As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_HasString(key As String) As Boolean
+    End Function
+
+    ' ---- String Table Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Locale_SetString(key As String, value As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Locale_RemoveString(key As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Locale_GetStringCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Locale_ClearStrings()
+    End Sub
+
+    ' ---- File Operations ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Locale_SaveLanguage(languageCode As String, filePath As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Locale_ReloadCurrent() As Boolean
+    End Function
+
+    ' ---- Callbacks ----
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub LocaleChangedCallback(newLanguage As IntPtr)
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Locale_SetOnLanguageChanged(callback As LocaleChangedCallback)
+    End Sub
+#End Region
+
+#Region "Achievement System"
+    ' Achievement State Constants
+    Public Const ACHIEVEMENT_LOCKED As Integer = 0
+    Public Const ACHIEVEMENT_UNLOCKED As Integer = 1
+    Public Const ACHIEVEMENT_HIDDEN As Integer = 2
+
+    ' ---- Achievement Definition ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Achievement_Create(id As String, name As String, description As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetIcon(achievementId As Integer, textureHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetHidden(achievementId As Integer, hidden As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetPoints(achievementId As Integer, points As Integer)
+    End Sub
+
+    ' ---- Progress Achievements ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetProgressTarget(achievementId As Integer, target As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetProgress(achievementId As Integer, progress As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_AddProgress(achievementId As Integer, amount As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetProgress(achievementId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetProgressTarget(achievementId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetProgressPercent(achievementId As Integer) As Single
+    End Function
+
+    ' ---- Unlock/Lock ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_Unlock(achievementId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_Lock(achievementId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_IsUnlocked(achievementId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetState(achievementId As Integer) As Integer
+    End Function
+
+    ' ---- Queries ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Achievement_GetByName(id As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetName(achievementId As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetDescription(achievementId As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetPoints(achievementId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetUnlockedCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetTotalPoints() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Achievement_GetEarnedPoints() As Integer
+    End Function
+
+    ' ---- Notifications ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetNotificationsEnabled(enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetNotificationDuration(seconds As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetNotificationPosition(x As Integer, y As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_Update(deltaTime As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_DrawNotifications()
+    End Sub
+
+    ' ---- Persistence ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Achievement_Save(filePath As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Achievement_Load(filePath As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_ResetAll()
+    End Sub
+
+    ' ---- Callbacks ----
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub AchievementUnlockedCallback(achievementId As Integer, name As IntPtr)
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Achievement_SetOnUnlocked(callback As AchievementUnlockedCallback)
+    End Sub
+#End Region
+
+#Region "Cutscene System"
+    ' Command Types
+    Public Const CUTSCENE_CMD_WAIT As Integer = 0
+    Public Const CUTSCENE_CMD_DIALOGUE As Integer = 1
+    Public Const CUTSCENE_CMD_MOVE_ACTOR As Integer = 2
+    Public Const CUTSCENE_CMD_FADE_IN As Integer = 3
+    Public Const CUTSCENE_CMD_FADE_OUT As Integer = 4
+    Public Const CUTSCENE_CMD_PLAY_SOUND As Integer = 5
+    Public Const CUTSCENE_CMD_PLAY_MUSIC As Integer = 6
+    Public Const CUTSCENE_CMD_STOP_MUSIC As Integer = 7
+    Public Const CUTSCENE_CMD_CAMERA_PAN As Integer = 8
+    Public Const CUTSCENE_CMD_CAMERA_ZOOM As Integer = 9
+    Public Const CUTSCENE_CMD_SHAKE As Integer = 10
+    Public Const CUTSCENE_CMD_SET_VISIBLE As Integer = 11
+    Public Const CUTSCENE_CMD_ANIMATE As Integer = 12
+    Public Const CUTSCENE_CMD_CALLBACK As Integer = 13
+
+    ' Cutscene State
+    Public Const CUTSCENE_STATE_IDLE As Integer = 0
+    Public Const CUTSCENE_STATE_PLAYING As Integer = 1
+    Public Const CUTSCENE_STATE_PAUSED As Integer = 2
+    Public Const CUTSCENE_STATE_FINISHED As Integer = 3
+
+    ' ---- Cutscene Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Cutscene_Create(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_Destroy(cutsceneId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Cutscene_GetByName(name As String) As Integer
+    End Function
+
+    ' ---- Adding Commands ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddWait(cutsceneId As Integer, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cutscene_AddDialogue(cutsceneId As Integer, speaker As String, text As String, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddMoveActor(cutsceneId As Integer, entityId As Integer, targetX As Single, targetY As Single, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddFadeIn(cutsceneId As Integer, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddFadeOut(cutsceneId As Integer, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddPlaySound(cutsceneId As Integer, soundHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cutscene_AddPlayMusic(cutsceneId As Integer, musicPath As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddStopMusic(cutsceneId As Integer, fadeTime As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddCameraPan(cutsceneId As Integer, targetX As Single, targetY As Single, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddCameraZoom(cutsceneId As Integer, targetZoom As Single, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddShake(cutsceneId As Integer, intensity As Single, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddSetVisible(cutsceneId As Integer, entityId As Integer, visible As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cutscene_AddAnimate(cutsceneId As Integer, entityId As Integer, animationName As String)
+    End Sub
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub CutsceneCallback()
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_AddCallback(cutsceneId As Integer, callback As CutsceneCallback)
+    End Sub
+
+    ' ---- Playback Control ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_Play(cutsceneId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_Pause(cutsceneId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_Resume(cutsceneId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_Stop(cutsceneId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_Skip(cutsceneId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_SetSkippable(cutsceneId As Integer, skippable As Boolean)
+    End Sub
+
+    ' ---- State Queries ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cutscene_GetState(cutsceneId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cutscene_IsPlaying(cutsceneId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cutscene_IsPaused(cutsceneId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cutscene_IsFinished(cutsceneId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cutscene_GetProgress(cutsceneId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cutscene_GetCurrentCommand(cutsceneId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cutscene_GetCommandCount(cutsceneId As Integer) As Integer
+    End Function
+
+    ' ---- Update & Render ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_Update(deltaTime As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_DrawDialogue()
+    End Sub
+
+    ' ---- Dialogue Display Settings ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_SetDialogueFont(fontHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_SetDialogueBox(x As Integer, y As Integer, width As Integer, height As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_SetDialogueColors(bgR As Byte, bgG As Byte, bgB As Byte, bgA As Byte, textR As Byte, textG As Byte, textB As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_SetTypewriterSpeed(charsPerSecond As Single)
+    End Sub
+
+    ' ---- Callbacks ----
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub CutsceneFinishedCallback(cutsceneId As Integer)
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cutscene_SetOnFinished(callback As CutsceneFinishedCallback)
+    End Sub
+#End Region
+
+#Region "Leaderboard System"
+    ' Sort Order
+    Public Const LEADERBOARD_SORT_DESC As Integer = 0
+    Public Const LEADERBOARD_SORT_ASC As Integer = 1
+
+    ' ---- Leaderboard Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_Create(name As String, sortOrder As Integer, maxEntries As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Leaderboard_Destroy(leaderboardId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_GetByName(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Leaderboard_Clear(leaderboardId As Integer)
+    End Sub
+
+    ' ---- Score Submission ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_SubmitScore(leaderboardId As Integer, playerName As String, score As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_SubmitScoreEx(leaderboardId As Integer, playerName As String, score As Integer, metadata As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_IsHighScore(leaderboardId As Integer, score As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetRankForScore(leaderboardId As Integer, score As Integer) As Integer
+    End Function
+
+    ' ---- Entry Queries ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetEntryCount(leaderboardId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetEntryName(leaderboardId As Integer, rank As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetEntryScore(leaderboardId As Integer, rank As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetEntryMetadata(leaderboardId As Integer, rank As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetEntryDate(leaderboardId As Integer, rank As Integer) As IntPtr
+    End Function
+
+    ' ---- Player Queries ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_GetPlayerRank(leaderboardId As Integer, playerName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_GetPlayerBestScore(leaderboardId As Integer, playerName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_GetPlayerEntryCount(leaderboardId As Integer, playerName As String) As Integer
+    End Function
+
+    ' ---- Top Scores ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetTopScore(leaderboardId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetTopPlayer(leaderboardId As Integer) As IntPtr
+    End Function
+
+    ' ---- Persistence ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_Save(leaderboardId As Integer, filePath As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_Load(leaderboardId As Integer, filePath As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_SaveAll(filePath As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Leaderboard_LoadAll(filePath As String) As Boolean
+    End Function
+
+    ' ---- Global Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Leaderboard_GetCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Leaderboard_DestroyAll()
+    End Sub
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()
