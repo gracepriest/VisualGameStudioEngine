@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <queue>
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -11607,6 +11608,923 @@ extern "C" {
     bool Framework_FSM_GetDebugEnabled(int fsmId) {
         auto* fsm = GetFSM(fsmId);
         return fsm ? fsm->debugEnabled : false;
+    }
+
+    // ========================================================================
+    // AI & PATHFINDING SYSTEM
+    // ========================================================================
+
+    struct NavCell {
+        bool walkable = true;
+        float cost = 1.0f;
+    };
+
+    struct NavGrid {
+        int id;
+        int width;
+        int height;
+        float cellSize;
+        float originX = 0;
+        float originY = 0;
+        std::vector<NavCell> cells;
+        bool diagonalEnabled = true;
+        float diagonalCost = 1.414f;
+        int heuristic = 1;  // 0=Manhattan, 1=Euclidean, 2=Chebyshev
+    };
+
+    struct PathWaypoint {
+        float x, y;
+    };
+
+    struct NavPath {
+        int id;
+        std::vector<PathWaypoint> waypoints;
+        float totalDistance = 0;
+    };
+
+    struct BehaviorConfig {
+        bool enabled = false;
+        float weight = 1.0f;
+    };
+
+    struct SteeringAgent {
+        int id;
+        int entity;
+        float maxSpeed = 100.0f;
+        float maxForce = 50.0f;
+        float mass = 1.0f;
+        float velocityX = 0;
+        float velocityY = 0;
+        float steeringX = 0;
+        float steeringY = 0;
+
+        // Target
+        float targetX = 0;
+        float targetY = 0;
+        int targetEntity = -1;
+
+        // Path following
+        int pathId = -1;
+        int currentWaypoint = 0;
+        float pathOffset = 20.0f;
+        bool reachedTarget = false;
+        bool reachedPathEnd = false;
+
+        // Arrive behavior
+        float slowingRadius = 50.0f;
+
+        // Wander behavior
+        float wanderRadius = 30.0f;
+        float wanderDistance = 50.0f;
+        float wanderJitter = 20.0f;
+        float wanderAngle = 0;
+
+        // Flocking
+        float neighborRadius = 100.0f;
+        float separationRadius = 30.0f;
+
+        // Obstacle avoidance
+        float avoidanceRadius = 50.0f;
+        float avoidanceForce = 100.0f;
+
+        // Behaviors
+        BehaviorConfig behaviors[12];
+
+        bool debugEnabled = false;
+    };
+
+    static std::unordered_map<int, NavGrid> g_navGrids;
+    static int g_nextNavGridId = 1;
+
+    static std::unordered_map<int, NavPath> g_navPaths;
+    static int g_nextPathId = 1;
+
+    static std::unordered_map<int, SteeringAgent> g_steerAgents;
+    static std::unordered_map<int, int> g_agentByEntity;
+    static int g_nextAgentId = 1;
+
+    static NavGrid* GetNavGrid(int gridId) {
+        auto it = g_navGrids.find(gridId);
+        return (it != g_navGrids.end()) ? &it->second : nullptr;
+    }
+
+    static NavPath* GetNavPath(int pathId) {
+        auto it = g_navPaths.find(pathId);
+        return (it != g_navPaths.end()) ? &it->second : nullptr;
+    }
+
+    static SteeringAgent* GetSteerAgent(int agentId) {
+        auto it = g_steerAgents.find(agentId);
+        return (it != g_steerAgents.end()) ? &it->second : nullptr;
+    }
+
+    // Navigation grid functions
+    int Framework_NavGrid_Create(int width, int height, float cellSize) {
+        NavGrid grid;
+        grid.id = g_nextNavGridId++;
+        grid.width = width;
+        grid.height = height;
+        grid.cellSize = cellSize;
+        grid.cells.resize(width * height);
+
+        g_navGrids[grid.id] = grid;
+        return grid.id;
+    }
+
+    void Framework_NavGrid_Destroy(int gridId) {
+        g_navGrids.erase(gridId);
+    }
+
+    bool Framework_NavGrid_IsValid(int gridId) {
+        return GetNavGrid(gridId) != nullptr;
+    }
+
+    void Framework_NavGrid_SetOrigin(int gridId, float x, float y) {
+        auto* grid = GetNavGrid(gridId);
+        if (grid) {
+            grid->originX = x;
+            grid->originY = y;
+        }
+    }
+
+    void Framework_NavGrid_GetOrigin(int gridId, float* outX, float* outY) {
+        auto* grid = GetNavGrid(gridId);
+        if (grid) {
+            if (outX) *outX = grid->originX;
+            if (outY) *outY = grid->originY;
+        }
+    }
+
+    void Framework_NavGrid_SetWalkable(int gridId, int cellX, int cellY, bool walkable) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid || cellX < 0 || cellX >= grid->width || cellY < 0 || cellY >= grid->height) return;
+        grid->cells[cellY * grid->width + cellX].walkable = walkable;
+    }
+
+    bool Framework_NavGrid_IsWalkable(int gridId, int cellX, int cellY) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid || cellX < 0 || cellX >= grid->width || cellY < 0 || cellY >= grid->height) return false;
+        return grid->cells[cellY * grid->width + cellX].walkable;
+    }
+
+    void Framework_NavGrid_SetCost(int gridId, int cellX, int cellY, float cost) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid || cellX < 0 || cellX >= grid->width || cellY < 0 || cellY >= grid->height) return;
+        grid->cells[cellY * grid->width + cellX].cost = cost;
+    }
+
+    float Framework_NavGrid_GetCost(int gridId, int cellX, int cellY) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid || cellX < 0 || cellX >= grid->width || cellY < 0 || cellY >= grid->height) return 1.0f;
+        return grid->cells[cellY * grid->width + cellX].cost;
+    }
+
+    void Framework_NavGrid_SetAllWalkable(int gridId, bool walkable) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid) return;
+        for (auto& cell : grid->cells) cell.walkable = walkable;
+    }
+
+    void Framework_NavGrid_SetRect(int gridId, int x, int y, int w, int h, bool walkable) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid) return;
+        for (int cy = y; cy < y + h && cy < grid->height; cy++) {
+            for (int cx = x; cx < x + w && cx < grid->width; cx++) {
+                if (cx >= 0 && cy >= 0) {
+                    grid->cells[cy * grid->width + cx].walkable = walkable;
+                }
+            }
+        }
+    }
+
+    void Framework_NavGrid_SetCircle(int gridId, int centerX, int centerY, int radius, bool walkable) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid) return;
+        int r2 = radius * radius;
+        for (int cy = centerY - radius; cy <= centerY + radius; cy++) {
+            for (int cx = centerX - radius; cx <= centerX + radius; cx++) {
+                if (cx >= 0 && cx < grid->width && cy >= 0 && cy < grid->height) {
+                    int dx = cx - centerX;
+                    int dy = cy - centerY;
+                    if (dx * dx + dy * dy <= r2) {
+                        grid->cells[cy * grid->width + cx].walkable = walkable;
+                    }
+                }
+            }
+        }
+    }
+
+    void Framework_NavGrid_WorldToCell(int gridId, float worldX, float worldY, int* outCellX, int* outCellY) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid) return;
+        if (outCellX) *outCellX = (int)((worldX - grid->originX) / grid->cellSize);
+        if (outCellY) *outCellY = (int)((worldY - grid->originY) / grid->cellSize);
+    }
+
+    void Framework_NavGrid_CellToWorld(int gridId, int cellX, int cellY, float* outWorldX, float* outWorldY) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid) return;
+        if (outWorldX) *outWorldX = grid->originX + cellX * grid->cellSize + grid->cellSize * 0.5f;
+        if (outWorldY) *outWorldY = grid->originY + cellY * grid->cellSize + grid->cellSize * 0.5f;
+    }
+
+    bool Framework_NavGrid_IsWorldPosWalkable(int gridId, float worldX, float worldY) {
+        int cellX, cellY;
+        Framework_NavGrid_WorldToCell(gridId, worldX, worldY, &cellX, &cellY);
+        return Framework_NavGrid_IsWalkable(gridId, cellX, cellY);
+    }
+
+    // A* Pathfinding helper
+    struct AStarNode {
+        int x, y;
+        float g, h, f;
+        int parentX, parentY;
+        bool operator>(const AStarNode& other) const { return f > other.f; }
+    };
+
+    static float Heuristic(int x1, int y1, int x2, int y2, int type) {
+        float dx = (float)abs(x2 - x1);
+        float dy = (float)abs(y2 - y1);
+        switch (type) {
+            case 0: return dx + dy;  // Manhattan
+            case 1: return sqrtf(dx * dx + dy * dy);  // Euclidean
+            case 2: return fmaxf(dx, dy);  // Chebyshev
+            default: return sqrtf(dx * dx + dy * dy);
+        }
+    }
+
+    int Framework_Path_FindCell(int gridId, int startCellX, int startCellY, int endCellX, int endCellY) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid) return -1;
+
+        // Validate start and end
+        if (!Framework_NavGrid_IsWalkable(gridId, startCellX, startCellY)) return -1;
+        if (!Framework_NavGrid_IsWalkable(gridId, endCellX, endCellY)) return -1;
+
+        // A* implementation
+        std::priority_queue<AStarNode, std::vector<AStarNode>, std::greater<AStarNode>> openList;
+        std::unordered_map<int, AStarNode> allNodes;
+        std::unordered_set<int> closedSet;
+
+        auto nodeKey = [&](int x, int y) { return y * grid->width + x; };
+
+        AStarNode start;
+        start.x = startCellX; start.y = startCellY;
+        start.g = 0;
+        start.h = Heuristic(startCellX, startCellY, endCellX, endCellY, grid->heuristic);
+        start.f = start.g + start.h;
+        start.parentX = -1; start.parentY = -1;
+
+        openList.push(start);
+        allNodes[nodeKey(startCellX, startCellY)] = start;
+
+        int dx[] = { 0, 1, 0, -1, 1, 1, -1, -1 };
+        int dy[] = { -1, 0, 1, 0, -1, 1, 1, -1 };
+        int dirCount = grid->diagonalEnabled ? 8 : 4;
+
+        while (!openList.empty()) {
+            AStarNode current = openList.top();
+            openList.pop();
+
+            if (current.x == endCellX && current.y == endCellY) {
+                // Reconstruct path
+                NavPath path;
+                path.id = g_nextPathId++;
+
+                int cx = endCellX, cy = endCellY;
+                while (cx != -1 && cy != -1) {
+                    float wx, wy;
+                    Framework_NavGrid_CellToWorld(gridId, cx, cy, &wx, &wy);
+                    path.waypoints.insert(path.waypoints.begin(), PathWaypoint{ wx, wy });
+
+                    int key = nodeKey(cx, cy);
+                    auto it = allNodes.find(key);
+                    if (it != allNodes.end()) {
+                        cx = it->second.parentX;
+                        cy = it->second.parentY;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Calculate total distance
+                path.totalDistance = 0;
+                for (size_t i = 1; i < path.waypoints.size(); i++) {
+                    float dx = path.waypoints[i].x - path.waypoints[i - 1].x;
+                    float dy = path.waypoints[i].y - path.waypoints[i - 1].y;
+                    path.totalDistance += sqrtf(dx * dx + dy * dy);
+                }
+
+                g_navPaths[path.id] = path;
+                return path.id;
+            }
+
+            closedSet.insert(nodeKey(current.x, current.y));
+
+            for (int i = 0; i < dirCount; i++) {
+                int nx = current.x + dx[i];
+                int ny = current.y + dy[i];
+
+                if (nx < 0 || nx >= grid->width || ny < 0 || ny >= grid->height) continue;
+                if (!grid->cells[ny * grid->width + nx].walkable) continue;
+                if (closedSet.count(nodeKey(nx, ny))) continue;
+
+                // Check diagonal corners
+                if (i >= 4) {
+                    if (!Framework_NavGrid_IsWalkable(gridId, current.x + dx[i], current.y) ||
+                        !Framework_NavGrid_IsWalkable(gridId, current.x, current.y + dy[i])) continue;
+                }
+
+                float moveCost = (i >= 4) ? grid->diagonalCost : 1.0f;
+                float newG = current.g + moveCost * grid->cells[ny * grid->width + nx].cost;
+
+                int nKey = nodeKey(nx, ny);
+                auto it = allNodes.find(nKey);
+                if (it == allNodes.end() || newG < it->second.g) {
+                    AStarNode neighbor;
+                    neighbor.x = nx; neighbor.y = ny;
+                    neighbor.g = newG;
+                    neighbor.h = Heuristic(nx, ny, endCellX, endCellY, grid->heuristic);
+                    neighbor.f = neighbor.g + neighbor.h;
+                    neighbor.parentX = current.x;
+                    neighbor.parentY = current.y;
+
+                    allNodes[nKey] = neighbor;
+                    openList.push(neighbor);
+                }
+            }
+        }
+
+        return -1;  // No path found
+    }
+
+    int Framework_Path_Find(int gridId, float startX, float startY, float endX, float endY) {
+        int startCellX, startCellY, endCellX, endCellY;
+        Framework_NavGrid_WorldToCell(gridId, startX, startY, &startCellX, &startCellY);
+        Framework_NavGrid_WorldToCell(gridId, endX, endY, &endCellX, &endCellY);
+        return Framework_Path_FindCell(gridId, startCellX, startCellY, endCellX, endCellY);
+    }
+
+    void Framework_Path_Destroy(int pathId) {
+        g_navPaths.erase(pathId);
+    }
+
+    bool Framework_Path_IsValid(int pathId) {
+        return GetNavPath(pathId) != nullptr;
+    }
+
+    int Framework_Path_GetLength(int pathId) {
+        auto* path = GetNavPath(pathId);
+        return path ? (int)path->waypoints.size() : 0;
+    }
+
+    void Framework_Path_GetWaypoint(int pathId, int index, float* outX, float* outY) {
+        auto* path = GetNavPath(pathId);
+        if (!path || index < 0 || index >= (int)path->waypoints.size()) return;
+        if (outX) *outX = path->waypoints[index].x;
+        if (outY) *outY = path->waypoints[index].y;
+    }
+
+    float Framework_Path_GetTotalDistance(int pathId) {
+        auto* path = GetNavPath(pathId);
+        return path ? path->totalDistance : 0;
+    }
+
+    void Framework_Path_Smooth(int pathId) {
+        auto* path = GetNavPath(pathId);
+        if (!path || path->waypoints.size() < 3) return;
+
+        std::vector<PathWaypoint> smoothed;
+        smoothed.push_back(path->waypoints[0]);
+
+        for (size_t i = 1; i < path->waypoints.size() - 1; i++) {
+            // Simple averaging
+            PathWaypoint wp;
+            wp.x = (path->waypoints[i - 1].x + path->waypoints[i].x + path->waypoints[i + 1].x) / 3.0f;
+            wp.y = (path->waypoints[i - 1].y + path->waypoints[i].y + path->waypoints[i + 1].y) / 3.0f;
+            smoothed.push_back(wp);
+        }
+
+        smoothed.push_back(path->waypoints.back());
+        path->waypoints = smoothed;
+
+        // Recalculate distance
+        path->totalDistance = 0;
+        for (size_t i = 1; i < path->waypoints.size(); i++) {
+            float dx = path->waypoints[i].x - path->waypoints[i - 1].x;
+            float dy = path->waypoints[i].y - path->waypoints[i - 1].y;
+            path->totalDistance += sqrtf(dx * dx + dy * dy);
+        }
+    }
+
+    void Framework_Path_SimplifyRDP(int pathId, float epsilon) {
+        auto* path = GetNavPath(pathId);
+        if (!path || path->waypoints.size() < 3) return;
+
+        std::function<void(int, int, std::vector<bool>&)> rdp = [&](int start, int end, std::vector<bool>& keep) {
+            float maxDist = 0;
+            int maxIdx = start;
+
+            float x1 = path->waypoints[start].x, y1 = path->waypoints[start].y;
+            float x2 = path->waypoints[end].x, y2 = path->waypoints[end].y;
+            float dx = x2 - x1, dy = y2 - y1;
+            float len = sqrtf(dx * dx + dy * dy);
+
+            for (int i = start + 1; i < end; i++) {
+                float dist;
+                if (len < 0.0001f) {
+                    dist = sqrtf((path->waypoints[i].x - x1) * (path->waypoints[i].x - x1) +
+                                 (path->waypoints[i].y - y1) * (path->waypoints[i].y - y1));
+                } else {
+                    float t = ((path->waypoints[i].x - x1) * dx + (path->waypoints[i].y - y1) * dy) / (len * len);
+                    t = fmaxf(0, fminf(1, t));
+                    float projX = x1 + t * dx, projY = y1 + t * dy;
+                    dist = sqrtf((path->waypoints[i].x - projX) * (path->waypoints[i].x - projX) +
+                                 (path->waypoints[i].y - projY) * (path->waypoints[i].y - projY));
+                }
+                if (dist > maxDist) {
+                    maxDist = dist;
+                    maxIdx = i;
+                }
+            }
+
+            if (maxDist > epsilon) {
+                keep[maxIdx] = true;
+                rdp(start, maxIdx, keep);
+                rdp(maxIdx, end, keep);
+            }
+        };
+
+        std::vector<bool> keep(path->waypoints.size(), false);
+        keep[0] = true;
+        keep[path->waypoints.size() - 1] = true;
+        rdp(0, (int)path->waypoints.size() - 1, keep);
+
+        std::vector<PathWaypoint> simplified;
+        for (size_t i = 0; i < path->waypoints.size(); i++) {
+            if (keep[i]) simplified.push_back(path->waypoints[i]);
+        }
+        path->waypoints = simplified;
+
+        // Recalculate distance
+        path->totalDistance = 0;
+        for (size_t i = 1; i < path->waypoints.size(); i++) {
+            float dx = path->waypoints[i].x - path->waypoints[i - 1].x;
+            float dy = path->waypoints[i].y - path->waypoints[i - 1].y;
+            path->totalDistance += sqrtf(dx * dx + dy * dy);
+        }
+    }
+
+    void Framework_Path_SetDiagonalEnabled(int gridId, bool enabled) {
+        auto* grid = GetNavGrid(gridId);
+        if (grid) grid->diagonalEnabled = enabled;
+    }
+
+    void Framework_Path_SetDiagonalCost(int gridId, float cost) {
+        auto* grid = GetNavGrid(gridId);
+        if (grid) grid->diagonalCost = cost;
+    }
+
+    void Framework_Path_SetHeuristic(int gridId, int heuristic) {
+        auto* grid = GetNavGrid(gridId);
+        if (grid) grid->heuristic = heuristic;
+    }
+
+    // Steering agent functions
+    int Framework_Steer_CreateAgent(int entity) {
+        SteeringAgent agent;
+        agent.id = g_nextAgentId++;
+        agent.entity = entity;
+
+        g_steerAgents[agent.id] = agent;
+        g_agentByEntity[entity] = agent.id;
+        return agent.id;
+    }
+
+    void Framework_Steer_DestroyAgent(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            g_agentByEntity.erase(agent->entity);
+            g_steerAgents.erase(agentId);
+        }
+    }
+
+    int Framework_Steer_GetAgentForEntity(int entity) {
+        auto it = g_agentByEntity.find(entity);
+        return (it != g_agentByEntity.end()) ? it->second : -1;
+    }
+
+    bool Framework_Steer_IsAgentValid(int agentId) {
+        return GetSteerAgent(agentId) != nullptr;
+    }
+
+    void Framework_Steer_SetMaxSpeed(int agentId, float maxSpeed) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->maxSpeed = maxSpeed;
+    }
+
+    float Framework_Steer_GetMaxSpeed(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        return agent ? agent->maxSpeed : 0;
+    }
+
+    void Framework_Steer_SetMaxForce(int agentId, float maxForce) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->maxForce = maxForce;
+    }
+
+    float Framework_Steer_GetMaxForce(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        return agent ? agent->maxForce : 0;
+    }
+
+    void Framework_Steer_SetMass(int agentId, float mass) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent && mass > 0) agent->mass = mass;
+    }
+
+    float Framework_Steer_GetMass(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        return agent ? agent->mass : 1.0f;
+    }
+
+    void Framework_Steer_SetSlowingRadius(int agentId, float radius) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->slowingRadius = radius;
+    }
+
+    void Framework_Steer_SetWanderRadius(int agentId, float radius) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->wanderRadius = radius;
+    }
+
+    void Framework_Steer_SetWanderDistance(int agentId, float distance) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->wanderDistance = distance;
+    }
+
+    void Framework_Steer_SetWanderJitter(int agentId, float jitter) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->wanderJitter = jitter;
+    }
+
+    void Framework_Steer_GetVelocity(int agentId, float* outX, float* outY) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            if (outX) *outX = agent->velocityX;
+            if (outY) *outY = agent->velocityY;
+        }
+    }
+
+    void Framework_Steer_SetVelocity(int agentId, float x, float y) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            agent->velocityX = x;
+            agent->velocityY = y;
+        }
+    }
+
+    void Framework_Steer_EnableBehavior(int agentId, int behavior, bool enabled) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent && behavior >= 0 && behavior < 12) {
+            agent->behaviors[behavior].enabled = enabled;
+        }
+    }
+
+    bool Framework_Steer_IsBehaviorEnabled(int agentId, int behavior) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent && behavior >= 0 && behavior < 12) {
+            return agent->behaviors[behavior].enabled;
+        }
+        return false;
+    }
+
+    void Framework_Steer_SetBehaviorWeight(int agentId, int behavior, float weight) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent && behavior >= 0 && behavior < 12) {
+            agent->behaviors[behavior].weight = weight;
+        }
+    }
+
+    float Framework_Steer_GetBehaviorWeight(int agentId, int behavior) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent && behavior >= 0 && behavior < 12) {
+            return agent->behaviors[behavior].weight;
+        }
+        return 1.0f;
+    }
+
+    void Framework_Steer_SetTargetPosition(int agentId, float x, float y) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            agent->targetX = x;
+            agent->targetY = y;
+            agent->targetEntity = -1;
+        }
+    }
+
+    void Framework_Steer_SetTargetEntity(int agentId, int targetEntity) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            agent->targetEntity = targetEntity;
+        }
+    }
+
+    void Framework_Steer_SetPath(int agentId, int pathId) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            agent->pathId = pathId;
+            agent->currentWaypoint = 0;
+            agent->reachedPathEnd = false;
+        }
+    }
+
+    void Framework_Steer_SetPathOffset(int agentId, float offset) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->pathOffset = offset;
+    }
+
+    void Framework_Steer_SetNeighborRadius(int agentId, float radius) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->neighborRadius = radius;
+    }
+
+    void Framework_Steer_SetSeparationRadius(int agentId, float radius) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->separationRadius = radius;
+    }
+
+    void Framework_Steer_SetAvoidanceRadius(int agentId, float radius) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->avoidanceRadius = radius;
+    }
+
+    void Framework_Steer_SetAvoidanceForce(int agentId, float force) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->avoidanceForce = force;
+    }
+
+    static Vector2 Truncate(Vector2 v, float max) {
+        float len = sqrtf(v.x * v.x + v.y * v.y);
+        if (len > max && len > 0) {
+            v.x = v.x / len * max;
+            v.y = v.y / len * max;
+        }
+        return v;
+    }
+
+    static Vector2 Normalize(Vector2 v) {
+        float len = sqrtf(v.x * v.x + v.y * v.y);
+        if (len > 0) {
+            v.x /= len;
+            v.y /= len;
+        }
+        return v;
+    }
+
+    void Framework_Steer_Update(int agentId, float deltaTime) {
+        auto* agent = GetSteerAgent(agentId);
+        if (!agent) return;
+
+        // Get agent position from entity
+        Vector2 pos = GetWorldPositionInternal(agent->entity);
+        Vector2 steering = { 0, 0 };
+
+        // Get target position
+        Vector2 target = { agent->targetX, agent->targetY };
+        if (agent->targetEntity >= 0) {
+            target = GetWorldPositionInternal(agent->targetEntity);
+            agent->targetX = target.x;
+            agent->targetY = target.y;
+        }
+
+        // Seek
+        if (agent->behaviors[STEER_SEEK].enabled) {
+            Vector2 desired = { target.x - pos.x, target.y - pos.y };
+            desired = Normalize(desired);
+            desired.x *= agent->maxSpeed;
+            desired.y *= agent->maxSpeed;
+            Vector2 force = { desired.x - agent->velocityX, desired.y - agent->velocityY };
+            force.x *= agent->behaviors[STEER_SEEK].weight;
+            force.y *= agent->behaviors[STEER_SEEK].weight;
+            steering.x += force.x;
+            steering.y += force.y;
+        }
+
+        // Flee
+        if (agent->behaviors[STEER_FLEE].enabled) {
+            Vector2 desired = { pos.x - target.x, pos.y - target.y };
+            desired = Normalize(desired);
+            desired.x *= agent->maxSpeed;
+            desired.y *= agent->maxSpeed;
+            Vector2 force = { desired.x - agent->velocityX, desired.y - agent->velocityY };
+            force.x *= agent->behaviors[STEER_FLEE].weight;
+            force.y *= agent->behaviors[STEER_FLEE].weight;
+            steering.x += force.x;
+            steering.y += force.y;
+        }
+
+        // Arrive
+        if (agent->behaviors[STEER_ARRIVE].enabled) {
+            Vector2 toTarget = { target.x - pos.x, target.y - pos.y };
+            float dist = sqrtf(toTarget.x * toTarget.x + toTarget.y * toTarget.y);
+
+            if (dist > 0.1f) {
+                float speed = agent->maxSpeed;
+                if (dist < agent->slowingRadius) {
+                    speed = agent->maxSpeed * (dist / agent->slowingRadius);
+                }
+                Vector2 desired = Normalize(toTarget);
+                desired.x *= speed;
+                desired.y *= speed;
+                Vector2 force = { desired.x - agent->velocityX, desired.y - agent->velocityY };
+                force.x *= agent->behaviors[STEER_ARRIVE].weight;
+                force.y *= agent->behaviors[STEER_ARRIVE].weight;
+                steering.x += force.x;
+                steering.y += force.y;
+            }
+
+            agent->reachedTarget = dist < 5.0f;
+        }
+
+        // Wander
+        if (agent->behaviors[STEER_WANDER].enabled) {
+            agent->wanderAngle += ((float)rand() / RAND_MAX - 0.5f) * agent->wanderJitter;
+            float circleX = agent->velocityX;
+            float circleY = agent->velocityY;
+            Vector2 circleDir = Normalize(Vector2{ circleX, circleY });
+            if (circleDir.x == 0 && circleDir.y == 0) {
+                circleDir.x = 1;
+            }
+            float cx = pos.x + circleDir.x * agent->wanderDistance;
+            float cy = pos.y + circleDir.y * agent->wanderDistance;
+            float tx = cx + cosf(agent->wanderAngle) * agent->wanderRadius;
+            float ty = cy + sinf(agent->wanderAngle) * agent->wanderRadius;
+
+            Vector2 desired = { tx - pos.x, ty - pos.y };
+            desired = Normalize(desired);
+            desired.x *= agent->maxSpeed;
+            desired.y *= agent->maxSpeed;
+            Vector2 force = { desired.x - agent->velocityX, desired.y - agent->velocityY };
+            force.x *= agent->behaviors[STEER_WANDER].weight;
+            force.y *= agent->behaviors[STEER_WANDER].weight;
+            steering.x += force.x;
+            steering.y += force.y;
+        }
+
+        // Path follow
+        if (agent->behaviors[STEER_PATH_FOLLOW].enabled && agent->pathId >= 0) {
+            auto* path = GetNavPath(agent->pathId);
+            if (path && !path->waypoints.empty() && agent->currentWaypoint < (int)path->waypoints.size()) {
+                Vector2 wp = { path->waypoints[agent->currentWaypoint].x, path->waypoints[agent->currentWaypoint].y };
+                float dx = wp.x - pos.x;
+                float dy = wp.y - pos.y;
+                float dist = sqrtf(dx * dx + dy * dy);
+
+                if (dist < agent->pathOffset) {
+                    agent->currentWaypoint++;
+                    if (agent->currentWaypoint >= (int)path->waypoints.size()) {
+                        agent->reachedPathEnd = true;
+                    }
+                }
+
+                if (!agent->reachedPathEnd) {
+                    Vector2 desired = { wp.x - pos.x, wp.y - pos.y };
+                    desired = Normalize(desired);
+                    desired.x *= agent->maxSpeed;
+                    desired.y *= agent->maxSpeed;
+                    Vector2 force = { desired.x - agent->velocityX, desired.y - agent->velocityY };
+                    force.x *= agent->behaviors[STEER_PATH_FOLLOW].weight;
+                    force.y *= agent->behaviors[STEER_PATH_FOLLOW].weight;
+                    steering.x += force.x;
+                    steering.y += force.y;
+                }
+            }
+        }
+
+        // Truncate and apply steering
+        steering = Truncate(steering, agent->maxForce);
+        steering.x /= agent->mass;
+        steering.y /= agent->mass;
+
+        agent->steeringX = steering.x;
+        agent->steeringY = steering.y;
+
+        // Update velocity
+        agent->velocityX += steering.x * deltaTime;
+        agent->velocityY += steering.y * deltaTime;
+        Vector2 vel = Truncate(Vector2{ agent->velocityX, agent->velocityY }, agent->maxSpeed);
+        agent->velocityX = vel.x;
+        agent->velocityY = vel.y;
+
+        // Update entity position
+        auto it = g_transform2D.find(agent->entity);
+        if (it != g_transform2D.end()) {
+            it->second.position.x += agent->velocityX * deltaTime;
+            it->second.position.y += agent->velocityY * deltaTime;
+        }
+    }
+
+    void Framework_Steer_UpdateAll(float deltaTime) {
+        for (auto& pair : g_steerAgents) {
+            Framework_Steer_Update(pair.first, deltaTime);
+        }
+    }
+
+    void Framework_Steer_GetSteeringForce(int agentId, float* outX, float* outY) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            if (outX) *outX = agent->steeringX;
+            if (outY) *outY = agent->steeringY;
+        }
+    }
+
+    int Framework_Steer_GetCurrentWaypoint(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        return agent ? agent->currentWaypoint : 0;
+    }
+
+    bool Framework_Steer_HasReachedTarget(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        return agent ? agent->reachedTarget : false;
+    }
+
+    bool Framework_Steer_HasReachedPathEnd(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        return agent ? agent->reachedPathEnd : false;
+    }
+
+    void Framework_Steer_ResetPath(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            agent->currentWaypoint = 0;
+            agent->reachedPathEnd = false;
+        }
+    }
+
+    // Debug visualization
+    void Framework_NavGrid_DrawDebug(int gridId) {
+        auto* grid = GetNavGrid(gridId);
+        if (!grid) return;
+
+        for (int y = 0; y < grid->height; y++) {
+            for (int x = 0; x < grid->width; x++) {
+                float wx = grid->originX + x * grid->cellSize;
+                float wy = grid->originY + y * grid->cellSize;
+                Color col = grid->cells[y * grid->width + x].walkable ? Color{ 0, 100, 0, 50 } : Color{ 100, 0, 0, 100 };
+                DrawRectangle((int)wx, (int)wy, (int)grid->cellSize - 1, (int)grid->cellSize - 1, col);
+            }
+        }
+    }
+
+    void Framework_Path_DrawDebug(int pathId, unsigned char r, unsigned char g, unsigned char b) {
+        auto* path = GetNavPath(pathId);
+        if (!path || path->waypoints.size() < 2) return;
+
+        Color col = { r, g, b, 255 };
+        for (size_t i = 0; i < path->waypoints.size() - 1; i++) {
+            DrawLineV(Vector2{ path->waypoints[i].x, path->waypoints[i].y },
+                      Vector2{ path->waypoints[i + 1].x, path->waypoints[i + 1].y }, col);
+        }
+
+        for (auto& wp : path->waypoints) {
+            DrawCircle((int)wp.x, (int)wp.y, 3, col);
+        }
+    }
+
+    void Framework_Steer_DrawDebug(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        if (!agent || !agent->debugEnabled) return;
+
+        Vector2 pos = GetWorldPositionInternal(agent->entity);
+
+        // Draw velocity
+        DrawLineV(pos, Vector2{ pos.x + agent->velocityX * 0.5f, pos.y + agent->velocityY * 0.5f }, GREEN);
+
+        // Draw steering
+        DrawLineV(pos, Vector2{ pos.x + agent->steeringX * 0.5f, pos.y + agent->steeringY * 0.5f }, RED);
+
+        // Draw target
+        DrawCircle((int)agent->targetX, (int)agent->targetY, 5, YELLOW);
+    }
+
+    void Framework_Steer_SetDebugEnabled(int agentId, bool enabled) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) agent->debugEnabled = enabled;
+    }
+
+    // Global management
+    void Framework_NavGrid_DestroyAll() {
+        g_navGrids.clear();
+    }
+
+    void Framework_Path_DestroyAll() {
+        g_navPaths.clear();
+    }
+
+    void Framework_Steer_DestroyAllAgents() {
+        g_steerAgents.clear();
+        g_agentByEntity.clear();
     }
 
     // ========================================================================

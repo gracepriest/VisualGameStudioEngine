@@ -4366,6 +4366,325 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "AI and Pathfinding"
+    ' ========================================================================
+    ' AI AND PATHFINDING - Navigation grids, A* pathfinding, steering behaviors
+    ' ========================================================================
+
+    ' Steering Behavior Types
+    Public Enum SteeringBehavior As Integer
+        STEER_NONE = 0
+        STEER_SEEK = 1
+        STEER_FLEE = 2
+        STEER_ARRIVE = 3
+        STEER_PURSUE = 4
+        STEER_EVADE = 5
+        STEER_WANDER = 6
+        STEER_PATH_FOLLOW = 7
+        STEER_OBSTACLE_AVOID = 8
+        STEER_SEPARATION = 9
+        STEER_ALIGNMENT = 10
+        STEER_COHESION = 11
+    End Enum
+
+    ' Heuristic Types
+    Public Enum PathHeuristic As Integer
+        HEURISTIC_MANHATTAN = 0
+        HEURISTIC_EUCLIDEAN = 1
+        HEURISTIC_CHEBYSHEV = 2
+    End Enum
+
+    ' ---- Navigation Grid ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_NavGrid_Create(width As Integer, height As Integer, cellSize As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_Destroy(gridId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_NavGrid_IsValid(gridId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_SetOrigin(gridId As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_SetWalkable(gridId As Integer, cellX As Integer, cellY As Integer, walkable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_NavGrid_IsWalkable(gridId As Integer, cellX As Integer, cellY As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_SetCost(gridId As Integer, cellX As Integer, cellY As Integer, cost As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_NavGrid_GetCost(gridId As Integer, cellX As Integer, cellY As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_SetDiagonalEnabled(gridId As Integer, enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_SetDiagonalCost(gridId As Integer, cost As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_SetHeuristic(gridId As Integer, heuristic As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_Clear(gridId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_Fill(gridId As Integer, walkable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_SetRect(gridId As Integer, x As Integer, y As Integer, w As Integer, h As Integer, walkable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_WorldToCell(gridId As Integer, worldX As Single, worldY As Single, ByRef cellX As Integer, ByRef cellY As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_CellToWorld(gridId As Integer, cellX As Integer, cellY As Integer, ByRef worldX As Single, ByRef worldY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_NavGrid_GetWidth(gridId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_NavGrid_GetHeight(gridId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_NavGrid_GetCellSize(gridId As Integer) As Single
+    End Function
+
+    ' ---- A* Pathfinding ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Path_Find(gridId As Integer, startX As Single, startY As Single, endX As Single, endY As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Path_FindCell(gridId As Integer, startCellX As Integer, startCellY As Integer, endCellX As Integer, endCellY As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Path_Destroy(pathId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Path_IsValid(pathId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Path_GetLength(pathId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Path_GetWaypoint(pathId As Integer, index As Integer, ByRef x As Single, ByRef y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Path_GetTotalDistance(pathId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Path_Smooth(pathId As Integer, epsilon As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Path_Reverse(pathId As Integer)
+    End Sub
+
+    ' ---- Steering Agents ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_CreateAgent(entity As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_DestroyAgent(agentId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_IsValid(agentId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_GetAgentForEntity(entity As Integer) As Integer
+    End Function
+
+    ' Agent properties
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetMaxSpeed(agentId As Integer, maxSpeed As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_GetMaxSpeed(agentId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetMaxForce(agentId As Integer, maxForce As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_GetMaxForce(agentId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetMass(agentId As Integer, mass As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_GetMass(agentId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_GetVelocity(agentId As Integer, ByRef vx As Single, ByRef vy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetVelocity(agentId As Integer, vx As Single, vy As Single)
+    End Sub
+
+    ' Target
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetTarget(agentId As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetTargetEntity(agentId As Integer, targetEntity As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_ClearTarget(agentId As Integer)
+    End Sub
+
+    ' Behaviors
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_EnableBehavior(agentId As Integer, behavior As Integer, enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_IsBehaviorEnabled(agentId As Integer, behavior As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetBehaviorWeight(agentId As Integer, behavior As Integer, weight As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_GetBehaviorWeight(agentId As Integer, behavior As Integer) As Single
+    End Function
+
+    ' Arrive behavior config
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetArriveRadius(agentId As Integer, slowRadius As Single, stopRadius As Single)
+    End Sub
+
+    ' Wander behavior config
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetWanderParams(agentId As Integer, radius As Single, distance As Single, jitter As Single)
+    End Sub
+
+    ' Path following
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetPath(agentId As Integer, pathId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_ClearPath(agentId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetPathLooping(agentId As Integer, shouldLoop As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetWaypointRadius(agentId As Integer, radius As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_GetCurrentWaypoint(agentId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Steer_HasReachedEnd(agentId As Integer) As Boolean
+    End Function
+
+    ' Agent update
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_Update(agentId As Integer, dt As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_UpdateAll(dt As Single)
+    End Sub
+
+    ' Obstacle avoidance
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetAvoidanceRadius(agentId As Integer, radius As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_AddObstacle(x As Single, y As Single, radius As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_ClearObstacles()
+    End Sub
+
+    ' Flocking
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetFlockingParams(agentId As Integer, separationDist As Single, alignDist As Single, cohesionDist As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_SetFlockGroup(agentId As Integer, groupId As Integer)
+    End Sub
+
+    ' Debug visualization
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_NavGrid_DrawDebug(gridId As Integer, showCosts As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Path_DrawDebug(pathId As Integer, r As Byte, g As Byte, b As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Steer_DrawDebug(agentId As Integer)
+    End Sub
+
+    ' Global AI management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AI_DestroyAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AI_GetAgentCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AI_GetPathCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AI_GetGridCount() As Integer
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

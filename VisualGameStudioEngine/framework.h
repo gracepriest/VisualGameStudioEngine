@@ -1848,6 +1848,129 @@ extern "C" {
     __declspec(dllexport) bool  Framework_FSM_GetDebugEnabled(int fsmId);
 
     // ========================================================================
+    // AI & PATHFINDING - Navigation grids, A* pathfinding, steering behaviors
+    // ========================================================================
+
+    // Steering behavior types
+    enum SteeringBehavior {
+        STEER_NONE = 0,
+        STEER_SEEK = 1,
+        STEER_FLEE = 2,
+        STEER_ARRIVE = 3,
+        STEER_PURSUE = 4,
+        STEER_EVADE = 5,
+        STEER_WANDER = 6,
+        STEER_PATH_FOLLOW = 7,
+        STEER_OBSTACLE_AVOID = 8,
+        STEER_SEPARATION = 9,
+        STEER_ALIGNMENT = 10,
+        STEER_COHESION = 11
+    };
+
+    // Navigation grid creation and management
+    __declspec(dllexport) int   Framework_NavGrid_Create(int width, int height, float cellSize);
+    __declspec(dllexport) void  Framework_NavGrid_Destroy(int gridId);
+    __declspec(dllexport) bool  Framework_NavGrid_IsValid(int gridId);
+    __declspec(dllexport) void  Framework_NavGrid_SetOrigin(int gridId, float x, float y);
+    __declspec(dllexport) void  Framework_NavGrid_GetOrigin(int gridId, float* outX, float* outY);
+
+    // Grid cell properties
+    __declspec(dllexport) void  Framework_NavGrid_SetWalkable(int gridId, int cellX, int cellY, bool walkable);
+    __declspec(dllexport) bool  Framework_NavGrid_IsWalkable(int gridId, int cellX, int cellY);
+    __declspec(dllexport) void  Framework_NavGrid_SetCost(int gridId, int cellX, int cellY, float cost);
+    __declspec(dllexport) float Framework_NavGrid_GetCost(int gridId, int cellX, int cellY);
+    __declspec(dllexport) void  Framework_NavGrid_SetAllWalkable(int gridId, bool walkable);
+    __declspec(dllexport) void  Framework_NavGrid_SetRect(int gridId, int x, int y, int w, int h, bool walkable);
+    __declspec(dllexport) void  Framework_NavGrid_SetCircle(int gridId, int centerX, int centerY, int radius, bool walkable);
+
+    // World to grid coordinate conversion
+    __declspec(dllexport) void  Framework_NavGrid_WorldToCell(int gridId, float worldX, float worldY, int* outCellX, int* outCellY);
+    __declspec(dllexport) void  Framework_NavGrid_CellToWorld(int gridId, int cellX, int cellY, float* outWorldX, float* outWorldY);
+    __declspec(dllexport) bool  Framework_NavGrid_IsWorldPosWalkable(int gridId, float worldX, float worldY);
+
+    // A* Pathfinding
+    __declspec(dllexport) int   Framework_Path_Find(int gridId, float startX, float startY, float endX, float endY);  // Returns path handle
+    __declspec(dllexport) int   Framework_Path_FindCell(int gridId, int startCellX, int startCellY, int endCellX, int endCellY);
+    __declspec(dllexport) void  Framework_Path_Destroy(int pathId);
+    __declspec(dllexport) bool  Framework_Path_IsValid(int pathId);
+    __declspec(dllexport) int   Framework_Path_GetLength(int pathId);  // Number of waypoints
+    __declspec(dllexport) void  Framework_Path_GetWaypoint(int pathId, int index, float* outX, float* outY);
+    __declspec(dllexport) float Framework_Path_GetTotalDistance(int pathId);
+
+    // Path smoothing
+    __declspec(dllexport) void  Framework_Path_Smooth(int pathId);  // Remove unnecessary waypoints
+    __declspec(dllexport) void  Framework_Path_SimplifyRDP(int pathId, float epsilon);  // Ramer-Douglas-Peucker
+
+    // Pathfinding options
+    __declspec(dllexport) void  Framework_Path_SetDiagonalEnabled(int gridId, bool enabled);
+    __declspec(dllexport) void  Framework_Path_SetDiagonalCost(int gridId, float cost);  // Default 1.414
+    __declspec(dllexport) void  Framework_Path_SetHeuristic(int gridId, int heuristic);  // 0=Manhattan, 1=Euclidean, 2=Chebyshev
+
+    // Steering agent creation
+    __declspec(dllexport) int   Framework_Steer_CreateAgent(int entity);  // Bind steering to entity
+    __declspec(dllexport) void  Framework_Steer_DestroyAgent(int agentId);
+    __declspec(dllexport) int   Framework_Steer_GetAgentForEntity(int entity);
+    __declspec(dllexport) bool  Framework_Steer_IsAgentValid(int agentId);
+
+    // Agent properties
+    __declspec(dllexport) void  Framework_Steer_SetMaxSpeed(int agentId, float maxSpeed);
+    __declspec(dllexport) float Framework_Steer_GetMaxSpeed(int agentId);
+    __declspec(dllexport) void  Framework_Steer_SetMaxForce(int agentId, float maxForce);
+    __declspec(dllexport) float Framework_Steer_GetMaxForce(int agentId);
+    __declspec(dllexport) void  Framework_Steer_SetMass(int agentId, float mass);
+    __declspec(dllexport) float Framework_Steer_GetMass(int agentId);
+    __declspec(dllexport) void  Framework_Steer_SetSlowingRadius(int agentId, float radius);  // For arrive behavior
+    __declspec(dllexport) void  Framework_Steer_SetWanderRadius(int agentId, float radius);
+    __declspec(dllexport) void  Framework_Steer_SetWanderDistance(int agentId, float distance);
+    __declspec(dllexport) void  Framework_Steer_SetWanderJitter(int agentId, float jitter);
+
+    // Velocity
+    __declspec(dllexport) void  Framework_Steer_GetVelocity(int agentId, float* outX, float* outY);
+    __declspec(dllexport) void  Framework_Steer_SetVelocity(int agentId, float x, float y);
+
+    // Steering behaviors - Enable/Disable
+    __declspec(dllexport) void  Framework_Steer_EnableBehavior(int agentId, int behavior, bool enabled);
+    __declspec(dllexport) bool  Framework_Steer_IsBehaviorEnabled(int agentId, int behavior);
+    __declspec(dllexport) void  Framework_Steer_SetBehaviorWeight(int agentId, int behavior, float weight);
+    __declspec(dllexport) float Framework_Steer_GetBehaviorWeight(int agentId, int behavior);
+
+    // Steering targets
+    __declspec(dllexport) void  Framework_Steer_SetTargetPosition(int agentId, float x, float y);
+    __declspec(dllexport) void  Framework_Steer_SetTargetEntity(int agentId, int targetEntity);
+    __declspec(dllexport) void  Framework_Steer_SetPath(int agentId, int pathId);  // For path following
+    __declspec(dllexport) void  Framework_Steer_SetPathOffset(int agentId, float offset);  // How far ahead to look
+
+    // Flocking neighbors
+    __declspec(dllexport) void  Framework_Steer_SetNeighborRadius(int agentId, float radius);
+    __declspec(dllexport) void  Framework_Steer_SetSeparationRadius(int agentId, float radius);
+
+    // Obstacle avoidance
+    __declspec(dllexport) void  Framework_Steer_SetAvoidanceRadius(int agentId, float radius);
+    __declspec(dllexport) void  Framework_Steer_SetAvoidanceForce(int agentId, float force);
+
+    // Update and calculate steering
+    __declspec(dllexport) void  Framework_Steer_Update(int agentId, float deltaTime);
+    __declspec(dllexport) void  Framework_Steer_UpdateAll(float deltaTime);  // Update all agents
+    __declspec(dllexport) void  Framework_Steer_GetSteeringForce(int agentId, float* outX, float* outY);
+
+    // Path following state
+    __declspec(dllexport) int   Framework_Steer_GetCurrentWaypoint(int agentId);
+    __declspec(dllexport) bool  Framework_Steer_HasReachedTarget(int agentId);
+    __declspec(dllexport) bool  Framework_Steer_HasReachedPathEnd(int agentId);
+    __declspec(dllexport) void  Framework_Steer_ResetPath(int agentId);
+
+    // Debug visualization
+    __declspec(dllexport) void  Framework_NavGrid_DrawDebug(int gridId);
+    __declspec(dllexport) void  Framework_Path_DrawDebug(int pathId, unsigned char r, unsigned char g, unsigned char b);
+    __declspec(dllexport) void  Framework_Steer_DrawDebug(int agentId);
+    __declspec(dllexport) void  Framework_Steer_SetDebugEnabled(int agentId, bool enabled);
+
+    // Global management
+    __declspec(dllexport) void  Framework_NavGrid_DestroyAll();
+    __declspec(dllexport) void  Framework_Path_DestroyAll();
+    __declspec(dllexport) void  Framework_Steer_DestroyAllAgents();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();
