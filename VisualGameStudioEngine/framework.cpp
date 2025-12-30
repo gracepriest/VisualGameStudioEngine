@@ -6948,6 +6948,590 @@ extern "C" {
     }
 
     // ========================================================================
+    // SAVE/LOAD SYSTEM - Game State Persistence Implementation
+    // ========================================================================
+
+    // Save system state
+    static std::string g_saveDirectory = "saves";
+    static std::unordered_map<std::string, std::string> g_saveData;       // Current save being built/read
+    static std::unordered_map<std::string, std::string> g_saveMetadata;   // Metadata for current save
+    static int g_currentSaveSlot = -1;
+    static bool g_isSaving = false;
+    static bool g_isLoading = false;
+    static std::string g_tempStringResult;  // For returning string pointers
+
+    // Auto-save state
+    static bool g_autoSaveEnabled = false;
+    static float g_autoSaveInterval = 300.0f;  // 5 minutes default
+    static float g_autoSaveTimer = 0.0f;
+    static int g_autoSaveSlot = -1;  // -1 = rotating, else specific slot
+    static int g_autoSaveRotation = 0;
+
+    // Settings (separate from game saves)
+    static std::unordered_map<std::string, std::string> g_settings;
+
+    // Helper: Get save file path for a slot
+    static std::string GetSaveFilePath(int slot) {
+        return g_saveDirectory + "/save_" + std::to_string(slot) + ".sav";
+    }
+
+    static std::string GetSettingsFilePath() {
+        return g_saveDirectory + "/settings.cfg";
+    }
+
+    // Helper: Ensure save directory exists (use raylib's DirectoryExists)
+    static bool EnsureSaveDirectory() {
+        std::string path = ResolveAssetPath(g_saveDirectory.c_str());
+        // Use raylib's directory check - if not exists, create it
+        if (!DirectoryExists(path.c_str())) {
+            // Create directory using system call
+            std::string cmd = "mkdir \"" + path + "\"";
+            system(cmd.c_str());
+        }
+        return true;
+    }
+
+    // Helper: Check if file exists (use raylib's FileExists)
+    static bool SaveFileExists(const std::string& path) {
+        return ::FileExists(path.c_str());
+    }
+
+    // Save slot management
+    void Framework_Save_SetDirectory(const char* directory) {
+        if (directory) g_saveDirectory = directory;
+    }
+
+    const char* Framework_Save_GetDirectory() {
+        return g_saveDirectory.c_str();
+    }
+
+    int Framework_Save_GetSlotCount() {
+        int count = 0;
+        for (int i = 0; i < 100; i++) {  // Check up to 100 slots
+            if (Framework_Save_SlotExists(i)) count++;
+        }
+        return count;
+    }
+
+    bool Framework_Save_SlotExists(int slot) {
+        std::string path = ResolveAssetPath(GetSaveFilePath(slot).c_str());
+        return SaveFileExists(path);
+    }
+
+    bool Framework_Save_DeleteSlot(int slot) {
+        std::string path = ResolveAssetPath(GetSaveFilePath(slot).c_str());
+        return remove(path.c_str()) == 0;
+    }
+
+    bool Framework_Save_CopySlot(int fromSlot, int toSlot) {
+        if (!Framework_Save_SlotExists(fromSlot)) return false;
+
+        std::string fromPath = ResolveAssetPath(GetSaveFilePath(fromSlot).c_str());
+        std::string toPath = ResolveAssetPath(GetSaveFilePath(toSlot).c_str());
+
+        FILE* src = nullptr;
+        FILE* dst = nullptr;
+
+        if (fopen_s(&src, fromPath.c_str(), "rb") != 0 || !src) return false;
+        if (fopen_s(&dst, toPath.c_str(), "wb") != 0 || !dst) {
+            fclose(src);
+            return false;
+        }
+
+        char buffer[4096];
+        size_t bytes;
+        while ((bytes = fread(buffer, 1, sizeof(buffer), src)) > 0) {
+            fwrite(buffer, 1, bytes, dst);
+        }
+
+        fclose(src);
+        fclose(dst);
+        return true;
+    }
+
+    const char* Framework_Save_GetSlotInfo(int slot) {
+        if (!Framework_Save_SlotExists(slot)) {
+            g_tempStringResult = "";
+            return g_tempStringResult.c_str();
+        }
+
+        // Load just metadata from slot
+        std::string path = ResolveAssetPath(GetSaveFilePath(slot).c_str());
+        FILE* f = nullptr;
+        if (fopen_s(&f, path.c_str(), "r") != 0 || !f) {
+            g_tempStringResult = "";
+            return g_tempStringResult.c_str();
+        }
+
+        g_tempStringResult = "";
+        char line[512];
+        while (fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "[META]", 6) == 0) {
+                // Read metadata section
+                while (fgets(line, sizeof(line), f)) {
+                    if (line[0] == '[') break;  // Next section
+                    g_tempStringResult += line;
+                }
+                break;
+            }
+        }
+
+        fclose(f);
+        return g_tempStringResult.c_str();
+    }
+
+    // Save/Load operations
+    bool Framework_Save_BeginSave(int slot) {
+        if (g_isSaving || g_isLoading) return false;
+
+        g_saveData.clear();
+        g_saveMetadata.clear();
+        g_currentSaveSlot = slot;
+        g_isSaving = true;
+
+        // Add timestamp metadata
+        time_t now = time(nullptr);
+        char timeBuf[64];
+        ctime_s(timeBuf, sizeof(timeBuf), &now);
+        timeBuf[strlen(timeBuf) - 1] = '\0';  // Remove newline
+        g_saveMetadata["timestamp"] = timeBuf;
+
+        return true;
+    }
+
+    bool Framework_Save_EndSave() {
+        if (!g_isSaving) return false;
+
+        EnsureSaveDirectory();
+        std::string path = ResolveAssetPath(GetSaveFilePath(g_currentSaveSlot).c_str());
+
+        FILE* f = nullptr;
+        if (fopen_s(&f, path.c_str(), "w") != 0 || !f) {
+            g_isSaving = false;
+            return false;
+        }
+
+        fprintf(f, "# Game Save - Slot %d\n", g_currentSaveSlot);
+        fprintf(f, "version 1\n\n");
+
+        // Write metadata
+        fprintf(f, "[META]\n");
+        for (const auto& kv : g_saveMetadata) {
+            fprintf(f, "%s=%s\n", kv.first.c_str(), kv.second.c_str());
+        }
+        fprintf(f, "\n");
+
+        // Write data
+        fprintf(f, "[DATA]\n");
+        for (const auto& kv : g_saveData) {
+            fprintf(f, "%s=%s\n", kv.first.c_str(), kv.second.c_str());
+        }
+
+        fclose(f);
+        g_isSaving = false;
+        g_currentSaveSlot = -1;
+        return true;
+    }
+
+    bool Framework_Save_BeginLoad(int slot) {
+        if (g_isSaving || g_isLoading) return false;
+        if (!Framework_Save_SlotExists(slot)) return false;
+
+        std::string path = ResolveAssetPath(GetSaveFilePath(slot).c_str());
+        FILE* f = nullptr;
+        if (fopen_s(&f, path.c_str(), "r") != 0 || !f) return false;
+
+        g_saveData.clear();
+        g_saveMetadata.clear();
+        g_currentSaveSlot = slot;
+        g_isLoading = true;
+
+        char line[1024];
+        bool inMeta = false;
+        bool inData = false;
+
+        while (fgets(line, sizeof(line), f)) {
+            // Remove newline
+            size_t len = strlen(line);
+            if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+            if (len > 1 && line[len - 2] == '\r') line[len - 2] = '\0';
+
+            if (line[0] == '#' || line[0] == '\0') continue;
+
+            if (strcmp(line, "[META]") == 0) { inMeta = true; inData = false; continue; }
+            if (strcmp(line, "[DATA]") == 0) { inMeta = false; inData = true; continue; }
+
+            // Parse key=value
+            char* eq = strchr(line, '=');
+            if (eq) {
+                *eq = '\0';
+                std::string key = line;
+                std::string val = eq + 1;
+
+                if (inMeta) g_saveMetadata[key] = val;
+                else if (inData) g_saveData[key] = val;
+            }
+        }
+
+        fclose(f);
+        return true;
+    }
+
+    bool Framework_Save_EndLoad() {
+        if (!g_isLoading) return false;
+        g_isLoading = false;
+        g_currentSaveSlot = -1;
+        return true;
+    }
+
+    // Data serialization - Write
+    void Framework_Save_WriteInt(const char* key, int value) {
+        if (!g_isSaving || !key) return;
+        g_saveData[key] = std::to_string(value);
+    }
+
+    void Framework_Save_WriteFloat(const char* key, float value) {
+        if (!g_isSaving || !key) return;
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.6f", value);
+        g_saveData[key] = buf;
+    }
+
+    void Framework_Save_WriteBool(const char* key, bool value) {
+        if (!g_isSaving || !key) return;
+        g_saveData[key] = value ? "true" : "false";
+    }
+
+    void Framework_Save_WriteString(const char* key, const char* value) {
+        if (!g_isSaving || !key) return;
+        g_saveData[key] = value ? value : "";
+    }
+
+    void Framework_Save_WriteVector2(const char* key, float x, float y) {
+        if (!g_isSaving || !key) return;
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%.6f,%.6f", x, y);
+        g_saveData[key] = buf;
+    }
+
+    void Framework_Save_WriteIntArray(const char* key, const int* values, int count) {
+        if (!g_isSaving || !key || !values || count <= 0) return;
+        std::string result;
+        for (int i = 0; i < count; i++) {
+            if (i > 0) result += ",";
+            result += std::to_string(values[i]);
+        }
+        g_saveData[key] = result;
+    }
+
+    void Framework_Save_WriteFloatArray(const char* key, const float* values, int count) {
+        if (!g_isSaving || !key || !values || count <= 0) return;
+        std::string result;
+        char buf[32];
+        for (int i = 0; i < count; i++) {
+            if (i > 0) result += ",";
+            snprintf(buf, sizeof(buf), "%.6f", values[i]);
+            result += buf;
+        }
+        g_saveData[key] = result;
+    }
+
+    // Data serialization - Read
+    int Framework_Save_ReadInt(const char* key, int defaultValue) {
+        if (!g_isLoading || !key) return defaultValue;
+        auto it = g_saveData.find(key);
+        if (it == g_saveData.end()) return defaultValue;
+        return atoi(it->second.c_str());
+    }
+
+    float Framework_Save_ReadFloat(const char* key, float defaultValue) {
+        if (!g_isLoading || !key) return defaultValue;
+        auto it = g_saveData.find(key);
+        if (it == g_saveData.end()) return defaultValue;
+        return (float)atof(it->second.c_str());
+    }
+
+    bool Framework_Save_ReadBool(const char* key, bool defaultValue) {
+        if (!g_isLoading || !key) return defaultValue;
+        auto it = g_saveData.find(key);
+        if (it == g_saveData.end()) return defaultValue;
+        return it->second == "true" || it->second == "1";
+    }
+
+    const char* Framework_Save_ReadString(const char* key, const char* defaultValue) {
+        if (!g_isLoading || !key) return defaultValue;
+        auto it = g_saveData.find(key);
+        if (it == g_saveData.end()) return defaultValue;
+        g_tempStringResult = it->second;
+        return g_tempStringResult.c_str();
+    }
+
+    void Framework_Save_ReadVector2(const char* key, float* x, float* y, float defX, float defY) {
+        if (!g_isLoading || !key) {
+            if (x) *x = defX;
+            if (y) *y = defY;
+            return;
+        }
+        auto it = g_saveData.find(key);
+        if (it == g_saveData.end()) {
+            if (x) *x = defX;
+            if (y) *y = defY;
+            return;
+        }
+        float fx = defX, fy = defY;
+        sscanf_s(it->second.c_str(), "%f,%f", &fx, &fy);
+        if (x) *x = fx;
+        if (y) *y = fy;
+    }
+
+    int Framework_Save_ReadIntArray(const char* key, int* buffer, int bufferSize) {
+        if (!g_isLoading || !key || !buffer || bufferSize <= 0) return 0;
+        auto it = g_saveData.find(key);
+        if (it == g_saveData.end()) return 0;
+
+        int count = 0;
+        const char* str = it->second.c_str();
+        const char* p = str;
+
+        while (*p && count < bufferSize) {
+            buffer[count++] = atoi(p);
+            p = strchr(p, ',');
+            if (!p) break;
+            p++;  // Skip comma
+        }
+        return count;
+    }
+
+    int Framework_Save_ReadFloatArray(const char* key, float* buffer, int bufferSize) {
+        if (!g_isLoading || !key || !buffer || bufferSize <= 0) return 0;
+        auto it = g_saveData.find(key);
+        if (it == g_saveData.end()) return 0;
+
+        int count = 0;
+        const char* str = it->second.c_str();
+        const char* p = str;
+
+        while (*p && count < bufferSize) {
+            buffer[count++] = (float)atof(p);
+            p = strchr(p, ',');
+            if (!p) break;
+            p++;  // Skip comma
+        }
+        return count;
+    }
+
+    bool Framework_Save_HasKey(const char* key) {
+        if (!g_isLoading || !key) return false;
+        return g_saveData.find(key) != g_saveData.end();
+    }
+
+    // Metadata
+    void Framework_Save_SetMetadata(const char* key, const char* value) {
+        if (!g_isSaving || !key) return;
+        g_saveMetadata[key] = value ? value : "";
+    }
+
+    const char* Framework_Save_GetMetadata(int slot, const char* key) {
+        // Need to load the slot temporarily to get metadata
+        if (!key) return "";
+
+        std::string path = ResolveAssetPath(GetSaveFilePath(slot).c_str());
+        FILE* f = nullptr;
+        if (fopen_s(&f, path.c_str(), "r") != 0 || !f) return "";
+
+        char line[1024];
+        bool inMeta = false;
+        g_tempStringResult = "";
+
+        while (fgets(line, sizeof(line), f)) {
+            size_t len = strlen(line);
+            if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+
+            if (strcmp(line, "[META]") == 0) { inMeta = true; continue; }
+            if (line[0] == '[') { inMeta = false; continue; }
+
+            if (inMeta) {
+                char* eq = strchr(line, '=');
+                if (eq) {
+                    *eq = '\0';
+                    if (strcmp(line, key) == 0) {
+                        g_tempStringResult = eq + 1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        fclose(f);
+        return g_tempStringResult.c_str();
+    }
+
+    // Auto-save
+    void Framework_Save_SetAutoSaveEnabled(bool enabled) {
+        g_autoSaveEnabled = enabled;
+        g_autoSaveTimer = 0;
+    }
+
+    bool Framework_Save_IsAutoSaveEnabled() {
+        return g_autoSaveEnabled;
+    }
+
+    void Framework_Save_SetAutoSaveInterval(float seconds) {
+        g_autoSaveInterval = seconds > 1.0f ? seconds : 1.0f;
+    }
+
+    float Framework_Save_GetAutoSaveInterval() {
+        return g_autoSaveInterval;
+    }
+
+    void Framework_Save_SetAutoSaveSlot(int slot) {
+        g_autoSaveSlot = slot;
+    }
+
+    int Framework_Save_GetAutoSaveSlot() {
+        return g_autoSaveSlot;
+    }
+
+    void Framework_Save_TriggerAutoSave() {
+        int slot = g_autoSaveSlot;
+        if (slot < 0) {
+            // Rotating slots: use 90-99 for auto-saves
+            slot = 90 + (g_autoSaveRotation % 10);
+            g_autoSaveRotation++;
+        }
+
+        // Quick auto-save - just mark that auto-save should happen
+        // Game code needs to handle the actual save in their update loop
+        if (Framework_Save_BeginSave(slot)) {
+            Framework_Save_SetMetadata("type", "autosave");
+            // Note: Game code must call WriteXxx functions and EndSave
+        }
+    }
+
+    void Framework_Save_Update(float dt) {
+        if (!g_autoSaveEnabled) return;
+
+        g_autoSaveTimer += dt;
+        if (g_autoSaveTimer >= g_autoSaveInterval) {
+            g_autoSaveTimer = 0;
+            Framework_Save_TriggerAutoSave();
+        }
+    }
+
+    // Quick save/load
+    bool Framework_Save_QuickSave() {
+        return Framework_Save_BeginSave(0);
+        // Note: Caller must write data and call EndSave
+    }
+
+    bool Framework_Save_QuickLoad() {
+        return Framework_Save_BeginLoad(0);
+        // Note: Caller must read data and call EndLoad
+    }
+
+    // Settings (persistent across sessions)
+    void Framework_Settings_SetInt(const char* key, int value) {
+        if (!key) return;
+        g_settings[key] = std::to_string(value);
+    }
+
+    int Framework_Settings_GetInt(const char* key, int defaultValue) {
+        if (!key) return defaultValue;
+        auto it = g_settings.find(key);
+        if (it == g_settings.end()) return defaultValue;
+        return atoi(it->second.c_str());
+    }
+
+    void Framework_Settings_SetFloat(const char* key, float value) {
+        if (!key) return;
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.6f", value);
+        g_settings[key] = buf;
+    }
+
+    float Framework_Settings_GetFloat(const char* key, float defaultValue) {
+        if (!key) return defaultValue;
+        auto it = g_settings.find(key);
+        if (it == g_settings.end()) return defaultValue;
+        return (float)atof(it->second.c_str());
+    }
+
+    void Framework_Settings_SetBool(const char* key, bool value) {
+        if (!key) return;
+        g_settings[key] = value ? "true" : "false";
+    }
+
+    bool Framework_Settings_GetBool(const char* key, bool defaultValue) {
+        if (!key) return defaultValue;
+        auto it = g_settings.find(key);
+        if (it == g_settings.end()) return defaultValue;
+        return it->second == "true" || it->second == "1";
+    }
+
+    void Framework_Settings_SetString(const char* key, const char* value) {
+        if (!key) return;
+        g_settings[key] = value ? value : "";
+    }
+
+    const char* Framework_Settings_GetString(const char* key, const char* defaultValue) {
+        if (!key) return defaultValue;
+        auto it = g_settings.find(key);
+        if (it == g_settings.end()) return defaultValue;
+        g_tempStringResult = it->second;
+        return g_tempStringResult.c_str();
+    }
+
+    bool Framework_Settings_Save() {
+        EnsureSaveDirectory();
+        std::string path = ResolveAssetPath(GetSettingsFilePath().c_str());
+
+        FILE* f = nullptr;
+        if (fopen_s(&f, path.c_str(), "w") != 0 || !f) return false;
+
+        fprintf(f, "# Game Settings\n");
+        fprintf(f, "version 1\n\n");
+
+        for (const auto& kv : g_settings) {
+            fprintf(f, "%s=%s\n", kv.first.c_str(), kv.second.c_str());
+        }
+
+        fclose(f);
+        return true;
+    }
+
+    bool Framework_Settings_Load() {
+        std::string path = ResolveAssetPath(GetSettingsFilePath().c_str());
+
+        FILE* f = nullptr;
+        if (fopen_s(&f, path.c_str(), "r") != 0 || !f) return false;
+
+        g_settings.clear();
+        char line[1024];
+
+        while (fgets(line, sizeof(line), f)) {
+            size_t len = strlen(line);
+            if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+            if (len > 1 && line[len - 2] == '\r') line[len - 2] = '\0';
+
+            if (line[0] == '#' || line[0] == '\0') continue;
+            if (strncmp(line, "version", 7) == 0) continue;
+
+            char* eq = strchr(line, '=');
+            if (eq) {
+                *eq = '\0';
+                g_settings[line] = eq + 1;
+            }
+        }
+
+        fclose(f);
+        return true;
+    }
+
+    void Framework_Settings_Clear() {
+        g_settings.clear();
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {

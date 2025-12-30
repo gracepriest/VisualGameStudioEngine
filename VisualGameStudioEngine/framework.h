@@ -1091,6 +1091,76 @@ extern "C" {
     __declspec(dllexport) bool  Framework_Input_LoadBindings(const char* filename);
 
     // ========================================================================
+    // SAVE/LOAD SYSTEM - Game State Persistence
+    // ========================================================================
+    // Save slot management
+    __declspec(dllexport) void  Framework_Save_SetDirectory(const char* directory);  // Set save directory
+    __declspec(dllexport) const char* Framework_Save_GetDirectory();
+    __declspec(dllexport) int   Framework_Save_GetSlotCount();  // Number of existing saves
+    __declspec(dllexport) bool  Framework_Save_SlotExists(int slot);
+    __declspec(dllexport) bool  Framework_Save_DeleteSlot(int slot);
+    __declspec(dllexport) bool  Framework_Save_CopySlot(int fromSlot, int toSlot);
+    __declspec(dllexport) const char* Framework_Save_GetSlotInfo(int slot);  // Returns metadata string
+
+    // Save/Load current game state
+    __declspec(dllexport) bool  Framework_Save_BeginSave(int slot);  // Start building save data
+    __declspec(dllexport) bool  Framework_Save_EndSave();            // Write to disk
+    __declspec(dllexport) bool  Framework_Save_BeginLoad(int slot);  // Start reading save data
+    __declspec(dllexport) bool  Framework_Save_EndLoad();            // Finish loading
+
+    // Data serialization - Write
+    __declspec(dllexport) void  Framework_Save_WriteInt(const char* key, int value);
+    __declspec(dllexport) void  Framework_Save_WriteFloat(const char* key, float value);
+    __declspec(dllexport) void  Framework_Save_WriteBool(const char* key, bool value);
+    __declspec(dllexport) void  Framework_Save_WriteString(const char* key, const char* value);
+    __declspec(dllexport) void  Framework_Save_WriteVector2(const char* key, float x, float y);
+    __declspec(dllexport) void  Framework_Save_WriteIntArray(const char* key, const int* values, int count);
+    __declspec(dllexport) void  Framework_Save_WriteFloatArray(const char* key, const float* values, int count);
+
+    // Data serialization - Read
+    __declspec(dllexport) int   Framework_Save_ReadInt(const char* key, int defaultValue);
+    __declspec(dllexport) float Framework_Save_ReadFloat(const char* key, float defaultValue);
+    __declspec(dllexport) bool  Framework_Save_ReadBool(const char* key, bool defaultValue);
+    __declspec(dllexport) const char* Framework_Save_ReadString(const char* key, const char* defaultValue);
+    __declspec(dllexport) void  Framework_Save_ReadVector2(const char* key, float* x, float* y, float defX, float defY);
+    __declspec(dllexport) int   Framework_Save_ReadIntArray(const char* key, int* buffer, int bufferSize);
+    __declspec(dllexport) int   Framework_Save_ReadFloatArray(const char* key, float* buffer, int bufferSize);
+
+    // Check if key exists
+    __declspec(dllexport) bool  Framework_Save_HasKey(const char* key);
+
+    // Save metadata (stored with each save)
+    __declspec(dllexport) void  Framework_Save_SetMetadata(const char* key, const char* value);
+    __declspec(dllexport) const char* Framework_Save_GetMetadata(int slot, const char* key);
+
+    // Auto-save
+    __declspec(dllexport) void  Framework_Save_SetAutoSaveEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Save_IsAutoSaveEnabled();
+    __declspec(dllexport) void  Framework_Save_SetAutoSaveInterval(float seconds);
+    __declspec(dllexport) float Framework_Save_GetAutoSaveInterval();
+    __declspec(dllexport) void  Framework_Save_SetAutoSaveSlot(int slot);  // -1 for rotating slots
+    __declspec(dllexport) int   Framework_Save_GetAutoSaveSlot();
+    __declspec(dllexport) void  Framework_Save_TriggerAutoSave();  // Force auto-save now
+    __declspec(dllexport) void  Framework_Save_Update(float dt);   // Call each frame for auto-save timing
+
+    // Quick save/load (slot 0)
+    __declspec(dllexport) bool  Framework_Save_QuickSave();
+    __declspec(dllexport) bool  Framework_Save_QuickLoad();
+
+    // Settings (separate from game saves, persistent across sessions)
+    __declspec(dllexport) void  Framework_Settings_SetInt(const char* key, int value);
+    __declspec(dllexport) int   Framework_Settings_GetInt(const char* key, int defaultValue);
+    __declspec(dllexport) void  Framework_Settings_SetFloat(const char* key, float value);
+    __declspec(dllexport) float Framework_Settings_GetFloat(const char* key, float defaultValue);
+    __declspec(dllexport) void  Framework_Settings_SetBool(const char* key, bool value);
+    __declspec(dllexport) bool  Framework_Settings_GetBool(const char* key, bool defaultValue);
+    __declspec(dllexport) void  Framework_Settings_SetString(const char* key, const char* value);
+    __declspec(dllexport) const char* Framework_Settings_GetString(const char* key, const char* defaultValue);
+    __declspec(dllexport) bool  Framework_Settings_Save();  // Save settings to disk
+    __declspec(dllexport) bool  Framework_Settings_Load();  // Load settings from disk
+    __declspec(dllexport) void  Framework_Settings_Clear(); // Clear all settings
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();
