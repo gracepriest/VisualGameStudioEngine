@@ -19,6 +19,11 @@
     <ProjectReference Include="..\VisualGameStudioEngine\VisualGameStudioEngine.vcxproj" />
   </ItemGroup>
 
+  <Target Name="CopyNativeDll" AfterTargets="Build">
+    <Copy SourceFiles="$(SolutionDir)x64\Release\VisualGameStudioEngine.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(SolutionDir)x64\Release\VisualGameStudioEngine.dll" DestinationFolder="$(OutputPath)net8.0\" SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <None Update="raylib.dll">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
