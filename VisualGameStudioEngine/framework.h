@@ -1661,6 +1661,92 @@ extern "C" {
     __declspec(dllexport) void  Framework_Pool_ReleaseAllPools();  // Release all objects in all pools
 
     // ========================================================================
+    // STATE MACHINE - Finite State Machines for game logic and AI
+    // ========================================================================
+
+    // State callback types
+    typedef void (*StateEnterCallback)(int fsmId, int stateId, int previousState, void* userData);
+    typedef void (*StateUpdateCallback)(int fsmId, int stateId, float deltaTime, void* userData);
+    typedef void (*StateExitCallback)(int fsmId, int stateId, int nextState, void* userData);
+    typedef bool (*TransitionCondition)(int fsmId, int fromState, int toState, void* userData);
+
+    // FSM creation and management
+    __declspec(dllexport) int   Framework_FSM_Create(const char* name);
+    __declspec(dllexport) int   Framework_FSM_CreateForEntity(const char* name, int entity);
+    __declspec(dllexport) void  Framework_FSM_Destroy(int fsmId);
+    __declspec(dllexport) int   Framework_FSM_GetByName(const char* name);
+    __declspec(dllexport) int   Framework_FSM_GetForEntity(int entity);
+    __declspec(dllexport) bool  Framework_FSM_IsValid(int fsmId);
+
+    // State registration
+    __declspec(dllexport) int   Framework_FSM_AddState(int fsmId, const char* stateName);
+    __declspec(dllexport) int   Framework_FSM_GetState(int fsmId, const char* stateName);
+    __declspec(dllexport) const char* Framework_FSM_GetStateName(int fsmId, int stateId);
+    __declspec(dllexport) void  Framework_FSM_RemoveState(int fsmId, int stateId);
+    __declspec(dllexport) int   Framework_FSM_GetStateCount(int fsmId);
+
+    // State callbacks
+    __declspec(dllexport) void  Framework_FSM_SetStateEnter(int fsmId, int stateId, StateEnterCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_FSM_SetStateUpdate(int fsmId, int stateId, StateUpdateCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_FSM_SetStateExit(int fsmId, int stateId, StateExitCallback callback, void* userData);
+
+    // Transitions
+    __declspec(dllexport) int   Framework_FSM_AddTransition(int fsmId, int fromState, int toState);
+    __declspec(dllexport) void  Framework_FSM_SetTransitionCondition(int fsmId, int transitionId, TransitionCondition condition, void* userData);
+    __declspec(dllexport) void  Framework_FSM_RemoveTransition(int fsmId, int transitionId);
+    __declspec(dllexport) bool  Framework_FSM_CanTransition(int fsmId, int fromState, int toState);
+
+    // Any-state transitions (can trigger from any state)
+    __declspec(dllexport) int   Framework_FSM_AddAnyTransition(int fsmId, int toState);
+    __declspec(dllexport) void  Framework_FSM_SetAnyTransitionCondition(int fsmId, int transitionId, TransitionCondition condition, void* userData);
+
+    // State machine control
+    __declspec(dllexport) void  Framework_FSM_SetInitialState(int fsmId, int stateId);
+    __declspec(dllexport) void  Framework_FSM_Start(int fsmId);
+    __declspec(dllexport) void  Framework_FSM_Stop(int fsmId);
+    __declspec(dllexport) void  Framework_FSM_Pause(int fsmId);
+    __declspec(dllexport) void  Framework_FSM_Resume(int fsmId);
+    __declspec(dllexport) bool  Framework_FSM_IsRunning(int fsmId);
+    __declspec(dllexport) bool  Framework_FSM_IsPaused(int fsmId);
+
+    // State queries
+    __declspec(dllexport) int   Framework_FSM_GetCurrentState(int fsmId);
+    __declspec(dllexport) int   Framework_FSM_GetPreviousState(int fsmId);
+    __declspec(dllexport) float Framework_FSM_GetTimeInState(int fsmId);
+    __declspec(dllexport) int   Framework_FSM_GetStateChangeCount(int fsmId);
+
+    // Manual transitions
+    __declspec(dllexport) bool  Framework_FSM_TransitionTo(int fsmId, int stateId);  // Force transition
+    __declspec(dllexport) bool  Framework_FSM_TransitionToByName(int fsmId, const char* stateName);
+    __declspec(dllexport) bool  Framework_FSM_TryTransition(int fsmId, int toState);  // Only if condition passes
+    __declspec(dllexport) void  Framework_FSM_RevertToPrevious(int fsmId);  // Go back to previous state
+
+    // State history
+    __declspec(dllexport) void  Framework_FSM_SetHistorySize(int fsmId, int size);  // How many states to remember
+    __declspec(dllexport) int   Framework_FSM_GetHistoryState(int fsmId, int index);  // 0 = most recent
+    __declspec(dllexport) int   Framework_FSM_GetHistoryCount(int fsmId);
+
+    // Triggers (named events that can cause transitions)
+    __declspec(dllexport) int   Framework_FSM_AddTrigger(int fsmId, const char* triggerName, int fromState, int toState);
+    __declspec(dllexport) void  Framework_FSM_FireTrigger(int fsmId, const char* triggerName);
+    __declspec(dllexport) void  Framework_FSM_FireTriggerWithData(int fsmId, const char* triggerName, void* data);
+    __declspec(dllexport) void  Framework_FSM_RemoveTrigger(int fsmId, int triggerId);
+
+    // Update (call each frame)
+    __declspec(dllexport) void  Framework_FSM_Update(int fsmId, float deltaTime);
+    __declspec(dllexport) void  Framework_FSM_UpdateAll(float deltaTime);  // Update all FSMs
+
+    // Global FSM management
+    __declspec(dllexport) int   Framework_FSM_GetCount();
+    __declspec(dllexport) void  Framework_FSM_DestroyAll();
+    __declspec(dllexport) void  Framework_FSM_PauseAll();
+    __declspec(dllexport) void  Framework_FSM_ResumeAll();
+
+    // Debug
+    __declspec(dllexport) void  Framework_FSM_SetDebugEnabled(int fsmId, bool enabled);
+    __declspec(dllexport) bool  Framework_FSM_GetDebugEnabled(int fsmId);
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

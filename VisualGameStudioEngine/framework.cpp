@@ -10376,6 +10376,632 @@ extern "C" {
     }
 
     // ========================================================================
+    // STATE MACHINE SYSTEM
+    // ========================================================================
+
+    struct FSMState {
+        int id;
+        std::string name;
+        StateEnterCallback enterCallback = nullptr;
+        void* enterUserData = nullptr;
+        StateUpdateCallback updateCallback = nullptr;
+        void* updateUserData = nullptr;
+        StateExitCallback exitCallback = nullptr;
+        void* exitUserData = nullptr;
+    };
+
+    struct FSMTransition {
+        int id;
+        int fromState;
+        int toState;
+        bool isAnyState;  // Can trigger from any state
+        TransitionCondition condition = nullptr;
+        void* conditionUserData = nullptr;
+    };
+
+    struct FSMTrigger {
+        int id;
+        std::string name;
+        int fromState;  // -1 for any state
+        int toState;
+        void* lastData = nullptr;
+    };
+
+    struct StateMachine {
+        int id;
+        std::string name;
+        int entity = -1;  // -1 if not bound to entity
+
+        std::unordered_map<int, FSMState> states;
+        std::unordered_map<std::string, int> stateIdByName;
+        int nextStateId = 0;
+
+        std::unordered_map<int, FSMTransition> transitions;
+        int nextTransitionId = 0;
+
+        std::unordered_map<int, FSMTrigger> triggers;
+        std::unordered_map<std::string, std::vector<int>> triggerIdsByName;
+        int nextTriggerId = 0;
+
+        int initialState = -1;
+        int currentState = -1;
+        int previousState = -1;
+
+        bool running = false;
+        bool paused = false;
+
+        float timeInState = 0.0f;
+        int stateChangeCount = 0;
+
+        std::vector<int> stateHistory;
+        int maxHistorySize = 10;
+
+        bool debugEnabled = false;
+    };
+
+    static std::unordered_map<int, StateMachine> g_fsms;
+    static std::unordered_map<std::string, int> g_fsmIdByName;
+    static std::unordered_map<int, int> g_fsmIdByEntity;
+    static int g_nextFsmId = 1;
+    static bool g_fsmGlobalPaused = false;
+
+    static StateMachine* GetFSM(int fsmId) {
+        auto it = g_fsms.find(fsmId);
+        return (it != g_fsms.end()) ? &it->second : nullptr;
+    }
+
+    static FSMState* GetFSMState(StateMachine* fsm, int stateId) {
+        if (!fsm) return nullptr;
+        auto it = fsm->states.find(stateId);
+        return (it != fsm->states.end()) ? &it->second : nullptr;
+    }
+
+    static void FSMPerformTransition(StateMachine* fsm, int newState) {
+        if (!fsm || newState == fsm->currentState) return;
+
+        FSMState* oldStateObj = GetFSMState(fsm, fsm->currentState);
+        FSMState* newStateObj = GetFSMState(fsm, newState);
+
+        if (!newStateObj) return;
+
+        // Exit old state
+        if (oldStateObj && oldStateObj->exitCallback) {
+            oldStateObj->exitCallback(fsm->id, fsm->currentState, newState, oldStateObj->exitUserData);
+        }
+
+        // Update history
+        if (fsm->currentState >= 0) {
+            fsm->stateHistory.insert(fsm->stateHistory.begin(), fsm->currentState);
+            while ((int)fsm->stateHistory.size() > fsm->maxHistorySize) {
+                fsm->stateHistory.pop_back();
+            }
+        }
+
+        int prevState = fsm->currentState;
+        fsm->previousState = prevState;
+        fsm->currentState = newState;
+        fsm->timeInState = 0.0f;
+        fsm->stateChangeCount++;
+
+        if (fsm->debugEnabled) {
+            const char* fromName = prevState >= 0 ? fsm->states[prevState].name.c_str() : "none";
+            const char* toName = newStateObj->name.c_str();
+            TraceLog(LOG_INFO, "FSM[%s]: %s -> %s", fsm->name.c_str(), fromName, toName);
+        }
+
+        // Enter new state
+        if (newStateObj->enterCallback) {
+            newStateObj->enterCallback(fsm->id, newState, prevState, newStateObj->enterUserData);
+        }
+    }
+
+    // FSM creation and management
+    int Framework_FSM_Create(const char* name) {
+        StateMachine fsm;
+        fsm.id = g_nextFsmId++;
+        fsm.name = name ? name : "";
+
+        g_fsms[fsm.id] = fsm;
+        if (name && strlen(name) > 0) {
+            g_fsmIdByName[name] = fsm.id;
+        }
+
+        return fsm.id;
+    }
+
+    int Framework_FSM_CreateForEntity(const char* name, int entity) {
+        int fsmId = Framework_FSM_Create(name);
+        auto* fsm = GetFSM(fsmId);
+        if (fsm) {
+            fsm->entity = entity;
+            g_fsmIdByEntity[entity] = fsmId;
+        }
+        return fsmId;
+    }
+
+    void Framework_FSM_Destroy(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm) return;
+
+        // Stop if running
+        if (fsm->running) {
+            Framework_FSM_Stop(fsmId);
+        }
+
+        // Remove from lookup maps
+        if (!fsm->name.empty()) {
+            g_fsmIdByName.erase(fsm->name);
+        }
+        if (fsm->entity >= 0) {
+            g_fsmIdByEntity.erase(fsm->entity);
+        }
+
+        g_fsms.erase(fsmId);
+    }
+
+    int Framework_FSM_GetByName(const char* name) {
+        if (!name) return -1;
+        auto it = g_fsmIdByName.find(name);
+        return (it != g_fsmIdByName.end()) ? it->second : -1;
+    }
+
+    int Framework_FSM_GetForEntity(int entity) {
+        auto it = g_fsmIdByEntity.find(entity);
+        return (it != g_fsmIdByEntity.end()) ? it->second : -1;
+    }
+
+    bool Framework_FSM_IsValid(int fsmId) {
+        return GetFSM(fsmId) != nullptr;
+    }
+
+    // State registration
+    int Framework_FSM_AddState(int fsmId, const char* stateName) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !stateName) return -1;
+
+        // Check if state already exists
+        auto it = fsm->stateIdByName.find(stateName);
+        if (it != fsm->stateIdByName.end()) {
+            return it->second;
+        }
+
+        FSMState state;
+        state.id = fsm->nextStateId++;
+        state.name = stateName;
+
+        fsm->states[state.id] = state;
+        fsm->stateIdByName[stateName] = state.id;
+
+        return state.id;
+    }
+
+    int Framework_FSM_GetState(int fsmId, const char* stateName) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !stateName) return -1;
+
+        auto it = fsm->stateIdByName.find(stateName);
+        return (it != fsm->stateIdByName.end()) ? it->second : -1;
+    }
+
+    const char* Framework_FSM_GetStateName(int fsmId, int stateId) {
+        auto* fsm = GetFSM(fsmId);
+        auto* state = GetFSMState(fsm, stateId);
+        return state ? state->name.c_str() : "";
+    }
+
+    void Framework_FSM_RemoveState(int fsmId, int stateId) {
+        auto* fsm = GetFSM(fsmId);
+        auto* state = GetFSMState(fsm, stateId);
+        if (!state) return;
+
+        // Can't remove current state while running
+        if (fsm->running && fsm->currentState == stateId) return;
+
+        fsm->stateIdByName.erase(state->name);
+        fsm->states.erase(stateId);
+
+        // Remove transitions involving this state
+        std::vector<int> toRemove;
+        for (auto& pair : fsm->transitions) {
+            if (pair.second.fromState == stateId || pair.second.toState == stateId) {
+                toRemove.push_back(pair.first);
+            }
+        }
+        for (int id : toRemove) {
+            fsm->transitions.erase(id);
+        }
+    }
+
+    int Framework_FSM_GetStateCount(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? (int)fsm->states.size() : 0;
+    }
+
+    // State callbacks
+    void Framework_FSM_SetStateEnter(int fsmId, int stateId, StateEnterCallback callback, void* userData) {
+        auto* fsm = GetFSM(fsmId);
+        auto* state = GetFSMState(fsm, stateId);
+        if (state) {
+            state->enterCallback = callback;
+            state->enterUserData = userData;
+        }
+    }
+
+    void Framework_FSM_SetStateUpdate(int fsmId, int stateId, StateUpdateCallback callback, void* userData) {
+        auto* fsm = GetFSM(fsmId);
+        auto* state = GetFSMState(fsm, stateId);
+        if (state) {
+            state->updateCallback = callback;
+            state->updateUserData = userData;
+        }
+    }
+
+    void Framework_FSM_SetStateExit(int fsmId, int stateId, StateExitCallback callback, void* userData) {
+        auto* fsm = GetFSM(fsmId);
+        auto* state = GetFSMState(fsm, stateId);
+        if (state) {
+            state->exitCallback = callback;
+            state->exitUserData = userData;
+        }
+    }
+
+    // Transitions
+    int Framework_FSM_AddTransition(int fsmId, int fromState, int toState) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm) return -1;
+
+        FSMTransition transition;
+        transition.id = fsm->nextTransitionId++;
+        transition.fromState = fromState;
+        transition.toState = toState;
+        transition.isAnyState = false;
+
+        fsm->transitions[transition.id] = transition;
+        return transition.id;
+    }
+
+    void Framework_FSM_SetTransitionCondition(int fsmId, int transitionId, TransitionCondition condition, void* userData) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm) return;
+
+        auto it = fsm->transitions.find(transitionId);
+        if (it != fsm->transitions.end()) {
+            it->second.condition = condition;
+            it->second.conditionUserData = userData;
+        }
+    }
+
+    void Framework_FSM_RemoveTransition(int fsmId, int transitionId) {
+        auto* fsm = GetFSM(fsmId);
+        if (fsm) {
+            fsm->transitions.erase(transitionId);
+        }
+    }
+
+    bool Framework_FSM_CanTransition(int fsmId, int fromState, int toState) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm) return false;
+
+        for (auto& pair : fsm->transitions) {
+            auto& t = pair.second;
+            if ((t.fromState == fromState || t.isAnyState) && t.toState == toState) {
+                if (!t.condition) return true;
+                return t.condition(fsmId, fromState, toState, t.conditionUserData);
+            }
+        }
+        return false;
+    }
+
+    // Any-state transitions
+    int Framework_FSM_AddAnyTransition(int fsmId, int toState) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm) return -1;
+
+        FSMTransition transition;
+        transition.id = fsm->nextTransitionId++;
+        transition.fromState = -1;
+        transition.toState = toState;
+        transition.isAnyState = true;
+
+        fsm->transitions[transition.id] = transition;
+        return transition.id;
+    }
+
+    void Framework_FSM_SetAnyTransitionCondition(int fsmId, int transitionId, TransitionCondition condition, void* userData) {
+        Framework_FSM_SetTransitionCondition(fsmId, transitionId, condition, userData);
+    }
+
+    // State machine control
+    void Framework_FSM_SetInitialState(int fsmId, int stateId) {
+        auto* fsm = GetFSM(fsmId);
+        if (fsm) {
+            fsm->initialState = stateId;
+        }
+    }
+
+    void Framework_FSM_Start(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || fsm->running) return;
+
+        fsm->running = true;
+        fsm->paused = false;
+        fsm->timeInState = 0.0f;
+        fsm->stateChangeCount = 0;
+        fsm->stateHistory.clear();
+        fsm->previousState = -1;
+
+        // Enter initial state
+        if (fsm->initialState >= 0) {
+            fsm->currentState = fsm->initialState;
+            auto* state = GetFSMState(fsm, fsm->initialState);
+            if (state && state->enterCallback) {
+                state->enterCallback(fsm->id, fsm->initialState, -1, state->enterUserData);
+            }
+            if (fsm->debugEnabled) {
+                TraceLog(LOG_INFO, "FSM[%s]: Started in state '%s'", fsm->name.c_str(), state ? state->name.c_str() : "unknown");
+            }
+        }
+    }
+
+    void Framework_FSM_Stop(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !fsm->running) return;
+
+        // Exit current state
+        auto* state = GetFSMState(fsm, fsm->currentState);
+        if (state && state->exitCallback) {
+            state->exitCallback(fsm->id, fsm->currentState, -1, state->exitUserData);
+        }
+
+        fsm->running = false;
+        fsm->paused = false;
+        fsm->currentState = -1;
+
+        if (fsm->debugEnabled) {
+            TraceLog(LOG_INFO, "FSM[%s]: Stopped", fsm->name.c_str());
+        }
+    }
+
+    void Framework_FSM_Pause(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        if (fsm && fsm->running) {
+            fsm->paused = true;
+        }
+    }
+
+    void Framework_FSM_Resume(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        if (fsm && fsm->running) {
+            fsm->paused = false;
+        }
+    }
+
+    bool Framework_FSM_IsRunning(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? fsm->running : false;
+    }
+
+    bool Framework_FSM_IsPaused(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? fsm->paused : false;
+    }
+
+    // State queries
+    int Framework_FSM_GetCurrentState(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? fsm->currentState : -1;
+    }
+
+    int Framework_FSM_GetPreviousState(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? fsm->previousState : -1;
+    }
+
+    float Framework_FSM_GetTimeInState(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? fsm->timeInState : 0.0f;
+    }
+
+    int Framework_FSM_GetStateChangeCount(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? fsm->stateChangeCount : 0;
+    }
+
+    // Manual transitions
+    bool Framework_FSM_TransitionTo(int fsmId, int stateId) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !fsm->running) return false;
+
+        auto* state = GetFSMState(fsm, stateId);
+        if (!state) return false;
+
+        FSMPerformTransition(fsm, stateId);
+        return true;
+    }
+
+    bool Framework_FSM_TransitionToByName(int fsmId, const char* stateName) {
+        int stateId = Framework_FSM_GetState(fsmId, stateName);
+        return Framework_FSM_TransitionTo(fsmId, stateId);
+    }
+
+    bool Framework_FSM_TryTransition(int fsmId, int toState) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !fsm->running) return false;
+
+        if (Framework_FSM_CanTransition(fsmId, fsm->currentState, toState)) {
+            FSMPerformTransition(fsm, toState);
+            return true;
+        }
+        return false;
+    }
+
+    void Framework_FSM_RevertToPrevious(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !fsm->running || fsm->previousState < 0) return;
+
+        FSMPerformTransition(fsm, fsm->previousState);
+    }
+
+    // State history
+    void Framework_FSM_SetHistorySize(int fsmId, int size) {
+        auto* fsm = GetFSM(fsmId);
+        if (fsm && size >= 0) {
+            fsm->maxHistorySize = size;
+            while ((int)fsm->stateHistory.size() > size) {
+                fsm->stateHistory.pop_back();
+            }
+        }
+    }
+
+    int Framework_FSM_GetHistoryState(int fsmId, int index) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || index < 0 || index >= (int)fsm->stateHistory.size()) return -1;
+        return fsm->stateHistory[index];
+    }
+
+    int Framework_FSM_GetHistoryCount(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? (int)fsm->stateHistory.size() : 0;
+    }
+
+    // Triggers
+    int Framework_FSM_AddTrigger(int fsmId, const char* triggerName, int fromState, int toState) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !triggerName) return -1;
+
+        FSMTrigger trigger;
+        trigger.id = fsm->nextTriggerId++;
+        trigger.name = triggerName;
+        trigger.fromState = fromState;
+        trigger.toState = toState;
+
+        fsm->triggers[trigger.id] = trigger;
+        fsm->triggerIdsByName[triggerName].push_back(trigger.id);
+
+        return trigger.id;
+    }
+
+    void Framework_FSM_FireTrigger(int fsmId, const char* triggerName) {
+        Framework_FSM_FireTriggerWithData(fsmId, triggerName, nullptr);
+    }
+
+    void Framework_FSM_FireTriggerWithData(int fsmId, const char* triggerName, void* data) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !fsm->running || !triggerName) return;
+
+        auto it = fsm->triggerIdsByName.find(triggerName);
+        if (it == fsm->triggerIdsByName.end()) return;
+
+        for (int triggerId : it->second) {
+            auto trigIt = fsm->triggers.find(triggerId);
+            if (trigIt == fsm->triggers.end()) continue;
+
+            auto& trigger = trigIt->second;
+            trigger.lastData = data;
+
+            // Check if trigger applies to current state
+            if (trigger.fromState < 0 || trigger.fromState == fsm->currentState) {
+                if (fsm->debugEnabled) {
+                    TraceLog(LOG_INFO, "FSM[%s]: Trigger '%s' fired", fsm->name.c_str(), triggerName);
+                }
+                FSMPerformTransition(fsm, trigger.toState);
+                return;  // Only first matching trigger
+            }
+        }
+    }
+
+    void Framework_FSM_RemoveTrigger(int fsmId, int triggerId) {
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm) return;
+
+        auto it = fsm->triggers.find(triggerId);
+        if (it == fsm->triggers.end()) return;
+
+        // Remove from name lookup
+        auto& triggerList = fsm->triggerIdsByName[it->second.name];
+        triggerList.erase(std::remove(triggerList.begin(), triggerList.end(), triggerId), triggerList.end());
+        if (triggerList.empty()) {
+            fsm->triggerIdsByName.erase(it->second.name);
+        }
+
+        fsm->triggers.erase(triggerId);
+    }
+
+    // Update
+    void Framework_FSM_Update(int fsmId, float deltaTime) {
+        if (g_fsmGlobalPaused) return;
+
+        auto* fsm = GetFSM(fsmId);
+        if (!fsm || !fsm->running || fsm->paused) return;
+
+        fsm->timeInState += deltaTime;
+
+        // Check auto-transitions
+        for (auto& pair : fsm->transitions) {
+            auto& t = pair.second;
+            if ((t.fromState == fsm->currentState || t.isAnyState) && t.condition) {
+                if (t.condition(fsmId, fsm->currentState, t.toState, t.conditionUserData)) {
+                    FSMPerformTransition(fsm, t.toState);
+                    break;  // Only one transition per frame
+                }
+            }
+        }
+
+        // Update current state
+        auto* state = GetFSMState(fsm, fsm->currentState);
+        if (state && state->updateCallback) {
+            state->updateCallback(fsm->id, fsm->currentState, deltaTime, state->updateUserData);
+        }
+    }
+
+    void Framework_FSM_UpdateAll(float deltaTime) {
+        if (g_fsmGlobalPaused) return;
+
+        for (auto& pair : g_fsms) {
+            Framework_FSM_Update(pair.first, deltaTime);
+        }
+    }
+
+    // Global FSM management
+    int Framework_FSM_GetCount() {
+        return (int)g_fsms.size();
+    }
+
+    void Framework_FSM_DestroyAll() {
+        // Stop all first
+        for (auto& pair : g_fsms) {
+            if (pair.second.running) {
+                pair.second.running = false;
+            }
+        }
+
+        g_fsms.clear();
+        g_fsmIdByName.clear();
+        g_fsmIdByEntity.clear();
+    }
+
+    void Framework_FSM_PauseAll() {
+        g_fsmGlobalPaused = true;
+    }
+
+    void Framework_FSM_ResumeAll() {
+        g_fsmGlobalPaused = false;
+    }
+
+    // Debug
+    void Framework_FSM_SetDebugEnabled(int fsmId, bool enabled) {
+        auto* fsm = GetFSM(fsmId);
+        if (fsm) {
+            fsm->debugEnabled = enabled;
+        }
+    }
+
+    bool Framework_FSM_GetDebugEnabled(int fsmId) {
+        auto* fsm = GetFSM(fsmId);
+        return fsm ? fsm->debugEnabled : false;
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {

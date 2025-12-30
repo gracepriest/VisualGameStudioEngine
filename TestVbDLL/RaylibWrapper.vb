@@ -3857,6 +3857,234 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "State Machine"
+    ' State callback delegates
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub StateEnterCallback(fsmId As Integer, stateId As Integer, previousState As Integer, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub StateUpdateCallback(fsmId As Integer, stateId As Integer, deltaTime As Single, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub StateExitCallback(fsmId As Integer, stateId As Integer, nextState As Integer, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function TransitionCondition(fsmId As Integer, fromState As Integer, toState As Integer, userData As IntPtr) As Boolean
+
+    ' FSM creation and management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_Create(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_CreateForEntity(name As String, entity As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_Destroy(fsmId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetByName(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetForEntity(entity As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_IsValid(fsmId As Integer) As Boolean
+    End Function
+
+    ' State registration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_AddState(fsmId As Integer, stateName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetState(fsmId As Integer, stateName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetStateName(fsmId As Integer, stateId As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_RemoveState(fsmId As Integer, stateId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetStateCount(fsmId As Integer) As Integer
+    End Function
+
+    ' State callbacks
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_SetStateEnter(fsmId As Integer, stateId As Integer, callback As StateEnterCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_SetStateUpdate(fsmId As Integer, stateId As Integer, callback As StateUpdateCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_SetStateExit(fsmId As Integer, stateId As Integer, callback As StateExitCallback, userData As IntPtr)
+    End Sub
+
+    ' Transitions
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_AddTransition(fsmId As Integer, fromState As Integer, toState As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_SetTransitionCondition(fsmId As Integer, transitionId As Integer, condition As TransitionCondition, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_RemoveTransition(fsmId As Integer, transitionId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_CanTransition(fsmId As Integer, fromState As Integer, toState As Integer) As Boolean
+    End Function
+
+    ' Any-state transitions
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_AddAnyTransition(fsmId As Integer, toState As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_SetAnyTransitionCondition(fsmId As Integer, transitionId As Integer, condition As TransitionCondition, userData As IntPtr)
+    End Sub
+
+    ' State machine control
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_SetInitialState(fsmId As Integer, stateId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_Start(fsmId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_Stop(fsmId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_Pause(fsmId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_Resume(fsmId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_IsRunning(fsmId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_IsPaused(fsmId As Integer) As Boolean
+    End Function
+
+    ' State queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetCurrentState(fsmId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetPreviousState(fsmId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetTimeInState(fsmId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetStateChangeCount(fsmId As Integer) As Integer
+    End Function
+
+    ' Manual transitions
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_TransitionTo(fsmId As Integer, stateId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_TransitionToByName(fsmId As Integer, stateName As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_TryTransition(fsmId As Integer, toState As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_RevertToPrevious(fsmId As Integer)
+    End Sub
+
+    ' State history
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_SetHistorySize(fsmId As Integer, size As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetHistoryState(fsmId As Integer, index As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetHistoryCount(fsmId As Integer) As Integer
+    End Function
+
+    ' Triggers
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_AddTrigger(fsmId As Integer, triggerName As String, fromState As Integer, toState As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_FireTrigger(fsmId As Integer, triggerName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_FireTriggerWithData(fsmId As Integer, triggerName As String, data As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_RemoveTrigger(fsmId As Integer, triggerId As Integer)
+    End Sub
+
+    ' Update
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_Update(fsmId As Integer, deltaTime As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_UpdateAll(deltaTime As Single)
+    End Sub
+
+    ' Global FSM management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_DestroyAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_PauseAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_ResumeAll()
+    End Sub
+
+    ' Debug
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_FSM_SetDebugEnabled(fsmId As Integer, enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_FSM_GetDebugEnabled(fsmId As Integer) As Boolean
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()
