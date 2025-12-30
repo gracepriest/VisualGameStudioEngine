@@ -1971,6 +1971,135 @@ extern "C" {
     __declspec(dllexport) void  Framework_Steer_DestroyAllAgents();
 
     // ========================================================================
+    // DIALOGUE SYSTEM - Branching conversations and dialogue trees
+    // ========================================================================
+
+    // Dialogue callback types
+    typedef void (*DialogueCallback)(int dialogueId, int nodeId, void* userData);
+    typedef void (*DialogueChoiceCallback)(int dialogueId, int nodeId, int choiceIndex, void* userData);
+    typedef bool (*DialogueConditionCallback)(int dialogueId, const char* condition, void* userData);
+
+    // Dialogue creation and management
+    __declspec(dllexport) int   Framework_Dialogue_Create(const char* name);
+    __declspec(dllexport) void  Framework_Dialogue_Destroy(int dialogueId);
+    __declspec(dllexport) int   Framework_Dialogue_GetByName(const char* name);
+    __declspec(dllexport) bool  Framework_Dialogue_IsValid(int dialogueId);
+    __declspec(dllexport) void  Framework_Dialogue_Clear(int dialogueId);  // Remove all nodes
+
+    // Node creation - returns node ID
+    __declspec(dllexport) int   Framework_Dialogue_AddNode(int dialogueId, const char* nodeTag);  // Optional tag for identification
+    __declspec(dllexport) void  Framework_Dialogue_RemoveNode(int dialogueId, int nodeId);
+    __declspec(dllexport) int   Framework_Dialogue_GetNodeByTag(int dialogueId, const char* tag);
+    __declspec(dllexport) int   Framework_Dialogue_GetNodeCount(int dialogueId);
+
+    // Node content
+    __declspec(dllexport) void  Framework_Dialogue_SetNodeSpeaker(int dialogueId, int nodeId, const char* speaker);
+    __declspec(dllexport) const char* Framework_Dialogue_GetNodeSpeaker(int dialogueId, int nodeId);
+    __declspec(dllexport) void  Framework_Dialogue_SetNodeText(int dialogueId, int nodeId, const char* text);
+    __declspec(dllexport) const char* Framework_Dialogue_GetNodeText(int dialogueId, int nodeId);
+    __declspec(dllexport) void  Framework_Dialogue_SetNodePortrait(int dialogueId, int nodeId, int textureHandle);
+    __declspec(dllexport) int   Framework_Dialogue_GetNodePortrait(int dialogueId, int nodeId);
+
+    // Node connections - simple linear flow
+    __declspec(dllexport) void  Framework_Dialogue_SetNextNode(int dialogueId, int nodeId, int nextNodeId);  // -1 = end dialogue
+    __declspec(dllexport) int   Framework_Dialogue_GetNextNode(int dialogueId, int nodeId);
+    __declspec(dllexport) void  Framework_Dialogue_SetStartNode(int dialogueId, int nodeId);
+    __declspec(dllexport) int   Framework_Dialogue_GetStartNode(int dialogueId);
+
+    // Choices/responses - for branching dialogue
+    __declspec(dllexport) int   Framework_Dialogue_AddChoice(int dialogueId, int nodeId, const char* choiceText, int targetNodeId);
+    __declspec(dllexport) void  Framework_Dialogue_RemoveChoice(int dialogueId, int nodeId, int choiceIndex);
+    __declspec(dllexport) int   Framework_Dialogue_GetChoiceCount(int dialogueId, int nodeId);
+    __declspec(dllexport) const char* Framework_Dialogue_GetChoiceText(int dialogueId, int nodeId, int choiceIndex);
+    __declspec(dllexport) int   Framework_Dialogue_GetChoiceTarget(int dialogueId, int nodeId, int choiceIndex);
+    __declspec(dllexport) void  Framework_Dialogue_SetChoiceCondition(int dialogueId, int nodeId, int choiceIndex, const char* condition);
+    __declspec(dllexport) const char* Framework_Dialogue_GetChoiceCondition(int dialogueId, int nodeId, int choiceIndex);
+
+    // Conditional nodes - node only shows if condition is met
+    __declspec(dllexport) void  Framework_Dialogue_SetNodeCondition(int dialogueId, int nodeId, const char* condition);
+    __declspec(dllexport) const char* Framework_Dialogue_GetNodeCondition(int dialogueId, int nodeId);
+
+    // Node events/triggers
+    __declspec(dllexport) void  Framework_Dialogue_SetNodeEvent(int dialogueId, int nodeId, const char* eventName);
+    __declspec(dllexport) const char* Framework_Dialogue_GetNodeEvent(int dialogueId, int nodeId);
+
+    // Dialogue variables (for conditions and text substitution)
+    __declspec(dllexport) void  Framework_Dialogue_SetVarInt(const char* varName, int value);
+    __declspec(dllexport) int   Framework_Dialogue_GetVarInt(const char* varName);
+    __declspec(dllexport) void  Framework_Dialogue_SetVarFloat(const char* varName, float value);
+    __declspec(dllexport) float Framework_Dialogue_GetVarFloat(const char* varName);
+    __declspec(dllexport) void  Framework_Dialogue_SetVarBool(const char* varName, bool value);
+    __declspec(dllexport) bool  Framework_Dialogue_GetVarBool(const char* varName);
+    __declspec(dllexport) void  Framework_Dialogue_SetVarString(const char* varName, const char* value);
+    __declspec(dllexport) const char* Framework_Dialogue_GetVarString(const char* varName);
+    __declspec(dllexport) void  Framework_Dialogue_ClearVar(const char* varName);
+    __declspec(dllexport) void  Framework_Dialogue_ClearAllVars();
+
+    // Playback - active dialogue state
+    __declspec(dllexport) void  Framework_Dialogue_Start(int dialogueId);
+    __declspec(dllexport) void  Framework_Dialogue_StartAtNode(int dialogueId, int nodeId);
+    __declspec(dllexport) void  Framework_Dialogue_Stop();
+    __declspec(dllexport) bool  Framework_Dialogue_IsActive();
+    __declspec(dllexport) int   Framework_Dialogue_GetActiveDialogue();
+    __declspec(dllexport) int   Framework_Dialogue_GetCurrentNode();
+
+    // Advance dialogue
+    __declspec(dllexport) bool  Framework_Dialogue_Continue();  // Move to next node (returns false if ended)
+    __declspec(dllexport) bool  Framework_Dialogue_SelectChoice(int choiceIndex);  // Select a choice
+
+    // Current node queries during playback
+    __declspec(dllexport) const char* Framework_Dialogue_GetCurrentSpeaker();
+    __declspec(dllexport) const char* Framework_Dialogue_GetCurrentText();
+    __declspec(dllexport) int   Framework_Dialogue_GetCurrentPortrait();
+    __declspec(dllexport) int   Framework_Dialogue_GetCurrentChoiceCount();  // 0 if not a choice node
+    __declspec(dllexport) const char* Framework_Dialogue_GetCurrentChoiceText(int choiceIndex);
+    __declspec(dllexport) bool  Framework_Dialogue_IsCurrentChoiceAvailable(int choiceIndex);  // Check condition
+
+    // Typewriter effect
+    __declspec(dllexport) void  Framework_Dialogue_SetTypewriterEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Dialogue_IsTypewriterEnabled();
+    __declspec(dllexport) void  Framework_Dialogue_SetTypewriterSpeed(float charsPerSecond);
+    __declspec(dllexport) float Framework_Dialogue_GetTypewriterSpeed();
+    __declspec(dllexport) void  Framework_Dialogue_SkipTypewriter();  // Complete text instantly
+    __declspec(dllexport) bool  Framework_Dialogue_IsTypewriterComplete();
+    __declspec(dllexport) const char* Framework_Dialogue_GetVisibleText();  // Text shown so far
+    __declspec(dllexport) int   Framework_Dialogue_GetVisibleCharCount();
+
+    // Callbacks
+    __declspec(dllexport) void  Framework_Dialogue_SetOnStartCallback(DialogueCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Dialogue_SetOnEndCallback(DialogueCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Dialogue_SetOnNodeEnterCallback(DialogueCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Dialogue_SetOnNodeExitCallback(DialogueCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Dialogue_SetOnChoiceCallback(DialogueChoiceCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Dialogue_SetConditionHandler(DialogueConditionCallback callback, void* userData);
+
+    // Dialogue update (for typewriter effect)
+    __declspec(dllexport) void  Framework_Dialogue_Update(float dt);
+
+    // Speaker management (for portraits and names)
+    __declspec(dllexport) void  Framework_Dialogue_RegisterSpeaker(const char* speakerId, const char* displayName, int defaultPortrait);
+    __declspec(dllexport) void  Framework_Dialogue_UnregisterSpeaker(const char* speakerId);
+    __declspec(dllexport) const char* Framework_Dialogue_GetSpeakerDisplayName(const char* speakerId);
+    __declspec(dllexport) int   Framework_Dialogue_GetSpeakerPortrait(const char* speakerId);
+    __declspec(dllexport) void  Framework_Dialogue_SetSpeakerPortrait(const char* speakerId, int textureHandle);
+
+    // History/log
+    __declspec(dllexport) void  Framework_Dialogue_SetHistoryEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Dialogue_IsHistoryEnabled();
+    __declspec(dllexport) int   Framework_Dialogue_GetHistoryCount();
+    __declspec(dllexport) const char* Framework_Dialogue_GetHistorySpeaker(int index);
+    __declspec(dllexport) const char* Framework_Dialogue_GetHistoryText(int index);
+    __declspec(dllexport) void  Framework_Dialogue_ClearHistory();
+
+    // Save/Load dialogue state
+    __declspec(dllexport) bool  Framework_Dialogue_SaveToFile(int dialogueId, const char* filename);
+    __declspec(dllexport) int   Framework_Dialogue_LoadFromFile(const char* filename);  // Returns dialogue ID
+
+    // Global dialogue management
+    __declspec(dllexport) void  Framework_Dialogue_DestroyAll();
+    __declspec(dllexport) int   Framework_Dialogue_GetCount();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

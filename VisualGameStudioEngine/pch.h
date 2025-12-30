@@ -7,6 +7,7 @@
 #ifndef PCH_H
 #define PCH_H
 // Define this BEFORE any Windows headers to exclude problematic functions
+#define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #define NOGDI          // Excludes GDI functions
 #define NOUSER         // Excludes USER functions  

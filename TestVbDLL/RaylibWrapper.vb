@@ -4685,6 +4685,376 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Dialogue System"
+    ' ========================================================================
+    ' DIALOGUE SYSTEM - Branching conversations and dialogue trees
+    ' ========================================================================
+
+    ' Dialogue Callbacks
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub DialogueCallback(dialogueId As Integer, nodeId As Integer, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub DialogueChoiceCallback(dialogueId As Integer, nodeId As Integer, choiceIndex As Integer, userData As IntPtr)
+
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function DialogueConditionCallback(dialogueId As Integer, condition As String, userData As IntPtr) As Boolean
+
+    ' ---- Dialogue Creation and Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_Create(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_Destroy(dialogueId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_GetByName(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_IsValid(dialogueId As Integer) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_Clear(dialogueId As Integer)
+    End Sub
+
+    ' ---- Node Creation ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_AddNode(dialogueId As Integer, nodeTag As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_RemoveNode(dialogueId As Integer, nodeId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_GetNodeByTag(dialogueId As Integer, tag As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetNodeCount(dialogueId As Integer) As Integer
+    End Function
+
+    ' ---- Node Content ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetNodeSpeaker(dialogueId As Integer, nodeId As Integer, speaker As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetNodeSpeaker(dialogueId As Integer, nodeId As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetNodeText(dialogueId As Integer, nodeId As Integer, text As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetNodeText(dialogueId As Integer, nodeId As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetNodePortrait(dialogueId As Integer, nodeId As Integer, textureHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetNodePortrait(dialogueId As Integer, nodeId As Integer) As Integer
+    End Function
+
+    ' ---- Node Connections ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetNextNode(dialogueId As Integer, nodeId As Integer, nextNodeId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetNextNode(dialogueId As Integer, nodeId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetStartNode(dialogueId As Integer, nodeId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetStartNode(dialogueId As Integer) As Integer
+    End Function
+
+    ' ---- Choices ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_AddChoice(dialogueId As Integer, nodeId As Integer, choiceText As String, targetNodeId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_RemoveChoice(dialogueId As Integer, nodeId As Integer, choiceIndex As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetChoiceCount(dialogueId As Integer, nodeId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetChoiceText(dialogueId As Integer, nodeId As Integer, choiceIndex As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetChoiceTarget(dialogueId As Integer, nodeId As Integer, choiceIndex As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetChoiceCondition(dialogueId As Integer, nodeId As Integer, choiceIndex As Integer, condition As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetChoiceCondition(dialogueId As Integer, nodeId As Integer, choiceIndex As Integer) As IntPtr
+    End Function
+
+    ' ---- Conditional Nodes ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetNodeCondition(dialogueId As Integer, nodeId As Integer, condition As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetNodeCondition(dialogueId As Integer, nodeId As Integer) As IntPtr
+    End Function
+
+    ' ---- Node Events ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetNodeEvent(dialogueId As Integer, nodeId As Integer, eventName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetNodeEvent(dialogueId As Integer, nodeId As Integer) As IntPtr
+    End Function
+
+    ' ---- Variables ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetVarInt(varName As String, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_GetVarInt(varName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetVarFloat(varName As String, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_GetVarFloat(varName As String) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetVarBool(varName As String, value As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_GetVarBool(varName As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetVarString(varName As String, value As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_GetVarString(varName As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_ClearVar(varName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_ClearAllVars()
+    End Sub
+
+    ' ---- Playback ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_Start(dialogueId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_StartAtNode(dialogueId As Integer, nodeId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_Stop()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_IsActive() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetActiveDialogue() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetCurrentNode() As Integer
+    End Function
+
+    ' ---- Advance Dialogue ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_Continue() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_SelectChoice(choiceIndex As Integer) As Boolean
+    End Function
+
+    ' ---- Current Node Queries ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetCurrentSpeaker() As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetCurrentText() As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetCurrentPortrait() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetCurrentChoiceCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetCurrentChoiceText(choiceIndex As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_IsCurrentChoiceAvailable(choiceIndex As Integer) As Boolean
+    End Function
+
+    ' ---- Typewriter Effect ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetTypewriterEnabled(enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_IsTypewriterEnabled() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetTypewriterSpeed(charsPerSecond As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetTypewriterSpeed() As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SkipTypewriter()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_IsTypewriterComplete() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetVisibleText() As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetVisibleCharCount() As Integer
+    End Function
+
+    ' ---- Callbacks ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetOnStartCallback(callback As DialogueCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetOnEndCallback(callback As DialogueCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetOnNodeEnterCallback(callback As DialogueCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetOnNodeExitCallback(callback As DialogueCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetOnChoiceCallback(callback As DialogueChoiceCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetConditionHandler(callback As DialogueConditionCallback, userData As IntPtr)
+    End Sub
+
+    ' ---- Update ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_Update(dt As Single)
+    End Sub
+
+    ' ---- Speaker Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_RegisterSpeaker(speakerId As String, displayName As String, defaultPortrait As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_UnregisterSpeaker(speakerId As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_GetSpeakerDisplayName(speakerId As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_GetSpeakerPortrait(speakerId As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Dialogue_SetSpeakerPortrait(speakerId As String, textureHandle As Integer)
+    End Sub
+
+    ' ---- History ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_SetHistoryEnabled(enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_IsHistoryEnabled() As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetHistoryCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetHistorySpeaker(index As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetHistoryText(index As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_ClearHistory()
+    End Sub
+
+    ' ---- Save/Load ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_SaveToFile(dialogueId As Integer, filename As String) As Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Dialogue_LoadFromFile(filename As String) As Integer
+    End Function
+
+    ' ---- Global Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Dialogue_DestroyAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Dialogue_GetCount() As Integer
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

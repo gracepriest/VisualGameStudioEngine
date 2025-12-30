@@ -12528,6 +12528,829 @@ extern "C" {
     }
 
     // ========================================================================
+    // DIALOGUE SYSTEM
+    // ========================================================================
+
+    struct DialogueChoice {
+        std::string text;
+        int targetNodeId = -1;
+        std::string condition;
+    };
+
+    struct DialogueNode {
+        int id = 0;
+        std::string tag;
+        std::string speaker;
+        std::string text;
+        int portrait = -1;
+        int nextNodeId = -1;
+        std::string condition;
+        std::string eventName;
+        std::vector<DialogueChoice> choices;
+    };
+
+    struct Dialogue {
+        int id = 0;
+        std::string name;
+        int startNodeId = -1;
+        std::unordered_map<int, DialogueNode> nodes;
+        int nextNodeId = 0;
+    };
+
+    struct Speaker {
+        std::string id;
+        std::string displayName;
+        int portrait = -1;
+    };
+
+    struct DialogueHistoryEntry {
+        std::string speaker;
+        std::string text;
+    };
+
+    // Dialogue variable union for storage
+    struct DialogueVar {
+        enum Type { INT, FLOAT, BOOL, STRING } type = INT;
+        int intVal = 0;
+        float floatVal = 0.0f;
+        bool boolVal = false;
+        std::string strVal;
+    };
+
+    // Global dialogue state
+    namespace {
+        std::unordered_map<int, Dialogue> g_dialogues;
+        std::unordered_map<std::string, int> g_dialogueByName;
+        int g_nextDialogueId = 1;
+
+        std::unordered_map<std::string, Speaker> g_speakers;
+        std::unordered_map<std::string, DialogueVar> g_dialogueVars;
+
+        // Active playback state
+        int g_activeDialogueId = -1;
+        int g_activeNodeId = -1;
+
+        // Typewriter state
+        bool g_typewriterEnabled = true;
+        float g_typewriterSpeed = 30.0f;  // chars per second
+        float g_typewriterProgress = 0.0f;
+        bool g_typewriterComplete = false;
+        std::string g_visibleText;
+
+        // Callbacks
+        DialogueCallback g_onDialogueStart = nullptr;
+        DialogueCallback g_onDialogueEnd = nullptr;
+        DialogueCallback g_onNodeEnter = nullptr;
+        DialogueCallback g_onNodeExit = nullptr;
+        DialogueChoiceCallback g_onChoice = nullptr;
+        DialogueConditionCallback g_conditionHandler = nullptr;
+        void* g_dialogueStartUserData = nullptr;
+        void* g_dialogueEndUserData = nullptr;
+        void* g_nodeEnterUserData = nullptr;
+        void* g_nodeExitUserData = nullptr;
+        void* g_choiceUserData = nullptr;
+        void* g_conditionUserData = nullptr;
+
+        // History
+        bool g_historyEnabled = false;
+        std::vector<DialogueHistoryEntry> g_dialogueHistory;
+
+        // Static buffers for string returns
+        static char s_dialogueSpeakerBuf[256] = {0};
+        static char s_dialogueTextBuf[2048] = {0};
+        static char s_dialogueChoiceBuf[512] = {0};
+        static char s_dialogueVarBuf[512] = {0};
+        static char s_dialogueVisibleBuf[2048] = {0};
+    }
+
+    Dialogue* GetDialogue(int id) {
+        auto it = g_dialogues.find(id);
+        return it != g_dialogues.end() ? &it->second : nullptr;
+    }
+
+    DialogueNode* GetDialogueNode(int dialogueId, int nodeId) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (!dlg) return nullptr;
+        auto it = dlg->nodes.find(nodeId);
+        return it != dlg->nodes.end() ? &it->second : nullptr;
+    }
+
+    // Dialogue creation and management
+    int Framework_Dialogue_Create(const char* name) {
+        Dialogue dlg;
+        dlg.id = g_nextDialogueId++;
+        dlg.name = name ? name : "";
+        g_dialogues[dlg.id] = dlg;
+        if (name && strlen(name) > 0) {
+            g_dialogueByName[name] = dlg.id;
+        }
+        return dlg.id;
+    }
+
+    void Framework_Dialogue_Destroy(int dialogueId) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (dlg) {
+            if (!dlg->name.empty()) {
+                g_dialogueByName.erase(dlg->name);
+            }
+            g_dialogues.erase(dialogueId);
+            if (g_activeDialogueId == dialogueId) {
+                g_activeDialogueId = -1;
+                g_activeNodeId = -1;
+            }
+        }
+    }
+
+    int Framework_Dialogue_GetByName(const char* name) {
+        if (!name) return -1;
+        auto it = g_dialogueByName.find(name);
+        return it != g_dialogueByName.end() ? it->second : -1;
+    }
+
+    bool Framework_Dialogue_IsValid(int dialogueId) {
+        return GetDialogue(dialogueId) != nullptr;
+    }
+
+    void Framework_Dialogue_Clear(int dialogueId) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (dlg) {
+            dlg->nodes.clear();
+            dlg->startNodeId = -1;
+            dlg->nextNodeId = 0;
+        }
+    }
+
+    // Node creation
+    int Framework_Dialogue_AddNode(int dialogueId, const char* nodeTag) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (!dlg) return -1;
+
+        DialogueNode node;
+        node.id = dlg->nextNodeId++;
+        node.tag = nodeTag ? nodeTag : "";
+        dlg->nodes[node.id] = node;
+
+        if (dlg->startNodeId < 0) {
+            dlg->startNodeId = node.id;
+        }
+
+        return node.id;
+    }
+
+    void Framework_Dialogue_RemoveNode(int dialogueId, int nodeId) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (dlg) {
+            dlg->nodes.erase(nodeId);
+        }
+    }
+
+    int Framework_Dialogue_GetNodeByTag(int dialogueId, const char* tag) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (!dlg || !tag) return -1;
+
+        for (auto& kv : dlg->nodes) {
+            if (kv.second.tag == tag) return kv.first;
+        }
+        return -1;
+    }
+
+    int Framework_Dialogue_GetNodeCount(int dialogueId) {
+        auto* dlg = GetDialogue(dialogueId);
+        return dlg ? (int)dlg->nodes.size() : 0;
+    }
+
+    // Node content
+    void Framework_Dialogue_SetNodeSpeaker(int dialogueId, int nodeId, const char* speaker) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node) node->speaker = speaker ? speaker : "";
+    }
+
+    const char* Framework_Dialogue_GetNodeSpeaker(int dialogueId, int nodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && !node->speaker.empty()) {
+            strncpy(s_dialogueSpeakerBuf, node->speaker.c_str(), sizeof(s_dialogueSpeakerBuf) - 1);
+            return s_dialogueSpeakerBuf;
+        }
+        return "";
+    }
+
+    void Framework_Dialogue_SetNodeText(int dialogueId, int nodeId, const char* text) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node) node->text = text ? text : "";
+    }
+
+    const char* Framework_Dialogue_GetNodeText(int dialogueId, int nodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && !node->text.empty()) {
+            strncpy(s_dialogueTextBuf, node->text.c_str(), sizeof(s_dialogueTextBuf) - 1);
+            return s_dialogueTextBuf;
+        }
+        return "";
+    }
+
+    void Framework_Dialogue_SetNodePortrait(int dialogueId, int nodeId, int textureHandle) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node) node->portrait = textureHandle;
+    }
+
+    int Framework_Dialogue_GetNodePortrait(int dialogueId, int nodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        return node ? node->portrait : -1;
+    }
+
+    // Node connections
+    void Framework_Dialogue_SetNextNode(int dialogueId, int nodeId, int nextNodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node) node->nextNodeId = nextNodeId;
+    }
+
+    int Framework_Dialogue_GetNextNode(int dialogueId, int nodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        return node ? node->nextNodeId : -1;
+    }
+
+    void Framework_Dialogue_SetStartNode(int dialogueId, int nodeId) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (dlg) dlg->startNodeId = nodeId;
+    }
+
+    int Framework_Dialogue_GetStartNode(int dialogueId) {
+        auto* dlg = GetDialogue(dialogueId);
+        return dlg ? dlg->startNodeId : -1;
+    }
+
+    // Choices
+    int Framework_Dialogue_AddChoice(int dialogueId, int nodeId, const char* choiceText, int targetNodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (!node) return -1;
+
+        DialogueChoice choice;
+        choice.text = choiceText ? choiceText : "";
+        choice.targetNodeId = targetNodeId;
+        node->choices.push_back(choice);
+        return (int)node->choices.size() - 1;
+    }
+
+    void Framework_Dialogue_RemoveChoice(int dialogueId, int nodeId, int choiceIndex) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && choiceIndex >= 0 && choiceIndex < (int)node->choices.size()) {
+            node->choices.erase(node->choices.begin() + choiceIndex);
+        }
+    }
+
+    int Framework_Dialogue_GetChoiceCount(int dialogueId, int nodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        return node ? (int)node->choices.size() : 0;
+    }
+
+    const char* Framework_Dialogue_GetChoiceText(int dialogueId, int nodeId, int choiceIndex) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && choiceIndex >= 0 && choiceIndex < (int)node->choices.size()) {
+            strncpy(s_dialogueChoiceBuf, node->choices[choiceIndex].text.c_str(), sizeof(s_dialogueChoiceBuf) - 1);
+            return s_dialogueChoiceBuf;
+        }
+        return "";
+    }
+
+    int Framework_Dialogue_GetChoiceTarget(int dialogueId, int nodeId, int choiceIndex) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && choiceIndex >= 0 && choiceIndex < (int)node->choices.size()) {
+            return node->choices[choiceIndex].targetNodeId;
+        }
+        return -1;
+    }
+
+    void Framework_Dialogue_SetChoiceCondition(int dialogueId, int nodeId, int choiceIndex, const char* condition) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && choiceIndex >= 0 && choiceIndex < (int)node->choices.size()) {
+            node->choices[choiceIndex].condition = condition ? condition : "";
+        }
+    }
+
+    const char* Framework_Dialogue_GetChoiceCondition(int dialogueId, int nodeId, int choiceIndex) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && choiceIndex >= 0 && choiceIndex < (int)node->choices.size()) {
+            strncpy(s_dialogueChoiceBuf, node->choices[choiceIndex].condition.c_str(), sizeof(s_dialogueChoiceBuf) - 1);
+            return s_dialogueChoiceBuf;
+        }
+        return "";
+    }
+
+    // Conditional nodes
+    void Framework_Dialogue_SetNodeCondition(int dialogueId, int nodeId, const char* condition) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node) node->condition = condition ? condition : "";
+    }
+
+    const char* Framework_Dialogue_GetNodeCondition(int dialogueId, int nodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && !node->condition.empty()) {
+            strncpy(s_dialogueTextBuf, node->condition.c_str(), sizeof(s_dialogueTextBuf) - 1);
+            return s_dialogueTextBuf;
+        }
+        return "";
+    }
+
+    // Node events
+    void Framework_Dialogue_SetNodeEvent(int dialogueId, int nodeId, const char* eventName) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node) node->eventName = eventName ? eventName : "";
+    }
+
+    const char* Framework_Dialogue_GetNodeEvent(int dialogueId, int nodeId) {
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node && !node->eventName.empty()) {
+            strncpy(s_dialogueTextBuf, node->eventName.c_str(), sizeof(s_dialogueTextBuf) - 1);
+            return s_dialogueTextBuf;
+        }
+        return "";
+    }
+
+    // Variables
+    void Framework_Dialogue_SetVarInt(const char* varName, int value) {
+        if (!varName) return;
+        DialogueVar& v = g_dialogueVars[varName];
+        v.type = DialogueVar::INT;
+        v.intVal = value;
+    }
+
+    int Framework_Dialogue_GetVarInt(const char* varName) {
+        if (!varName) return 0;
+        auto it = g_dialogueVars.find(varName);
+        if (it != g_dialogueVars.end() && it->second.type == DialogueVar::INT) {
+            return it->second.intVal;
+        }
+        return 0;
+    }
+
+    void Framework_Dialogue_SetVarFloat(const char* varName, float value) {
+        if (!varName) return;
+        DialogueVar& v = g_dialogueVars[varName];
+        v.type = DialogueVar::FLOAT;
+        v.floatVal = value;
+    }
+
+    float Framework_Dialogue_GetVarFloat(const char* varName) {
+        if (!varName) return 0.0f;
+        auto it = g_dialogueVars.find(varName);
+        if (it != g_dialogueVars.end() && it->second.type == DialogueVar::FLOAT) {
+            return it->second.floatVal;
+        }
+        return 0.0f;
+    }
+
+    void Framework_Dialogue_SetVarBool(const char* varName, bool value) {
+        if (!varName) return;
+        DialogueVar& v = g_dialogueVars[varName];
+        v.type = DialogueVar::BOOL;
+        v.boolVal = value;
+    }
+
+    bool Framework_Dialogue_GetVarBool(const char* varName) {
+        if (!varName) return false;
+        auto it = g_dialogueVars.find(varName);
+        if (it != g_dialogueVars.end() && it->second.type == DialogueVar::BOOL) {
+            return it->second.boolVal;
+        }
+        return false;
+    }
+
+    void Framework_Dialogue_SetVarString(const char* varName, const char* value) {
+        if (!varName) return;
+        DialogueVar& v = g_dialogueVars[varName];
+        v.type = DialogueVar::STRING;
+        v.strVal = value ? value : "";
+    }
+
+    const char* Framework_Dialogue_GetVarString(const char* varName) {
+        if (!varName) return "";
+        auto it = g_dialogueVars.find(varName);
+        if (it != g_dialogueVars.end() && it->second.type == DialogueVar::STRING) {
+            strncpy(s_dialogueVarBuf, it->second.strVal.c_str(), sizeof(s_dialogueVarBuf) - 1);
+            return s_dialogueVarBuf;
+        }
+        return "";
+    }
+
+    void Framework_Dialogue_ClearVar(const char* varName) {
+        if (varName) g_dialogueVars.erase(varName);
+    }
+
+    void Framework_Dialogue_ClearAllVars() {
+        g_dialogueVars.clear();
+    }
+
+    // Internal helper to enter a node
+    void EnterDialogueNode(int dialogueId, int nodeId) {
+        g_activeDialogueId = dialogueId;
+        g_activeNodeId = nodeId;
+        g_typewriterProgress = 0.0f;
+        g_typewriterComplete = !g_typewriterEnabled;
+        g_visibleText = "";
+
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (node) {
+            if (g_typewriterComplete) {
+                g_visibleText = node->text;
+            }
+
+            // Add to history
+            if (g_historyEnabled && !node->text.empty()) {
+                DialogueHistoryEntry entry;
+                entry.speaker = node->speaker;
+                entry.text = node->text;
+                g_dialogueHistory.push_back(entry);
+            }
+
+            // Trigger node enter callback
+            if (g_onNodeEnter) {
+                g_onNodeEnter(dialogueId, nodeId, g_nodeEnterUserData);
+            }
+        }
+    }
+
+    // Playback
+    void Framework_Dialogue_Start(int dialogueId) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (!dlg || dlg->startNodeId < 0) return;
+
+        if (g_onDialogueStart) {
+            g_onDialogueStart(dialogueId, dlg->startNodeId, g_dialogueStartUserData);
+        }
+
+        EnterDialogueNode(dialogueId, dlg->startNodeId);
+    }
+
+    void Framework_Dialogue_StartAtNode(int dialogueId, int nodeId) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (!dlg) return;
+        auto* node = GetDialogueNode(dialogueId, nodeId);
+        if (!node) return;
+
+        if (g_onDialogueStart) {
+            g_onDialogueStart(dialogueId, nodeId, g_dialogueStartUserData);
+        }
+
+        EnterDialogueNode(dialogueId, nodeId);
+    }
+
+    void Framework_Dialogue_Stop() {
+        if (g_activeDialogueId >= 0) {
+            if (g_onDialogueEnd) {
+                g_onDialogueEnd(g_activeDialogueId, g_activeNodeId, g_dialogueEndUserData);
+            }
+        }
+        g_activeDialogueId = -1;
+        g_activeNodeId = -1;
+        g_typewriterProgress = 0.0f;
+        g_typewriterComplete = false;
+        g_visibleText = "";
+    }
+
+    bool Framework_Dialogue_IsActive() {
+        return g_activeDialogueId >= 0;
+    }
+
+    int Framework_Dialogue_GetActiveDialogue() {
+        return g_activeDialogueId;
+    }
+
+    int Framework_Dialogue_GetCurrentNode() {
+        return g_activeNodeId;
+    }
+
+    bool Framework_Dialogue_Continue() {
+        if (g_activeDialogueId < 0 || g_activeNodeId < 0) return false;
+
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (!node) return false;
+
+        // If has choices, cannot continue automatically
+        if (!node->choices.empty()) return false;
+
+        // Trigger node exit
+        if (g_onNodeExit) {
+            g_onNodeExit(g_activeDialogueId, g_activeNodeId, g_nodeExitUserData);
+        }
+
+        int nextId = node->nextNodeId;
+        if (nextId < 0) {
+            Framework_Dialogue_Stop();
+            return false;
+        }
+
+        EnterDialogueNode(g_activeDialogueId, nextId);
+        return true;
+    }
+
+    bool Framework_Dialogue_SelectChoice(int choiceIndex) {
+        if (g_activeDialogueId < 0 || g_activeNodeId < 0) return false;
+
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (!node || choiceIndex < 0 || choiceIndex >= (int)node->choices.size()) return false;
+
+        // Check condition
+        auto& choice = node->choices[choiceIndex];
+        if (!choice.condition.empty() && g_conditionHandler) {
+            if (!g_conditionHandler(g_activeDialogueId, choice.condition.c_str(), g_conditionUserData)) {
+                return false;
+            }
+        }
+
+        // Trigger choice callback
+        if (g_onChoice) {
+            g_onChoice(g_activeDialogueId, g_activeNodeId, choiceIndex, g_choiceUserData);
+        }
+
+        // Trigger node exit
+        if (g_onNodeExit) {
+            g_onNodeExit(g_activeDialogueId, g_activeNodeId, g_nodeExitUserData);
+        }
+
+        int targetId = choice.targetNodeId;
+        if (targetId < 0) {
+            Framework_Dialogue_Stop();
+            return true;
+        }
+
+        EnterDialogueNode(g_activeDialogueId, targetId);
+        return true;
+    }
+
+    // Current node queries
+    const char* Framework_Dialogue_GetCurrentSpeaker() {
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (node && !node->speaker.empty()) {
+            // Check if speaker is registered
+            auto sit = g_speakers.find(node->speaker);
+            if (sit != g_speakers.end()) {
+                strncpy(s_dialogueSpeakerBuf, sit->second.displayName.c_str(), sizeof(s_dialogueSpeakerBuf) - 1);
+            } else {
+                strncpy(s_dialogueSpeakerBuf, node->speaker.c_str(), sizeof(s_dialogueSpeakerBuf) - 1);
+            }
+            return s_dialogueSpeakerBuf;
+        }
+        return "";
+    }
+
+    const char* Framework_Dialogue_GetCurrentText() {
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (node) {
+            strncpy(s_dialogueTextBuf, node->text.c_str(), sizeof(s_dialogueTextBuf) - 1);
+            return s_dialogueTextBuf;
+        }
+        return "";
+    }
+
+    int Framework_Dialogue_GetCurrentPortrait() {
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (node) {
+            if (node->portrait >= 0) return node->portrait;
+            // Check speaker default portrait
+            auto sit = g_speakers.find(node->speaker);
+            if (sit != g_speakers.end()) {
+                return sit->second.portrait;
+            }
+        }
+        return -1;
+    }
+
+    int Framework_Dialogue_GetCurrentChoiceCount() {
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        return node ? (int)node->choices.size() : 0;
+    }
+
+    const char* Framework_Dialogue_GetCurrentChoiceText(int choiceIndex) {
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (node && choiceIndex >= 0 && choiceIndex < (int)node->choices.size()) {
+            strncpy(s_dialogueChoiceBuf, node->choices[choiceIndex].text.c_str(), sizeof(s_dialogueChoiceBuf) - 1);
+            return s_dialogueChoiceBuf;
+        }
+        return "";
+    }
+
+    bool Framework_Dialogue_IsCurrentChoiceAvailable(int choiceIndex) {
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (!node || choiceIndex < 0 || choiceIndex >= (int)node->choices.size()) return false;
+
+        auto& choice = node->choices[choiceIndex];
+        if (choice.condition.empty()) return true;
+
+        if (g_conditionHandler) {
+            return g_conditionHandler(g_activeDialogueId, choice.condition.c_str(), g_conditionUserData);
+        }
+        return true;
+    }
+
+    // Typewriter effect
+    void Framework_Dialogue_SetTypewriterEnabled(bool enabled) {
+        g_typewriterEnabled = enabled;
+    }
+
+    bool Framework_Dialogue_IsTypewriterEnabled() {
+        return g_typewriterEnabled;
+    }
+
+    void Framework_Dialogue_SetTypewriterSpeed(float charsPerSecond) {
+        g_typewriterSpeed = charsPerSecond > 0 ? charsPerSecond : 1.0f;
+    }
+
+    float Framework_Dialogue_GetTypewriterSpeed() {
+        return g_typewriterSpeed;
+    }
+
+    void Framework_Dialogue_SkipTypewriter() {
+        g_typewriterComplete = true;
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (node) {
+            g_visibleText = node->text;
+            g_typewriterProgress = (float)node->text.length();
+        }
+    }
+
+    bool Framework_Dialogue_IsTypewriterComplete() {
+        return g_typewriterComplete;
+    }
+
+    const char* Framework_Dialogue_GetVisibleText() {
+        strncpy(s_dialogueVisibleBuf, g_visibleText.c_str(), sizeof(s_dialogueVisibleBuf) - 1);
+        return s_dialogueVisibleBuf;
+    }
+
+    int Framework_Dialogue_GetVisibleCharCount() {
+        return (int)g_visibleText.length();
+    }
+
+    // Callbacks
+    void Framework_Dialogue_SetOnStartCallback(DialogueCallback callback, void* userData) {
+        g_onDialogueStart = callback;
+        g_dialogueStartUserData = userData;
+    }
+
+    void Framework_Dialogue_SetOnEndCallback(DialogueCallback callback, void* userData) {
+        g_onDialogueEnd = callback;
+        g_dialogueEndUserData = userData;
+    }
+
+    void Framework_Dialogue_SetOnNodeEnterCallback(DialogueCallback callback, void* userData) {
+        g_onNodeEnter = callback;
+        g_nodeEnterUserData = userData;
+    }
+
+    void Framework_Dialogue_SetOnNodeExitCallback(DialogueCallback callback, void* userData) {
+        g_onNodeExit = callback;
+        g_nodeExitUserData = userData;
+    }
+
+    void Framework_Dialogue_SetOnChoiceCallback(DialogueChoiceCallback callback, void* userData) {
+        g_onChoice = callback;
+        g_choiceUserData = userData;
+    }
+
+    void Framework_Dialogue_SetConditionHandler(DialogueConditionCallback callback, void* userData) {
+        g_conditionHandler = callback;
+        g_conditionUserData = userData;
+    }
+
+    // Dialogue update
+    void Framework_Dialogue_Update(float dt) {
+        if (!g_typewriterEnabled || g_typewriterComplete) return;
+        if (g_activeDialogueId < 0 || g_activeNodeId < 0) return;
+
+        auto* node = GetDialogueNode(g_activeDialogueId, g_activeNodeId);
+        if (!node) return;
+
+        g_typewriterProgress += g_typewriterSpeed * dt;
+        int charCount = (int)g_typewriterProgress;
+        int textLen = (int)node->text.length();
+
+        if (charCount >= textLen) {
+            g_visibleText = node->text;
+            g_typewriterComplete = true;
+        } else {
+            g_visibleText = node->text.substr(0, charCount);
+        }
+    }
+
+    // Speaker management
+    void Framework_Dialogue_RegisterSpeaker(const char* speakerId, const char* displayName, int defaultPortrait) {
+        if (!speakerId) return;
+        Speaker spk;
+        spk.id = speakerId;
+        spk.displayName = displayName ? displayName : speakerId;
+        spk.portrait = defaultPortrait;
+        g_speakers[speakerId] = spk;
+    }
+
+    void Framework_Dialogue_UnregisterSpeaker(const char* speakerId) {
+        if (speakerId) g_speakers.erase(speakerId);
+    }
+
+    const char* Framework_Dialogue_GetSpeakerDisplayName(const char* speakerId) {
+        if (!speakerId) return "";
+        auto it = g_speakers.find(speakerId);
+        if (it != g_speakers.end()) {
+            strncpy(s_dialogueSpeakerBuf, it->second.displayName.c_str(), sizeof(s_dialogueSpeakerBuf) - 1);
+            return s_dialogueSpeakerBuf;
+        }
+        return "";
+    }
+
+    int Framework_Dialogue_GetSpeakerPortrait(const char* speakerId) {
+        if (!speakerId) return -1;
+        auto it = g_speakers.find(speakerId);
+        return it != g_speakers.end() ? it->second.portrait : -1;
+    }
+
+    void Framework_Dialogue_SetSpeakerPortrait(const char* speakerId, int textureHandle) {
+        if (!speakerId) return;
+        auto it = g_speakers.find(speakerId);
+        if (it != g_speakers.end()) {
+            it->second.portrait = textureHandle;
+        }
+    }
+
+    // History
+    void Framework_Dialogue_SetHistoryEnabled(bool enabled) {
+        g_historyEnabled = enabled;
+    }
+
+    bool Framework_Dialogue_IsHistoryEnabled() {
+        return g_historyEnabled;
+    }
+
+    int Framework_Dialogue_GetHistoryCount() {
+        return (int)g_dialogueHistory.size();
+    }
+
+    const char* Framework_Dialogue_GetHistorySpeaker(int index) {
+        if (index >= 0 && index < (int)g_dialogueHistory.size()) {
+            strncpy(s_dialogueSpeakerBuf, g_dialogueHistory[index].speaker.c_str(), sizeof(s_dialogueSpeakerBuf) - 1);
+            return s_dialogueSpeakerBuf;
+        }
+        return "";
+    }
+
+    const char* Framework_Dialogue_GetHistoryText(int index) {
+        if (index >= 0 && index < (int)g_dialogueHistory.size()) {
+            strncpy(s_dialogueTextBuf, g_dialogueHistory[index].text.c_str(), sizeof(s_dialogueTextBuf) - 1);
+            return s_dialogueTextBuf;
+        }
+        return "";
+    }
+
+    void Framework_Dialogue_ClearHistory() {
+        g_dialogueHistory.clear();
+    }
+
+    // Save/Load
+    bool Framework_Dialogue_SaveToFile(int dialogueId, const char* filename) {
+        auto* dlg = GetDialogue(dialogueId);
+        if (!dlg || !filename) return false;
+
+        std::ofstream file(filename);
+        if (!file.is_open()) return false;
+
+        file << "DIALOGUE " << dlg->name << "\n";
+        file << "START " << dlg->startNodeId << "\n";
+
+        for (auto& kv : dlg->nodes) {
+            auto& node = kv.second;
+            file << "NODE " << node.id << " " << node.tag << "\n";
+            file << "SPEAKER " << node.speaker << "\n";
+            file << "TEXT " << node.text << "\n";
+            file << "NEXT " << node.nextNodeId << "\n";
+            file << "PORTRAIT " << node.portrait << "\n";
+
+            for (auto& choice : node.choices) {
+                file << "CHOICE " << choice.targetNodeId << " " << choice.text << "\n";
+            }
+            file << "ENDNODE\n";
+        }
+
+        file << "ENDDIALOGUE\n";
+        return true;
+    }
+
+    int Framework_Dialogue_LoadFromFile(const char* filename) {
+        // Simple load - a full implementation would parse the file properly
+        // For now just return -1 as placeholder
+        return -1;
+    }
+
+    // Global management
+    void Framework_Dialogue_DestroyAll() {
+        g_dialogues.clear();
+        g_dialogueByName.clear();
+        g_activeDialogueId = -1;
+        g_activeNodeId = -1;
+    }
+
+    int Framework_Dialogue_GetCount() {
+        return (int)g_dialogues.size();
+    }
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     void Framework_ResourcesShutdown() {
