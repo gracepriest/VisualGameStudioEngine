@@ -1,0 +1,204 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="550" d:DesignHeight="600"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.ExtractConstantDialog"
+        x:DataType="vm:ExtractConstantDialogViewModel"
+        Title="Extract Constant"
+        Width="550" Height="600"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Extract Constant" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Text="Extract the selected literal value to a named constant"
+                 Foreground="#808080" Margin="0,4,0,0"/>
+    </StackPanel>
+
+    <!-- Literal Info -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" Margin="0,0,0,16">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Value:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding LiteralValue}"
+                 FontFamily="Consolas" Foreground="#CE9178" Margin="0,0,0,4" TextTrimming="CharacterEllipsis"/>
+
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Type:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding InferredType}"
+                 FontFamily="Consolas" Foreground="#4EC9B0" Margin="0,0,0,4"/>
+
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Scope:" Foreground="#808080" Margin="0,0,8,4"/>
+      <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
+        <TextBlock Text="{Binding ContainingType, TargetNullValue='(global)'}"
+                   FontFamily="Consolas" Foreground="#DCDCAA"/>
+        <TextBlock Text="." Foreground="#808080" IsVisible="{Binding ContainingMethod, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <TextBlock Text="{Binding ContainingMethod}" FontFamily="Consolas" Foreground="#DCDCAA"
+                   IsVisible="{Binding ContainingMethod, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+      </StackPanel>
+
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="Occurrences:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="3" Grid.Column="1" Foreground="#CCCCCC" Margin="0,0,0,4">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="{}{0} occurrence(s) in file">
+            <Binding Path="OccurrenceCount"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </Grid>
+
+    <!-- Constant Name -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Constant Name:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <TextBox DockPanel.Dock="Top"
+             Text="{Binding ConstantName, Mode=TwoWay}"
+             FontFamily="Consolas"
+             Background="#252526"
+             Foreground="#9CDCFE"
+             BorderBrush="#3C3C3C"
+             Margin="0,0,0,12"/>
+
+    <!-- Constant Type -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Type (leave empty for auto):"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <TextBox DockPanel.Dock="Top"
+             Text="{Binding ConstantType, Mode=TwoWay}"
+             FontFamily="Consolas"
+             Background="#252526"
+             Foreground="#4EC9B0"
+             BorderBrush="#3C3C3C"
+             Watermark="{Binding InferredType}"
+             Margin="0,0,0,12"/>
+
+    <!-- Accessibility -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Margin="0,0,0,12">
+      <TextBlock Grid.Column="0" Text="Accessibility:" Foreground="#808080" VerticalAlignment="Center" Margin="0,0,8,0"/>
+      <ComboBox Grid.Column="1"
+                ItemsSource="{Binding AccessibilityOptions}"
+                SelectedItem="{Binding SelectedAccessibility}"
+                Background="#252526"
+                BorderBrush="#3C3C3C"
+                Width="150"
+                HorizontalAlignment="Left"/>
+    </Grid>
+
+    <!-- Options -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+      <CheckBox IsChecked="{Binding CreateAsShared}"
+                Content="Create as class-level constant (Shared)"
+                Foreground="#CCCCCC"
+                Margin="0,0,0,4"/>
+      <CheckBox IsChecked="{Binding ReplaceAllOccurrences}"
+                Foreground="#CCCCCC">
+        <CheckBox.Content>
+          <TextBlock>
+            <TextBlock.Text>
+              <MultiBinding StringFormat="Replace all {0} occurrences">
+                <Binding Path="OccurrenceCount"/>
+              </MultiBinding>
+            </TextBlock.Text>
+          </TextBlock>
+        </CheckBox.Content>
+      </CheckBox>
+    </StackPanel>
+
+    <!-- Occurrences List (collapsed by default) -->
+    <Expander DockPanel.Dock="Top"
+              Header="Occurrences"
+              IsExpanded="False"
+              Foreground="#808080"
+              Margin="0,0,0,12">
+      <Border Background="#252526"
+              BorderBrush="#3C3C3C"
+              BorderThickness="1"
+              CornerRadius="4"
+              MaxHeight="100">
+        <ListBox ItemsSource="{Binding Occurrences}"
+                 Background="Transparent"
+                 BorderThickness="0">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding DisplayText}"
+                         FontFamily="Consolas"
+                         FontSize="11"
+                         Foreground="#808080"/>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Border>
+    </Expander>
+
+    <!-- Warning Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding WarningMessage}"
+               Foreground="#CCA700"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding WarningMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Error Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="100">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding Preview}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#4EC9B0"
+                   Padding="8"
+                   TextWrapping="Wrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Processing..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Extract"
+              Command="{Binding ExtractCommand}"
+              Width="100"
+              Classes="accent"
+              IsEnabled="{Binding CanExtract}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

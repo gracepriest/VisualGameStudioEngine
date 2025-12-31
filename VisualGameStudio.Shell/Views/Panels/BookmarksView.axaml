@@ -1,0 +1,73 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.BookmarksView"
+             x:DataType="vm:BookmarksViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Text="Bookmarks" Classes="panelTitle"/>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+            <Button Command="{Binding GoToPreviousBookmarkCommand}"
+                    ToolTip.Tip="Previous Bookmark (Ctrl+Shift+F2)"
+                    Width="24" Height="24"
+                    Classes="toolbarButton">
+              <TextBlock Text="^" FontWeight="Bold" Foreground="#CCCCCC"/>
+            </Button>
+            <Button Command="{Binding GoToNextBookmarkCommand}"
+                    ToolTip.Tip="Next Bookmark (F2)"
+                    Width="24" Height="24"
+                    Classes="toolbarButton">
+              <TextBlock Text="v" FontWeight="Bold" Foreground="#CCCCCC"/>
+            </Button>
+            <Button Command="{Binding ClearAllBookmarksCommand}"
+                    ToolTip.Tip="Clear All Bookmarks"
+                    Width="24" Height="24"
+                    Classes="toolbarButton">
+              <TextBlock Text="X" FontWeight="Bold" Foreground="#F48771"/>
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <ListBox ItemsSource="{Binding Bookmarks}"
+               SelectedItem="{Binding SelectedBookmark}"
+               Background="Transparent"
+               DoubleTapped="OnListBoxDoubleTapped">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Text="*"
+                         Foreground="#569CD6" FontWeight="Bold"
+                         VerticalAlignment="Center" Margin="0,0,8,0"/>
+              <StackPanel Grid.Column="1">
+                <TextBlock Text="{Binding FileName}" Foreground="#CCCCCC"/>
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="{Binding DisplayText}"
+                             Foreground="#808080" FontSize="11"/>
+                  <TextBlock Text="{Binding Line, StringFormat='(Line {0})'}"
+                             Foreground="#606060" FontSize="11"
+                             IsVisible="{Binding Label, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                </StackPanel>
+              </StackPanel>
+              <Button Grid.Column="2"
+                      Command="{Binding $parent[ListBox].((vm:BookmarksViewModel)DataContext).RemoveBookmarkCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Remove Bookmark"
+                      Width="20" Height="20"
+                      Classes="toolbarButton"
+                      Opacity="0.5">
+                <TextBlock Text="x" FontSize="10" Foreground="#CCCCCC"/>
+              </Button>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </DockPanel>
+  </Border>
+</UserControl>

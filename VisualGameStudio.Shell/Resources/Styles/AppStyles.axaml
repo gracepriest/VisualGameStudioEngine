@@ -1,0 +1,273 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:idc="using:Dock.Avalonia.Controls">
+
+  <!-- IDE Dark Theme Colors -->
+  <Style Selector="Window">
+    <Setter Property="Background" Value="#1E1E1E"/>
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+  </Style>
+
+  <Style Selector="Menu">
+    <Setter Property="Background" Value="#2D2D2D"/>
+  </Style>
+
+  <Style Selector="MenuItem">
+    <Setter Property="Background" Value="Transparent"/>
+  </Style>
+
+  <Style Selector="MenuItem:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="#3E3E3E"/>
+  </Style>
+
+  <!-- TreeView styling -->
+  <Style Selector="TreeView">
+    <Setter Property="Background" Value="#252526"/>
+  </Style>
+
+  <Style Selector="TreeViewItem">
+    <Setter Property="Padding" Value="2"/>
+  </Style>
+
+  <!-- Tab styling for documents -->
+  <Style Selector="TabControl">
+    <Setter Property="Background" Value="#252526"/>
+  </Style>
+
+  <!-- Status bar -->
+  <Style Selector="Border.statusBar">
+    <Setter Property="Background" Value="#007ACC"/>
+    <Setter Property="Height" Value="22"/>
+  </Style>
+
+  <!-- Tool panels -->
+  <Style Selector="Border.toolPanel">
+    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="BorderBrush" Value="#3C3C3C"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+
+  <!-- Panel headers -->
+  <Style Selector="Border.panelHeader">
+    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Padding" Value="8,4"/>
+  </Style>
+
+  <Style Selector="TextBlock.panelTitle">
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+  </Style>
+
+  <!-- DataGrid styling -->
+  <Style Selector="DataGrid">
+    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="RowBackground" Value="#252526"/>
+    <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+    <Setter Property="HeadersVisibility" Value="Column"/>
+  </Style>
+
+  <Style Selector="DataGridColumnHeader">
+    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="Padding" Value="8,4"/>
+  </Style>
+
+  <!-- Buttons -->
+  <Style Selector="Button.toolbarButton">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Padding" Value="4"/>
+    <Setter Property="MinWidth" Value="24"/>
+    <Setter Property="MinHeight" Value="24"/>
+  </Style>
+
+  <Style Selector="Button.toolbarButton:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#3E3E3E"/>
+  </Style>
+
+  <!-- Dock.Avalonia Tool Tab Styling -->
+  <Style Selector="idc|ToolControl">
+    <Setter Property="Background" Value="#252526"/>
+  </Style>
+
+  <!-- Style the tool tab strip for better visibility -->
+  <Style Selector="idc|ToolTabStrip">
+    <Setter Property="Background" Value="#2D2D2D"/>
+  </Style>
+
+  <Style Selector="idc|ToolTabStripItem">
+    <Setter Property="Background" Value="#2D2D2D"/>
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="Padding" Value="8,4"/>
+    <Setter Property="FontSize" Value="12"/>
+  </Style>
+
+  <Style Selector="idc|ToolTabStripItem:selected">
+    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+
+  <Style Selector="idc|ToolTabStripItem:pointerover">
+    <Setter Property="Background" Value="#3E3E3E"/>
+  </Style>
+
+  <!-- Tool chrome styling -->
+  <Style Selector="idc|ToolChromeControl">
+    <Setter Property="Background" Value="#252526"/>
+  </Style>
+
+  <!-- Primary button styling -->
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="#0E639C"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Padding" Value="12,6"/>
+    <Setter Property="CornerRadius" Value="2"/>
+  </Style>
+
+  <Style Selector="Button.primary:pointerover">
+    <Setter Property="Background" Value="#1177BB"/>
+  </Style>
+
+  <Style Selector="Button.primary:pressed">
+    <Setter Property="Background" Value="#0D5687"/>
+  </Style>
+
+  <!-- Secondary button styling -->
+  <Style Selector="Button.secondary">
+    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="BorderBrush" Value="#5A5A5A"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="12,6"/>
+    <Setter Property="CornerRadius" Value="2"/>
+  </Style>
+
+  <Style Selector="Button.secondary:pointerover">
+    <Setter Property="Background" Value="#4A4A4A"/>
+  </Style>
+
+  <!-- TextBox styling -->
+  <Style Selector="TextBox">
+    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="BorderBrush" Value="#5A5A5A"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="SelectionBrush" Value="#264F78"/>
+    <Setter Property="SelectionForegroundBrush" Value="#FFFFFF"/>
+    <Setter Property="CaretBrush" Value="#AEAFAD"/>
+    <Setter Property="Padding" Value="8,4"/>
+    <Setter Property="CornerRadius" Value="2"/>
+  </Style>
+
+  <Style Selector="TextBox:focus">
+    <Setter Property="BorderBrush" Value="#007ACC"/>
+  </Style>
+
+  <Style Selector="TextBox:pointerover">
+    <Setter Property="BorderBrush" Value="#6A6A6A"/>
+  </Style>
+
+  <!-- ComboBox styling -->
+  <Style Selector="ComboBox">
+    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="BorderBrush" Value="#5A5A5A"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="8,4"/>
+    <Setter Property="CornerRadius" Value="2"/>
+  </Style>
+
+  <Style Selector="ComboBox:focus">
+    <Setter Property="BorderBrush" Value="#007ACC"/>
+  </Style>
+
+  <!-- ListBox styling -->
+  <Style Selector="ListBox">
+    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="BorderBrush" Value="#3C3C3C"/>
+  </Style>
+
+  <Style Selector="ListBoxItem:selected">
+    <Setter Property="Background" Value="#094771"/>
+  </Style>
+
+  <Style Selector="ListBoxItem:pointerover">
+    <Setter Property="Background" Value="#2A2D2E"/>
+  </Style>
+
+  <!-- Context Menu styling -->
+  <Style Selector="ContextMenu">
+    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="BorderBrush" Value="#454545"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="CornerRadius" Value="2"/>
+  </Style>
+
+  <Style Selector="ContextMenu MenuItem">
+    <Setter Property="Padding" Value="8,4"/>
+  </Style>
+
+  <Style Selector="ContextMenu Separator">
+    <Setter Property="Background" Value="#454545"/>
+    <Setter Property="Height" Value="1"/>
+    <Setter Property="Margin" Value="8,4"/>
+  </Style>
+
+  <!-- ScrollBar styling -->
+  <Style Selector="ScrollBar">
+    <Setter Property="Background" Value="Transparent"/>
+  </Style>
+
+  <Style Selector="ScrollBar /template/ Thumb">
+    <Setter Property="Background" Value="#424242"/>
+    <Setter Property="CornerRadius" Value="4"/>
+  </Style>
+
+  <Style Selector="ScrollBar /template/ Thumb:pointerover">
+    <Setter Property="Background" Value="#5A5A5A"/>
+  </Style>
+
+  <!-- CheckBox styling -->
+  <Style Selector="CheckBox">
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+  </Style>
+
+  <!-- Tooltip styling -->
+  <Style Selector="ToolTip">
+    <Setter Property="Background" Value="#2D2D2D"/>
+    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="BorderBrush" Value="#454545"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="8,4"/>
+    <Setter Property="CornerRadius" Value="2"/>
+  </Style>
+
+  <!-- Expander styling -->
+  <Style Selector="Expander">
+    <Setter Property="Background" Value="#252526"/>
+  </Style>
+
+  <Style Selector="Expander /template/ ToggleButton">
+    <Setter Property="Background" Value="#3C3C3C"/>
+  </Style>
+
+  <!-- Progress bar styling -->
+  <Style Selector="ProgressBar">
+    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Foreground" Value="#0E639C"/>
+    <Setter Property="CornerRadius" Value="2"/>
+  </Style>
+
+  <!-- Splitter styling -->
+  <Style Selector="GridSplitter">
+    <Setter Property="Background" Value="#3C3C3C"/>
+  </Style>
+
+  <Style Selector="GridSplitter:pointerover">
+    <Setter Property="Background" Value="#007ACC"/>
+  </Style>
+
+</Styles>

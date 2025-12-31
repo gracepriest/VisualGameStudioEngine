@@ -1,0 +1,161 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="550" d:DesignHeight="500"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.InlineMethodDialog"
+        x:DataType="vm:InlineMethodDialogViewModel"
+        Title="Inline Method"
+        Width="550" Height="500"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Inline Method" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Text="Replace method calls with the method body"
+                 Foreground="#808080" Margin="0,4,0,0"/>
+    </StackPanel>
+
+    <!-- Method Info -->
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="12"
+            Margin="0,0,0,16">
+      <StackPanel Spacing="8">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="Method:" Foreground="#808080" Width="80"/>
+          <TextBlock Text="{Binding MethodSignature}" Foreground="#DCDCAA" FontFamily="Consolas, Courier New, monospace"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="Call sites:" Foreground="#808080" Width="80"/>
+          <TextBlock Text="{Binding CallSiteCount}" Foreground="#B5CEA8"/>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <!-- Warning Message -->
+    <Border DockPanel.Dock="Top"
+            Background="#3D2C1E"
+            BorderBrush="#A67C52"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="12"
+            Margin="0,0,0,16"
+            IsVisible="{Binding WarningMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="!" Foreground="#DDB56B" FontWeight="Bold" FontSize="14"/>
+        <TextBlock Text="{Binding WarningMessage}" Foreground="#DDB56B" TextWrapping="Wrap"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Error Message -->
+    <Border DockPanel.Dock="Top"
+            Background="#3D1E1E"
+            BorderBrush="#A65252"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="12"
+            Margin="0,0,0,16"
+            IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <TextBlock Text="{Binding ErrorMessage}" Foreground="#F48771" TextWrapping="Wrap"/>
+    </Border>
+
+    <!-- Method Body Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Method body to inline:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="100">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding MethodBody}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#9CDCFE"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Call Sites List -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Call sites to inline:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16">
+      <ScrollViewer MaxHeight="100">
+        <ItemsControl ItemsSource="{Binding CallSites}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Padding="8,4" BorderBrush="#3C3C3C" BorderThickness="0,0,0,1">
+                <StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="{Binding FileName}" Foreground="#DCDCAA"/>
+                    <TextBlock Text="{Binding Line, StringFormat='Line {0}'}"
+                               Foreground="#606060" FontSize="11"/>
+                  </StackPanel>
+                  <TextBlock Text="{Binding Text}"
+                             Foreground="#808080"
+                             FontSize="11"
+                             FontFamily="Consolas, Courier New, monospace"
+                             TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Options -->
+    <CheckBox DockPanel.Dock="Top"
+              IsChecked="{Binding RemoveDefinition}"
+              Content="Remove method definition after inlining"
+              Foreground="#CCCCCC"
+              Margin="0,0,0,16"
+              IsEnabled="{Binding CanInline}"/>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Processing..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Inline"
+              Command="{Binding InlineCommand}"
+              Width="80"
+              Classes="accent"
+              IsEnabled="{Binding CanInline}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

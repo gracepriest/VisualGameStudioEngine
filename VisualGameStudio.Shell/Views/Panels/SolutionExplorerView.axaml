@@ -1,0 +1,101 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="250" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.SolutionExplorerView"
+             x:DataType="vm:SolutionExplorerViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Text="Solution Explorer" Classes="panelTitle"/>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Add New File"
+                    Command="{Binding AddNewFileCommand}"
+                    Width="24" Height="24">
+              <TextBlock Text="+" FontSize="14" FontWeight="Bold"/>
+            </Button>
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Add New Folder"
+                    Command="{Binding AddNewFolderCommand}"
+                    Width="24" Height="24">
+              <TextBlock Text="📁" FontSize="12"/>
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <TreeView x:Name="SolutionTreeView"
+                ItemsSource="{Binding Nodes}"
+                SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
+                Background="Transparent"
+                DoubleTapped="OnTreeViewDoubleTapped">
+
+        <TreeView.ContextMenu>
+          <ContextMenu>
+            <MenuItem Header="Add">
+              <MenuItem Header="New File..." Command="{Binding #SolutionTreeView.DataContext.AddNewFileCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="📄" FontSize="12"/>
+                </MenuItem.Icon>
+              </MenuItem>
+              <MenuItem Header="New Folder..." Command="{Binding #SolutionTreeView.DataContext.AddNewFolderCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="📁" FontSize="12"/>
+                </MenuItem.Icon>
+              </MenuItem>
+              <Separator/>
+              <MenuItem Header="Existing File..." Command="{Binding #SolutionTreeView.DataContext.AddExistingFileCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="📋" FontSize="12"/>
+                </MenuItem.Icon>
+              </MenuItem>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Open" Click="OnOpenMenuItemClick"/>
+            <Separator/>
+            <MenuItem Header="Rename" Command="{Binding #SolutionTreeView.DataContext.StartRenameCommand}" InputGesture="F2"/>
+            <MenuItem Header="Delete" Command="{Binding #SolutionTreeView.DataContext.DeleteCommand}" InputGesture="Delete">
+              <MenuItem.Icon>
+                <TextBlock Text="🗑" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Open in Explorer" Command="{Binding #SolutionTreeView.DataContext.OpenInExplorerCommand}"/>
+            <MenuItem Header="Copy Path" Command="{Binding #SolutionTreeView.DataContext.CopyPathCommand}"/>
+          </ContextMenu>
+        </TreeView.ContextMenu>
+
+        <TreeView.ItemTemplate>
+          <TreeDataTemplate ItemsSource="{Binding Children}">
+            <Grid ColumnDefinitions="Auto,*,Auto" DoubleTapped="OnItemDoubleTapped">
+              <!-- Icon based on node type -->
+              <TextBlock Grid.Column="0"
+                         Text="{Binding NodeType, Converter={x:Static vm:NodeTypeIconConverter.Instance}}"
+                         Margin="0,0,6,0"
+                         FontSize="14"
+                         VerticalAlignment="Center"/>
+
+              <!-- Name (always visible - rename handled elsewhere) -->
+              <TextBlock Grid.Column="1"
+                         Text="{Binding Name}"
+                         Foreground="#CCCCCC"
+                         VerticalAlignment="Center"/>
+            </Grid>
+          </TreeDataTemplate>
+        </TreeView.ItemTemplate>
+
+        <TreeView.Styles>
+          <Style Selector="TreeViewItem">
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+          </Style>
+        </TreeView.Styles>
+      </TreeView>
+    </DockPanel>
+  </Border>
+
+</UserControl>

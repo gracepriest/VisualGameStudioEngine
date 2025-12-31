@@ -1,0 +1,116 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:views="using:VisualGameStudio.Shell.Views.Panels"
+             mc:Ignorable="d" d:DesignWidth="350" d:DesignHeight="300"
+             x:Class="VisualGameStudio.Shell.Views.Panels.VariablesView"
+             x:DataType="vm:VariablesViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Classes="panelTitle" Text="Variables"/>
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RefreshVariablesCommand}" ToolTip.Tip="Refresh">
+            <TextBlock Text="↻" FontSize="14"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Watch input -->
+      <Border DockPanel.Dock="Bottom" Background="#2D2D2D" Padding="4">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBox Grid.Column="0"
+                   Text="{Binding NewWatchExpression}"
+                   Watermark="Add watch expression..."
+                   FontFamily="Cascadia Code, Consolas, monospace"
+                   FontSize="12"/>
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding AddWatchCommand}" Margin="4,0,0,0">
+            <TextBlock Text="+" FontSize="16"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <TabControl Background="Transparent">
+        <!-- Locals Tab with TreeView for hierarchical display -->
+        <TabItem Header="Locals">
+          <TreeView ItemsSource="{Binding VariableTree}"
+                    SelectedItem="{Binding SelectedVariable}"
+                    Background="#252526">
+            <TreeView.ItemTemplate>
+              <TreeDataTemplate ItemsSource="{Binding Children}">
+                <Grid ColumnDefinitions="*,*,Auto" MinHeight="22">
+                  <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="0,2">
+                    <TextBlock Text="{Binding DisplayName}"
+                               Foreground="{Binding IsScope, Converter={x:Static views:VariablesView.ScopeColorConverter}}"
+                               FontFamily="Cascadia Code, Consolas, monospace"
+                               FontSize="12"
+                               VerticalAlignment="Center"/>
+                    <TextBlock Text=" (loading...)"
+                               IsVisible="{Binding IsLoading}"
+                               Foreground="#808080"
+                               FontStyle="Italic"
+                               FontSize="11"
+                               VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <TextBlock Grid.Column="1"
+                             Text="{Binding Value}"
+                             Foreground="#CE9178"
+                             FontFamily="Cascadia Code, Consolas, monospace"
+                             FontSize="12"
+                             Margin="8,0"
+                             VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"/>
+                  <TextBlock Grid.Column="2"
+                             Text="{Binding Type}"
+                             Foreground="#4EC9B0"
+                             FontFamily="Cascadia Code, Consolas, monospace"
+                             FontSize="11"
+                             VerticalAlignment="Center"
+                             MinWidth="80"/>
+                </Grid>
+              </TreeDataTemplate>
+            </TreeView.ItemTemplate>
+          </TreeView>
+        </TabItem>
+
+        <!-- Flat List Tab (Alternative View) -->
+        <TabItem Header="Flat">
+          <DataGrid ItemsSource="{Binding Variables}"
+                    AutoGenerateColumns="False"
+                    CanUserResizeColumns="True"
+                    CanUserSortColumns="False"
+                    IsReadOnly="True"
+                    GridLinesVisibility="Horizontal"
+                    HeadersVisibility="Column">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="120"/>
+              <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
+              <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="100"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </TabItem>
+
+        <!-- Watch Tab -->
+        <TabItem Header="Watch">
+          <DataGrid ItemsSource="{Binding WatchExpressions}"
+                    AutoGenerateColumns="False"
+                    CanUserResizeColumns="True"
+                    CanUserSortColumns="False"
+                    IsReadOnly="True"
+                    GridLinesVisibility="Horizontal"
+                    HeadersVisibility="Column">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Expression" Binding="{Binding Expression}" Width="120"/>
+              <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
+              <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="100"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </TabItem>
+      </TabControl>
+    </DockPanel>
+  </Border>
+
+</UserControl>

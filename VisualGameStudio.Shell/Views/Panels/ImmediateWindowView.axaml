@@ -1,0 +1,93 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="300"
+             x:Class="VisualGameStudio.Shell.Views.Panels.ImmediateWindowView"
+             x:DataType="vm:ImmediateWindowViewModel"
+             Background="#1E1E1E">
+
+  <UserControl.Styles>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#252526"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="CaretBrush" Value="#FFFFFF"/>
+      <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="TextBox:focus">
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="CornerRadius" Value="2"/>
+    </Style>
+    <Style Selector="Button:pointerover">
+      <Setter Property="Background" Value="#4C4C4C"/>
+    </Style>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="*,Auto">
+    <!-- Output Area -->
+    <Border Grid.Row="0"
+            Background="#1E1E1E"
+            BorderBrush="#3C3C3C"
+            BorderThickness="0,0,0,1">
+      <ScrollViewer x:Name="OutputScroller"
+                    HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto">
+        <TextBox x:Name="OutputTextBox"
+                 Text="{Binding OutputText}"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="NoWrap"
+                 Background="#1E1E1E"
+                 BorderThickness="0"
+                 Padding="8"
+                 Foreground="#D4D4D4"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Input Area -->
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" Background="#252526">
+      <!-- Prompt -->
+      <TextBlock Grid.Column="0"
+                 Text=">"
+                 Foreground="#569CD6"
+                 FontFamily="Cascadia Code, Consolas, monospace"
+                 FontSize="12"
+                 FontWeight="Bold"
+                 VerticalAlignment="Center"
+                 Margin="8,0,4,0"/>
+
+      <!-- Input TextBox -->
+      <TextBox x:Name="InputTextBox"
+               Grid.Column="1"
+               Text="{Binding InputText, Mode=TwoWay}"
+               Watermark="Enter expression to evaluate..."
+               BorderThickness="0"
+               Background="Transparent"
+               Padding="4,8"
+               VerticalAlignment="Center"
+               KeyDown="OnInputKeyDown"/>
+
+      <!-- Buttons -->
+      <StackPanel Grid.Column="2"
+                  Orientation="Horizontal"
+                  Spacing="4"
+                  Margin="4">
+        <Button Content="Execute"
+                Command="{Binding ExecuteCommand}"
+                ToolTip.Tip="Execute expression (Enter)"/>
+        <Button Content="Clear"
+                Command="{Binding ClearCommand}"
+                ToolTip.Tip="Clear output"/>
+      </StackPanel>
+    </Grid>
+  </Grid>
+
+</UserControl>

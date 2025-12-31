@@ -1,0 +1,174 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Documents"
+             xmlns:editor="using:VisualGameStudio.Editor.Controls"
+             xmlns:controls="using:VisualGameStudio.Shell.Views.Controls"
+             xmlns:avalonEdit="https://github.com/avaloniaui/avaloniaedit"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Documents.CodeEditorDocumentView"
+             x:DataType="vm:CodeEditorDocumentViewModel"
+             HorizontalAlignment="Stretch"
+             VerticalAlignment="Stretch">
+
+  <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch" RowDefinitions="Auto,*">
+    <!-- Find/Replace Bar -->
+    <controls:FindReplaceControl x:Name="FindReplaceBar"
+                                  Grid.Row="0"
+                                  IsVisible="False"
+                                  FindNext="OnFindNext"
+                                  FindPrevious="OnFindPrevious"
+                                  ReplaceRequested="OnReplace"
+                                  ReplaceAllRequested="OnReplaceAll"
+                                  CloseRequested="OnCloseFindReplace"
+                                  SearchTextChangedEvent="OnSearchTextChanged"/>
+
+    <!-- Editor Content -->
+    <Grid Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+    <!-- AvaloniaEdit code editor with syntax highlighting -->
+    <editor:CodeEditorControl x:Name="MainEditor"
+                              Text="{Binding Text, Mode=TwoWay}"
+                              TextChanged="OnTextChanged"
+                              CaretPositionChanged="OnCaretPositionChanged"
+                              AddToWatchRequested="OnAddToWatchRequested"
+                              DataTipRequested="OnDataTipRequested"
+                              IsVisible="{Binding !IsSplitView}">
+      <editor:CodeEditorControl.ContextMenu>
+        <ContextMenu>
+          <MenuItem Header="Cut" Click="OnCut" InputGesture="Ctrl+X"/>
+          <MenuItem Header="Copy" Click="OnCopy" InputGesture="Ctrl+C"/>
+          <MenuItem Header="Paste" Click="OnPaste" InputGesture="Ctrl+V"/>
+          <Separator/>
+          <MenuItem Header="Add to Watch" Click="OnAddToWatch" InputGesture="Shift+F9"/>
+          <Separator/>
+          <MenuItem Header="Go to Definition" Click="OnGoToDefinition" InputGesture="F12"/>
+          <MenuItem Header="Peek Definition" Click="OnPeekDefinition" InputGesture="Alt+F12"/>
+          <MenuItem Header="Find All References" Click="OnFindAllReferences" InputGesture="Shift+F12"/>
+          <Separator/>
+          <MenuItem Header="Surround With..." Click="OnSurroundWith" InputGesture="Ctrl+K, Ctrl+S"/>
+          <Separator/>
+          <MenuItem Header="Rename Symbol..." Click="OnRenameSymbol" InputGesture="Ctrl+R"/>
+          <MenuItem Header="Extract Method..." Click="OnExtractMethod" InputGesture="Ctrl+Shift+M"/>
+          <MenuItem Header="Inline Method..." Click="OnInlineMethod" InputGesture="Ctrl+Shift+I"/>
+          <MenuItem Header="Introduce Variable..." Click="OnIntroduceVariable" InputGesture="Ctrl+Shift+V"/>
+          <MenuItem Header="Extract Constant..." Click="OnExtractConstant" InputGesture="Ctrl+Shift+K"/>
+          <MenuItem Header="Inline Constant..." Click="OnInlineConstant" InputGesture="Ctrl+Shift+J"/>
+          <MenuItem Header="Inline Variable..." Click="OnInlineVariable" InputGesture="Ctrl+Shift+L"/>
+          <MenuItem Header="Change Signature..." Click="OnChangeSignature" InputGesture="Ctrl+Shift+S"/>
+          <MenuItem Header="Encapsulate Field..." Click="OnEncapsulateField" InputGesture="Ctrl+Shift+E"/>
+          <MenuItem Header="Inline Field..." Click="OnInlineField" InputGesture="Ctrl+Shift+F"/>
+          <MenuItem Header="Move Type to File..." Click="OnMoveTypeToFile" InputGesture="Ctrl+Shift+T"/>
+          <MenuItem Header="Extract Interface..." Click="OnExtractInterface" InputGesture="Ctrl+Shift+X"/>
+          <MenuItem Header="Generate Constructor..." Click="OnGenerateConstructor" InputGesture="Ctrl+Shift+G"/>
+          <MenuItem Header="Implement Interface..." Click="OnImplementInterface" InputGesture="Ctrl+."/>
+          <MenuItem Header="Override Method..." Click="OnOverrideMethod" InputGesture="Ctrl+Shift+O"/>
+          <MenuItem Header="Add Parameter..." Click="OnAddParameter" InputGesture="Ctrl+Shift+P"/>
+          <MenuItem Header="Remove Parameter..." Click="OnRemoveParameter" InputGesture="Ctrl+Shift+R"/>
+          <MenuItem Header="Reorder Parameters..." Click="OnReorderParameters" InputGesture="Ctrl+Shift+U"/>
+          <MenuItem Header="Rename Parameter..." Click="OnRenameParameter" InputGesture="Ctrl+Shift+N"/>
+          <MenuItem Header="Change Parameter Type..." Click="OnChangeParameterType" InputGesture="Ctrl+Shift+Y"/>
+          <MenuItem Header="Make Parameter Optional..." Click="OnMakeParameterOptional" InputGesture="Ctrl+Shift+D"/>
+          <MenuItem Header="Make Parameter Required..." Click="OnMakeParameterRequired" InputGesture="Ctrl+Shift+Q"/>
+          <MenuItem Header="Convert to Named Arguments..." Click="OnConvertToNamedArguments" InputGesture="Ctrl+Shift+A"/>
+          <MenuItem Header="Convert to Positional Arguments..." Click="OnConvertToPositionalArguments" InputGesture="Ctrl+Shift+Z"/>
+          <MenuItem Header="Safe Delete..." Click="OnSafeDelete" InputGesture="Alt+Delete"/>
+          <MenuItem Header="Pull Members Up..." Click="OnPullMembersUp" InputGesture="Ctrl+Shift+Up"/>
+          <MenuItem Header="Push Members Down..." Click="OnPushMembersDown" InputGesture="Ctrl+Shift+Down"/>
+          <MenuItem Header="Use Base Type..." Click="OnUseBaseType" InputGesture="Ctrl+Shift+B"/>
+          <MenuItem Header="Convert to Interface..." Click="OnConvertToInterface" InputGesture="Ctrl+Shift+W"/>
+          <MenuItem Header="Invert If..." Click="OnInvertIf" InputGesture="Ctrl+Shift+H"/>
+          <MenuItem Header="Convert to Select Case..." Click="OnConvertToSelectCase" InputGesture="Ctrl+Alt+C"/>
+          <MenuItem Header="Split Declaration" Click="OnSplitDeclaration" InputGesture="Ctrl+Shift+;"/>
+          <MenuItem Header="Introduce Field..." Click="OnIntroduceField" InputGesture="Ctrl+Alt+F"/>
+          <Separator/>
+          <MenuItem Header="Toggle Comment" Click="OnToggleComment" InputGesture="Ctrl+/"/>
+        </ContextMenu>
+      </editor:CodeEditorControl.ContextMenu>
+    </editor:CodeEditorControl>
+
+    <!-- Split View - Horizontal -->
+    <Grid RowDefinitions="*,5,*"
+          IsVisible="{Binding IsSplitView}">
+      <Grid.IsVisible>
+        <MultiBinding Converter="{x:Static BoolConverters.And}">
+          <Binding Path="IsSplitView"/>
+          <Binding Path="SplitOrientation" Converter="{x:Static ObjectConverters.Equal}" ConverterParameter="{x:Static vm:SplitOrientation.Horizontal}"/>
+        </MultiBinding>
+      </Grid.IsVisible>
+
+      <editor:CodeEditorControl x:Name="TopEditor"
+                                Grid.Row="0"
+                                Text="{Binding Text, Mode=TwoWay}"
+                                TextChanged="OnTextChanged"
+                                CaretPositionChanged="OnCaretPositionChanged"/>
+
+      <GridSplitter Grid.Row="1" Background="#3C3C3C" HorizontalAlignment="Stretch"/>
+
+      <editor:CodeEditorControl x:Name="BottomEditor"
+                                Grid.Row="2"
+                                Text="{Binding Text, Mode=TwoWay}"
+                                TextChanged="OnTextChanged"
+                                CaretPositionChanged="OnCaretPositionChanged"/>
+    </Grid>
+
+    <!-- Split View - Vertical -->
+    <Grid ColumnDefinitions="*,5,*">
+      <Grid.IsVisible>
+        <MultiBinding Converter="{x:Static BoolConverters.And}">
+          <Binding Path="IsSplitView"/>
+          <Binding Path="SplitOrientation" Converter="{x:Static ObjectConverters.Equal}" ConverterParameter="{x:Static vm:SplitOrientation.Vertical}"/>
+        </MultiBinding>
+      </Grid.IsVisible>
+
+      <editor:CodeEditorControl x:Name="LeftEditor"
+                                Grid.Column="0"
+                                Text="{Binding Text, Mode=TwoWay}"
+                                TextChanged="OnTextChanged"
+                                CaretPositionChanged="OnCaretPositionChanged"/>
+
+      <GridSplitter Grid.Column="1" Background="#3C3C3C" VerticalAlignment="Stretch"/>
+
+      <editor:CodeEditorControl x:Name="RightEditor"
+                                Grid.Column="2"
+                                Text="{Binding Text, Mode=TwoWay}"
+                                TextChanged="OnTextChanged"
+                                CaretPositionChanged="OnCaretPositionChanged"/>
+    </Grid>
+
+    <!-- Split View Toggle Button -->
+    <StackPanel Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="0,2,20,0"
+                Spacing="2">
+      <Button Command="{Binding SplitHorizontalCommand}"
+              ToolTip.Tip="Split Horizontal"
+              Width="20" Height="20"
+              Padding="2"
+              Background="Transparent"
+              Opacity="0.6">
+        <TextBlock Text="=" FontSize="10" Foreground="#CCCCCC"/>
+      </Button>
+      <Button Command="{Binding SplitVerticalCommand}"
+              ToolTip.Tip="Split Vertical"
+              Width="20" Height="20"
+              Padding="2"
+              Background="Transparent"
+              Opacity="0.6">
+        <TextBlock Text="||" FontSize="10" Foreground="#CCCCCC"/>
+      </Button>
+      <Button Command="{Binding CloseSplitCommand}"
+              ToolTip.Tip="Close Split"
+              Width="20" Height="20"
+              Padding="2"
+              Background="Transparent"
+              Opacity="0.6"
+              IsVisible="{Binding IsSplitView}">
+        <TextBlock Text="x" FontSize="10" Foreground="#CCCCCC"/>
+      </Button>
+    </StackPanel>
+    </Grid>
+  </Grid>
+
+</UserControl>

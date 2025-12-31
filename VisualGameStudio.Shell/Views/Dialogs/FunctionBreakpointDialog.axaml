@@ -1,0 +1,91 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="200"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.FunctionBreakpointDialog"
+        x:DataType="vm:FunctionBreakpointDialogViewModel"
+        Title="New Function Breakpoint"
+        Width="400" Height="180"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#252526">
+
+  <Window.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#555555"/>
+      <Setter Property="CaretBrush" Value="#FFFFFF"/>
+    </Style>
+    <Style Selector="TextBox:focus">
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#0E639C"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="Padding" Value="16,6"/>
+      <Setter Property="CornerRadius" Value="2"/>
+    </Style>
+    <Style Selector="Button:pointerover">
+      <Setter Property="Background" Value="#1177BB"/>
+    </Style>
+    <Style Selector="Button.cancel">
+      <Setter Property="Background" Value="#3C3C3C"/>
+    </Style>
+    <Style Selector="Button.cancel:pointerover">
+      <Setter Property="Background" Value="#4C4C4C"/>
+    </Style>
+  </Window.Styles>
+
+  <Grid Margin="20">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- Function Name Input -->
+    <StackPanel Grid.Row="0" Spacing="6">
+      <TextBlock Text="Function name:" FontSize="13"/>
+      <TextBox x:Name="FunctionNameTextBox"
+               Text="{Binding FunctionName}"
+               Watermark="e.g., Main, Module.MyFunction"
+               FontFamily="Cascadia Code, Consolas, monospace"
+               FontSize="13">
+        <TextBox.KeyBindings>
+          <KeyBinding Gesture="Enter" Command="{Binding AddCommand}"/>
+          <KeyBinding Gesture="Escape" Command="{Binding CancelCommand}"/>
+        </TextBox.KeyBindings>
+      </TextBox>
+    </StackPanel>
+
+    <!-- Error Message -->
+    <TextBlock Grid.Row="1"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F44747"
+               FontSize="12"
+               Margin="0,8,0,0"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Help Text -->
+    <TextBlock Grid.Row="2"
+               Text="Enter the name of a function to break when it is called. You can use qualified names like Module.FunctionName."
+               TextWrapping="Wrap"
+               Foreground="#888888"
+               FontSize="11"
+               Margin="0,12,0,0"/>
+
+    <!-- Buttons -->
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Add" Command="{Binding AddCommand}" IsDefault="True"/>
+      <Button Content="Cancel" Command="{Binding CancelCommand}" Classes="cancel" IsCancel="True"/>
+    </StackPanel>
+  </Grid>
+
+</Window>

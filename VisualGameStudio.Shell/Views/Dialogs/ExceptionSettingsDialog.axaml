@@ -1,0 +1,139 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="500"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.ExceptionSettingsDialog"
+        x:DataType="vm:ExceptionSettingsViewModel"
+        Title="Exception Settings"
+        Width="600" Height="500"
+        WindowStartupLocation="CenterOwner"
+        Background="#252526">
+
+  <Window.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#555555"/>
+      <Setter Property="CaretBrush" Value="#FFFFFF"/>
+    </Style>
+    <Style Selector="TextBox:focus">
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#0E639C"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="Padding" Value="12,6"/>
+      <Setter Property="CornerRadius" Value="2"/>
+    </Style>
+    <Style Selector="Button:pointerover">
+      <Setter Property="Background" Value="#1177BB"/>
+    </Style>
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="#3C3C3C"/>
+    </Style>
+    <Style Selector="Button.secondary:pointerover">
+      <Setter Property="Background" Value="#4C4C4C"/>
+    </Style>
+    <Style Selector="CheckBox">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="TreeViewItem">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+  </Window.Styles>
+
+  <Grid Margin="16" RowDefinitions="Auto,Auto,*,Auto">
+    <!-- Header -->
+    <StackPanel Grid.Row="0" Spacing="8" Margin="0,0,0,12">
+      <TextBlock Text="Exception Settings" FontSize="16" FontWeight="SemiBold"/>
+      <TextBlock Text="Configure which exceptions the debugger should break on."
+                 Foreground="#888888" FontSize="12" TextWrapping="Wrap"/>
+    </StackPanel>
+
+    <!-- Search and Actions -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+      <TextBox Grid.Column="0"
+               Text="{Binding SearchText}"
+               Watermark="Search exceptions..."
+               Margin="0,0,8,0"/>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+        <Button Content="Enable All" Command="{Binding EnableAllCommand}" Classes="secondary" Padding="8,4"/>
+        <Button Content="Disable All" Command="{Binding DisableAllCommand}" Classes="secondary" Padding="8,4"/>
+        <Button Content="Reset" Command="{Binding ResetToDefaultsCommand}" Classes="secondary" Padding="8,4"/>
+      </StackPanel>
+    </Grid>
+
+    <!-- Exception Tree -->
+    <Border Grid.Row="2" Background="#1E1E1E" BorderBrush="#3C3C3C" BorderThickness="1" CornerRadius="4">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding ExceptionCategories}" Margin="8">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="vm:ExceptionCategoryViewModel">
+              <StackPanel IsVisible="{Binding IsVisible}">
+                <!-- Category Header -->
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,4">
+                  <ToggleButton Grid.Column="0"
+                                IsChecked="{Binding IsExpanded}"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="4,2"
+                                Width="20"
+                                IsVisible="{Binding Children, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <Panel>
+                      <TextBlock Text="+" IsVisible="{Binding !IsExpanded}" FontWeight="Bold" HorizontalAlignment="Center"/>
+                      <TextBlock Text="-" IsVisible="{Binding IsExpanded}" FontWeight="Bold" HorizontalAlignment="Center"/>
+                    </Panel>
+                  </ToggleButton>
+
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <CheckBox IsChecked="{Binding BreakWhenThrown}" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Description}" Foreground="#888888" FontSize="11" VerticalAlignment="Center"
+                               IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                  </StackPanel>
+
+                  <TextBlock Grid.Column="2" Text="Thrown" Foreground="#888888" FontSize="10"
+                             VerticalAlignment="Center" Margin="8,0"/>
+                  <CheckBox Grid.Column="3" IsChecked="{Binding BreakWhenUserUnhandled}"
+                            Content="User-Unhandled" FontSize="11" VerticalAlignment="Center"/>
+                </Grid>
+
+                <!-- Children -->
+                <ItemsControl ItemsSource="{Binding Children}"
+                              Margin="24,0,0,0"
+                              IsVisible="{Binding IsExpanded}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="vm:ExceptionCategoryViewModel">
+                      <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,2" IsVisible="{Binding IsVisible}">
+                        <CheckBox Grid.Column="0" IsChecked="{Binding BreakWhenThrown}" VerticalAlignment="Center"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                          <TextBlock Text="{Binding Description}" Foreground="#888888" FontSize="11" VerticalAlignment="Center"
+                                     IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                        </StackPanel>
+                        <CheckBox Grid.Column="2" IsChecked="{Binding BreakWhenUserUnhandled}"
+                                  Content="User-Unhandled" FontSize="11" VerticalAlignment="Center"/>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Buttons -->
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="OK" Command="{Binding ApplyCommand}" IsDefault="True"/>
+      <Button Content="Cancel" Command="{Binding CancelCommand}" Classes="secondary" IsCancel="True"/>
+    </StackPanel>
+  </Grid>
+
+</Window>

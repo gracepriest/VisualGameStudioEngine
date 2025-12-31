@@ -1,0 +1,255 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.SettingsDialog"
+        x:DataType="vm:SettingsViewModel"
+        Title="Settings"
+        Width="800" Height="600"
+        WindowStartupLocation="CenterOwner">
+
+  <Grid RowDefinitions="*,Auto" Background="#1E1E1E">
+    <TabControl Grid.Row="0" Margin="16">
+      <!-- Editor Tab -->
+      <TabItem Header="Editor">
+        <ScrollViewer>
+          <StackPanel Spacing="24" Margin="16">
+            <Border Background="#252526" CornerRadius="4" Padding="16">
+              <StackPanel Spacing="12">
+                <TextBlock Text="Font" FontWeight="SemiBold"/>
+
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto">
+                  <TextBlock Grid.Row="0" Grid.Column="0"
+                             Text="Font Family:"
+                             VerticalAlignment="Center"
+                             Margin="0,0,12,0"/>
+                  <ComboBox Grid.Row="0" Grid.Column="1"
+                            ItemsSource="{Binding AvailableFonts}"
+                            SelectedItem="{Binding FontFamily}"
+                            MinWidth="200"/>
+
+                  <TextBlock Grid.Row="0" Grid.Column="2"
+                             Text="Size:"
+                             VerticalAlignment="Center"
+                             Margin="24,0,12,0"/>
+                  <NumericUpDown Grid.Row="0" Grid.Column="3"
+                                 Value="{Binding FontSize}"
+                                 Minimum="8"
+                                 Maximum="72"
+                                 Width="80"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <Border Background="#252526" CornerRadius="4" Padding="16">
+              <StackPanel Spacing="12">
+                <TextBlock Text="Tabs" FontWeight="SemiBold"/>
+
+                <Grid ColumnDefinitions="Auto,Auto,Auto,*">
+                  <TextBlock Grid.Column="0"
+                             Text="Tab Size:"
+                             VerticalAlignment="Center"
+                             Margin="0,0,12,0"/>
+                  <NumericUpDown Grid.Column="1"
+                                 Value="{Binding TabSize}"
+                                 Minimum="1"
+                                 Maximum="16"
+                                 Width="80"/>
+
+                  <CheckBox Grid.Column="2"
+                            Content="Convert tabs to spaces"
+                            IsChecked="{Binding ConvertTabsToSpaces}"
+                            Margin="24,0,0,0"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <Border Background="#252526" CornerRadius="4" Padding="16">
+              <StackPanel Spacing="12">
+                <TextBlock Text="Display" FontWeight="SemiBold"/>
+
+                <WrapPanel>
+                  <CheckBox Content="Show line numbers"
+                            IsChecked="{Binding ShowLineNumbers}"
+                            Margin="0,0,24,8"/>
+                  <CheckBox Content="Highlight current line"
+                            IsChecked="{Binding HighlightCurrentLine}"
+                            Margin="0,0,24,8"/>
+                  <CheckBox Content="Show whitespace"
+                            IsChecked="{Binding ShowWhitespace}"
+                            Margin="0,0,24,8"/>
+                  <CheckBox Content="Word wrap"
+                            IsChecked="{Binding WordWrap}"
+                            Margin="0,0,24,8"/>
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Background="#252526" CornerRadius="4" Padding="16">
+              <StackPanel Spacing="12">
+                <TextBlock Text="Behavior" FontWeight="SemiBold"/>
+
+                <WrapPanel>
+                  <CheckBox Content="Auto indent"
+                            IsChecked="{Binding AutoIndent}"
+                            Margin="0,0,24,8"/>
+                  <CheckBox Content="Bracket matching"
+                            IsChecked="{Binding BracketMatching}"
+                            Margin="0,0,24,8"/>
+                  <CheckBox Content="Auto close brackets"
+                            IsChecked="{Binding AutoCloseBrackets}"
+                            Margin="0,0,24,8"/>
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- IntelliSense Tab -->
+      <TabItem Header="IntelliSense">
+        <ScrollViewer>
+          <StackPanel Spacing="24" Margin="16">
+            <Border Background="#252526" CornerRadius="4" Padding="16">
+              <StackPanel Spacing="12">
+                <TextBlock Text="Auto Complete" FontWeight="SemiBold"/>
+
+                <CheckBox Content="Enable auto complete"
+                          IsChecked="{Binding EnableAutoComplete}"/>
+                <CheckBox Content="Show quick info on hover"
+                          IsChecked="{Binding ShowQuickInfo}"/>
+                <CheckBox Content="Show signature help"
+                          IsChecked="{Binding ShowSignatureHelp}"/>
+
+                <Grid ColumnDefinitions="Auto,Auto,*">
+                  <TextBlock Grid.Column="0"
+                             Text="Delay (ms):"
+                             VerticalAlignment="Center"
+                             Margin="0,0,12,0"/>
+                  <NumericUpDown Grid.Column="1"
+                                 Value="{Binding AutoCompleteDelay}"
+                                 Minimum="0"
+                                 Maximum="2000"
+                                 Increment="50"
+                                 Width="100"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- Build Tab -->
+      <TabItem Header="Build">
+        <ScrollViewer>
+          <StackPanel Spacing="24" Margin="16">
+            <Border Background="#252526" CornerRadius="4" Padding="16">
+              <StackPanel Spacing="12">
+                <TextBlock Text="Build Options" FontWeight="SemiBold"/>
+
+                <CheckBox Content="Save all files before build"
+                          IsChecked="{Binding SaveBeforeBuild}"/>
+                <CheckBox Content="Show build output panel"
+                          IsChecked="{Binding ShowBuildOutput}"/>
+
+                <Grid ColumnDefinitions="Auto,*">
+                  <TextBlock Grid.Column="0"
+                             Text="Default configuration:"
+                             VerticalAlignment="Center"
+                             Margin="0,0,12,0"/>
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding Configurations}"
+                            SelectedItem="{Binding DefaultConfiguration}"
+                            MinWidth="150"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- Appearance Tab -->
+      <TabItem Header="Appearance">
+        <ScrollViewer>
+          <StackPanel Spacing="24" Margin="16">
+            <Border Background="#252526" CornerRadius="4" Padding="16">
+              <StackPanel Spacing="12">
+                <TextBlock Text="Theme" FontWeight="SemiBold"/>
+
+                <Grid ColumnDefinitions="Auto,*">
+                  <TextBlock Grid.Column="0"
+                             Text="Color Theme:"
+                             VerticalAlignment="Center"
+                             Margin="0,0,12,0"/>
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding AvailableThemes}"
+                            SelectedItem="{Binding SelectedTheme}"
+                            MinWidth="200"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- Keyboard Tab -->
+      <TabItem Header="Keyboard">
+        <DockPanel Margin="16">
+          <TextBlock DockPanel.Dock="Top"
+                     Text="Keyboard Shortcuts"
+                     FontWeight="SemiBold"
+                     Margin="0,0,0,12"/>
+
+          <DataGrid ItemsSource="{Binding Shortcuts}"
+                    AutoGenerateColumns="False"
+                    IsReadOnly="False"
+                    CanUserReorderColumns="False"
+                    CanUserSortColumns="False"
+                    GridLinesVisibility="Horizontal"
+                    Background="#252526">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Action"
+                                  Binding="{Binding Action}"
+                                  IsReadOnly="True"
+                                  Width="200"/>
+              <DataGridTextColumn Header="Shortcut"
+                                  Binding="{Binding CurrentBinding}"
+                                  Width="150"/>
+              <DataGridTextColumn Header="Default"
+                                  Binding="{Binding DefaultBinding}"
+                                  IsReadOnly="True"
+                                  Width="150"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </DockPanel>
+      </TabItem>
+    </TabControl>
+
+    <!-- Buttons -->
+    <Border Grid.Row="1"
+            Background="#2D2D2D"
+            Padding="16,12"
+            BorderThickness="0,1,0,0"
+            BorderBrush="#3C3C3C">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <Button Grid.Column="0"
+                Content="Reset to Defaults"
+                Command="{Binding ResetToDefaultsCommand}"/>
+
+        <StackPanel Grid.Column="2"
+                    Orientation="Horizontal"
+                    Spacing="8">
+          <Button Content="OK"
+                  Command="{Binding SaveCommand}"
+                  Width="80"
+                  Classes="accent"/>
+          <Button Content="Cancel"
+                  Command="{Binding CancelCommand}"
+                  Width="80"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

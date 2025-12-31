@@ -1,0 +1,84 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="300"
+             x:Class="VisualGameStudio.Shell.Views.Panels.TerminalView"
+             x:DataType="vm:TerminalViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+          <TextBlock Grid.Column="0" Classes="panelTitle" Text="{Binding Title}"/>
+
+          <Button Grid.Column="1"
+                  Classes="toolbarButton"
+                  Command="{Binding StartCommand}"
+                  ToolTip.Tip="Start Terminal"
+                  IsVisible="{Binding !IsRunning}">
+            <TextBlock Text="▶" FontSize="12" Foreground="#89D185"/>
+          </Button>
+
+          <Button Grid.Column="2"
+                  Classes="toolbarButton"
+                  Command="{Binding StopCommand}"
+                  ToolTip.Tip="Stop Terminal"
+                  IsVisible="{Binding IsRunning}">
+            <TextBlock Text="■" FontSize="12" Foreground="#E51400"/>
+          </Button>
+
+          <Button Grid.Column="3"
+                  Classes="toolbarButton"
+                  Command="{Binding ClearCommand}"
+                  ToolTip.Tip="Clear">
+            <TextBlock Text="Clear" FontSize="11"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Input -->
+      <Border DockPanel.Dock="Bottom" Background="#1E1E1E" Padding="4">
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <TextBlock Grid.Column="0"
+                     Text=">"
+                     Foreground="#569CD6"
+                     FontFamily="Cascadia Code, Consolas, monospace"
+                     VerticalAlignment="Center"
+                     Margin="4,0,8,0"/>
+
+          <TextBox Grid.Column="1"
+                   Text="{Binding InputText}"
+                   FontFamily="Cascadia Code, Consolas, monospace"
+                   FontSize="13"
+                   Background="#1E1E1E"
+                   BorderThickness="0"
+                   IsEnabled="{Binding IsRunning}"
+                   x:Name="InputBox"/>
+
+          <Button Grid.Column="2"
+                  Classes="toolbarButton"
+                  Command="{Binding SendInputCommand}"
+                  IsEnabled="{Binding IsRunning}"
+                  Margin="4,0,0,0">
+            <TextBlock Text="Send" FontSize="11"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Output -->
+      <ScrollViewer Background="#0C0C0C"
+                    HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto"
+                    x:Name="OutputScroller">
+        <TextBlock Text="{Binding OutputText}"
+                   FontFamily="Cascadia Code, Consolas, monospace"
+                   FontSize="13"
+                   Foreground="#CCCCCC"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </DockPanel>
+  </Border>
+</UserControl>

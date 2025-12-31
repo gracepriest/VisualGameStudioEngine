@@ -1,0 +1,170 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="650" d:DesignHeight="550"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.LaunchConfigurationDialog"
+        x:DataType="vm:LaunchConfigurationDialogViewModel"
+        Title="Launch Configurations"
+        Width="650" Height="550"
+        WindowStartupLocation="CenterOwner"
+        Background="#1E1E1E">
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="16">
+    <!-- Header -->
+    <StackPanel Grid.Row="0" Margin="0,0,0,16">
+      <TextBlock Text="Launch Configurations"
+                 Foreground="#FFFFFF"
+                 FontSize="16"
+                 FontWeight="SemiBold"
+                 Margin="0,0,0,8"/>
+      <TextBlock Text="Configure how your program is launched for debugging or running."
+                 Foreground="#808080"
+                 FontSize="12"
+                 TextWrapping="Wrap"/>
+    </StackPanel>
+
+    <!-- Content -->
+    <Grid Grid.Row="1" ColumnDefinitions="200,*">
+      <!-- Configuration List -->
+      <Border Grid.Column="0" Background="#252526" CornerRadius="4" Margin="0,0,8,0">
+        <DockPanel>
+          <!-- Add Configuration -->
+          <Border DockPanel.Dock="Bottom" Background="#2D2D2D" Padding="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBox Grid.Column="0"
+                       Text="{Binding NewConfigurationName}"
+                       Watermark="New config name..."
+                       FontSize="12"/>
+              <Button Grid.Column="1"
+                      Command="{Binding AddConfigurationCommand}"
+                      Classes="toolbarButton"
+                      Margin="4,0,0,0">
+                <TextBlock Text="+" FontSize="16" Foreground="#CCCCCC"/>
+              </Button>
+            </Grid>
+          </Border>
+
+          <!-- List Header -->
+          <Border DockPanel.Dock="Top" Background="#3C3C3C" Padding="8,6">
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBlock Grid.Column="0" Text="Launch Configs" Foreground="#CCCCCC" FontWeight="SemiBold" FontSize="12"/>
+              <Button Grid.Column="1"
+                      Command="{Binding DuplicateConfigurationCommand}"
+                      Classes="toolbarButton"
+                      ToolTip.Tip="Duplicate">
+                <TextBlock Text="⧉" FontSize="12" Foreground="#CCCCCC"/>
+              </Button>
+              <Button Grid.Column="2"
+                      Command="{Binding RemoveConfigurationCommand}"
+                      Classes="toolbarButton"
+                      ToolTip.Tip="Remove">
+                <TextBlock Text="×" FontSize="14" Foreground="#CCCCCC"/>
+              </Button>
+            </Grid>
+          </Border>
+
+          <!-- Configuration List -->
+          <ListBox ItemsSource="{Binding Configurations}"
+                   SelectedItem="{Binding SelectedConfiguration}"
+                   Background="Transparent">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="▶" Foreground="#4EC9B0" FontSize="10" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding Name}"
+                             Foreground="#CCCCCC"
+                             Padding="4"/>
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <!-- Configuration Editor -->
+      <Border Grid.Column="1" Background="#252526" CornerRadius="4" Padding="16">
+        <ScrollViewer IsVisible="{Binding SelectedConfiguration, Converter={x:Static ObjectConverters.IsNotNull}}">
+          <StackPanel Spacing="16" DataContext="{Binding SelectedConfiguration}">
+            <!-- Name -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Configuration Name" Foreground="#569CD6" FontSize="12"/>
+              <TextBox Text="{Binding Name}"
+                       Background="#3C3C3C"
+                       Foreground="#CCCCCC"/>
+            </StackPanel>
+
+            <!-- Working Directory -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Working Directory" Foreground="#569CD6" FontSize="12"/>
+              <TextBox Text="{Binding WorkingDirectory}"
+                       Background="#3C3C3C"
+                       Foreground="#CCCCCC"
+                       Watermark="${ProjectDir}"/>
+              <TextBlock Text="Use ${ProjectDir} for the project directory"
+                         Foreground="#808080"
+                         FontSize="10"/>
+            </StackPanel>
+
+            <!-- Command Line Arguments -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Command Line Arguments" Foreground="#569CD6" FontSize="12"/>
+              <TextBox Text="{Binding CommandLineArgs}"
+                       Background="#3C3C3C"
+                       Foreground="#CCCCCC"
+                       Watermark="--arg1 value1 --arg2 value2"/>
+            </StackPanel>
+
+            <!-- Environment Variables -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Environment Variables (KEY=value, one per line)" Foreground="#569CD6" FontSize="12"/>
+              <TextBox Text="{Binding EnvironmentVariablesText}"
+                       Background="#3C3C3C"
+                       Foreground="#CCCCCC"
+                       AcceptsReturn="True"
+                       Height="80"
+                       TextWrapping="Wrap"
+                       Watermark="DEBUG=true&#x0a;API_KEY=abc123"/>
+            </StackPanel>
+
+            <!-- Launch Options -->
+            <Border Background="#2D2D2D" CornerRadius="4" Padding="12">
+              <StackPanel Spacing="8">
+                <TextBlock Text="Launch Options" Foreground="#569CD6" FontWeight="SemiBold"/>
+
+                <CheckBox IsChecked="{Binding EnableDebugging}"
+                          Content="Enable debugging"
+                          Foreground="#CCCCCC"/>
+
+                <CheckBox IsChecked="{Binding ExternalConsole}"
+                          Content="Use external console window"
+                          Foreground="#CCCCCC"/>
+
+                <CheckBox IsChecked="{Binding StopOnEntry}"
+                          Content="Break at program entry point"
+                          Foreground="#CCCCCC"/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+
+    <!-- Buttons -->
+    <StackPanel Grid.Row="2"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Margin="0,16,0,0"
+                Spacing="8">
+      <Button Content="OK"
+              Width="80"
+              Click="OnOkClick"
+              Classes="primary"/>
+      <Button Content="Cancel"
+              Width="80"
+              Click="OnCancelClick"/>
+    </StackPanel>
+  </Grid>
+
+</Window>

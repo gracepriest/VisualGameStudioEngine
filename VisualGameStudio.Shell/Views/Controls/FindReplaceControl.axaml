@@ -1,0 +1,187 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="80"
+             x:Class="VisualGameStudio.Shell.Views.Controls.FindReplaceControl"
+             Background="#252526"
+             Padding="8,4">
+
+  <UserControl.Styles>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="CaretBrush" Value="#CCCCCC"/>
+      <Setter Property="MinHeight" Value="24"/>
+      <Setter Property="Padding" Value="6,2"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="TextBox:focus">
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="TextBox.hasError">
+      <Setter Property="BorderBrush" Value="#F44747"/>
+    </Style>
+    <Style Selector="Button.findButton">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Padding" Value="6,2"/>
+      <Setter Property="MinWidth" Value="24"/>
+      <Setter Property="MinHeight" Value="24"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="Button.findButton:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#3C3C3C"/>
+    </Style>
+    <Style Selector="ToggleButton.optionButton">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#808080"/>
+      <Setter Property="Padding" Value="4,2"/>
+      <Setter Property="MinWidth" Value="24"/>
+      <Setter Property="MinHeight" Value="24"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+    <Style Selector="ToggleButton.optionButton:checked">
+      <Setter Property="Background" Value="#094771"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="ToggleButton.optionButton:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#3C3C3C"/>
+    </Style>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,Auto">
+    <!-- Find Row -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,4">
+      <!-- Expand/Collapse Replace -->
+      <Button Grid.Column="0"
+              Classes="findButton"
+              Click="OnToggleReplace"
+              ToolTip.Tip="Toggle Replace"
+              Margin="0,0,4,0">
+        <Panel>
+          <TextBlock Text=">" IsVisible="{Binding !ShowReplace, RelativeSource={RelativeSource AncestorType=UserControl}}" FontFamily="Consolas"/>
+          <TextBlock Text="v" IsVisible="{Binding ShowReplace, RelativeSource={RelativeSource AncestorType=UserControl}}" FontFamily="Consolas"/>
+        </Panel>
+      </Button>
+
+      <!-- Search TextBox -->
+      <TextBox Grid.Column="1"
+               x:Name="SearchTextBox"
+               Text="{Binding SearchText, RelativeSource={RelativeSource AncestorType=UserControl}}"
+               Watermark="Find"
+               KeyDown="OnSearchKeyDown"
+               TextChanged="OnSearchTextChanged"/>
+
+      <!-- Match Count -->
+      <TextBlock Grid.Column="2"
+                 x:Name="MatchCountDisplay"
+                 Text="{Binding MatchCountText, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                 Foreground="#808080"
+                 FontSize="11"
+                 VerticalAlignment="Center"
+                 Margin="8,0"/>
+
+      <!-- Options -->
+      <ToggleButton Grid.Column="3"
+                    Classes="optionButton"
+                    IsChecked="{Binding MatchCase, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                    ToolTip.Tip="Match Case (Alt+C)"
+                    Content="Aa"
+                    Margin="2,0"/>
+
+      <ToggleButton Grid.Column="4"
+                    Classes="optionButton"
+                    IsChecked="{Binding WholeWord, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                    ToolTip.Tip="Match Whole Word (Alt+W)"
+                    Content="Ab"
+                    Margin="2,0"/>
+
+      <ToggleButton Grid.Column="5"
+                    Classes="optionButton"
+                    IsChecked="{Binding UseRegex, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                    ToolTip.Tip="Use Regular Expression (Alt+R)"
+                    Content=".*"
+                    Margin="2,0"/>
+
+      <!-- Navigation -->
+      <Button Grid.Column="6"
+              Classes="findButton"
+              Click="OnFindPrevious"
+              ToolTip.Tip="Previous Match (Shift+F3)"
+              Margin="4,0,0,0">
+        <TextBlock Text="^" FontFamily="Consolas" FontWeight="Bold"/>
+      </Button>
+
+      <Button Grid.Column="7"
+              Classes="findButton"
+              Click="OnFindNext"
+              ToolTip.Tip="Next Match (F3)">
+        <TextBlock Text="v" FontFamily="Consolas" FontWeight="Bold"/>
+      </Button>
+
+      <!-- Selection Search -->
+      <ToggleButton Grid.Column="8"
+                    Classes="optionButton"
+                    IsChecked="{Binding SearchInSelection, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                    ToolTip.Tip="Find in Selection"
+                    Content="[..]"
+                    Margin="4,0"/>
+
+      <!-- Close -->
+      <Button Grid.Column="9"
+              Classes="findButton"
+              Click="OnClose"
+              ToolTip.Tip="Close (Escape)"
+              Margin="4,0,0,0">
+        <TextBlock Text="x" FontFamily="Consolas"/>
+      </Button>
+    </Grid>
+
+    <!-- Replace Row -->
+    <Grid Grid.Row="1"
+          ColumnDefinitions="Auto,*,Auto,Auto,Auto"
+          IsVisible="{Binding ShowReplace, RelativeSource={RelativeSource AncestorType=UserControl}}">
+      <!-- Spacer to align with find row -->
+      <Border Grid.Column="0" Width="28"/>
+
+      <!-- Replace TextBox -->
+      <TextBox Grid.Column="1"
+               x:Name="ReplaceTextBox"
+               Text="{Binding ReplaceText, RelativeSource={RelativeSource AncestorType=UserControl}}"
+               Watermark="Replace"
+               KeyDown="OnReplaceKeyDown"/>
+
+      <!-- Replace Actions -->
+      <Button Grid.Column="2"
+              Classes="findButton"
+              Click="OnReplace"
+              ToolTip.Tip="Replace (Ctrl+Shift+1)"
+              Margin="8,0,0,0">
+        <TextBlock Text="Replace" FontSize="11"/>
+      </Button>
+
+      <Button Grid.Column="3"
+              Classes="findButton"
+              Click="OnReplaceAll"
+              ToolTip.Tip="Replace All (Ctrl+Shift+Enter)"
+              Margin="2,0">
+        <TextBlock Text="Replace All" FontSize="11"/>
+      </Button>
+
+      <!-- Preserve Case Toggle -->
+      <ToggleButton Grid.Column="4"
+                    Classes="optionButton"
+                    IsChecked="{Binding PreserveCase, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                    ToolTip.Tip="Preserve Case"
+                    Content="AB"
+                    Margin="2,0"/>
+    </Grid>
+  </Grid>
+</UserControl>

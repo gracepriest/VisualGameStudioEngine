@@ -1,0 +1,111 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="250"
+             x:Class="VisualGameStudio.Shell.Views.Controls.PeekDefinitionControl"
+             x:DataType="vm:PeekDefinitionViewModel">
+
+  <Border Background="#1E1E1E"
+          BorderBrush="#007ACC"
+          BorderThickness="1"
+          CornerRadius="4">
+    <DockPanel>
+      <!-- Header -->
+      <Border DockPanel.Dock="Top"
+              Background="#252526"
+              Padding="8,4">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto">
+          <!-- Navigation arrows (when multiple definitions) -->
+          <Button Grid.Column="0"
+                  Command="{Binding PreviousDefinitionCommand}"
+                  ToolTip.Tip="Previous Definition"
+                  Background="Transparent"
+                  Padding="4,2"
+                  IsVisible="{Binding Definitions.Count, Converter={StaticResource GreaterThanOneConverter}}">
+            <TextBlock Text="◀" FontSize="10"/>
+          </Button>
+          <Button Grid.Column="1"
+                  Command="{Binding NextDefinitionCommand}"
+                  ToolTip.Tip="Next Definition"
+                  Background="Transparent"
+                  Padding="4,2"
+                  IsVisible="{Binding Definitions.Count, Converter={StaticResource GreaterThanOneConverter}}">
+            <TextBlock Text="▶" FontSize="10"/>
+          </Button>
+
+          <!-- File info -->
+          <StackPanel Grid.Column="2"
+                      Orientation="Horizontal"
+                      Spacing="8"
+                      Margin="8,0">
+            <TextBlock Text="{Binding DefinitionFileName}"
+                       Foreground="#DCDCAA"
+                       FontSize="12"/>
+            <TextBlock Text="{Binding DefinitionLine, StringFormat='Line {0}'}"
+                       Foreground="#808080"
+                       FontSize="11"
+                       VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding Definitions.Count, StringFormat='({0} definition(s))'}"
+                       Foreground="#606060"
+                       FontSize="10"
+                       VerticalAlignment="Center"
+                       IsVisible="{Binding Definitions.Count, Converter={StaticResource GreaterThanOneConverter}}"/>
+          </StackPanel>
+
+          <!-- Actions -->
+          <Button Grid.Column="3"
+                  Command="{Binding GoToDefinitionCommand}"
+                  ToolTip.Tip="Go to Definition (F12)"
+                  Background="Transparent"
+                  Padding="4,2">
+            <TextBlock Text="↗" FontSize="14"/>
+          </Button>
+          <Button Grid.Column="5"
+                  Command="{Binding CloseCommand}"
+                  ToolTip.Tip="Close (Escape)"
+                  Background="Transparent"
+                  Padding="4,2">
+            <TextBlock Text="✕" FontSize="12"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Loading State -->
+      <Border DockPanel.Dock="Top"
+              Background="#1E1E1E"
+              Padding="16"
+              IsVisible="{Binding IsLoading}">
+        <TextBlock Text="Loading definition..."
+                   Foreground="#808080"
+                   FontSize="12"
+                   HorizontalAlignment="Center"/>
+      </Border>
+
+      <!-- Error State -->
+      <Border DockPanel.Dock="Top"
+              Background="#1E1E1E"
+              Padding="16"
+              IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <TextBlock Text="{Binding ErrorMessage}"
+                   Foreground="#F48771"
+                   FontSize="12"
+                   HorizontalAlignment="Center"/>
+      </Border>
+
+      <!-- Definition Code -->
+      <ScrollViewer IsVisible="{Binding HasDefinition}"
+                    HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto">
+        <Border Background="#1E1E1E" Padding="8">
+          <SelectableTextBlock Text="{Binding DefinitionCode}"
+                               FontFamily="Cascadia Code, Consolas, monospace"
+                               FontSize="12"
+                               Foreground="#D4D4D4"
+                               TextWrapping="NoWrap"/>
+        </Border>
+      </ScrollViewer>
+    </DockPanel>
+  </Border>
+</UserControl>

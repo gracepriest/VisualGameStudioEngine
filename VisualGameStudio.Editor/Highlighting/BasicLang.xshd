@@ -1,0 +1,433 @@
+<?xml version="1.0"?>
+<SyntaxDefinition name="BasicLang" extensions=".bas;.bl;.basic"
+                  xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+
+  <Color name="Comment" foreground="#6A9955" fontStyle="italic" />
+  <Color name="String" foreground="#CE9178" />
+  <Color name="InterpolatedString" foreground="#CE9178" />
+  <Color name="Number" foreground="#B5CEA8" />
+  <Color name="Keyword" foreground="#569CD6" fontWeight="bold" />
+  <Color name="ControlKeyword" foreground="#C586C0" fontWeight="bold" />
+  <Color name="Type" foreground="#4EC9B0" />
+  <Color name="Modifier" foreground="#569CD6" />
+  <Color name="BuiltinFunction" foreground="#DCDCAA" />
+  <Color name="Constant" foreground="#4FC1FF" />
+  <Color name="Operator" foreground="#D4D4D4" />
+
+  <RuleSet ignoreCase="true">
+    <!-- Comments -->
+    <Span color="Comment">
+      <Begin>'</Begin>
+    </Span>
+    <Span color="Comment">
+      <Begin>REM </Begin>
+    </Span>
+    <Span color="Comment" multiline="true">
+      <Begin>/\*</Begin>
+      <End>\*/</End>
+    </Span>
+
+    <!-- Interpolated Strings -->
+    <Span color="InterpolatedString">
+      <Begin>\$"</Begin>
+      <End>"</End>
+      <RuleSet>
+        <Span begin="\{" end="\}" color="Keyword" />
+      </RuleSet>
+    </Span>
+
+    <!-- Regular Strings -->
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet>
+        <Span begin='""' end="" />
+      </RuleSet>
+    </Span>
+
+    <!-- Character Literals -->
+    <Span color="String">
+      <Begin>'</Begin>
+      <End>'c</End>
+    </Span>
+
+    <!-- Control Flow Keywords -->
+    <Keywords color="ControlKeyword">
+      <Word>If</Word>
+      <Word>Then</Word>
+      <Word>Else</Word>
+      <Word>ElseIf</Word>
+      <Word>End If</Word>
+      <Word>EndIf</Word>
+      <Word>Select</Word>
+      <Word>Case</Word>
+      <Word>End Select</Word>
+      <Word>EndSelect</Word>
+      <Word>For</Word>
+      <Word>To</Word>
+      <Word>Step</Word>
+      <Word>Next</Word>
+      <Word>While</Word>
+      <Word>Wend</Word>
+      <Word>Do</Word>
+      <Word>Loop</Word>
+      <Word>Until</Word>
+      <Word>Each</Word>
+      <Word>In</Word>
+      <Word>Exit</Word>
+      <Word>Continue</Word>
+      <Word>Return</Word>
+      <Word>GoTo</Word>
+      <Word>Try</Word>
+      <Word>Catch</Word>
+      <Word>Finally</Word>
+      <Word>End Try</Word>
+      <Word>EndTry</Word>
+      <Word>Throw</Word>
+      <Word>With</Word>
+      <Word>End With</Word>
+      <Word>EndWith</Word>
+    </Keywords>
+
+    <!-- LINQ Keywords -->
+    <Keywords color="ControlKeyword">
+      <Word>From</Word>
+      <Word>Where</Word>
+      <Word>Order By</Word>
+      <Word>OrderBy</Word>
+      <Word>Group By</Word>
+      <Word>GroupBy</Word>
+      <Word>Ascending</Word>
+      <Word>Descending</Word>
+      <Word>Join</Word>
+      <Word>On</Word>
+      <Word>Equals</Word>
+      <Word>Into</Word>
+      <Word>Let</Word>
+      <Word>Aggregate</Word>
+      <Word>Take</Word>
+      <Word>Skip</Word>
+      <Word>Distinct</Word>
+      <Word>Any</Word>
+      <Word>All</Word>
+      <Word>First</Word>
+      <Word>Last</Word>
+    </Keywords>
+
+    <!-- Declaration Keywords -->
+    <Keywords color="Keyword">
+      <Word>Dim</Word>
+      <Word>Auto</Word>
+      <Word>Const</Word>
+      <Word>Sub</Word>
+      <Word>Function</Word>
+      <Word>End Sub</Word>
+      <Word>EndSub</Word>
+      <Word>End Function</Word>
+      <Word>EndFunction</Word>
+      <Word>Class</Word>
+      <Word>End Class</Word>
+      <Word>EndClass</Word>
+      <Word>Structure</Word>
+      <Word>End Structure</Word>
+      <Word>EndStructure</Word>
+      <Word>Type</Word>
+      <Word>End Type</Word>
+      <Word>EndType</Word>
+      <Word>Interface</Word>
+      <Word>End Interface</Word>
+      <Word>EndInterface</Word>
+      <Word>Enum</Word>
+      <Word>End Enum</Word>
+      <Word>EndEnum</Word>
+      <Word>Module</Word>
+      <Word>End Module</Word>
+      <Word>EndModule</Word>
+      <Word>Namespace</Word>
+      <Word>End Namespace</Word>
+      <Word>EndNamespace</Word>
+      <Word>Property</Word>
+      <Word>End Property</Word>
+      <Word>EndProperty</Word>
+      <Word>Get</Word>
+      <Word>End Get</Word>
+      <Word>EndGet</Word>
+      <Word>Set</Word>
+      <Word>End Set</Word>
+      <Word>EndSet</Word>
+      <Word>Operator</Word>
+      <Word>End Operator</Word>
+      <Word>EndOperator</Word>
+      <Word>Template</Word>
+      <Word>End Template</Word>
+      <Word>EndTemplate</Word>
+      <Word>Delegate</Word>
+      <Word>Event</Word>
+      <Word>RaiseEvent</Word>
+      <Word>AddHandler</Word>
+      <Word>RemoveHandler</Word>
+      <Word>Handles</Word>
+      <Word>Extern</Word>
+      <Word>End Extern</Word>
+      <Word>EndExtern</Word>
+      <Word>Using</Word>
+      <Word>End Using</Word>
+      <Word>EndUsing</Word>
+      <Word>Import</Word>
+    </Keywords>
+
+    <!-- Modifiers -->
+    <Keywords color="Modifier">
+      <Word>Public</Word>
+      <Word>Private</Word>
+      <Word>Protected</Word>
+      <Word>Friend</Word>
+      <Word>Shared</Word>
+      <Word>Static</Word>
+      <Word>Overridable</Word>
+      <Word>Overrides</Word>
+      <Word>MustOverride</Word>
+      <Word>MustInherit</Word>
+      <Word>NotOverridable</Word>
+      <Word>NotInheritable</Word>
+      <Word>ReadOnly</Word>
+      <Word>WriteOnly</Word>
+      <Word>Optional</Word>
+      <Word>ParamArray</Word>
+      <Word>ByVal</Word>
+      <Word>ByRef</Word>
+      <Word>Inherits</Word>
+      <Word>Implements</Word>
+      <Word>Widening</Word>
+      <Word>Narrowing</Word>
+      <Word>Extension</Word>
+      <Word>Async</Word>
+      <Word>Await</Word>
+      <Word>Iterator</Word>
+      <Word>Yield</Word>
+    </Keywords>
+
+    <!-- Type-related Keywords -->
+    <Keywords color="Type">
+      <Word>As</Word>
+      <Word>Of</Word>
+      <Word>New</Word>
+      <Word>Me</Word>
+      <Word>MyBase</Word>
+      <Word>Is</Word>
+      <Word>IsNot</Word>
+      <Word>TypeOf</Word>
+      <Word>AddressOf</Word>
+      <Word>SizeOf</Word>
+      <Word>GetType</Word>
+    </Keywords>
+
+    <!-- Built-in Types -->
+    <Keywords color="Type">
+      <Word>Integer</Word>
+      <Word>Long</Word>
+      <Word>Short</Word>
+      <Word>Byte</Word>
+      <Word>Single</Word>
+      <Word>Double</Word>
+      <Word>Decimal</Word>
+      <Word>String</Word>
+      <Word>Boolean</Word>
+      <Word>Char</Word>
+      <Word>Object</Word>
+      <Word>Date</Word>
+      <Word>Pointer</Word>
+      <Word>Void</Word>
+    </Keywords>
+
+    <!-- Constants -->
+    <Keywords color="Constant">
+      <Word>True</Word>
+      <Word>False</Word>
+      <Word>Nothing</Word>
+      <Word>Null</Word>
+    </Keywords>
+
+    <!-- Logical Operators -->
+    <Keywords color="Operator">
+      <Word>And</Word>
+      <Word>AndAlso</Word>
+      <Word>Or</Word>
+      <Word>OrElse</Word>
+      <Word>Not</Word>
+      <Word>Xor</Word>
+      <Word>Mod</Word>
+      <Word>Like</Word>
+    </Keywords>
+
+    <!-- Built-in Functions - I/O -->
+    <Keywords color="BuiltinFunction">
+      <Word>Print</Word>
+      <Word>PrintLine</Word>
+      <Word>Input</Word>
+      <Word>ReadLine</Word>
+      <Word>ReadKey</Word>
+    </Keywords>
+
+    <!-- Built-in Functions - String -->
+    <Keywords color="BuiltinFunction">
+      <Word>Len</Word>
+      <Word>Mid</Word>
+      <Word>Left</Word>
+      <Word>Right</Word>
+      <Word>UCase</Word>
+      <Word>LCase</Word>
+      <Word>Trim</Word>
+      <Word>LTrim</Word>
+      <Word>RTrim</Word>
+      <Word>InStr</Word>
+      <Word>InStrRev</Word>
+      <Word>Replace</Word>
+      <Word>Split</Word>
+      <Word>Join</Word>
+      <Word>Chr</Word>
+      <Word>Asc</Word>
+      <Word>Space</Word>
+      <Word>String</Word>
+      <Word>StrComp</Word>
+      <Word>Format</Word>
+    </Keywords>
+
+    <!-- Built-in Functions - Math -->
+    <Keywords color="BuiltinFunction">
+      <Word>Abs</Word>
+      <Word>Sqrt</Word>
+      <Word>Pow</Word>
+      <Word>Sin</Word>
+      <Word>Cos</Word>
+      <Word>Tan</Word>
+      <Word>Atn</Word>
+      <Word>Log</Word>
+      <Word>Exp</Word>
+      <Word>Floor</Word>
+      <Word>Ceiling</Word>
+      <Word>Round</Word>
+      <Word>Int</Word>
+      <Word>Fix</Word>
+      <Word>Sgn</Word>
+      <Word>Min</Word>
+      <Word>Max</Word>
+      <Word>Rnd</Word>
+      <Word>Randomize</Word>
+    </Keywords>
+
+    <!-- Built-in Functions - Conversion -->
+    <Keywords color="BuiltinFunction">
+      <Word>CInt</Word>
+      <Word>CLng</Word>
+      <Word>CDbl</Word>
+      <Word>CSng</Word>
+      <Word>CStr</Word>
+      <Word>CBool</Word>
+      <Word>CByte</Word>
+      <Word>CChar</Word>
+      <Word>CDate</Word>
+      <Word>CDec</Word>
+      <Word>CObj</Word>
+      <Word>CShort</Word>
+      <Word>CType</Word>
+      <Word>DirectCast</Word>
+      <Word>TryCast</Word>
+      <Word>Val</Word>
+      <Word>Str</Word>
+    </Keywords>
+
+    <!-- Built-in Functions - Array -->
+    <Keywords color="BuiltinFunction">
+      <Word>UBound</Word>
+      <Word>LBound</Word>
+      <Word>Array</Word>
+      <Word>Erase</Word>
+      <Word>ReDim</Word>
+      <Word>Preserve</Word>
+    </Keywords>
+
+    <!-- Built-in Functions - Date/Time -->
+    <Keywords color="BuiltinFunction">
+      <Word>Now</Word>
+      <Word>Today</Word>
+      <Word>Year</Word>
+      <Word>Month</Word>
+      <Word>Day</Word>
+      <Word>Hour</Word>
+      <Word>Minute</Word>
+      <Word>Second</Word>
+      <Word>DateAdd</Word>
+      <Word>DateDiff</Word>
+      <Word>DatePart</Word>
+      <Word>DateSerial</Word>
+      <Word>TimeSerial</Word>
+      <Word>DateValue</Word>
+      <Word>TimeValue</Word>
+      <Word>FormatDate</Word>
+      <Word>Timer</Word>
+    </Keywords>
+
+    <!-- Built-in Functions - File I/O -->
+    <Keywords color="BuiltinFunction">
+      <Word>FileRead</Word>
+      <Word>FileWrite</Word>
+      <Word>FileAppend</Word>
+      <Word>FileExists</Word>
+      <Word>FileDelete</Word>
+      <Word>FileCopy</Word>
+      <Word>FileMove</Word>
+      <Word>DirExists</Word>
+      <Word>DirCreate</Word>
+      <Word>DirDelete</Word>
+      <Word>DirGetFiles</Word>
+      <Word>DirGetDirs</Word>
+      <Word>PathCombine</Word>
+      <Word>PathGetFileName</Word>
+      <Word>PathGetDirectory</Word>
+      <Word>PathGetExtension</Word>
+    </Keywords>
+
+    <!-- Built-in Functions - Memory -->
+    <Keywords color="BuiltinFunction">
+      <Word>AllocateMemory</Word>
+      <Word>DeallocateMemory</Word>
+    </Keywords>
+
+    <!-- Numbers - Hexadecimal -->
+    <Rule color="Number">
+      &amp;[Hh][0-9A-Fa-f]+[LlSsIi%&amp;!#@]?
+    </Rule>
+
+    <!-- Numbers - Octal -->
+    <Rule color="Number">
+      &amp;[Oo][0-7]+[LlSsIi%&amp;!#@]?
+    </Rule>
+
+    <!-- Numbers - Binary -->
+    <Rule color="Number">
+      &amp;[Bb][01]+[LlSsIi%&amp;!#@]?
+    </Rule>
+
+    <!-- Numbers - Float with exponent -->
+    <Rule color="Number">
+      \b\d+\.\d+([Ee][+-]?\d+)?[FfDdRr]?\b
+    </Rule>
+
+    <!-- Numbers - Float without whole part -->
+    <Rule color="Number">
+      \b\.\d+([Ee][+-]?\d+)?[FfDdRr]?\b
+    </Rule>
+
+    <!-- Numbers - Integer with exponent -->
+    <Rule color="Number">
+      \b\d+[Ee][+-]?\d+[FfDdRr]?\b
+    </Rule>
+
+    <!-- Numbers - Integer with type suffix -->
+    <Rule color="Number">
+      \b\d+[LlSsIi%&amp;!#@FfDdRr]?\b
+    </Rule>
+
+  </RuleSet>
+</SyntaxDefinition>

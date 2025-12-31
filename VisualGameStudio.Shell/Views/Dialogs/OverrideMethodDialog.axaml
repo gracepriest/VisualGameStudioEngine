@@ -1,0 +1,181 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="650" d:DesignHeight="600"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.OverrideMethodDialog"
+        x:DataType="vm:OverrideMethodDialogViewModel"
+        Title="Override Method"
+        Width="650" Height="600"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Override Method" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Generate method overrides for class '{0}'">
+            <Binding Path="ClassName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+      <TextBlock Foreground="#569CD6" Margin="0,4,0,0" FontSize="11"
+                 IsVisible="{Binding BaseClassName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Base class: {0}">
+            <Binding Path="BaseClassName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Method Selection Header -->
+    <TextBlock DockPanel.Dock="Top"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4">
+      <TextBlock.Text>
+        <MultiBinding StringFormat="Methods ({0} overridable, {1} already overridden):">
+          <Binding Path="TotalOverridableCount"/>
+          <Binding Path="AlreadyOverriddenCount"/>
+        </MultiBinding>
+      </TextBlock.Text>
+    </TextBlock>
+
+    <!-- Selection Buttons -->
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+      <Button Content="Select All" Command="{Binding SelectAllMethodsCommand}" Padding="8,2"/>
+      <Button Content="Select None" Command="{Binding SelectNoneMethodsCommand}" Padding="8,2"/>
+      <Button Content="Abstract Only" Command="{Binding SelectAbstractOnlyCommand}" Padding="8,2"/>
+    </StackPanel>
+
+    <!-- Methods List -->
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,12"
+            Height="160">
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Methods}" Margin="4">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="vm:OverridableMethodViewModel">
+              <CheckBox IsChecked="{Binding IsSelected}"
+                        IsEnabled="{Binding !IsOverridden}"
+                        Margin="4,2">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding KindText}"
+                             Foreground="#569CD6"
+                             FontFamily="Consolas"
+                             Width="60"/>
+                  <TextBlock Text="{Binding Name}"
+                             Foreground="#DCDCAA"
+                             FontFamily="Consolas"
+                             Width="140"/>
+                  <TextBlock Text="{Binding ReturnType}"
+                             Foreground="#4EC9B0"
+                             FontFamily="Consolas"
+                             Width="80"
+                             IsVisible="{Binding ReturnType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                  <TextBlock Text="(already overridden)"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             IsVisible="{Binding IsOverridden}"
+                             Foreground="#608B4E"/>
+                  <TextBlock Text="(abstract - must override)"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="#CE9178">
+                    <TextBlock.IsVisible>
+                      <MultiBinding Converter="{x:Static BoolConverters.And}">
+                        <Binding Path="IsAbstract"/>
+                        <Binding Path="!IsOverridden"/>
+                      </MultiBinding>
+                    </TextBlock.IsVisible>
+                  </TextBlock>
+                </StackPanel>
+              </CheckBox>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Options -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Options:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12" Spacing="4">
+      <CheckBox IsChecked="{Binding CallBaseMethod}"
+                Content="Call base method in override (MyBase.MethodName)"
+                Foreground="#CCCCCC"/>
+      <CheckBox IsChecked="{Binding InsertRegion}"
+                Content="Insert #Region around overrides"
+                Foreground="#CCCCCC"/>
+    </StackPanel>
+
+    <!-- Error Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="150">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding Preview}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#DCDCAA"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Processing..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Override"
+              Command="{Binding OverrideCommand}"
+              Width="100"
+              Classes="accent"
+              IsEnabled="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

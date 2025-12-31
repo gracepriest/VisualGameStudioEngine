@@ -1,0 +1,281 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels"
+        xmlns:dock="using:Dock.Avalonia.Controls"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
+        x:Class="VisualGameStudio.Shell.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Title}"
+        Width="1200" Height="800"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="F5" Command="{Binding StartDebuggingCommand}"/>
+    <KeyBinding Gesture="Ctrl+F5" Command="{Binding StartWithoutDebuggingCommand}"/>
+    <KeyBinding Gesture="Shift+F5" Command="{Binding StopDebuggingCommand}"/>
+    <KeyBinding Gesture="F9" Command="{Binding ToggleBreakpointCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+F9" Command="{Binding NewFunctionBreakpointCommand}"/>
+    <KeyBinding Gesture="Ctrl+F10" Command="{Binding RunToCursorCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+F10" Command="{Binding SetNextStatementCommand}"/>
+    <KeyBinding Gesture="F10" Command="{Binding StepOverCommand}"/>
+    <KeyBinding Gesture="F11" Command="{Binding StepIntoCommand}"/>
+    <KeyBinding Gesture="Shift+F11" Command="{Binding StepOutCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+B" Command="{Binding BuildCommand}"/>
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+S" Command="{Binding SaveAllCommand}"/>
+    <KeyBinding Gesture="Ctrl+G" Command="{Binding GoToLineCommand}"/>
+    <KeyBinding Gesture="Ctrl+T" Command="{Binding GoToSymbolCommand}"/>
+    <KeyBinding Gesture="Ctrl+F" Command="{Binding FindCommand}"/>
+    <KeyBinding Gesture="Ctrl+H" Command="{Binding ReplaceCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+F" Command="{Binding ShowFindInFilesCommand}"/>
+    <!-- Bookmark shortcuts -->
+    <KeyBinding Gesture="Ctrl+K" Command="{Binding ToggleBookmarkCommand}"/>
+    <KeyBinding Gesture="F2" Command="{Binding NextBookmarkCommand}"/>
+    <KeyBinding Gesture="Shift+F2" Command="{Binding PreviousBookmarkCommand}"/>
+    <!-- Navigation shortcuts -->
+    <KeyBinding Gesture="F12" Command="{Binding GoToDefinitionCommand}"/>
+    <KeyBinding Gesture="Shift+F12" Command="{Binding FindReferencesCommand}"/>
+    <!-- Refactoring shortcuts -->
+    <KeyBinding Gesture="Ctrl+R" Command="{Binding RenameSymbolCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+M" Command="{Binding ExtractMethodCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+I" Command="{Binding InlineMethodCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+V" Command="{Binding IntroduceVariableCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+S" Command="{Binding ChangeSignatureCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+E" Command="{Binding EncapsulateFieldCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+T" Command="{Binding MoveTypeToFileCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+X" Command="{Binding ExtractInterfaceCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+G" Command="{Binding GenerateConstructorCommand}"/>
+    <KeyBinding Gesture="Ctrl+OemPeriod" Command="{Binding ImplementInterfaceCommand}"/>
+    <!-- Panel shortcuts -->
+    <KeyBinding Gesture="Ctrl+Alt+B" Command="{Binding ShowBreakpointsCommand}"/>
+    <KeyBinding Gesture="Ctrl+Alt+O" Command="{Binding ShowOutputCommand}"/>
+    <KeyBinding Gesture="Ctrl+Alt+E" Command="{Binding ShowErrorListCommand}"/>
+    <KeyBinding Gesture="Ctrl+Alt+C" Command="{Binding ShowCallStackCommand}"/>
+    <KeyBinding Gesture="Ctrl+Alt+V" Command="{Binding ShowVariablesCommand}"/>
+    <KeyBinding Gesture="Ctrl+Alt+W" Command="{Binding ShowWatchCommand}"/>
+    <KeyBinding Gesture="Ctrl+Alt+I" Command="{Binding ShowImmediateWindowCommand}"/>
+    <KeyBinding Gesture="Ctrl+Alt+X" Command="{Binding ShowExceptionSettingsCommand}"/>
+  </Window.KeyBindings>
+
+  <Design.DataContext>
+    <vm:MainWindowViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <!-- Menu Bar -->
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="_File">
+        <MenuItem Header="_New Project..." Command="{Binding NewProjectCommand}" InputGesture="Ctrl+Shift+N"/>
+        <Separator/>
+        <MenuItem Header="_Open Project..." Command="{Binding OpenProjectCommand}" InputGesture="Ctrl+Shift+O"/>
+        <MenuItem Header="Open _File..." Command="{Binding OpenFileCommand}" InputGesture="Ctrl+O"/>
+        <Separator/>
+        <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGesture="Ctrl+S"/>
+        <MenuItem Header="Save _All" Command="{Binding SaveAllCommand}" InputGesture="Ctrl+Shift+S"/>
+        <Separator/>
+        <MenuItem Header="E_xit" Command="{Binding ExitCommand}" InputGesture="Alt+F4"/>
+      </MenuItem>
+
+      <MenuItem Header="_Edit">
+        <MenuItem Header="_Undo" InputGesture="Ctrl+Z"/>
+        <MenuItem Header="_Redo" InputGesture="Ctrl+Y"/>
+        <Separator/>
+        <MenuItem Header="Cu_t" InputGesture="Ctrl+X"/>
+        <MenuItem Header="_Copy" InputGesture="Ctrl+C"/>
+        <MenuItem Header="_Paste" InputGesture="Ctrl+V"/>
+        <Separator/>
+        <MenuItem Header="_Find..." Command="{Binding FindCommand}" InputGesture="Ctrl+F"/>
+        <MenuItem Header="_Replace..." Command="{Binding ReplaceCommand}" InputGesture="Ctrl+H"/>
+        <MenuItem Header="Find in _Files..." Command="{Binding ShowFindInFilesCommand}" InputGesture="Ctrl+Shift+F"/>
+        <Separator/>
+        <MenuItem Header="_Go to Definition" Command="{Binding GoToDefinitionCommand}" InputGesture="F12"/>
+        <MenuItem Header="Find All _References" Command="{Binding FindReferencesCommand}" InputGesture="Shift+F12"/>
+        <MenuItem Header="_Rename Symbol..." Command="{Binding RenameSymbolCommand}" InputGesture="Ctrl+R"/>
+        <MenuItem Header="_Extract Method..." Command="{Binding ExtractMethodCommand}" InputGesture="Ctrl+Shift+M"/>
+        <MenuItem Header="_Inline Method..." Command="{Binding InlineMethodCommand}" InputGesture="Ctrl+Shift+I"/>
+        <MenuItem Header="Introduce _Variable..." Command="{Binding IntroduceVariableCommand}" InputGesture="Ctrl+Shift+V"/>
+        <MenuItem Header="Change _Signature..." Command="{Binding ChangeSignatureCommand}" InputGesture="Ctrl+Shift+S"/>
+        <MenuItem Header="_Encapsulate Field..." Command="{Binding EncapsulateFieldCommand}" InputGesture="Ctrl+Shift+E"/>
+        <MenuItem Header="_Move Type to File..." Command="{Binding MoveTypeToFileCommand}" InputGesture="Ctrl+Shift+T"/>
+        <MenuItem Header="E_xtract Interface..." Command="{Binding ExtractInterfaceCommand}" InputGesture="Ctrl+Shift+X"/>
+        <MenuItem Header="_Generate Constructor..." Command="{Binding GenerateConstructorCommand}" InputGesture="Ctrl+Shift+G"/>
+        <MenuItem Header="_Implement Interface..." Command="{Binding ImplementInterfaceCommand}" InputGesture="Ctrl+."/>
+        <Separator/>
+        <MenuItem Header="Go to _Line..." Command="{Binding GoToLineCommand}" InputGesture="Ctrl+G"/>
+        <MenuItem Header="Go to _Symbol..." Command="{Binding GoToSymbolCommand}" InputGesture="Ctrl+T"/>
+        <Separator/>
+        <MenuItem Header="_Bookmarks">
+          <MenuItem Header="_Toggle Bookmark" Command="{Binding ToggleBookmarkCommand}" InputGesture="Ctrl+K"/>
+          <MenuItem Header="_Next Bookmark" Command="{Binding NextBookmarkCommand}" InputGesture="F2"/>
+          <MenuItem Header="_Previous Bookmark" Command="{Binding PreviousBookmarkCommand}" InputGesture="Shift+F2"/>
+          <Separator/>
+          <MenuItem Header="_Clear All Bookmarks" Command="{Binding ClearAllBookmarksCommand}"/>
+          <MenuItem Header="_Show Bookmarks Panel" Command="{Binding ShowBookmarksCommand}"/>
+        </MenuItem>
+        <Separator/>
+        <MenuItem Header="Toggle _Comment" Command="{Binding ToggleCommentCommand}" InputGesture="Ctrl+OemQuestion"/>
+        <Separator/>
+        <MenuItem Header="_Line">
+          <MenuItem Header="_Duplicate Line" Command="{Binding DuplicateLineCommand}" InputGesture="Ctrl+D"/>
+          <MenuItem Header="Move Line _Up" Command="{Binding MoveLineUpCommand}" InputGesture="Alt+Up"/>
+          <MenuItem Header="Move Line _Down" Command="{Binding MoveLineDownCommand}" InputGesture="Alt+Down"/>
+          <Separator/>
+          <MenuItem Header="De_lete Line" Command="{Binding DeleteLineCommand}" InputGesture="Ctrl+Shift+K"/>
+        </MenuItem>
+      </MenuItem>
+
+      <MenuItem Header="_View">
+        <MenuItem Header="_Solution Explorer" Command="{Binding ShowSolutionExplorerCommand}"/>
+        <MenuItem Header="_Output" Command="{Binding ShowOutputCommand}"/>
+        <MenuItem Header="_Error List" Command="{Binding ShowErrorListCommand}"/>
+        <MenuItem Header="_Terminal" Command="{Binding ShowTerminalCommand}"/>
+        <MenuItem Header="Find _Results" Command="{Binding ShowFindResultsCommand}"/>
+        <Separator/>
+        <MenuItem Header="_Full Screen" InputGesture="Shift+Alt+Enter"/>
+      </MenuItem>
+
+      <MenuItem Header="_Tools">
+        <MenuItem Header="_Settings..." Command="{Binding SettingsCommand}"/>
+      </MenuItem>
+
+      <MenuItem Header="_Build">
+        <MenuItem Header="_Build Project" Command="{Binding BuildCommand}" InputGesture="Ctrl+Shift+B"/>
+        <MenuItem Header="_Rebuild Project" Command="{Binding RebuildCommand}"/>
+        <MenuItem Header="_Clean Project" Command="{Binding CleanCommand}"/>
+        <Separator/>
+        <MenuItem Header="Cancel Build" Command="{Binding CancelBuildCommand}"/>
+      </MenuItem>
+
+      <MenuItem Header="_Debug">
+        <MenuItem Header="_Start Debugging" Command="{Binding StartDebuggingCommand}" InputGesture="F5"/>
+        <MenuItem Header="Start _Without Debugging" Command="{Binding StartWithoutDebuggingCommand}" InputGesture="Ctrl+F5"/>
+        <MenuItem Header="_Stop Debugging" Command="{Binding StopDebuggingCommand}" InputGesture="Shift+F5"/>
+        <Separator/>
+        <MenuItem Header="_Continue" Command="{Binding ContinueCommand}" InputGesture="F5" IsEnabled="{Binding IsPaused}"/>
+        <MenuItem Header="Step _Over" Command="{Binding StepOverCommand}" InputGesture="F10" IsEnabled="{Binding IsPaused}"/>
+        <MenuItem Header="Step _Into" Command="{Binding StepIntoCommand}" InputGesture="F11" IsEnabled="{Binding IsPaused}"/>
+        <MenuItem Header="Step O_ut" Command="{Binding StepOutCommand}" InputGesture="Shift+F11" IsEnabled="{Binding IsPaused}"/>
+        <MenuItem Header="_Run to Cursor" Command="{Binding RunToCursorCommand}" InputGesture="Ctrl+F10" IsEnabled="{Binding IsPaused}"/>
+        <MenuItem Header="Set _Next Statement" Command="{Binding SetNextStatementCommand}" InputGesture="Ctrl+Shift+F10" IsEnabled="{Binding IsPaused}"/>
+        <MenuItem Header="_Pause" Command="{Binding PauseCommand}" IsEnabled="{Binding IsDebugging}"/>
+        <Separator/>
+        <MenuItem Header="Toggle _Breakpoint" Command="{Binding ToggleBreakpointCommand}" InputGesture="F9"/>
+        <MenuItem Header="New _Function Breakpoint..." Command="{Binding NewFunctionBreakpointCommand}" InputGesture="Ctrl+Shift+F9"/>
+        <MenuItem Header="_Exception Settings..." Command="{Binding ShowExceptionSettingsCommand}" InputGesture="Ctrl+Alt+X"/>
+        <Separator/>
+        <MenuItem Header="_Windows">
+          <MenuItem Header="_Breakpoints" Command="{Binding ShowBreakpointsCommand}" InputGesture="Ctrl+Alt+B"/>
+          <MenuItem Header="_Call Stack" Command="{Binding ShowCallStackCommand}" InputGesture="Ctrl+Alt+C"/>
+          <MenuItem Header="_Variables" Command="{Binding ShowVariablesCommand}" InputGesture="Ctrl+Alt+V"/>
+          <MenuItem Header="_Watch" Command="{Binding ShowWatchCommand}" InputGesture="Ctrl+Alt+W"/>
+          <MenuItem Header="_Immediate" Command="{Binding ShowImmediateWindowCommand}" InputGesture="Ctrl+Alt+I"/>
+        </MenuItem>
+      </MenuItem>
+
+      <MenuItem Header="_Help">
+        <MenuItem Header="_About Visual Game Studio"/>
+      </MenuItem>
+    </Menu>
+
+    <!-- Toolbar -->
+    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="4" BorderThickness="0,0,0,1" BorderBrush="#3C3C3C">
+      <StackPanel Orientation="Horizontal" Spacing="4">
+        <Button Classes="toolbarButton" Command="{Binding NewProjectCommand}" ToolTip.Tip="New Project">
+          <TextBlock Text="New" FontSize="12"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding OpenProjectCommand}" ToolTip.Tip="Open Project">
+          <TextBlock Text="Open" FontSize="12"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding SaveCommand}" ToolTip.Tip="Save">
+          <TextBlock Text="Save" FontSize="12"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding SaveAllCommand}" ToolTip.Tip="Save All">
+          <TextBlock Text="Save All" FontSize="12"/>
+        </Button>
+
+        <Border Width="1" Background="#3C3C3C" Margin="4,2"/>
+
+        <ComboBox ItemsSource="{Binding Configurations}"
+                  SelectedItem="{Binding CurrentConfiguration}"
+                  MinWidth="100"
+                  Margin="4,0"/>
+
+        <Button Classes="toolbarButton" Command="{Binding BuildCommand}" ToolTip.Tip="Build">
+          <TextBlock Text="Build" FontSize="12"/>
+        </Button>
+
+        <Border Width="1" Background="#3C3C3C" Margin="4,2"/>
+
+        <!-- Debug Toolbar -->
+        <Button Classes="toolbarButton" Command="{Binding StartDebuggingCommand}" ToolTip.Tip="Start Debugging (F5)" IsVisible="{Binding !IsDebugging}">
+          <TextBlock Text="▶ Start" FontSize="12" Foreground="#89D185"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding ContinueCommand}" ToolTip.Tip="Continue (F5)" IsVisible="{Binding IsPaused}">
+          <TextBlock Text="▶ Continue" FontSize="12" Foreground="#89D185"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding PauseCommand}" ToolTip.Tip="Pause" IsVisible="{Binding IsDebugging}" IsEnabled="{Binding !IsPaused}">
+          <TextBlock Text="⏸" FontSize="12" Foreground="#DCDCAA"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding StopDebuggingCommand}" ToolTip.Tip="Stop Debugging (Shift+F5)" IsVisible="{Binding IsDebugging}">
+          <TextBlock Text="■" FontSize="12" Foreground="#E51400"/>
+        </Button>
+
+        <Border Width="1" Background="#3C3C3C" Margin="4,2" IsVisible="{Binding IsDebugging}"/>
+
+        <Button Classes="toolbarButton" Command="{Binding StepOverCommand}" ToolTip.Tip="Step Over (F10)" IsVisible="{Binding IsPaused}">
+          <TextBlock Text="⤵" FontSize="14"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding StepIntoCommand}" ToolTip.Tip="Step Into (F11)" IsVisible="{Binding IsPaused}">
+          <TextBlock Text="↓" FontSize="14"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding StepOutCommand}" ToolTip.Tip="Step Out (Shift+F11)" IsVisible="{Binding IsPaused}">
+          <TextBlock Text="↑" FontSize="14"/>
+        </Button>
+
+        <!-- Debug Status -->
+        <TextBlock Text="{Binding DebugStatusText}" Foreground="#DCDCAA" VerticalAlignment="Center" Margin="8,0" IsVisible="{Binding IsDebugging}"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Status Bar -->
+    <Border DockPanel.Dock="Bottom" Classes="statusBar">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+        <TextBlock Grid.Column="0"
+                   Text="{Binding StatusText}"
+                   VerticalAlignment="Center"
+                   Margin="8,0"
+                   Foreground="White"/>
+
+        <TextBlock Grid.Column="1"
+                   Text="{Binding CurrentConfiguration}"
+                   VerticalAlignment="Center"
+                   Margin="8,0"
+                   Foreground="White"/>
+
+        <TextBlock Grid.Column="2"
+                   VerticalAlignment="Center"
+                   Margin="8,0"
+                   Foreground="White">
+          <TextBlock.Text>
+            <MultiBinding StringFormat="Ln {0}, Col {1}">
+              <Binding Path="CaretLine"/>
+              <Binding Path="CaretColumn"/>
+            </MultiBinding>
+          </TextBlock.Text>
+        </TextBlock>
+
+        <TextBlock Grid.Column="3"
+                   Text="UTF-8"
+                   VerticalAlignment="Center"
+                   Margin="8,0"
+                   Foreground="White"/>
+      </Grid>
+    </Border>
+
+    <!-- Main Content - Dock Control -->
+    <dock:DockControl Layout="{Binding Layout}"/>
+
+  </DockPanel>
+</Window>

@@ -1,0 +1,145 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="450"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.IntroduceVariableDialog"
+        x:DataType="vm:IntroduceVariableDialogViewModel"
+        Title="Introduce Variable"
+        Width="500" Height="450"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Introduce Variable" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Text="Extract expression into a new variable"
+                 Foreground="#808080" Margin="0,4,0,0"/>
+    </StackPanel>
+
+    <!-- Selected Expression -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Selected expression:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="60">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding SelectedExpression}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#CE9178"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Variable Configuration -->
+    <Grid DockPanel.Dock="Top" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="Auto,*" Margin="0,0,0,16">
+      <!-- Variable Name -->
+      <TextBlock Grid.Row="0" Grid.Column="0"
+                 Text="Variable name:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <TextBox Grid.Row="0" Grid.Column="1"
+               Text="{Binding VariableName}"
+               Watermark="Enter variable name..."
+               x:Name="VariableNameTextBox"
+               Margin="0,0,0,8"/>
+
+      <!-- Type Selection -->
+      <TextBlock Grid.Row="1" Grid.Column="0"
+                 Text="Type:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4" Margin="0,0,0,8">
+        <RadioButton IsChecked="{Binding UseInferredType}"
+                     IsEnabled="{Binding InferredType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     Foreground="#CCCCCC">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="Inferred:"/>
+            <TextBlock Text="{Binding InferredType, TargetNullValue='(cannot infer)'}"
+                       Foreground="{Binding InferredType, Converter={x:Static StringConverters.IsNotNullOrEmpty}, ConverterParameter=#569CD6|#808080}"/>
+          </StackPanel>
+        </RadioButton>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <RadioButton IsChecked="{Binding !UseInferredType}"
+                       Content="Custom:"
+                       Foreground="#CCCCCC"/>
+          <ComboBox ItemsSource="{Binding CommonTypes}"
+                    SelectedItem="{Binding CustomType}"
+                    IsEnabled="{Binding !UseInferredType}"
+                    MinWidth="120"/>
+        </StackPanel>
+      </StackPanel>
+
+      <!-- Replace All -->
+      <CheckBox Grid.Row="2" Grid.Column="1"
+                IsChecked="{Binding ReplaceAllOccurrences}"
+                Content="Replace all occurrences in current method"
+                Foreground="#CCCCCC"
+                Margin="0,0,0,8"/>
+
+      <!-- Error Message -->
+      <TextBlock Grid.Row="3" Grid.Column="1"
+                 Text="{Binding ErrorMessage}"
+                 Foreground="#F48771"
+                 FontSize="11"
+                 IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+    </Grid>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Declaration preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16">
+      <TextBlock Text="{Binding PreviewDeclaration}"
+                 FontFamily="Consolas, Courier New, monospace"
+                 FontSize="12"
+                 Foreground="#DCDCAA"
+                 Padding="8"/>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Introducing variable..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Introduce"
+              Command="{Binding IntroduceCommand}"
+              Width="80"
+              Classes="accent"
+              IsEnabled="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

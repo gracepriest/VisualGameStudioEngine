@@ -1,0 +1,23 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="100" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Editor.Controls.MinimapControl"
+             Background="#1E1E1E"
+             Width="100">
+
+  <Grid>
+    <!-- Code Preview Canvas -->
+    <Canvas x:Name="CodeCanvas"/>
+
+    <!-- Viewport Indicator -->
+    <Border x:Name="ViewportIndicator"
+            Background="#40FFFFFF"
+            BorderBrush="#808080"
+            BorderThickness="1"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Top"
+            IsHitTestVisible="False"/>
+  </Grid>
+</UserControl>

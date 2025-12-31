@@ -1,0 +1,54 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="200"
+             x:Class="VisualGameStudio.Shell.Views.Panels.ErrorListView"
+             x:DataType="vm:ErrorListViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <DockPanel>
+          <TextBlock Text="Error List" Classes="panelTitle" DockPanel.Dock="Left"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <CheckBox IsChecked="{Binding ShowErrors}" Content="Errors" FontSize="11"/>
+            <TextBlock Text="{Binding ErrorCount}" VerticalAlignment="Center" Foreground="#F14C4C"/>
+
+            <CheckBox IsChecked="{Binding ShowWarnings}" Content="Warnings" FontSize="11"/>
+            <TextBlock Text="{Binding WarningCount}" VerticalAlignment="Center" Foreground="#CCA700"/>
+
+            <CheckBox IsChecked="{Binding ShowMessages}" Content="Messages" FontSize="11"/>
+            <TextBlock Text="{Binding MessageCount}" VerticalAlignment="Center" Foreground="#3794FF"/>
+          </StackPanel>
+        </DockPanel>
+      </Border>
+
+      <DataGrid x:Name="ErrorDataGrid"
+                ItemsSource="{Binding Diagnostics}"
+                SelectedItem="{Binding SelectedDiagnostic}"
+                AutoGenerateColumns="False"
+                IsReadOnly="True"
+                CanUserResizeColumns="True"
+                CanUserReorderColumns="True"
+                CanUserSortColumns="True"
+                GridLinesVisibility="Horizontal"
+                BorderThickness="0"
+                Background="#1E1E1E"
+                MinHeight="100">
+
+        <DataGrid.Columns>
+          <DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="80"/>
+          <DataGridTextColumn Header="Code" Binding="{Binding Id}" Width="80"/>
+          <DataGridTextColumn Header="Description" Binding="{Binding Message}" Width="*"/>
+          <DataGridTextColumn Header="File" Binding="{Binding FilePath}" Width="150"/>
+          <DataGridTextColumn Header="Line" Binding="{Binding Line}" Width="60"/>
+          <DataGridTextColumn Header="Column" Binding="{Binding Column}" Width="60"/>
+        </DataGrid.Columns>
+
+      </DataGrid>
+    </DockPanel>
+  </Border>
+
+</UserControl>

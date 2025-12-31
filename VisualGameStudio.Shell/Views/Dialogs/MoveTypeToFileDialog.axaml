@@ -1,0 +1,136 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="550" d:DesignHeight="550"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.MoveTypeToFileDialog"
+        x:DataType="vm:MoveTypeToFileDialogViewModel"
+        Title="Move Type to File"
+        Width="550" Height="550"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Move Type to File" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Move {0} '{1}' to a new file">
+            <Binding Path="TypeKind"/>
+            <Binding Path="TypeName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Type Info -->
+    <Grid DockPanel.Dock="Top" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,16">
+      <!-- New File Name -->
+      <TextBlock Grid.Row="0" Grid.Column="0"
+                 Text="New file name:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2"
+               Text="{Binding NewFileName}"
+               Watermark="Enter file name..."
+               x:Name="FileNameTextBox"
+               Margin="0,0,0,8"/>
+
+      <!-- Target Directory -->
+      <TextBlock Grid.Row="1" Grid.Column="0"
+                 Text="Target directory:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <TextBox Grid.Row="1" Grid.Column="1"
+               Text="{Binding TargetDirectory}"
+               Watermark="Enter target directory..."
+               Margin="0,0,8,8"/>
+      <Button Grid.Row="1" Grid.Column="2"
+              Content="..."
+              Click="OnBrowseDirectory"
+              Width="30"
+              Margin="0,0,0,8"/>
+
+      <!-- Options -->
+      <TextBlock Grid.Row="2" Grid.Column="0"
+                 Text="Options:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Top"
+                 Margin="0,4,12,8"/>
+      <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,8">
+        <CheckBox IsChecked="{Binding IncludeImports}"
+                  Content="Include imports/using statements"
+                  Foreground="#CCCCCC"
+                  Margin="0,0,0,4"/>
+        <CheckBox IsChecked="{Binding RemoveFromOriginalFile}"
+                  Content="Remove type from original file"
+                  Foreground="#CCCCCC"
+                  Margin="0,0,0,4"/>
+        <CheckBox IsChecked="{Binding AddToProject}"
+                  Content="Add new file to project"
+                  Foreground="#CCCCCC"/>
+      </StackPanel>
+    </Grid>
+
+    <!-- Validation Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ValidationMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="220">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding Preview}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#DCDCAA"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Processing..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Move"
+              Command="{Binding MoveTypeCommand}"
+              Width="100"
+              Classes="accent"
+              IsEnabled="{Binding IsValid}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

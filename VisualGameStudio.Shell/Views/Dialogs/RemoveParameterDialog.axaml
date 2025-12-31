@@ -1,0 +1,185 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="550"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.RemoveParameterDialog"
+        x:DataType="vm:RemoveParameterDialogViewModel"
+        Title="Remove Parameter"
+        Width="500" Height="550"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Remove Parameter" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Select parameters to remove from '{0}'">
+            <Binding Path="MethodName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+      <TextBlock Foreground="#569CD6" FontSize="11" Margin="0,4,0,0"
+                 IsVisible="{Binding ContainingType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="In: {0}">
+            <Binding Path="ContainingType"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Current Signature -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Current signature:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="8"
+            Margin="0,0,0,12">
+      <TextBlock Text="{Binding CurrentSignature}"
+                 FontFamily="Consolas"
+                 FontSize="12"
+                 Foreground="#DCDCAA"
+                 TextWrapping="Wrap"/>
+    </Border>
+
+    <!-- Parameters List -->
+    <Grid DockPanel.Dock="Top" RowDefinitions="Auto,*" Margin="0,0,0,12">
+      <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+        <TextBlock Text="Parameters:"
+                   Foreground="#808080"
+                   FontSize="11"
+                   VerticalAlignment="Center"/>
+        <Button Content="Select All"
+                Command="{Binding SelectAllCommand}"
+                Margin="16,0,8,0"
+                Padding="8,2"
+                FontSize="11"/>
+        <Button Content="Select None"
+                Command="{Binding SelectNoneCommand}"
+                Padding="8,2"
+                FontSize="11"/>
+      </StackPanel>
+
+      <Border Grid.Row="1"
+              Background="#252526"
+              BorderBrush="#3C3C3C"
+              BorderThickness="1"
+              CornerRadius="4"
+              Height="150">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding Parameters}" Margin="8">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="vm:RemovableParameterViewModel">
+                <CheckBox IsChecked="{Binding IsSelected}"
+                          Margin="0,4">
+                  <CheckBox.Content>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="{Binding Index, StringFormat='[{0}]'}"
+                                 FontFamily="Consolas"
+                                 FontSize="11"
+                                 Foreground="#808080"
+                                 VerticalAlignment="Center"/>
+                      <TextBlock Text="{Binding DisplayText}"
+                                 FontFamily="Consolas"
+                                 FontSize="12"
+                                 Foreground="#9CDCFE"
+                                 VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </CheckBox.Content>
+                </CheckBox>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+
+    <!-- Call Sites Option -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+      <CheckBox IsChecked="{Binding UpdateCallSites}"
+                Foreground="#CCCCCC">
+        <CheckBox.Content>
+          <TextBlock>
+            <TextBlock.Text>
+              <MultiBinding StringFormat="Update {0} call site(s)">
+                <Binding Path="CallSiteCount"/>
+              </MultiBinding>
+            </TextBlock.Text>
+          </TextBlock>
+        </CheckBox.Content>
+      </CheckBox>
+      <TextBlock Text="Arguments at selected positions will be removed from all call sites."
+                 Foreground="#808080"
+                 FontSize="11"
+                 Margin="24,4,0,0"
+                 IsVisible="{Binding UpdateCallSites}"/>
+    </StackPanel>
+
+    <!-- Error Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="80">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding Preview}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#DCDCAA"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Processing..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Remove"
+              Command="{Binding RemoveParametersCommand}"
+              Width="100"
+              Classes="accent"
+              IsEnabled="{Binding HasParametersSelected}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

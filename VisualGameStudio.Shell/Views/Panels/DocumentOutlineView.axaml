@@ -1,0 +1,60 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="250" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.DocumentOutlineView"
+             x:DataType="vm:DocumentOutlineViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="Outline" Classes="panelTitle"/>
+            <TextBlock Text="{Binding CurrentFile}"
+                       Foreground="#808080"
+                       FontSize="11"
+                       VerticalAlignment="Center"/>
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+            <ToggleButton IsChecked="{Binding SortAlphabetically}"
+                          ToolTip.Tip="Sort Alphabetically"
+                          Width="24" Height="24"
+                          Classes="toolbarButton">
+              <TextBlock Text="AZ" FontSize="10" FontWeight="Bold"/>
+            </ToggleButton>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <TreeView ItemsSource="{Binding Nodes}"
+                SelectedItem="{Binding SelectedNode}"
+                Background="Transparent"
+                DoubleTapped="OnTreeViewDoubleTapped">
+        <TreeView.ItemTemplate>
+          <TreeDataTemplate ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="{Binding Icon}"
+                         FontSize="12"
+                         VerticalAlignment="Center"/>
+              <TextBlock Text="{Binding Name}"
+                         Foreground="#CCCCCC"
+                         VerticalAlignment="Center"/>
+              <TextBlock Text="{Binding Line, StringFormat=': {0}'}"
+                         Foreground="#606060"
+                         FontSize="10"
+                         VerticalAlignment="Center"/>
+            </StackPanel>
+          </TreeDataTemplate>
+        </TreeView.ItemTemplate>
+        <TreeView.Styles>
+          <Style Selector="TreeViewItem">
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+          </Style>
+        </TreeView.Styles>
+      </TreeView>
+    </DockPanel>
+  </Border>
+</UserControl>

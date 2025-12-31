@@ -1,0 +1,23 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:avalonEdit="https://github.com/avaloniaui/avaloniaedit"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="VisualGameStudio.Editor.Controls.CodeEditorControl"
+             HorizontalAlignment="Stretch"
+             VerticalAlignment="Stretch">
+
+  <avalonEdit:TextEditor x:Name="TextEditor"
+                         FontFamily="Cascadia Code, Consolas, Courier New, monospace"
+                         FontSize="14"
+                         ShowLineNumbers="True"
+                         WordWrap="False"
+                         HorizontalScrollBarVisibility="Auto"
+                         VerticalScrollBarVisibility="Auto"
+                         MinWidth="100"
+                         MinHeight="100"
+                         Background="#1E1E1E"
+                         Foreground="#D4D4D4" />
+
+</UserControl>

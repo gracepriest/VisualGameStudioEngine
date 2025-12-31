@@ -1,0 +1,109 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:dlg="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+             mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="300"
+             x:Class="VisualGameStudio.Shell.Views.Panels.FindInFilesView"
+             x:DataType="vm:FindInFilesViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <TextBlock Classes="panelTitle" Text="Find in Files"/>
+      </Border>
+
+      <!-- Search Controls -->
+      <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="8">
+        <StackPanel Spacing="8">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox x:Name="SearchTextBox"
+                     Grid.Column="0"
+                     Text="{Binding SearchText}"
+                     Watermark="Search..."
+                     Margin="0,0,4,0"
+                     KeyDown="OnSearchKeyDown"/>
+            <Button Grid.Column="1"
+                    Classes="toolbarButton"
+                    Command="{Binding SearchCommand}"
+                    IsEnabled="{Binding !IsSearching}"
+                    Width="60">
+              <TextBlock Text="Search" FontSize="12"/>
+            </Button>
+          </Grid>
+
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0"
+                     Text="{Binding ReplaceText}"
+                     Watermark="Replace with..."
+                     Margin="0,0,4,0"/>
+            <Button Grid.Column="1"
+                    Classes="toolbarButton"
+                    Command="{Binding ReplaceAllCommand}"
+                    IsEnabled="{Binding !IsSearching}"
+                    Width="60">
+              <TextBlock Text="Replace" FontSize="12"/>
+            </Button>
+          </Grid>
+
+          <Grid ColumnDefinitions="Auto,*">
+            <TextBlock Grid.Column="0" Text="Files:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <TextBox Grid.Column="1" Text="{Binding FileFilter}" Watermark="*.bas;*.bl"/>
+          </Grid>
+
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <CheckBox Content="Match case" IsChecked="{Binding MatchCase}"/>
+            <CheckBox Content="Whole word" IsChecked="{Binding MatchWholeWord}"/>
+            <CheckBox Content="Regex" IsChecked="{Binding UseRegex}"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- Status -->
+      <Border DockPanel.Dock="Bottom" Background="#1E1E1E" Padding="8,4">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0"
+                     Text="{Binding StatusText}"
+                     Foreground="#808080"
+                     FontSize="11"/>
+          <Button Grid.Column="1"
+                  Classes="toolbarButton"
+                  Command="{Binding CancelSearchCommand}"
+                  IsVisible="{Binding IsSearching}"
+                  Width="50">
+            <TextBlock Text="Cancel" FontSize="11"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Results -->
+      <TreeView ItemsSource="{Binding ResultGroups}"
+                SelectedItem="{Binding SelectedResult}"
+                DoubleTapped="OnResultDoubleTapped"
+                Background="Transparent">
+        <TreeView.ItemTemplate>
+          <TreeDataTemplate ItemsSource="{Binding Results}">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="{Binding FileName}" Foreground="#DCDCAA" Margin="0,0,8,0"/>
+              <TextBlock Text="{Binding MatchCount, StringFormat='({0} matches)'}" Foreground="#808080"/>
+            </StackPanel>
+          </TreeDataTemplate>
+        </TreeView.ItemTemplate>
+        <TreeView.Styles>
+          <Style Selector="TreeViewItem">
+            <Setter Property="IsExpanded" Value="True"/>
+          </Style>
+        </TreeView.Styles>
+        <TreeView.DataTemplates>
+          <DataTemplate DataType="dlg:FindResult">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="{Binding Line, StringFormat='Line {0}: '}" Foreground="#569CD6" FontSize="11"/>
+              <TextBlock Text="{Binding PreviewText}" FontFamily="Cascadia Code, Consolas, monospace" FontSize="11"/>
+            </StackPanel>
+          </DataTemplate>
+        </TreeView.DataTemplates>
+      </TreeView>
+    </DockPanel>
+  </Border>
+</UserControl>

@@ -1,0 +1,108 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.DiffViewerView"
+        x:DataType="vm:DiffViewerViewModel"
+        Title="{Binding FilePath, StringFormat='Diff: {0}'}"
+        Width="900" Height="600"
+        WindowStartupLocation="CenterOwner"
+        Background="#1E1E1E">
+
+  <Window.Styles>
+    <Style Selector="TextBlock.diffLine">
+      <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="Border.lineNumber">
+      <Setter Property="Width" Value="45"/>
+      <Setter Property="Padding" Value="4,0"/>
+    </Style>
+  </Window.Styles>
+
+  <DockPanel>
+    <!-- Header -->
+    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12,8">
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Orientation="Horizontal" Spacing="16">
+          <TextBlock Text="{Binding FilePath}" Foreground="#CCCCCC" VerticalAlignment="Center"/>
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Foreground="#4EC9B0" VerticalAlignment="Center">
+              <Run Text="+"/>
+              <Run Text="{Binding AddedLines}"/>
+            </TextBlock>
+            <TextBlock Foreground="#F48771" VerticalAlignment="Center">
+              <Run Text="-"/>
+              <Run Text="{Binding RemovedLines}"/>
+            </TextBlock>
+          </StackPanel>
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+          <ToggleButton IsChecked="{Binding SideBySide}"
+                        ToolTip.Tip="Side by Side View"
+                        Width="28" Height="28"
+                        Classes="toolbarButton">
+            <TextBlock Text="|||" FontSize="10" FontWeight="Bold" Foreground="#CCCCCC"/>
+          </ToggleButton>
+          <Button Content="Close" Command="{Binding $parent[Window].Close}" Width="70"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Column Headers -->
+    <Border DockPanel.Dock="Top" Background="#252526" Padding="0,4"
+            IsVisible="{Binding SideBySide}">
+      <Grid ColumnDefinitions="*,*">
+        <TextBlock Grid.Column="0" Text="{Binding LeftTitle}"
+                   Foreground="#808080" FontSize="11" Margin="50,0,0,0"/>
+        <TextBlock Grid.Column="1" Text="{Binding RightTitle}"
+                   Foreground="#808080" FontSize="11" Margin="50,0,0,0"/>
+      </Grid>
+    </Border>
+
+    <!-- Diff Content -->
+    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+      <!-- Side by Side View -->
+      <ItemsControl ItemsSource="{Binding DiffLines}" IsVisible="{Binding SideBySide}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="*,*" Background="{Binding BackgroundColor}">
+              <!-- Left Side -->
+              <Border Grid.Column="0" BorderBrush="#3C3C3C" BorderThickness="0,0,1,0"
+                      Background="{Binding LeftBackground}">
+                <Grid ColumnDefinitions="45,*">
+                  <Border Grid.Column="0" Background="#252526" Padding="4,0">
+                    <TextBlock Text="{Binding LeftLineNumberText}"
+                               Foreground="#606060"
+                               HorizontalAlignment="Right"
+                               Classes="diffLine"/>
+                  </Border>
+                  <TextBlock Grid.Column="1" Text="{Binding LeftContent}"
+                             Foreground="#D4D4D4" Margin="8,0"
+                             Classes="diffLine"/>
+                </Grid>
+              </Border>
+
+              <!-- Right Side -->
+              <Border Grid.Column="1" Background="{Binding RightBackground}">
+                <Grid ColumnDefinitions="45,*">
+                  <Border Grid.Column="0" Background="#252526" Padding="4,0">
+                    <TextBlock Text="{Binding RightLineNumberText}"
+                               Foreground="#606060"
+                               HorizontalAlignment="Right"
+                               Classes="diffLine"/>
+                  </Border>
+                  <TextBlock Grid.Column="1" Text="{Binding RightContent}"
+                             Foreground="#D4D4D4" Margin="8,0"
+                             Classes="diffLine"/>
+                </Grid>
+              </Border>
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

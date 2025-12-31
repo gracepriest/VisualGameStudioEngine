@@ -1,0 +1,146 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.GitBlameView"
+             x:DataType="vm:GitBlameViewModel"
+             Background="#1E1E1E">
+
+  <DockPanel>
+    <!-- Header -->
+    <Border DockPanel.Dock="Top" Background="#252526" Padding="8,4">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Column="0"
+                   Text="Git Blame"
+                   Foreground="#CCCCCC"
+                   FontWeight="SemiBold"
+                   VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="1"
+                   Text="{Binding FileName, StringFormat='- {0}'}"
+                   Foreground="#808080"
+                   Margin="8,0,0,0"
+                   VerticalAlignment="Center"
+                   IsVisible="{Binding FileName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <Button Grid.Column="2"
+                Command="{Binding RefreshCommand}"
+                ToolTip.Tip="Refresh"
+                Background="Transparent"
+                Padding="4">
+          <TextBlock Text="↻" FontSize="14"/>
+        </Button>
+      </Grid>
+    </Border>
+
+    <!-- Loading -->
+    <Border DockPanel.Dock="Top"
+            Background="#1E1E1E"
+            Padding="16"
+            IsVisible="{Binding IsLoading}">
+      <StackPanel HorizontalAlignment="Center" Spacing="8">
+        <TextBlock Text="Loading blame information..."
+                   Foreground="#808080"
+                   FontSize="12"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Error Message -->
+    <Border DockPanel.Dock="Top"
+            Background="#1E1E1E"
+            Padding="16"
+            IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <StackPanel HorizontalAlignment="Center" Spacing="8">
+        <TextBlock Text="⚠" FontSize="24" HorizontalAlignment="Center" Foreground="#F48771"/>
+        <TextBlock Text="{Binding ErrorMessage}"
+                   Foreground="#F48771"
+                   FontSize="12"
+                   TextWrapping="Wrap"
+                   HorizontalAlignment="Center"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Empty State -->
+    <Border DockPanel.Dock="Top"
+            Background="#1E1E1E"
+            Padding="16"
+            IsVisible="{Binding !HasBlameData}">
+      <StackPanel HorizontalAlignment="Center" Spacing="8"
+                  IsVisible="{Binding !IsLoading}">
+        <TextBlock Text="📋" FontSize="32" HorizontalAlignment="Center"/>
+        <TextBlock Text="No file selected"
+                   Foreground="#808080"
+                   FontSize="12"
+                   HorizontalAlignment="Center"
+                   IsVisible="{Binding !CurrentFilePath, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
+        <TextBlock Text="Open a file to view blame information"
+                   Foreground="#606060"
+                   FontSize="11"
+                   HorizontalAlignment="Center"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Blame Content -->
+    <ScrollViewer IsVisible="{Binding HasBlameData}">
+      <ItemsControl ItemsSource="{Binding BlameLines}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border Padding="0"
+                    Background="{Binding IsAlternate, Converter={StaticResource BoolToAlternateBrush}}">
+              <Grid ColumnDefinitions="50,80,100,80,*">
+                <!-- Line Number -->
+                <Border Grid.Column="0"
+                        Background="#252526"
+                        Padding="4,2">
+                  <TextBlock Text="{Binding LineNumber}"
+                             Foreground="#858585"
+                             FontFamily="Consolas"
+                             FontSize="12"
+                             HorizontalAlignment="Right"/>
+                </Border>
+
+                <!-- Commit Hash -->
+                <Border Grid.Column="1"
+                        Padding="4,2"
+                        ToolTip.Tip="{Binding ToolTipText}">
+                  <TextBlock Text="{Binding ShortHash}"
+                             Foreground="#569CD6"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             IsVisible="{Binding IsFirstInGroup}"/>
+                </Border>
+
+                <!-- Author -->
+                <Border Grid.Column="2" Padding="4,2">
+                  <TextBlock Text="{Binding AuthorShort}"
+                             Foreground="#DCDCAA"
+                             FontSize="11"
+                             TextTrimming="CharacterEllipsis"
+                             IsVisible="{Binding IsFirstInGroup}"/>
+                </Border>
+
+                <!-- Date -->
+                <Border Grid.Column="3" Padding="4,2">
+                  <TextBlock Text="{Binding DateFormatted}"
+                             Foreground="#808080"
+                             FontSize="11"
+                             IsVisible="{Binding IsFirstInGroup}"/>
+                </Border>
+
+                <!-- Line Content -->
+                <Border Grid.Column="4"
+                        Padding="8,2"
+                        Background="#1E1E1E">
+                  <TextBlock Text="{Binding LineContent}"
+                             Foreground="#D4D4D4"
+                             FontFamily="Consolas"
+                             FontSize="12"/>
+                </Border>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </DockPanel>
+</UserControl>

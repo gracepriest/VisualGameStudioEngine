@@ -1,0 +1,38 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="200"
+             x:Class="VisualGameStudio.Shell.Views.Panels.CallStackView"
+             x:DataType="vm:CallStackViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Classes="panelTitle" Text="Call Stack"/>
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RefreshStackTraceCommand}" ToolTip.Tip="Refresh">
+            <TextBlock Text="↻" FontSize="14"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <ListBox ItemsSource="{Binding StackFrames}"
+               SelectedItem="{Binding SelectedFrame}"
+               Background="Transparent"
+               Padding="4">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding DisplayText}"
+                       Foreground="#CCCCCC"
+                       FontFamily="Cascadia Code, Consolas, monospace"
+                       FontSize="12"
+                       Padding="4,2"/>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </DockPanel>
+  </Border>
+
+</UserControl>

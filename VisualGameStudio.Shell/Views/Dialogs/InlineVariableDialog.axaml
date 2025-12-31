@@ -1,0 +1,165 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="450"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.InlineVariableDialog"
+        x:DataType="vm:InlineVariableDialogViewModel"
+        Title="Inline Variable"
+        Width="500" Height="450"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Inline Variable" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Replace usages of '{0}' with its initializer expression">
+            <Binding Path="VariableName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Variable Info -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" Margin="0,0,0,16">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Variable:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding VariableName}" FontFamily="Consolas" Foreground="#9CDCFE" Margin="0,0,0,4"/>
+
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Type:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding VariableType, TargetNullValue='(inferred)'}" FontFamily="Consolas" Foreground="#4EC9B0" Margin="0,0,0,4"/>
+
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Scope:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ContainingMethod, TargetNullValue='(class level)'}" FontFamily="Consolas" Foreground="#DCDCAA" Margin="0,0,0,4"/>
+
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="Usages:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="3" Grid.Column="1" Foreground="#CCCCCC" Margin="0,0,0,4">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="{}{0} usage(s)">
+            <Binding Path="UsageCount"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </Grid>
+
+    <!-- Declaration -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Declaration:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="8"
+            Margin="0,0,0,12">
+      <TextBlock Text="{Binding DeclarationText}"
+                 FontFamily="Consolas"
+                 FontSize="12"
+                 Foreground="#CE9178"
+                 TextWrapping="Wrap"/>
+    </Border>
+
+    <!-- Expression to inline -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Expression to inline:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="8"
+            Margin="0,0,0,12">
+      <TextBlock Text="{Binding InitializerExpression}"
+                 FontFamily="Consolas"
+                 FontSize="12"
+                 Foreground="#B5CEA8"
+                 TextWrapping="Wrap"/>
+    </Border>
+
+    <!-- Options -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+      <CheckBox IsChecked="{Binding RemoveDeclaration}"
+                Content="Remove variable declaration after inlining"
+                Foreground="#CCCCCC"
+                Margin="0,0,0,4"/>
+      <CheckBox IsChecked="{Binding AddParenthesesIfNeeded}"
+                Content="Add parentheses around expression if needed"
+                Foreground="#CCCCCC"/>
+    </StackPanel>
+
+    <!-- Warning Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding WarningMessage}"
+               Foreground="#CCA700"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding WarningMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Error Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="60">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding Preview}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#4EC9B0"
+                   Padding="8"
+                   TextWrapping="Wrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Processing..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Inline"
+              Command="{Binding InlineCommand}"
+              Width="100"
+              Classes="accent"
+              IsEnabled="{Binding CanInline}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

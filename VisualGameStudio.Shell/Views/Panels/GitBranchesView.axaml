@@ -1,0 +1,140 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.GitBranchesView"
+             x:DataType="vm:GitBranchesViewModel"
+             Background="#1E1E1E">
+
+  <DockPanel>
+    <!-- Toolbar -->
+    <Border DockPanel.Dock="Top" Background="#252526" Padding="4">
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+          <Button Command="{Binding RefreshCommand}"
+                  ToolTip.Tip="Refresh"
+                  Background="Transparent"
+                  Padding="4">
+            <TextBlock Text="↻" FontSize="14"/>
+          </Button>
+          <Button Command="{Binding FetchCommand}"
+                  ToolTip.Tip="Fetch from Remote"
+                  Background="Transparent"
+                  Padding="4">
+            <TextBlock Text="⬇" FontSize="14"/>
+          </Button>
+        </StackPanel>
+        <CheckBox Grid.Column="1"
+                  IsChecked="{Binding ShowRemoteBranches}"
+                  Content="Remote"
+                  Foreground="#CCCCCC"
+                  FontSize="11"
+                  VerticalAlignment="Center"/>
+      </Grid>
+    </Border>
+
+    <!-- Create Branch -->
+    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="8,4">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBox Grid.Column="0"
+                 Text="{Binding NewBranchName}"
+                 Watermark="New branch name..."
+                 FontSize="12"/>
+        <Button Grid.Column="1"
+                Command="{Binding CreateBranchCommand}"
+                Content="+"
+                ToolTip.Tip="Create Branch"
+                Margin="4,0,0,0"
+                Width="28"/>
+      </Grid>
+    </Border>
+
+    <!-- Loading -->
+    <Border DockPanel.Dock="Top"
+            Background="#1E1E1E"
+            Padding="8"
+            IsVisible="{Binding IsLoading}">
+      <TextBlock Text="Loading branches..."
+                 Foreground="#808080"
+                 FontSize="11"/>
+    </Border>
+
+    <!-- Branch List -->
+    <ListBox ItemsSource="{Binding Branches}"
+             SelectedItem="{Binding SelectedBranch}"
+             Background="Transparent"
+             BorderThickness="0">
+      <ListBox.ItemTemplate>
+        <DataTemplate>
+          <Border Padding="4,2"
+                  Background="Transparent"
+                  PointerPressed="OnBranchPointerPressed">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <!-- Branch Icon -->
+              <Border Grid.Column="0"
+                      Width="18" Height="18"
+                      CornerRadius="2"
+                      Margin="0,0,8,0"
+                      Background="{Binding IsCurrentBranch, Converter={StaticResource BoolToCurrentBranchBrush}}">
+                <TextBlock Text="{Binding Icon}"
+                           Foreground="White"
+                           FontSize="10"
+                           FontWeight="Bold"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"/>
+              </Border>
+
+              <!-- Branch Name -->
+              <StackPanel Grid.Column="1" Orientation="Vertical">
+                <TextBlock Text="{Binding Name}"
+                           Foreground="{Binding IsCurrentBranch, Converter={StaticResource BoolToCurrentBranchForeground}}"
+                           FontWeight="{Binding IsCurrentBranch, Converter={StaticResource BoolToCurrentBranchWeight}}"
+                           FontSize="12"/>
+                <TextBlock Text="{Binding TrackingBranch}"
+                           Foreground="#606060"
+                           FontSize="10"
+                           IsVisible="{Binding TrackingBranch, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+              </StackPanel>
+
+              <!-- Ahead/Behind Status -->
+              <StackPanel Grid.Column="2"
+                          Orientation="Horizontal"
+                          Spacing="4"
+                          VerticalAlignment="Center"
+                          IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <Border Background="#3C3C3C"
+                        CornerRadius="2"
+                        Padding="4,1">
+                  <TextBlock Text="{Binding StatusText}"
+                             Foreground="#808080"
+                             FontSize="10"/>
+                </Border>
+              </StackPanel>
+            </Grid>
+
+            <Border.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="Checkout"
+                          Command="{Binding $parent[ListBox].((vm:GitBranchesViewModel)DataContext).CheckoutCommand}"
+                          CommandParameter="{Binding}"
+                          IsEnabled="{Binding !IsCurrentBranch}"/>
+                <Separator/>
+                <MenuItem Header="Merge into Current"
+                          Command="{Binding $parent[ListBox].((vm:GitBranchesViewModel)DataContext).MergeBranchCommand}"
+                          CommandParameter="{Binding}"
+                          IsEnabled="{Binding !IsCurrentBranch}"/>
+                <Separator/>
+                <MenuItem Header="Delete"
+                          Command="{Binding $parent[ListBox].((vm:GitBranchesViewModel)DataContext).DeleteBranchCommand}"
+                          CommandParameter="{Binding}"
+                          IsEnabled="{Binding !IsCurrentBranch}"/>
+              </ContextMenu>
+            </Border.ContextMenu>
+          </Border>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+  </DockPanel>
+</UserControl>

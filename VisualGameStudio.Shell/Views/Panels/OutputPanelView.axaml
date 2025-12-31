@@ -1,0 +1,40 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="200"
+             x:Class="VisualGameStudio.Shell.Views.Panels.OutputPanelView"
+             x:DataType="vm:OutputPanelViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <DockPanel>
+          <TextBlock Text="Output" Classes="panelTitle" DockPanel.Dock="Left"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="4">
+            <Button Content="Build" Command="{Binding ShowBuildOutputCommand}"
+                    Padding="8,2" FontSize="11"/>
+            <Button Content="General" Command="{Binding ShowGeneralOutputCommand}"
+                    Padding="8,2" FontSize="11"/>
+            <Button Content="Clear" Command="{Binding ClearCommand}"
+                    Padding="8,2" FontSize="11"/>
+          </StackPanel>
+        </DockPanel>
+      </Border>
+
+      <TextBox Text="{Binding OutputText}"
+               IsReadOnly="True"
+               AcceptsReturn="True"
+               TextWrapping="NoWrap"
+               FontFamily="Cascadia Code, Consolas, monospace"
+               FontSize="12"
+               Background="#1E1E1E"
+               Foreground="#CCCCCC"
+               BorderThickness="0"
+               ScrollViewer.HorizontalScrollBarVisibility="Auto"
+               ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+    </DockPanel>
+  </Border>
+
+</UserControl>

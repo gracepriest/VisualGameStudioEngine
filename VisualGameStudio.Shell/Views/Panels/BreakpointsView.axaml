@@ -1,0 +1,200 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.BreakpointsView"
+             x:DataType="vm:BreakpointsViewModel">
+
+  <Border Classes="toolPanel">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <StackPanel>
+      <!-- Function Breakpoints Header (shown first for visibility) -->
+      <Border Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Classes="panelTitle" Text="Function Breakpoints"/>
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RemoveAllFunctionBreakpointsCommand}" ToolTip.Tip="Remove All">
+            <TextBlock Text="×" FontSize="16"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Add Function Breakpoint Input -->
+      <Border Padding="2" Background="#1E1E1E">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBox Grid.Column="0"
+                   Text="{Binding NewFunctionName}"
+                   Watermark="Function name..."
+                   FontFamily="Cascadia Code, Consolas, monospace"
+                   FontSize="12"
+                   Margin="0,0,4,0">
+            <TextBox.KeyBindings>
+              <KeyBinding Gesture="Enter" Command="{Binding AddFunctionBreakpointCommand}"/>
+            </TextBox.KeyBindings>
+          </TextBox>
+          <Button Grid.Column="1"
+                  Classes="toolbarButton"
+                  Command="{Binding AddFunctionBreakpointCommand}"
+                  ToolTip.Tip="Add Function Breakpoint"
+                  Padding="8,4">
+            <TextBlock Text="+" FontSize="14" FontWeight="Bold"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Function Breakpoints List -->
+      <ListBox ItemsSource="{Binding FunctionBreakpoints}"
+               SelectedItem="{Binding SelectedFunctionBreakpoint}"
+               Background="Transparent"
+               Padding="4"
+               MaxHeight="50">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:FunctionBreakpointItem">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+              <Grid.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Edit Condition..."
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.EditFunctionConditionCommand}"
+                            CommandParameter="{Binding}"/>
+                  <Separator/>
+                  <MenuItem Header="Enable"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleFunctionBreakpointCommand}"
+                            CommandParameter="{Binding}"
+                            IsVisible="{Binding !IsEnabled}"/>
+                  <MenuItem Header="Disable"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleFunctionBreakpointCommand}"
+                            CommandParameter="{Binding}"
+                            IsVisible="{Binding IsEnabled}"/>
+                  <MenuItem Header="Remove"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.RemoveFunctionBreakpointCommand}"
+                            CommandParameter="{Binding}"/>
+                </ContextMenu>
+              </Grid.ContextMenu>
+              <CheckBox Grid.Column="0"
+                        IsChecked="{Binding IsEnabled}"
+                        Margin="0,0,8,0"
+                        Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleFunctionBreakpointCommand}"
+                        CommandParameter="{Binding}"/>
+              <TextBlock Grid.Column="1"
+                         Text="{Binding DisplayText}"
+                         Foreground="#CCCCCC"
+                         FontFamily="Cascadia Code, Consolas, monospace"
+                         FontSize="12"
+                         VerticalAlignment="Center"
+                         IsEnabled="{Binding IsEnabled}"/>
+              <Panel Grid.Column="2" Margin="4,0">
+                <TextBlock Text="ƒ"
+                           Foreground="#569CD6"
+                           FontSize="12"
+                           FontWeight="Bold"
+                           IsVisible="{Binding IsEnabled}"/>
+              </Panel>
+              <Button Grid.Column="3"
+                      Classes="toolbarButton"
+                      Command="{ReflectionBinding $parent[ListBox].DataContext.EditFunctionConditionCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Edit Condition"
+                      Padding="2">
+                <TextBlock Text="..." FontSize="10"/>
+              </Button>
+              <Button Grid.Column="4"
+                      Classes="toolbarButton"
+                      Command="{ReflectionBinding $parent[ListBox].DataContext.RemoveFunctionBreakpointCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Remove"
+                      Padding="2">
+                <TextBlock Text="×" FontSize="12"/>
+              </Button>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <!-- Line Breakpoints Header -->
+      <Border Classes="panelHeader" Margin="0,4,0,0">
+        <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+          <TextBlock Grid.Column="0" Classes="panelTitle" Text="Line Breakpoints"/>
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding EnableAllBreakpointsCommand}" ToolTip.Tip="Enable All">
+            <TextBlock Text="●" Foreground="#E51400"/>
+          </Button>
+          <Button Grid.Column="2" Classes="toolbarButton" Command="{Binding DisableAllBreakpointsCommand}" ToolTip.Tip="Disable All">
+            <TextBlock Text="○" Foreground="#858585"/>
+          </Button>
+          <Button Grid.Column="3" Classes="toolbarButton" Command="{Binding RemoveAllBreakpointsCommand}" ToolTip.Tip="Remove All">
+            <TextBlock Text="×" FontSize="16"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Line Breakpoints List -->
+      <ListBox ItemsSource="{Binding Breakpoints}"
+               SelectedItem="{Binding SelectedBreakpoint}"
+               Background="Transparent"
+               Padding="4"
+               MaxHeight="50">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:BreakpointItem">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+              <Grid.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Edit Condition..."
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.EditConditionCommand}"
+                            CommandParameter="{Binding}"/>
+                  <MenuItem Header="Go to Source"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.NavigateToBreakpointCommand}"
+                            CommandParameter="{Binding}"/>
+                  <Separator/>
+                  <MenuItem Header="Enable"
+                            IsVisible="{Binding !IsEnabled}"/>
+                  <MenuItem Header="Disable"
+                            IsVisible="{Binding IsEnabled}"/>
+                  <MenuItem Header="Remove"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.RemoveBreakpointCommand}"
+                            CommandParameter="{Binding}"/>
+                </ContextMenu>
+              </Grid.ContextMenu>
+              <CheckBox Grid.Column="0" IsChecked="{Binding IsEnabled}" Margin="0,0,8,0"/>
+              <TextBlock Grid.Column="1"
+                         Text="{Binding DisplayText}"
+                         Foreground="#CCCCCC"
+                         FontFamily="Cascadia Code, Consolas, monospace"
+                         FontSize="12"
+                         VerticalAlignment="Center"
+                         IsEnabled="{Binding IsEnabled}"
+                         Cursor="Hand"
+                         DoubleTapped="OnBreakpointDoubleTapped"/>
+              <Panel Grid.Column="2" Margin="4,0">
+                <Ellipse Width="8" Height="8"
+                         Fill="#E51400"
+                         IsVisible="{Binding IsEnabled}"/>
+                <!-- Yellow diamond for conditional breakpoints -->
+                <Ellipse Width="8" Height="8"
+                         Fill="#FFA500"
+                         IsVisible="{Binding Condition, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+              </Panel>
+              <Button Grid.Column="3"
+                      Classes="toolbarButton"
+                      Command="{ReflectionBinding $parent[ListBox].DataContext.EditConditionCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Edit Condition"
+                      Padding="2">
+                <TextBlock Text="..." FontSize="10"/>
+              </Button>
+              <Button Grid.Column="4"
+                      Classes="toolbarButton"
+                      Command="{ReflectionBinding $parent[ListBox].DataContext.RemoveBreakpointCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Remove"
+                      Padding="2">
+                <TextBlock Text="×" FontSize="12"/>
+              </Button>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </StackPanel>
+    </ScrollViewer>
+  </Border>
+
+</UserControl>

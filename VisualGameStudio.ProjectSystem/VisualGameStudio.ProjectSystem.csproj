@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>VisualGameStudio.ProjectSystem</RootNamespace>
+    <AssemblyName>VisualGameStudio.ProjectSystem</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VisualGameStudio.Core\VisualGameStudio.Core.csproj" />
+    <ProjectReference Include="..\..\..\gracepriest\BasicLangvb\BasicLang\BasicLang.csproj" Condition="Exists('..\..\..\gracepriest\BasicLangvb\BasicLang\BasicLang.csproj')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Templates\**\*" />
+  </ItemGroup>
+
+</Project>

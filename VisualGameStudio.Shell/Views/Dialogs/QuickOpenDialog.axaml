@@ -1,0 +1,82 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.QuickOpenDialog"
+        x:DataType="vm:QuickOpenViewModel"
+        Title="Quick Open"
+        Width="600" Height="400"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        SystemDecorations="BorderOnly"
+        TransparencyLevelHint="AcrylicBlur"
+        Background="Transparent">
+
+  <Border Background="#E8252526" CornerRadius="8" BorderBrush="#3C3C3C" BorderThickness="1">
+    <DockPanel>
+      <!-- Search Box -->
+      <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12" CornerRadius="8,8,0,0">
+        <TextBox x:Name="SearchBox"
+                 Text="{Binding SearchText, Mode=TwoWay}"
+                 Watermark="{Binding Placeholder}"
+                 FontSize="16"
+                 BorderThickness="0"
+                 Background="Transparent"
+                 Foreground="#CCCCCC"/>
+      </Border>
+
+      <!-- Mode indicator -->
+      <Border DockPanel.Dock="Top" Background="#252526" Padding="12,4">
+        <StackPanel Orientation="Horizontal" Spacing="16">
+          <TextBlock FontSize="11" Foreground="#808080">
+            <Run Text="Mode: "/>
+            <Run Text="{Binding Mode}" Foreground="#569CD6"/>
+          </TextBlock>
+          <TextBlock Text="↑↓ Navigate" FontSize="11" Foreground="#606060"/>
+          <TextBlock Text="Enter Select" FontSize="11" Foreground="#606060"/>
+          <TextBlock Text="Esc Cancel" FontSize="11" Foreground="#606060"/>
+        </StackPanel>
+      </Border>
+
+      <!-- Results -->
+      <ListBox ItemsSource="{Binding Results}"
+               SelectedItem="{Binding SelectedItem}"
+               SelectedIndex="{Binding SelectedIndex}"
+               Background="Transparent"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Border Padding="8,6" Background="Transparent">
+              <Grid ColumnDefinitions="Auto,*">
+                <TextBlock Grid.Column="0"
+                           Text="{Binding Icon}"
+                           FontSize="16"
+                           Margin="0,0,12,0"
+                           VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Text="{Binding Name}"
+                             FontSize="14"
+                             Foreground="#CCCCCC"/>
+                  <TextBlock Text="{Binding Description}"
+                             FontSize="11"
+                             Foreground="#808080"
+                             TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+        <ListBox.Styles>
+          <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="#094771"/>
+          </Style>
+          <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2A2D2E"/>
+          </Style>
+        </ListBox.Styles>
+      </ListBox>
+    </DockPanel>
+  </Border>
+</Window>

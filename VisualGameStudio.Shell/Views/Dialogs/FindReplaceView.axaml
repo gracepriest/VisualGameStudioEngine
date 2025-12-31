@@ -1,0 +1,106 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="100"
+             x:Class="VisualGameStudio.Shell.Views.Dialogs.FindReplaceView"
+             x:DataType="vm:FindReplaceViewModel">
+
+  <Border Background="#252526" BorderBrush="#3C3C3C" BorderThickness="0,0,0,1" Padding="8">
+    <Grid RowDefinitions="Auto,Auto,Auto">
+      <!-- Find Row -->
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto">
+        <Button Grid.Column="0"
+                Classes="toolbarButton"
+                Command="{Binding ToggleReplaceModeCommand}"
+                ToolTip.Tip="Toggle Replace"
+                Width="24" Height="24"
+                Margin="0,0,4,0">
+          <TextBlock Text="▶" FontSize="10"/>
+        </Button>
+
+        <TextBox Grid.Column="1"
+                 Text="{Binding SearchText}"
+                 Watermark="Find..."
+                 MinWidth="200"
+                 Margin="0,0,4,0"/>
+
+        <Button Grid.Column="2"
+                Classes="toolbarButton"
+                Command="{Binding FindPreviousCommand}"
+                ToolTip.Tip="Previous Match (Shift+F3)"
+                Width="28" Height="24">
+          <TextBlock Text="▲" FontSize="10"/>
+        </Button>
+
+        <Button Grid.Column="3"
+                Classes="toolbarButton"
+                Command="{Binding FindNextMatchCommand}"
+                ToolTip.Tip="Next Match (F3)"
+                Width="28" Height="24">
+          <TextBlock Text="▼" FontSize="10"/>
+        </Button>
+
+        <ToggleButton Grid.Column="4"
+                      IsChecked="{Binding MatchCase}"
+                      ToolTip.Tip="Match Case"
+                      Width="28" Height="24"
+                      Margin="8,0,0,0">
+          <TextBlock Text="Aa" FontSize="11" FontWeight="Bold"/>
+        </ToggleButton>
+
+        <ToggleButton Grid.Column="5"
+                      IsChecked="{Binding MatchWholeWord}"
+                      ToolTip.Tip="Match Whole Word"
+                      Width="28" Height="24">
+          <TextBlock Text="W" FontSize="11" FontWeight="Bold"/>
+        </ToggleButton>
+
+        <ToggleButton Grid.Column="6"
+                      IsChecked="{Binding UseRegex}"
+                      ToolTip.Tip="Use Regular Expression"
+                      Width="28" Height="24">
+          <TextBlock Text=".*" FontSize="11" FontFamily="Consolas"/>
+        </ToggleButton>
+      </Grid>
+
+      <!-- Replace Row -->
+      <Grid Grid.Row="1"
+            ColumnDefinitions="Auto,*,Auto,Auto"
+            IsVisible="{Binding IsReplaceMode}"
+            Margin="0,4,0,0">
+        <Border Grid.Column="0" Width="24" Margin="0,0,4,0"/>
+
+        <TextBox Grid.Column="1"
+                 Text="{Binding ReplaceText}"
+                 Watermark="Replace..."
+                 MinWidth="200"
+                 Margin="0,0,4,0"/>
+
+        <Button Grid.Column="2"
+                Classes="toolbarButton"
+                Command="{Binding ReplaceCommand}"
+                ToolTip.Tip="Replace"
+                Width="60" Height="24">
+          <TextBlock Text="Replace" FontSize="11"/>
+        </Button>
+
+        <Button Grid.Column="3"
+                Classes="toolbarButton"
+                Command="{Binding ReplaceAllCommand}"
+                ToolTip.Tip="Replace All"
+                Width="70" Height="24">
+          <TextBlock Text="Replace All" FontSize="11"/>
+        </Button>
+      </Grid>
+
+      <!-- Status Row -->
+      <TextBlock Grid.Row="2"
+                 Text="{Binding StatusText}"
+                 Foreground="#808080"
+                 FontSize="11"
+                 Margin="28,4,0,0"/>
+    </Grid>
+  </Border>
+</UserControl>

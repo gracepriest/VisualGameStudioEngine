@@ -1,0 +1,134 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="550" d:DesignHeight="500"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.ExtractMethodDialog"
+        x:DataType="vm:ExtractMethodDialogViewModel"
+        Title="Extract Method"
+        Width="550" Height="500"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Extract Method" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Text="Extract the selected code into a new method"
+                 Foreground="#808080" Margin="0,4,0,0"/>
+    </StackPanel>
+
+    <!-- Method Configuration -->
+    <Grid DockPanel.Dock="Top" RowDefinitions="Auto,Auto,Auto,Auto" ColumnDefinitions="Auto,*" Margin="0,0,0,16">
+      <!-- Method Name -->
+      <TextBlock Grid.Row="0" Grid.Column="0"
+                 Text="Method name:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <TextBox Grid.Row="0" Grid.Column="1"
+               Text="{Binding MethodName}"
+               Watermark="Enter method name..."
+               x:Name="MethodNameTextBox"
+               Margin="0,0,0,8"/>
+
+      <!-- Access Modifier -->
+      <TextBlock Grid.Row="1" Grid.Column="0"
+                 Text="Access:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <ComboBox Grid.Row="1" Grid.Column="1"
+                ItemsSource="{Binding AccessModifiers}"
+                SelectedItem="{Binding AccessModifier}"
+                Margin="0,0,0,8"
+                MinWidth="120"
+                HorizontalAlignment="Left"/>
+
+      <!-- Create as Function -->
+      <CheckBox Grid.Row="2" Grid.Column="1"
+                IsChecked="{Binding CreateAsFunction}"
+                Content="Create as Function (with return value)"
+                Foreground="#CCCCCC"
+                Margin="0,0,0,8"/>
+
+      <!-- Error Message -->
+      <TextBlock Grid.Row="3" Grid.Column="1"
+                 Text="{Binding ErrorMessage}"
+                 Foreground="#F48771"
+                 FontSize="11"
+                 IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+    </Grid>
+
+    <!-- Selected Code Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Selected code:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="100">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding SelectedCode}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#9CDCFE"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Method Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="New method preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" MaxHeight="120">
+        <TextBlock Text="{Binding PreviewCode}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#DCDCAA"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Extracting..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Extract"
+              Command="{Binding ExtractCommand}"
+              Width="80"
+              Classes="accent"
+              IsEnabled="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

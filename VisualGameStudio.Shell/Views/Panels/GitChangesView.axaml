@@ -1,0 +1,264 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="500"
+             x:Class="VisualGameStudio.Shell.Views.Panels.GitChangesView"
+             x:DataType="vm:GitChangesViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="Git Changes" Classes="panelTitle"/>
+            <TextBlock Text="{Binding CurrentBranch}"
+                       Foreground="#569CD6"
+                       FontSize="11"
+                       VerticalAlignment="Center"
+                       IsVisible="{Binding IsGitRepository}"/>
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Refresh"
+                    Command="{Binding RefreshCommand}"
+                    Width="24" Height="24">
+              <TextBlock Text="↻" FontSize="12"/>
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- Not a Git Repository -->
+      <StackPanel IsVisible="{Binding !IsGitRepository}"
+                  VerticalAlignment="Center"
+                  HorizontalAlignment="Center"
+                  Spacing="12"
+                  Margin="20">
+        <TextBlock Text="No Git repository"
+                   Foreground="#808080"
+                   HorizontalAlignment="Center"/>
+        <Button Content="Initialize Repository"
+                Command="{Binding InitRepositoryCommand}"
+                HorizontalAlignment="Center"/>
+      </StackPanel>
+
+      <!-- Git Repository Content -->
+      <DockPanel IsVisible="{Binding IsGitRepository}">
+        <!-- Toolbar -->
+        <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="8,4">
+          <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+            <!-- Branch selector -->
+            <ComboBox Grid.Column="0"
+                      ItemsSource="{Binding Branches}"
+                      SelectedItem="{Binding CurrentBranch}"
+                      MinWidth="120"
+                      MaxWidth="150"
+                      FontSize="11">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding}"/>
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <Button Grid.Column="2"
+                    Classes="toolbarButton"
+                    ToolTip.Tip="Pull"
+                    Command="{Binding PullCommand}"
+                    Width="28" Height="24">
+              <TextBlock Text="↓" FontSize="12"/>
+            </Button>
+
+            <Button Grid.Column="3"
+                    Classes="toolbarButton"
+                    ToolTip.Tip="Push"
+                    Command="{Binding PushCommand}"
+                    Width="28" Height="24">
+              <TextBlock Text="↑" FontSize="12"/>
+            </Button>
+
+            <Button Grid.Column="4"
+                    Classes="toolbarButton"
+                    ToolTip.Tip="New Branch"
+                    Command="{Binding CreateBranchCommand}"
+                    Width="28" Height="24">
+              <TextBlock Text="+" FontSize="12"/>
+            </Button>
+          </Grid>
+        </Border>
+
+        <!-- Ahead/Behind indicator -->
+        <Border DockPanel.Dock="Top"
+                Background="#252526"
+                Padding="8,4"
+                IsVisible="{Binding !!AheadCount}">
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock FontSize="11" Foreground="#808080">
+              <Run Text="↑"/>
+              <Run Text="{Binding AheadCount}"/>
+              <Run Text=" ahead"/>
+            </TextBlock>
+            <TextBlock FontSize="11" Foreground="#808080" IsVisible="{Binding !!BehindCount}">
+              <Run Text="↓"/>
+              <Run Text="{Binding BehindCount}"/>
+              <Run Text=" behind"/>
+            </TextBlock>
+          </StackPanel>
+        </Border>
+
+        <!-- Commit message -->
+        <Border DockPanel.Dock="Top" Background="#252526" Padding="8">
+          <StackPanel Spacing="8">
+            <TextBox Text="{Binding CommitMessage}"
+                     Watermark="Commit message"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     MinHeight="60"
+                     MaxHeight="100"/>
+            <Button Content="Commit"
+                    Command="{Binding CommitCommand}"
+                    HorizontalAlignment="Stretch"
+                    IsEnabled="{Binding StagedChanges.Count}"/>
+          </StackPanel>
+        </Border>
+
+        <!-- Changes -->
+        <ScrollViewer>
+          <StackPanel Spacing="0">
+            <!-- Staged Changes -->
+            <Expander IsExpanded="True" Padding="0">
+              <Expander.Header>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="Staged Changes" FontWeight="SemiBold"/>
+                  <TextBlock Text="{Binding StagedChanges.Count, StringFormat='({0})'}"
+                             Foreground="#808080"/>
+                </StackPanel>
+              </Expander.Header>
+              <StackPanel>
+                <Border Background="#1E1E1E" Padding="4">
+                  <Button Content="Unstage All"
+                          Command="{Binding UnstageAllCommand}"
+                          Classes="toolbarButton"
+                          FontSize="11"
+                          IsVisible="{Binding StagedChanges.Count}"/>
+                </Border>
+                <ItemsControl ItemsSource="{Binding StagedChanges}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Background="#1E1E1E"
+                              Padding="8,4"
+                              Margin="0,1,0,0">
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                          <Border Grid.Column="0"
+                                  Background="{Binding StatusColor}"
+                                  CornerRadius="2"
+                                  Padding="4,1"
+                                  Margin="0,0,8,0">
+                            <TextBlock Text="{Binding StatusText}"
+                                       Foreground="White"
+                                       FontSize="10"
+                                       FontWeight="Bold"/>
+                          </Border>
+                          <TextBlock Grid.Column="1"
+                                     Text="{Binding FileName}"
+                                     Foreground="#CCCCCC"
+                                     VerticalAlignment="Center"
+                                     TextTrimming="CharacterEllipsis"
+                                     ToolTip.Tip="{Binding FilePath}"/>
+                          <Button Grid.Column="2"
+                                  Classes="toolbarButton"
+                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).UnstageFileCommand}"
+                                  CommandParameter="{Binding}"
+                                  ToolTip.Tip="Unstage"
+                                  Width="20" Height="20">
+                            <TextBlock Text="-" FontSize="12"/>
+                          </Button>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="No staged changes"
+                           Foreground="#606060"
+                           Margin="8"
+                           FontSize="11"
+                           IsVisible="{Binding !StagedChanges.Count}"/>
+              </StackPanel>
+            </Expander>
+
+            <!-- Unstaged Changes -->
+            <Expander IsExpanded="True" Padding="0" Margin="0,8,0,0">
+              <Expander.Header>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="Changes" FontWeight="SemiBold"/>
+                  <TextBlock Text="{Binding UnstagedChanges.Count, StringFormat='({0})'}"
+                             Foreground="#808080"/>
+                </StackPanel>
+              </Expander.Header>
+              <StackPanel>
+                <Border Background="#1E1E1E" Padding="4">
+                  <Button Content="Stage All"
+                          Command="{Binding StageAllCommand}"
+                          Classes="toolbarButton"
+                          FontSize="11"
+                          IsVisible="{Binding UnstagedChanges.Count}"/>
+                </Border>
+                <ItemsControl ItemsSource="{Binding UnstagedChanges}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border Background="#1E1E1E"
+                              Padding="8,4"
+                              Margin="0,1,0,0">
+                        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                          <Border Grid.Column="0"
+                                  Background="{Binding StatusColor}"
+                                  CornerRadius="2"
+                                  Padding="4,1"
+                                  Margin="0,0,8,0">
+                            <TextBlock Text="{Binding StatusText}"
+                                       Foreground="White"
+                                       FontSize="10"
+                                       FontWeight="Bold"/>
+                          </Border>
+                          <TextBlock Grid.Column="1"
+                                     Text="{Binding FileName}"
+                                     Foreground="#CCCCCC"
+                                     VerticalAlignment="Center"
+                                     TextTrimming="CharacterEllipsis"
+                                     ToolTip.Tip="{Binding FilePath}"/>
+                          <Button Grid.Column="2"
+                                  Classes="toolbarButton"
+                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).StageFileCommand}"
+                                  CommandParameter="{Binding}"
+                                  ToolTip.Tip="Stage"
+                                  Width="20" Height="20">
+                            <TextBlock Text="+" FontSize="12"/>
+                          </Button>
+                          <Button Grid.Column="3"
+                                  Classes="toolbarButton"
+                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).DiscardChangesCommand}"
+                                  CommandParameter="{Binding}"
+                                  ToolTip.Tip="Discard Changes"
+                                  Width="20" Height="20">
+                            <TextBlock Text="↩" FontSize="10"/>
+                          </Button>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="No changes"
+                           Foreground="#606060"
+                           Margin="8"
+                           FontSize="11"
+                           IsVisible="{Binding !UnstagedChanges.Count}"/>
+              </StackPanel>
+            </Expander>
+          </StackPanel>
+        </ScrollViewer>
+      </DockPanel>
+    </DockPanel>
+  </Border>
+</UserControl>

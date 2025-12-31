@@ -1,0 +1,207 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="550" d:DesignHeight="550"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.SafeDeleteDialog"
+        x:DataType="vm:SafeDeleteDialogViewModel"
+        Title="Safe Delete"
+        Width="550" Height="550"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Safe Delete" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Delete {0} '{1}'">
+            <Binding Path="SymbolKind"/>
+            <Binding Path="SymbolName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Symbol Info -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,16">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Symbol:" Foreground="#808080" Margin="0,0,8,4"/>
+      <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
+        <TextBlock Text="{Binding SymbolName}" FontFamily="Consolas" Foreground="#4FC1FF"/>
+        <TextBlock Text=" : " Foreground="#808080" IsVisible="{Binding SymbolType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <TextBlock Text="{Binding SymbolType}" FontFamily="Consolas" Foreground="#4EC9B0" IsVisible="{Binding SymbolType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+      </StackPanel>
+
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Kind:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SymbolKind}"
+                 FontFamily="Consolas" Foreground="#569CD6" Margin="0,0,0,4"/>
+
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Access:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Accessibility}"
+                 FontFamily="Consolas" Foreground="#569CD6" Margin="0,0,0,4"/>
+
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="Scope:" Foreground="#808080" Margin="0,0,8,4"/>
+      <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
+        <TextBlock Text="{Binding ContainingType, TargetNullValue=''}" FontFamily="Consolas" Foreground="#DCDCAA"/>
+        <TextBlock Text="." Foreground="#808080" IsVisible="{Binding ContainingMethod, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <TextBlock Text="{Binding ContainingMethod}" FontFamily="Consolas" Foreground="#DCDCAA" IsVisible="{Binding ContainingMethod, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+      </StackPanel>
+
+      <TextBlock Grid.Row="4" Grid.Column="0" Text="Usages:" Foreground="#808080" Margin="0,0,8,4"/>
+      <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
+        <TextBlock Foreground="#CCCCCC">
+          <TextBlock.Text>
+            <MultiBinding StringFormat="{}{0} usage(s)">
+              <Binding Path="UsageCount"/>
+            </MultiBinding>
+          </TextBlock.Text>
+        </TextBlock>
+        <TextBlock Text=" - Can safely delete" Foreground="#4EC9B0" IsVisible="{Binding CanSafelyDelete}"/>
+        <TextBlock Text=" - Has usages!" Foreground="#F48771" IsVisible="{Binding !CanSafelyDelete}"/>
+      </StackPanel>
+    </Grid>
+
+    <!-- Declaration -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Declaration:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="8"
+            Margin="0,0,0,12"
+            MaxHeight="60">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding DeclarationText}"
+                   FontFamily="Consolas"
+                   FontSize="12"
+                   Foreground="#CE9178"
+                   TextWrapping="Wrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Usages List -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Usages:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"
+               IsVisible="{Binding !CanSafelyDelete}"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,12"
+            MaxHeight="120"
+            IsVisible="{Binding !CanSafelyDelete}">
+      <ListBox ItemsSource="{Binding Usages}"
+               Background="Transparent"
+               BorderThickness="0">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="{Binding UsageKind}"
+                         FontFamily="Consolas"
+                         FontSize="11"
+                         Foreground="#569CD6"
+                         Width="80"/>
+              <TextBlock Text="{Binding DisplayText}"
+                         FontFamily="Consolas"
+                         FontSize="11"
+                         Foreground="#808080"
+                         TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Border>
+
+    <!-- Warning Message -->
+    <Border DockPanel.Dock="Top"
+            Background="#433821"
+            BorderBrush="#6B5A2E"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="8"
+            Margin="0,0,0,12"
+            IsVisible="{Binding WarningMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="!" FontWeight="Bold" Foreground="#CCA700"/>
+        <TextBlock Text="{Binding WarningMessage}"
+                   Foreground="#CCA700"
+                   FontSize="11"
+                   TextWrapping="Wrap"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Error Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Options -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12" IsVisible="{Binding !CanSafelyDelete}">
+      <CheckBox IsChecked="{Binding ForceDelete}"
+                Content="Force delete (ignore usages)"
+                Foreground="#CCCCCC"
+                Margin="0,0,0,4"/>
+      <CheckBox IsChecked="{Binding CommentOutUsages}"
+                Content="Comment out usages instead of leaving errors"
+                Foreground="#CCCCCC"
+                IsEnabled="{Binding ForceDelete}"/>
+    </StackPanel>
+
+    <!-- Safe to delete message -->
+    <Border DockPanel.Dock="Top"
+            Background="#2D4F3E"
+            BorderBrush="#3E6B51"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="8"
+            Margin="0,0,0,12"
+            IsVisible="{Binding CanSafelyDelete}">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="✓" FontWeight="Bold" Foreground="#4EC9B0"/>
+        <TextBlock Text="Symbol has no usages. Safe to delete."
+                   Foreground="#4EC9B0"
+                   FontSize="11"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Analyzing usages..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Delete"
+              Command="{Binding DeleteCommand}"
+              Width="100"
+              Classes="accent"
+              IsEnabled="{Binding CanDelete}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

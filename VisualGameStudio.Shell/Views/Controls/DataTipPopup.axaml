@@ -1,0 +1,72 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="80"
+             x:Class="VisualGameStudio.Shell.Views.Controls.DataTipPopup"
+             Background="#2D2D30"
+             BorderBrush="#3F3F46"
+             BorderThickness="1"
+             CornerRadius="4"
+             Padding="8"
+             MinWidth="150"
+             MaxWidth="400">
+
+  <Grid RowDefinitions="Auto,Auto,Auto">
+    <!-- Expression and Type -->
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
+      <TextBlock x:Name="ExpressionText"
+                 Text="variable"
+                 Foreground="#DCDCAA"
+                 FontFamily="Cascadia Code, Consolas, monospace"
+                 FontSize="12"
+                 FontWeight="SemiBold"/>
+      <TextBlock x:Name="TypeText"
+                 Text="Integer"
+                 Foreground="#4EC9B0"
+                 FontFamily="Cascadia Code, Consolas, monospace"
+                 FontSize="11"
+                 VerticalAlignment="Center"/>
+    </StackPanel>
+
+    <!-- Value -->
+    <Border Grid.Row="1"
+            Background="#1E1E1E"
+            CornerRadius="2"
+            Padding="6,4"
+            Margin="0,6,0,0">
+      <TextBlock x:Name="ValueText"
+                 Text="42"
+                 Foreground="#CE9178"
+                 FontFamily="Cascadia Code, Consolas, monospace"
+                 FontSize="12"
+                 TextWrapping="Wrap"
+                 MaxWidth="380"/>
+    </Border>
+
+    <!-- Actions -->
+    <StackPanel Grid.Row="2"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Margin="0,6,0,0"
+                Spacing="4">
+      <Button x:Name="AddToWatchButton"
+              Content="Add to Watch"
+              FontSize="10"
+              Padding="8,2"
+              Background="#0E639C"
+              Foreground="White"
+              CornerRadius="2"
+              Click="OnAddToWatchClick"/>
+      <Button x:Name="CopyButton"
+              Content="Copy"
+              FontSize="10"
+              Padding="8,2"
+              Background="#3C3C3C"
+              Foreground="#CCCCCC"
+              CornerRadius="2"
+              Click="OnCopyClick"/>
+    </StackPanel>
+  </Grid>
+
+</UserControl>

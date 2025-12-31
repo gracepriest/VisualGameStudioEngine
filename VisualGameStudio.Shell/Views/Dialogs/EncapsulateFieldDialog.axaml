@@ -1,0 +1,158 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="550" d:DesignHeight="550"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.EncapsulateFieldDialog"
+        x:DataType="vm:EncapsulateFieldDialogViewModel"
+        Title="Encapsulate Field"
+        Width="550" Height="550"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Encapsulate Field" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Convert field '{0}' to property ({1} references)">
+            <Binding Path="FieldName"/>
+            <Binding Path="ReferenceCount"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Field Info -->
+    <Grid DockPanel.Dock="Top" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="Auto,*" Margin="0,0,0,16">
+      <!-- Property Name -->
+      <TextBlock Grid.Row="0" Grid.Column="0"
+                 Text="Property name:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <TextBox Grid.Row="0" Grid.Column="1"
+               Text="{Binding PropertyName}"
+               Watermark="Enter property name..."
+               x:Name="PropertyNameTextBox"
+               Margin="0,0,0,8"/>
+
+      <!-- Field Name -->
+      <TextBlock Grid.Row="1" Grid.Column="0"
+                 Text="Backing field name:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <TextBox Grid.Row="1" Grid.Column="1"
+               Text="{Binding NewFieldName}"
+               Watermark="Enter field name..."
+               Margin="0,0,0,8"/>
+
+      <!-- Property Accessibility -->
+      <TextBlock Grid.Row="2" Grid.Column="0"
+                 Text="Property accessibility:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <ComboBox Grid.Row="2" Grid.Column="1"
+                ItemsSource="{Binding AccessibilityOptions}"
+                SelectedItem="{Binding SelectedPropertyAccessibility}"
+                MinWidth="120"
+                Margin="0,0,0,8"/>
+
+      <!-- Field Accessibility -->
+      <TextBlock Grid.Row="3" Grid.Column="0"
+                 Text="Field accessibility:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <ComboBox Grid.Row="3" Grid.Column="1"
+                ItemsSource="{Binding AccessibilityOptions}"
+                SelectedItem="{Binding SelectedFieldAccessibility}"
+                MinWidth="120"
+                Margin="0,0,0,8"/>
+
+      <!-- Accessors -->
+      <TextBlock Grid.Row="4" Grid.Column="0"
+                 Text="Accessors:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,8"/>
+      <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Spacing="16" Margin="0,0,0,8">
+        <CheckBox IsChecked="{Binding GenerateGetter}"
+                  Content="Generate Get"
+                  Foreground="#CCCCCC"/>
+        <CheckBox IsChecked="{Binding GenerateSetter}"
+                  Content="Generate Set"
+                  Foreground="#CCCCCC"
+                  IsEnabled="{Binding !IsReadOnly}"/>
+      </StackPanel>
+
+      <!-- Update References -->
+      <CheckBox Grid.Row="5" Grid.Column="1"
+                IsChecked="{Binding UpdateReferences}"
+                Content="Update all references to use property"
+                Foreground="#CCCCCC"
+                Margin="0,0,0,8"/>
+    </Grid>
+
+    <!-- Error Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="180">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding PreviewCode}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#DCDCAA"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Encapsulating field..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Encapsulate"
+              Command="{Binding EncapsulateCommand}"
+              Width="100"
+              Classes="accent"
+              IsEnabled="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

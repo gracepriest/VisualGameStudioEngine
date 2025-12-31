@@ -1,0 +1,174 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="550"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.MakeParameterRequiredDialog"
+        x:DataType="vm:MakeParameterRequiredDialogViewModel"
+        Title="Make Parameter Required"
+        Width="500" Height="550"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Make Parameter Required" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Convert an optional parameter to required in '{0}'">
+            <Binding Path="MethodName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+      <TextBlock Foreground="#569CD6" FontSize="11" Margin="0,4,0,0"
+                 IsVisible="{Binding ContainingType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="In: {0}">
+            <Binding Path="ContainingType"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Current Signature -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Current signature:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="8"
+            Margin="0,0,0,12">
+      <TextBlock Text="{Binding CurrentSignature}"
+                 FontFamily="Consolas"
+                 FontSize="12"
+                 Foreground="#DCDCAA"
+                 TextWrapping="Wrap"/>
+    </Border>
+
+    <!-- Parameter Selection -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Select optional parameter to make required:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,8"/>
+
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,12"
+            Height="100">
+      <ListBox ItemsSource="{Binding Parameters}"
+               SelectedItem="{Binding SelectedParameter}"
+               Background="Transparent"
+               Margin="4">
+        <ListBox.ItemTemplate>
+          <DataTemplate DataType="vm:MakeRequiredParameterViewModel">
+            <TextBlock Text="{Binding DisplayText}"
+                       FontFamily="Consolas"
+                       FontSize="12"
+                       Foreground="#9CDCFE"
+                       Margin="4,2"/>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Border>
+
+    <!-- Call Site Value Input -->
+    <Grid DockPanel.Dock="Top" RowDefinitions="Auto,Auto" Margin="0,0,0,12">
+      <TextBlock Grid.Row="0"
+                 Foreground="#CCCCCC"
+                 Margin="0,0,0,4">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Value to insert at call sites ({0} calls):">
+            <Binding Path="CallSiteCount"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+      <TextBox Grid.Row="1"
+               Text="{Binding CallSiteValue}"
+               Watermark="Enter value to use at call sites"/>
+    </Grid>
+
+    <!-- Info Message -->
+    <Border DockPanel.Dock="Top"
+            Background="#2D2D30"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="8"
+            Margin="0,0,0,12">
+      <StackPanel Orientation="Horizontal">
+        <TextBlock Text="i" FontWeight="Bold" Foreground="#569CD6" Margin="0,0,8,0"/>
+        <TextBlock Foreground="#808080" TextWrapping="Wrap">
+          Call sites that omit this argument will have the specified value inserted.
+        </TextBlock>
+      </StackPanel>
+    </Border>
+
+    <!-- Error Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="80">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding Preview}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#DCDCAA"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Processing..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Make Required"
+              Command="{Binding MakeRequiredCommand}"
+              Width="120"
+              Classes="accent"
+              IsEnabled="{Binding CanMakeRequired}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

@@ -1,0 +1,243 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="700"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.GenerateConstructorDialog"
+        x:DataType="vm:GenerateConstructorDialogViewModel"
+        Title="Generate Constructor"
+        Width="600" Height="700"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#1E1E1E">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+      <TextBlock Text="Generate Constructor" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Generate constructor for class '{0}'">
+            <Binding Path="ClassName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Options Row -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto,*" Margin="0,0,0,12">
+      <TextBlock Grid.Column="0"
+                 Text="Accessibility:"
+                 Foreground="#CCCCCC"
+                 VerticalAlignment="Center"
+                 Margin="0,0,8,0"/>
+      <ComboBox Grid.Column="1"
+                ItemsSource="{Binding AccessibilityOptions}"
+                SelectedItem="{Binding SelectedAccessibility}"
+                MinWidth="100"
+                HorizontalAlignment="Left"/>
+
+      <CheckBox Grid.Column="2"
+                IsChecked="{Binding GenerateNullChecks}"
+                Content="Null checks"
+                Foreground="#CCCCCC"
+                Margin="16,0,8,0"/>
+
+      <CheckBox Grid.Column="3"
+                IsChecked="{Binding CallBaseConstructor}"
+                Content="Call MyBase.New()"
+                Foreground="#CCCCCC"/>
+    </Grid>
+
+    <!-- Fields Section -->
+    <TextBlock DockPanel.Dock="Top"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4">
+      <TextBlock.Text>
+        <MultiBinding StringFormat="Fields ({0} selected):">
+          <Binding Path="SelectedFieldCount"/>
+        </MultiBinding>
+      </TextBlock.Text>
+    </TextBlock>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+      <Button Content="Select All" Command="{Binding SelectAllFieldsCommand}" Padding="8,2"/>
+      <Button Content="Select None" Command="{Binding SelectNoneFieldsCommand}" Padding="8,2"/>
+    </StackPanel>
+
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,12"
+            Height="120">
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Fields}" Margin="4">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="vm:FieldViewModel">
+              <CheckBox IsChecked="{Binding IsSelected}" Margin="4,2">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding Name}"
+                             Foreground="#9CDCFE"
+                             FontFamily="Consolas"
+                             Width="120"/>
+                  <TextBlock Text="As"
+                             Foreground="#808080"
+                             FontFamily="Consolas"/>
+                  <TextBlock Text="{Binding Type}"
+                             Foreground="#4EC9B0"
+                             FontFamily="Consolas"/>
+                  <TextBlock Text="(ReadOnly)"
+                             Foreground="#569CD6"
+                             FontFamily="Consolas"
+                             IsVisible="{Binding IsReadOnly}"/>
+                  <TextBlock Text="(has initializer)"
+                             Foreground="#608B4E"
+                             FontFamily="Consolas"
+                             IsVisible="{Binding HasInitializer}"/>
+                </StackPanel>
+              </CheckBox>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Properties Section -->
+    <TextBlock DockPanel.Dock="Top"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4">
+      <TextBlock.Text>
+        <MultiBinding StringFormat="Properties ({0} selected):">
+          <Binding Path="SelectedPropertyCount"/>
+        </MultiBinding>
+      </TextBlock.Text>
+    </TextBlock>
+
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+      <Button Content="Select All" Command="{Binding SelectAllPropertiesCommand}" Padding="8,2"/>
+      <Button Content="Select None" Command="{Binding SelectNonePropertiesCommand}" Padding="8,2"/>
+    </StackPanel>
+
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,12"
+            Height="100">
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Properties}" Margin="4">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="vm:FieldViewModel">
+              <CheckBox IsChecked="{Binding IsSelected}" Margin="4,2">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding Name}"
+                             Foreground="#DCDCAA"
+                             FontFamily="Consolas"
+                             Width="120"/>
+                  <TextBlock Text="As"
+                             Foreground="#808080"
+                             FontFamily="Consolas"/>
+                  <TextBlock Text="{Binding Type}"
+                             Foreground="#4EC9B0"
+                             FontFamily="Consolas"/>
+                </StackPanel>
+              </CheckBox>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Existing Constructors -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Existing constructors:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"
+               IsVisible="{Binding ExistingConstructors.Count}"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,12"
+            MaxHeight="60"
+            IsVisible="{Binding ExistingConstructors.Count}">
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding ExistingConstructors}" Margin="4">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding}"
+                         Foreground="#CE9178"
+                         FontFamily="Consolas"
+                         FontSize="11"
+                         Margin="4,2"/>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Error Message -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="{Binding ErrorMessage}"
+               Foreground="#F48771"
+               FontSize="11"
+               Margin="0,0,0,8"
+               TextWrapping="Wrap"
+               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+    <!-- Preview -->
+    <TextBlock DockPanel.Dock="Top"
+               Text="Preview:"
+               Foreground="#808080"
+               FontSize="11"
+               Margin="0,0,0,4"/>
+    <Border DockPanel.Dock="Top"
+            Background="#252526"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16"
+            MaxHeight="150">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <TextBlock Text="{Binding Preview}"
+                   FontFamily="Consolas, Courier New, monospace"
+                   FontSize="12"
+                   Foreground="#DCDCAA"
+                   Padding="8"
+                   TextWrapping="NoWrap"/>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Loading Indicator -->
+    <StackPanel DockPanel.Dock="Top"
+                Orientation="Horizontal"
+                HorizontalAlignment="Center"
+                IsVisible="{Binding IsLoading}"
+                Margin="0,0,0,16">
+      <TextBlock Text="Processing..." Foreground="#808080"/>
+    </StackPanel>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="Generate"
+              Command="{Binding GenerateCommand}"
+              Width="100"
+              Classes="accent"
+              IsEnabled="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
+    </StackPanel>
+  </DockPanel>
+</Window>
