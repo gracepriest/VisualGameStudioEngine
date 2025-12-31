@@ -2309,7 +2309,13 @@ extern "C" {
     // ========================================================================
     // ECS - ENTITIES
     // ========================================================================
+    constexpr int MAX_ENTITIES = 100000;  // Prevent runaway entity creation
+
     int Framework_Ecs_CreateEntity() {
+        // Prevent excessive entity creation that could exhaust memory
+        if ((int)g_entities.size() >= MAX_ENTITIES) {
+            return -1;  // Return invalid entity ID
+        }
         Entity e = g_nextEntityId++;
         g_entities.insert(e);
         g_enabled[e] = EnabledComponent{ true };
@@ -6210,7 +6216,17 @@ extern "C" {
     bool Framework_Physics_IsEnabled() { return g_physicsEnabled; }
 
     // Body creation/destruction
+    constexpr int MAX_PHYSICS_BODIES = 10000;  // Prevent excessive body creation
+
     int Framework_Physics_CreateBody(int bodyType, float x, float y) {
+        // Prevent excessive physics body creation
+        if ((int)g_physicsBodies.size() >= MAX_PHYSICS_BODIES) {
+            return -1;  // Return invalid handle
+        }
+        // Validate body type
+        if (bodyType < BODY_STATIC || bodyType > BODY_KINEMATIC) {
+            return -1;
+        }
         PhysicsBody body;
         body.handle = g_physicsNextHandle++;
         body.type = bodyType;
@@ -6475,7 +6491,9 @@ extern "C" {
 
     void Framework_Physics_SetBodyPolygon(int bodyHandle, const float* vertices, int vertexCount) {
         auto it = g_physicsBodies.find(bodyHandle);
-        if (it == g_physicsBodies.end() || !vertices || vertexCount < 3) return;
+        // Validate inputs: need at least 3 vertices, max 64 to prevent excessive memory
+        constexpr int MAX_POLYGON_VERTS = 64;
+        if (it == g_physicsBodies.end() || !vertices || vertexCount < 3 || vertexCount > MAX_POLYGON_VERTS) return;
         it->second.shapeType = SHAPE_POLYGON;
         it->second.polygonVerts.clear();
         it->second.polygonVerts.assign(vertices, vertices + vertexCount * 2);
@@ -6522,6 +6540,8 @@ extern "C" {
     void Framework_Physics_BindToEntity(int bodyHandle, int entityId) {
         auto it = g_physicsBodies.find(bodyHandle);
         if (it == g_physicsBodies.end()) return;
+        // Validate entity exists before binding (unless unbinding with -1)
+        if (entityId >= 0 && !EcsIsAlive(entityId)) return;
         // Unbind previous entity if any
         if (it->second.boundEntity >= 0) {
             g_entityToBody.erase(it->second.boundEntity);
@@ -18769,6 +18789,9 @@ extern "C" {
         std::unordered_map<int, SpriteBatch> g_batches;
         int g_nextBatchId = 1;
 
+        constexpr int MAX_BATCHES = 100;          // Max simultaneous batches
+        constexpr int MAX_BATCH_SPRITES = 100000; // Max sprites per batch
+
         SpriteBatch* GetBatch(int id) {
             auto it = g_batches.find(id);
             return (it != g_batches.end()) ? &it->second : nullptr;
@@ -18776,9 +18799,16 @@ extern "C" {
     }
 
     int Framework_Batch_Create(int maxSprites) {
+        // Prevent excessive batch creation
+        if ((int)g_batches.size() >= MAX_BATCHES) {
+            return -1;
+        }
         SpriteBatch batch;
         batch.id = g_nextBatchId++;
-        batch.maxSprites = maxSprites > 0 ? maxSprites : 10000;
+        // Clamp maxSprites to reasonable limits
+        if (maxSprites <= 0) maxSprites = 10000;
+        if (maxSprites > MAX_BATCH_SPRITES) maxSprites = MAX_BATCH_SPRITES;
+        batch.maxSprites = maxSprites;
         batch.sprites.reserve(batch.maxSprites);
         g_batches[batch.id] = batch;
         return batch.id;
