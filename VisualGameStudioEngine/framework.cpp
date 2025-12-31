@@ -19187,29 +19187,54 @@ extern "C" {
         g_nextLevelId = 1;
     }
 
+} // Temporarily close extern "C" for networking namespace
+
     // ========================================================================
-    // NETWORKING SYSTEM (Simplified stub for API)
+    // NETWORKING SYSTEM (WinSock2 Implementation)
     // ========================================================================
 
     namespace {
-        struct NetClient {
+        bool g_wsaInitialized = false;
+
+        void EnsureWsaInit() {
+            if (!g_wsaInitialized) {
+                WSADATA wsaData;
+                if (WSAStartup(MAKEWORD(2, 2), &wsaData) == 0) {
+                    g_wsaInitialized = true;
+                }
+            }
+        }
+
+        void SetSocketNonBlocking(SOCKET s) {
+            u_long mode = 1;
+            ioctlsocket(s, FIONBIO, &mode);
+        }
+
+        // Message header: 4 bytes channel length + channel + 4 bytes data length + data
+        struct NetMessage {
+            std::string channel;
+            std::vector<unsigned char> data;
+        };
+
+        struct ServerClient {
             int id = 0;
-            bool connected = false;
+            SOCKET sock = INVALID_SOCKET;
             std::string address;
-            int port = 0, bytesSent = 0, bytesReceived = 0;
-            NetConnectCallback onConnect = nullptr;
-            void* connectUserData = nullptr;
-            NetDisconnectCallback onDisconnect = nullptr;
-            void* disconnectUserData = nullptr;
-            NetMessageCallback onMessage = nullptr;
-            void* messageUserData = nullptr;
+            int port = 0;
+            std::vector<unsigned char> recvBuffer;
+            int bytesSent = 0, bytesReceived = 0;
+            double lastPingTime = 0;
+            int ping = 0;
         };
 
         struct NetServer {
             int id = 0;
+            SOCKET listenSock = INVALID_SOCKET;
             bool running = false;
-            int port = 0, maxClients = 4, bytesSent = 0, bytesReceived = 0;
-            std::vector<NetClient> clients;
+            int port = 0, maxClients = 4;
+            int nextClientId = 1;
+            std::vector<ServerClient> clients;
+            int bytesSent = 0, bytesReceived = 0;
             NetConnectCallback onClientConnect = nullptr;
             void* clientConnectUserData = nullptr;
             NetDisconnectCallback onClientDisconnect = nullptr;
@@ -19218,10 +19243,29 @@ extern "C" {
             void* messageUserData = nullptr;
         };
 
+        struct NetClient {
+            int id = 0;
+            SOCKET sock = INVALID_SOCKET;
+            bool connected = false;
+            bool connecting = false;
+            std::string address;
+            int port = 0;
+            std::vector<unsigned char> recvBuffer;
+            int bytesSent = 0, bytesReceived = 0;
+            double lastPingSent = 0;
+            int ping = 0;
+            NetConnectCallback onConnect = nullptr;
+            void* connectUserData = nullptr;
+            NetDisconnectCallback onDisconnect = nullptr;
+            void* disconnectUserData = nullptr;
+            NetMessageCallback onMessage = nullptr;
+            void* messageUserData = nullptr;
+        };
+
         std::unordered_map<int, NetServer> g_servers;
         std::unordered_map<int, NetClient> g_netClients;
         int g_nextServerId = 1, g_nextNetClientId = 1;
-        static char s_netAddrBuf[64] = {0};
+        static char s_netAddrBuf[64] = { 0 };
 
         NetServer* GetServer(int id) {
             auto it = g_servers.find(id);
@@ -19231,15 +19275,108 @@ extern "C" {
             auto it = g_netClients.find(id);
             return (it != g_netClients.end()) ? &it->second : nullptr;
         }
+
+        // Send a framed message: [4-byte channel len][channel][4-byte data len][data]
+        bool SendFramedMessage(SOCKET s, const char* channel, const void* data, int dataSize, int& bytesSentOut) {
+            if (s == INVALID_SOCKET) return false;
+            std::string ch = channel ? channel : "";
+            uint32_t chanLen = (uint32_t)ch.size();
+            uint32_t dataLen = (uint32_t)dataSize;
+
+            std::vector<unsigned char> frame;
+            frame.resize(4 + chanLen + 4 + dataLen);
+            memcpy(&frame[0], &chanLen, 4);
+            if (chanLen > 0) memcpy(&frame[4], ch.c_str(), chanLen);
+            memcpy(&frame[4 + chanLen], &dataLen, 4);
+            if (dataLen > 0) memcpy(&frame[4 + chanLen + 4], data, dataLen);
+
+            int totalSent = 0;
+            while (totalSent < (int)frame.size()) {
+                int sent = send(s, (const char*)&frame[totalSent], (int)frame.size() - totalSent, 0);
+                if (sent == SOCKET_ERROR) {
+                    int err = WSAGetLastError();
+                    if (err == WSAEWOULDBLOCK) continue;
+                    return false;
+                }
+                totalSent += sent;
+            }
+            bytesSentOut += totalSent;
+            return true;
+        }
+
+        // Try to parse messages from buffer, returns parsed messages
+        std::vector<NetMessage> ParseMessages(std::vector<unsigned char>& buffer) {
+            std::vector<NetMessage> msgs;
+            while (buffer.size() >= 8) {
+                uint32_t chanLen = 0;
+                memcpy(&chanLen, &buffer[0], 4);
+                if (buffer.size() < 4 + chanLen + 4) break;
+                uint32_t dataLen = 0;
+                memcpy(&dataLen, &buffer[4 + chanLen], 4);
+                if (buffer.size() < 4 + chanLen + 4 + dataLen) break;
+
+                NetMessage msg;
+                if (chanLen > 0) msg.channel.assign((char*)&buffer[4], chanLen);
+                if (dataLen > 0) {
+                    msg.data.resize(dataLen);
+                    memcpy(msg.data.data(), &buffer[4 + chanLen + 4], dataLen);
+                }
+                msgs.push_back(std::move(msg));
+                buffer.erase(buffer.begin(), buffer.begin() + 4 + chanLen + 4 + dataLen);
+            }
+            return msgs;
+        }
     }
 
+extern "C" {
+
     int Framework_Net_CreateServer(int port, int maxClients) {
-        NetServer srv = { g_nextServerId++, true, port, maxClients > 0 ? maxClients : 4 };
+        EnsureWsaInit();
+        if (!g_wsaInitialized) return -1;
+
+        SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (listenSock == INVALID_SOCKET) return -1;
+
+        // Allow address reuse
+        int optval = 1;
+        setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, (const char*)&optval, sizeof(optval));
+
+        sockaddr_in addr = {};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons((u_short)port);
+
+        if (bind(listenSock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+            closesocket(listenSock);
+            return -1;
+        }
+
+        if (listen(listenSock, SOMAXCONN) == SOCKET_ERROR) {
+            closesocket(listenSock);
+            return -1;
+        }
+
+        SetSocketNonBlocking(listenSock);
+
+        NetServer srv;
+        srv.id = g_nextServerId++;
+        srv.listenSock = listenSock;
+        srv.running = true;
+        srv.port = port;
+        srv.maxClients = maxClients > 0 ? maxClients : 4;
         g_servers[srv.id] = srv;
         return srv.id;
     }
 
-    void Framework_Net_DestroyServer(int serverId) { g_servers.erase(serverId); }
+    void Framework_Net_DestroyServer(int serverId) {
+        auto* s = GetServer(serverId);
+        if (!s) return;
+        for (auto& c : s->clients) {
+            if (c.sock != INVALID_SOCKET) closesocket(c.sock);
+        }
+        if (s->listenSock != INVALID_SOCKET) closesocket(s->listenSock);
+        g_servers.erase(serverId);
+    }
 
     bool Framework_Net_ServerIsRunning(int serverId) {
         auto* s = GetServer(serverId);
@@ -19253,44 +19390,111 @@ extern "C" {
 
     void Framework_Net_DisconnectClient(int serverId, int clientId) {
         auto* s = GetServer(serverId);
-        if (s) s->clients.erase(std::remove_if(s->clients.begin(), s->clients.end(),
-            [clientId](const NetClient& c) { return c.id == clientId; }), s->clients.end());
+        if (!s) return;
+        for (auto it = s->clients.begin(); it != s->clients.end(); ++it) {
+            if (it->id == clientId) {
+                if (it->sock != INVALID_SOCKET) closesocket(it->sock);
+                if (s->onClientDisconnect) s->onClientDisconnect(clientId, s->clientDisconnectUserData);
+                s->clients.erase(it);
+                break;
+            }
+        }
     }
 
     void Framework_Net_BroadcastMessage(int serverId, const char* channel, const void* data, int dataSize, bool reliable) {
         auto* s = GetServer(serverId);
-        if (s) s->bytesSent += dataSize * (int)s->clients.size();
+        if (!s) return;
+        for (auto& c : s->clients) {
+            int sent = 0;
+            SendFramedMessage(c.sock, channel, data, dataSize, sent);
+            c.bytesSent += sent;
+            s->bytesSent += sent;
+        }
     }
 
     void Framework_Net_SendToClient(int serverId, int clientId, const char* channel, const void* data, int dataSize, bool reliable) {
         auto* s = GetServer(serverId);
-        if (s) s->bytesSent += dataSize;
+        if (!s) return;
+        for (auto& c : s->clients) {
+            if (c.id == clientId) {
+                int sent = 0;
+                SendFramedMessage(c.sock, channel, data, dataSize, sent);
+                c.bytesSent += sent;
+                s->bytesSent += sent;
+                break;
+            }
+        }
     }
 
     int Framework_Net_CreateClient() {
-        NetClient c = { g_nextNetClientId++ };
+        EnsureWsaInit();
+        NetClient c;
+        c.id = g_nextNetClientId++;
+        c.sock = INVALID_SOCKET;
         g_netClients[c.id] = c;
         return c.id;
     }
 
-    void Framework_Net_DestroyClient(int clientId) { g_netClients.erase(clientId); }
+    void Framework_Net_DestroyClient(int clientId) {
+        auto* c = GetNetClient(clientId);
+        if (!c) return;
+        if (c->sock != INVALID_SOCKET) closesocket(c->sock);
+        g_netClients.erase(clientId);
+    }
 
     bool Framework_Net_Connect(int clientId, const char* host, int port) {
         auto* c = GetNetClient(clientId);
-        if (!c) return false;
-        c->address = host ? host : "";
+        if (!c || !host || !g_wsaInitialized) return false;
+
+        if (c->sock != INVALID_SOCKET) closesocket(c->sock);
+        c->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (c->sock == INVALID_SOCKET) return false;
+
+        SetSocketNonBlocking(c->sock);
+
+        // Resolve host
+        struct addrinfo hints = {}, *result = nullptr;
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        char portStr[16];
+        snprintf(portStr, sizeof(portStr), "%d", port);
+
+        if (getaddrinfo(host, portStr, &hints, &result) != 0 || !result) {
+            closesocket(c->sock);
+            c->sock = INVALID_SOCKET;
+            return false;
+        }
+
+        int res = connect(c->sock, result->ai_addr, (int)result->ai_addrlen);
+        freeaddrinfo(result);
+
+        if (res == SOCKET_ERROR) {
+            int err = WSAGetLastError();
+            if (err != WSAEWOULDBLOCK) {
+                closesocket(c->sock);
+                c->sock = INVALID_SOCKET;
+                return false;
+            }
+        }
+
+        c->address = host;
         c->port = port;
-        c->connected = true;
-        if (c->onConnect) c->onConnect(clientId, c->connectUserData);
+        c->connecting = true;
+        c->connected = false;
         return true;
     }
 
     void Framework_Net_Disconnect(int clientId) {
         auto* c = GetNetClient(clientId);
-        if (c && c->connected) {
-            c->connected = false;
-            if (c->onDisconnect) c->onDisconnect(clientId, c->disconnectUserData);
+        if (!c) return;
+        if (c->sock != INVALID_SOCKET) {
+            closesocket(c->sock);
+            c->sock = INVALID_SOCKET;
         }
+        bool wasConnected = c->connected;
+        c->connected = false;
+        c->connecting = false;
+        if (wasConnected && c->onDisconnect) c->onDisconnect(clientId, c->disconnectUserData);
     }
 
     bool Framework_Net_IsConnected(int clientId) {
@@ -19300,11 +19504,140 @@ extern "C" {
 
     void Framework_Net_SendMessage(int clientId, const char* channel, const void* data, int dataSize, bool reliable) {
         auto* c = GetNetClient(clientId);
-        if (c && c->connected) c->bytesSent += dataSize;
+        if (!c || !c->connected) return;
+        int sent = 0;
+        if (SendFramedMessage(c->sock, channel, data, dataSize, sent)) {
+            c->bytesSent += sent;
+        }
     }
 
-    void Framework_Net_UpdateServer(int serverId) {}
-    void Framework_Net_UpdateClient(int clientId) {}
+    void Framework_Net_UpdateServer(int serverId) {
+        auto* s = GetServer(serverId);
+        if (!s || !s->running) return;
+
+        // Accept new connections
+        while ((int)s->clients.size() < s->maxClients) {
+            sockaddr_in clientAddr;
+            int addrLen = sizeof(clientAddr);
+            SOCKET clientSock = accept(s->listenSock, (sockaddr*)&clientAddr, &addrLen);
+            if (clientSock == INVALID_SOCKET) break;
+
+            SetSocketNonBlocking(clientSock);
+
+            ServerClient sc;
+            sc.id = s->nextClientId++;
+            sc.sock = clientSock;
+            char ipBuf[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &clientAddr.sin_addr, ipBuf, sizeof(ipBuf));
+            sc.address = ipBuf;
+            sc.port = ntohs(clientAddr.sin_port);
+            s->clients.push_back(sc);
+
+            if (s->onClientConnect) s->onClientConnect(sc.id, s->clientConnectUserData);
+        }
+
+        // Process each client
+        std::vector<int> toRemove;
+        for (auto& c : s->clients) {
+            // Receive data
+            char recvBuf[4096];
+            int received = recv(c.sock, recvBuf, sizeof(recvBuf), 0);
+            if (received > 0) {
+                c.recvBuffer.insert(c.recvBuffer.end(), recvBuf, recvBuf + received);
+                c.bytesReceived += received;
+                s->bytesReceived += received;
+
+                // Parse and dispatch messages
+                auto msgs = ParseMessages(c.recvBuffer);
+                for (auto& msg : msgs) {
+                    if (s->onMessage) {
+                        s->onMessage(c.id, msg.channel.c_str(), msg.data.data(), (int)msg.data.size(), s->messageUserData);
+                    }
+                }
+            }
+            else if (received == 0) {
+                // Connection closed
+                toRemove.push_back(c.id);
+            }
+            else {
+                int err = WSAGetLastError();
+                if (err != WSAEWOULDBLOCK) {
+                    toRemove.push_back(c.id);
+                }
+            }
+        }
+
+        // Remove disconnected clients
+        for (int id : toRemove) {
+            for (auto it = s->clients.begin(); it != s->clients.end(); ++it) {
+                if (it->id == id) {
+                    if (it->sock != INVALID_SOCKET) closesocket(it->sock);
+                    if (s->onClientDisconnect) s->onClientDisconnect(id, s->clientDisconnectUserData);
+                    s->clients.erase(it);
+                    break;
+                }
+            }
+        }
+    }
+
+    void Framework_Net_UpdateClient(int clientId) {
+        auto* c = GetNetClient(clientId);
+        if (!c || c->sock == INVALID_SOCKET) return;
+
+        // Check if still connecting
+        if (c->connecting && !c->connected) {
+            fd_set writeSet, exceptSet;
+            FD_ZERO(&writeSet);
+            FD_ZERO(&exceptSet);
+            FD_SET(c->sock, &writeSet);
+            FD_SET(c->sock, &exceptSet);
+            timeval tv = { 0, 0 };
+
+            int res = select(0, nullptr, &writeSet, &exceptSet, &tv);
+            if (res > 0) {
+                if (FD_ISSET(c->sock, &exceptSet)) {
+                    // Connection failed
+                    closesocket(c->sock);
+                    c->sock = INVALID_SOCKET;
+                    c->connecting = false;
+                }
+                else if (FD_ISSET(c->sock, &writeSet)) {
+                    // Connected!
+                    c->connected = true;
+                    c->connecting = false;
+                    if (c->onConnect) c->onConnect(clientId, c->connectUserData);
+                }
+            }
+        }
+
+        if (!c->connected) return;
+
+        // Receive data
+        char recvBuf[4096];
+        int received = recv(c->sock, recvBuf, sizeof(recvBuf), 0);
+        if (received > 0) {
+            c->recvBuffer.insert(c->recvBuffer.end(), recvBuf, recvBuf + received);
+            c->bytesReceived += received;
+
+            // Parse and dispatch messages
+            auto msgs = ParseMessages(c->recvBuffer);
+            for (auto& msg : msgs) {
+                if (c->onMessage) {
+                    c->onMessage(clientId, msg.channel.c_str(), msg.data.data(), (int)msg.data.size(), c->messageUserData);
+                }
+            }
+        }
+        else if (received == 0) {
+            // Server closed connection
+            Framework_Net_Disconnect(clientId);
+        }
+        else {
+            int err = WSAGetLastError();
+            if (err != WSAEWOULDBLOCK) {
+                Framework_Net_Disconnect(clientId);
+            }
+        }
+    }
 
     void Framework_Net_SetOnClientConnected(int serverId, NetConnectCallback cb, void* ud) {
         if (auto* s = GetServer(serverId)) { s->onClientConnect = cb; s->clientConnectUserData = ud; }
@@ -19330,7 +19663,10 @@ extern "C" {
         if (auto* c = GetNetClient(clientId)) { c->onMessage = cb; c->messageUserData = ud; }
     }
 
-    int Framework_Net_GetPing(int clientId) { return 0; }
+    int Framework_Net_GetPing(int clientId) {
+        auto* c = GetNetClient(clientId);
+        return c ? c->ping : 0;
+    }
 
     int Framework_Net_GetBytesSent(int connectionId) {
         if (auto* c = GetNetClient(connectionId)) return c->bytesSent;
@@ -19363,10 +19699,23 @@ extern "C" {
     }
 
     void Framework_Net_Shutdown() {
+        for (auto& kv : g_servers) {
+            for (auto& c : kv.second.clients) {
+                if (c.sock != INVALID_SOCKET) closesocket(c.sock);
+            }
+            if (kv.second.listenSock != INVALID_SOCKET) closesocket(kv.second.listenSock);
+        }
+        for (auto& kv : g_netClients) {
+            if (kv.second.sock != INVALID_SOCKET) closesocket(kv.second.sock);
+        }
         g_servers.clear();
         g_netClients.clear();
         g_nextServerId = 1;
         g_nextNetClientId = 1;
+        if (g_wsaInitialized) {
+            WSACleanup();
+            g_wsaInitialized = false;
+        }
     }
 
     // ========================================================================

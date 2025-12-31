@@ -10,8 +10,14 @@
 #define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #define NOGDI          // Excludes GDI functions
-#define NOUSER         // Excludes USER functions  
+#define NOUSER         // Excludes USER functions
 #define NOMINMAX       // Excludes min/max macros
+
+// WinSock2 must be included before Windows.h
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+#pragma comment(lib, "Ws2_32.lib")
+
 // add headers that you want to pre-compile here
 #include "raylib.h"
 #include "platform.h"
