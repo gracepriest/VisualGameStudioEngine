@@ -574,6 +574,76 @@ Framework_Animators_Update(dt As Single)
 
 ---
 
+## Sprite Sheet System
+
+Grid-based sprite sheet tools for easy frame extraction and animation creation.
+
+### Sheet Creation
+
+```vb
+' Create sprite sheet from texture with uniform grid
+Framework_SpriteSheet_Create(textureHandle As Integer, frameWidth As Integer, frameHeight As Integer, columns As Integer, rows As Integer, paddingX As Integer, paddingY As Integer) As Integer
+Framework_SpriteSheet_Destroy(sheetId As Integer)
+Framework_SpriteSheet_DestroyAll()
+Framework_SpriteSheet_IsValid(sheetId As Integer) As Boolean
+Framework_SpriteSheet_GetCount() As Integer
+```
+
+### Frame Access
+
+```vb
+' Get frame info
+Framework_SpriteSheet_GetTextureHandle(sheetId As Integer) As Integer
+Framework_SpriteSheet_GetFrameCount(sheetId As Integer) As Integer
+Framework_SpriteSheet_GetColumns(sheetId As Integer) As Integer
+Framework_SpriteSheet_GetRows(sheetId As Integer) As Integer
+Framework_SpriteSheet_GetFrameSize(sheetId As Integer, ByRef width As Integer, ByRef height As Integer)
+
+' Get frame rectangle by index (left-to-right, top-to-bottom)
+Framework_SpriteSheet_GetFrameRect(sheetId As Integer, frameIndex As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
+
+' Get frame rectangle by row/column
+Framework_SpriteSheet_GetFrameRectRC(sheetId As Integer, row As Integer, col As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
+```
+
+### Animation Integration
+
+```vb
+' Create animation clip from sprite sheet
+Framework_AnimClip_CreateFromSheet(name As String, sheetId As Integer, startFrame As Integer, frameCount As Integer, frameDuration As Single, loopMode As Integer) As Integer
+
+' Create animation from a specific row
+Framework_AnimClip_CreateFromSheetRow(name As String, sheetId As Integer, row As Integer, startCol As Integer, frameCount As Integer, frameDuration As Single, loopMode As Integer) As Integer
+```
+
+### Quick Draw
+
+```vb
+' Draw a frame directly without entity
+Framework_SpriteSheet_DrawFrame(sheetId As Integer, frameIndex As Integer, x As Single, y As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+```
+
+### Example Usage
+
+```vb
+' Load a 4x4 sprite sheet (16 frames, 32x32 each)
+Dim texture = Framework_LoadTextureH("player_walk.png")
+Dim sheet = Framework_SpriteSheet_Create(texture, 32, 32, 4, 4, 0, 0)
+
+' Create walk animation from first row (frames 0-3)
+Dim walkClip = Framework_AnimClip_CreateFromSheet("walk", sheet, 0, 4, 0.1F, 1)
+
+' Or from a specific row
+Dim runClip = Framework_AnimClip_CreateFromSheetRow("run", sheet, 1, 0, 4, 0.08F, 1)
+
+' Attach to entity
+Framework_Ecs_AddAnimator(player)
+Framework_Ecs_SetAnimatorClip(player, walkClip)
+Framework_Ecs_AnimatorPlay(player)
+```
+
+---
+
 ## Particle System
 
 ### Emitter Component
@@ -2036,6 +2106,63 @@ Framework_Level_Draw(levelId As Integer, tilesetHandle As Integer)
 Framework_Level_DrawLayer(levelId As Integer, layerIndex As Integer, tilesetHandle As Integer)
 ```
 
+### Coordinate Conversion
+
+```vb
+' Convert world coordinates to tile coordinates
+Framework_Level_WorldToTile(levelId As Integer, worldX As Single, worldY As Single, ByRef tileX As Integer, ByRef tileY As Integer)
+
+' Convert tile coordinates to world coordinates (top-left corner)
+Framework_Level_TileToWorld(levelId As Integer, tileX As Integer, tileY As Integer, ByRef worldX As Single, ByRef worldY As Single)
+
+' Convert tile coordinates to world coordinates (center)
+Framework_Level_TileToWorldCenter(levelId As Integer, tileX As Integer, tileY As Integer, ByRef worldX As Single, ByRef worldY As Single)
+```
+
+### Editing Tools
+
+```vb
+' Flood fill area with tile
+Framework_Level_FloodFill(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, newTileId As Integer) As Integer
+
+' Undo/Redo system
+Framework_Level_BeginEdit(levelId As Integer)      ' Start edit batch
+Framework_Level_EndEdit(levelId As Integer)        ' End edit batch
+Framework_Level_Undo(levelId As Integer)
+Framework_Level_Redo(levelId As Integer)
+Framework_Level_CanUndo(levelId As Integer) As Boolean
+Framework_Level_CanRedo(levelId As Integer) As Boolean
+Framework_Level_ClearHistory(levelId As Integer)
+
+' Selection and copy/paste
+Framework_Level_SetSelection(levelId As Integer, x As Integer, y As Integer, w As Integer, h As Integer)
+Framework_Level_ClearSelection(levelId As Integer)
+Framework_Level_GetSelectionSize(levelId As Integer, ByRef w As Integer, ByRef h As Integer)
+Framework_Level_CopySelection(levelId As Integer, layerIndex As Integer)
+Framework_Level_PasteSelection(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer)
+```
+
+### Tile Properties
+
+```vb
+' Tile collision flags
+Framework_Level_SetTileCollision(levelId As Integer, tileX As Integer, tileY As Integer, isSolid As Boolean)
+Framework_Level_GetTileCollision(levelId As Integer, tileX As Integer, tileY As Integer) As Boolean
+Framework_Level_IsTileSolid(levelId As Integer, tileX As Integer, tileY As Integer) As Boolean
+
+' Raycast for collision
+Framework_Level_RaycastTiles(levelId As Integer, startX As Single, startY As Single, dirX As Single, dirY As Single, maxDist As Single, ByRef hitX As Single, ByRef hitY As Single) As Boolean
+```
+
+### Auto-Tiling
+
+```vb
+' Set auto-tile rules (16 tiles for 4-bit neighbor rules)
+Framework_Level_SetAutoTileRules(levelId As Integer, baseTileId As Integer, tileMapping() As Integer)
+Framework_Level_ClearAutoTileRules(levelId As Integer, baseTileId As Integer)
+Framework_Level_ApplyAutoTiling(levelId As Integer, layerIndex As Integer)
+```
+
 ---
 
 ## Networking
@@ -2166,6 +2293,20 @@ Framework_Shader_LoadChromatic() As Integer     ' RGB channel separation
   ' Uniforms: aberrationAmount (float)
 Framework_Shader_LoadPixelate() As Integer      ' Retro pixelation
   ' Uniforms: pixelSize (float)
+
+' Post-processing effects (NEW)
+Framework_Shader_LoadVignette() As Integer      ' Darken screen edges
+  ' Uniforms: vignetteRadius (float), vignetteSoftness (float), vignetteIntensity (float)
+Framework_Shader_LoadBloom() As Integer         ' Bright area glow
+  ' Uniforms: bloomThreshold (float), bloomIntensity (float), bloomSpread (float)
+Framework_Shader_LoadWave() As Integer          ' Wavy distortion effect
+  ' Uniforms: waveAmplitude (float), waveFrequency (float), waveSpeed (float), time (float)
+Framework_Shader_LoadSharpen() As Integer       ' Edge enhancement
+  ' Uniforms: sharpenAmount (float)
+Framework_Shader_LoadFilmGrain() As Integer     ' Noise/grain effect
+  ' Uniforms: grainIntensity (float), grainSize (float), time (float)
+Framework_Shader_LoadColorAdjust() As Integer   ' Color grading
+  ' Uniforms: brightness (float), contrast (float), saturation (float)
 ```
 
 ---

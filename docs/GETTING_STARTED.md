@@ -351,6 +351,269 @@ End If
 Dim moveValue = Framework_Input_GetActionValue(moveXAction)
 ```
 
+### Particle Effects
+
+Add visual flair with particles:
+
+```vb
+' Create a fire-like particle emitter
+Dim emitter = Framework_Particle_CreateEmitter()
+Framework_Particle_SetPosition(emitter, 400, 300)
+Framework_Particle_SetEmissionRate(emitter, 50)        ' 50 particles/second
+Framework_Particle_SetLifetime(emitter, 1.0F, 2.0F)    ' 1-2 second lifespan
+Framework_Particle_SetVelocity(emitter, 0, -100, 30)   ' Upward with spread
+Framework_Particle_SetStartColor(emitter, 255, 200, 50, 255)  ' Yellow
+Framework_Particle_SetEndColor(emitter, 255, 50, 0, 0)        ' Fading red
+Framework_Particle_SetStartSize(emitter, 10, 15)
+Framework_Particle_SetEndSize(emitter, 2, 5)
+Framework_Particle_Start(emitter)
+
+' In game loop:
+Framework_Particle_Update(dt)  ' Update all emitters
+Framework_Particle_Draw()      ' Draw all particles
+
+' Cleanup
+Framework_Particle_DestroyEmitter(emitter)
+```
+
+### Tweening and Animations
+
+Smooth value transitions:
+
+```vb
+' Tween an entity's position over 1 second with ease-out
+Dim tween = Framework_Tween_Float(startValue, endValue, 1.0F, EaseType.QuadOut)
+
+' Tween entity position
+Dim posX As Single = 100
+Framework_Tween_CreateFloat(posX, 500, 0.5F, EaseType.ElasticOut)
+
+' Move entity along path
+Framework_Tween_EntityPosition(entity, 200, 300, 1.0F, EaseType.CubicInOut)
+
+' Create a sequence of tweens
+Dim seq = Framework_Tween_CreateSequence()
+Framework_Tween_SequenceAppend(seq, tween1)
+Framework_Tween_SequenceAppend(seq, tween2)
+Framework_Tween_SequencePlay(seq)
+
+' Update in game loop
+Framework_Tween_Update(dt)
+```
+
+### UI System
+
+Create interactive user interfaces:
+
+```vb
+' Create UI elements
+Dim panel = Framework_UI_CreatePanel(10, 10, 200, 150)
+Framework_UI_SetColor(panel, 40, 45, 60, 220)
+
+Dim label = Framework_UI_CreateLabel("Score: 0", 20, 20)
+Framework_UI_SetParent(label, panel)  ' Attach to panel
+
+Dim button = Framework_UI_CreateButton("Start Game", 20, 60, 160, 40)
+Framework_UI_SetParent(button, panel)
+
+Dim slider = Framework_UI_CreateSlider(20, 110, 160, 20)
+Framework_UI_SetSliderRange(slider, 0, 100)
+Framework_UI_SetSliderValue(slider, 50)
+Framework_UI_SetParent(slider, panel)
+
+' In game loop:
+Framework_UI_Update()  ' Handle input
+Framework_UI_Draw()    ' Render UI
+
+' Check button clicks
+If Framework_UI_WasClicked(button) Then
+    ' Start game
+End If
+
+' Get slider value
+Dim volume = Framework_UI_GetSliderValue(slider)
+```
+
+### Camera Effects
+
+Dynamic camera for engaging gameplay:
+
+```vb
+' Setup camera to follow player
+Framework_Camera_SetTarget(player)
+Framework_Camera_SetFollowSmoothing(0.1F)  ' Smooth follow
+Framework_Camera_SetDeadzone(50, 30)        ' Movement deadzone
+
+' Add zoom
+Framework_Camera_SetZoom(1.5F)
+Framework_Camera_ZoomTo(2.0F, 0.5F)  ' Zoom to 2x over 0.5 seconds
+
+' Screen shake on impact
+Framework_Camera_Shake(10.0F, 0.3F)  ' Intensity 10, duration 0.3s
+
+' Constrain camera to level bounds
+Framework_Camera_SetBounds(0, 0, levelWidth, levelHeight)
+
+' In draw:
+Framework_Camera_BeginMode()  ' Apply camera transform
+    ' Draw world objects here
+Framework_Camera_EndMode()
+' Draw UI after (unaffected by camera)
+```
+
+### GLSL Shaders
+
+Apply visual effects:
+
+```vb
+' Load built-in shaders
+Dim grayscale = Framework_Shader_LoadGrayscale()
+Dim blur = Framework_Shader_LoadBlur()
+Dim crt = Framework_Shader_LoadCRT()
+Dim vignette = Framework_Shader_LoadVignette()
+
+' Set shader uniforms
+Framework_Shader_SetFloatByName(vignette, "vignetteRadius", 0.5F)
+Framework_Shader_SetFloatByName(vignette, "vignetteIntensity", 0.8F)
+
+' In draw:
+Framework_Shader_Begin(vignette)
+    ' Draw affected content
+    Framework_DrawRectangle(100, 100, 200, 200, 255, 100, 50, 255)
+Framework_Shader_End()
+
+' Cleanup
+Framework_Shader_Unload(vignette)
+```
+
+### Save/Load System
+
+Persist game progress:
+
+```vb
+' Save game data
+Framework_Save_BeginSave(1)  ' Slot 1
+Framework_Save_WriteInt("level", currentLevel)
+Framework_Save_WriteFloat("health", playerHealth)
+Framework_Save_WriteBool("hasKey", hasKey)
+Framework_Save_WriteString("playerName", playerName)
+Framework_Save_EndSave()
+
+' Load game data
+If Framework_Save_SlotExists(1) Then
+    Framework_Save_BeginLoad(1)
+    currentLevel = Framework_Save_ReadInt("level", 1)      ' Default: 1
+    playerHealth = Framework_Save_ReadFloat("health", 100) ' Default: 100
+    hasKey = Framework_Save_ReadBool("hasKey", False)
+    playerName = Framework_Save_ReadString("playerName", "Player")
+    Framework_Save_EndLoad()
+End If
+
+' Delete save
+Framework_Save_DeleteSlot(1)
+
+' Auto-save with interval
+Framework_Save_SetAutoSaveInterval(60.0F)  ' Every 60 seconds
+Framework_Save_EnableAutoSave(True)
+```
+
+### A* Pathfinding
+
+AI navigation with pathfinding:
+
+```vb
+' Create navigation grid
+Dim grid = Framework_NavGrid_Create(50, 50, 32)  ' 50x50 tiles, 32px each
+
+' Mark obstacles as unwalkable
+Framework_NavGrid_SetWalkable(grid, 10, 10, False)
+Framework_NavGrid_Fill(grid, 5, 5, 10, 3, False)  ' Wall region
+
+' Find path
+Dim pathId = Framework_AI_FindPath(grid, startX, startY, endX, endY)
+If pathId >= 0 Then
+    Dim pathLength = Framework_AI_GetPathLength(pathId)
+    For i As Integer = 0 To pathLength - 1
+        Dim wx, wy As Single
+        Framework_AI_GetPathPoint(pathId, i, wx, wy)
+        ' Move toward each waypoint
+    Next
+End If
+
+' Create steering agent
+Dim agent = Framework_AI_CreateAgent(entity)
+Framework_AI_SetMaxSpeed(agent, 150)
+Framework_AI_SetArriveRadius(agent, 20)
+
+' Behaviors
+Framework_AI_Seek(agent, targetX, targetY)
+Framework_AI_Flee(agent, threatX, threatY)
+Framework_AI_Wander(agent)
+```
+
+### Timers and Events
+
+Schedule delayed actions:
+
+```vb
+' One-shot timer (fires once after delay)
+Dim timerId = Framework_Timer_After(2.0F, AddressOf OnTimerComplete)
+
+' Repeating timer
+Dim repeatId = Framework_Timer_Every(0.5F, AddressOf OnTick)
+
+' Cancel timer
+Framework_Timer_Cancel(timerId)
+
+' Event system
+Dim eventId = Framework_Event_Register("PlayerDied")
+Framework_Event_Subscribe(eventId, AddressOf OnPlayerDied)
+
+' Publish event from anywhere
+Framework_Event_Publish(eventId)
+
+' Publish with data
+Framework_Event_PublishInt(eventId, score)
+Framework_Event_PublishString(eventId, "Game Over!")
+
+' Update in game loop
+Framework_Timer_Update(dt)
+Framework_Event_ProcessQueue()
+```
+
+### Dialogue System
+
+Create conversations:
+
+```vb
+' Create dialogue
+Dim dlg = Framework_Dialogue_Create("intro")
+
+' Add nodes
+Dim node1 = Framework_Dialogue_AddNode(dlg, "Hello, traveler!")
+Framework_Dialogue_SetNodeSpeaker(dlg, node1, "Merchant")
+
+Dim node2 = Framework_Dialogue_AddNode(dlg, "What brings you here?")
+Framework_Dialogue_SetNodeSpeaker(dlg, node2, "Merchant")
+
+' Add choices
+Framework_Dialogue_AddChoice(dlg, node1, "Looking for supplies", node2)
+Framework_Dialogue_AddChoice(dlg, node1, "Just passing through", -1)  ' End
+
+' Start dialogue
+Framework_Dialogue_Start(dlg)
+Framework_Dialogue_SetTypewriterSpeed(0.05F)
+
+' In game loop
+If Framework_Dialogue_IsActive(dlg) Then
+    Framework_Dialogue_Update(dt)
+
+    ' Get current text for display
+    Dim speaker = Framework_Dialogue_GetCurrentSpeaker(dlg)
+    Dim text = Framework_Dialogue_GetCurrentText(dlg)
+End If
+```
+
 ## Next Steps
 
 1. **Explore the Demo Scenes** in `TestVbDLL/GameScenes.vb`

@@ -28,7 +28,8 @@ Class TitleScene
         "TIMER/EVT", "FSM",
         "SAVE/LOAD", "BATCHING",
         "ATLAS", "LEVEL ED",
-        "NETWORK", ""
+        "NETWORK", "SHADERS",
+        "SPRITES", "RPG DEMO"
     }
 
     ' Menu item colors (R, G, B)
@@ -44,12 +45,13 @@ Class TitleScene
         {150, 200, 255}, {255, 150, 200},
         {200, 255, 150}, {100, 200, 255},
         {255, 180, 100}, {150, 255, 150},
-        {200, 150, 255}, {100, 100, 100}
+        {200, 150, 255}, {255, 100, 150},
+        {150, 200, 255}, {255, 200, 50}
     }
 
     ' Grid layout constants
     Const MENU_COLS As Integer = 2
-    Const MENU_ROWS As Integer = 12
+    Const MENU_ROWS As Integer = 13
     Const MENU_START_Y As Integer = 100
     Const MENU_ITEM_WIDTH As Integer = 220
     Const MENU_ITEM_HEIGHT As Integer = 38
@@ -211,6 +213,18 @@ Class TitleScene
                     'Networking Demo
                     Framework_PlaySoundH(sfxHit)
                     ChangeTo(New DemoNetworkScene)
+                Case 23
+                    'GLSL Shader Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoShaderScene)
+                Case 24
+                    'Sprite Sheet Demo
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New DemoSpriteSheetScene)
+                Case 25
+                    'RPG Demo - Full Engine Showcase
+                    Framework_PlaySoundH(sfxHit)
+                    ChangeTo(New SampleRPGScene)
             End Select
         End If
 
@@ -5128,5 +5142,710 @@ Class DemoNetworkScene
         Framework_DrawText("(Networking is a stub API for demonstration)", WINDOW_WIDTH \ 2 - 175, 373, 12, 200, 150, 100, 255)
 
         Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+End Class
+
+' ============================================================================
+' GLSL SHADER DEMO SCENE
+' ============================================================================
+Public Class DemoShaderScene
+    Inherits Scene
+
+    Private _currentShader As Integer = 0
+    Private _shaderId As Integer = -1
+    Private _time As Single = 0
+    Private _shaderNames() As String = {"Grayscale", "Blur", "CRT", "Vignette", "Bloom", "Wave", "Sharpen", "FilmGrain", "ColorAdjust"}
+
+    ' Demo objects
+    Private ReadOnly _boxes As New List(Of (x As Single, y As Single, w As Single, h As Single, r As Byte, g As Byte, b As Byte))
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoShaderScene OnEnter - GLSL Shader Effects")
+
+        ' Create colorful boxes to see shader effects
+        Dim rnd As New Random()
+        For i As Integer = 0 To 19
+            _boxes.Add((
+                CSng(rnd.Next(50, WINDOW_WIDTH - 100)),
+                CSng(rnd.Next(100, WINDOW_HEIGHT - 100)),
+                CSng(rnd.Next(40, 100)),
+                CSng(rnd.Next(40, 100)),
+                CByte(rnd.Next(100, 255)),
+                CByte(rnd.Next(100, 255)),
+                CByte(rnd.Next(100, 255))
+            ))
+        Next
+
+        LoadCurrentShader()
+    End Sub
+
+    Private Sub LoadCurrentShader()
+        ' Destroy previous shader
+        If _shaderId > 0 Then
+            Framework_Shader_Unload(_shaderId)
+        End If
+
+        ' Load new shader based on selection
+        Select Case _currentShader
+            Case 0 : _shaderId = Framework_Shader_LoadGrayscale()
+            Case 1 : _shaderId = Framework_Shader_LoadBlur()
+            Case 2 : _shaderId = Framework_Shader_LoadCRT()
+            Case 3 : _shaderId = Framework_Shader_LoadVignette()
+            Case 4 : _shaderId = Framework_Shader_LoadBloom()
+            Case 5 : _shaderId = Framework_Shader_LoadWave()
+            Case 6 : _shaderId = Framework_Shader_LoadSharpen()
+            Case 7 : _shaderId = Framework_Shader_LoadFilmGrain()
+            Case 8 : _shaderId = Framework_Shader_LoadColorAdjust()
+        End Select
+
+        ' Set default uniforms
+        SetShaderDefaults()
+    End Sub
+
+    Private Sub SetShaderDefaults()
+        Select Case _currentShader
+            Case 3 ' Vignette
+                Framework_Shader_SetFloatByName(_shaderId, "vignetteRadius", 0.5F)
+                Framework_Shader_SetFloatByName(_shaderId, "vignetteSoftness", 0.4F)
+                Framework_Shader_SetFloatByName(_shaderId, "vignetteIntensity", 0.8F)
+            Case 4 ' Bloom
+                Framework_Shader_SetFloatByName(_shaderId, "bloomThreshold", 0.6F)
+                Framework_Shader_SetFloatByName(_shaderId, "bloomIntensity", 1.5F)
+            Case 5 ' Wave
+                Framework_Shader_SetFloatByName(_shaderId, "waveAmplitude", 0.01F)
+                Framework_Shader_SetFloatByName(_shaderId, "waveFrequency", 20.0F)
+                Framework_Shader_SetFloatByName(_shaderId, "waveSpeed", 3.0F)
+            Case 6 ' Sharpen
+                Framework_Shader_SetFloatByName(_shaderId, "sharpenAmount", 1.5F)
+            Case 7 ' FilmGrain
+                Framework_Shader_SetFloatByName(_shaderId, "grainIntensity", 0.15F)
+                Framework_Shader_SetFloatByName(_shaderId, "grainSize", 1.5F)
+            Case 8 ' ColorAdjust
+                Framework_Shader_SetFloatByName(_shaderId, "brightness", 1.1F)
+                Framework_Shader_SetFloatByName(_shaderId, "contrast", 1.2F)
+                Framework_Shader_SetFloatByName(_shaderId, "saturation", 1.3F)
+        End Select
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        If _shaderId > 0 Then
+            Framework_Shader_Unload(_shaderId)
+            _shaderId = -1
+        End If
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        _time += dt
+
+        ' Update time-based uniforms
+        If _currentShader = 5 OrElse _currentShader = 7 Then ' Wave or FilmGrain
+            Framework_Shader_SetFloatByName(_shaderId, "time", _time)
+        End If
+
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Switch shaders
+        If Framework_IsKeyPressed(Keys.LEFT) Then
+            _currentShader = (_currentShader - 1 + _shaderNames.Length) Mod _shaderNames.Length
+            LoadCurrentShader()
+        ElseIf Framework_IsKeyPressed(Keys.RIGHT) Then
+            _currentShader = (_currentShader + 1) Mod _shaderNames.Length
+            LoadCurrentShader()
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(30, 35, 50, 255)
+
+        ' Draw boxes with shader
+        If _shaderId > 0 Then
+            Framework_Shader_Begin(_shaderId)
+        End If
+
+        For Each box In _boxes
+            Framework_DrawRectangle(CInt(box.x), CInt(box.y), CInt(box.w), CInt(box.h), box.r, box.g, box.b, 255)
+        Next
+
+        ' Draw some circles too
+        For i As Integer = 0 To 9
+            Dim angle As Single = _time + i * 0.6F
+            Dim cx As Integer = WINDOW_WIDTH \ 2 + CInt(Math.Cos(angle) * 150)
+            Dim cy As Integer = WINDOW_HEIGHT \ 2 + CInt(Math.Sin(angle) * 100)
+            Framework_DrawCircle(cx, cy, 20 + i * 2, CByte(200 + i * 5), CByte(100 + i * 10), CByte(50 + i * 15), 255)
+        Next
+
+        If _shaderId > 0 Then
+            Framework_Shader_End()
+        End If
+
+        ' UI (draw without shader)
+        Framework_DrawRectangle(0, 0, WINDOW_WIDTH, 80, 20, 25, 40, 230)
+        Framework_DrawText("GLSL SHADER DEMO", 20, 15, 24, 255, 200, 100, 255)
+        Framework_DrawText("LEFT/RIGHT: Change Shader | ESC: Exit", 20, 50, 14, 180, 180, 180, 255)
+
+        ' Current shader name
+        Framework_DrawText("Current: " & _shaderNames(_currentShader), WINDOW_WIDTH - 200, 20, 18, 100, 255, 200, 255)
+        Framework_DrawText("Shader ID: " & _shaderId.ToString(), WINDOW_WIDTH - 200, 45, 12, 150, 150, 150, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, WINDOW_HEIGHT - 30)
+    End Sub
+End Class
+
+' ============================================================================
+' SPRITE SHEET DEMO SCENE
+' ============================================================================
+Public Class DemoSpriteSheetScene
+    Inherits Scene
+
+    Private _sheetId As Integer = -1
+    Private _textureId As Integer = -1
+    Private _currentFrame As Integer = 0
+    Private _animTimer As Single = 0
+    Private _animSpeed As Single = 0.1F
+    Private _isPlaying As Boolean = True
+
+    ' Simulated sprite sheet (we'll draw colored frames)
+    Private Const FRAME_SIZE As Integer = 64
+    Private Const SHEET_COLS As Integer = 4
+    Private Const SHEET_ROWS As Integer = 4
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("DemoSpriteSheetScene OnEnter - Sprite Sheet Tools")
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        If _sheetId > 0 Then
+            Framework_SpriteSheet_Destroy(_sheetId)
+        End If
+        If _textureId > 0 Then
+            Framework_ReleaseTextureH(_textureId)
+        End If
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse Framework_IsKeyPressed(Keys.ESCAPE) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        ' Toggle animation
+        If Framework_IsKeyPressed(Keys.SPACE) Then
+            _isPlaying = Not _isPlaying
+        End If
+
+        ' Adjust speed
+        If Framework_IsKeyPressed(Keys.UP) Then
+            _animSpeed = Math.Max(0.02F, _animSpeed - 0.02F)
+        ElseIf Framework_IsKeyPressed(Keys.DOWN) Then
+            _animSpeed = Math.Min(0.5F, _animSpeed + 0.02F)
+        End If
+
+        ' Manual frame control
+        If Framework_IsKeyPressed(Keys.LEFT) Then
+            _currentFrame = (_currentFrame - 1 + SHEET_COLS * SHEET_ROWS) Mod (SHEET_COLS * SHEET_ROWS)
+        ElseIf Framework_IsKeyPressed(Keys.RIGHT) Then
+            _currentFrame = (_currentFrame + 1) Mod (SHEET_COLS * SHEET_ROWS)
+        End If
+
+        ' Auto animation
+        If _isPlaying Then
+            _animTimer += dt
+            If _animTimer >= _animSpeed Then
+                _animTimer = 0
+                _currentFrame = (_currentFrame + 1) Mod (SHEET_COLS * SHEET_ROWS)
+            End If
+        End If
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_ClearBackground(35, 40, 55, 255)
+
+        ' Title
+        Framework_DrawRectangle(0, 0, WINDOW_WIDTH, 70, 25, 30, 45, 230)
+        Framework_DrawText("SPRITE SHEET DEMO", 20, 15, 24, 255, 200, 100, 255)
+        Framework_DrawText("SPACE: Play/Pause | Arrows: Navigate | UP/DOWN: Speed | ESC: Exit", 20, 45, 12, 180, 180, 180, 255)
+
+        ' Draw simulated sprite sheet grid
+        Dim sheetX As Integer = 50
+        Dim sheetY As Integer = 100
+        Framework_DrawText("Sprite Sheet Grid (" & SHEET_COLS & "x" & SHEET_ROWS & "):", sheetX, sheetY - 25, 16, 200, 200, 200, 255)
+
+        For row As Integer = 0 To SHEET_ROWS - 1
+            For col As Integer = 0 To SHEET_COLS - 1
+                Dim frameIdx As Integer = row * SHEET_COLS + col
+                Dim fx As Integer = sheetX + col * (FRAME_SIZE + 4)
+                Dim fy As Integer = sheetY + row * (FRAME_SIZE + 4)
+
+                ' Highlight current frame
+                If frameIdx = _currentFrame Then
+                    Framework_DrawRectangle(fx - 3, fy - 3, FRAME_SIZE + 6, FRAME_SIZE + 6, 255, 255, 0, 255)
+                End If
+
+                ' Draw frame with unique color
+                Dim r As Byte = CByte(100 + frameIdx * 10)
+                Dim g As Byte = CByte(150 - frameIdx * 5)
+                Dim b As Byte = CByte(200 + frameIdx * 3)
+                Framework_DrawRectangle(fx, fy, FRAME_SIZE, FRAME_SIZE, r, g, b, 255)
+
+                ' Frame number
+                Framework_DrawText(frameIdx.ToString(), fx + FRAME_SIZE \ 2 - 5, fy + FRAME_SIZE \ 2 - 8, 16, 255, 255, 255, 255)
+            Next
+        Next
+
+        ' Draw current frame enlarged (preview)
+        Dim previewX As Integer = 400
+        Dim previewY As Integer = 120
+        Dim previewSize As Integer = 150
+        Framework_DrawText("Current Frame Preview:", previewX, previewY - 25, 16, 200, 200, 200, 255)
+
+        Dim cr As Byte = CByte(100 + _currentFrame * 10)
+        Dim cg As Byte = CByte(150 - _currentFrame * 5)
+        Dim cb As Byte = CByte(200 + _currentFrame * 3)
+        Framework_DrawRectangle(previewX, previewY, previewSize, previewSize, cr, cg, cb, 255)
+        Framework_DrawText("Frame " & _currentFrame.ToString(), previewX + previewSize \ 2 - 30, previewY + previewSize \ 2 - 10, 20, 255, 255, 255, 255)
+
+        ' Info panel
+        Framework_DrawRectangle(previewX, previewY + 180, 200, 120, 40, 45, 60, 200)
+        Framework_DrawText("Frame: " & _currentFrame.ToString() & " / " & (SHEET_COLS * SHEET_ROWS - 1).ToString(), previewX + 10, previewY + 190, 14, 200, 200, 200, 255)
+        Framework_DrawText("Row: " & (_currentFrame \ SHEET_COLS).ToString() & " Col: " & (_currentFrame Mod SHEET_COLS).ToString(), previewX + 10, previewY + 210, 14, 200, 200, 200, 255)
+        Framework_DrawText("Speed: " & _animSpeed.ToString("F2") & "s", previewX + 10, previewY + 230, 14, 200, 200, 200, 255)
+        Framework_DrawText("Playing: " & _isPlaying.ToString(), previewX + 10, previewY + 250, 14, If(_isPlaying, CByte(100), CByte(200)), If(_isPlaying, CByte(255), CByte(100)), If(_isPlaying, CByte(100), CByte(100)), 255)
+
+        ' API info
+        Framework_DrawRectangle(50, 400, 500, 100, 30, 35, 50, 200)
+        Framework_DrawText("Sprite Sheet API:", 60, 410, 16, 255, 200, 100, 255)
+        Framework_DrawText("Framework_SpriteSheet_Create(tex, frameW, frameH, cols, rows, padX, padY)", 60, 435, 11, 150, 200, 150, 255)
+        Framework_DrawText("Framework_SpriteSheet_GetFrameRect(sheetId, frameIndex, x, y, w, h)", 60, 455, 11, 150, 200, 150, 255)
+        Framework_DrawText("Framework_AnimClip_CreateFromSheet(name, sheetId, start, count, dur, loop)", 60, 475, 11, 150, 200, 150, 255)
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, WINDOW_HEIGHT - 30)
+    End Sub
+End Class
+
+''' <summary>
+''' Complete Sample RPG Game demonstrating framework systems working together.
+''' Features: Player, Enemies, Combat, Particles, Camera, UI, and Achievements
+''' </summary>
+Public Class SampleRPGScene
+    Inherits Scene
+
+    ' ============ CONSTANTS ============
+    Private Const TILE_SIZE As Integer = 32
+    Private Const MAP_WIDTH As Integer = 25
+    Private Const MAP_HEIGHT As Integer = 18
+    Private Const PLAYER_SPEED As Single = 160.0F
+    Private Const ENEMY_SPEED As Single = 80.0F
+
+    ' ============ PLAYER STATE ============
+    Private _playerEntity As Integer = -1
+    Private _playerX As Single = 400.0F
+    Private _playerY As Single = 300.0F
+    Private _playerHealth As Integer = 100
+    Private _playerMaxHealth As Integer = 100
+    Private _playerGold As Integer = 0
+    Private _playerXP As Integer = 0
+    Private _playerLevel As Integer = 1
+    Private _playerFacing As Integer = 0 ' 0=down, 1=left, 2=right, 3=up
+    Private _attackCooldown As Single = 0.0F
+    Private _invincibilityTimer As Single = 0.0F
+    Private _isAttacking As Boolean = False
+
+    ' ============ ENEMY STATE ============
+    Private Structure EnemyData
+        Public Entity As Integer
+        Public X As Single
+        Public Y As Single
+        Public Health As Integer
+        Public TargetX As Single
+        Public TargetY As Single
+        Public WaitTimer As Single
+        Public IsActive As Boolean
+        Public State As String ' "idle", "wander", "chase"
+    End Structure
+    Private _enemies(4) As EnemyData
+    Private _enemyCount As Integer = 5
+
+    ' ============ GAME SYSTEMS ============
+    Private _particleEntity As Integer = -1
+
+    ' ============ GAME STATE ============
+    Private _gameState As Integer = 0 ' 0=playing, 1=paused, 4=gameover
+    Private _showDebug As Boolean = False
+    Private _gameTime As Single = 0.0F
+    Private _messageTimer As Single = 0.0F
+    Private _currentMessage As String = ""
+    Private _rand As New Random()
+
+    ' ============ MAP DATA ============
+    Private _mapData(MAP_WIDTH * MAP_HEIGHT - 1) As Integer
+
+    ' ============ ACHIEVEMENTS ============
+    Private _achFirstKill As Integer = -1
+
+    Protected Overrides Sub OnEnter()
+        Console.WriteLine("=== SAMPLE RPG SCENE - FRAMEWORK SHOWCASE ===")
+
+        InitializeMap()
+        InitializePlayer()
+        InitializeEnemies()
+        InitializeParticles()
+        InitializeAchievements()
+
+        Framework_Camera_SetPosition(_playerX, _playerY)
+        Framework_Camera_SetZoom(1.5F)
+
+        _currentMessage = "WASD:Move SPACE:Attack ESC:Back BACKSPACE:Back"
+        _messageTimer = 5.0F
+    End Sub
+
+    Private Sub InitializeMap()
+        For y As Integer = 0 To MAP_HEIGHT - 1
+            For x As Integer = 0 To MAP_WIDTH - 1
+                Dim idx As Integer = y * MAP_WIDTH + x
+                If x = 0 OrElse x = MAP_WIDTH - 1 OrElse y = 0 OrElse y = MAP_HEIGHT - 1 Then
+                    _mapData(idx) = 1 ' Wall
+                ElseIf _rand.Next(100) < 5 Then
+                    _mapData(idx) = 4 ' Tree
+                ElseIf _rand.Next(100) < 3 Then
+                    _mapData(idx) = 2 ' Water
+                Else
+                    _mapData(idx) = 0 ' Grass
+                End If
+            Next
+        Next
+
+        Dim pathY As Integer = MAP_HEIGHT \ 2
+        For x As Integer = 1 To MAP_WIDTH - 2
+            _mapData(pathY * MAP_WIDTH + x) = 3
+            _mapData((pathY - 1) * MAP_WIDTH + x) = 3
+        Next
+    End Sub
+
+    Private Sub InitializePlayer()
+        _playerEntity = Framework_Ecs_CreateEntity()
+        Framework_Ecs_SetName(_playerEntity, "Player")
+        Framework_Ecs_AddTransform2D(_playerEntity, _playerX, _playerY, 0.0F, 1.0F, 1.0F)
+    End Sub
+
+    Private Sub InitializeEnemies()
+        For i As Integer = 0 To _enemyCount - 1
+            _enemies(i).Entity = Framework_Ecs_CreateEntity()
+            Framework_Ecs_SetName(_enemies(i).Entity, "Enemy" & i.ToString())
+
+            Dim ex, ey As Integer
+            Do
+                ex = _rand.Next(2, MAP_WIDTH - 2)
+                ey = _rand.Next(2, MAP_HEIGHT - 2)
+            Loop While _mapData(ey * MAP_WIDTH + ex) <> 0
+
+            _enemies(i).X = ex * TILE_SIZE + TILE_SIZE \ 2
+            _enemies(i).Y = ey * TILE_SIZE + TILE_SIZE \ 2
+            _enemies(i).Health = 30
+            _enemies(i).IsActive = True
+            _enemies(i).WaitTimer = 0
+            _enemies(i).State = "idle"
+
+            Framework_Ecs_AddTransform2D(_enemies(i).Entity, _enemies(i).X, _enemies(i).Y, 0.0F, 1.0F, 1.0F)
+        Next
+    End Sub
+
+    Private Sub InitializeParticles()
+        _particleEntity = Framework_Ecs_CreateEntity()
+        Framework_Ecs_SetName(_particleEntity, "CombatParticles")
+        Framework_Ecs_AddTransform2D(_particleEntity, 0, 0, 0, 1, 1)
+        Framework_Ecs_AddParticleEmitter(_particleEntity, 0)
+        Framework_Ecs_SetEmitterRate(_particleEntity, 0)
+        Framework_Ecs_SetEmitterMaxParticles(_particleEntity, 50)
+        Framework_Ecs_SetEmitterLifetime(_particleEntity, 0.2F, 0.5F)
+        Framework_Ecs_SetEmitterVelocity(_particleEntity, -100, -100, 100, 100)
+        Framework_Ecs_SetEmitterSize(_particleEntity, 6, 2)
+        Framework_Ecs_SetEmitterGravity(_particleEntity, 0, 200)
+    End Sub
+
+    Private Sub InitializeAchievements()
+        _achFirstKill = Framework_Achievement_Create("first_kill", "First Blood", "Defeat your first enemy")
+        Framework_Achievement_SetPoints(_achFirstKill, 10)
+        Framework_Achievement_SetNotificationPosition(WINDOW_WIDTH - 320, 80)
+    End Sub
+
+    Protected Overrides Sub OnExit()
+        Console.WriteLine("SampleRPGScene OnExit")
+        If _playerEntity >= 0 Then Framework_Ecs_DestroyEntity(_playerEntity)
+        If _particleEntity >= 0 Then Framework_Ecs_DestroyEntity(_particleEntity)
+        For i As Integer = 0 To _enemyCount - 1
+            If _enemies(i).Entity >= 0 Then Framework_Ecs_DestroyEntity(_enemies(i).Entity)
+        Next
+    End Sub
+
+    Protected Overrides Sub OnResume()
+    End Sub
+
+    Protected Overrides Sub OnUpdateFixed(dt As Double)
+    End Sub
+
+    Protected Overrides Sub OnUpdateFrame(dt As Single)
+        _gameTime += dt
+
+        If _messageTimer > 0 Then _messageTimer -= dt
+
+        ' Back to menu
+        If Framework_IsKeyPressed(Keys.BACKSPACE) OrElse (Framework_IsKeyPressed(Keys.ESCAPE) AndAlso _gameState <> 1) Then
+            ChangeTo(New TitleScene)
+            Return
+        End If
+
+        Select Case _gameState
+            Case 0
+                UpdatePlaying(dt)
+            Case 1
+                If Framework_IsKeyPressed(Keys.ESCAPE) Then
+                    _gameState = 0
+                End If
+            Case 4
+                If Framework_IsKeyPressed(Keys.SPACE) Then
+                    _playerHealth = _playerMaxHealth
+                    _playerX = 400 : _playerY = 300
+                    _gameState = 0
+                End If
+        End Select
+
+        Framework_Achievement_Update(dt)
+        Framework_Particles_Update(dt)
+        Framework_Camera_Update(dt)
+    End Sub
+
+    Private Sub UpdatePlaying(dt As Single)
+        If _attackCooldown > 0 Then _attackCooldown -= dt
+        If _invincibilityTimer > 0 Then _invincibilityTimer -= dt
+
+        Dim velX As Single = 0, velY As Single = 0
+        If Framework_IsKeyDown(Keys.W) OrElse Framework_IsKeyDown(Keys.UP) Then velY = -PLAYER_SPEED : _playerFacing = 3
+        If Framework_IsKeyDown(Keys.S) OrElse Framework_IsKeyDown(Keys.DOWN) Then velY = PLAYER_SPEED : _playerFacing = 0
+        If Framework_IsKeyDown(Keys.A) OrElse Framework_IsKeyDown(Keys.LEFT) Then velX = -PLAYER_SPEED : _playerFacing = 1
+        If Framework_IsKeyDown(Keys.D) OrElse Framework_IsKeyDown(Keys.RIGHT) Then velX = PLAYER_SPEED : _playerFacing = 2
+
+        If velX <> 0 AndAlso velY <> 0 Then velX *= 0.7071F : velY *= 0.7071F
+
+        Dim newX As Single = _playerX + velX * dt
+        Dim newY As Single = _playerY + velY * dt
+        If Not IsBlocked(newX, _playerY) Then _playerX = newX
+        If Not IsBlocked(_playerX, newY) Then _playerY = newY
+
+        _playerX = Math.Max(TILE_SIZE, Math.Min((MAP_WIDTH - 1) * TILE_SIZE, _playerX))
+        _playerY = Math.Max(TILE_SIZE, Math.Min((MAP_HEIGHT - 1) * TILE_SIZE, _playerY))
+        Framework_Ecs_SetTransformPosition(_playerEntity, _playerX, _playerY)
+
+        If Framework_IsKeyPressed(Keys.SPACE) AndAlso _attackCooldown <= 0 Then
+            PerformAttack()
+            _attackCooldown = 0.5F
+        End If
+
+        UpdateEnemies(dt)
+        CheckEnemyCollisions()
+
+        Framework_Camera_SetPosition(_playerX, _playerY)
+
+        If _playerHealth <= 0 Then
+            _gameState = 4
+            Framework_Camera_Shake(0.8F, 0.5F)
+        End If
+    End Sub
+
+    Private Function IsBlocked(x As Single, y As Single) As Boolean
+        Dim tileX As Integer = CInt(Math.Floor(x / TILE_SIZE))
+        Dim tileY As Integer = CInt(Math.Floor(y / TILE_SIZE))
+        If tileX < 0 OrElse tileX >= MAP_WIDTH OrElse tileY < 0 OrElse tileY >= MAP_HEIGHT Then Return True
+        Dim tile As Integer = _mapData(tileY * MAP_WIDTH + tileX)
+        Return tile = 1 OrElse tile = 2 OrElse tile = 4
+    End Function
+
+    Private Sub PerformAttack()
+        _isAttacking = True
+        Dim attackX As Single = _playerX, attackY As Single = _playerY
+        Select Case _playerFacing
+            Case 0 : attackY += 40
+            Case 1 : attackX -= 40
+            Case 2 : attackX += 40
+            Case 3 : attackY -= 40
+        End Select
+
+        For i As Integer = 0 To _enemyCount - 1
+            If Not _enemies(i).IsActive Then Continue For
+            Dim dx As Single = _enemies(i).X - attackX
+            Dim dy As Single = _enemies(i).Y - attackY
+            Dim dist As Single = CSng(Math.Sqrt(dx * dx + dy * dy))
+            If dist < 35 Then
+                _enemies(i).Health -= 15
+                Framework_PlaySoundH(sfxHit)
+                Framework_Ecs_SetTransformPosition(_particleEntity, _enemies(i).X, _enemies(i).Y)
+                Framework_Ecs_SetEmitterColorStart(_particleEntity, 255, 100, 100, 255)
+                Framework_Ecs_SetEmitterColorEnd(_particleEntity, 255, 50, 50, 0)
+                Framework_Ecs_EmitterBurst(_particleEntity, 10)
+
+                If _enemies(i).Health <= 0 Then
+                    _enemies(i).IsActive = False
+                    Dim goldDrop As Integer = _rand.Next(5, 15)
+                    _playerGold += goldDrop
+                    _playerXP += 20
+                    If _playerXP >= _playerLevel * 100 Then
+                        _playerLevel += 1
+                        _playerMaxHealth += 10
+                        _playerHealth = _playerMaxHealth
+                        _currentMessage = "LEVEL UP! Level " & _playerLevel.ToString()
+                        _messageTimer = 3.0F
+                        Framework_Camera_Shake(0.5F, 0.3F)
+                    End If
+                    Framework_Achievement_Unlock(_achFirstKill)
+                End If
+            End If
+        Next
+        _isAttacking = False
+    End Sub
+
+    Private Sub UpdateEnemies(dt As Single)
+        For i As Integer = 0 To _enemyCount - 1
+            If Not _enemies(i).IsActive Then Continue For
+            Dim distToPlayer As Single = CSng(Math.Sqrt((_enemies(i).X - _playerX) ^ 2 + (_enemies(i).Y - _playerY) ^ 2))
+
+            Select Case _enemies(i).State
+                Case "idle"
+                    _enemies(i).WaitTimer -= dt
+                    If distToPlayer < 150 Then
+                        _enemies(i).State = "chase"
+                    ElseIf _enemies(i).WaitTimer <= 0 Then
+                        _enemies(i).TargetX = _enemies(i).X + _rand.Next(-100, 100)
+                        _enemies(i).TargetY = _enemies(i).Y + _rand.Next(-100, 100)
+                        _enemies(i).State = "wander"
+                    End If
+
+                Case "wander"
+                    Dim dx As Single = _enemies(i).TargetX - _enemies(i).X
+                    Dim dy As Single = _enemies(i).TargetY - _enemies(i).Y
+                    Dim dist As Single = CSng(Math.Sqrt(dx * dx + dy * dy))
+                    If distToPlayer < 150 Then
+                        _enemies(i).State = "chase"
+                    ElseIf dist < 10 Then
+                        _enemies(i).WaitTimer = _rand.Next(1, 3)
+                        _enemies(i).State = "idle"
+                    Else
+                        Dim speed As Single = ENEMY_SPEED * 0.5F
+                        If Not IsBlocked(_enemies(i).X + (dx / dist) * speed * dt, _enemies(i).Y) Then _enemies(i).X += (dx / dist) * speed * dt
+                        If Not IsBlocked(_enemies(i).X, _enemies(i).Y + (dy / dist) * speed * dt) Then _enemies(i).Y += (dy / dist) * speed * dt
+                    End If
+
+                Case "chase"
+                    If distToPlayer > 200 Then
+                        _enemies(i).WaitTimer = 1
+                        _enemies(i).State = "idle"
+                    Else
+                        Dim dx As Single = _playerX - _enemies(i).X
+                        Dim dy As Single = _playerY - _enemies(i).Y
+                        Dim dist As Single = CSng(Math.Sqrt(dx * dx + dy * dy))
+                        If dist > 5 Then
+                            If Not IsBlocked(_enemies(i).X + (dx / dist) * ENEMY_SPEED * dt, _enemies(i).Y) Then _enemies(i).X += (dx / dist) * ENEMY_SPEED * dt
+                            If Not IsBlocked(_enemies(i).X, _enemies(i).Y + (dy / dist) * ENEMY_SPEED * dt) Then _enemies(i).Y += (dy / dist) * ENEMY_SPEED * dt
+                        End If
+                    End If
+            End Select
+            Framework_Ecs_SetTransformPosition(_enemies(i).Entity, _enemies(i).X, _enemies(i).Y)
+        Next
+    End Sub
+
+    Private Sub CheckEnemyCollisions()
+        If _invincibilityTimer > 0 Then Return
+        For i As Integer = 0 To _enemyCount - 1
+            If Not _enemies(i).IsActive Then Continue For
+            Dim dx As Single = _enemies(i).X - _playerX
+            Dim dy As Single = _enemies(i).Y - _playerY
+            Dim dist As Single = CSng(Math.Sqrt(dx * dx + dy * dy))
+            If dist < 25 Then
+                _playerHealth -= 10
+                _invincibilityTimer = 1.0F
+                Framework_PlaySoundH(sfxWall)
+                Framework_Camera_Shake(0.4F, 0.2F)
+                If dist > 0 Then
+                    _playerX -= (dx / dist) * 30
+                    _playerY -= (dy / dist) * 30
+                End If
+            End If
+        Next
+    End Sub
+
+    Protected Overrides Sub OnDraw()
+        Framework_Camera_BeginMode()
+        DrawMap()
+
+        For i As Integer = 0 To _enemyCount - 1
+            If Not _enemies(i).IsActive Then Continue For
+            Dim ec As Byte = If(_enemies(i).Health < 15, CByte(255), CByte(200))
+            Framework_DrawRectangle(CInt(_enemies(i).X) - 10, CInt(_enemies(i).Y) - 10, 20, 20, ec, 50, 50, 255)
+            Dim hw As Integer = CInt((_enemies(i).Health / 30.0F) * 20)
+            Framework_DrawRectangle(CInt(_enemies(i).X) - 10, CInt(_enemies(i).Y) - 18, hw, 4, 200, 50, 50, 255)
+        Next
+
+        Dim pa As Byte = If(_invincibilityTimer > 0 AndAlso CInt(_gameTime * 10) Mod 2 = 0, CByte(100), CByte(255))
+        Framework_DrawRectangle(CInt(_playerX) - 12, CInt(_playerY) - 14, 24, 28, 100, 150, 255, pa)
+
+        If _isAttacking Then
+            Dim ax As Integer = CInt(_playerX), ay As Integer = CInt(_playerY)
+            Select Case _playerFacing
+                Case 0 : ay += 30 : Case 1 : ax -= 30 : Case 2 : ax += 30 : Case 3 : ay -= 30
+            End Select
+            Framework_DrawCircle(ax, ay, 15, 255, 255, 100, 150)
+        End If
+
+        Framework_Particles_Draw()
+        Framework_Camera_EndMode()
+
+        ' HUD
+        Framework_DrawRectangle(18, 18, 104, 14, 50, 50, 50, 200)
+        Framework_DrawRectangle(20, 20, CInt(_playerHealth), 10, 200, 50, 50, 255)
+        Framework_DrawText("HP: " & _playerHealth.ToString() & "/" & _playerMaxHealth.ToString(), 20, 35, 14, 255, 255, 255, 255)
+        Framework_DrawText("Gold: " & _playerGold.ToString(), 20, 52, 14, 255, 215, 0, 255)
+        Framework_DrawText("Level " & _playerLevel.ToString() & " XP: " & _playerXP.ToString(), 20, 69, 14, 150, 200, 255, 255)
+
+        If _messageTimer > 0 Then
+            Framework_DrawText(_currentMessage, 10, WINDOW_HEIGHT - 30, 16, 255, 255, 255, 255)
+        End If
+
+        If _gameState = 4 Then
+            Framework_DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, 0, 0, 0, 180)
+            Framework_DrawText("GAME OVER", WINDOW_WIDTH \ 2 - 80, WINDOW_HEIGHT \ 2 - 30, 40, 255, 50, 50, 255)
+            Framework_DrawText("Press SPACE to restart", WINDOW_WIDTH \ 2 - 100, WINDOW_HEIGHT \ 2 + 30, 18, 200, 200, 200, 255)
+        End If
+
+        Framework_DrawFPS(WINDOW_WIDTH - 100, 10)
+    End Sub
+
+    Private Sub DrawMap()
+        For y As Integer = 0 To MAP_HEIGHT - 1
+            For x As Integer = 0 To MAP_WIDTH - 1
+                Dim tile As Integer = _mapData(y * MAP_WIDTH + x)
+                Dim tx As Integer = x * TILE_SIZE, ty As Integer = y * TILE_SIZE
+                Select Case tile
+                    Case 0 : Framework_DrawRectangle(tx, ty, TILE_SIZE, TILE_SIZE, 50, 120, 50, 255)
+                    Case 1 : Framework_DrawRectangle(tx, ty, TILE_SIZE, TILE_SIZE, 80, 80, 90, 255)
+                    Case 2 : Framework_DrawRectangle(tx, ty, TILE_SIZE, TILE_SIZE, 50, 100, 180, 255)
+                    Case 3 : Framework_DrawRectangle(tx, ty, TILE_SIZE, TILE_SIZE, 140, 120, 90, 255)
+                    Case 4 : Framework_DrawRectangle(tx, ty, TILE_SIZE, TILE_SIZE, 50, 120, 50, 255)
+                        Framework_DrawCircle(tx + TILE_SIZE \ 2, ty + TILE_SIZE \ 2, 12, 30, 80, 30, 255)
+                End Select
+            Next
+        Next
     End Sub
 End Class
