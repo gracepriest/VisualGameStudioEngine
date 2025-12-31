@@ -428,6 +428,12 @@ namespace {
         bool active = false;
     };
 
+    // Color stop for gradient
+    struct ColorStop {
+        float time;  // 0-1 normalized
+        Color color;
+    };
+
     struct ParticleEmitterComponent {
         int textureHandle = 0;
         Rectangle sourceRect{0, 0, 0, 0};
@@ -452,10 +458,86 @@ namespace {
         float directionX = 0.0f;
         float directionY = -1.0f;   // Default: upward
 
+        // Enhanced: Emitter shape
+        int shape = EMITTER_SHAPE_POINT;
+        float shapeRadius = 0.0f;
+        float shapeWidth = 0.0f;
+        float shapeHeight = 0.0f;
+        float shapeInnerRadius = 0.0f;
+        float shapeLine[4] = {0, 0, 0, 0};
+        bool edgeEmission = false;
+
+        // Enhanced: Rotation/spin
+        float rotationMin = 0.0f;
+        float rotationMax = 0.0f;
+        float spinMin = 0.0f;
+        float spinMax = 0.0f;
+
+        // Enhanced: Blend mode
+        int blendMode = PARTICLE_BLEND_ALPHA;
+
+        // Enhanced: Color gradient
+        int colorStopCount = 2;
+        ColorStop colorStops[4];
+
+        // Enhanced: Size curve
+        float sizeCurve[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        bool useSizeCurve = false;
+
+        // Enhanced: Velocity modifiers
+        float drag = 0.0f;
+        float accelX = 0.0f;
+        float accelY = 0.0f;
+        float radialAccel = 0.0f;
+        float tangentialAccel = 0.0f;
+
+        // Enhanced: Noise
+        float noiseStrength = 0.0f;
+        float noiseFrequency = 1.0f;
+        float noiseScrollSpeed = 0.0f;
+        float noiseOffset = 0.0f;
+
+        // Enhanced: Sub-emitters
+        int subEmitterOnDeath = -1;
+        int subEmitterOnBirth = -1;
+
+        // Enhanced: Trail
+        bool trailEnabled = false;
+        int trailLength = 5;
+        float trailWidth = 2.0f;
+        Color trailColor{255, 255, 255, 128};
+
+        // Enhanced: Collision
+        bool collisionEnabled = false;
+        float collisionBounce = 0.5f;
+        float collisionFriction = 0.1f;
+        float collisionLifetimeLoss = 0.0f;
+        bool collisionKill = false;
+
+        // Enhanced: Animation
+        int animColumns = 1;
+        int animRows = 1;
+        float animFPS = 10.0f;
+        bool animRandomStart = false;
+        bool randomTexture = false;
+        int sortMode = 0;
+
         // State
         bool active = false;
         std::vector<Particle> particles;
     };
+
+    // Particle attractor
+    struct ParticleAttractor {
+        int id;
+        float x, y;
+        float strength;
+        float radius;
+        float falloffPower;
+    };
+    static std::unordered_map<int, ParticleAttractor> g_particleAttractors;
+    static int g_nextAttractorId = 1;
+    static float g_particleGlobalTimeScale = 1.0f;
 
     // Entity storage
     int g_nextEntityId = 1;
@@ -5027,6 +5109,338 @@ extern "C" {
                 }
             }
         }
+    }
+
+    // ========================================================================
+    // ENHANCED PARTICLE SYSTEM - Implementation
+    // ========================================================================
+
+    // Emitter shape configuration
+    void Framework_Ecs_SetEmitterShape(int entity, int shape) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.shape = shape;
+    }
+
+    void Framework_Ecs_SetEmitterShapeRadius(int entity, float radius) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.shapeRadius = radius;
+    }
+
+    void Framework_Ecs_SetEmitterShapeSize(int entity, float width, float height) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.shapeWidth = width;
+        it->second.shapeHeight = height;
+    }
+
+    void Framework_Ecs_SetEmitterShapeInnerRadius(int entity, float innerRadius) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.shapeInnerRadius = innerRadius;
+    }
+
+    void Framework_Ecs_SetEmitterShapeLine(int entity, float x1, float y1, float x2, float y2) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.shapeLine[0] = x1;
+        it->second.shapeLine[1] = y1;
+        it->second.shapeLine[2] = x2;
+        it->second.shapeLine[3] = y2;
+    }
+
+    void Framework_Ecs_SetEmitterEdgeEmission(int entity, bool edgeOnly) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.edgeEmission = edgeOnly;
+    }
+
+    // Rotation/spin
+    void Framework_Ecs_SetEmitterRotation(int entity, float startMin, float startMax) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.rotationMin = startMin;
+        it->second.rotationMax = startMax;
+    }
+
+    void Framework_Ecs_SetEmitterSpin(int entity, float spinMin, float spinMax) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.spinMin = spinMin;
+        it->second.spinMax = spinMax;
+    }
+
+    // Blend mode
+    void Framework_Ecs_SetEmitterBlendMode(int entity, int blendMode) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.blendMode = blendMode;
+    }
+
+    // Color gradient
+    void Framework_Ecs_SetEmitterColorGradient(int entity, int stopCount) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        if (stopCount < 2) stopCount = 2;
+        if (stopCount > 4) stopCount = 4;
+        it->second.colorStopCount = stopCount;
+    }
+
+    void Framework_Ecs_SetEmitterColorStop(int entity, int stopIndex, float time,
+                                           unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        if (stopIndex < 0 || stopIndex >= 4) return;
+        it->second.colorStops[stopIndex].time = time;
+        it->second.colorStops[stopIndex].color = { r, g, b, a };
+    }
+
+    // Size over lifetime curve
+    void Framework_Ecs_SetEmitterSizeOverLifetime(int entity, float t0Size, float t1Size, float t2Size, float t3Size) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.sizeCurve[0] = t0Size;
+        it->second.sizeCurve[1] = t1Size;
+        it->second.sizeCurve[2] = t2Size;
+        it->second.sizeCurve[3] = t3Size;
+        it->second.useSizeCurve = true;
+    }
+
+    // Velocity modifiers
+    void Framework_Ecs_SetEmitterDrag(int entity, float drag) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.drag = drag;
+    }
+
+    void Framework_Ecs_SetEmitterAcceleration(int entity, float ax, float ay) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.accelX = ax;
+        it->second.accelY = ay;
+    }
+
+    void Framework_Ecs_SetEmitterRadialAccel(int entity, float radialAccel) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.radialAccel = radialAccel;
+    }
+
+    void Framework_Ecs_SetEmitterTangentialAccel(int entity, float tangentAccel) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.tangentialAccel = tangentAccel;
+    }
+
+    // Noise
+    void Framework_Ecs_SetEmitterNoise(int entity, float strength, float frequency, float scrollSpeed) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.noiseStrength = strength;
+        it->second.noiseFrequency = frequency;
+        it->second.noiseScrollSpeed = scrollSpeed;
+    }
+
+    // Particle attractors
+    int Framework_Particle_CreateAttractor(float x, float y, float strength, float radius) {
+        ParticleAttractor attr;
+        attr.id = g_nextAttractorId++;
+        attr.x = x;
+        attr.y = y;
+        attr.strength = strength;
+        attr.radius = radius;
+        attr.falloffPower = 1.0f;
+        g_particleAttractors[attr.id] = attr;
+        return attr.id;
+    }
+
+    void Framework_Particle_DestroyAttractor(int attractorId) {
+        g_particleAttractors.erase(attractorId);
+    }
+
+    void Framework_Particle_SetAttractorPosition(int attractorId, float x, float y) {
+        auto it = g_particleAttractors.find(attractorId);
+        if (it == g_particleAttractors.end()) return;
+        it->second.x = x;
+        it->second.y = y;
+    }
+
+    void Framework_Particle_SetAttractorStrength(int attractorId, float strength) {
+        auto it = g_particleAttractors.find(attractorId);
+        if (it == g_particleAttractors.end()) return;
+        it->second.strength = strength;
+    }
+
+    void Framework_Particle_SetAttractorRadius(int attractorId, float radius) {
+        auto it = g_particleAttractors.find(attractorId);
+        if (it == g_particleAttractors.end()) return;
+        it->second.radius = radius;
+    }
+
+    void Framework_Particle_SetAttractorFalloff(int attractorId, float falloffPower) {
+        auto it = g_particleAttractors.find(attractorId);
+        if (it == g_particleAttractors.end()) return;
+        it->second.falloffPower = falloffPower;
+    }
+
+    int Framework_Particle_GetAttractorCount() {
+        return (int)g_particleAttractors.size();
+    }
+
+    // Sub-emitters
+    void Framework_Ecs_SetEmitterSubEmitter(int entity, int subEmitterEntity) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.subEmitterOnDeath = subEmitterEntity;
+    }
+
+    void Framework_Ecs_SetEmitterSubEmitterOnBirth(int entity, int subEmitterEntity) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.subEmitterOnBirth = subEmitterEntity;
+    }
+
+    void Framework_Ecs_ClearSubEmitters(int entity) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.subEmitterOnDeath = -1;
+        it->second.subEmitterOnBirth = -1;
+    }
+
+    // Trail
+    void Framework_Ecs_SetEmitterTrail(int entity, bool enabled, int trailLength, float trailWidth) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.trailEnabled = enabled;
+        it->second.trailLength = trailLength;
+        it->second.trailWidth = trailWidth;
+    }
+
+    void Framework_Ecs_SetEmitterTrailColor(int entity, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.trailColor = { r, g, b, a };
+    }
+
+    // Collision
+    void Framework_Ecs_SetEmitterCollision(int entity, bool enabled) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.collisionEnabled = enabled;
+    }
+
+    void Framework_Ecs_SetEmitterCollisionBounce(int entity, float bounciness) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.collisionBounce = bounciness;
+    }
+
+    void Framework_Ecs_SetEmitterCollisionFriction(int entity, float friction) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.collisionFriction = friction;
+    }
+
+    void Framework_Ecs_SetEmitterCollisionLifetimeLoss(int entity, float lifetimeLoss) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.collisionLifetimeLoss = lifetimeLoss;
+    }
+
+    void Framework_Ecs_SetEmitterCollisionKillOnCollide(int entity, bool kill) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.collisionKill = kill;
+    }
+
+    // Animation
+    void Framework_Ecs_SetEmitterAnimation(int entity, int columns, int rows, float fps, bool randomStart) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.animColumns = columns > 0 ? columns : 1;
+        it->second.animRows = rows > 0 ? rows : 1;
+        it->second.animFPS = fps;
+        it->second.animRandomStart = randomStart;
+    }
+
+    // Texture sheet
+    void Framework_Ecs_SetEmitterTextureSheet(int entity, int textureHandle, int columns, int rows) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.textureHandle = textureHandle;
+        it->second.animColumns = columns > 0 ? columns : 1;
+        it->second.animRows = rows > 0 ? rows : 1;
+    }
+
+    void Framework_Ecs_SetEmitterRandomTexture(int entity, bool randomize) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.randomTexture = randomize;
+    }
+
+    // Sorting
+    void Framework_Ecs_SetEmitterSortMode(int entity, int sortMode) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+        it->second.sortMode = sortMode;
+    }
+
+    // Pre-warming
+    void Framework_Ecs_EmitterPrewarm(int entity, float simulateTime) {
+        auto it = g_particleEmitter.find(entity);
+        if (it == g_particleEmitter.end()) return;
+
+        // Temporarily activate emitter and simulate
+        bool wasActive = it->second.active;
+        it->second.active = true;
+
+        // Simulate in small timesteps
+        float dt = 1.0f / 60.0f;
+        for (float t = 0; t < simulateTime; t += dt) {
+            // Spawn particles based on emission rate
+            it->second.emissionAccum += dt * it->second.emissionRate;
+            while (it->second.emissionAccum >= 1.0f) {
+                it->second.emissionAccum -= 1.0f;
+                Framework_Ecs_EmitterBurst(entity, 1);
+            }
+
+            // Update particles
+            ParticleEmitterComponent& pe = it->second;
+            for (auto& p : pe.particles) {
+                if (!p.active) continue;
+                p.life -= dt;
+                if (p.life <= 0) {
+                    p.active = false;
+                    continue;
+                }
+                p.vx += pe.gravityX * dt;
+                p.vy += pe.gravityY * dt;
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+            }
+        }
+
+        it->second.active = wasActive;
+    }
+
+    // Pool statistics
+    int Framework_Particles_GetTotalCount() {
+        int total = 0;
+        for (const auto& kv : g_particleEmitter) {
+            for (const auto& p : kv.second.particles) {
+                if (p.active) total++;
+            }
+        }
+        return total;
+    }
+
+    int Framework_Particles_GetEmitterCount() {
+        return (int)g_particleEmitter.size();
+    }
+
+    void Framework_Particles_SetGlobalTimeScale(float scale) {
+        g_particleGlobalTimeScale = scale;
     }
 
     // ========================================================================

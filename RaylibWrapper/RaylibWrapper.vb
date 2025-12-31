@@ -1747,6 +1747,190 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_Particles_Draw()
     End Sub
+
+    ' Enhanced Particle System - Emitter Shapes
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterShape(entity As Integer, shape As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterShapeRadius(entity As Integer, radius As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterShapeSize(entity As Integer, width As Single, height As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterShapeInnerRadius(entity As Integer, innerRadius As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterShapeLine(entity As Integer, x1 As Single, y1 As Single, x2 As Single, y2 As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterEdgeEmission(entity As Integer, <MarshalAs(UnmanagedType.I1)> edgeOnly As Boolean)
+    End Sub
+
+    ' Enhanced Particle System - Rotation/Spin
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterRotation(entity As Integer, startMin As Single, startMax As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterSpin(entity As Integer, spinMin As Single, spinMax As Single)
+    End Sub
+
+    ' Enhanced Particle System - Blend Mode
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterBlendMode(entity As Integer, blendMode As Integer)
+    End Sub
+
+    ' Enhanced Particle System - Color Gradient
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterColorGradient(entity As Integer, stopCount As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterColorStop(entity As Integer, stopIndex As Integer, time As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ' Enhanced Particle System - Size Over Lifetime
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterSizeOverLifetime(entity As Integer, t0Size As Single, t1Size As Single, t2Size As Single, t3Size As Single)
+    End Sub
+
+    ' Enhanced Particle System - Velocity Modifiers
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterDrag(entity As Integer, drag As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterAcceleration(entity As Integer, ax As Single, ay As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterRadialAccel(entity As Integer, radialAccel As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterTangentialAccel(entity As Integer, tangentAccel As Single)
+    End Sub
+
+    ' Enhanced Particle System - Noise
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterNoise(entity As Integer, strength As Single, frequency As Single, scrollSpeed As Single)
+    End Sub
+
+    ' Enhanced Particle System - Attractors
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Particle_CreateAttractor(x As Single, y As Single, strength As Single, radius As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Particle_DestroyAttractor(attractorId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Particle_SetAttractorPosition(attractorId As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Particle_SetAttractorStrength(attractorId As Integer, strength As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Particle_SetAttractorRadius(attractorId As Integer, radius As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Particle_SetAttractorFalloff(attractorId As Integer, falloffPower As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Particle_GetAttractorCount() As Integer
+    End Function
+
+    ' Enhanced Particle System - Sub-emitters
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterSubEmitter(entity As Integer, subEmitterEntity As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterSubEmitterOnBirth(entity As Integer, subEmitterEntity As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_ClearSubEmitters(entity As Integer)
+    End Sub
+
+    ' Enhanced Particle System - Trail
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterTrail(entity As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean, trailLength As Integer, trailWidth As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterTrailColor(entity As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ' Enhanced Particle System - Collision
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterCollision(entity As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterCollisionBounce(entity As Integer, bounciness As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterCollisionFriction(entity As Integer, friction As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterCollisionLifetimeLoss(entity As Integer, lifetimeLoss As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterCollisionKillOnCollide(entity As Integer, <MarshalAs(UnmanagedType.I1)> kill As Boolean)
+    End Sub
+
+    ' Enhanced Particle System - Animation
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterAnimation(entity As Integer, columns As Integer, rows As Integer, fps As Single, <MarshalAs(UnmanagedType.I1)> randomStart As Boolean)
+    End Sub
+
+    ' Enhanced Particle System - Texture Sheet
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterTextureSheet(entity As Integer, textureHandle As Integer, columns As Integer, rows As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterRandomTexture(entity As Integer, <MarshalAs(UnmanagedType.I1)> randomize As Boolean)
+    End Sub
+
+    ' Enhanced Particle System - Sorting
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_SetEmitterSortMode(entity As Integer, sortMode As Integer)
+    End Sub
+
+    ' Enhanced Particle System - Pre-warming
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Ecs_EmitterPrewarm(entity As Integer, simulateTime As Single)
+    End Sub
+
+    ' Enhanced Particle System - Pool Statistics
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Particles_GetTotalCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Particles_GetEmitterCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Particles_SetGlobalTimeScale(scale As Single)
+    End Sub
 #End Region
 
 #Region "UI System"

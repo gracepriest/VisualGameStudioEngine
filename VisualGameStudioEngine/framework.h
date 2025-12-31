@@ -1091,6 +1091,100 @@ extern "C" {
     __declspec(dllexport) void  Framework_Particles_Draw();            // Draw all particles
 
     // ========================================================================
+    // ENHANCED PARTICLE SYSTEM - Advanced Emitter Features
+    // ========================================================================
+    // Emitter shapes
+    enum ParticleEmitterShape {
+        EMITTER_SHAPE_POINT = 0,      // Emit from single point
+        EMITTER_SHAPE_CIRCLE = 1,     // Emit from circle edge or area
+        EMITTER_SHAPE_RECTANGLE = 2,  // Emit from rectangle area
+        EMITTER_SHAPE_LINE = 3,       // Emit along a line
+        EMITTER_SHAPE_RING = 4        // Emit from ring (hollow circle)
+    };
+
+    // Blend modes for particles
+    enum ParticleBlendMode {
+        PARTICLE_BLEND_ALPHA = 0,     // Normal alpha blending
+        PARTICLE_BLEND_ADDITIVE = 1,  // Additive (glow effect)
+        PARTICLE_BLEND_MULTIPLY = 2   // Multiply
+    };
+
+    // Emitter shape configuration
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterShape(int entity, int shape);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterShapeRadius(int entity, float radius);  // For circle/ring
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterShapeSize(int entity, float width, float height);  // For rectangle
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterShapeInnerRadius(int entity, float innerRadius);  // For ring
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterShapeLine(int entity, float x1, float y1, float x2, float y2);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterEdgeEmission(int entity, bool edgeOnly);  // Emit from edge vs fill
+
+    // Particle rotation/spin
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterRotation(int entity, float startMin, float startMax);  // Initial rotation
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterSpin(int entity, float spinMin, float spinMax);  // Rotation speed
+
+    // Blend mode
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterBlendMode(int entity, int blendMode);
+
+    // Color gradient (up to 4 color stops over lifetime)
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterColorGradient(int entity, int stopCount);  // 2-4 stops
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterColorStop(int entity, int stopIndex, float time,
+                                                                   unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // Size over lifetime curve (Bezier-like)
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterSizeOverLifetime(int entity, float t0Size, float t1Size, float t2Size, float t3Size);
+
+    // Velocity modifiers over lifetime
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterDrag(int entity, float drag);  // Velocity damping
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterAcceleration(int entity, float ax, float ay);  // Constant acceleration
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterRadialAccel(int entity, float radialAccel);  // Toward/away from emitter
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterTangentialAccel(int entity, float tangentAccel);  // Perpendicular to radial
+
+    // Noise/turbulence
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterNoise(int entity, float strength, float frequency, float scrollSpeed);
+
+    // Particle attractors
+    __declspec(dllexport) int   Framework_Particle_CreateAttractor(float x, float y, float strength, float radius);
+    __declspec(dllexport) void  Framework_Particle_DestroyAttractor(int attractorId);
+    __declspec(dllexport) void  Framework_Particle_SetAttractorPosition(int attractorId, float x, float y);
+    __declspec(dllexport) void  Framework_Particle_SetAttractorStrength(int attractorId, float strength);  // Negative = repulsor
+    __declspec(dllexport) void  Framework_Particle_SetAttractorRadius(int attractorId, float radius);
+    __declspec(dllexport) void  Framework_Particle_SetAttractorFalloff(int attractorId, float falloffPower);  // 1=linear, 2=quadratic
+    __declspec(dllexport) int   Framework_Particle_GetAttractorCount();
+
+    // Sub-emitters (particles that spawn particles)
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterSubEmitter(int entity, int subEmitterEntity);  // Spawn on death
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterSubEmitterOnBirth(int entity, int subEmitterEntity);
+    __declspec(dllexport) void  Framework_Ecs_ClearSubEmitters(int entity);
+
+    // Trail rendering (particles leave trails)
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterTrail(int entity, bool enabled, int trailLength, float trailWidth);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterTrailColor(int entity, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // World collision
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterCollision(int entity, bool enabled);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterCollisionBounce(int entity, float bounciness);  // 0-1
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterCollisionFriction(int entity, float friction);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterCollisionLifetimeLoss(int entity, float lifetimeLoss);  // Lose life on bounce
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterCollisionKillOnCollide(int entity, bool kill);
+
+    // Animation (sprite sheet particles)
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterAnimation(int entity, int columns, int rows, float fps, bool randomStart);
+
+    // Texture sheet (multiple particle textures)
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterTextureSheet(int entity, int textureHandle, int columns, int rows);
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterRandomTexture(int entity, bool randomize);  // Pick random frame
+
+    // Sorting
+    __declspec(dllexport) void  Framework_Ecs_SetEmitterSortMode(int entity, int sortMode);  // 0=none, 1=age, 2=distance
+
+    // Pre-warming (simulate particles before game starts)
+    __declspec(dllexport) void  Framework_Ecs_EmitterPrewarm(int entity, float simulateTime);
+
+    // Particle pool statistics
+    __declspec(dllexport) int   Framework_Particles_GetTotalCount();      // All active particles
+    __declspec(dllexport) int   Framework_Particles_GetEmitterCount();    // Number of emitters
+    __declspec(dllexport) void  Framework_Particles_SetGlobalTimeScale(float scale);
+
+    // ========================================================================
     // UI SYSTEM
     // ========================================================================
     // UI Element lifecycle

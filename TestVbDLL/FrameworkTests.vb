@@ -4499,6 +4499,355 @@ Public Module FrameworkTests
 
         ' Clean up
         Framework_Ecs_DestroyEntity(entity)
+
+        ' =====================
+        ' Enhanced Particle System Tests
+        ' =====================
+        LogSection("Enhanced Particle System")
+
+        ' Create new entity for enhanced tests
+        entity = Framework_Ecs_CreateEntity()
+        Framework_Ecs_AddParticleEmitter(entity, 0)
+
+        ' Test emitter shapes
+        Try
+            Framework_Ecs_SetEmitterShape(entity, 0) ' EMITTER_SHAPE_POINT
+            LogPass("Set emitter shape (point)")
+        Catch ex As Exception
+            LogFail("Set emitter shape (point)", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterShape(entity, 1) ' EMITTER_SHAPE_CIRCLE
+            Framework_Ecs_SetEmitterShapeRadius(entity, 50.0F)
+            LogPass("Set emitter shape (circle with radius)")
+        Catch ex As Exception
+            LogFail("Set emitter shape (circle with radius)", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterShape(entity, 2) ' EMITTER_SHAPE_RECTANGLE
+            Framework_Ecs_SetEmitterShapeSize(entity, 100.0F, 50.0F)
+            LogPass("Set emitter shape (rectangle with size)")
+        Catch ex As Exception
+            LogFail("Set emitter shape (rectangle with size)", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterShape(entity, 3) ' EMITTER_SHAPE_LINE
+            Framework_Ecs_SetEmitterShapeLine(entity, 0, 0, 100, 0)
+            LogPass("Set emitter shape (line)")
+        Catch ex As Exception
+            LogFail("Set emitter shape (line)", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterShape(entity, 4) ' EMITTER_SHAPE_RING
+            Framework_Ecs_SetEmitterShapeRadius(entity, 50.0F)
+            Framework_Ecs_SetEmitterShapeInnerRadius(entity, 25.0F)
+            LogPass("Set emitter shape (ring with inner radius)")
+        Catch ex As Exception
+            LogFail("Set emitter shape (ring with inner radius)", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterEdgeEmission(entity, True)
+            LogPass("Set emitter edge emission")
+        Catch ex As Exception
+            LogFail("Set emitter edge emission", ex.Message)
+        End Try
+
+        ' Test rotation/spin
+        Try
+            Framework_Ecs_SetEmitterRotation(entity, 0.0F, 360.0F)
+            LogPass("Set emitter rotation")
+        Catch ex As Exception
+            LogFail("Set emitter rotation", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterSpin(entity, -180.0F, 180.0F)
+            LogPass("Set emitter spin")
+        Catch ex As Exception
+            LogFail("Set emitter spin", ex.Message)
+        End Try
+
+        ' Test blend mode
+        Try
+            Framework_Ecs_SetEmitterBlendMode(entity, 0) ' PARTICLE_BLEND_ALPHA
+            Framework_Ecs_SetEmitterBlendMode(entity, 1) ' PARTICLE_BLEND_ADDITIVE
+            Framework_Ecs_SetEmitterBlendMode(entity, 2) ' PARTICLE_BLEND_MULTIPLY
+            LogPass("Set emitter blend modes")
+        Catch ex As Exception
+            LogFail("Set emitter blend modes", ex.Message)
+        End Try
+
+        ' Test color gradient
+        Try
+            Framework_Ecs_SetEmitterColorGradient(entity, 4)
+            Framework_Ecs_SetEmitterColorStop(entity, 0, 0.0F, 255, 0, 0, 255)    ' Red at start
+            Framework_Ecs_SetEmitterColorStop(entity, 1, 0.33F, 255, 255, 0, 255) ' Yellow
+            Framework_Ecs_SetEmitterColorStop(entity, 2, 0.66F, 0, 255, 0, 200)   ' Green
+            Framework_Ecs_SetEmitterColorStop(entity, 3, 1.0F, 0, 0, 255, 0)      ' Blue at end
+            LogPass("Set emitter color gradient (4 stops)")
+        Catch ex As Exception
+            LogFail("Set emitter color gradient", ex.Message)
+        End Try
+
+        ' Test size over lifetime
+        Try
+            Framework_Ecs_SetEmitterSizeOverLifetime(entity, 1.0F, 1.5F, 0.8F, 0.2F)
+            LogPass("Set emitter size over lifetime")
+        Catch ex As Exception
+            LogFail("Set emitter size over lifetime", ex.Message)
+        End Try
+
+        ' Test velocity modifiers
+        Try
+            Framework_Ecs_SetEmitterDrag(entity, 0.1F)
+            LogPass("Set emitter drag")
+        Catch ex As Exception
+            LogFail("Set emitter drag", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterAcceleration(entity, 0.0F, 50.0F)
+            LogPass("Set emitter acceleration")
+        Catch ex As Exception
+            LogFail("Set emitter acceleration", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterRadialAccel(entity, 10.0F)
+            LogPass("Set emitter radial acceleration")
+        Catch ex As Exception
+            LogFail("Set emitter radial acceleration", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterTangentialAccel(entity, 5.0F)
+            LogPass("Set emitter tangential acceleration")
+        Catch ex As Exception
+            LogFail("Set emitter tangential acceleration", ex.Message)
+        End Try
+
+        ' Test noise
+        Try
+            Framework_Ecs_SetEmitterNoise(entity, 10.0F, 2.0F, 1.0F)
+            LogPass("Set emitter noise")
+        Catch ex As Exception
+            LogFail("Set emitter noise", ex.Message)
+        End Try
+
+        ' Test attractors
+        Dim attractorId As Integer = -1
+        Try
+            attractorId = Framework_Particle_CreateAttractor(400.0F, 300.0F, 100.0F, 200.0F)
+            If attractorId > 0 Then
+                LogPass($"Create particle attractor (id={attractorId})")
+            Else
+                LogFail("Create particle attractor", "Invalid ID returned")
+            End If
+        Catch ex As Exception
+            LogFail("Create particle attractor", ex.Message)
+        End Try
+
+        Try
+            Framework_Particle_SetAttractorPosition(attractorId, 500.0F, 400.0F)
+            LogPass("Set attractor position")
+        Catch ex As Exception
+            LogFail("Set attractor position", ex.Message)
+        End Try
+
+        Try
+            Framework_Particle_SetAttractorStrength(attractorId, -50.0F) ' Negative = repulsor
+            LogPass("Set attractor strength (repulsor)")
+        Catch ex As Exception
+            LogFail("Set attractor strength", ex.Message)
+        End Try
+
+        Try
+            Framework_Particle_SetAttractorRadius(attractorId, 300.0F)
+            LogPass("Set attractor radius")
+        Catch ex As Exception
+            LogFail("Set attractor radius", ex.Message)
+        End Try
+
+        Try
+            Framework_Particle_SetAttractorFalloff(attractorId, 2.0F) ' Quadratic falloff
+            LogPass("Set attractor falloff")
+        Catch ex As Exception
+            LogFail("Set attractor falloff", ex.Message)
+        End Try
+
+        Try
+            Dim count = Framework_Particle_GetAttractorCount()
+            If count >= 1 Then
+                LogPass($"Get attractor count (count={count})")
+            Else
+                LogFail("Get attractor count", $"Expected >= 1, got {count}")
+            End If
+        Catch ex As Exception
+            LogFail("Get attractor count", ex.Message)
+        End Try
+
+        Try
+            Framework_Particle_DestroyAttractor(attractorId)
+            LogPass("Destroy attractor")
+        Catch ex As Exception
+            LogFail("Destroy attractor", ex.Message)
+        End Try
+
+        ' Test sub-emitters
+        Dim subEntity As Integer = Framework_Ecs_CreateEntity()
+        Framework_Ecs_AddParticleEmitter(subEntity, 0)
+
+        Try
+            Framework_Ecs_SetEmitterSubEmitter(entity, subEntity)
+            LogPass("Set sub-emitter on death")
+        Catch ex As Exception
+            LogFail("Set sub-emitter on death", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterSubEmitterOnBirth(entity, subEntity)
+            LogPass("Set sub-emitter on birth")
+        Catch ex As Exception
+            LogFail("Set sub-emitter on birth", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_ClearSubEmitters(entity)
+            LogPass("Clear sub-emitters")
+        Catch ex As Exception
+            LogFail("Clear sub-emitters", ex.Message)
+        End Try
+
+        Framework_Ecs_DestroyEntity(subEntity)
+
+        ' Test trail
+        Try
+            Framework_Ecs_SetEmitterTrail(entity, True, 10, 2.0F)
+            LogPass("Set emitter trail")
+        Catch ex As Exception
+            LogFail("Set emitter trail", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterTrailColor(entity, 255, 128, 0, 200)
+            LogPass("Set emitter trail color")
+        Catch ex As Exception
+            LogFail("Set emitter trail color", ex.Message)
+        End Try
+
+        ' Test collision
+        Try
+            Framework_Ecs_SetEmitterCollision(entity, True)
+            LogPass("Set emitter collision enabled")
+        Catch ex As Exception
+            LogFail("Set emitter collision enabled", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterCollisionBounce(entity, 0.7F)
+            LogPass("Set emitter collision bounce")
+        Catch ex As Exception
+            LogFail("Set emitter collision bounce", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterCollisionFriction(entity, 0.2F)
+            LogPass("Set emitter collision friction")
+        Catch ex As Exception
+            LogFail("Set emitter collision friction", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterCollisionLifetimeLoss(entity, 0.1F)
+            LogPass("Set emitter collision lifetime loss")
+        Catch ex As Exception
+            LogFail("Set emitter collision lifetime loss", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterCollisionKillOnCollide(entity, False)
+            LogPass("Set emitter collision kill on collide")
+        Catch ex As Exception
+            LogFail("Set emitter collision kill on collide", ex.Message)
+        End Try
+
+        ' Test animation
+        Try
+            Framework_Ecs_SetEmitterAnimation(entity, 4, 4, 15.0F, True)
+            LogPass("Set emitter animation (4x4 @ 15fps)")
+        Catch ex As Exception
+            LogFail("Set emitter animation", ex.Message)
+        End Try
+
+        ' Test texture sheet
+        Try
+            Framework_Ecs_SetEmitterTextureSheet(entity, 0, 4, 4)
+            LogPass("Set emitter texture sheet")
+        Catch ex As Exception
+            LogFail("Set emitter texture sheet", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_SetEmitterRandomTexture(entity, True)
+            LogPass("Set emitter random texture")
+        Catch ex As Exception
+            LogFail("Set emitter random texture", ex.Message)
+        End Try
+
+        ' Test sorting
+        Try
+            Framework_Ecs_SetEmitterSortMode(entity, 0) ' No sort
+            Framework_Ecs_SetEmitterSortMode(entity, 1) ' Sort by age
+            Framework_Ecs_SetEmitterSortMode(entity, 2) ' Sort by distance
+            LogPass("Set emitter sort modes")
+        Catch ex As Exception
+            LogFail("Set emitter sort modes", ex.Message)
+        End Try
+
+        ' Test pre-warming
+        Try
+            Framework_Ecs_SetEmitterRate(entity, 100)
+            Framework_Ecs_SetEmitterMaxParticles(entity, 200)
+            Framework_Ecs_EmitterPrewarm(entity, 2.0F)
+            LogPass("Emitter prewarm")
+        Catch ex As Exception
+            LogFail("Emitter prewarm", ex.Message)
+        End Try
+
+        ' Test pool statistics
+        Try
+            Dim totalCount = Framework_Particles_GetTotalCount()
+            LogPass($"Get total particle count (count={totalCount})")
+        Catch ex As Exception
+            LogFail("Get total particle count", ex.Message)
+        End Try
+
+        Try
+            Dim emitterCount = Framework_Particles_GetEmitterCount()
+            If emitterCount >= 1 Then
+                LogPass($"Get emitter count (count={emitterCount})")
+            Else
+                LogFail("Get emitter count", $"Expected >= 1, got {emitterCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get emitter count", ex.Message)
+        End Try
+
+        Try
+            Framework_Particles_SetGlobalTimeScale(0.5F)
+            Framework_Particles_SetGlobalTimeScale(1.0F) ' Reset
+            LogPass("Set global particle time scale")
+        Catch ex As Exception
+            LogFail("Set global particle time scale", ex.Message)
+        End Try
+
+        ' Clean up enhanced tests
+        Framework_Ecs_DestroyEntity(entity)
     End Sub
 #End Region
 
