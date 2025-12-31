@@ -7376,6 +7376,448 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Shader System"
+    ' ---- Shader Loading ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Shader_Load(vsPath As String, fsPath As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Shader_LoadFromMemory(vsCode As String, fsCode As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_Unload(shaderId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_IsValid(shaderId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Shader Usage ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_Begin(shaderId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_End()
+    End Sub
+
+    ' ---- Uniform Locations ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Shader_GetUniformLocation(shaderId As Integer, uniformName As String) As Integer
+    End Function
+
+    ' ---- Set Uniforms ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_SetInt(shaderId As Integer, loc As Integer, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_SetFloat(shaderId As Integer, loc As Integer, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_SetVec2(shaderId As Integer, loc As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_SetVec3(shaderId As Integer, loc As Integer, x As Single, y As Single, z As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_SetVec4(shaderId As Integer, loc As Integer, x As Single, y As Single, z As Single, w As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_SetMat4(shaderId As Integer, loc As Integer, matrix As Single())
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_SetTexture(shaderId As Integer, loc As Integer, textureHandle As Integer)
+    End Sub
+
+    ' ---- Set Uniforms by Name ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Shader_SetIntByName(shaderId As Integer, uniformName As String, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Shader_SetFloatByName(shaderId As Integer, uniformName As String, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Shader_SetVec2ByName(shaderId As Integer, uniformName As String, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Shader_SetVec3ByName(shaderId As Integer, uniformName As String, x As Single, y As Single, z As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Shader_SetVec4ByName(shaderId As Integer, uniformName As String, x As Single, y As Single, z As Single, w As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Shader_SetMat4ByName(shaderId As Integer, uniformName As String, matrix As Single())
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Shader_SetTextureByName(shaderId As Integer, uniformName As String, textureHandle As Integer)
+    End Sub
+
+    ' ---- Built-in Shaders ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_GetDefault() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadGrayscale() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadBlur() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadCRT() As Integer
+    End Function
+
+    ' ---- Global ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_GetCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Shader_UnloadAll()
+    End Sub
+#End Region
+
+#Region "Skeletal Animation System"
+    ' ---- Skeleton Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Skeleton_Create(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_Destroy(skeletonId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Skeleton_GetByName(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Skeleton_IsValid(skeletonId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Bone Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Skeleton_AddBone(skeletonId As Integer, boneName As String, parentBoneId As Integer, x As Single, y As Single, rotation As Single, length As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Skeleton_GetBoneByName(skeletonId As Integer, boneName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Skeleton_GetBoneCount(skeletonId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_SetBoneLocalTransform(skeletonId As Integer, boneId As Integer, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_GetBoneWorldPosition(skeletonId As Integer, boneId As Integer, ByRef outX As Single, ByRef outY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Skeleton_GetBoneWorldRotation(skeletonId As Integer, boneId As Integer) As Single
+    End Function
+
+    ' ---- Sprite Attachment ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_AttachSprite(skeletonId As Integer, boneId As Integer, textureHandle As Integer, srcX As Single, srcY As Single, srcW As Single, srcH As Single, offsetX As Single, offsetY As Single, originX As Single, originY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_DetachSprite(skeletonId As Integer, boneId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_SetSpriteVisible(skeletonId As Integer, boneId As Integer, <MarshalAs(UnmanagedType.I1)> visible As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_SetSpriteColor(skeletonId As Integer, boneId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ' ---- Animation Creation ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Skeleton_CreateAnimation(skeletonId As Integer, animName As String, duration As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Skeleton_GetAnimationByName(skeletonId As Integer, animName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Skeleton_GetAnimationCount(skeletonId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_AddKeyframe(skeletonId As Integer, animId As Integer, boneId As Integer, time As Single, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_SetAnimationLooping(skeletonId As Integer, animId As Integer, <MarshalAs(UnmanagedType.I1)> looping As Boolean)
+    End Sub
+
+    ' ---- Animation Playback ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_PlayAnimation(skeletonId As Integer, animId As Integer, <MarshalAs(UnmanagedType.I1)> looping As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_StopAnimation(skeletonId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_PauseAnimation(skeletonId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_ResumeAnimation(skeletonId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_SetAnimationTime(skeletonId As Integer, time As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_SetAnimationSpeed(skeletonId As Integer, speed As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Skeleton_GetAnimationTime(skeletonId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Skeleton_IsAnimationPlaying(skeletonId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Skeleton_GetCurrentAnimation(skeletonId As Integer) As Integer
+    End Function
+
+    ' ---- Animation Blending ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_CrossFade(skeletonId As Integer, animId As Integer, duration As Single, <MarshalAs(UnmanagedType.I1)> looping As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_BlendAnimations(skeletonId As Integer, animA As Integer, animB As Integer, blendFactor As Single)
+    End Sub
+
+    ' ---- Pose ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_SetPose(skeletonId As Integer, animId As Integer, time As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_ResetPose(skeletonId As Integer)
+    End Sub
+
+    ' ---- Update and Render ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_Update(skeletonId As Integer, deltaTime As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_Draw(skeletonId As Integer, x As Single, y As Single, scale As Single, rotation As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_DrawDebug(skeletonId As Integer, x As Single, y As Single, scale As Single)
+    End Sub
+
+    ' ---- IK ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_SetIKTarget(skeletonId As Integer, boneId As Integer, targetX As Single, targetY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_ClearIKTarget(skeletonId As Integer, boneId As Integer)
+    End Sub
+
+    ' ---- Global ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Skeleton_GetCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Skeleton_DestroyAll()
+    End Sub
+#End Region
+
+#Region "Command Console System"
+    ' ---- Command Callback Delegate ----
+    Public Delegate Sub CmdConsoleCallback(<MarshalAs(UnmanagedType.LPStr)> args As String, userData As IntPtr)
+
+    ' ---- Console Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_Init()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_Shutdown()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_Toggle()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_Show()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_Hide()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cmd_IsVisible() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Command Registration ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_RegisterCommand(cmdName As String, description As String, callback As CmdConsoleCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_UnregisterCommand(cmdName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Cmd_HasCommand(cmdName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Command Execution ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_Execute(commandLine As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_ExecuteFile(filePath As String)
+    End Sub
+
+    ' ---- Logging ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_Log(message As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_LogInfo(message As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_LogWarning(message As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_LogError(message As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_LogDebug(message As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_Clear()
+    End Sub
+
+    ' ---- Console Variables (CVars) ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_SetCvarInt(name As String, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_SetCvarFloat(name As String, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_SetCvarBool(name As String, <MarshalAs(UnmanagedType.I1)> value As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Cmd_SetCvarString(name As String, value As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Cmd_GetCvarInt(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Cmd_GetCvarFloat(name As String) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Cmd_GetCvarBool(name As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Cmd_GetCvarString(name As String) As IntPtr
+    End Function
+
+    ' ---- History ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cmd_GetHistoryCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Cmd_GetHistoryItem(index As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_ClearHistory()
+    End Sub
+
+    ' ---- Update and Render ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_Update(deltaTime As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_Draw()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_HandleInput()
+    End Sub
+
+    ' ---- Configuration ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_SetMaxLines(maxLines As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_SetBackgroundColor(r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_SetTextColor(r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_SetFontSize(size As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Cmd_SetToggleKey(keyCode As Integer)
+    End Sub
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

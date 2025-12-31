@@ -19369,4 +19369,888 @@ extern "C" {
         g_nextNetClientId = 1;
     }
 
+    // ========================================================================
+    // SHADER SYSTEM
+    // ========================================================================
+
+    namespace {
+        struct ManagedShader {
+            int id = 0;
+            Shader shader;
+            std::unordered_map<std::string, int> uniformLocs;
+            bool valid = false;
+        };
+
+        std::unordered_map<int, ManagedShader> g_shaders;
+        int g_nextShaderId = 1;
+        int g_activeShader = 0;
+
+        ManagedShader* GetShader(int id) {
+            auto it = g_shaders.find(id);
+            return (it != g_shaders.end()) ? &it->second : nullptr;
+        }
+    }
+
+    int Framework_Shader_Load(const char* vsPath, const char* fsPath) {
+        Shader s = LoadShader(vsPath, fsPath);
+        if (s.id == 0) return 0;
+        ManagedShader ms;
+        ms.id = g_nextShaderId++;
+        ms.shader = s;
+        ms.valid = true;
+        g_shaders[ms.id] = ms;
+        return ms.id;
+    }
+
+    int Framework_Shader_LoadFromMemory(const char* vsCode, const char* fsCode) {
+        Shader s = LoadShaderFromMemory(vsCode, fsCode);
+        if (s.id == 0) return 0;
+        ManagedShader ms;
+        ms.id = g_nextShaderId++;
+        ms.shader = s;
+        ms.valid = true;
+        g_shaders[ms.id] = ms;
+        return ms.id;
+    }
+
+    void Framework_Shader_Unload(int shaderId) {
+        auto* ms = GetShader(shaderId);
+        if (ms && ms->valid) {
+            UnloadShader(ms->shader);
+            g_shaders.erase(shaderId);
+        }
+    }
+
+    bool Framework_Shader_IsValid(int shaderId) {
+        auto* ms = GetShader(shaderId);
+        return ms && ms->valid;
+    }
+
+    void Framework_Shader_Begin(int shaderId) {
+        auto* ms = GetShader(shaderId);
+        if (ms && ms->valid) {
+            BeginShaderMode(ms->shader);
+            g_activeShader = shaderId;
+        }
+    }
+
+    void Framework_Shader_End() {
+        EndShaderMode();
+        g_activeShader = 0;
+    }
+
+    int Framework_Shader_GetActive() { return g_activeShader; }
+
+    int Framework_Shader_GetUniformLocation(int shaderId, const char* uniformName) {
+        auto* ms = GetShader(shaderId);
+        if (!ms || !ms->valid || !uniformName) return -1;
+        auto it = ms->uniformLocs.find(uniformName);
+        if (it != ms->uniformLocs.end()) return it->second;
+        int loc = GetShaderLocation(ms->shader, uniformName);
+        ms->uniformLocs[uniformName] = loc;
+        return loc;
+    }
+
+    int Framework_Shader_GetAttributeLocation(int shaderId, const char* attribName) {
+        auto* ms = GetShader(shaderId);
+        if (!ms || !ms->valid || !attribName) return -1;
+        return GetShaderLocationAttrib(ms->shader, attribName);
+    }
+
+    void Framework_Shader_SetInt(int shaderId, int loc, int value) {
+        auto* ms = GetShader(shaderId);
+        if (ms && ms->valid && loc >= 0) SetShaderValue(ms->shader, loc, &value, SHADER_UNIFORM_INT);
+    }
+
+    void Framework_Shader_SetFloat(int shaderId, int loc, float value) {
+        auto* ms = GetShader(shaderId);
+        if (ms && ms->valid && loc >= 0) SetShaderValue(ms->shader, loc, &value, SHADER_UNIFORM_FLOAT);
+    }
+
+    void Framework_Shader_SetVec2(int shaderId, int loc, float x, float y) {
+        auto* ms = GetShader(shaderId);
+        if (ms && ms->valid && loc >= 0) {
+            float v[2] = { x, y };
+            SetShaderValue(ms->shader, loc, v, SHADER_UNIFORM_VEC2);
+        }
+    }
+
+    void Framework_Shader_SetVec3(int shaderId, int loc, float x, float y, float z) {
+        auto* ms = GetShader(shaderId);
+        if (ms && ms->valid && loc >= 0) {
+            float v[3] = { x, y, z };
+            SetShaderValue(ms->shader, loc, v, SHADER_UNIFORM_VEC3);
+        }
+    }
+
+    void Framework_Shader_SetVec4(int shaderId, int loc, float x, float y, float z, float w) {
+        auto* ms = GetShader(shaderId);
+        if (ms && ms->valid && loc >= 0) {
+            float v[4] = { x, y, z, w };
+            SetShaderValue(ms->shader, loc, v, SHADER_UNIFORM_VEC4);
+        }
+    }
+
+    void Framework_Shader_SetMat4(int shaderId, int loc, const float* matrix) {
+        auto* ms = GetShader(shaderId);
+        if (ms && ms->valid && loc >= 0 && matrix) {
+            SetShaderValueMatrix(ms->shader, loc, *(Matrix*)matrix);
+        }
+    }
+
+    void Framework_Shader_SetTexture(int shaderId, int loc, int textureHandle) {
+        auto* ms = GetShader(shaderId);
+        auto* tex = GetTextureH_Internal(textureHandle);
+        if (ms && ms->valid && loc >= 0 && tex) {
+            SetShaderValueTexture(ms->shader, loc, *tex);
+        }
+    }
+
+    void Framework_Shader_SetIntByName(int shaderId, const char* name, int value) {
+        int loc = Framework_Shader_GetUniformLocation(shaderId, name);
+        Framework_Shader_SetInt(shaderId, loc, value);
+    }
+
+    void Framework_Shader_SetFloatByName(int shaderId, const char* name, float value) {
+        int loc = Framework_Shader_GetUniformLocation(shaderId, name);
+        Framework_Shader_SetFloat(shaderId, loc, value);
+    }
+
+    void Framework_Shader_SetVec2ByName(int shaderId, const char* name, float x, float y) {
+        int loc = Framework_Shader_GetUniformLocation(shaderId, name);
+        Framework_Shader_SetVec2(shaderId, loc, x, y);
+    }
+
+    void Framework_Shader_SetVec3ByName(int shaderId, const char* name, float x, float y, float z) {
+        int loc = Framework_Shader_GetUniformLocation(shaderId, name);
+        Framework_Shader_SetVec3(shaderId, loc, x, y, z);
+    }
+
+    void Framework_Shader_SetVec4ByName(int shaderId, const char* name, float x, float y, float z, float w) {
+        int loc = Framework_Shader_GetUniformLocation(shaderId, name);
+        Framework_Shader_SetVec4(shaderId, loc, x, y, z, w);
+    }
+
+    void Framework_Shader_SetTime(int shaderId, float time) {
+        Framework_Shader_SetFloatByName(shaderId, "time", time);
+    }
+
+    void Framework_Shader_SetResolution(int shaderId, float width, float height) {
+        Framework_Shader_SetVec2ByName(shaderId, "resolution", width, height);
+    }
+
+    void Framework_Shader_SetMouse(int shaderId, float x, float y) {
+        Framework_Shader_SetVec2ByName(shaderId, "mouse", x, y);
+    }
+
+    int Framework_Shader_GetCount() { return (int)g_shaders.size(); }
+
+    void Framework_Shader_UnloadAll() {
+        for (auto& kv : g_shaders) {
+            if (kv.second.valid) UnloadShader(kv.second.shader);
+        }
+        g_shaders.clear();
+        g_nextShaderId = 1;
+    }
+
+    // ========================================================================
+    // SKELETAL ANIMATION SYSTEM
+    // ========================================================================
+
+    namespace {
+        struct BoneKeyframe {
+            float time;
+            float x, y, rotation, scaleX, scaleY;
+        };
+
+        struct BoneAnimation {
+            std::vector<BoneKeyframe> keyframes;
+        };
+
+        struct SkeletonAnimation {
+            int id = 0;
+            std::string name;
+            float duration = 1.0f;
+            std::unordered_map<int, BoneAnimation> boneAnims;
+        };
+
+        struct BoneSprite {
+            int textureHandle = -1;
+            float srcX = 0, srcY = 0, srcW = 0, srcH = 0;
+            float offsetX = 0, offsetY = 0;
+            bool hasRegion = false;
+        };
+
+        struct Bone {
+            int id = 0;
+            std::string name;
+            int parentId = -1;
+            float localX = 0, localY = 0;
+            float localRotation = 0;
+            float localScaleX = 1, localScaleY = 1;
+            float length = 50;
+            float worldX = 0, worldY = 0;
+            float worldRotation = 0;
+            BoneSprite sprite;
+        };
+
+        struct Skeleton {
+            int id = 0;
+            std::string name;
+            std::vector<Bone> bones;
+            std::unordered_map<std::string, int> boneByName;
+            std::vector<SkeletonAnimation> animations;
+            std::unordered_map<std::string, int> animByName;
+            int currentAnim = -1;
+            float animTime = 0;
+            float animSpeed = 1.0f;
+            bool playing = false;
+            bool looping = false;
+            int blendAnim = -1;
+            float blendTime = 0, blendDuration = 0;
+        };
+
+        std::unordered_map<int, Skeleton> g_skeletons;
+        int g_nextSkeletonId = 1;
+        static char s_boneNameBuf[256] = { 0 };
+
+        Skeleton* GetSkeleton(int id) {
+            auto it = g_skeletons.find(id);
+            return (it != g_skeletons.end()) ? &it->second : nullptr;
+        }
+
+        void UpdateBoneWorldTransform(Skeleton* skel, int boneIdx) {
+            if (!skel || boneIdx < 0 || boneIdx >= (int)skel->bones.size()) return;
+            Bone& bone = skel->bones[boneIdx];
+            if (bone.parentId < 0) {
+                bone.worldX = bone.localX;
+                bone.worldY = bone.localY;
+                bone.worldRotation = bone.localRotation;
+            }
+            else {
+                Bone& parent = skel->bones[bone.parentId];
+                float rad = parent.worldRotation * DEG2RAD;
+                float cosR = cosf(rad), sinR = sinf(rad);
+                bone.worldX = parent.worldX + bone.localX * cosR - bone.localY * sinR;
+                bone.worldY = parent.worldY + bone.localX * sinR + bone.localY * cosR;
+                bone.worldRotation = parent.worldRotation + bone.localRotation;
+            }
+        }
+
+        float LerpAngle(float a, float b, float t) {
+            float diff = fmodf(b - a + 540.0f, 360.0f) - 180.0f;
+            return a + diff * t;
+        }
+    }
+
+    int Framework_Skeleton_Create(const char* name) {
+        Skeleton skel;
+        skel.id = g_nextSkeletonId++;
+        skel.name = name ? name : "";
+        g_skeletons[skel.id] = skel;
+        return skel.id;
+    }
+
+    void Framework_Skeleton_Destroy(int skeletonId) {
+        g_skeletons.erase(skeletonId);
+    }
+
+    bool Framework_Skeleton_IsValid(int skeletonId) {
+        return g_skeletons.find(skeletonId) != g_skeletons.end();
+    }
+
+    int Framework_Skeleton_AddBone(int skeletonId, const char* boneName, int parentBoneId, float x, float y, float rotation, float length) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel) return -1;
+        Bone bone;
+        bone.id = (int)skel->bones.size();
+        bone.name = boneName ? boneName : "";
+        bone.parentId = parentBoneId;
+        bone.localX = x;
+        bone.localY = y;
+        bone.localRotation = rotation;
+        bone.length = length;
+        skel->bones.push_back(bone);
+        if (!bone.name.empty()) skel->boneByName[bone.name] = bone.id;
+        return bone.id;
+    }
+
+    int Framework_Skeleton_GetBoneByName(int skeletonId, const char* boneName) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || !boneName) return -1;
+        auto it = skel->boneByName.find(boneName);
+        return (it != skel->boneByName.end()) ? it->second : -1;
+    }
+
+    int Framework_Skeleton_GetBoneCount(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        return skel ? (int)skel->bones.size() : 0;
+    }
+
+    int Framework_Skeleton_GetBoneParent(int skeletonId, int boneId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || boneId < 0 || boneId >= (int)skel->bones.size()) return -1;
+        return skel->bones[boneId].parentId;
+    }
+
+    const char* Framework_Skeleton_GetBoneName(int skeletonId, int boneId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || boneId < 0 || boneId >= (int)skel->bones.size()) return "";
+        strncpy(s_boneNameBuf, skel->bones[boneId].name.c_str(), 255);
+        return s_boneNameBuf;
+    }
+
+    void Framework_Skeleton_SetBonePosition(int skeletonId, int boneId, float x, float y) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            skel->bones[boneId].localX = x;
+            skel->bones[boneId].localY = y;
+        }
+    }
+
+    void Framework_Skeleton_SetBoneRotation(int skeletonId, int boneId, float rotation) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            skel->bones[boneId].localRotation = rotation;
+        }
+    }
+
+    void Framework_Skeleton_SetBoneScale(int skeletonId, int boneId, float scaleX, float scaleY) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            skel->bones[boneId].localScaleX = scaleX;
+            skel->bones[boneId].localScaleY = scaleY;
+        }
+    }
+
+    void Framework_Skeleton_GetBonePosition(int skeletonId, int boneId, float* x, float* y) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            if (x) *x = skel->bones[boneId].localX;
+            if (y) *y = skel->bones[boneId].localY;
+        }
+    }
+
+    float Framework_Skeleton_GetBoneRotation(int skeletonId, int boneId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            return skel->bones[boneId].localRotation;
+        }
+        return 0;
+    }
+
+    void Framework_Skeleton_GetBoneWorldPosition(int skeletonId, int boneId, float* x, float* y) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            if (x) *x = skel->bones[boneId].worldX;
+            if (y) *y = skel->bones[boneId].worldY;
+        }
+    }
+
+    float Framework_Skeleton_GetBoneWorldRotation(int skeletonId, int boneId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            return skel->bones[boneId].worldRotation;
+        }
+        return 0;
+    }
+
+    void Framework_Skeleton_UpdateWorldTransforms(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel) return;
+        for (int i = 0; i < (int)skel->bones.size(); i++) {
+            UpdateBoneWorldTransform(skel, i);
+        }
+    }
+
+    void Framework_Skeleton_AttachSprite(int skeletonId, int boneId, int textureHandle, float offsetX, float offsetY, float width, float height) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || boneId < 0 || boneId >= (int)skel->bones.size()) return;
+        auto& sprite = skel->bones[boneId].sprite;
+        sprite.textureHandle = textureHandle;
+        sprite.offsetX = offsetX;
+        sprite.offsetY = offsetY;
+        sprite.srcX = 0;
+        sprite.srcY = 0;
+        sprite.srcW = width;
+        sprite.srcH = height;
+        sprite.hasRegion = false;
+    }
+
+    void Framework_Skeleton_AttachSpriteRegion(int skeletonId, int boneId, int textureHandle, float srcX, float srcY, float srcW, float srcH, float offsetX, float offsetY) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || boneId < 0 || boneId >= (int)skel->bones.size()) return;
+        auto& sprite = skel->bones[boneId].sprite;
+        sprite.textureHandle = textureHandle;
+        sprite.srcX = srcX;
+        sprite.srcY = srcY;
+        sprite.srcW = srcW;
+        sprite.srcH = srcH;
+        sprite.offsetX = offsetX;
+        sprite.offsetY = offsetY;
+        sprite.hasRegion = true;
+    }
+
+    void Framework_Skeleton_DetachSprite(int skeletonId, int boneId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || boneId < 0 || boneId >= (int)skel->bones.size()) return;
+        skel->bones[boneId].sprite.textureHandle = -1;
+    }
+
+    int Framework_Skeleton_CreateAnimation(int skeletonId, const char* animName, float duration) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel) return -1;
+        SkeletonAnimation anim;
+        anim.id = (int)skel->animations.size();
+        anim.name = animName ? animName : "";
+        anim.duration = duration > 0 ? duration : 1.0f;
+        skel->animations.push_back(anim);
+        if (!anim.name.empty()) skel->animByName[anim.name] = anim.id;
+        return anim.id;
+    }
+
+    void Framework_Skeleton_AddKeyframe(int skeletonId, int animId, int boneId, float time, float x, float y, float rotation, float scaleX, float scaleY) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || animId < 0 || animId >= (int)skel->animations.size()) return;
+        BoneKeyframe kf = { time, x, y, rotation, scaleX, scaleY };
+        skel->animations[animId].boneAnims[boneId].keyframes.push_back(kf);
+    }
+
+    int Framework_Skeleton_GetAnimationByName(int skeletonId, const char* animName) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || !animName) return -1;
+        auto it = skel->animByName.find(animName);
+        return (it != skel->animByName.end()) ? it->second : -1;
+    }
+
+    int Framework_Skeleton_GetAnimationCount(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        return skel ? (int)skel->animations.size() : 0;
+    }
+
+    float Framework_Skeleton_GetAnimationDuration(int skeletonId, int animId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || animId < 0 || animId >= (int)skel->animations.size()) return 0;
+        return skel->animations[animId].duration;
+    }
+
+    void Framework_Skeleton_PlayAnimation(int skeletonId, int animId, bool loop) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || animId < 0 || animId >= (int)skel->animations.size()) return;
+        skel->currentAnim = animId;
+        skel->animTime = 0;
+        skel->playing = true;
+        skel->looping = loop;
+    }
+
+    void Framework_Skeleton_StopAnimation(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel) { skel->playing = false; skel->animTime = 0; }
+    }
+
+    void Framework_Skeleton_PauseAnimation(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel) skel->playing = false;
+    }
+
+    void Framework_Skeleton_ResumeAnimation(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel) skel->playing = true;
+    }
+
+    void Framework_Skeleton_SetAnimationTime(int skeletonId, float time) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel) skel->animTime = time;
+    }
+
+    float Framework_Skeleton_GetAnimationTime(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        return skel ? skel->animTime : 0;
+    }
+
+    bool Framework_Skeleton_IsAnimationPlaying(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        return skel && skel->playing;
+    }
+
+    void Framework_Skeleton_SetAnimationSpeed(int skeletonId, float speed) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel) skel->animSpeed = speed;
+    }
+
+    void Framework_Skeleton_BlendToAnimation(int skeletonId, int animId, float blendTime, bool loop) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || animId < 0 || animId >= (int)skel->animations.size()) return;
+        skel->blendAnim = animId;
+        skel->blendDuration = blendTime;
+        skel->blendTime = 0;
+        skel->looping = loop;
+    }
+
+    void Framework_Skeleton_SetBlendWeight(int skeletonId, int animId, float weight) {
+        // Simplified - just set blend time ratio
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && skel->blendDuration > 0) {
+            skel->blendTime = skel->blendDuration * weight;
+        }
+    }
+
+    void Framework_Skeleton_Update(int skeletonId, float deltaTime) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || !skel->playing) return;
+
+        skel->animTime += deltaTime * skel->animSpeed;
+
+        if (skel->currentAnim >= 0 && skel->currentAnim < (int)skel->animations.size()) {
+            auto& anim = skel->animations[skel->currentAnim];
+            if (skel->animTime >= anim.duration) {
+                if (skel->looping) skel->animTime = fmodf(skel->animTime, anim.duration);
+                else { skel->animTime = anim.duration; skel->playing = false; }
+            }
+
+            for (auto& kv : anim.boneAnims) {
+                int boneId = kv.first;
+                auto& boneAnim = kv.second;
+                if (boneId < 0 || boneId >= (int)skel->bones.size() || boneAnim.keyframes.empty()) continue;
+
+                // Find keyframes
+                BoneKeyframe* kf0 = nullptr, * kf1 = nullptr;
+                for (size_t i = 0; i < boneAnim.keyframes.size(); i++) {
+                    if (boneAnim.keyframes[i].time <= skel->animTime) kf0 = &boneAnim.keyframes[i];
+                    if (boneAnim.keyframes[i].time >= skel->animTime && !kf1) kf1 = &boneAnim.keyframes[i];
+                }
+                if (!kf0) kf0 = &boneAnim.keyframes[0];
+                if (!kf1) kf1 = kf0;
+
+                float t = (kf1->time > kf0->time) ? (skel->animTime - kf0->time) / (kf1->time - kf0->time) : 0;
+                auto& bone = skel->bones[boneId];
+                bone.localX = kf0->x + (kf1->x - kf0->x) * t;
+                bone.localY = kf0->y + (kf1->y - kf0->y) * t;
+                bone.localRotation = LerpAngle(kf0->rotation, kf1->rotation, t);
+                bone.localScaleX = kf0->scaleX + (kf1->scaleX - kf0->scaleX) * t;
+                bone.localScaleY = kf0->scaleY + (kf1->scaleY - kf0->scaleY) * t;
+            }
+        }
+
+        Framework_Skeleton_UpdateWorldTransforms(skeletonId);
+    }
+
+    void Framework_Skeleton_Draw(int skeletonId, float x, float y, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel) return;
+        for (auto& bone : skel->bones) {
+            if (bone.sprite.textureHandle < 0) continue;
+            auto* tex = GetTextureH_Internal(bone.sprite.textureHandle);
+            if (!tex) continue;
+            float bx = x + bone.worldX * scale;
+            float by = y + bone.worldY * scale;
+            Rectangle src = { bone.sprite.srcX, bone.sprite.srcY, bone.sprite.srcW, bone.sprite.srcH };
+            if (!bone.sprite.hasRegion) { src.width = (float)tex->width; src.height = (float)tex->height; }
+            Rectangle dest = { bx + bone.sprite.offsetX * scale, by + bone.sprite.offsetY * scale, src.width * scale * bone.localScaleX, src.height * scale * bone.localScaleY };
+            Vector2 origin = { dest.width / 2, dest.height / 2 };
+            DrawTexturePro(*tex, src, dest, origin, bone.worldRotation, { r, g, b, a });
+        }
+    }
+
+    void Framework_Skeleton_DrawDebug(int skeletonId, float x, float y, float scale) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel) return;
+        for (auto& bone : skel->bones) {
+            float bx = x + bone.worldX * scale;
+            float by = y + bone.worldY * scale;
+            float rad = bone.worldRotation * DEG2RAD;
+            float ex = bx + cosf(rad) * bone.length * scale;
+            float ey = by + sinf(rad) * bone.length * scale;
+            DrawLineEx({ bx, by }, { ex, ey }, 2, YELLOW);
+            DrawCircle((int)bx, (int)by, 4, RED);
+        }
+    }
+
+    bool Framework_Skeleton_SaveToFile(int skeletonId, const char* filePath) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || !filePath) return false;
+        // Simplified JSON save
+        FILE* f = fopen(filePath, "w");
+        if (!f) return false;
+        fprintf(f, "{\"name\":\"%s\",\"bones\":[", skel->name.c_str());
+        for (size_t i = 0; i < skel->bones.size(); i++) {
+            auto& b = skel->bones[i];
+            if (i > 0) fprintf(f, ",");
+            fprintf(f, "{\"name\":\"%s\",\"parent\":%d,\"x\":%.2f,\"y\":%.2f,\"rot\":%.2f,\"len\":%.2f}",
+                b.name.c_str(), b.parentId, b.localX, b.localY, b.localRotation, b.length);
+        }
+        fprintf(f, "]}");
+        fclose(f);
+        return true;
+    }
+
+    int Framework_Skeleton_LoadFromFile(const char* filePath) {
+        // Simplified - just create empty skeleton
+        return Framework_Skeleton_Create(filePath);
+    }
+
+    int Framework_Skeleton_GetCount() { return (int)g_skeletons.size(); }
+
+    void Framework_Skeleton_DestroyAll() {
+        g_skeletons.clear();
+        g_nextSkeletonId = 1;
+    }
+
+    // ========================================================================
+    // COMMAND CONSOLE SYSTEM
+    // ========================================================================
+
+    namespace {
+        struct CmdConsoleCommand {
+            std::string name;
+            std::string description;
+            CmdConsoleCallback callback;
+            void* userData;
+        };
+
+        struct CmdConsoleLine {
+            std::string text;
+            Color color;
+        };
+
+        struct CmdCvar {
+            enum Type { INT, FLOAT, BOOL, STRING } type;
+            int intVal = 0;
+            float floatVal = 0;
+            bool boolVal = false;
+            std::string stringVal;
+        };
+
+        std::unordered_map<std::string, CmdConsoleCommand> g_cmdCommands;
+        std::unordered_map<std::string, CmdCvar> g_cmdCvars;
+        std::vector<CmdConsoleLine> g_cmdLines;
+        std::vector<std::string> g_cmdHistory;
+        std::string g_cmdInput;
+        int g_cmdHistoryIndex = -1;
+        bool g_cmdVisible = false;
+        int g_cmdMaxLines = 100;
+        int g_cmdFontSize = 14;
+        int g_cmdToggleKey = KEY_GRAVE;
+        Color g_cmdBgColor = { 20, 20, 30, 220 };
+        Color g_cmdTextColor = { 200, 200, 200, 255 };
+        static char s_cmdStringBuf[1024] = { 0 };
+
+        void AddCmdLine(const std::string& text, Color color) {
+            g_cmdLines.push_back({ text, color });
+            while ((int)g_cmdLines.size() > g_cmdMaxLines) g_cmdLines.erase(g_cmdLines.begin());
+        }
+    }
+
+    void Framework_Cmd_Init() {
+        g_cmdLines.clear();
+        g_cmdHistory.clear();
+        g_cmdInput.clear();
+        AddCmdLine("Console initialized. Type 'help' for commands.", GREEN);
+
+        // Register built-in commands
+        Framework_Cmd_RegisterCommand("help", "Show available commands", [](const char*, void*) {
+            AddCmdLine("=== Available Commands ===", YELLOW);
+            for (auto& kv : g_cmdCommands) {
+                AddCmdLine("  " + kv.first + " - " + kv.second.description, g_cmdTextColor);
+            }
+            }, nullptr);
+
+        Framework_Cmd_RegisterCommand("clear", "Clear console", [](const char*, void*) {
+            g_cmdLines.clear();
+            }, nullptr);
+
+        Framework_Cmd_RegisterCommand("echo", "Print message", [](const char* args, void*) {
+            AddCmdLine(args ? args : "", g_cmdTextColor);
+            }, nullptr);
+
+        Framework_Cmd_RegisterCommand("cvar", "Set/get cvar: cvar <name> [value]", [](const char* args, void*) {
+            if (!args || strlen(args) == 0) return;
+            char name[64], value[256];
+            if (sscanf(args, "%63s %255s", name, value) == 2) {
+                Framework_Cmd_SetCvarString(name, value);
+                AddCmdLine(std::string(name) + " = " + value, GREEN);
+            }
+            else if (sscanf(args, "%63s", name) == 1) {
+                const char* v = Framework_Cmd_GetCvarString(name);
+                AddCmdLine(std::string(name) + " = " + (v ? v : "(not set)"), YELLOW);
+            }
+            }, nullptr);
+    }
+
+    void Framework_Cmd_Shutdown() {
+        g_cmdCommands.clear();
+        g_cmdCvars.clear();
+        g_cmdLines.clear();
+        g_cmdHistory.clear();
+    }
+
+    void Framework_Cmd_Toggle() { g_cmdVisible = !g_cmdVisible; }
+    void Framework_Cmd_Show() { g_cmdVisible = true; }
+    void Framework_Cmd_Hide() { g_cmdVisible = false; }
+    bool Framework_Cmd_IsVisible() { return g_cmdVisible; }
+
+    void Framework_Cmd_RegisterCommand(const char* cmdName, const char* description, CmdConsoleCallback callback, void* userData) {
+        if (!cmdName || !callback) return;
+        g_cmdCommands[cmdName] = { cmdName, description ? description : "", callback, userData };
+    }
+
+    void Framework_Cmd_UnregisterCommand(const char* cmdName) {
+        if (cmdName) g_cmdCommands.erase(cmdName);
+    }
+
+    bool Framework_Cmd_HasCommand(const char* cmdName) {
+        return cmdName && g_cmdCommands.find(cmdName) != g_cmdCommands.end();
+    }
+
+    void Framework_Cmd_Execute(const char* commandLine) {
+        if (!commandLine || strlen(commandLine) == 0) return;
+        g_cmdHistory.push_back(commandLine);
+        AddCmdLine("> " + std::string(commandLine), WHITE);
+
+        char cmd[64];
+        const char* args = nullptr;
+        if (sscanf(commandLine, "%63s", cmd) == 1) {
+            args = commandLine + strlen(cmd);
+            while (*args == ' ') args++;
+        }
+
+        auto it = g_cmdCommands.find(cmd);
+        if (it != g_cmdCommands.end()) {
+            it->second.callback(args, it->second.userData);
+        }
+        else {
+            AddCmdLine("Unknown command: " + std::string(cmd), RED);
+        }
+    }
+
+    void Framework_Cmd_ExecuteFile(const char* filePath) {
+        if (!filePath) return;
+        FILE* f = fopen(filePath, "r");
+        if (!f) { AddCmdLine("Failed to open: " + std::string(filePath), RED); return; }
+        char line[512];
+        while (fgets(line, sizeof(line), f)) {
+            size_t len = strlen(line);
+            if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+            if (strlen(line) > 0 && line[0] != '#') Framework_Cmd_Execute(line);
+        }
+        fclose(f);
+    }
+
+    void Framework_Cmd_Log(const char* message) { AddCmdLine(message ? message : "", g_cmdTextColor); }
+    void Framework_Cmd_LogInfo(const char* message) { AddCmdLine("[INFO] " + std::string(message ? message : ""), { 100, 200, 255, 255 }); }
+    void Framework_Cmd_LogWarning(const char* message) { AddCmdLine("[WARN] " + std::string(message ? message : ""), YELLOW); }
+    void Framework_Cmd_LogError(const char* message) { AddCmdLine("[ERROR] " + std::string(message ? message : ""), RED); }
+    void Framework_Cmd_LogDebug(const char* message) { AddCmdLine("[DEBUG] " + std::string(message ? message : ""), GRAY); }
+    void Framework_Cmd_Clear() { g_cmdLines.clear(); }
+
+    void Framework_Cmd_SetCvarInt(const char* name, int value) {
+        if (!name) return;
+        g_cmdCvars[name] = { CmdCvar::INT, value, (float)value, value != 0, std::to_string(value) };
+    }
+
+    void Framework_Cmd_SetCvarFloat(const char* name, float value) {
+        if (!name) return;
+        g_cmdCvars[name] = { CmdCvar::FLOAT, (int)value, value, value != 0, std::to_string(value) };
+    }
+
+    void Framework_Cmd_SetCvarBool(const char* name, bool value) {
+        if (!name) return;
+        g_cmdCvars[name] = { CmdCvar::BOOL, value ? 1 : 0, value ? 1.0f : 0.0f, value, value ? "true" : "false" };
+    }
+
+    void Framework_Cmd_SetCvarString(const char* name, const char* value) {
+        if (!name) return;
+        g_cmdCvars[name] = { CmdCvar::STRING, 0, 0, false, value ? value : "" };
+    }
+
+    int Framework_Cmd_GetCvarInt(const char* name) {
+        if (!name) return 0;
+        auto it = g_cmdCvars.find(name);
+        return (it != g_cmdCvars.end()) ? it->second.intVal : 0;
+    }
+
+    float Framework_Cmd_GetCvarFloat(const char* name) {
+        if (!name) return 0;
+        auto it = g_cmdCvars.find(name);
+        return (it != g_cmdCvars.end()) ? it->second.floatVal : 0;
+    }
+
+    bool Framework_Cmd_GetCvarBool(const char* name) {
+        if (!name) return false;
+        auto it = g_cmdCvars.find(name);
+        return (it != g_cmdCvars.end()) ? it->second.boolVal : false;
+    }
+
+    const char* Framework_Cmd_GetCvarString(const char* name) {
+        if (!name) return "";
+        auto it = g_cmdCvars.find(name);
+        if (it == g_cmdCvars.end()) return "";
+        strncpy(s_cmdStringBuf, it->second.stringVal.c_str(), 1023);
+        return s_cmdStringBuf;
+    }
+
+    int Framework_Cmd_GetHistoryCount() { return (int)g_cmdHistory.size(); }
+
+    const char* Framework_Cmd_GetHistoryItem(int index) {
+        if (index < 0 || index >= (int)g_cmdHistory.size()) return "";
+        strncpy(s_cmdStringBuf, g_cmdHistory[index].c_str(), 1023);
+        return s_cmdStringBuf;
+    }
+
+    void Framework_Cmd_ClearHistory() { g_cmdHistory.clear(); }
+
+    void Framework_Cmd_Update(float deltaTime) {
+        // Handle toggle key
+        if (IsKeyPressed(g_cmdToggleKey)) g_cmdVisible = !g_cmdVisible;
+    }
+
+    void Framework_Cmd_Draw() {
+        if (!g_cmdVisible) return;
+        int screenW = GetScreenWidth(), screenH = GetScreenHeight();
+        int consoleH = screenH / 2;
+
+        DrawRectangle(0, 0, screenW, consoleH, g_cmdBgColor);
+        DrawRectangle(0, consoleH - 2, screenW, 2, WHITE);
+
+        int y = consoleH - 30;
+        for (int i = (int)g_cmdLines.size() - 1; i >= 0 && y > 5; i--) {
+            DrawText(g_cmdLines[i].text.c_str(), 10, y, g_cmdFontSize, g_cmdLines[i].color);
+            y -= g_cmdFontSize + 2;
+        }
+
+        DrawRectangle(5, consoleH - 25, screenW - 10, 20, { 30, 30, 40, 255 });
+        DrawText(("> " + g_cmdInput + "_").c_str(), 10, consoleH - 23, g_cmdFontSize, GREEN);
+    }
+
+    void Framework_Cmd_HandleInput() {
+        if (!g_cmdVisible) return;
+        int key = GetCharPressed();
+        while (key > 0) {
+            if (key >= 32 && key <= 126) g_cmdInput += (char)key;
+            key = GetCharPressed();
+        }
+        if (IsKeyPressed(KEY_BACKSPACE) && !g_cmdInput.empty()) g_cmdInput.pop_back();
+        if (IsKeyPressed(KEY_ENTER) && !g_cmdInput.empty()) {
+            Framework_Cmd_Execute(g_cmdInput.c_str());
+            g_cmdInput.clear();
+            g_cmdHistoryIndex = -1;
+        }
+        if (IsKeyPressed(KEY_UP) && !g_cmdHistory.empty()) {
+            if (g_cmdHistoryIndex < 0) g_cmdHistoryIndex = (int)g_cmdHistory.size() - 1;
+            else if (g_cmdHistoryIndex > 0) g_cmdHistoryIndex--;
+            g_cmdInput = g_cmdHistory[g_cmdHistoryIndex];
+        }
+        if (IsKeyPressed(KEY_DOWN) && g_cmdHistoryIndex >= 0) {
+            g_cmdHistoryIndex++;
+            if (g_cmdHistoryIndex >= (int)g_cmdHistory.size()) { g_cmdHistoryIndex = -1; g_cmdInput.clear(); }
+            else g_cmdInput = g_cmdHistory[g_cmdHistoryIndex];
+        }
+    }
+
+    void Framework_Cmd_SetMaxLines(int maxLines) { g_cmdMaxLines = maxLines > 10 ? maxLines : 10; }
+    void Framework_Cmd_SetBackgroundColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { g_cmdBgColor = { r, g, b, a }; }
+    void Framework_Cmd_SetTextColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { g_cmdTextColor = { r, g, b, a }; }
+    void Framework_Cmd_SetFontSize(int size) { g_cmdFontSize = size > 8 ? size : 8; }
+    void Framework_Cmd_SetToggleKey(int keyCode) { g_cmdToggleKey = keyCode; }
+
 } // extern "C"

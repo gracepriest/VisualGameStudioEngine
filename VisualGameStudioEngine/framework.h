@@ -3067,6 +3067,179 @@ extern "C" {
     __declspec(dllexport) void  Framework_Net_Shutdown();
 
     // ========================================================================
+    // SHADER SYSTEM
+    // ========================================================================
+    // Custom shader loading and uniform management
+
+    // Shader loading
+    __declspec(dllexport) int   Framework_Shader_Load(const char* vsPath, const char* fsPath);
+    __declspec(dllexport) int   Framework_Shader_LoadFromMemory(const char* vsCode, const char* fsCode);
+    __declspec(dllexport) void  Framework_Shader_Unload(int shaderId);
+    __declspec(dllexport) bool  Framework_Shader_IsValid(int shaderId);
+
+    // Shader usage
+    __declspec(dllexport) void  Framework_Shader_Begin(int shaderId);
+    __declspec(dllexport) void  Framework_Shader_End();
+    __declspec(dllexport) int   Framework_Shader_GetActive();
+
+    // Uniform locations
+    __declspec(dllexport) int   Framework_Shader_GetUniformLocation(int shaderId, const char* uniformName);
+    __declspec(dllexport) int   Framework_Shader_GetAttributeLocation(int shaderId, const char* attribName);
+
+    // Set uniforms by location
+    __declspec(dllexport) void  Framework_Shader_SetInt(int shaderId, int loc, int value);
+    __declspec(dllexport) void  Framework_Shader_SetFloat(int shaderId, int loc, float value);
+    __declspec(dllexport) void  Framework_Shader_SetVec2(int shaderId, int loc, float x, float y);
+    __declspec(dllexport) void  Framework_Shader_SetVec3(int shaderId, int loc, float x, float y, float z);
+    __declspec(dllexport) void  Framework_Shader_SetVec4(int shaderId, int loc, float x, float y, float z, float w);
+    __declspec(dllexport) void  Framework_Shader_SetMat4(int shaderId, int loc, const float* matrix);
+    __declspec(dllexport) void  Framework_Shader_SetTexture(int shaderId, int loc, int textureHandle);
+
+    // Set uniforms by name (convenience)
+    __declspec(dllexport) void  Framework_Shader_SetIntByName(int shaderId, const char* name, int value);
+    __declspec(dllexport) void  Framework_Shader_SetFloatByName(int shaderId, const char* name, float value);
+    __declspec(dllexport) void  Framework_Shader_SetVec2ByName(int shaderId, const char* name, float x, float y);
+    __declspec(dllexport) void  Framework_Shader_SetVec3ByName(int shaderId, const char* name, float x, float y, float z);
+    __declspec(dllexport) void  Framework_Shader_SetVec4ByName(int shaderId, const char* name, float x, float y, float z, float w);
+
+    // Built-in shader uniforms (auto-set)
+    __declspec(dllexport) void  Framework_Shader_SetTime(int shaderId, float time);
+    __declspec(dllexport) void  Framework_Shader_SetResolution(int shaderId, float width, float height);
+    __declspec(dllexport) void  Framework_Shader_SetMouse(int shaderId, float x, float y);
+
+    // Global
+    __declspec(dllexport) int   Framework_Shader_GetCount();
+    __declspec(dllexport) void  Framework_Shader_UnloadAll();
+
+    // ========================================================================
+    // SKELETAL ANIMATION SYSTEM
+    // ========================================================================
+    // Bone-based 2D character animation
+
+    // Skeleton creation
+    __declspec(dllexport) int   Framework_Skeleton_Create(const char* name);
+    __declspec(dllexport) void  Framework_Skeleton_Destroy(int skeletonId);
+    __declspec(dllexport) bool  Framework_Skeleton_IsValid(int skeletonId);
+
+    // Bone management
+    __declspec(dllexport) int   Framework_Skeleton_AddBone(int skeletonId, const char* boneName, int parentBoneId, float x, float y, float rotation, float length);
+    __declspec(dllexport) int   Framework_Skeleton_GetBoneByName(int skeletonId, const char* boneName);
+    __declspec(dllexport) int   Framework_Skeleton_GetBoneCount(int skeletonId);
+    __declspec(dllexport) int   Framework_Skeleton_GetBoneParent(int skeletonId, int boneId);
+    __declspec(dllexport) const char* Framework_Skeleton_GetBoneName(int skeletonId, int boneId);
+
+    // Bone transforms (local space)
+    __declspec(dllexport) void  Framework_Skeleton_SetBonePosition(int skeletonId, int boneId, float x, float y);
+    __declspec(dllexport) void  Framework_Skeleton_SetBoneRotation(int skeletonId, int boneId, float rotation);
+    __declspec(dllexport) void  Framework_Skeleton_SetBoneScale(int skeletonId, int boneId, float scaleX, float scaleY);
+    __declspec(dllexport) void  Framework_Skeleton_GetBonePosition(int skeletonId, int boneId, float* x, float* y);
+    __declspec(dllexport) float Framework_Skeleton_GetBoneRotation(int skeletonId, int boneId);
+
+    // World space queries
+    __declspec(dllexport) void  Framework_Skeleton_GetBoneWorldPosition(int skeletonId, int boneId, float* x, float* y);
+    __declspec(dllexport) float Framework_Skeleton_GetBoneWorldRotation(int skeletonId, int boneId);
+    __declspec(dllexport) void  Framework_Skeleton_UpdateWorldTransforms(int skeletonId);
+
+    // Skin/sprite attachment
+    __declspec(dllexport) void  Framework_Skeleton_AttachSprite(int skeletonId, int boneId, int textureHandle, float offsetX, float offsetY, float width, float height);
+    __declspec(dllexport) void  Framework_Skeleton_AttachSpriteRegion(int skeletonId, int boneId, int textureHandle, float srcX, float srcY, float srcW, float srcH, float offsetX, float offsetY);
+    __declspec(dllexport) void  Framework_Skeleton_DetachSprite(int skeletonId, int boneId);
+
+    // Animation clips
+    __declspec(dllexport) int   Framework_Skeleton_CreateAnimation(int skeletonId, const char* animName, float duration);
+    __declspec(dllexport) void  Framework_Skeleton_AddKeyframe(int skeletonId, int animId, int boneId, float time, float x, float y, float rotation, float scaleX, float scaleY);
+    __declspec(dllexport) int   Framework_Skeleton_GetAnimationByName(int skeletonId, const char* animName);
+    __declspec(dllexport) int   Framework_Skeleton_GetAnimationCount(int skeletonId);
+    __declspec(dllexport) float Framework_Skeleton_GetAnimationDuration(int skeletonId, int animId);
+
+    // Animation playback
+    __declspec(dllexport) void  Framework_Skeleton_PlayAnimation(int skeletonId, int animId, bool loop);
+    __declspec(dllexport) void  Framework_Skeleton_StopAnimation(int skeletonId);
+    __declspec(dllexport) void  Framework_Skeleton_PauseAnimation(int skeletonId);
+    __declspec(dllexport) void  Framework_Skeleton_ResumeAnimation(int skeletonId);
+    __declspec(dllexport) void  Framework_Skeleton_SetAnimationTime(int skeletonId, float time);
+    __declspec(dllexport) float Framework_Skeleton_GetAnimationTime(int skeletonId);
+    __declspec(dllexport) bool  Framework_Skeleton_IsAnimationPlaying(int skeletonId);
+    __declspec(dllexport) void  Framework_Skeleton_SetAnimationSpeed(int skeletonId, float speed);
+
+    // Animation blending
+    __declspec(dllexport) void  Framework_Skeleton_BlendToAnimation(int skeletonId, int animId, float blendTime, bool loop);
+    __declspec(dllexport) void  Framework_Skeleton_SetBlendWeight(int skeletonId, int animId, float weight);
+
+    // Update and render
+    __declspec(dllexport) void  Framework_Skeleton_Update(int skeletonId, float deltaTime);
+    __declspec(dllexport) void  Framework_Skeleton_Draw(int skeletonId, float x, float y, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Skeleton_DrawDebug(int skeletonId, float x, float y, float scale);
+
+    // Save/Load
+    __declspec(dllexport) bool  Framework_Skeleton_SaveToFile(int skeletonId, const char* filePath);
+    __declspec(dllexport) int   Framework_Skeleton_LoadFromFile(const char* filePath);
+
+    // Global
+    __declspec(dllexport) int   Framework_Skeleton_GetCount();
+    __declspec(dllexport) void  Framework_Skeleton_DestroyAll();
+
+    // ========================================================================
+    // COMMAND CONSOLE SYSTEM
+    // ========================================================================
+    // Runtime command console for debugging with cvars and input
+
+    // Command callbacks
+    typedef void (*CmdConsoleCallback)(const char* args, void* userData);
+
+    // Console management
+    __declspec(dllexport) void  Framework_Cmd_Init();
+    __declspec(dllexport) void  Framework_Cmd_Shutdown();
+    __declspec(dllexport) void  Framework_Cmd_Toggle();
+    __declspec(dllexport) void  Framework_Cmd_Show();
+    __declspec(dllexport) void  Framework_Cmd_Hide();
+    __declspec(dllexport) bool  Framework_Cmd_IsVisible();
+
+    // Command registration
+    __declspec(dllexport) void  Framework_Cmd_RegisterCommand(const char* cmdName, const char* description, CmdConsoleCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_Cmd_UnregisterCommand(const char* cmdName);
+    __declspec(dllexport) bool  Framework_Cmd_HasCommand(const char* cmdName);
+
+    // Command execution
+    __declspec(dllexport) void  Framework_Cmd_Execute(const char* commandLine);
+    __declspec(dllexport) void  Framework_Cmd_ExecuteFile(const char* filePath);
+
+    // Logging
+    __declspec(dllexport) void  Framework_Cmd_Log(const char* message);
+    __declspec(dllexport) void  Framework_Cmd_LogInfo(const char* message);
+    __declspec(dllexport) void  Framework_Cmd_LogWarning(const char* message);
+    __declspec(dllexport) void  Framework_Cmd_LogError(const char* message);
+    __declspec(dllexport) void  Framework_Cmd_LogDebug(const char* message);
+    __declspec(dllexport) void  Framework_Cmd_Clear();
+
+    // Console variables (cvars)
+    __declspec(dllexport) void  Framework_Cmd_SetCvarInt(const char* name, int value);
+    __declspec(dllexport) void  Framework_Cmd_SetCvarFloat(const char* name, float value);
+    __declspec(dllexport) void  Framework_Cmd_SetCvarBool(const char* name, bool value);
+    __declspec(dllexport) void  Framework_Cmd_SetCvarString(const char* name, const char* value);
+    __declspec(dllexport) int   Framework_Cmd_GetCvarInt(const char* name);
+    __declspec(dllexport) float Framework_Cmd_GetCvarFloat(const char* name);
+    __declspec(dllexport) bool  Framework_Cmd_GetCvarBool(const char* name);
+    __declspec(dllexport) const char* Framework_Cmd_GetCvarString(const char* name);
+
+    // History
+    __declspec(dllexport) int   Framework_Cmd_GetHistoryCount();
+    __declspec(dllexport) const char* Framework_Cmd_GetHistoryItem(int index);
+    __declspec(dllexport) void  Framework_Cmd_ClearHistory();
+
+    // Update and render
+    __declspec(dllexport) void  Framework_Cmd_Update(float deltaTime);
+    __declspec(dllexport) void  Framework_Cmd_Draw();
+    __declspec(dllexport) void  Framework_Cmd_HandleInput();
+
+    // Configuration
+    __declspec(dllexport) void  Framework_Cmd_SetMaxLines(int maxLines);
+    __declspec(dllexport) void  Framework_Cmd_SetBackgroundColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Cmd_SetTextColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Cmd_SetFontSize(int size);
+    __declspec(dllexport) void  Framework_Cmd_SetToggleKey(int keyCode);
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();
