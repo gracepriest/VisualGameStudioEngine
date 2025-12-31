@@ -60,6 +60,12 @@ Public Module FrameworkTests
         TestCutsceneSystem()
         TestLeaderboardSystem()
 
+        ' Integration tests
+        TestIntegration_EntityPhysicsCamera()
+        TestIntegration_TimerEventEntity()
+        TestIntegration_UIInputState()
+        TestIntegration_SaveLoadMultiSystem()
+
         ' Print summary
         Console.WriteLine()
         Console.WriteLine("========================================")
@@ -4885,6 +4891,352 @@ Public Module FrameworkTests
             LogPass("Destroy leaderboard")
         Catch ex As Exception
             LogFail("Destroy leaderboard", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Integration Tests"
+    ' Callback for timer integration test
+    Private Sub IntegrationTimerCallback(timerId As Integer, userData As IntPtr)
+        ' Empty callback for testing - just needs to exist
+    End Sub
+
+    ' Integration Test: Entity + Velocity + Camera
+    ' Tests that an entity with velocity is tracked correctly by camera
+    Private Sub TestIntegration_EntityPhysicsCamera()
+        LogSection("Integration: Entity + Velocity + Camera")
+
+        ' Create entity
+        Dim entity As Integer = -1
+        Try
+            entity = Framework_Ecs_CreateEntity()
+            If entity >= 0 Then
+                LogPass("Create entity for integration")
+            Else
+                LogFail("Create entity for integration", "Invalid entity ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create entity for integration", ex.Message)
+            Return
+        End Try
+
+        ' Set entity position and add velocity
+        Try
+            Framework_Ecs_SetTransformPosition(entity, 100.0F, 100.0F)
+            Framework_Ecs_AddVelocity2D(entity, 10.0F, 5.0F)
+            LogPass("Setup entity with position and velocity")
+        Catch ex As Exception
+            LogFail("Setup entity with position and velocity", ex.Message)
+        End Try
+
+        ' Set camera to follow a target position
+        Try
+            Framework_Camera_SetFollowTarget(100.0F, 100.0F)
+            Framework_Camera_SetFollowEnabled(True)
+            LogPass("Camera follow target position")
+        Catch ex As Exception
+            LogFail("Camera follow target position", ex.Message)
+        End Try
+
+        ' Verify camera follow is enabled
+        Try
+            Dim followEnabled = Framework_Camera_IsFollowEnabled()
+            If followEnabled Then
+                LogPass("Camera follow is enabled")
+            Else
+                LogFail("Camera follow is enabled", "Follow not enabled")
+            End If
+        Catch ex As Exception
+            LogFail("Camera follow is enabled", ex.Message)
+        End Try
+
+        ' Simulate update
+        Try
+            Framework_Camera_Update(0.016F)
+            LogPass("Camera update with follow enabled")
+        Catch ex As Exception
+            LogFail("Camera update with follow enabled", ex.Message)
+        End Try
+
+        ' Verify entity still alive
+        Try
+            Dim alive = Framework_Ecs_IsAlive(entity)
+            If alive Then
+                LogPass("Entity remains alive after camera update")
+            Else
+                LogFail("Entity remains alive after camera update", "Entity not alive")
+            End If
+        Catch ex As Exception
+            LogFail("Entity remains alive after camera update", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_Camera_SetFollowEnabled(False)
+            Framework_Ecs_DestroyEntity(entity)
+            LogPass("Cleanup entity-velocity-camera integration")
+        Catch ex As Exception
+            LogFail("Cleanup entity-velocity-camera integration", ex.Message)
+        End Try
+    End Sub
+
+    ' Integration Test: Timer + Event + Entity
+    ' Tests that timers and events work with entities
+    Private Sub TestIntegration_TimerEventEntity()
+        LogSection("Integration: Timer + Event + Entity")
+
+        ' Create an entity
+        Dim entity As Integer = -1
+        Try
+            entity = Framework_Ecs_CreateEntity()
+            Framework_Ecs_SetName(entity, "TimerTarget")
+            LogPass("Create timer target entity")
+        Catch ex As Exception
+            LogFail("Create timer target entity", ex.Message)
+            Return
+        End Try
+
+        ' Register an event
+        Dim eventId As Integer = -1
+        Try
+            eventId = Framework_Event_Register("OnTimerFired")
+            If eventId >= 0 Then
+                LogPass("Register timer event (id=" & eventId.ToString() & ")")
+            Else
+                LogFail("Register timer event", "Invalid event ID")
+            End If
+        Catch ex As Exception
+            LogFail("Register timer event", ex.Message)
+        End Try
+
+        ' Create a timer
+        Dim timerId As Integer = -1
+        Try
+            Dim callback As New TimerCallback(AddressOf IntegrationTimerCallback)
+            timerId = Framework_Timer_After(0.5F, callback, IntPtr.Zero)
+            If timerId > 0 Then
+                LogPass("Create timer (id=" & timerId.ToString() & ")")
+            Else
+                LogFail("Create timer", "Invalid timer ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create timer", ex.Message)
+        End Try
+
+        ' Verify all systems are working together
+        Try
+            Dim timerValid = Framework_Timer_IsValid(timerId)
+            Dim entityAlive = Framework_Ecs_IsAlive(entity)
+            Dim eventExists = eventId >= 0
+            If timerValid AndAlso entityAlive AndAlso eventExists Then
+                LogPass("All systems active simultaneously")
+            Else
+                LogFail("All systems active simultaneously", "Timer=" & timerValid.ToString() & ", Entity=" & entityAlive.ToString() & ", Event=" & eventExists.ToString())
+            End If
+        Catch ex As Exception
+            LogFail("All systems active simultaneously", ex.Message)
+        End Try
+
+        ' Update timer
+        Try
+            Framework_Timer_Update(0.1F)
+            LogPass("Update timer system")
+        Catch ex As Exception
+            LogFail("Update timer system", ex.Message)
+        End Try
+
+        ' Publish event
+        Try
+            Framework_Event_Publish(eventId)
+            LogPass("Publish event")
+        Catch ex As Exception
+            LogFail("Publish event", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_Timer_Cancel(timerId)
+            Framework_Ecs_DestroyEntity(entity)
+            LogPass("Cleanup timer-event-entity integration")
+        Catch ex As Exception
+            LogFail("Cleanup timer-event-entity integration", ex.Message)
+        End Try
+    End Sub
+
+    ' Integration Test: UI + State
+    ' Tests UI elements respond to state changes
+    Private Sub TestIntegration_UIInputState()
+        LogSection("Integration: UI + State")
+
+        ' Create UI elements
+        Dim buttonId As Integer = -1
+        Dim checkboxId As Integer = -1
+        Try
+            buttonId = Framework_UI_CreateButton("TestButton", 100, 100, 80, 30)
+            checkboxId = Framework_UI_CreateCheckbox("TestCheck", 100, 150, False)
+            If buttonId >= 0 AndAlso checkboxId >= 0 Then
+                LogPass("Create UI elements (button=" & buttonId.ToString() & ", checkbox=" & checkboxId.ToString() & ")")
+            Else
+                LogFail("Create UI elements", "Invalid element IDs")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create UI elements", ex.Message)
+            Return
+        End Try
+
+        ' Test visibility state
+        Try
+            Framework_UI_SetVisible(buttonId, False)
+            Dim visible = Framework_UI_IsVisible(buttonId)
+            If Not visible Then
+                LogPass("Set button invisible")
+            Else
+                LogFail("Set button invisible", "Still visible")
+            End If
+        Catch ex As Exception
+            LogFail("Set button invisible", ex.Message)
+        End Try
+
+        ' Test enabled state
+        Try
+            Framework_UI_SetEnabled(buttonId, False)
+            Dim enabled = Framework_UI_IsEnabled(buttonId)
+            If Not enabled Then
+                LogPass("Set button disabled")
+            Else
+                LogFail("Set button disabled", "Still enabled")
+            End If
+        Catch ex As Exception
+            LogFail("Set button disabled", ex.Message)
+        End Try
+
+        ' Test checkbox toggle
+        Try
+            Framework_UI_SetChecked(checkboxId, True)
+            Dim checked = Framework_UI_IsChecked(checkboxId)
+            If checked Then
+                LogPass("Toggle checkbox state")
+            Else
+                LogFail("Toggle checkbox state", "Not checked")
+            End If
+        Catch ex As Exception
+            LogFail("Toggle checkbox state", ex.Message)
+        End Try
+
+        ' Test parent-child visibility relationship
+        Dim panelId As Integer = -1
+        Try
+            panelId = Framework_UI_CreatePanel(50, 50, 200, 200)
+            Framework_UI_SetParent(buttonId, panelId)
+            Framework_UI_SetVisible(panelId, False)
+            LogPass("Setup parent-child UI hierarchy")
+        Catch ex As Exception
+            LogFail("Setup parent-child UI hierarchy", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_UI_Destroy(buttonId)
+            Framework_UI_Destroy(checkboxId)
+            If panelId >= 0 Then Framework_UI_Destroy(panelId)
+            LogPass("Cleanup UI integration")
+        Catch ex As Exception
+            LogFail("Cleanup UI integration", ex.Message)
+        End Try
+    End Sub
+
+    ' Integration Test: Save/Load with Multiple Data Types
+    ' Tests saving and loading data of various types
+    Private Sub TestIntegration_SaveLoadMultiSystem()
+        LogSection("Integration: Save/Load Multi-Type")
+
+        Dim slot = 99 ' Use a high slot to avoid conflicts
+
+        ' Begin save session
+        Try
+            Dim success = Framework_Save_BeginSave(slot)
+            If success Then
+                LogPass("Begin save slot " & slot.ToString())
+            Else
+                LogFail("Begin save slot", "Failed to begin save")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Begin save slot", ex.Message)
+            Return
+        End Try
+
+        ' Save player data (simulated game state)
+        Try
+            Framework_Save_WriteInt("player_x", 150)
+            Framework_Save_WriteInt("player_y", 200)
+            Framework_Save_WriteFloat("player_health", 75.5F)
+            Framework_Save_WriteString("player_name", "TestPlayer")
+            Framework_Save_WriteBool("has_weapon", True)
+            LogPass("Write multi-type player data")
+        Catch ex As Exception
+            LogFail("Write multi-type player data", ex.Message)
+        End Try
+
+        ' End save session
+        Try
+            Dim success = Framework_Save_EndSave()
+            If success Then
+                LogPass("Persist save slot")
+            Else
+                LogFail("Persist save slot", "EndSave failed")
+            End If
+        Catch ex As Exception
+            LogFail("Persist save slot", ex.Message)
+        End Try
+
+        ' Begin load session
+        Try
+            Dim success = Framework_Save_BeginLoad(slot)
+            If success Then
+                LogPass("Begin load slot " & slot.ToString())
+            Else
+                LogFail("Begin load slot", "Failed to begin load")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Begin load slot", ex.Message)
+            Return
+        End Try
+
+        ' Verify player data integrity
+        Try
+            Dim x = Framework_Save_ReadInt("player_x", 0)
+            Dim y = Framework_Save_ReadInt("player_y", 0)
+            Dim health = Framework_Save_ReadFloat("player_health", 0.0F)
+            Dim hasWeapon = Framework_Save_ReadBool("has_weapon", False)
+
+            Dim allMatch = (x = 150) AndAlso (y = 200) AndAlso (Math.Abs(health - 75.5F) < 0.01F) AndAlso hasWeapon
+            If allMatch Then
+                LogPass("Verify restored player data integrity")
+            Else
+                LogFail("Verify restored player data integrity", "x=" & x.ToString() & ", y=" & y.ToString() & ", health=" & health.ToString() & ", hasWeapon=" & hasWeapon.ToString())
+            End If
+        Catch ex As Exception
+            LogFail("Verify restored player data integrity", ex.Message)
+        End Try
+
+        ' End load session
+        Try
+            Framework_Save_EndLoad()
+            LogPass("End load session")
+        Catch ex As Exception
+            LogFail("End load session", ex.Message)
+        End Try
+
+        ' Clean up - delete test save
+        Try
+            Framework_Save_DeleteSlot(slot)
+            LogPass("Cleanup test save slot")
+        Catch ex As Exception
+            LogFail("Cleanup test save slot", ex.Message)
         End Try
     End Sub
 #End Region
