@@ -5718,9 +5718,10 @@ Public Module FrameworkTests
         End Try
 
         ' Add many sprites (without actual texture, just API stress)
+        ' Use AddSprite which doesn't validate texture (validation happens at draw time)
         Try
             For i = 0 To 999
-                Framework_Batch_AddSpriteSimple(batchId, 0, i Mod 800, i \ 800 * 32, 255, 255, 255, 255)
+                Framework_Batch_AddSprite(batchId, 1, i Mod 800, i \ 800 * 32, 32, 32, 0, 0, 32, 32, 0, 0, 0, 255, 255, 255, 255)
             Next
             Dim count = Framework_Batch_GetSpriteCount(batchId)
             If count = 1000 Then
