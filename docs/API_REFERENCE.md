@@ -32,6 +32,13 @@ A comprehensive 2D game engine framework built on Raylib with VB.NET P/Invoke bi
 26. [Achievement System](#achievement-system)
 27. [Cutscene System](#cutscene-system)
 28. [Leaderboard System](#leaderboard-system)
+29. [Sprite Batching](#sprite-batching)
+30. [Texture Atlas](#texture-atlas)
+31. [Level Editor](#level-editor)
+32. [Networking](#networking)
+33. [Shader System](#shader-system)
+34. [Skeletal Animation](#skeletal-animation)
+35. [Command Console](#command-console)
 
 ---
 
@@ -1615,6 +1622,467 @@ Framework_Leaderboard_GetTopPlayer(leaderboardId As Integer) As String
 ```vb
 Framework_Leaderboard_Save(leaderboardId As Integer, filePath As String) As Boolean
 Framework_Leaderboard_Load(leaderboardId As Integer, filePath As String) As Boolean
+```
+
+---
+
+## Sprite Batching
+
+Reduce draw calls by grouping sprites with same texture into batched renders.
+
+### Batch Creation
+
+```vb
+Framework_Batch_Create(maxSprites As Integer) As Integer
+Framework_Batch_Destroy(batchId As Integer)
+Framework_Batch_Clear(batchId As Integer)
+```
+
+### Adding Sprites
+
+```vb
+Framework_Batch_AddSprite(batchId As Integer, textureHandle As Integer, x As Single, y As Single, width As Single, height As Single, srcX As Single, srcY As Single, srcW As Single, srcH As Single, rotation As Single, originX As Single, originY As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_Batch_AddSpriteSimple(batchId As Integer, textureHandle As Integer, x As Single, y As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+```
+
+### Rendering
+
+```vb
+Framework_Batch_Draw(batchId As Integer)
+Framework_Batch_DrawSorted(batchId As Integer)  ' Sort by texture then draw
+```
+
+### Statistics
+
+```vb
+Framework_Batch_GetSpriteCount(batchId As Integer) As Integer
+Framework_Batch_GetDrawCallCount(batchId As Integer) As Integer
+Framework_Batch_SetAutoCull(batchId As Integer, enabled As Boolean)
+```
+
+---
+
+## Texture Atlas
+
+Pack multiple sprites into single textures to reduce texture swaps.
+
+### Atlas Creation
+
+```vb
+Framework_Atlas_Create(width As Integer, height As Integer) As Integer
+Framework_Atlas_Destroy(atlasId As Integer)
+Framework_Atlas_IsValid(atlasId As Integer) As Boolean
+```
+
+### Adding Sprites
+
+```vb
+Framework_Atlas_AddImage(atlasId As Integer, imagePath As String) As Integer
+Framework_Atlas_AddRegion(atlasId As Integer, textureHandle As Integer, srcX As Integer, srcY As Integer, srcW As Integer, srcH As Integer) As Integer
+Framework_Atlas_Pack(atlasId As Integer) As Boolean
+```
+
+### Querying
+
+```vb
+Framework_Atlas_GetSpriteRect(atlasId As Integer, spriteIndex As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
+Framework_Atlas_GetSpriteCount(atlasId As Integer) As Integer
+Framework_Atlas_GetTextureHandle(atlasId As Integer) As Integer
+```
+
+### Drawing
+
+```vb
+Framework_Atlas_DrawSprite(atlasId As Integer, spriteIndex As Integer, x As Single, y As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_Atlas_DrawSpriteEx(atlasId As Integer, spriteIndex As Integer, x As Single, y As Single, rotation As Single, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_Atlas_DrawSpritePro(atlasId As Integer, spriteIndex As Integer, destX As Single, destY As Single, destW As Single, destH As Single, originX As Single, originY As Single, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+```
+
+### Persistence
+
+```vb
+Framework_Atlas_SaveToFile(atlasId As Integer, jsonPath As String, imagePath As String) As Boolean
+Framework_Atlas_LoadFromFile(jsonPath As String, imagePath As String) As Integer
+```
+
+---
+
+## Level Editor
+
+Load/save levels at runtime in JSON format for easy editing.
+
+### Level Management
+
+```vb
+Framework_Level_Create(name As String) As Integer
+Framework_Level_Destroy(levelId As Integer)
+Framework_Level_IsValid(levelId As Integer) As Boolean
+```
+
+### Level Properties
+
+```vb
+Framework_Level_SetSize(levelId As Integer, width As Integer, height As Integer)
+Framework_Level_GetSize(levelId As Integer, ByRef width As Integer, ByRef height As Integer)
+Framework_Level_SetTileSize(levelId As Integer, tileWidth As Integer, tileHeight As Integer)
+Framework_Level_SetBackground(levelId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+```
+
+### Tile Layers
+
+```vb
+Framework_Level_AddLayer(levelId As Integer, layerName As String) As Integer
+Framework_Level_RemoveLayer(levelId As Integer, layerIndex As Integer)
+Framework_Level_GetLayerCount(levelId As Integer) As Integer
+Framework_Level_SetTile(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, tileId As Integer)
+Framework_Level_GetTile(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer) As Integer
+Framework_Level_FillTiles(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, w As Integer, h As Integer, tileId As Integer)
+Framework_Level_ClearLayer(levelId As Integer, layerIndex As Integer)
+```
+
+### Objects
+
+```vb
+Framework_Level_AddObject(levelId As Integer, objectType As String, x As Single, y As Single) As Integer
+Framework_Level_RemoveObject(levelId As Integer, objectId As Integer)
+Framework_Level_SetObjectPosition(levelId As Integer, objectId As Integer, x As Single, y As Single)
+Framework_Level_SetObjectProperty(levelId As Integer, objectId As Integer, key As String, value As String)
+Framework_Level_GetObjectProperty(levelId As Integer, objectId As Integer, key As String) As String
+```
+
+### Collision Shapes
+
+```vb
+Framework_Level_AddCollisionRect(levelId As Integer, x As Single, y As Single, w As Single, h As Single)
+Framework_Level_AddCollisionCircle(levelId As Integer, x As Single, y As Single, radius As Single)
+Framework_Level_ClearCollisions(levelId As Integer)
+```
+
+### Persistence
+
+```vb
+Framework_Level_SaveToFile(levelId As Integer, filePath As String) As Boolean
+Framework_Level_LoadFromFile(filePath As String) As Integer
+```
+
+### Rendering
+
+```vb
+Framework_Level_Draw(levelId As Integer, tilesetHandle As Integer)
+Framework_Level_DrawLayer(levelId As Integer, layerIndex As Integer, tilesetHandle As Integer)
+```
+
+---
+
+## Networking
+
+TCP client-server networking for multiplayer games.
+
+### Server
+
+```vb
+Framework_Net_CreateServer(port As Integer, maxClients As Integer) As Integer
+Framework_Net_DestroyServer(serverId As Integer)
+Framework_Net_ServerIsRunning(serverId As Integer) As Boolean
+Framework_Net_GetClientCount(serverId As Integer) As Integer
+Framework_Net_DisconnectClient(serverId As Integer, clientId As Integer)
+Framework_Net_UpdateServer(serverId As Integer)
+```
+
+### Client
+
+```vb
+Framework_Net_CreateClient() As Integer
+Framework_Net_DestroyClient(clientId As Integer)
+Framework_Net_Connect(clientId As Integer, host As String, port As Integer) As Boolean
+Framework_Net_Disconnect(clientId As Integer)
+Framework_Net_IsConnected(clientId As Integer) As Boolean
+Framework_Net_UpdateClient(clientId As Integer)
+```
+
+### Messaging
+
+```vb
+Framework_Net_BroadcastMessage(serverId As Integer, channel As String, data As IntPtr, dataSize As Integer, reliable As Boolean)
+Framework_Net_SendToClient(serverId As Integer, clientId As Integer, channel As String, data As IntPtr, dataSize As Integer, reliable As Boolean)
+Framework_Net_SendMessage(clientId As Integer, channel As String, data As IntPtr, dataSize As Integer, reliable As Boolean)
+```
+
+### Callbacks
+
+```vb
+' Server callbacks
+Delegate Sub NetConnectCallback(connectionId As Integer, userData As IntPtr)
+Delegate Sub NetDisconnectCallback(connectionId As Integer, userData As IntPtr)
+Delegate Sub NetMessageCallback(connectionId As Integer, channel As String, data As IntPtr, dataSize As Integer, userData As IntPtr)
+
+Framework_Net_SetOnClientConnected(serverId As Integer, callback As NetConnectCallback, userData As IntPtr)
+Framework_Net_SetOnClientDisconnected(serverId As Integer, callback As NetDisconnectCallback, userData As IntPtr)
+Framework_Net_SetOnServerMessage(serverId As Integer, callback As NetMessageCallback, userData As IntPtr)
+
+' Client callbacks
+Framework_Net_SetOnConnected(clientId As Integer, callback As NetConnectCallback, userData As IntPtr)
+Framework_Net_SetOnDisconnected(clientId As Integer, callback As NetDisconnectCallback, userData As IntPtr)
+Framework_Net_SetOnMessage(clientId As Integer, callback As NetMessageCallback, userData As IntPtr)
+```
+
+### Statistics
+
+```vb
+Framework_Net_GetPing(clientId As Integer) As Integer
+Framework_Net_GetBytesSent(connectionId As Integer) As Integer
+Framework_Net_GetBytesReceived(connectionId As Integer) As Integer
+```
+
+---
+
+## Shader System
+
+Custom shader loading and GPU uniform management.
+
+### Loading Shaders
+
+```vb
+Framework_Shader_Load(vsPath As String, fsPath As String) As Integer
+Framework_Shader_LoadFromMemory(vsCode As String, fsCode As String) As Integer
+Framework_Shader_Unload(shaderId As Integer)
+Framework_Shader_IsValid(shaderId As Integer) As Boolean
+```
+
+### Using Shaders
+
+```vb
+Framework_Shader_Begin(shaderId As Integer)
+Framework_Shader_End()
+```
+
+### Uniform Locations
+
+```vb
+Framework_Shader_GetLocation(shaderId As Integer, uniformName As String) As Integer
+```
+
+### Setting Uniforms (by location)
+
+```vb
+Framework_Shader_SetInt(shaderId As Integer, loc As Integer, value As Integer)
+Framework_Shader_SetFloat(shaderId As Integer, loc As Integer, value As Single)
+Framework_Shader_SetVec2(shaderId As Integer, loc As Integer, x As Single, y As Single)
+Framework_Shader_SetVec3(shaderId As Integer, loc As Integer, x As Single, y As Single, z As Single)
+Framework_Shader_SetVec4(shaderId As Integer, loc As Integer, x As Single, y As Single, z As Single, w As Single)
+Framework_Shader_SetMat4(shaderId As Integer, loc As Integer, mat As IntPtr)
+```
+
+### Setting Uniforms (by name)
+
+```vb
+Framework_Shader_SetIntByName(shaderId As Integer, name As String, value As Integer)
+Framework_Shader_SetFloatByName(shaderId As Integer, name As String, value As Single)
+Framework_Shader_SetVec2ByName(shaderId As Integer, name As String, x As Single, y As Single)
+Framework_Shader_SetVec3ByName(shaderId As Integer, name As String, x As Single, y As Single, z As Single)
+Framework_Shader_SetVec4ByName(shaderId As Integer, name As String, x As Single, y As Single, z As Single, w As Single)
+```
+
+### Built-in Shaders
+
+```vb
+Framework_Shader_LoadGrayscale() As Integer
+Framework_Shader_LoadBlur() As Integer
+Framework_Shader_LoadCRT() As Integer
+```
+
+---
+
+## Skeletal Animation
+
+Bone-based character animation with sprite attachments.
+
+### Skeleton Creation
+
+```vb
+Framework_Skeleton_Create(name As String) As Integer
+Framework_Skeleton_Destroy(skeletonId As Integer)
+Framework_Skeleton_IsValid(skeletonId As Integer) As Boolean
+```
+
+### Bones
+
+```vb
+' Returns boneId (0 = root, -1 = error)
+Framework_Skeleton_AddBone(skeletonId As Integer, boneName As String, parentBoneId As Integer, x As Single, y As Single, rotation As Single, length As Single) As Integer
+Framework_Skeleton_GetBoneCount(skeletonId As Integer) As Integer
+Framework_Skeleton_GetBoneId(skeletonId As Integer, boneName As String) As Integer
+```
+
+### Bone Transforms
+
+```vb
+Framework_Skeleton_SetBoneLocalTransform(skeletonId As Integer, boneId As Integer, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
+Framework_Skeleton_GetBoneWorldPosition(skeletonId As Integer, boneId As Integer, ByRef x As Single, ByRef y As Single)
+Framework_Skeleton_GetBoneWorldRotation(skeletonId As Integer, boneId As Integer) As Single
+Framework_Skeleton_ComputeWorldTransforms(skeletonId As Integer)
+```
+
+### Sprite Attachments
+
+```vb
+Framework_Skeleton_AttachSprite(skeletonId As Integer, boneId As Integer, textureHandle As Integer, offsetX As Single, offsetY As Single, originX As Single, originY As Single, width As Single, height As Single)
+Framework_Skeleton_DetachSprite(skeletonId As Integer, boneId As Integer)
+Framework_Skeleton_SetSpriteSourceRect(skeletonId As Integer, boneId As Integer, srcX As Single, srcY As Single, srcW As Single, srcH As Single)
+```
+
+### Animation Creation
+
+```vb
+Framework_Skeleton_CreateAnimation(skeletonId As Integer, animName As String, duration As Single) As Integer
+Framework_Skeleton_DestroyAnimation(skeletonId As Integer, animId As Integer)
+Framework_Skeleton_GetAnimationId(skeletonId As Integer, animName As String) As Integer
+```
+
+### Keyframes
+
+```vb
+Framework_Skeleton_AddKeyframe(skeletonId As Integer, animId As Integer, boneId As Integer, time As Single, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
+```
+
+### Playback
+
+```vb
+Framework_Skeleton_PlayAnimation(skeletonId As Integer, animId As Integer, loop As Boolean)
+Framework_Skeleton_StopAnimation(skeletonId As Integer)
+Framework_Skeleton_PauseAnimation(skeletonId As Integer)
+Framework_Skeleton_ResumeAnimation(skeletonId As Integer)
+Framework_Skeleton_SetAnimationSpeed(skeletonId As Integer, speed As Single)
+Framework_Skeleton_GetAnimationTime(skeletonId As Integer) As Single
+Framework_Skeleton_SetAnimationTime(skeletonId As Integer, time As Single)
+Framework_Skeleton_IsAnimationPlaying(skeletonId As Integer) As Boolean
+```
+
+### Blending
+
+```vb
+Framework_Skeleton_CrossfadeTo(skeletonId As Integer, animId As Integer, duration As Single, loop As Boolean)
+Framework_Skeleton_SetBlendWeight(skeletonId As Integer, animIdA As Integer, animIdB As Integer, weight As Single)
+```
+
+### Pose
+
+```vb
+Framework_Skeleton_SetPose(skeletonId As Integer, boneId As Integer, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
+Framework_Skeleton_ResetPose(skeletonId As Integer)
+```
+
+### Update & Draw
+
+```vb
+Framework_Skeleton_Update(skeletonId As Integer, dt As Single)
+Framework_Skeleton_UpdateAll(dt As Single)
+Framework_Skeleton_Draw(skeletonId As Integer, x As Single, y As Single, scaleX As Single, scaleY As Single, rotation As Single)
+Framework_Skeleton_DrawDebug(skeletonId As Integer, x As Single, y As Single, scale As Single)
+```
+
+---
+
+## Command Console
+
+Runtime command console with variables and callbacks.
+
+### Initialization
+
+```vb
+Framework_Cmd_Init()
+Framework_Cmd_Shutdown()
+```
+
+### Registering Commands
+
+```vb
+Delegate Sub CmdConsoleCallback(args As String, userData As IntPtr)
+
+Framework_Cmd_RegisterCommand(cmdName As String, description As String, callback As CmdConsoleCallback, userData As IntPtr)
+Framework_Cmd_UnregisterCommand(cmdName As String)
+```
+
+### Executing Commands
+
+```vb
+Framework_Cmd_Execute(commandLine As String)
+Framework_Cmd_ExecuteFile(filePath As String) As Boolean
+```
+
+### Console Variables (CVars)
+
+```vb
+' Registration
+Framework_Cmd_RegisterCvarInt(name As String, defaultValue As Integer, description As String)
+Framework_Cmd_RegisterCvarFloat(name As String, defaultValue As Single, description As String)
+Framework_Cmd_RegisterCvarBool(name As String, defaultValue As Boolean, description As String)
+Framework_Cmd_RegisterCvarString(name As String, defaultValue As String, description As String)
+
+' Getters/Setters
+Framework_Cmd_GetCvarInt(name As String) As Integer
+Framework_Cmd_GetCvarFloat(name As String) As Single
+Framework_Cmd_GetCvarBool(name As String) As Boolean
+Framework_Cmd_GetCvarString(name As String) As String
+Framework_Cmd_SetCvarInt(name As String, value As Integer)
+Framework_Cmd_SetCvarFloat(name As String, value As Single)
+Framework_Cmd_SetCvarBool(name As String, value As Boolean)
+Framework_Cmd_SetCvarString(name As String, value As String)
+```
+
+### Command History
+
+```vb
+Framework_Cmd_GetHistoryCount() As Integer
+Framework_Cmd_GetHistoryEntry(index As Integer) As String
+Framework_Cmd_ClearHistory()
+```
+
+### Logging
+
+| Level | Value |
+|-------|-------|
+| TRACE | 0 |
+| DEBUG | 1 |
+| INFO | 2 |
+| WARN | 3 |
+| ERROR | 4 |
+| FATAL | 5 |
+
+```vb
+Framework_Cmd_Log(level As Integer, message As String)
+Framework_Cmd_LogInfo(message As String)
+Framework_Cmd_LogWarning(message As String)
+Framework_Cmd_LogError(message As String)
+Framework_Cmd_LogDebug(message As String)
+Framework_Cmd_SetLogLevel(level As Integer)
+Framework_Cmd_SetLogToFile(enabled As Boolean, filePath As String)
+```
+
+### Visual Console
+
+```vb
+Framework_Cmd_SetToggleKey(keyCode As Integer)  ' Default: KEY_GRAVE (`)
+Framework_Cmd_Toggle()
+Framework_Cmd_Show()
+Framework_Cmd_Hide()
+Framework_Cmd_IsVisible() As Boolean
+```
+
+### Appearance
+
+```vb
+Framework_Cmd_SetBackgroundColor(r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_Cmd_SetTextColor(r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_Cmd_SetFontSize(fontSize As Integer)
+Framework_Cmd_SetMaxLines(maxLines As Integer)
+```
+
+### Update & Draw
+
+```vb
+Framework_Cmd_Update(dt As Single)
+Framework_Cmd_Draw()
 ```
 
 ---
