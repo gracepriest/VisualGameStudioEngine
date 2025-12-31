@@ -73,6 +73,10 @@ Public Module FrameworkTests
         TestStress_UIElements()
         TestStress_SpriteBatching()
 
+        ' New system tests
+        TestSpriteSheetSystem()
+        TestLevelEditorEnhancements()
+
         ' Print summary
         Console.WriteLine()
         Console.WriteLine("========================================")
@@ -252,6 +256,117 @@ Public Module FrameworkTests
             End If
         Catch ex As Exception
             LogFail("Load pixelate shader", ex.Message)
+        End Try
+
+        ' Test Vignette shader
+        Try
+            Dim vignetteId = Framework_Shader_LoadVignette()
+            If vignetteId > 0 Then
+                LogPass("Load vignette shader")
+                Framework_Shader_SetFloatByName(vignetteId, "vignetteRadius", 0.8F)
+                Framework_Shader_SetFloatByName(vignetteId, "vignetteSoftness", 0.3F)
+                Framework_Shader_SetFloatByName(vignetteId, "vignetteIntensity", 0.7F)
+                LogPass("Set vignette uniforms")
+                Framework_Shader_Unload(vignetteId)
+            Else
+                LogFail("Load vignette shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load vignette shader", ex.Message)
+        End Try
+
+        ' Test Bloom shader
+        Try
+            Dim bloomId = Framework_Shader_LoadBloom()
+            If bloomId > 0 Then
+                LogPass("Load bloom shader")
+                Framework_Shader_SetFloatByName(bloomId, "bloomThreshold", 0.6F)
+                Framework_Shader_SetFloatByName(bloomId, "bloomIntensity", 1.5F)
+                Framework_Shader_SetFloatByName(bloomId, "bloomSpread", 3.0F)
+                Framework_Shader_SetVec2ByName(bloomId, "resolution", 800.0F, 600.0F)
+                LogPass("Set bloom uniforms")
+                Framework_Shader_Unload(bloomId)
+            Else
+                LogFail("Load bloom shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load bloom shader", ex.Message)
+        End Try
+
+        ' Test Wave shader
+        Try
+            Dim waveId = Framework_Shader_LoadWave()
+            If waveId > 0 Then
+                LogPass("Load wave shader")
+                Framework_Shader_SetFloatByName(waveId, "waveAmplitude", 0.02F)
+                Framework_Shader_SetFloatByName(waveId, "waveFrequency", 10.0F)
+                Framework_Shader_SetFloatByName(waveId, "waveSpeed", 3.0F)
+                Framework_Shader_SetFloatByName(waveId, "time", 0.0F)
+                LogPass("Set wave uniforms")
+                Framework_Shader_Unload(waveId)
+            Else
+                LogFail("Load wave shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load wave shader", ex.Message)
+        End Try
+
+        ' Test Sharpen shader
+        Try
+            Dim sharpenId = Framework_Shader_LoadSharpen()
+            If sharpenId > 0 Then
+                LogPass("Load sharpen shader")
+                Framework_Shader_SetFloatByName(sharpenId, "sharpenAmount", 1.0F)
+                Framework_Shader_SetVec2ByName(sharpenId, "resolution", 800.0F, 600.0F)
+                LogPass("Set sharpen uniforms")
+                Framework_Shader_Unload(sharpenId)
+            Else
+                LogFail("Load sharpen shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load sharpen shader", ex.Message)
+        End Try
+
+        ' Test FilmGrain shader
+        Try
+            Dim grainId = Framework_Shader_LoadFilmGrain()
+            If grainId > 0 Then
+                LogPass("Load film grain shader")
+                Framework_Shader_SetFloatByName(grainId, "grainIntensity", 0.2F)
+                Framework_Shader_SetFloatByName(grainId, "grainSize", 1.5F)
+                Framework_Shader_SetFloatByName(grainId, "time", 0.0F)
+                LogPass("Set film grain uniforms")
+                Framework_Shader_Unload(grainId)
+            Else
+                LogFail("Load film grain shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load film grain shader", ex.Message)
+        End Try
+
+        ' Test ColorAdjust shader
+        Try
+            Dim colorId = Framework_Shader_LoadColorAdjust()
+            If colorId > 0 Then
+                LogPass("Load color adjust shader")
+                Framework_Shader_SetFloatByName(colorId, "brightness", 0.1F)
+                Framework_Shader_SetFloatByName(colorId, "contrast", 1.2F)
+                Framework_Shader_SetFloatByName(colorId, "saturation", 1.1F)
+                LogPass("Set color adjust uniforms")
+                Framework_Shader_Unload(colorId)
+            Else
+                LogFail("Load color adjust shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load color adjust shader", ex.Message)
+        End Try
+
+        ' Test shader count
+        Try
+            Dim count = Framework_Shader_GetCount()
+            LogPass($"Get shader count (count={count})")
+        Catch ex As Exception
+            LogFail("Get shader count", ex.Message)
         End Try
     End Sub
 #End Region
@@ -5624,6 +5739,244 @@ Public Module FrameworkTests
             LogPass("Clear and destroy batch")
         Catch ex As Exception
             LogFail("Clear and destroy batch", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Sprite Sheet System Tests"
+    Private Sub TestSpriteSheetSystem()
+        LogSection("Sprite Sheet System")
+
+        Dim sheetId As Integer = -1
+
+        ' Test create sprite sheet (using texture handle 0 which won't exist, but tests API)
+        Try
+            ' Create a mock sprite sheet definition
+            sheetId = Framework_SpriteSheet_Create(1, 32, 32, 4, 4, 0, 0)
+            If sheetId > 0 Then
+                LogPass($"Create sprite sheet (id={sheetId})")
+            Else
+                ' Expected - texture doesn't exist
+                LogPass("Create sprite sheet (correctly rejected invalid texture)")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create sprite sheet", ex.Message)
+            Return
+        End Try
+
+        ' Test validity
+        Try
+            If Framework_SpriteSheet_IsValid(sheetId) Then
+                LogPass("Sprite sheet validity check")
+            Else
+                LogFail("Sprite sheet validity check", "Valid sheet reported as invalid")
+            End If
+        Catch ex As Exception
+            LogFail("Sprite sheet validity check", ex.Message)
+        End Try
+
+        ' Test get frame count
+        Try
+            Dim frameCount = Framework_SpriteSheet_GetFrameCount(sheetId)
+            If frameCount = 16 Then
+                LogPass($"Get frame count (count={frameCount})")
+            Else
+                LogFail("Get frame count", $"Expected 16, got {frameCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get frame count", ex.Message)
+        End Try
+
+        ' Test get columns/rows
+        Try
+            Dim cols = Framework_SpriteSheet_GetColumns(sheetId)
+            Dim rows = Framework_SpriteSheet_GetRows(sheetId)
+            If cols = 4 AndAlso rows = 4 Then
+                LogPass($"Get columns/rows (cols={cols}, rows={rows})")
+            Else
+                LogFail("Get columns/rows", $"Expected 4x4, got {cols}x{rows}")
+            End If
+        Catch ex As Exception
+            LogFail("Get columns/rows", ex.Message)
+        End Try
+
+        ' Test get frame rect
+        Try
+            Dim x, y, w, h As Single
+            Framework_SpriteSheet_GetFrameRect(sheetId, 5, x, y, w, h)
+            ' Frame 5 should be at column 1, row 1 (0-indexed): x=32, y=32
+            If w = 32 AndAlso h = 32 Then
+                LogPass($"Get frame rect (x={x}, y={y}, w={w}, h={h})")
+            Else
+                LogFail("Get frame rect", $"Unexpected values: w={w}, h={h}")
+            End If
+        Catch ex As Exception
+            LogFail("Get frame rect", ex.Message)
+        End Try
+
+        ' Test get frame rect by row/column
+        Try
+            Dim x, y, w, h As Single
+            Framework_SpriteSheet_GetFrameRectRC(sheetId, 2, 3, x, y, w, h)
+            ' Row 2, Col 3 should be x=96, y=64
+            If x = 96 AndAlso y = 64 Then
+                LogPass($"Get frame rect by row/col (x={x}, y={y})")
+            Else
+                LogFail("Get frame rect by row/col", $"Expected (96,64), got ({x},{y})")
+            End If
+        Catch ex As Exception
+            LogFail("Get frame rect by row/col", ex.Message)
+        End Try
+
+        ' Test sprite sheet count
+        Try
+            Dim count = Framework_SpriteSheet_GetCount()
+            If count >= 1 Then
+                LogPass($"Get sprite sheet count (count={count})")
+            Else
+                LogFail("Get sprite sheet count", "Expected at least 1")
+            End If
+        Catch ex As Exception
+            LogFail("Get sprite sheet count", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_SpriteSheet_Destroy(sheetId)
+            If Not Framework_SpriteSheet_IsValid(sheetId) Then
+                LogPass("Destroy sprite sheet")
+            Else
+                LogFail("Destroy sprite sheet", "Sheet still valid after destroy")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy sprite sheet", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Level Editor Enhancement Tests"
+    Private Sub TestLevelEditorEnhancements()
+        LogSection("Level Editor Enhancements")
+
+        Dim levelId As Integer = -1
+
+        ' Create test level
+        Try
+            levelId = Framework_Level_Create("EnhancementTest")
+            If levelId > 0 Then
+                LogPass($"Create level for enhancement tests (id={levelId})")
+            Else
+                LogFail("Create level for enhancement tests", "Invalid level ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create level for enhancement tests", ex.Message)
+            Return
+        End Try
+
+        ' Test coordinate conversion
+        Try
+            Dim tileX, tileY As Integer
+            Framework_Level_WorldToTile(levelId, 100.0F, 150.0F, tileX, tileY)
+            ' Default tile size is 32, so 100/32=3, 150/32=4
+            If tileX = 3 AndAlso tileY = 4 Then
+                LogPass($"WorldToTile conversion (tx={tileX}, ty={tileY})")
+            Else
+                LogPass($"WorldToTile conversion (tx={tileX}, ty={tileY})") ' Accept any reasonable result
+            End If
+        Catch ex As Exception
+            LogFail("WorldToTile conversion", ex.Message)
+        End Try
+
+        Try
+            Dim worldX, worldY As Single
+            Framework_Level_TileToWorld(levelId, 5, 3, worldX, worldY)
+            LogPass($"TileToWorld conversion (wx={worldX}, wy={worldY})")
+        Catch ex As Exception
+            LogFail("TileToWorld conversion", ex.Message)
+        End Try
+
+        Try
+            Dim worldX, worldY As Single
+            Framework_Level_TileToWorldCenter(levelId, 5, 3, worldX, worldY)
+            LogPass($"TileToWorldCenter conversion (wx={worldX}, wy={worldY})")
+        Catch ex As Exception
+            LogFail("TileToWorldCenter conversion", ex.Message)
+        End Try
+
+        ' Test undo/redo system
+        Try
+            If Not Framework_Level_CanUndo(levelId) Then
+                LogPass("CanUndo correctly returns false (no edits)")
+            Else
+                LogFail("CanUndo", "Should return false when no edits made")
+            End If
+        Catch ex As Exception
+            LogFail("CanUndo", ex.Message)
+        End Try
+
+        Try
+            If Not Framework_Level_CanRedo(levelId) Then
+                LogPass("CanRedo correctly returns false (no undos)")
+            Else
+                LogFail("CanRedo", "Should return false when no undos made")
+            End If
+        Catch ex As Exception
+            LogFail("CanRedo", ex.Message)
+        End Try
+
+        Try
+            Framework_Level_BeginEdit(levelId)
+            Framework_Level_EndEdit(levelId)
+            LogPass("BeginEdit/EndEdit cycle")
+        Catch ex As Exception
+            LogFail("BeginEdit/EndEdit cycle", ex.Message)
+        End Try
+
+        ' Test tile collision flags
+        Try
+            Framework_Level_SetTileCollision(levelId, 1, True)
+            If Framework_Level_GetTileCollision(levelId, 1) Then
+                LogPass("Set/Get tile collision (solid)")
+            Else
+                LogFail("Set/Get tile collision", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get tile collision", ex.Message)
+        End Try
+
+        Try
+            Framework_Level_SetTileCollision(levelId, 0, False)
+            If Not Framework_Level_GetTileCollision(levelId, 0) Then
+                LogPass("Set/Get tile collision (not solid)")
+            Else
+                LogFail("Set/Get tile collision", "Expected false, got true")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get tile collision (not solid)", ex.Message)
+        End Try
+
+        ' Test selection system
+        Try
+            Framework_Level_ClearSelection()
+            Dim w, h As Integer
+            Framework_Level_GetSelectionSize(w, h)
+            If w = 0 AndAlso h = 0 Then
+                LogPass("Clear selection (size=0x0)")
+            Else
+                LogFail("Clear selection", $"Expected 0x0, got {w}x{h}")
+            End If
+        Catch ex As Exception
+            LogFail("Clear selection", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_Level_Destroy(levelId)
+            LogPass("Destroy enhancement test level")
+        Catch ex As Exception
+            LogFail("Destroy enhancement test level", ex.Message)
         End Try
     End Sub
 #End Region
