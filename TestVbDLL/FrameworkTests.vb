@@ -173,6 +173,86 @@ Public Module FrameworkTests
         Catch ex As Exception
             LogFail("Invalid shader detection", ex.Message)
         End Try
+
+        ' Test Outline shader (NEW)
+        Try
+            Dim outlineId = Framework_Shader_LoadOutline()
+            If outlineId > 0 Then
+                LogPass("Load outline shader")
+                Framework_Shader_SetVec4ByName(outlineId, "outlineColor", 1.0F, 0.0F, 0.0F, 1.0F)
+                Framework_Shader_SetFloatByName(outlineId, "outlineThickness", 2.0F)
+                LogPass("Set outline uniforms")
+                Framework_Shader_Unload(outlineId)
+            Else
+                LogFail("Load outline shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load outline shader", ex.Message)
+        End Try
+
+        ' Test Glow shader (NEW)
+        Try
+            Dim glowId = Framework_Shader_LoadGlow()
+            If glowId > 0 Then
+                LogPass("Load glow shader")
+                Framework_Shader_SetFloatByName(glowId, "glowIntensity", 1.5F)
+                Framework_Shader_SetFloatByName(glowId, "glowRadius", 5.0F)
+                LogPass("Set glow uniforms")
+                Framework_Shader_Unload(glowId)
+            Else
+                LogFail("Load glow shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load glow shader", ex.Message)
+        End Try
+
+        ' Test Distortion shader (NEW)
+        Try
+            Dim distortId = Framework_Shader_LoadDistortion()
+            If distortId > 0 Then
+                LogPass("Load distortion shader")
+                Framework_Shader_SetFloatByName(distortId, "time", 0.0F)
+                Framework_Shader_SetFloatByName(distortId, "distortionStrength", 0.05F)
+                Framework_Shader_SetFloatByName(distortId, "waveFrequency", 10.0F)
+                LogPass("Set distortion uniforms")
+                Framework_Shader_Unload(distortId)
+            Else
+                LogFail("Load distortion shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load distortion shader", ex.Message)
+        End Try
+
+        ' Test Chromatic shader (NEW)
+        Try
+            Dim chromaticId = Framework_Shader_LoadChromatic()
+            If chromaticId > 0 Then
+                LogPass("Load chromatic shader")
+                Framework_Shader_SetFloatByName(chromaticId, "aberrationAmount", 0.01F)
+                LogPass("Set chromatic uniforms")
+                Framework_Shader_Unload(chromaticId)
+            Else
+                LogFail("Load chromatic shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load chromatic shader", ex.Message)
+        End Try
+
+        ' Test Pixelate shader (NEW)
+        Try
+            Dim pixelateId = Framework_Shader_LoadPixelate()
+            If pixelateId > 0 Then
+                LogPass("Load pixelate shader")
+                Framework_Shader_SetFloatByName(pixelateId, "pixelSize", 4.0F)
+                Framework_Shader_SetVec2ByName(pixelateId, "resolution", 800.0F, 600.0F)
+                LogPass("Set pixelate uniforms")
+                Framework_Shader_Unload(pixelateId)
+            Else
+                LogFail("Load pixelate shader", "Invalid shader ID")
+            End If
+        Catch ex As Exception
+            LogFail("Load pixelate shader", ex.Message)
+        End Try
     End Sub
 #End Region
 
@@ -2261,6 +2341,62 @@ Public Module FrameworkTests
             End If
         Catch ex As Exception
             LogFail("Set/Get active gamepad", ex.Message)
+        End Try
+
+        ' Test gamepad vibration (rumble)
+        Try
+            Framework_Input_SetGamepadVibration(0, 0.5F, 0.5F, 0.1F)
+            LogPass("Set gamepad vibration")
+        Catch ex As Exception
+            LogFail("Set gamepad vibration", ex.Message)
+        End Try
+
+        ' Test pulse gamepad (convenience function)
+        Try
+            Framework_Input_PulseGamepad(0, 0.8F, 0.1F)
+            LogPass("Pulse gamepad")
+        Catch ex As Exception
+            LogFail("Pulse gamepad", ex.Message)
+        End Try
+
+        ' Test impact rumble (quick strong vibration)
+        Try
+            Framework_Input_ImpactRumble(0, 1.0F)
+            LogPass("Impact rumble")
+        Catch ex As Exception
+            LogFail("Impact rumble", ex.Message)
+        End Try
+
+        ' Test engine rumble (asymmetric vibration)
+        Try
+            Framework_Input_EngineRumble(0, 0.5F)
+            LogPass("Engine rumble")
+        Catch ex As Exception
+            LogFail("Engine rumble", ex.Message)
+        End Try
+
+        ' Test is gamepad vibrating
+        Try
+            Dim isVibrating = Framework_Input_IsGamepadVibrating(0)
+            LogPass($"Is gamepad vibrating (result={isVibrating})")
+        Catch ex As Exception
+            LogFail("Is gamepad vibrating", ex.Message)
+        End Try
+
+        ' Test get vibration time remaining
+        Try
+            Dim timeRemaining = Framework_Input_GetVibrationTimeRemaining(0)
+            LogPass($"Get vibration time remaining (time={timeRemaining:F2})")
+        Catch ex As Exception
+            LogFail("Get vibration time remaining", ex.Message)
+        End Try
+
+        ' Test stop gamepad vibration
+        Try
+            Framework_Input_StopGamepadVibration(0)
+            LogPass("Stop gamepad vibration")
+        Catch ex As Exception
+            LogFail("Stop gamepad vibration", ex.Message)
         End Try
 
         ' Test destroy action

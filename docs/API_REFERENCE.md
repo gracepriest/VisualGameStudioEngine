@@ -42,6 +42,251 @@ A comprehensive 2D game engine framework built on Raylib with VB.NET P/Invoke bi
 
 ---
 
+## Quick Start Examples
+
+This section provides practical code examples to help you get started quickly.
+
+### Example 1: Basic Game Loop
+
+```vb
+Imports RaylibWrapper.FrameworkWrapper
+
+Module MyGame
+    Sub Main()
+        ' Initialize the framework
+        Framework_Initialize(800, 600, "My First Game")
+        Framework_SetTargetFPS(60)
+
+        ' Main game loop
+        While Not Framework_ShouldClose()
+            Framework_BeginFrame()
+            Framework_ClearBackground(30, 30, 50, 255)
+
+            ' Draw text
+            Framework_DrawText("Hello, World!", 350, 280, 24, 255, 255, 255, 255)
+
+            Framework_EndFrame()
+        End While
+
+        Framework_Shutdown()
+    End Sub
+End Module
+```
+
+### Example 2: Creating and Moving an Entity
+
+```vb
+' Create a player entity with a sprite
+Dim player As Integer = Framework_Ecs_CreateEntity()
+Framework_Ecs_SetName(player, "Player")
+
+' Load a texture and add sprite
+Dim texture As Integer = Framework_LoadTextureH("player.png")
+Framework_Ecs_AddSprite(player, texture)
+Framework_Ecs_SetPosition(player, 400, 300)
+
+' In your update loop - simple WASD movement
+Dim speed As Single = 200.0F * deltaTime
+If Framework_IsKeyDown(Keys.W) Then Framework_Ecs_Translate(player, 0, -speed)
+If Framework_IsKeyDown(Keys.S) Then Framework_Ecs_Translate(player, 0, speed)
+If Framework_IsKeyDown(Keys.A) Then Framework_Ecs_Translate(player, -speed, 0)
+If Framework_IsKeyDown(Keys.D) Then Framework_Ecs_Translate(player, speed, 0)
+
+' Draw all entities
+Framework_Ecs_DrawAll()
+```
+
+### Example 3: Physics Bodies and Collision
+
+```vb
+' Initialize physics
+Framework_Physics_Initialize()
+Framework_Physics_SetGravity(0, 500)
+
+' Create a dynamic player body
+Dim player As Integer = Framework_Ecs_CreateEntity()
+Dim playerBody As Integer = Framework_Physics_CreateBody(player, 0) ' 0 = Dynamic
+Framework_Physics_AddCircleShape(playerBody, 16, 0, 0)
+Framework_Physics_SetBodyPosition(playerBody, 100, 100)
+
+' Create a static ground
+Dim ground As Integer = Framework_Ecs_CreateEntity()
+Dim groundBody As Integer = Framework_Physics_CreateBody(ground, 1) ' 1 = Static
+Framework_Physics_AddBoxShape(groundBody, 800, 32, 0, 0)
+Framework_Physics_SetBodyPosition(groundBody, 400, 550)
+
+' Update physics each frame
+Framework_Physics_Update(deltaTime)
+```
+
+### Example 4: UI Button with Click Handler
+
+```vb
+' Create a button
+Dim button As Integer = Framework_UI_Create(1) ' 1 = Button type
+Framework_UI_SetPosition(button, 300, 200)
+Framework_UI_SetSize(button, 200, 50)
+Framework_UI_SetText(button, "Click Me!")
+
+' Set button colors
+Framework_UI_SetColor(button, 0, 60, 120, 180, 255)  ' Normal
+Framework_UI_SetColor(button, 1, 80, 150, 220, 255)  ' Hovered
+Framework_UI_SetColor(button, 2, 40, 90, 140, 255)   ' Pressed
+
+' In your update loop
+Framework_UI_Update(deltaTime)
+If Framework_UI_WasClicked(button) Then
+    Console.WriteLine("Button clicked!")
+End If
+
+' In your draw loop
+Framework_UI_Draw()
+```
+
+### Example 5: Audio with Spatial Sound
+
+```vb
+' Initialize audio
+Framework_InitAudio()
+
+' Load sounds
+Dim music As Integer = Framework_LoadMusicH("background.ogg")
+Dim sfx As Integer = Framework_LoadSoundH("explosion.wav")
+
+' Play background music with fade-in
+Framework_PlayMusicH(music)
+Framework_Audio_FadeIn(music, 2.0F)
+
+' Set listener position (usually at player)
+Framework_Audio_SetListenerPosition(playerX, playerY)
+
+' Play spatial sound effect at explosion location
+Framework_Audio_PlaySpatial(sfx, explosionX, explosionY, 500) ' 500 = max distance
+```
+
+### Example 6: Tweening for Smooth Animations
+
+```vb
+' Create a tween to move entity from x=100 to x=500 over 2 seconds
+Dim tweenId As Integer = Framework_Tween_CreateForEntity(player, 0) ' 0 = PositionX
+Framework_Tween_SetTarget(tweenId, 500)
+Framework_Tween_SetDuration(tweenId, 2.0F)
+Framework_Tween_SetEasing(tweenId, 8) ' 8 = EaseOutBounce
+Framework_Tween_Play(tweenId)
+
+' Create a color fade tween
+Dim alphaTween As Integer = Framework_Tween_CreateForEntity(player, 6) ' 6 = Alpha
+Framework_Tween_SetTarget(alphaTween, 0) ' Fade to invisible
+Framework_Tween_SetDuration(alphaTween, 1.5F)
+Framework_Tween_SetDelay(alphaTween, 3.0F) ' Wait 3 seconds before starting
+Framework_Tween_Play(alphaTween)
+
+' Update tweens each frame
+Framework_Tween_Update(deltaTime)
+```
+
+### Example 7: Simple A* Pathfinding
+
+```vb
+' Create navigation grid (20x15 tiles, 32px each)
+Dim navGrid As Integer = Framework_AI_CreateNavGrid(20, 15, 32)
+
+' Mark obstacles as unwalkable
+Framework_AI_SetWalkable(navGrid, 5, 5, False)
+Framework_AI_SetWalkable(navGrid, 5, 6, False)
+Framework_AI_SetWalkable(navGrid, 5, 7, False)
+
+' Find path from (2,2) to (18,12)
+Dim pathId As Integer = Framework_AI_FindPath(navGrid, 2, 2, 18, 12)
+Dim pathLength As Integer = Framework_AI_GetPathLength(pathId)
+
+' Get path waypoints
+For i As Integer = 0 To pathLength - 1
+    Dim wx, wy As Single
+    Framework_AI_GetPathPoint(pathId, i, wx, wy)
+    Console.WriteLine($"Waypoint {i}: ({wx}, {wy})")
+Next
+
+' Clean up
+Framework_AI_DestroyPath(pathId)
+```
+
+### Example 8: Screen Shake Effect
+
+```vb
+' Trigger a screen shake (great for impacts/explosions)
+Framework_Camera_SetPosition(400, 300)
+Framework_Camera_Shake(
+    intensity:=15.0F,    ' Maximum offset in pixels
+    duration:=0.5F,      ' Duration in seconds
+    frequency:=30.0F,    ' Shakes per second
+    decay:=True          ' Gradually reduce intensity
+)
+
+' Update camera each frame
+Framework_Camera_Update(deltaTime)
+
+' In draw loop, use camera transform
+Framework_Camera_BeginMode()
+    ' Draw game world here (affected by shake)
+    Framework_Ecs_DrawAll()
+Framework_Camera_EndMode()
+
+' Draw HUD outside camera (not affected by shake)
+Framework_DrawText("Score: 1000", 10, 10, 24, 255, 255, 255, 255)
+```
+
+### Example 9: Controller Rumble/Vibration
+
+```vb
+' Check if gamepad is connected
+If Framework_IsGamepadAvailable(0) Then
+    ' Impact rumble - quick strong pulse for hits/explosions
+    Framework_Input_ImpactRumble(0, 1.0F)
+
+    ' Engine rumble - asymmetric for engine/car effects
+    Framework_Input_EngineRumble(0, 0.5F)
+
+    ' Custom pulse pattern
+    Framework_Input_PulseGamepad(0, 0.8F, 0.3F) ' intensity, duration
+
+    ' Full control over both motors
+    Framework_Input_SetGamepadVibration(0, 0.3F, 0.8F, 1.0F) ' left, right, duration
+
+    ' Check if still vibrating
+    If Framework_Input_IsGamepadVibrating(0) Then
+        Dim remaining = Framework_Input_GetVibrationTimeRemaining(0)
+        Console.WriteLine($"Vibration time remaining: {remaining:F2}s")
+    End If
+End If
+```
+
+### Example 10: Custom Shader Effects
+
+```vb
+' Load a built-in shader effect
+Dim grayscaleShader As Integer = Framework_Shader_LoadGrayscale()
+Dim outlineShader As Integer = Framework_Shader_LoadOutline()
+
+' Configure the outline shader
+Framework_Shader_SetVec4ByName(outlineShader, "outlineColor", 1.0F, 0.0F, 0.0F, 1.0F)
+Framework_Shader_SetFloatByName(outlineShader, "outlineThickness", 2.0F)
+
+' Apply shader while drawing
+Framework_Shader_BeginMode(outlineShader)
+    Framework_Ecs_DrawAll() ' All entities drawn with outline
+Framework_Shader_EndMode()
+
+' Draw UI without shader
+Framework_UI_Draw()
+
+' Clean up shaders when done
+Framework_Shader_Unload(grayscaleShader)
+Framework_Shader_Unload(outlineShader)
+```
+
+---
+
 ## Core Framework
 
 ### Window & Application
