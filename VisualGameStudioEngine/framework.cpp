@@ -875,8 +875,44 @@ extern "C" {
         return WindowShouldClose() || g_engineState == ENGINE_QUITTING;
     }
 
+    // Forward declarations for shutdown cleanup
+    void Framework_Physics_DestroyAllBodies();
+    void Framework_UI_DestroyAll();
+    void Framework_Timer_CancelAll();
+    void Framework_Tween_KillAll();
+    void Framework_FSM_DestroyAll();
+    void Framework_Pool_DestroyAll();
+    void Framework_Batch_DestroyAll();
+    void Framework_Atlas_DestroyAll();
+    void Framework_SpriteSheet_DestroyAll();
+    void Framework_Level_DestroyAll();
+    void Framework_Net_Shutdown();
+    void Framework_Lighting_Shutdown();
+    void Framework_Effects_Shutdown();
+    void Framework_Skeleton_DestroyAll();
+    void Framework_Cmd_Shutdown();
+
     void Framework_Shutdown() {
         g_engineState = ENGINE_STOPPED;
+
+        // Clean up all systems before shutting down
+        Framework_Physics_DestroyAllBodies();  // Clear physics bodies
+        Framework_UI_DestroyAll();             // Clear UI elements
+        Framework_Timer_CancelAll();           // Cancel all timers
+        Framework_Tween_KillAll();             // Kill all tweens
+        Framework_FSM_DestroyAll();            // Destroy all FSMs
+        Framework_Pool_DestroyAll();           // Destroy all object pools
+        Framework_Batch_DestroyAll();          // Destroy all sprite batches
+        Framework_Atlas_DestroyAll();          // Destroy all texture atlases
+        Framework_SpriteSheet_DestroyAll();    // Destroy all sprite sheets
+        Framework_Level_DestroyAll();          // Destroy all levels
+        Framework_Net_Shutdown();              // Shutdown networking
+        Framework_Lighting_Shutdown();         // Shutdown lighting
+        Framework_Effects_Shutdown();          // Shutdown effects
+        Framework_Skeleton_DestroyAll();       // Destroy all skeletons
+        Framework_Cmd_Shutdown();              // Shutdown command console
+
+        // Clear resources and ECS last
         Framework_ResourcesShutdown();
         EcsClearAllInternal();
         CloseWindow();
@@ -4537,7 +4573,10 @@ extern "C" {
             // Update sprite source rect if entity has a sprite
             auto sprIt = g_sprite2D.find(kv.first);
             if (sprIt != g_sprite2D.end()) {
-                sprIt->second.source = clip.frames[anim.currentFrame].source;
+                // Bounds check to prevent out-of-bounds access
+                if (anim.currentFrame >= 0 && anim.currentFrame < (int)clip.frames.size()) {
+                    sprIt->second.source = clip.frames[anim.currentFrame].source;
+                }
             }
         }
     }
@@ -5061,7 +5100,10 @@ extern "C" {
     static int g_uiHoveredId = -1;
 
     // Helper: Get computed position based on anchor
-    static Vector2 UI_GetAnchoredPosition(const UIElement& el) {
+    // depth parameter prevents infinite recursion on circular parent chains
+    static Vector2 UI_GetAnchoredPosition(const UIElement& el, int depth = 0) {
+        constexpr int MAX_UI_DEPTH = 32;  // Prevent stack overflow on circular parents
+
         float baseX = el.x;
         float baseY = el.y;
 
@@ -5070,10 +5112,10 @@ extern "C" {
         float parentW = (float)GetScreenWidth();
         float parentH = (float)GetScreenHeight();
 
-        if (el.parent >= 0) {
+        if (el.parent >= 0 && depth < MAX_UI_DEPTH) {
             auto pit = g_uiElements.find(el.parent);
             if (pit != g_uiElements.end() && pit->second.valid) {
-                Vector2 ppos = UI_GetAnchoredPosition(pit->second);
+                Vector2 ppos = UI_GetAnchoredPosition(pit->second, depth + 1);
                 parentX = ppos.x;
                 parentY = ppos.y;
                 parentW = pit->second.width;
@@ -18816,6 +18858,10 @@ extern "C" {
 
     void Framework_Batch_Destroy(int batchId) {
         g_batches.erase(batchId);
+    }
+
+    void Framework_Batch_DestroyAll() {
+        g_batches.clear();
     }
 
     void Framework_Batch_Clear(int batchId) {
