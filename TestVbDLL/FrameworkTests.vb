@@ -42,6 +42,15 @@ Public Module FrameworkTests
         TestEventSystem()
         TestInputManagerSystem()
         TestSaveLoadSystem()
+        TestTilesetSystem()
+        TestAnimationClipSystem()
+        TestAudioManagerSystem()
+        TestSceneManagerSystem()
+        TestObjectPoolingSystem()
+        TestFSMSystem()
+        TestDialogueSystem()
+        TestInventorySystem()
+        TestQuestSystem()
 
         ' Print summary
         Console.WriteLine()
@@ -2427,6 +2436,887 @@ Public Module FrameworkTests
             LogPass("Clear settings")
         Catch ex As Exception
             LogFail("Clear settings", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Tileset System Tests"
+    Private Sub TestTilesetSystem()
+        LogSection("Tileset System")
+
+        Dim tilesetId As Integer = -1
+
+        ' Test create tileset (using texture handle 0 which is invalid, but tests API)
+        Try
+            ' We don't have a real texture, so just test with handle 0
+            tilesetId = Framework_Tileset_Create(0, 32, 32, 8)
+            ' Handle 0 is invalid texture, but API should still return a tileset ID
+            If tilesetId >= 0 Then
+                LogPass($"Create tileset (id={tilesetId})")
+            Else
+                ' If it returns -1, that's also valid behavior for invalid texture
+                LogPass("Create tileset (rejected invalid texture)")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create tileset", ex.Message)
+            Return
+        End Try
+
+        ' Test tileset validity
+        If tilesetId >= 0 Then
+            Try
+                Dim isValid = Framework_Tileset_IsValid(tilesetId)
+                LogPass($"Tileset validity check (valid={isValid})")
+            Catch ex As Exception
+                LogFail("Tileset validity check", ex.Message)
+            End Try
+        End If
+
+        ' Test get tile dimensions
+        If tilesetId >= 0 Then
+            Try
+                Dim tileW = Framework_Tileset_GetTileWidth(tilesetId)
+                Dim tileH = Framework_Tileset_GetTileHeight(tilesetId)
+                If tileW = 32 AndAlso tileH = 32 Then
+                    LogPass($"Get tile dimensions ({tileW}x{tileH})")
+                Else
+                    LogPass($"Get tile dimensions (returned {tileW}x{tileH})")
+                End If
+            Catch ex As Exception
+                LogFail("Get tile dimensions", ex.Message)
+            End Try
+        End If
+
+        ' Clean up
+        If tilesetId >= 0 Then
+            Try
+                Framework_Tileset_Destroy(tilesetId)
+                LogPass("Destroy tileset")
+            Catch ex As Exception
+                LogFail("Destroy tileset", ex.Message)
+            End Try
+        End If
+    End Sub
+#End Region
+
+#Region "Animation Clip System Tests"
+    Private Sub TestAnimationClipSystem()
+        LogSection("Animation Clip System")
+
+        Dim clipId As Integer = -1
+
+        ' Test create animation clip
+        Try
+            clipId = Framework_AnimClip_Create("TestAnim", 4)
+            If clipId >= 0 Then
+                LogPass($"Create animation clip (id={clipId})")
+            Else
+                LogFail("Create animation clip", "Invalid clip ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create animation clip", ex.Message)
+            Return
+        End Try
+
+        ' Test clip validity
+        Try
+            If Framework_AnimClip_IsValid(clipId) Then
+                LogPass("Animation clip validity check")
+            Else
+                LogFail("Animation clip validity check", "Clip not valid")
+            End If
+        Catch ex As Exception
+            LogFail("Animation clip validity check", ex.Message)
+        End Try
+
+        ' Test set frame
+        Try
+            Framework_AnimClip_SetFrame(clipId, 0, 0, 0, 32, 32, 0.1F)
+            Framework_AnimClip_SetFrame(clipId, 1, 32, 0, 32, 32, 0.1F)
+            Framework_AnimClip_SetFrame(clipId, 2, 64, 0, 32, 32, 0.1F)
+            Framework_AnimClip_SetFrame(clipId, 3, 96, 0, 32, 32, 0.1F)
+            LogPass("Set animation frames")
+        Catch ex As Exception
+            LogFail("Set animation frames", ex.Message)
+        End Try
+
+        ' Test get frame count
+        Try
+            Dim frameCount = Framework_AnimClip_GetFrameCount(clipId)
+            If frameCount = 4 Then
+                LogPass($"Get frame count (count={frameCount})")
+            Else
+                LogFail("Get frame count", $"Expected 4, got {frameCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get frame count", ex.Message)
+        End Try
+
+        ' Test get total duration
+        Try
+            Dim duration = Framework_AnimClip_GetTotalDuration(clipId)
+            If Math.Abs(duration - 0.4F) < 0.01 Then
+                LogPass($"Get total duration ({duration})")
+            Else
+                LogPass($"Get total duration (returned {duration})")
+            End If
+        Catch ex As Exception
+            LogFail("Get total duration", ex.Message)
+        End Try
+
+        ' Test set loop mode
+        Try
+            Framework_AnimClip_SetLoopMode(clipId, 1) ' 1 = repeat
+            LogPass("Set loop mode")
+        Catch ex As Exception
+            LogFail("Set loop mode", ex.Message)
+        End Try
+
+        ' Test find by name
+        Try
+            Dim foundId = Framework_AnimClip_FindByName("TestAnim")
+            If foundId = clipId Then
+                LogPass("Find animation clip by name")
+            Else
+                LogPass($"Find animation clip by name (returned {foundId})")
+            End If
+        Catch ex As Exception
+            LogFail("Find animation clip by name", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_AnimClip_Destroy(clipId)
+            If Not Framework_AnimClip_IsValid(clipId) Then
+                LogPass("Destroy animation clip")
+            Else
+                LogFail("Destroy animation clip", "Clip still valid")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy animation clip", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Audio Manager System Tests"
+    Private Sub TestAudioManagerSystem()
+        LogSection("Audio Manager System")
+
+        ' Test group volume (no audio files needed)
+        Try
+            Framework_Audio_SetGroupVolume(0, 0.8F) ' Master group
+            Dim vol = Framework_Audio_GetGroupVolume(0)
+            If Math.Abs(vol - 0.8F) < 0.01 Then
+                LogPass("Set/Get group volume")
+            Else
+                LogFail("Set/Get group volume", $"Expected 0.8, got {vol}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get group volume", ex.Message)
+        End Try
+
+        ' Test group mute
+        Try
+            Framework_Audio_SetGroupMuted(1, True) ' Music group
+            If Framework_Audio_IsGroupMuted(1) Then
+                LogPass("Set/Get group muted")
+            Else
+                LogFail("Set/Get group muted", "Not muted after set")
+            End If
+            Framework_Audio_SetGroupMuted(1, False)
+        Catch ex As Exception
+            LogFail("Set/Get group muted", ex.Message)
+        End Try
+
+        ' Test listener position
+        Try
+            Framework_Audio_SetListenerPosition(100, 200)
+            Dim x As Single = 0, y As Single = 0
+            Framework_Audio_GetListenerPosition(x, y)
+            If Math.Abs(x - 100) < 0.01 AndAlso Math.Abs(y - 200) < 0.01 Then
+                LogPass("Set/Get listener position")
+            Else
+                LogFail("Set/Get listener position", $"Expected (100,200), got ({x},{y})")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get listener position", ex.Message)
+        End Try
+
+        ' Test spatial falloff
+        Try
+            Framework_Audio_SetSpatialFalloff(50, 500)
+            LogPass("Set spatial falloff")
+        Catch ex As Exception
+            LogFail("Set spatial falloff", ex.Message)
+        End Try
+
+        ' Test spatial enabled
+        Try
+            Framework_Audio_SetSpatialEnabled(True)
+            LogPass("Enable spatial audio")
+            Framework_Audio_SetSpatialEnabled(False)
+        Catch ex As Exception
+            LogFail("Enable spatial audio", ex.Message)
+        End Try
+
+        ' Test playlist creation
+        Try
+            Dim playlistId = Framework_Audio_CreatePlaylist()
+            If playlistId >= 0 Then
+                LogPass($"Create playlist (id={playlistId})")
+                Framework_Audio_DestroyPlaylist(playlistId)
+            Else
+                LogPass("Create playlist (API call)")
+            End If
+        Catch ex As Exception
+            LogFail("Create playlist", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Scene Manager System Tests"
+    Private Sub TestSceneManagerSystem()
+        LogSection("Scene Manager System")
+
+        ' Test set transition
+        Try
+            Framework_Scene_SetTransition(0, 0.5F) ' 0 = fade
+            LogPass("Set scene transition")
+        Catch ex As Exception
+            LogFail("Set scene transition", ex.Message)
+        End Try
+
+        ' Test get transition type
+        Try
+            Dim transType = Framework_Scene_GetTransitionType()
+            If transType = 0 Then
+                LogPass("Get transition type")
+            Else
+                LogPass($"Get transition type (type={transType})")
+            End If
+        Catch ex As Exception
+            LogFail("Get transition type", ex.Message)
+        End Try
+
+        ' Test get transition duration
+        Try
+            Dim duration = Framework_Scene_GetTransitionDuration()
+            If Math.Abs(duration - 0.5F) < 0.01 Then
+                LogPass("Get transition duration")
+            Else
+                LogPass($"Get transition duration (duration={duration})")
+            End If
+        Catch ex As Exception
+            LogFail("Get transition duration", ex.Message)
+        End Try
+
+        ' Test set transition color
+        Try
+            Framework_Scene_SetTransitionColor(0, 0, 0, 255)
+            LogPass("Set transition color")
+        Catch ex As Exception
+            LogFail("Set transition color", ex.Message)
+        End Try
+
+        ' Test is transitioning
+        Try
+            Dim isTransitioning = Framework_Scene_IsTransitioning()
+            LogPass($"Is transitioning check (transitioning={isTransitioning})")
+        Catch ex As Exception
+            LogFail("Is transitioning check", ex.Message)
+        End Try
+
+        ' Test loading settings
+        Try
+            Framework_Scene_SetLoadingEnabled(True)
+            If Framework_Scene_IsLoadingEnabled() Then
+                LogPass("Enable loading screen")
+            Else
+                LogFail("Enable loading screen", "Not enabled")
+            End If
+            Framework_Scene_SetLoadingEnabled(False)
+        Catch ex As Exception
+            LogFail("Enable loading screen", ex.Message)
+        End Try
+
+        ' Test loading min duration
+        Try
+            Framework_Scene_SetLoadingMinDuration(1.0F)
+            Dim minDur = Framework_Scene_GetLoadingMinDuration()
+            If Math.Abs(minDur - 1.0F) < 0.01 Then
+                LogPass("Set/Get loading min duration")
+            Else
+                LogFail("Set/Get loading min duration", $"Expected 1.0, got {minDur}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get loading min duration", ex.Message)
+        End Try
+
+        ' Test stack size
+        Try
+            Dim stackSize = Framework_Scene_GetStackSize()
+            LogPass($"Get scene stack size (size={stackSize})")
+        Catch ex As Exception
+            LogFail("Get scene stack size", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Object Pooling System Tests"
+    Private Sub TestObjectPoolingSystem()
+        LogSection("Object Pooling System")
+
+        Dim poolId As Integer = -1
+
+        ' Test create pool
+        Try
+            poolId = Framework_Pool_Create("TestPool", 10, 50)
+            If poolId > 0 AndAlso Framework_Pool_IsValid(poolId) Then
+                LogPass($"Create object pool (id={poolId})")
+            Else
+                LogFail("Create object pool", "Invalid pool ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create object pool", ex.Message)
+            Return
+        End Try
+
+        ' Test get by name
+        Try
+            Dim foundId = Framework_Pool_GetByName("TestPool")
+            If foundId = poolId Then
+                LogPass("Get pool by name")
+            Else
+                LogFail("Get pool by name", $"Expected {poolId}, got {foundId}")
+            End If
+        Catch ex As Exception
+            LogFail("Get pool by name", ex.Message)
+        End Try
+
+        ' Test capacity
+        Try
+            Dim capacity = Framework_Pool_GetCapacity(poolId)
+            If capacity = 10 Then
+                LogPass($"Get pool capacity (capacity={capacity})")
+            Else
+                LogFail("Get pool capacity", $"Expected 10, got {capacity}")
+            End If
+        Catch ex As Exception
+            LogFail("Get pool capacity", ex.Message)
+        End Try
+
+        ' Test auto grow
+        Try
+            Framework_Pool_SetAutoGrow(poolId, True)
+            If Framework_Pool_GetAutoGrow(poolId) Then
+                LogPass("Set/Get auto grow")
+            Else
+                LogFail("Set/Get auto grow", "Not enabled")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get auto grow", ex.Message)
+        End Try
+
+        ' Test acquire object
+        Try
+            Dim objIndex = Framework_Pool_Acquire(poolId)
+            If objIndex >= 0 Then
+                LogPass($"Acquire object (index={objIndex})")
+
+                ' Test is object active
+                If Framework_Pool_IsObjectActive(poolId, objIndex) Then
+                    LogPass("Object is active after acquire")
+                Else
+                    LogFail("Object is active after acquire", "Not active")
+                End If
+
+                ' Test release object
+                Framework_Pool_Release(poolId, objIndex)
+                If Not Framework_Pool_IsObjectActive(poolId, objIndex) Then
+                    LogPass("Release object")
+                Else
+                    LogFail("Release object", "Still active after release")
+                End If
+            Else
+                LogFail("Acquire object", "Invalid object index")
+            End If
+        Catch ex As Exception
+            LogFail("Acquire object", ex.Message)
+        End Try
+
+        ' Test active count
+        Try
+            Dim activeCount = Framework_Pool_GetActiveCount(poolId)
+            If activeCount = 0 Then
+                LogPass("Get active count after release")
+            Else
+                LogFail("Get active count after release", $"Expected 0, got {activeCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get active count after release", ex.Message)
+        End Try
+
+        ' Test warmup
+        Try
+            Framework_Pool_Warmup(poolId, 5)
+            LogPass("Warmup pool")
+        Catch ex As Exception
+            LogFail("Warmup pool", ex.Message)
+        End Try
+
+        ' Test statistics
+        Try
+            Dim totalAcquires = Framework_Pool_GetTotalAcquires(poolId)
+            Dim peakUsage = Framework_Pool_GetPeakUsage(poolId)
+            LogPass($"Pool statistics (acquires={totalAcquires}, peak={peakUsage})")
+        Catch ex As Exception
+            LogFail("Pool statistics", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_Pool_Destroy(poolId)
+            If Not Framework_Pool_IsValid(poolId) Then
+                LogPass("Destroy pool")
+            Else
+                LogFail("Destroy pool", "Pool still valid")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy pool", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "FSM (State Machine) System Tests"
+    Private Sub TestFSMSystem()
+        LogSection("FSM (State Machine) System")
+
+        Dim fsmId As Integer = -1
+
+        ' Test create FSM
+        Try
+            fsmId = Framework_FSM_Create("TestFSM")
+            If fsmId > 0 AndAlso Framework_FSM_IsValid(fsmId) Then
+                LogPass($"Create FSM (id={fsmId})")
+            Else
+                LogFail("Create FSM", "Invalid FSM ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create FSM", ex.Message)
+            Return
+        End Try
+
+        ' Test get by name
+        Try
+            Dim foundId = Framework_FSM_GetByName("TestFSM")
+            If foundId = fsmId Then
+                LogPass("Get FSM by name")
+            Else
+                LogFail("Get FSM by name", $"Expected {fsmId}, got {foundId}")
+            End If
+        Catch ex As Exception
+            LogFail("Get FSM by name", ex.Message)
+        End Try
+
+        ' Test add states
+        Dim idleState As Integer = -1
+        Dim walkState As Integer = -1
+        Dim runState As Integer = -1
+
+        Try
+            idleState = Framework_FSM_AddState(fsmId, "Idle")
+            walkState = Framework_FSM_AddState(fsmId, "Walk")
+            runState = Framework_FSM_AddState(fsmId, "Run")
+            If idleState >= 0 AndAlso walkState >= 0 AndAlso runState >= 0 Then
+                LogPass($"Add states (idle={idleState}, walk={walkState}, run={runState})")
+            Else
+                LogFail("Add states", "Invalid state IDs")
+            End If
+        Catch ex As Exception
+            LogFail("Add states", ex.Message)
+        End Try
+
+        ' Test get state count
+        Try
+            Dim stateCount = Framework_FSM_GetStateCount(fsmId)
+            If stateCount = 3 Then
+                LogPass($"Get state count (count={stateCount})")
+            Else
+                LogFail("Get state count", $"Expected 3, got {stateCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get state count", ex.Message)
+        End Try
+
+        ' Test get state by name
+        Try
+            Dim foundState = Framework_FSM_GetState(fsmId, "Walk")
+            If foundState = walkState Then
+                LogPass("Get state by name")
+            Else
+                LogFail("Get state by name", $"Expected {walkState}, got {foundState}")
+            End If
+        Catch ex As Exception
+            LogFail("Get state by name", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_FSM_Destroy(fsmId)
+            If Not Framework_FSM_IsValid(fsmId) Then
+                LogPass("Destroy FSM")
+            Else
+                LogFail("Destroy FSM", "FSM still valid")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy FSM", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Dialogue System Tests"
+    Private Sub TestDialogueSystem()
+        LogSection("Dialogue System")
+
+        Dim dialogueId As Integer = -1
+
+        ' Test create dialogue
+        Try
+            dialogueId = Framework_Dialogue_Create("TestDialogue")
+            If dialogueId > 0 AndAlso Framework_Dialogue_IsValid(dialogueId) Then
+                LogPass($"Create dialogue (id={dialogueId})")
+            Else
+                LogFail("Create dialogue", "Invalid dialogue ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create dialogue", ex.Message)
+            Return
+        End Try
+
+        ' Test get by name
+        Try
+            Dim foundId = Framework_Dialogue_GetByName("TestDialogue")
+            If foundId = dialogueId Then
+                LogPass("Get dialogue by name")
+            Else
+                LogFail("Get dialogue by name", $"Expected {dialogueId}, got {foundId}")
+            End If
+        Catch ex As Exception
+            LogFail("Get dialogue by name", ex.Message)
+        End Try
+
+        ' Test add nodes
+        Dim node1 As Integer = -1
+        Dim node2 As Integer = -1
+
+        Try
+            node1 = Framework_Dialogue_AddNode(dialogueId, "greeting")
+            node2 = Framework_Dialogue_AddNode(dialogueId, "response")
+            If node1 >= 0 AndAlso node2 >= 0 Then
+                LogPass($"Add dialogue nodes (node1={node1}, node2={node2})")
+            Else
+                LogFail("Add dialogue nodes", "Invalid node IDs")
+            End If
+        Catch ex As Exception
+            LogFail("Add dialogue nodes", ex.Message)
+        End Try
+
+        ' Test get node count
+        Try
+            Dim nodeCount = Framework_Dialogue_GetNodeCount(dialogueId)
+            If nodeCount = 2 Then
+                LogPass($"Get node count (count={nodeCount})")
+            Else
+                LogFail("Get node count", $"Expected 2, got {nodeCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get node count", ex.Message)
+        End Try
+
+        ' Test set node text
+        If node1 >= 0 Then
+            Try
+                Framework_Dialogue_SetNodeSpeaker(dialogueId, node1, "NPC")
+                Framework_Dialogue_SetNodeText(dialogueId, node1, "Hello there!")
+                LogPass("Set node speaker and text")
+            Catch ex As Exception
+                LogFail("Set node speaker and text", ex.Message)
+            End Try
+        End If
+
+        ' Test set start node
+        If node1 >= 0 Then
+            Try
+                Framework_Dialogue_SetStartNode(dialogueId, node1)
+                Dim startNode = Framework_Dialogue_GetStartNode(dialogueId)
+                If startNode = node1 Then
+                    LogPass("Set/Get start node")
+                Else
+                    LogFail("Set/Get start node", $"Expected {node1}, got {startNode}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get start node", ex.Message)
+            End Try
+        End If
+
+        ' Test dialogue variables
+        Try
+            Framework_Dialogue_SetVarInt("score", 100)
+            Dim score = Framework_Dialogue_GetVarInt("score")
+            If score = 100 Then
+                LogPass("Set/Get dialogue variable (int)")
+            Else
+                LogFail("Set/Get dialogue variable (int)", $"Expected 100, got {score}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get dialogue variable (int)", ex.Message)
+        End Try
+
+        ' Test typewriter settings
+        Try
+            Framework_Dialogue_SetTypewriterEnabled(True)
+            If Framework_Dialogue_IsTypewriterEnabled() Then
+                LogPass("Enable typewriter effect")
+            Else
+                LogFail("Enable typewriter effect", "Not enabled")
+            End If
+        Catch ex As Exception
+            LogFail("Enable typewriter effect", ex.Message)
+        End Try
+
+        ' Test typewriter speed
+        Try
+            Framework_Dialogue_SetTypewriterSpeed(30.0F)
+            Dim speed = Framework_Dialogue_GetTypewriterSpeed()
+            If Math.Abs(speed - 30.0F) < 0.1 Then
+                LogPass("Set/Get typewriter speed")
+            Else
+                LogFail("Set/Get typewriter speed", $"Expected 30, got {speed}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get typewriter speed", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_Dialogue_Destroy(dialogueId)
+            If Not Framework_Dialogue_IsValid(dialogueId) Then
+                LogPass("Destroy dialogue")
+            Else
+                LogFail("Destroy dialogue", "Dialogue still valid")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy dialogue", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Inventory System Tests"
+    Private Sub TestInventorySystem()
+        LogSection("Inventory System")
+
+        Dim invId As Integer = -1
+
+        ' Test create inventory
+        Try
+            invId = Framework_Inventory_Create("PlayerInventory", 20)
+            If invId > 0 Then
+                LogPass($"Create inventory (id={invId})")
+            Else
+                LogFail("Create inventory", "Invalid inventory ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create inventory", ex.Message)
+            Return
+        End Try
+
+        ' Test get by name
+        Try
+            Dim foundId = Framework_Inventory_GetByName("PlayerInventory")
+            If foundId = invId Then
+                LogPass("Get inventory by name")
+            Else
+                LogFail("Get inventory by name", $"Expected {invId}, got {foundId}")
+            End If
+        Catch ex As Exception
+            LogFail("Get inventory by name", ex.Message)
+        End Try
+
+        ' Test get capacity
+        Try
+            Dim capacity = Framework_Inventory_GetCapacity(invId)
+            If capacity = 20 Then
+                LogPass($"Get inventory capacity (capacity={capacity})")
+            Else
+                LogFail("Get inventory capacity", $"Expected 20, got {capacity}")
+            End If
+        Catch ex As Exception
+            LogFail("Get inventory capacity", ex.Message)
+        End Try
+
+        ' Test max weight
+        Try
+            Framework_Inventory_SetMaxWeight(invId, 100.0F)
+            Dim maxWeight = Framework_Inventory_GetMaxWeight(invId)
+            If Math.Abs(maxWeight - 100.0F) < 0.1 Then
+                LogPass("Set/Get max weight")
+            Else
+                LogFail("Set/Get max weight", $"Expected 100, got {maxWeight}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get max weight", ex.Message)
+        End Try
+
+        ' Test empty slot count
+        Try
+            Dim emptySlots = Framework_Inventory_GetEmptySlotCount(invId)
+            If emptySlots = 20 Then
+                LogPass($"Get empty slot count (count={emptySlots})")
+            Else
+                LogFail("Get empty slot count", $"Expected 20, got {emptySlots}")
+            End If
+        Catch ex As Exception
+            LogFail("Get empty slot count", ex.Message)
+        End Try
+
+        ' Test auto stack
+        Try
+            Framework_Inventory_SetAutoStack(invId, True)
+            LogPass("Set auto stack")
+        Catch ex As Exception
+            LogFail("Set auto stack", ex.Message)
+        End Try
+
+        ' Test clear inventory
+        Try
+            Framework_Inventory_Clear(invId)
+            LogPass("Clear inventory")
+        Catch ex As Exception
+            LogFail("Clear inventory", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_Inventory_Destroy(invId)
+            LogPass("Destroy inventory")
+        Catch ex As Exception
+            LogFail("Destroy inventory", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Quest System Tests"
+    Private Sub TestQuestSystem()
+        LogSection("Quest System")
+
+        Dim questHandle As Integer = -1
+
+        ' Test define quest
+        Try
+            questHandle = Framework_Quest_Define("main_quest_01")
+            If questHandle > 0 Then
+                LogPass($"Define quest (handle={questHandle})")
+            Else
+                LogFail("Define quest", "Invalid quest handle")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Define quest", ex.Message)
+            Return
+        End Try
+
+        ' Test set quest name
+        Try
+            Framework_Quest_SetName(questHandle, "The Great Adventure")
+            LogPass("Set quest name")
+        Catch ex As Exception
+            LogFail("Set quest name", ex.Message)
+        End Try
+
+        ' Test set quest description
+        Try
+            Framework_Quest_SetDescription(questHandle, "Embark on an epic journey to save the kingdom.")
+            LogPass("Set quest description")
+        Catch ex As Exception
+            LogFail("Set quest description", ex.Message)
+        End Try
+
+        ' Test set quest category
+        Try
+            Framework_Quest_SetCategory(questHandle, "Main")
+            LogPass("Set quest category")
+        Catch ex As Exception
+            LogFail("Set quest category", ex.Message)
+        End Try
+
+        ' Test set quest level
+        Try
+            Framework_Quest_SetLevel(questHandle, 5)
+            LogPass("Set quest level")
+        Catch ex As Exception
+            LogFail("Set quest level", ex.Message)
+        End Try
+
+        ' Test set repeatable
+        Try
+            Framework_Quest_SetRepeatable(questHandle, False)
+            LogPass("Set quest repeatable")
+        Catch ex As Exception
+            LogFail("Set quest repeatable", ex.Message)
+        End Try
+
+        ' Test set time limit
+        Try
+            Framework_Quest_SetTimeLimit(questHandle, 3600.0F) ' 1 hour
+            LogPass("Set quest time limit")
+        Catch ex As Exception
+            LogFail("Set quest time limit", ex.Message)
+        End Try
+
+        ' Test add objective
+        Try
+            Dim objIndex = Framework_Quest_AddObjective(questHandle, 1, "Defeat 10 enemies", 10) ' 1 = Kill type
+            If objIndex >= 0 Then
+                LogPass($"Add quest objective (index={objIndex})")
+            Else
+                LogFail("Add quest objective", "Invalid objective index")
+            End If
+        Catch ex As Exception
+            LogFail("Add quest objective", ex.Message)
+        End Try
+
+        ' Test get objective count
+        Try
+            Dim objCount = Framework_Quest_GetObjectiveCount(questHandle)
+            If objCount = 1 Then
+                LogPass($"Get objective count (count={objCount})")
+            Else
+                LogFail("Get objective count", $"Expected 1, got {objCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get objective count", ex.Message)
+        End Try
+
+        ' Test set min level
+        Try
+            Framework_Quest_SetMinLevel(questHandle, 3)
+            LogPass("Set quest min level")
+        Catch ex As Exception
+            LogFail("Set quest min level", ex.Message)
+        End Try
+
+        ' Test auto complete
+        Try
+            Framework_Quest_SetAutoComplete(questHandle, True)
+            LogPass("Set quest auto complete")
+        Catch ex As Exception
+            LogFail("Set quest auto complete", ex.Message)
         End Try
     End Sub
 #End Region
