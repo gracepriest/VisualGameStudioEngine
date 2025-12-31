@@ -5981,6 +5981,9 @@ extern "C" {
 
     // Physics world state
     static std::unordered_map<int, PhysicsBody> g_physicsBodies;
+
+    // Forward declaration for joint constraints (defined in Physics Joints section)
+    static void ApplyJointConstraints(float dt);
     static int g_physicsNextHandle = 1;
     static float g_gravityX = 0.0f;
     static float g_gravityY = 980.0f;  // Default gravity (pixels/s^2)
@@ -6816,6 +6819,9 @@ extern "C" {
                 }
             }
 
+            // Apply joint constraints
+            ApplyJointConstraints(fixedStep);
+
             // Collect active bodies
             std::vector<int> bodies;
             for (auto& kv : g_physicsBodies) {
@@ -6942,6 +6948,1777 @@ extern "C" {
                     RED);
             }
         }
+    }
+
+    // ========================================================================
+    // PHYSICS JOINTS - Constraints between bodies
+    // ========================================================================
+
+    // Joint data structure
+    struct PhysicsJoint {
+        int id;
+        int type;  // PhysicsJointType
+        int bodyA;
+        int bodyB;
+        float anchorAX, anchorAY;  // Local anchor on body A
+        float anchorBX, anchorBY;  // Local anchor on body B
+
+        // Revolute/Wheel properties
+        float lowerAngle, upperAngle;
+        bool enableLimits;
+        float motorSpeed, maxMotorTorque;
+        bool enableMotor;
+
+        // Distance/Rope properties
+        float length;
+        float minLength, maxLength;
+        float stiffness;
+        float damping;
+
+        // Prismatic properties
+        float axisX, axisY;
+        float lowerTranslation, upperTranslation;
+        float motorForce;
+
+        // Motor joint properties
+        float targetX, targetY, targetAngle;
+        float maxForce, maxTorque;
+        float correctionFactor;
+
+        // Pulley properties
+        float groundAX, groundAY, groundBX, groundBY;
+        float ratio;
+
+        // General
+        bool collideConnected;
+        int userData;
+        bool valid;
+
+        // Runtime values
+        float currentAngle;
+        float currentSpeed;
+        float currentTranslation;
+        float reactionForceX, reactionForceY;
+        float reactionTorque;
+    };
+
+    static std::unordered_map<int, PhysicsJoint> g_physicsJoints;
+    static int g_nextJointHandle = 1;
+    static const int MAX_JOINTS = 1000;
+
+    // Helper to get body position
+    static bool GetJointBodyPosition(int bodyHandle, float& x, float& y) {
+        auto it = g_physicsBodies.find(bodyHandle);
+        if (it == g_physicsBodies.end() || !it->second.valid) return false;
+        x = it->second.x;
+        y = it->second.y;
+        return true;
+    }
+
+    // Apply joint constraints during physics step
+    static void ApplyJointConstraints(float dt) {
+        for (auto& kv : g_physicsJoints) {
+            PhysicsJoint& joint = kv.second;
+            if (!joint.valid) continue;
+
+            auto itA = g_physicsBodies.find(joint.bodyA);
+            auto itB = g_physicsBodies.find(joint.bodyB);
+            if (itA == g_physicsBodies.end() || !itA->second.valid) continue;
+            if (itB == g_physicsBodies.end() || !itB->second.valid) continue;
+
+            PhysicsBody& bodyA = itA->second;
+            PhysicsBody& bodyB = itB->second;
+
+            // World anchor positions
+            float worldAX = bodyA.x + joint.anchorAX;
+            float worldAY = bodyA.y + joint.anchorAY;
+            float worldBX = bodyB.x + joint.anchorBX;
+            float worldBY = bodyB.y + joint.anchorBY;
+
+            switch (joint.type) {
+                case JOINT_TYPE_DISTANCE: {
+                    // Calculate current distance
+                    float dx = worldBX - worldAX;
+                    float dy = worldBY - worldAY;
+                    float dist = sqrtf(dx * dx + dy * dy);
+                    if (dist < 0.001f) break;
+
+                    // Normalize direction
+                    float nx = dx / dist;
+                    float ny = dy / dist;
+
+                    // Error from target length
+                    float error = dist - joint.length;
+
+                    // Apply spring force if stiffness > 0
+                    float force = error * joint.stiffness;
+
+                    // Apply damping
+                    float relVelX = bodyB.vx - bodyA.vx;
+                    float relVelY = bodyB.vy - bodyA.vy;
+                    float relVelN = relVelX * nx + relVelY * ny;
+                    force += relVelN * joint.damping;
+
+                    // Apply forces
+                    float massSum = bodyA.mass + bodyB.mass;
+                    if (massSum > 0) {
+                        float ratioA = bodyB.mass / massSum;
+                        float ratioB = bodyA.mass / massSum;
+
+                        if (bodyA.type == BODY_DYNAMIC) {
+                            bodyA.vx += force * nx * ratioA * dt;
+                            bodyA.vy += force * ny * ratioA * dt;
+                        }
+                        if (bodyB.type == BODY_DYNAMIC) {
+                            bodyB.vx -= force * nx * ratioB * dt;
+                            bodyB.vy -= force * ny * ratioB * dt;
+                        }
+                    }
+
+                    joint.reactionForceX = force * nx;
+                    joint.reactionForceY = force * ny;
+                    break;
+                }
+
+                case JOINT_TYPE_REVOLUTE: {
+                    // Keep bodies attached at anchor point
+                    float dx = worldBX - worldAX;
+                    float dy = worldBY - worldAY;
+                    float dist = sqrtf(dx * dx + dy * dy);
+
+                    if (dist > 0.5f) {  // Tolerance
+                        float nx = dx / dist;
+                        float ny = dy / dist;
+                        float correction = dist * 0.5f;
+
+                        if (bodyA.type == BODY_DYNAMIC) {
+                            bodyA.x += nx * correction;
+                            bodyA.y += ny * correction;
+                        }
+                        if (bodyB.type == BODY_DYNAMIC) {
+                            bodyB.x -= nx * correction;
+                            bodyB.y -= ny * correction;
+                        }
+                    }
+
+                    // Calculate angle between bodies
+                    float angleA = bodyA.rotation;
+                    float angleB = bodyB.rotation;
+                    joint.currentAngle = angleB - angleA;
+
+                    // Angular velocity
+                    joint.currentSpeed = bodyB.angularVelocity - bodyA.angularVelocity;
+
+                    // Apply limits
+                    if (joint.enableLimits) {
+                        if (joint.currentAngle < joint.lowerAngle) {
+                            float correction = (joint.lowerAngle - joint.currentAngle) * 5.0f;
+                            if (bodyA.type == BODY_DYNAMIC) bodyA.angularVelocity -= correction * dt;
+                            if (bodyB.type == BODY_DYNAMIC) bodyB.angularVelocity += correction * dt;
+                        } else if (joint.currentAngle > joint.upperAngle) {
+                            float correction = (joint.currentAngle - joint.upperAngle) * 5.0f;
+                            if (bodyA.type == BODY_DYNAMIC) bodyA.angularVelocity += correction * dt;
+                            if (bodyB.type == BODY_DYNAMIC) bodyB.angularVelocity -= correction * dt;
+                        }
+                    }
+
+                    // Apply motor
+                    if (joint.enableMotor) {
+                        float speedError = joint.motorSpeed - joint.currentSpeed;
+                        float torque = speedError * joint.maxMotorTorque * dt;
+                        if (fabsf(torque) > joint.maxMotorTorque * dt) {
+                            torque = (torque > 0 ? 1 : -1) * joint.maxMotorTorque * dt;
+                        }
+                        if (bodyA.type == BODY_DYNAMIC) bodyA.angularVelocity -= torque / bodyA.mass;
+                        if (bodyB.type == BODY_DYNAMIC) bodyB.angularVelocity += torque / bodyB.mass;
+                        joint.reactionTorque = torque;
+                    }
+                    break;
+                }
+
+                case JOINT_TYPE_PRISMATIC: {
+                    // Project positions onto axis
+                    float dx = bodyB.x - bodyA.x;
+                    float dy = bodyB.y - bodyA.y;
+                    joint.currentTranslation = dx * joint.axisX + dy * joint.axisY;
+
+                    // Velocity along axis
+                    float relVelX = bodyB.vx - bodyA.vx;
+                    float relVelY = bodyB.vy - bodyA.vy;
+                    joint.currentSpeed = relVelX * joint.axisX + relVelY * joint.axisY;
+
+                    // Constrain perpendicular movement
+                    float perpX = -joint.axisY;
+                    float perpY = joint.axisX;
+                    float perpDist = dx * perpX + dy * perpY;
+
+                    if (fabsf(perpDist) > 0.5f) {
+                        float correction = perpDist * 0.5f;
+                        if (bodyA.type == BODY_DYNAMIC) {
+                            bodyA.x += perpX * correction;
+                            bodyA.y += perpY * correction;
+                        }
+                        if (bodyB.type == BODY_DYNAMIC) {
+                            bodyB.x -= perpX * correction;
+                            bodyB.y -= perpY * correction;
+                        }
+                    }
+
+                    // Apply limits
+                    if (joint.enableLimits) {
+                        if (joint.currentTranslation < joint.lowerTranslation) {
+                            float error = joint.lowerTranslation - joint.currentTranslation;
+                            if (bodyB.type == BODY_DYNAMIC) {
+                                bodyB.vx += joint.axisX * error * 5.0f * dt;
+                                bodyB.vy += joint.axisY * error * 5.0f * dt;
+                            }
+                        } else if (joint.currentTranslation > joint.upperTranslation) {
+                            float error = joint.currentTranslation - joint.upperTranslation;
+                            if (bodyB.type == BODY_DYNAMIC) {
+                                bodyB.vx -= joint.axisX * error * 5.0f * dt;
+                                bodyB.vy -= joint.axisY * error * 5.0f * dt;
+                            }
+                        }
+                    }
+
+                    // Apply motor
+                    if (joint.enableMotor) {
+                        float speedError = joint.motorSpeed - joint.currentSpeed;
+                        float force = speedError * joint.motorForce * dt;
+                        if (fabsf(force) > joint.motorForce * dt) {
+                            force = (force > 0 ? 1 : -1) * joint.motorForce * dt;
+                        }
+                        if (bodyB.type == BODY_DYNAMIC) {
+                            bodyB.vx += joint.axisX * force / bodyB.mass;
+                            bodyB.vy += joint.axisY * force / bodyB.mass;
+                        }
+                    }
+                    break;
+                }
+
+                case JOINT_TYPE_WELD: {
+                    // Force bodies to same position and rotation
+                    float dx = worldBX - worldAX;
+                    float dy = worldBY - worldAY;
+
+                    if (bodyB.type == BODY_DYNAMIC) {
+                        bodyB.x -= dx * 0.9f;
+                        bodyB.y -= dy * 0.9f;
+                        bodyB.vx = bodyA.vx;
+                        bodyB.vy = bodyA.vy;
+                        bodyB.rotation = bodyA.rotation + joint.currentAngle;
+                        bodyB.angularVelocity = bodyA.angularVelocity;
+                    } else if (bodyA.type == BODY_DYNAMIC) {
+                        bodyA.x += dx * 0.9f;
+                        bodyA.y += dy * 0.9f;
+                        bodyA.vx = bodyB.vx;
+                        bodyA.vy = bodyB.vy;
+                    }
+                    break;
+                }
+
+                case JOINT_TYPE_ROPE: {
+                    // Maximum distance constraint
+                    float dx = worldBX - worldAX;
+                    float dy = worldBY - worldAY;
+                    float dist = sqrtf(dx * dx + dy * dy);
+
+                    if (dist > joint.maxLength && dist > 0.001f) {
+                        float nx = dx / dist;
+                        float ny = dy / dist;
+                        float excess = dist - joint.maxLength;
+
+                        if (bodyA.type == BODY_DYNAMIC && bodyB.type == BODY_DYNAMIC) {
+                            float half = excess * 0.5f;
+                            bodyA.x += nx * half;
+                            bodyA.y += ny * half;
+                            bodyB.x -= nx * half;
+                            bodyB.y -= ny * half;
+                        } else if (bodyA.type == BODY_DYNAMIC) {
+                            bodyA.x += nx * excess;
+                            bodyA.y += ny * excess;
+                        } else if (bodyB.type == BODY_DYNAMIC) {
+                            bodyB.x -= nx * excess;
+                            bodyB.y -= ny * excess;
+                        }
+                    }
+                    break;
+                }
+
+                case JOINT_TYPE_MOTOR: {
+                    // Move body B toward target relative to body A
+                    float targetWorldX = bodyA.x + joint.targetX;
+                    float targetWorldY = bodyA.y + joint.targetY;
+
+                    float dx = targetWorldX - bodyB.x;
+                    float dy = targetWorldY - bodyB.y;
+                    float dist = sqrtf(dx * dx + dy * dy);
+
+                    if (dist > 0.5f && bodyB.type == BODY_DYNAMIC) {
+                        float force = fminf(dist * joint.correctionFactor, joint.maxForce) * dt;
+                        bodyB.vx += (dx / dist) * force / bodyB.mass;
+                        bodyB.vy += (dy / dist) * force / bodyB.mass;
+                    }
+
+                    // Rotate toward target angle
+                    float angleError = joint.targetAngle - (bodyB.rotation - bodyA.rotation);
+                    while (angleError > PI) angleError -= 2 * PI;
+                    while (angleError < -PI) angleError += 2 * PI;
+
+                    if (fabsf(angleError) > 0.01f && bodyB.type == BODY_DYNAMIC) {
+                        float torque = angleError * joint.correctionFactor * joint.maxTorque * dt;
+                        if (fabsf(torque) > joint.maxTorque * dt) {
+                            torque = (torque > 0 ? 1 : -1) * joint.maxTorque * dt;
+                        }
+                        bodyB.angularVelocity += torque / bodyB.mass;
+                    }
+                    break;
+                }
+
+                case JOINT_TYPE_WHEEL: {
+                    // Suspension along axis, free rotation
+                    float dx = bodyB.x - (bodyA.x + joint.anchorAX);
+                    float dy = bodyB.y - (bodyA.y + joint.anchorAY);
+
+                    // Project onto axis
+                    float axisProj = dx * joint.axisX + dy * joint.axisY;
+                    float perpProj = dx * (-joint.axisY) + dy * joint.axisX;
+
+                    // Spring force along axis
+                    float springForce = -axisProj * joint.stiffness;
+                    float relVel = (bodyB.vx - bodyA.vx) * joint.axisX + (bodyB.vy - bodyA.vy) * joint.axisY;
+                    springForce -= relVel * joint.damping;
+
+                    if (bodyB.type == BODY_DYNAMIC) {
+                        bodyB.vx += joint.axisX * springForce * dt / bodyB.mass;
+                        bodyB.vy += joint.axisY * springForce * dt / bodyB.mass;
+                    }
+
+                    // Constrain perpendicular
+                    if (fabsf(perpProj) > 0.1f) {
+                        if (bodyB.type == BODY_DYNAMIC) {
+                            bodyB.x -= (-joint.axisY) * perpProj * 0.5f;
+                            bodyB.y -= joint.axisX * perpProj * 0.5f;
+                        }
+                    }
+
+                    // Apply motor to wheel rotation
+                    if (joint.enableMotor && bodyB.type == BODY_DYNAMIC) {
+                        float speedError = joint.motorSpeed - bodyB.angularVelocity;
+                        float torque = speedError * joint.maxMotorTorque * dt;
+                        if (fabsf(torque) > joint.maxMotorTorque * dt) {
+                            torque = (torque > 0 ? 1 : -1) * joint.maxMotorTorque * dt;
+                        }
+                        bodyB.angularVelocity += torque / bodyB.mass;
+                    }
+                    break;
+                }
+
+                case JOINT_TYPE_PULLEY: {
+                    // Calculate rope lengths
+                    float dxA = worldAX - joint.groundAX;
+                    float dyA = worldAY - joint.groundAY;
+                    float dxB = worldBX - joint.groundBX;
+                    float dyB = worldBY - joint.groundBY;
+
+                    float lenA = sqrtf(dxA * dxA + dyA * dyA);
+                    float lenB = sqrtf(dxB * dxB + dyB * dyB);
+
+                    // Total rope length constraint
+                    float totalLen = lenA + joint.ratio * lenB;
+                    float targetLen = joint.length + joint.ratio * joint.maxLength;  // Using length and maxLength as initial lengths
+                    float error = totalLen - targetLen;
+
+                    if (fabsf(error) > 0.5f) {
+                        // Pull bodies toward ground anchors
+                        float correction = error * 0.3f;
+
+                        if (lenA > 0.001f && bodyA.type == BODY_DYNAMIC) {
+                            bodyA.vx -= (dxA / lenA) * correction * dt * 50;
+                            bodyA.vy -= (dyA / lenA) * correction * dt * 50;
+                        }
+                        if (lenB > 0.001f && bodyB.type == BODY_DYNAMIC) {
+                            bodyB.vx -= (dxB / lenB) * correction * joint.ratio * dt * 50;
+                            bodyB.vy -= (dyB / lenB) * correction * joint.ratio * dt * 50;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Joint creation functions
+    int Framework_Joint_CreateRevolute(int bodyA, int bodyB, float anchorX, float anchorY) {
+        if (g_physicsJoints.size() >= MAX_JOINTS) return -1;
+        if (g_physicsBodies.find(bodyA) == g_physicsBodies.end()) return -1;
+        if (g_physicsBodies.find(bodyB) == g_physicsBodies.end()) return -1;
+
+        int handle = g_nextJointHandle++;
+        PhysicsJoint& joint = g_physicsJoints[handle];
+        joint.id = handle;
+        joint.type = JOINT_TYPE_REVOLUTE;
+        joint.bodyA = bodyA;
+        joint.bodyB = bodyB;
+
+        // Calculate local anchors
+        PhysicsBody& bA = g_physicsBodies[bodyA];
+        PhysicsBody& bB = g_physicsBodies[bodyB];
+        joint.anchorAX = anchorX - bA.x;
+        joint.anchorAY = anchorY - bA.y;
+        joint.anchorBX = anchorX - bB.x;
+        joint.anchorBY = anchorY - bB.y;
+
+        joint.lowerAngle = -PI;
+        joint.upperAngle = PI;
+        joint.enableLimits = false;
+        joint.motorSpeed = 0;
+        joint.maxMotorTorque = 100;
+        joint.enableMotor = false;
+        joint.collideConnected = false;
+        joint.userData = 0;
+        joint.valid = true;
+
+        return handle;
+    }
+
+    int Framework_Joint_CreateDistance(int bodyA, int bodyB, float anchorAX, float anchorAY, float anchorBX, float anchorBY) {
+        if (g_physicsJoints.size() >= MAX_JOINTS) return -1;
+        if (g_physicsBodies.find(bodyA) == g_physicsBodies.end()) return -1;
+        if (g_physicsBodies.find(bodyB) == g_physicsBodies.end()) return -1;
+
+        int handle = g_nextJointHandle++;
+        PhysicsJoint& joint = g_physicsJoints[handle];
+        joint.id = handle;
+        joint.type = JOINT_TYPE_DISTANCE;
+        joint.bodyA = bodyA;
+        joint.bodyB = bodyB;
+
+        PhysicsBody& bA = g_physicsBodies[bodyA];
+        PhysicsBody& bB = g_physicsBodies[bodyB];
+        joint.anchorAX = anchorAX - bA.x;
+        joint.anchorAY = anchorAY - bA.y;
+        joint.anchorBX = anchorBX - bB.x;
+        joint.anchorBY = anchorBY - bB.y;
+
+        // Calculate initial length
+        float dx = anchorBX - anchorAX;
+        float dy = anchorBY - anchorAY;
+        joint.length = sqrtf(dx * dx + dy * dy);
+        joint.minLength = 0;
+        joint.maxLength = joint.length * 2;
+        joint.stiffness = 100.0f;
+        joint.damping = 10.0f;
+        joint.collideConnected = false;
+        joint.userData = 0;
+        joint.valid = true;
+
+        return handle;
+    }
+
+    int Framework_Joint_CreatePrismatic(int bodyA, int bodyB, float anchorX, float anchorY, float axisX, float axisY) {
+        if (g_physicsJoints.size() >= MAX_JOINTS) return -1;
+        if (g_physicsBodies.find(bodyA) == g_physicsBodies.end()) return -1;
+        if (g_physicsBodies.find(bodyB) == g_physicsBodies.end()) return -1;
+
+        int handle = g_nextJointHandle++;
+        PhysicsJoint& joint = g_physicsJoints[handle];
+        joint.id = handle;
+        joint.type = JOINT_TYPE_PRISMATIC;
+        joint.bodyA = bodyA;
+        joint.bodyB = bodyB;
+
+        PhysicsBody& bA = g_physicsBodies[bodyA];
+        PhysicsBody& bB = g_physicsBodies[bodyB];
+        joint.anchorAX = anchorX - bA.x;
+        joint.anchorAY = anchorY - bA.y;
+        joint.anchorBX = anchorX - bB.x;
+        joint.anchorBY = anchorY - bB.y;
+
+        // Normalize axis
+        float len = sqrtf(axisX * axisX + axisY * axisY);
+        joint.axisX = len > 0 ? axisX / len : 1;
+        joint.axisY = len > 0 ? axisY / len : 0;
+
+        joint.lowerTranslation = -100;
+        joint.upperTranslation = 100;
+        joint.enableLimits = false;
+        joint.motorSpeed = 0;
+        joint.motorForce = 100;
+        joint.enableMotor = false;
+        joint.collideConnected = false;
+        joint.userData = 0;
+        joint.valid = true;
+
+        return handle;
+    }
+
+    int Framework_Joint_CreatePulley(int bodyA, int bodyB, float groundAX, float groundAY, float groundBX, float groundBY,
+                                      float anchorAX, float anchorAY, float anchorBX, float anchorBY, float ratio) {
+        if (g_physicsJoints.size() >= MAX_JOINTS) return -1;
+        if (g_physicsBodies.find(bodyA) == g_physicsBodies.end()) return -1;
+        if (g_physicsBodies.find(bodyB) == g_physicsBodies.end()) return -1;
+
+        int handle = g_nextJointHandle++;
+        PhysicsJoint& joint = g_physicsJoints[handle];
+        joint.id = handle;
+        joint.type = JOINT_TYPE_PULLEY;
+        joint.bodyA = bodyA;
+        joint.bodyB = bodyB;
+
+        PhysicsBody& bA = g_physicsBodies[bodyA];
+        PhysicsBody& bB = g_physicsBodies[bodyB];
+        joint.anchorAX = anchorAX - bA.x;
+        joint.anchorAY = anchorAY - bA.y;
+        joint.anchorBX = anchorBX - bB.x;
+        joint.anchorBY = anchorBY - bB.y;
+
+        joint.groundAX = groundAX;
+        joint.groundAY = groundAY;
+        joint.groundBX = groundBX;
+        joint.groundBY = groundBY;
+        joint.ratio = ratio > 0 ? ratio : 1;
+
+        // Calculate initial lengths
+        float dxA = anchorAX - groundAX;
+        float dyA = anchorAY - groundAY;
+        float dxB = anchorBX - groundBX;
+        float dyB = anchorBY - groundBY;
+        joint.length = sqrtf(dxA * dxA + dyA * dyA);
+        joint.maxLength = sqrtf(dxB * dxB + dyB * dyB);
+
+        joint.collideConnected = true;
+        joint.userData = 0;
+        joint.valid = true;
+
+        return handle;
+    }
+
+    int Framework_Joint_CreateWeld(int bodyA, int bodyB, float anchorX, float anchorY) {
+        if (g_physicsJoints.size() >= MAX_JOINTS) return -1;
+        if (g_physicsBodies.find(bodyA) == g_physicsBodies.end()) return -1;
+        if (g_physicsBodies.find(bodyB) == g_physicsBodies.end()) return -1;
+
+        int handle = g_nextJointHandle++;
+        PhysicsJoint& joint = g_physicsJoints[handle];
+        joint.id = handle;
+        joint.type = JOINT_TYPE_WELD;
+        joint.bodyA = bodyA;
+        joint.bodyB = bodyB;
+
+        PhysicsBody& bA = g_physicsBodies[bodyA];
+        PhysicsBody& bB = g_physicsBodies[bodyB];
+        joint.anchorAX = anchorX - bA.x;
+        joint.anchorAY = anchorY - bA.y;
+        joint.anchorBX = anchorX - bB.x;
+        joint.anchorBY = anchorY - bB.y;
+        joint.currentAngle = bB.rotation - bA.rotation;
+
+        joint.collideConnected = false;
+        joint.userData = 0;
+        joint.valid = true;
+
+        return handle;
+    }
+
+    int Framework_Joint_CreateMotor(int bodyA, int bodyB) {
+        if (g_physicsJoints.size() >= MAX_JOINTS) return -1;
+        if (g_physicsBodies.find(bodyA) == g_physicsBodies.end()) return -1;
+        if (g_physicsBodies.find(bodyB) == g_physicsBodies.end()) return -1;
+
+        int handle = g_nextJointHandle++;
+        PhysicsJoint& joint = g_physicsJoints[handle];
+        joint.id = handle;
+        joint.type = JOINT_TYPE_MOTOR;
+        joint.bodyA = bodyA;
+        joint.bodyB = bodyB;
+
+        PhysicsBody& bA = g_physicsBodies[bodyA];
+        PhysicsBody& bB = g_physicsBodies[bodyB];
+        joint.targetX = bB.x - bA.x;
+        joint.targetY = bB.y - bA.y;
+        joint.targetAngle = bB.rotation - bA.rotation;
+        joint.maxForce = 100;
+        joint.maxTorque = 50;
+        joint.correctionFactor = 0.3f;
+
+        joint.collideConnected = true;
+        joint.userData = 0;
+        joint.valid = true;
+
+        return handle;
+    }
+
+    int Framework_Joint_CreateWheel(int bodyA, int bodyB, float anchorX, float anchorY, float axisX, float axisY) {
+        if (g_physicsJoints.size() >= MAX_JOINTS) return -1;
+        if (g_physicsBodies.find(bodyA) == g_physicsBodies.end()) return -1;
+        if (g_physicsBodies.find(bodyB) == g_physicsBodies.end()) return -1;
+
+        int handle = g_nextJointHandle++;
+        PhysicsJoint& joint = g_physicsJoints[handle];
+        joint.id = handle;
+        joint.type = JOINT_TYPE_WHEEL;
+        joint.bodyA = bodyA;
+        joint.bodyB = bodyB;
+
+        PhysicsBody& bA = g_physicsBodies[bodyA];
+        joint.anchorAX = anchorX - bA.x;
+        joint.anchorAY = anchorY - bA.y;
+        joint.anchorBX = 0;
+        joint.anchorBY = 0;
+
+        // Normalize axis
+        float len = sqrtf(axisX * axisX + axisY * axisY);
+        joint.axisX = len > 0 ? axisX / len : 0;
+        joint.axisY = len > 0 ? axisY / len : 1;
+
+        joint.stiffness = 200;
+        joint.damping = 20;
+        joint.motorSpeed = 0;
+        joint.maxMotorTorque = 100;
+        joint.enableMotor = false;
+
+        joint.collideConnected = false;
+        joint.userData = 0;
+        joint.valid = true;
+
+        return handle;
+    }
+
+    int Framework_Joint_CreateRope(int bodyA, int bodyB, float anchorAX, float anchorAY, float anchorBX, float anchorBY, float maxLength) {
+        if (g_physicsJoints.size() >= MAX_JOINTS) return -1;
+        if (g_physicsBodies.find(bodyA) == g_physicsBodies.end()) return -1;
+        if (g_physicsBodies.find(bodyB) == g_physicsBodies.end()) return -1;
+
+        int handle = g_nextJointHandle++;
+        PhysicsJoint& joint = g_physicsJoints[handle];
+        joint.id = handle;
+        joint.type = JOINT_TYPE_ROPE;
+        joint.bodyA = bodyA;
+        joint.bodyB = bodyB;
+
+        PhysicsBody& bA = g_physicsBodies[bodyA];
+        PhysicsBody& bB = g_physicsBodies[bodyB];
+        joint.anchorAX = anchorAX - bA.x;
+        joint.anchorAY = anchorAY - bA.y;
+        joint.anchorBX = anchorBX - bB.x;
+        joint.anchorBY = anchorBY - bB.y;
+        joint.maxLength = maxLength;
+
+        joint.collideConnected = true;
+        joint.userData = 0;
+        joint.valid = true;
+
+        return handle;
+    }
+
+    // Joint destruction
+    void Framework_Joint_Destroy(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it != g_physicsJoints.end()) {
+            g_physicsJoints.erase(it);
+        }
+    }
+
+    void Framework_Joint_DestroyAll() {
+        g_physicsJoints.clear();
+    }
+
+    bool Framework_Joint_IsValid(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        return it != g_physicsJoints.end() && it->second.valid;
+    }
+
+    int Framework_Joint_GetType(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return -1;
+        return it->second.type;
+    }
+
+    // Joint queries
+    int Framework_Joint_GetBodyA(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return -1;
+        return it->second.bodyA;
+    }
+
+    int Framework_Joint_GetBodyB(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return -1;
+        return it->second.bodyB;
+    }
+
+    void Framework_Joint_GetAnchorA(int jointHandle, float* x, float* y) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) { if (x) *x = 0; if (y) *y = 0; return; }
+
+        PhysicsJoint& joint = it->second;
+        auto bodyIt = g_physicsBodies.find(joint.bodyA);
+        if (bodyIt == g_physicsBodies.end()) { if (x) *x = 0; if (y) *y = 0; return; }
+
+        if (x) *x = bodyIt->second.x + joint.anchorAX;
+        if (y) *y = bodyIt->second.y + joint.anchorAY;
+    }
+
+    void Framework_Joint_GetAnchorB(int jointHandle, float* x, float* y) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) { if (x) *x = 0; if (y) *y = 0; return; }
+
+        PhysicsJoint& joint = it->second;
+        auto bodyIt = g_physicsBodies.find(joint.bodyB);
+        if (bodyIt == g_physicsBodies.end()) { if (x) *x = 0; if (y) *y = 0; return; }
+
+        if (x) *x = bodyIt->second.x + joint.anchorBX;
+        if (y) *y = bodyIt->second.y + joint.anchorBY;
+    }
+
+    void Framework_Joint_GetReactionForce(int jointHandle, float* fx, float* fy) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) { if (fx) *fx = 0; if (fy) *fy = 0; return; }
+        if (fx) *fx = it->second.reactionForceX;
+        if (fy) *fy = it->second.reactionForceY;
+    }
+
+    float Framework_Joint_GetReactionTorque(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.reactionTorque;
+    }
+
+    // Revolute joint configuration
+    void Framework_Joint_SetRevoluteLimits(int jointHandle, float lowerAngle, float upperAngle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end() || it->second.type != JOINT_TYPE_REVOLUTE) return;
+        it->second.lowerAngle = lowerAngle;
+        it->second.upperAngle = upperAngle;
+    }
+
+    void Framework_Joint_GetRevoluteLimits(int jointHandle, float* lowerAngle, float* upperAngle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) { if (lowerAngle) *lowerAngle = 0; if (upperAngle) *upperAngle = 0; return; }
+        if (lowerAngle) *lowerAngle = it->second.lowerAngle;
+        if (upperAngle) *upperAngle = it->second.upperAngle;
+    }
+
+    void Framework_Joint_EnableRevoluteLimits(int jointHandle, bool enable) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end() || it->second.type != JOINT_TYPE_REVOLUTE) return;
+        it->second.enableLimits = enable;
+    }
+
+    bool Framework_Joint_AreRevoluteLimitsEnabled(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return false;
+        return it->second.enableLimits;
+    }
+
+    void Framework_Joint_SetRevoluteMotor(int jointHandle, float speed, float maxTorque) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.motorSpeed = speed;
+        it->second.maxMotorTorque = maxTorque;
+    }
+
+    void Framework_Joint_EnableRevoluteMotor(int jointHandle, bool enable) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.enableMotor = enable;
+    }
+
+    bool Framework_Joint_IsRevoluteMotorEnabled(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return false;
+        return it->second.enableMotor;
+    }
+
+    float Framework_Joint_GetRevoluteAngle(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.currentAngle;
+    }
+
+    float Framework_Joint_GetRevoluteSpeed(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.currentSpeed;
+    }
+
+    // Distance joint configuration
+    void Framework_Joint_SetDistanceLength(int jointHandle, float length) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.length = length;
+    }
+
+    float Framework_Joint_GetDistanceLength(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.length;
+    }
+
+    void Framework_Joint_SetDistanceMinMax(int jointHandle, float minLength, float maxLength) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.minLength = minLength;
+        it->second.maxLength = maxLength;
+    }
+
+    void Framework_Joint_SetDistanceStiffness(int jointHandle, float stiffness) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.stiffness = stiffness;
+    }
+
+    float Framework_Joint_GetDistanceStiffness(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.stiffness;
+    }
+
+    void Framework_Joint_SetDistanceDamping(int jointHandle, float damping) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.damping = damping;
+    }
+
+    float Framework_Joint_GetDistanceDamping(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.damping;
+    }
+
+    // Prismatic joint configuration
+    void Framework_Joint_SetPrismaticLimits(int jointHandle, float lowerTranslation, float upperTranslation) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.lowerTranslation = lowerTranslation;
+        it->second.upperTranslation = upperTranslation;
+    }
+
+    void Framework_Joint_GetPrismaticLimits(int jointHandle, float* lower, float* upper) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) { if (lower) *lower = 0; if (upper) *upper = 0; return; }
+        if (lower) *lower = it->second.lowerTranslation;
+        if (upper) *upper = it->second.upperTranslation;
+    }
+
+    void Framework_Joint_EnablePrismaticLimits(int jointHandle, bool enable) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.enableLimits = enable;
+    }
+
+    bool Framework_Joint_ArePrismaticLimitsEnabled(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return false;
+        return it->second.enableLimits;
+    }
+
+    void Framework_Joint_SetPrismaticMotor(int jointHandle, float speed, float maxForce) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.motorSpeed = speed;
+        it->second.motorForce = maxForce;
+    }
+
+    void Framework_Joint_EnablePrismaticMotor(int jointHandle, bool enable) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.enableMotor = enable;
+    }
+
+    bool Framework_Joint_IsPrismaticMotorEnabled(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return false;
+        return it->second.enableMotor;
+    }
+
+    float Framework_Joint_GetPrismaticTranslation(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.currentTranslation;
+    }
+
+    float Framework_Joint_GetPrismaticSpeed(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.currentSpeed;
+    }
+
+    // Motor joint configuration
+    void Framework_Joint_SetMotorTarget(int jointHandle, float targetX, float targetY, float targetAngle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.targetX = targetX;
+        it->second.targetY = targetY;
+        it->second.targetAngle = targetAngle;
+    }
+
+    void Framework_Joint_SetMotorMaxForce(int jointHandle, float maxForce) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.maxForce = maxForce;
+    }
+
+    void Framework_Joint_SetMotorMaxTorque(int jointHandle, float maxTorque) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.maxTorque = maxTorque;
+    }
+
+    void Framework_Joint_SetMotorCorrectionFactor(int jointHandle, float factor) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.correctionFactor = factor;
+    }
+
+    // Wheel joint configuration
+    void Framework_Joint_SetWheelMotor(int jointHandle, float speed, float maxTorque) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.motorSpeed = speed;
+        it->second.maxMotorTorque = maxTorque;
+    }
+
+    void Framework_Joint_EnableWheelMotor(int jointHandle, bool enable) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.enableMotor = enable;
+    }
+
+    bool Framework_Joint_IsWheelMotorEnabled(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return false;
+        return it->second.enableMotor;
+    }
+
+    void Framework_Joint_SetWheelStiffness(int jointHandle, float stiffness) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.stiffness = stiffness;
+    }
+
+    void Framework_Joint_SetWheelDamping(int jointHandle, float damping) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.damping = damping;
+    }
+
+    // Rope joint configuration
+    void Framework_Joint_SetRopeMaxLength(int jointHandle, float maxLength) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.maxLength = maxLength;
+    }
+
+    float Framework_Joint_GetRopeMaxLength(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.maxLength;
+    }
+
+    // General joint properties
+    void Framework_Joint_SetCollideConnected(int jointHandle, bool collide) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.collideConnected = collide;
+    }
+
+    bool Framework_Joint_GetCollideConnected(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return false;
+        return it->second.collideConnected;
+    }
+
+    void Framework_Joint_SetUserData(int jointHandle, int userData) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return;
+        it->second.userData = userData;
+    }
+
+    int Framework_Joint_GetUserData(int jointHandle) {
+        auto it = g_physicsJoints.find(jointHandle);
+        if (it == g_physicsJoints.end()) return 0;
+        return it->second.userData;
+    }
+
+    int Framework_Joint_GetCount() {
+        return (int)g_physicsJoints.size();
+    }
+
+    int Framework_Joint_GetByIndex(int index) {
+        if (index < 0 || index >= (int)g_physicsJoints.size()) return -1;
+        auto it = g_physicsJoints.begin();
+        std::advance(it, index);
+        return it->first;
+    }
+
+    void Framework_Joint_DrawDebug() {
+        for (auto& kv : g_physicsJoints) {
+            PhysicsJoint& joint = kv.second;
+            if (!joint.valid) continue;
+
+            float ax, ay, bx, by;
+            Framework_Joint_GetAnchorA(kv.first, &ax, &ay);
+            Framework_Joint_GetAnchorB(kv.first, &bx, &by);
+
+            Color color;
+            switch (joint.type) {
+                case JOINT_TYPE_REVOLUTE: color = { 255, 100, 100, 200 }; break;
+                case JOINT_TYPE_DISTANCE: color = { 100, 255, 100, 200 }; break;
+                case JOINT_TYPE_PRISMATIC: color = { 100, 100, 255, 200 }; break;
+                case JOINT_TYPE_WELD: color = { 255, 255, 100, 200 }; break;
+                case JOINT_TYPE_ROPE: color = { 200, 150, 100, 200 }; break;
+                default: color = { 200, 200, 200, 200 }; break;
+            }
+
+            // Draw line between anchors
+            DrawLine((int)ax, (int)ay, (int)bx, (int)by, color);
+
+            // Draw anchor points
+            DrawCircle((int)ax, (int)ay, 4, color);
+            DrawCircle((int)bx, (int)by, 4, color);
+
+            // Draw special indicators
+            if (joint.type == JOINT_TYPE_REVOLUTE) {
+                DrawCircleLines((int)ax, (int)ay, 10, color);
+            } else if (joint.type == JOINT_TYPE_PRISMATIC) {
+                // Draw axis indicator
+                auto bodyIt = g_physicsBodies.find(joint.bodyA);
+                if (bodyIt != g_physicsBodies.end()) {
+                    float cx = bodyIt->second.x;
+                    float cy = bodyIt->second.y;
+                    DrawLine((int)(cx - joint.axisX * 30), (int)(cy - joint.axisY * 30),
+                             (int)(cx + joint.axisX * 30), (int)(cy + joint.axisY * 30), color);
+                }
+            } else if (joint.type == JOINT_TYPE_PULLEY) {
+                // Draw ground anchors
+                DrawCircle((int)joint.groundAX, (int)joint.groundAY, 6, { 150, 150, 150, 200 });
+                DrawCircle((int)joint.groundBX, (int)joint.groundBY, 6, { 150, 150, 150, 200 });
+                DrawLine((int)joint.groundAX, (int)joint.groundAY, (int)ax, (int)ay, color);
+                DrawLine((int)joint.groundBX, (int)joint.groundBY, (int)bx, (int)by, color);
+            }
+        }
+    }
+
+    // ========================================================================
+    // BEHAVIOR TREES - AI Decision Making System
+    // ========================================================================
+
+    // Blackboard value variant
+    struct BTBlackboardValue {
+        enum Type { INT, FLOAT, BOOL, STRING, VECTOR2 } type;
+        int intVal;
+        float floatVal;
+        bool boolVal;
+        std::string stringVal;
+        float vec2X, vec2Y;
+    };
+
+    // BT Node structure
+    struct BTNode {
+        int id;
+        int type;           // BTNodeType
+        int decoratorType;  // BTDecoratorType (if type == BT_NODE_DECORATOR)
+        std::string name;
+        std::string actionName;     // For action/condition nodes
+        int parentId;
+        std::vector<int> children;
+
+        // Decorator properties
+        int repeatCount;        // For repeater (-1 = forever)
+        int currentRepeat;
+        float cooldownTime;
+        float cooldownRemaining;
+        int maxExecutions;
+        int executionCount;
+
+        // Parallel properties
+        int successPolicy;
+        int failurePolicy;
+
+        // Runtime state
+        int lastStatus;
+        int runningChildIndex;
+        bool valid;
+    };
+
+    // Behavior Tree structure
+    struct BehaviorTree {
+        int id;
+        std::string name;
+        std::unordered_map<int, BTNode> nodes;
+        int rootNodeId;
+        int nextNodeId;
+        int lastStatus;
+        int runningNodeId;
+        bool debugEnabled;
+        std::unordered_map<std::string, BTBlackboardValue> blackboard;
+        bool valid;
+    };
+
+    // Action/Condition callback storage
+    struct BTActionEntry {
+        BTActionCallback callback;
+        void* userData;
+    };
+    struct BTConditionEntry {
+        BTConditionCallback callback;
+        void* userData;
+    };
+
+    static std::unordered_map<int, BehaviorTree> g_behaviorTrees;
+    static int g_nextBTId = 1;
+    static std::unordered_map<std::string, BTActionEntry> g_btActions;
+    static std::unordered_map<std::string, BTConditionEntry> g_btConditions;
+    static const int MAX_BT_TREES = 100;
+    static const int MAX_BT_NODES = 1000;
+
+    // Forward declaration for recursive execution
+    static int BT_ExecuteNode(BehaviorTree& tree, int nodeId, int entityId, float dt);
+
+    // Tree management
+    int Framework_BT_CreateTree(const char* name) {
+        if (g_behaviorTrees.size() >= MAX_BT_TREES) return -1;
+
+        int id = g_nextBTId++;
+        BehaviorTree& tree = g_behaviorTrees[id];
+        tree.id = id;
+        tree.name = name ? name : "";
+        tree.rootNodeId = -1;
+        tree.nextNodeId = 1;
+        tree.lastStatus = BT_SUCCESS;
+        tree.runningNodeId = -1;
+        tree.debugEnabled = false;
+        tree.valid = true;
+        return id;
+    }
+
+    void Framework_BT_DestroyTree(int treeId) {
+        g_behaviorTrees.erase(treeId);
+    }
+
+    int Framework_BT_GetTree(const char* name) {
+        if (!name) return -1;
+        for (auto& kv : g_behaviorTrees) {
+            if (kv.second.valid && kv.second.name == name) return kv.first;
+        }
+        return -1;
+    }
+
+    bool Framework_BT_IsTreeValid(int treeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        return it != g_behaviorTrees.end() && it->second.valid;
+    }
+
+    int Framework_BT_CloneTree(int treeId, const char* newName) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return -1;
+
+        int newId = Framework_BT_CreateTree(newName);
+        if (newId < 0) return -1;
+
+        BehaviorTree& newTree = g_behaviorTrees[newId];
+        BehaviorTree& srcTree = it->second;
+
+        newTree.nodes = srcTree.nodes;
+        newTree.rootNodeId = srcTree.rootNodeId;
+        newTree.nextNodeId = srcTree.nextNodeId;
+        return newId;
+    }
+
+    // Helper to create a node
+    static int BT_CreateNode(int treeId, int parentId, int nodeType) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return -1;
+        if (it->second.nodes.size() >= MAX_BT_NODES) return -1;
+
+        BehaviorTree& tree = it->second;
+        int nodeId = tree.nextNodeId++;
+
+        BTNode& node = tree.nodes[nodeId];
+        node.id = nodeId;
+        node.type = nodeType;
+        node.decoratorType = 0;
+        node.parentId = parentId;
+        node.repeatCount = 1;
+        node.currentRepeat = 0;
+        node.cooldownTime = 0;
+        node.cooldownRemaining = 0;
+        node.maxExecutions = -1;
+        node.executionCount = 0;
+        node.successPolicy = BT_PARALLEL_REQUIRE_ALL;
+        node.failurePolicy = BT_PARALLEL_REQUIRE_ONE;
+        node.lastStatus = BT_SUCCESS;
+        node.runningChildIndex = 0;
+        node.valid = true;
+
+        // Add to parent's children
+        if (parentId >= 0) {
+            auto parentIt = tree.nodes.find(parentId);
+            if (parentIt != tree.nodes.end()) {
+                parentIt->second.children.push_back(nodeId);
+            }
+        } else {
+            // This is the root
+            tree.rootNodeId = nodeId;
+        }
+
+        return nodeId;
+    }
+
+    int Framework_BT_CreateSelector(int treeId, int parentId) {
+        return BT_CreateNode(treeId, parentId, BT_NODE_SELECTOR);
+    }
+
+    int Framework_BT_CreateSequence(int treeId, int parentId) {
+        return BT_CreateNode(treeId, parentId, BT_NODE_SEQUENCE);
+    }
+
+    int Framework_BT_CreateParallel(int treeId, int parentId, int successPolicy, int failurePolicy) {
+        int nodeId = BT_CreateNode(treeId, parentId, BT_NODE_PARALLEL);
+        if (nodeId < 0) return -1;
+
+        auto& tree = g_behaviorTrees[treeId];
+        tree.nodes[nodeId].successPolicy = successPolicy;
+        tree.nodes[nodeId].failurePolicy = failurePolicy;
+        return nodeId;
+    }
+
+    int Framework_BT_CreateAction(int treeId, int parentId, const char* actionName) {
+        int nodeId = BT_CreateNode(treeId, parentId, BT_NODE_ACTION);
+        if (nodeId < 0) return -1;
+
+        auto& tree = g_behaviorTrees[treeId];
+        tree.nodes[nodeId].actionName = actionName ? actionName : "";
+        tree.nodes[nodeId].name = actionName ? actionName : "";
+        return nodeId;
+    }
+
+    int Framework_BT_CreateCondition(int treeId, int parentId, const char* conditionName) {
+        int nodeId = BT_CreateNode(treeId, parentId, BT_NODE_CONDITION);
+        if (nodeId < 0) return -1;
+
+        auto& tree = g_behaviorTrees[treeId];
+        tree.nodes[nodeId].actionName = conditionName ? conditionName : "";
+        tree.nodes[nodeId].name = conditionName ? conditionName : "";
+        return nodeId;
+    }
+
+    // Decorator creation
+    static int BT_CreateDecorator(int treeId, int parentId, int decoratorType) {
+        int nodeId = BT_CreateNode(treeId, parentId, BT_NODE_DECORATOR);
+        if (nodeId < 0) return -1;
+
+        auto& tree = g_behaviorTrees[treeId];
+        tree.nodes[nodeId].decoratorType = decoratorType;
+        return nodeId;
+    }
+
+    int Framework_BT_CreateInverter(int treeId, int parentId) {
+        return BT_CreateDecorator(treeId, parentId, BT_DEC_INVERTER);
+    }
+
+    int Framework_BT_CreateSucceeder(int treeId, int parentId) {
+        return BT_CreateDecorator(treeId, parentId, BT_DEC_SUCCEEDER);
+    }
+
+    int Framework_BT_CreateFailer(int treeId, int parentId) {
+        return BT_CreateDecorator(treeId, parentId, BT_DEC_FAILER);
+    }
+
+    int Framework_BT_CreateRepeater(int treeId, int parentId, int repeatCount) {
+        int nodeId = BT_CreateDecorator(treeId, parentId, BT_DEC_REPEATER);
+        if (nodeId < 0) return -1;
+
+        auto& tree = g_behaviorTrees[treeId];
+        tree.nodes[nodeId].repeatCount = repeatCount;
+        return nodeId;
+    }
+
+    int Framework_BT_CreateRepeatUntilFail(int treeId, int parentId) {
+        return BT_CreateDecorator(treeId, parentId, BT_DEC_REPEAT_UNTIL_FAIL);
+    }
+
+    int Framework_BT_CreateRepeatUntilSuccess(int treeId, int parentId) {
+        return BT_CreateDecorator(treeId, parentId, BT_DEC_REPEAT_UNTIL_SUCCESS);
+    }
+
+    int Framework_BT_CreateCooldown(int treeId, int parentId, float cooldownTime) {
+        int nodeId = BT_CreateDecorator(treeId, parentId, BT_DEC_COOLDOWN);
+        if (nodeId < 0) return -1;
+
+        auto& tree = g_behaviorTrees[treeId];
+        tree.nodes[nodeId].cooldownTime = cooldownTime;
+        return nodeId;
+    }
+
+    int Framework_BT_CreateLimiter(int treeId, int parentId, int maxExecutions) {
+        int nodeId = BT_CreateDecorator(treeId, parentId, BT_DEC_LIMITER);
+        if (nodeId < 0) return -1;
+
+        auto& tree = g_behaviorTrees[treeId];
+        tree.nodes[nodeId].maxExecutions = maxExecutions;
+        return nodeId;
+    }
+
+    // Node configuration
+    void Framework_BT_SetNodeName(int treeId, int nodeId, const char* name) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return;
+        auto nodeIt = it->second.nodes.find(nodeId);
+        if (nodeIt == it->second.nodes.end()) return;
+        nodeIt->second.name = name ? name : "";
+    }
+
+    const char* Framework_BT_GetNodeName(int treeId, int nodeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return "";
+        auto nodeIt = it->second.nodes.find(nodeId);
+        if (nodeIt == it->second.nodes.end()) return "";
+        return nodeIt->second.name.c_str();
+    }
+
+    int Framework_BT_GetNodeType(int treeId, int nodeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return -1;
+        auto nodeIt = it->second.nodes.find(nodeId);
+        if (nodeIt == it->second.nodes.end()) return -1;
+        return nodeIt->second.type;
+    }
+
+    int Framework_BT_GetNodeParent(int treeId, int nodeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return -1;
+        auto nodeIt = it->second.nodes.find(nodeId);
+        if (nodeIt == it->second.nodes.end()) return -1;
+        return nodeIt->second.parentId;
+    }
+
+    int Framework_BT_GetNodeChildCount(int treeId, int nodeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return 0;
+        auto nodeIt = it->second.nodes.find(nodeId);
+        if (nodeIt == it->second.nodes.end()) return 0;
+        return (int)nodeIt->second.children.size();
+    }
+
+    int Framework_BT_GetNodeChild(int treeId, int nodeId, int childIndex) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return -1;
+        auto nodeIt = it->second.nodes.find(nodeId);
+        if (nodeIt == it->second.nodes.end()) return -1;
+        if (childIndex < 0 || childIndex >= (int)nodeIt->second.children.size()) return -1;
+        return nodeIt->second.children[childIndex];
+    }
+
+    void Framework_BT_RemoveNode(int treeId, int nodeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return;
+
+        auto nodeIt = it->second.nodes.find(nodeId);
+        if (nodeIt == it->second.nodes.end()) return;
+
+        // Remove from parent's children
+        int parentId = nodeIt->second.parentId;
+        if (parentId >= 0) {
+            auto parentIt = it->second.nodes.find(parentId);
+            if (parentIt != it->second.nodes.end()) {
+                auto& children = parentIt->second.children;
+                children.erase(std::remove(children.begin(), children.end(), nodeId), children.end());
+            }
+        }
+
+        // Recursively remove children
+        for (int childId : nodeIt->second.children) {
+            Framework_BT_RemoveNode(treeId, childId);
+        }
+
+        it->second.nodes.erase(nodeId);
+    }
+
+    // Callback registration
+    void Framework_BT_RegisterAction(const char* actionName, BTActionCallback callback, void* userData) {
+        if (!actionName || !callback) return;
+        g_btActions[actionName] = { callback, userData };
+    }
+
+    void Framework_BT_RegisterCondition(const char* conditionName, BTConditionCallback callback, void* userData) {
+        if (!conditionName || !callback) return;
+        g_btConditions[conditionName] = { callback, userData };
+    }
+
+    void Framework_BT_UnregisterAction(const char* actionName) {
+        if (!actionName) return;
+        g_btActions.erase(actionName);
+    }
+
+    void Framework_BT_UnregisterCondition(const char* conditionName) {
+        if (!conditionName) return;
+        g_btConditions.erase(conditionName);
+    }
+
+    // Node execution
+    static int BT_ExecuteNode(BehaviorTree& tree, int nodeId, int entityId, float dt) {
+        auto nodeIt = tree.nodes.find(nodeId);
+        if (nodeIt == tree.nodes.end()) return BT_FAILURE;
+
+        BTNode& node = nodeIt->second;
+
+        if (tree.debugEnabled) {
+            TraceLog(LOG_INFO, "BT: Executing node %d (%s) type=%d", nodeId, node.name.c_str(), node.type);
+        }
+
+        switch (node.type) {
+            case BT_NODE_SELECTOR: {
+                // Run children until one succeeds
+                for (size_t i = node.runningChildIndex; i < node.children.size(); i++) {
+                    int status = BT_ExecuteNode(tree, node.children[i], entityId, dt);
+                    if (status == BT_RUNNING) {
+                        node.runningChildIndex = (int)i;
+                        tree.runningNodeId = nodeId;
+                        return BT_RUNNING;
+                    }
+                    if (status == BT_SUCCESS) {
+                        node.runningChildIndex = 0;
+                        return BT_SUCCESS;
+                    }
+                }
+                node.runningChildIndex = 0;
+                return BT_FAILURE;
+            }
+
+            case BT_NODE_SEQUENCE: {
+                // Run children until one fails
+                for (size_t i = node.runningChildIndex; i < node.children.size(); i++) {
+                    int status = BT_ExecuteNode(tree, node.children[i], entityId, dt);
+                    if (status == BT_RUNNING) {
+                        node.runningChildIndex = (int)i;
+                        tree.runningNodeId = nodeId;
+                        return BT_RUNNING;
+                    }
+                    if (status == BT_FAILURE) {
+                        node.runningChildIndex = 0;
+                        return BT_FAILURE;
+                    }
+                }
+                node.runningChildIndex = 0;
+                return BT_SUCCESS;
+            }
+
+            case BT_NODE_PARALLEL: {
+                int successCount = 0, failureCount = 0, runningCount = 0;
+                for (int childId : node.children) {
+                    int status = BT_ExecuteNode(tree, childId, entityId, dt);
+                    if (status == BT_SUCCESS) successCount++;
+                    else if (status == BT_FAILURE) failureCount++;
+                    else runningCount++;
+                }
+
+                if (runningCount > 0) return BT_RUNNING;
+
+                if (node.successPolicy == BT_PARALLEL_REQUIRE_ONE && successCount > 0) return BT_SUCCESS;
+                if (node.successPolicy == BT_PARALLEL_REQUIRE_ALL && failureCount == 0) return BT_SUCCESS;
+                return BT_FAILURE;
+            }
+
+            case BT_NODE_DECORATOR: {
+                if (node.children.empty()) return BT_FAILURE;
+                int childId = node.children[0];
+
+                switch (node.decoratorType) {
+                    case BT_DEC_INVERTER: {
+                        int status = BT_ExecuteNode(tree, childId, entityId, dt);
+                        if (status == BT_RUNNING) return BT_RUNNING;
+                        return (status == BT_SUCCESS) ? BT_FAILURE : BT_SUCCESS;
+                    }
+                    case BT_DEC_SUCCEEDER: {
+                        BT_ExecuteNode(tree, childId, entityId, dt);
+                        return BT_SUCCESS;
+                    }
+                    case BT_DEC_FAILER: {
+                        BT_ExecuteNode(tree, childId, entityId, dt);
+                        return BT_FAILURE;
+                    }
+                    case BT_DEC_REPEATER: {
+                        if (node.repeatCount >= 0 && node.currentRepeat >= node.repeatCount) {
+                            node.currentRepeat = 0;
+                            return BT_SUCCESS;
+                        }
+                        int status = BT_ExecuteNode(tree, childId, entityId, dt);
+                        if (status == BT_RUNNING) return BT_RUNNING;
+                        node.currentRepeat++;
+                        if (node.repeatCount < 0 || node.currentRepeat < node.repeatCount) {
+                            return BT_RUNNING;  // Keep running
+                        }
+                        node.currentRepeat = 0;
+                        return BT_SUCCESS;
+                    }
+                    case BT_DEC_REPEAT_UNTIL_FAIL: {
+                        int status = BT_ExecuteNode(tree, childId, entityId, dt);
+                        if (status == BT_FAILURE) return BT_SUCCESS;
+                        return BT_RUNNING;
+                    }
+                    case BT_DEC_REPEAT_UNTIL_SUCCESS: {
+                        int status = BT_ExecuteNode(tree, childId, entityId, dt);
+                        if (status == BT_SUCCESS) return BT_SUCCESS;
+                        return BT_RUNNING;
+                    }
+                    case BT_DEC_COOLDOWN: {
+                        if (node.cooldownRemaining > 0) {
+                            node.cooldownRemaining -= dt;
+                            return BT_FAILURE;
+                        }
+                        int status = BT_ExecuteNode(tree, childId, entityId, dt);
+                        if (status != BT_RUNNING) {
+                            node.cooldownRemaining = node.cooldownTime;
+                        }
+                        return status;
+                    }
+                    case BT_DEC_LIMITER: {
+                        if (node.maxExecutions >= 0 && node.executionCount >= node.maxExecutions) {
+                            return BT_FAILURE;
+                        }
+                        int status = BT_ExecuteNode(tree, childId, entityId, dt);
+                        if (status != BT_RUNNING) {
+                            node.executionCount++;
+                        }
+                        return status;
+                    }
+                }
+                return BT_FAILURE;
+            }
+
+            case BT_NODE_ACTION: {
+                auto actionIt = g_btActions.find(node.actionName);
+                if (actionIt == g_btActions.end()) {
+                    if (tree.debugEnabled) {
+                        TraceLog(LOG_WARNING, "BT: Action '%s' not registered", node.actionName.c_str());
+                    }
+                    return BT_FAILURE;
+                }
+                return actionIt->second.callback(tree.id, nodeId, entityId, dt, actionIt->second.userData);
+            }
+
+            case BT_NODE_CONDITION: {
+                auto condIt = g_btConditions.find(node.actionName);
+                if (condIt == g_btConditions.end()) {
+                    if (tree.debugEnabled) {
+                        TraceLog(LOG_WARNING, "BT: Condition '%s' not registered", node.actionName.c_str());
+                    }
+                    return BT_FAILURE;
+                }
+                return condIt->second.callback(tree.id, nodeId, entityId, condIt->second.userData) ? BT_SUCCESS : BT_FAILURE;
+            }
+        }
+
+        return BT_FAILURE;
+    }
+
+    int Framework_BT_Execute(int treeId, int entityId, float dt) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return BT_FAILURE;
+
+        BehaviorTree& tree = it->second;
+        if (tree.rootNodeId < 0) return BT_FAILURE;
+
+        tree.runningNodeId = -1;
+        tree.lastStatus = BT_ExecuteNode(tree, tree.rootNodeId, entityId, dt);
+        return tree.lastStatus;
+    }
+
+    void Framework_BT_Reset(int treeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return;
+
+        for (auto& kv : it->second.nodes) {
+            kv.second.runningChildIndex = 0;
+            kv.second.currentRepeat = 0;
+            kv.second.cooldownRemaining = 0;
+            kv.second.lastStatus = BT_SUCCESS;
+        }
+        it->second.runningNodeId = -1;
+        it->second.lastStatus = BT_SUCCESS;
+    }
+
+    void Framework_BT_Abort(int treeId) {
+        Framework_BT_Reset(treeId);
+    }
+
+    int Framework_BT_GetLastStatus(int treeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return BT_FAILURE;
+        return it->second.lastStatus;
+    }
+
+    int Framework_BT_GetRunningNode(int treeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return -1;
+        return it->second.runningNodeId;
+    }
+
+    // Blackboard
+    void Framework_BT_SetBlackboardInt(int treeId, const char* key, int value) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return;
+        BTBlackboardValue& v = it->second.blackboard[key];
+        v.type = BTBlackboardValue::INT;
+        v.intVal = value;
+    }
+
+    int Framework_BT_GetBlackboardInt(int treeId, const char* key, int defaultValue) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return defaultValue;
+        auto valIt = it->second.blackboard.find(key);
+        if (valIt == it->second.blackboard.end()) return defaultValue;
+        return valIt->second.intVal;
+    }
+
+    void Framework_BT_SetBlackboardFloat(int treeId, const char* key, float value) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return;
+        BTBlackboardValue& v = it->second.blackboard[key];
+        v.type = BTBlackboardValue::FLOAT;
+        v.floatVal = value;
+    }
+
+    float Framework_BT_GetBlackboardFloat(int treeId, const char* key, float defaultValue) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return defaultValue;
+        auto valIt = it->second.blackboard.find(key);
+        if (valIt == it->second.blackboard.end()) return defaultValue;
+        return valIt->second.floatVal;
+    }
+
+    void Framework_BT_SetBlackboardBool(int treeId, const char* key, bool value) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return;
+        BTBlackboardValue& v = it->second.blackboard[key];
+        v.type = BTBlackboardValue::BOOL;
+        v.boolVal = value;
+    }
+
+    bool Framework_BT_GetBlackboardBool(int treeId, const char* key, bool defaultValue) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return defaultValue;
+        auto valIt = it->second.blackboard.find(key);
+        if (valIt == it->second.blackboard.end()) return defaultValue;
+        return valIt->second.boolVal;
+    }
+
+    void Framework_BT_SetBlackboardString(int treeId, const char* key, const char* value) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return;
+        BTBlackboardValue& v = it->second.blackboard[key];
+        v.type = BTBlackboardValue::STRING;
+        v.stringVal = value ? value : "";
+    }
+
+    const char* Framework_BT_GetBlackboardString(int treeId, const char* key, const char* defaultValue) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return defaultValue;
+        auto valIt = it->second.blackboard.find(key);
+        if (valIt == it->second.blackboard.end()) return defaultValue;
+        return valIt->second.stringVal.c_str();
+    }
+
+    void Framework_BT_SetBlackboardVector2(int treeId, const char* key, float x, float y) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return;
+        BTBlackboardValue& v = it->second.blackboard[key];
+        v.type = BTBlackboardValue::VECTOR2;
+        v.vec2X = x;
+        v.vec2Y = y;
+    }
+
+    void Framework_BT_GetBlackboardVector2(int treeId, const char* key, float* x, float* y) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) { if (x) *x = 0; if (y) *y = 0; return; }
+        auto valIt = it->second.blackboard.find(key);
+        if (valIt == it->second.blackboard.end()) { if (x) *x = 0; if (y) *y = 0; return; }
+        if (x) *x = valIt->second.vec2X;
+        if (y) *y = valIt->second.vec2Y;
+    }
+
+    void Framework_BT_ClearBlackboard(int treeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return;
+        it->second.blackboard.clear();
+    }
+
+    bool Framework_BT_HasBlackboardKey(int treeId, const char* key) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return false;
+        return it->second.blackboard.count(key) > 0;
+    }
+
+    void Framework_BT_RemoveBlackboardKey(int treeId, const char* key) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end() || !key) return;
+        it->second.blackboard.erase(key);
+    }
+
+    // Built-in actions
+    static int BT_Action_Wait(int treeId, int nodeId, int entityId, float dt, void* userData) {
+        float waitTime = Framework_BT_GetBlackboardFloat(treeId, "wait_time", 1.0f);
+        float elapsed = Framework_BT_GetBlackboardFloat(treeId, "wait_elapsed", 0.0f);
+        elapsed += dt;
+        Framework_BT_SetBlackboardFloat(treeId, "wait_elapsed", elapsed);
+        if (elapsed >= waitTime) {
+            Framework_BT_SetBlackboardFloat(treeId, "wait_elapsed", 0.0f);
+            return BT_SUCCESS;
+        }
+        return BT_RUNNING;
+    }
+
+    static int BT_Action_Log(int treeId, int nodeId, int entityId, float dt, void* userData) {
+        const char* msg = Framework_BT_GetBlackboardString(treeId, "log_message", "BT Log");
+        TraceLog(LOG_INFO, "BT[%d] Entity[%d]: %s", treeId, entityId, msg);
+        return BT_SUCCESS;
+    }
+
+    static bool BT_Condition_True(int treeId, int nodeId, int entityId, void* userData) {
+        return true;
+    }
+
+    static bool BT_Condition_False(int treeId, int nodeId, int entityId, void* userData) {
+        return false;
+    }
+
+    static bool BT_Condition_HasKey(int treeId, int nodeId, int entityId, void* userData) {
+        const char* key = Framework_BT_GetBlackboardString(treeId, "check_key", "");
+        return Framework_BT_HasBlackboardKey(treeId, key);
+    }
+
+    void Framework_BT_RegisterBuiltinActions() {
+        Framework_BT_RegisterAction("Wait", BT_Action_Wait, nullptr);
+        Framework_BT_RegisterAction("Log", BT_Action_Log, nullptr);
+        Framework_BT_RegisterCondition("True", BT_Condition_True, nullptr);
+        Framework_BT_RegisterCondition("False", BT_Condition_False, nullptr);
+        Framework_BT_RegisterCondition("HasKey", BT_Condition_HasKey, nullptr);
+    }
+
+    // Debug
+    void Framework_BT_SetDebugEnabled(int treeId, bool enabled) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return;
+        it->second.debugEnabled = enabled;
+    }
+
+    bool Framework_BT_IsDebugEnabled(int treeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return false;
+        return it->second.debugEnabled;
+    }
+
+    int Framework_BT_GetTreeCount() {
+        return (int)g_behaviorTrees.size();
+    }
+
+    int Framework_BT_GetNodeCount(int treeId) {
+        auto it = g_behaviorTrees.find(treeId);
+        if (it == g_behaviorTrees.end()) return 0;
+        return (int)it->second.nodes.size();
     }
 
     // ========================================================================

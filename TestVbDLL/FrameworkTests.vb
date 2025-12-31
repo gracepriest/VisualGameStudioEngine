@@ -76,6 +76,8 @@ Public Module FrameworkTests
         ' New system tests
         TestSpriteSheetSystem()
         TestLevelEditorEnhancements()
+        TestBehaviorTreeSystem()
+        TestPhysicsJointSystem()
 
         ' Print summary
         Console.WriteLine()
@@ -5978,6 +5980,791 @@ Public Module FrameworkTests
             LogPass("Destroy enhancement test level")
         Catch ex As Exception
             LogFail("Destroy enhancement test level", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Behavior Tree Tests"
+    Private Sub TestBehaviorTreeSystem()
+        Console.WriteLine()
+        Console.WriteLine("--- Behavior Tree Tests ---")
+
+        ' Test tree creation
+        Dim treeId As Integer = -1
+        Try
+            treeId = Framework_BT_CreateTree("TestTree")
+            If treeId >= 0 Then
+                LogPass("Create behavior tree")
+            Else
+                LogFail("Create behavior tree", $"Got invalid ID: {treeId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create behavior tree", ex.Message)
+        End Try
+
+        ' Test tree validity
+        Try
+            Dim valid = Framework_BT_IsTreeValid(treeId)
+            If valid Then
+                LogPass("Tree is valid")
+            Else
+                LogFail("Tree is valid", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Tree is valid", ex.Message)
+        End Try
+
+        ' Test get tree by name
+        Try
+            Dim foundId = Framework_BT_GetTree("TestTree")
+            If foundId = treeId Then
+                LogPass("Get tree by name")
+            Else
+                LogFail("Get tree by name", $"Expected {treeId}, got {foundId}")
+            End If
+        Catch ex As Exception
+            LogFail("Get tree by name", ex.Message)
+        End Try
+
+        ' Test tree count
+        Try
+            Dim count = Framework_BT_GetTreeCount()
+            If count >= 1 Then
+                LogPass("Get tree count")
+            Else
+                LogFail("Get tree count", $"Expected >= 1, got {count}")
+            End If
+        Catch ex As Exception
+            LogFail("Get tree count", ex.Message)
+        End Try
+
+        ' Test create selector node
+        Dim selectorId As Integer = -1
+        Try
+            selectorId = Framework_BT_CreateSelector(treeId, -1) ' -1 = root
+            If selectorId >= 0 Then
+                LogPass("Create selector node (root)")
+            Else
+                LogFail("Create selector node", $"Got invalid ID: {selectorId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create selector node", ex.Message)
+        End Try
+
+        ' Test node count
+        Try
+            Dim nodeCount = Framework_BT_GetNodeCount(treeId)
+            If nodeCount >= 1 Then
+                LogPass("Get node count")
+            Else
+                LogFail("Get node count", $"Expected >= 1, got {nodeCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get node count", ex.Message)
+        End Try
+
+        ' Test get node type
+        Try
+            Dim nodeType = Framework_BT_GetNodeType(treeId, selectorId)
+            If nodeType = 0 Then ' BT_NODE_SELECTOR = 0
+                LogPass("Get node type (selector=0)")
+            Else
+                LogFail("Get node type", $"Expected 0, got {nodeType}")
+            End If
+        Catch ex As Exception
+            LogFail("Get node type", ex.Message)
+        End Try
+
+        ' Test create sequence node
+        Dim sequenceId As Integer = -1
+        Try
+            sequenceId = Framework_BT_CreateSequence(treeId, selectorId)
+            If sequenceId >= 0 Then
+                LogPass("Create sequence node")
+            Else
+                LogFail("Create sequence node", $"Got invalid ID: {sequenceId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create sequence node", ex.Message)
+        End Try
+
+        ' Test node parent
+        Try
+            Dim parentId = Framework_BT_GetNodeParent(treeId, sequenceId)
+            If parentId = selectorId Then
+                LogPass("Get node parent")
+            Else
+                LogFail("Get node parent", $"Expected {selectorId}, got {parentId}")
+            End If
+        Catch ex As Exception
+            LogFail("Get node parent", ex.Message)
+        End Try
+
+        ' Test node child count
+        Try
+            Dim childCount = Framework_BT_GetNodeChildCount(treeId, selectorId)
+            If childCount >= 1 Then
+                LogPass("Get node child count")
+            Else
+                LogFail("Get node child count", $"Expected >= 1, got {childCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Get node child count", ex.Message)
+        End Try
+
+        ' Test create action node
+        Dim actionId As Integer = -1
+        Try
+            actionId = Framework_BT_CreateAction(treeId, sequenceId, "TestAction")
+            If actionId >= 0 Then
+                LogPass("Create action node")
+            Else
+                LogFail("Create action node", $"Got invalid ID: {actionId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create action node", ex.Message)
+        End Try
+
+        ' Test create condition node
+        Dim conditionId As Integer = -1
+        Try
+            conditionId = Framework_BT_CreateCondition(treeId, sequenceId, "TestCondition")
+            If conditionId >= 0 Then
+                LogPass("Create condition node")
+            Else
+                LogFail("Create condition node", $"Got invalid ID: {conditionId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create condition node", ex.Message)
+        End Try
+
+        ' Test decorator nodes
+        Try
+            Dim inverterId = Framework_BT_CreateInverter(treeId, selectorId)
+            If inverterId >= 0 Then
+                LogPass("Create inverter decorator")
+            Else
+                LogFail("Create inverter decorator", $"Got invalid ID: {inverterId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create inverter decorator", ex.Message)
+        End Try
+
+        Try
+            Dim succeederId = Framework_BT_CreateSucceeder(treeId, selectorId)
+            If succeederId >= 0 Then
+                LogPass("Create succeeder decorator")
+            Else
+                LogFail("Create succeeder decorator", $"Got invalid ID: {succeederId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create succeeder decorator", ex.Message)
+        End Try
+
+        Try
+            Dim failerId = Framework_BT_CreateFailer(treeId, selectorId)
+            If failerId >= 0 Then
+                LogPass("Create failer decorator")
+            Else
+                LogFail("Create failer decorator", $"Got invalid ID: {failerId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create failer decorator", ex.Message)
+        End Try
+
+        Try
+            Dim repeaterId = Framework_BT_CreateRepeater(treeId, selectorId, 3)
+            If repeaterId >= 0 Then
+                LogPass("Create repeater decorator")
+            Else
+                LogFail("Create repeater decorator", $"Got invalid ID: {repeaterId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create repeater decorator", ex.Message)
+        End Try
+
+        Try
+            Dim cooldownId = Framework_BT_CreateCooldown(treeId, selectorId, 1.0F)
+            If cooldownId >= 0 Then
+                LogPass("Create cooldown decorator")
+            Else
+                LogFail("Create cooldown decorator", $"Got invalid ID: {cooldownId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create cooldown decorator", ex.Message)
+        End Try
+
+        Try
+            Dim limiterId = Framework_BT_CreateLimiter(treeId, selectorId, 5)
+            If limiterId >= 0 Then
+                LogPass("Create limiter decorator")
+            Else
+                LogFail("Create limiter decorator", $"Got invalid ID: {limiterId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create limiter decorator", ex.Message)
+        End Try
+
+        ' Test parallel node
+        Try
+            Dim parallelId = Framework_BT_CreateParallel(treeId, selectorId, 0, 0)
+            If parallelId >= 0 Then
+                LogPass("Create parallel node")
+            Else
+                LogFail("Create parallel node", $"Got invalid ID: {parallelId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create parallel node", ex.Message)
+        End Try
+
+        ' Test set/get node name
+        Try
+            Framework_BT_SetNodeName(treeId, selectorId, "RootSelector")
+            LogPass("Set node name")
+        Catch ex As Exception
+            LogFail("Set node name", ex.Message)
+        End Try
+
+        ' Test blackboard - int
+        Try
+            Framework_BT_SetBlackboardInt(treeId, "health", 100)
+            Dim val = Framework_BT_GetBlackboardInt(treeId, "health", 0)
+            If val = 100 Then
+                LogPass("Blackboard int set/get")
+            Else
+                LogFail("Blackboard int set/get", $"Expected 100, got {val}")
+            End If
+        Catch ex As Exception
+            LogFail("Blackboard int set/get", ex.Message)
+        End Try
+
+        ' Test blackboard - float
+        Try
+            Framework_BT_SetBlackboardFloat(treeId, "speed", 5.5F)
+            Dim val = Framework_BT_GetBlackboardFloat(treeId, "speed", 0.0F)
+            If Math.Abs(val - 5.5F) < 0.01F Then
+                LogPass("Blackboard float set/get")
+            Else
+                LogFail("Blackboard float set/get", $"Expected 5.5, got {val}")
+            End If
+        Catch ex As Exception
+            LogFail("Blackboard float set/get", ex.Message)
+        End Try
+
+        ' Test blackboard - bool
+        Try
+            Framework_BT_SetBlackboardBool(treeId, "isAlive", True)
+            Dim val = Framework_BT_GetBlackboardBool(treeId, "isAlive", False)
+            If val Then
+                LogPass("Blackboard bool set/get")
+            Else
+                LogFail("Blackboard bool set/get", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Blackboard bool set/get", ex.Message)
+        End Try
+
+        ' Test blackboard - string
+        Try
+            Framework_BT_SetBlackboardString(treeId, "targetName", "Enemy1")
+            LogPass("Blackboard string set")
+        Catch ex As Exception
+            LogFail("Blackboard string set", ex.Message)
+        End Try
+
+        ' Test blackboard - vector2
+        Try
+            Framework_BT_SetBlackboardVector2(treeId, "targetPos", 100.0F, 200.0F)
+            Dim x, y As Single
+            Framework_BT_GetBlackboardVector2(treeId, "targetPos", x, y)
+            If Math.Abs(x - 100.0F) < 0.01F AndAlso Math.Abs(y - 200.0F) < 0.01F Then
+                LogPass("Blackboard vector2 set/get")
+            Else
+                LogFail("Blackboard vector2 set/get", $"Expected (100,200), got ({x},{y})")
+            End If
+        Catch ex As Exception
+            LogFail("Blackboard vector2 set/get", ex.Message)
+        End Try
+
+        ' Test has blackboard key
+        Try
+            Dim hasKey = Framework_BT_HasBlackboardKey(treeId, "health")
+            If hasKey Then
+                LogPass("Has blackboard key (exists)")
+            Else
+                LogFail("Has blackboard key", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Has blackboard key", ex.Message)
+        End Try
+
+        Try
+            Dim hasKey = Framework_BT_HasBlackboardKey(treeId, "nonexistent")
+            If Not hasKey Then
+                LogPass("Has blackboard key (not exists)")
+            Else
+                LogFail("Has blackboard key (not exists)", "Expected false, got true")
+            End If
+        Catch ex As Exception
+            LogFail("Has blackboard key (not exists)", ex.Message)
+        End Try
+
+        ' Test remove blackboard key
+        Try
+            Framework_BT_RemoveBlackboardKey(treeId, "health")
+            Dim hasKey = Framework_BT_HasBlackboardKey(treeId, "health")
+            If Not hasKey Then
+                LogPass("Remove blackboard key")
+            Else
+                LogFail("Remove blackboard key", "Key still exists after removal")
+            End If
+        Catch ex As Exception
+            LogFail("Remove blackboard key", ex.Message)
+        End Try
+
+        ' Test clear blackboard
+        Try
+            Framework_BT_ClearBlackboard(treeId)
+            Dim hasKey = Framework_BT_HasBlackboardKey(treeId, "speed")
+            If Not hasKey Then
+                LogPass("Clear blackboard")
+            Else
+                LogFail("Clear blackboard", "Keys still exist after clear")
+            End If
+        Catch ex As Exception
+            LogFail("Clear blackboard", ex.Message)
+        End Try
+
+        ' Test debug enable/disable
+        Try
+            Framework_BT_SetDebugEnabled(treeId, True)
+            Dim enabled = Framework_BT_IsDebugEnabled(treeId)
+            If enabled Then
+                LogPass("Set/Get debug enabled")
+            Else
+                LogFail("Set/Get debug enabled", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get debug enabled", ex.Message)
+        End Try
+
+        Try
+            Framework_BT_SetDebugEnabled(treeId, False)
+            Dim enabled = Framework_BT_IsDebugEnabled(treeId)
+            If Not enabled Then
+                LogPass("Set/Get debug disabled")
+            Else
+                LogFail("Set/Get debug disabled", "Expected false, got true")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get debug disabled", ex.Message)
+        End Try
+
+        ' Test register builtin actions
+        Try
+            Framework_BT_RegisterBuiltinActions()
+            LogPass("Register builtin actions")
+        Catch ex As Exception
+            LogFail("Register builtin actions", ex.Message)
+        End Try
+
+        ' Test tree reset
+        Try
+            Framework_BT_Reset(treeId)
+            LogPass("Reset tree")
+        Catch ex As Exception
+            LogFail("Reset tree", ex.Message)
+        End Try
+
+        ' Test tree abort
+        Try
+            Framework_BT_Abort(treeId)
+            LogPass("Abort tree")
+        Catch ex As Exception
+            LogFail("Abort tree", ex.Message)
+        End Try
+
+        ' Test get last status
+        Try
+            Dim status = Framework_BT_GetLastStatus(treeId)
+            LogPass($"Get last status (value={status})")
+        Catch ex As Exception
+            LogFail("Get last status", ex.Message)
+        End Try
+
+        ' Test get running node
+        Try
+            Dim runningNode = Framework_BT_GetRunningNode(treeId)
+            LogPass($"Get running node (value={runningNode})")
+        Catch ex As Exception
+            LogFail("Get running node", ex.Message)
+        End Try
+
+        ' Test clone tree
+        Try
+            Dim cloneId = Framework_BT_CloneTree(treeId, "ClonedTree")
+            If cloneId >= 0 AndAlso cloneId <> treeId Then
+                LogPass("Clone tree")
+                ' Clean up clone
+                Framework_BT_DestroyTree(cloneId)
+            Else
+                LogFail("Clone tree", $"Got invalid clone ID: {cloneId}")
+            End If
+        Catch ex As Exception
+            LogFail("Clone tree", ex.Message)
+        End Try
+
+        ' Test tree execution (with entity 0)
+        Try
+            Dim result = Framework_BT_Execute(treeId, 0, 0.016F)
+            LogPass($"Execute tree (result={result})")
+        Catch ex As Exception
+            LogFail("Execute tree", ex.Message)
+        End Try
+
+        ' Test remove node
+        Try
+            Framework_BT_RemoveNode(treeId, actionId)
+            LogPass("Remove node")
+        Catch ex As Exception
+            LogFail("Remove node", ex.Message)
+        End Try
+
+        ' Clean up - destroy tree
+        Try
+            Framework_BT_DestroyTree(treeId)
+            Dim valid = Framework_BT_IsTreeValid(treeId)
+            If Not valid Then
+                LogPass("Destroy tree")
+            Else
+                LogFail("Destroy tree", "Tree still valid after destroy")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy tree", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Physics Joint Tests"
+    Private Sub TestPhysicsJointSystem()
+        Console.WriteLine()
+        Console.WriteLine("--- Physics Joint Tests ---")
+
+        ' Create two bodies for joint testing
+        Dim bodyA As Integer = -1
+        Dim bodyB As Integer = -1
+        Try
+            bodyA = Framework_Physics_CreateBody(0, 100.0F, 100.0F) ' Dynamic
+            bodyB = Framework_Physics_CreateBody(0, 200.0F, 100.0F) ' Dynamic
+            If bodyA >= 0 AndAlso bodyB >= 0 Then
+                LogPass("Create physics bodies for joint test")
+            Else
+                LogFail("Create physics bodies for joint test", $"Got invalid IDs: {bodyA}, {bodyB}")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create physics bodies for joint test", ex.Message)
+            Return
+        End Try
+
+        ' Test revolute joint
+        Dim revoluteId As Integer = -1
+        Try
+            revoluteId = Framework_Joint_CreateRevolute(bodyA, bodyB, 150.0F, 100.0F)
+            If revoluteId >= 0 Then
+                LogPass("Create revolute joint")
+            Else
+                LogFail("Create revolute joint", $"Got invalid ID: {revoluteId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create revolute joint", ex.Message)
+        End Try
+
+        ' Test get joint type
+        Try
+            Dim jointType = Framework_Joint_GetType(revoluteId)
+            If jointType = 0 Then ' JOINT_REVOLUTE = 0
+                LogPass("Get joint type (revolute=0)")
+            Else
+                LogFail("Get joint type", $"Expected 0, got {jointType}")
+            End If
+        Catch ex As Exception
+            LogFail("Get joint type", ex.Message)
+        End Try
+
+        ' Test get joint bodies
+        Try
+            Dim a = Framework_Joint_GetBodyA(revoluteId)
+            Dim b = Framework_Joint_GetBodyB(revoluteId)
+            If a = bodyA AndAlso b = bodyB Then
+                LogPass("Get joint bodies")
+            Else
+                LogFail("Get joint bodies", $"Expected ({bodyA},{bodyB}), got ({a},{b})")
+            End If
+        Catch ex As Exception
+            LogFail("Get joint bodies", ex.Message)
+        End Try
+
+        ' Test joint validity
+        Try
+            Dim valid = Framework_Joint_IsValid(revoluteId)
+            If valid Then
+                LogPass("Joint is valid")
+            Else
+                LogFail("Joint is valid", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Joint is valid", ex.Message)
+        End Try
+
+        ' Test revolute limits
+        Try
+            Framework_Joint_SetRevoluteLimits(revoluteId, -1.57F, 1.57F)
+            Framework_Joint_EnableRevoluteLimits(revoluteId, True)
+            Dim enabled = Framework_Joint_AreRevoluteLimitsEnabled(revoluteId)
+            If enabled Then
+                LogPass("Enable revolute limits")
+            Else
+                LogFail("Enable revolute limits", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Enable revolute limits", ex.Message)
+        End Try
+
+        ' Test revolute motor
+        Try
+            Framework_Joint_SetRevoluteMotor(revoluteId, 2.0F, 100.0F)
+            Framework_Joint_EnableRevoluteMotor(revoluteId, True)
+            Dim enabled = Framework_Joint_IsRevoluteMotorEnabled(revoluteId)
+            If enabled Then
+                LogPass("Enable revolute motor")
+            Else
+                LogFail("Enable revolute motor", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Enable revolute motor", ex.Message)
+        End Try
+
+        ' Test distance joint
+        Dim distanceId As Integer = -1
+        Try
+            distanceId = Framework_Joint_CreateDistance(bodyA, bodyB, 100.0F, 100.0F, 200.0F, 100.0F)
+            If distanceId >= 0 Then
+                LogPass("Create distance joint")
+            Else
+                LogFail("Create distance joint", $"Got invalid ID: {distanceId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create distance joint", ex.Message)
+        End Try
+
+        ' Test distance joint length
+        Try
+            Framework_Joint_SetDistanceLength(distanceId, 150.0F)
+            Dim length = Framework_Joint_GetDistanceLength(distanceId)
+            If Math.Abs(length - 150.0F) < 0.01F Then
+                LogPass("Set/Get distance length")
+            Else
+                LogFail("Set/Get distance length", $"Expected 150, got {length}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get distance length", ex.Message)
+        End Try
+
+        ' Test distance joint stiffness/damping
+        Try
+            Framework_Joint_SetDistanceStiffness(distanceId, 0.8F)
+            Framework_Joint_SetDistanceDamping(distanceId, 0.2F)
+            LogPass("Set distance stiffness/damping")
+        Catch ex As Exception
+            LogFail("Set distance stiffness/damping", ex.Message)
+        End Try
+
+        ' Test prismatic joint
+        Dim prismaticId As Integer = -1
+        Try
+            prismaticId = Framework_Joint_CreatePrismatic(bodyA, bodyB, 150.0F, 100.0F, 1.0F, 0.0F)
+            If prismaticId >= 0 Then
+                LogPass("Create prismatic joint")
+            Else
+                LogFail("Create prismatic joint", $"Got invalid ID: {prismaticId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create prismatic joint", ex.Message)
+        End Try
+
+        ' Test prismatic limits
+        Try
+            Framework_Joint_SetPrismaticLimits(prismaticId, -50.0F, 50.0F)
+            Framework_Joint_EnablePrismaticLimits(prismaticId, True)
+            Dim enabled = Framework_Joint_ArePrismaticLimitsEnabled(prismaticId)
+            If enabled Then
+                LogPass("Enable prismatic limits")
+            Else
+                LogFail("Enable prismatic limits", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Enable prismatic limits", ex.Message)
+        End Try
+
+        ' Test weld joint
+        Dim weldId As Integer = -1
+        Try
+            weldId = Framework_Joint_CreateWeld(bodyA, bodyB, 150.0F, 100.0F)
+            If weldId >= 0 Then
+                LogPass("Create weld joint")
+            Else
+                LogFail("Create weld joint", $"Got invalid ID: {weldId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create weld joint", ex.Message)
+        End Try
+
+        ' Test motor joint
+        Dim motorId As Integer = -1
+        Try
+            motorId = Framework_Joint_CreateMotor(bodyA, bodyB)
+            If motorId >= 0 Then
+                LogPass("Create motor joint")
+            Else
+                LogFail("Create motor joint", $"Got invalid ID: {motorId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create motor joint", ex.Message)
+        End Try
+
+        ' Test motor target
+        Try
+            Framework_Joint_SetMotorTarget(motorId, 50.0F, 0.0F, 0.5F)
+            LogPass("Set motor target")
+        Catch ex As Exception
+            LogFail("Set motor target", ex.Message)
+        End Try
+
+        ' Test rope joint
+        Dim ropeId As Integer = -1
+        Try
+            ropeId = Framework_Joint_CreateRope(bodyA, bodyB, 100.0F, 100.0F, 200.0F, 100.0F, 120.0F)
+            If ropeId >= 0 Then
+                LogPass("Create rope joint")
+            Else
+                LogFail("Create rope joint", $"Got invalid ID: {ropeId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create rope joint", ex.Message)
+        End Try
+
+        ' Test rope max length
+        Try
+            Framework_Joint_SetRopeMaxLength(ropeId, 150.0F)
+            Dim maxLen = Framework_Joint_GetRopeMaxLength(ropeId)
+            If Math.Abs(maxLen - 150.0F) < 0.01F Then
+                LogPass("Set/Get rope max length")
+            Else
+                LogFail("Set/Get rope max length", $"Expected 150, got {maxLen}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get rope max length", ex.Message)
+        End Try
+
+        ' Test wheel joint
+        Dim wheelId As Integer = -1
+        Try
+            wheelId = Framework_Joint_CreateWheel(bodyA, bodyB, 150.0F, 100.0F, 0.0F, 1.0F)
+            If wheelId >= 0 Then
+                LogPass("Create wheel joint")
+            Else
+                LogFail("Create wheel joint", $"Got invalid ID: {wheelId}")
+            End If
+        Catch ex As Exception
+            LogFail("Create wheel joint", ex.Message)
+        End Try
+
+        ' Test wheel motor
+        Try
+            Framework_Joint_SetWheelMotor(wheelId, 5.0F, 100.0F)
+            Framework_Joint_EnableWheelMotor(wheelId, True)
+            Dim enabled = Framework_Joint_IsWheelMotorEnabled(wheelId)
+            If enabled Then
+                LogPass("Enable wheel motor")
+            Else
+                LogFail("Enable wheel motor", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Enable wheel motor", ex.Message)
+        End Try
+
+        ' Test collide connected
+        Try
+            Framework_Joint_SetCollideConnected(revoluteId, True)
+            Dim collide = Framework_Joint_GetCollideConnected(revoluteId)
+            If collide Then
+                LogPass("Set/Get collide connected")
+            Else
+                LogFail("Set/Get collide connected", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get collide connected", ex.Message)
+        End Try
+
+        ' Test user data
+        Try
+            Framework_Joint_SetUserData(revoluteId, 12345)
+            Dim data = Framework_Joint_GetUserData(revoluteId)
+            If data = 12345 Then
+                LogPass("Set/Get joint user data")
+            Else
+                LogFail("Set/Get joint user data", $"Expected 12345, got {data}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get joint user data", ex.Message)
+        End Try
+
+        ' Test joint count
+        Try
+            Dim count = Framework_Joint_GetCount()
+            If count >= 1 Then
+                LogPass($"Get joint count ({count})")
+            Else
+                LogFail("Get joint count", $"Expected >= 1, got {count}")
+            End If
+        Catch ex As Exception
+            LogFail("Get joint count", ex.Message)
+        End Try
+
+        ' Test joint by index
+        Try
+            Dim jointHandle = Framework_Joint_GetByIndex(0)
+            If jointHandle >= 0 Then
+                LogPass("Get joint by index")
+            Else
+                LogFail("Get joint by index", $"Got invalid handle: {jointHandle}")
+            End If
+        Catch ex As Exception
+            LogFail("Get joint by index", ex.Message)
+        End Try
+
+        ' Clean up joints
+        Try
+            Framework_Joint_Destroy(revoluteId)
+            Framework_Joint_Destroy(distanceId)
+            Framework_Joint_Destroy(prismaticId)
+            Framework_Joint_Destroy(weldId)
+            Framework_Joint_Destroy(motorId)
+            Framework_Joint_Destroy(ropeId)
+            Framework_Joint_Destroy(wheelId)
+            LogPass("Destroy joints")
+        Catch ex As Exception
+            LogFail("Destroy joints", ex.Message)
+        End Try
+
+        ' Clean up bodies
+        Try
+            Framework_Physics_DestroyBody(bodyA)
+            Framework_Physics_DestroyBody(bodyB)
+            LogPass("Destroy physics bodies")
+        Catch ex As Exception
+            LogFail("Destroy physics bodies", ex.Message)
         End Try
     End Sub
 #End Region

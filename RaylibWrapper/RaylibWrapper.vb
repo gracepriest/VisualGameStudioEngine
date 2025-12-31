@@ -2309,6 +2309,496 @@ Public Module FrameworkWrapper
     Public Const SHAPE_POLYGON As Integer = 2
 #End Region
 
+#Region "Physics Joints"
+    ' Joint type constants
+    Public Const JOINT_TYPE_REVOLUTE As Integer = 0
+    Public Const JOINT_TYPE_DISTANCE As Integer = 1
+    Public Const JOINT_TYPE_PRISMATIC As Integer = 2
+    Public Const JOINT_TYPE_PULLEY As Integer = 3
+    Public Const JOINT_TYPE_WELD As Integer = 4
+    Public Const JOINT_TYPE_MOTOR As Integer = 5
+    Public Const JOINT_TYPE_WHEEL As Integer = 6
+    Public Const JOINT_TYPE_ROPE As Integer = 7
+
+    ' Joint creation
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_CreateRevolute(bodyA As Integer, bodyB As Integer, anchorX As Single, anchorY As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_CreateDistance(bodyA As Integer, bodyB As Integer, anchorAX As Single, anchorAY As Single, anchorBX As Single, anchorBY As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_CreatePrismatic(bodyA As Integer, bodyB As Integer, anchorX As Single, anchorY As Single, axisX As Single, axisY As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_CreatePulley(bodyA As Integer, bodyB As Integer, groundAX As Single, groundAY As Single, groundBX As Single, groundBY As Single, anchorAX As Single, anchorAY As Single, anchorBX As Single, anchorBY As Single, ratio As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_CreateWeld(bodyA As Integer, bodyB As Integer, anchorX As Single, anchorY As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_CreateMotor(bodyA As Integer, bodyB As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_CreateWheel(bodyA As Integer, bodyB As Integer, anchorX As Single, anchorY As Single, axisX As Single, axisY As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_CreateRope(bodyA As Integer, bodyB As Integer, anchorAX As Single, anchorAY As Single, anchorBX As Single, anchorBY As Single, maxLength As Single) As Integer
+    End Function
+
+    ' Joint destruction
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_Destroy(jointHandle As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_DestroyAll()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_IsValid(jointHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetType(jointHandle As Integer) As Integer
+    End Function
+
+    ' Joint queries
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetBodyA(jointHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetBodyB(jointHandle As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_GetAnchorA(jointHandle As Integer, ByRef x As Single, ByRef y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_GetAnchorB(jointHandle As Integer, ByRef x As Single, ByRef y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_GetReactionForce(jointHandle As Integer, ByRef fx As Single, ByRef fy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetReactionTorque(jointHandle As Integer) As Single
+    End Function
+
+    ' Revolute joint configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetRevoluteLimits(jointHandle As Integer, lowerAngle As Single, upperAngle As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_GetRevoluteLimits(jointHandle As Integer, ByRef lowerAngle As Single, ByRef upperAngle As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_EnableRevoluteLimits(jointHandle As Integer, <MarshalAs(UnmanagedType.I1)> enable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_AreRevoluteLimitsEnabled(jointHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetRevoluteMotor(jointHandle As Integer, speed As Single, maxTorque As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_EnableRevoluteMotor(jointHandle As Integer, <MarshalAs(UnmanagedType.I1)> enable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_IsRevoluteMotorEnabled(jointHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetRevoluteAngle(jointHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetRevoluteSpeed(jointHandle As Integer) As Single
+    End Function
+
+    ' Distance joint configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetDistanceLength(jointHandle As Integer, length As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetDistanceLength(jointHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetDistanceMinMax(jointHandle As Integer, minLength As Single, maxLength As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetDistanceStiffness(jointHandle As Integer, stiffness As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetDistanceStiffness(jointHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetDistanceDamping(jointHandle As Integer, damping As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetDistanceDamping(jointHandle As Integer) As Single
+    End Function
+
+    ' Prismatic joint configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetPrismaticLimits(jointHandle As Integer, lowerTranslation As Single, upperTranslation As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_GetPrismaticLimits(jointHandle As Integer, ByRef lower As Single, ByRef upper As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_EnablePrismaticLimits(jointHandle As Integer, <MarshalAs(UnmanagedType.I1)> enable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_ArePrismaticLimitsEnabled(jointHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetPrismaticMotor(jointHandle As Integer, speed As Single, maxForce As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_EnablePrismaticMotor(jointHandle As Integer, <MarshalAs(UnmanagedType.I1)> enable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_IsPrismaticMotorEnabled(jointHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetPrismaticTranslation(jointHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetPrismaticSpeed(jointHandle As Integer) As Single
+    End Function
+
+    ' Motor joint configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetMotorTarget(jointHandle As Integer, targetX As Single, targetY As Single, targetAngle As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetMotorMaxForce(jointHandle As Integer, maxForce As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetMotorMaxTorque(jointHandle As Integer, maxTorque As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetMotorCorrectionFactor(jointHandle As Integer, factor As Single)
+    End Sub
+
+    ' Wheel joint configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetWheelMotor(jointHandle As Integer, speed As Single, maxTorque As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_EnableWheelMotor(jointHandle As Integer, <MarshalAs(UnmanagedType.I1)> enable As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_IsWheelMotorEnabled(jointHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetWheelStiffness(jointHandle As Integer, stiffness As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetWheelDamping(jointHandle As Integer, damping As Single)
+    End Sub
+
+    ' Rope joint configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetRopeMaxLength(jointHandle As Integer, maxLength As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetRopeMaxLength(jointHandle As Integer) As Single
+    End Function
+
+    ' General joint properties
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetCollideConnected(jointHandle As Integer, <MarshalAs(UnmanagedType.I1)> collide As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetCollideConnected(jointHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_SetUserData(jointHandle As Integer, userData As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetUserData(jointHandle As Integer) As Integer
+    End Function
+
+    ' Joint count and iteration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Joint_GetByIndex(index As Integer) As Integer
+    End Function
+
+    ' Joint debug drawing
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Joint_DrawDebug()
+    End Sub
+#End Region
+
+#Region "Behavior Trees"
+    ' Tree management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_CreateTree(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BT_DestroyTree(treeId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_GetTree(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_IsTreeValid(treeId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_CloneTree(treeId As Integer, newName As String) As Integer
+    End Function
+
+    ' Node creation
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateSelector(treeId As Integer, parentId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateSequence(treeId As Integer, parentId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateParallel(treeId As Integer, parentId As Integer, successPolicy As Integer, failurePolicy As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_CreateAction(treeId As Integer, parentId As Integer, actionName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_CreateCondition(treeId As Integer, parentId As Integer, conditionName As String) As Integer
+    End Function
+
+    ' Decorator creation
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateInverter(treeId As Integer, parentId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateSucceeder(treeId As Integer, parentId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateFailer(treeId As Integer, parentId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateRepeater(treeId As Integer, parentId As Integer, repeatCount As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateRepeatUntilFail(treeId As Integer, parentId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateRepeatUntilSuccess(treeId As Integer, parentId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateCooldown(treeId As Integer, parentId As Integer, cooldownTime As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_CreateLimiter(treeId As Integer, parentId As Integer, maxExecutions As Integer) As Integer
+    End Function
+
+    ' Node configuration
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_SetNodeName(treeId As Integer, nodeId As Integer, name As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetNodeName(treeId As Integer, nodeId As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetNodeType(treeId As Integer, nodeId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetNodeParent(treeId As Integer, nodeId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetNodeChildCount(treeId As Integer, nodeId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetNodeChild(treeId As Integer, nodeId As Integer, childIndex As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BT_RemoveNode(treeId As Integer, nodeId As Integer)
+    End Sub
+
+    ' Callback registration (use delegates in VB.NET)
+    Public Delegate Function BTActionCallbackDelegate(treeId As Integer, nodeId As Integer, entityId As Integer, dt As Single, userData As IntPtr) As Integer
+    Public Delegate Function BTConditionCallbackDelegate(treeId As Integer, nodeId As Integer, entityId As Integer, userData As IntPtr) As <MarshalAs(UnmanagedType.I1)> Boolean
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_RegisterAction(actionName As String, callback As BTActionCallbackDelegate, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_RegisterCondition(conditionName As String, callback As BTConditionCallbackDelegate, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_UnregisterAction(actionName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_UnregisterCondition(conditionName As String)
+    End Sub
+
+    ' Tree execution
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_Execute(treeId As Integer, entityId As Integer, dt As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BT_Reset(treeId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BT_Abort(treeId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetLastStatus(treeId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetRunningNode(treeId As Integer) As Integer
+    End Function
+
+    ' Blackboard (shared data)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_SetBlackboardInt(treeId As Integer, key As String, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_GetBlackboardInt(treeId As Integer, key As String, defaultValue As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_SetBlackboardFloat(treeId As Integer, key As String, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_GetBlackboardFloat(treeId As Integer, key As String, defaultValue As Single) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_SetBlackboardBool(treeId As Integer, key As String, <MarshalAs(UnmanagedType.I1)> value As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_GetBlackboardBool(treeId As Integer, key As String, <MarshalAs(UnmanagedType.I1)> defaultValue As Boolean) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_SetBlackboardString(treeId As Integer, key As String, value As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_GetBlackboardString(treeId As Integer, key As String, defaultValue As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_SetBlackboardVector2(treeId As Integer, key As String, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_GetBlackboardVector2(treeId As Integer, key As String, ByRef x As Single, ByRef y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BT_ClearBlackboard(treeId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_BT_HasBlackboardKey(treeId As Integer, key As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_BT_RemoveBlackboardKey(treeId As Integer, key As String)
+    End Sub
+
+    ' Built-in actions
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BT_RegisterBuiltinActions()
+    End Sub
+
+    ' Debug
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BT_SetDebugEnabled(treeId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_IsDebugEnabled(treeId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetTreeCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_BT_GetNodeCount(treeId As Integer) As Integer
+    End Function
+#End Region
+
 #Region "Audio Manager"
     ' Group volume control
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>

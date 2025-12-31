@@ -1280,6 +1280,218 @@ extern "C" {
     __declspec(dllexport) void  Framework_Physics_DrawDebug();  // Draw all collision shapes
 
     // ========================================================================
+    // PHYSICS JOINTS - Constraints between bodies
+    // ========================================================================
+    // Joint types
+    enum PhysicsJointType {
+        JOINT_TYPE_REVOLUTE = 0,    // Rotation around anchor (hinge)
+        JOINT_TYPE_DISTANCE = 1,    // Fixed distance between anchors
+        JOINT_TYPE_PRISMATIC = 2,   // Slide along axis (piston)
+        JOINT_TYPE_PULLEY = 3,      // Two bodies connected via pulley
+        JOINT_TYPE_WELD = 4,        // Bodies welded together (rigid)
+        JOINT_TYPE_MOTOR = 5,       // Motor joint for driven movement
+        JOINT_TYPE_WHEEL = 6,       // Wheel/suspension joint
+        JOINT_TYPE_ROPE = 7         // Maximum distance constraint
+    };
+
+    // Joint creation (returns joint handle)
+    __declspec(dllexport) int   Framework_Joint_CreateRevolute(int bodyA, int bodyB, float anchorX, float anchorY);
+    __declspec(dllexport) int   Framework_Joint_CreateDistance(int bodyA, int bodyB, float anchorAX, float anchorAY, float anchorBX, float anchorBY);
+    __declspec(dllexport) int   Framework_Joint_CreatePrismatic(int bodyA, int bodyB, float anchorX, float anchorY, float axisX, float axisY);
+    __declspec(dllexport) int   Framework_Joint_CreatePulley(int bodyA, int bodyB, float groundAX, float groundAY, float groundBX, float groundBY, float anchorAX, float anchorAY, float anchorBX, float anchorBY, float ratio);
+    __declspec(dllexport) int   Framework_Joint_CreateWeld(int bodyA, int bodyB, float anchorX, float anchorY);
+    __declspec(dllexport) int   Framework_Joint_CreateMotor(int bodyA, int bodyB);
+    __declspec(dllexport) int   Framework_Joint_CreateWheel(int bodyA, int bodyB, float anchorX, float anchorY, float axisX, float axisY);
+    __declspec(dllexport) int   Framework_Joint_CreateRope(int bodyA, int bodyB, float anchorAX, float anchorAY, float anchorBX, float anchorBY, float maxLength);
+
+    // Joint destruction
+    __declspec(dllexport) void  Framework_Joint_Destroy(int jointHandle);
+    __declspec(dllexport) void  Framework_Joint_DestroyAll();
+    __declspec(dllexport) bool  Framework_Joint_IsValid(int jointHandle);
+    __declspec(dllexport) int   Framework_Joint_GetType(int jointHandle);
+
+    // Joint queries
+    __declspec(dllexport) int   Framework_Joint_GetBodyA(int jointHandle);
+    __declspec(dllexport) int   Framework_Joint_GetBodyB(int jointHandle);
+    __declspec(dllexport) void  Framework_Joint_GetAnchorA(int jointHandle, float* x, float* y);
+    __declspec(dllexport) void  Framework_Joint_GetAnchorB(int jointHandle, float* x, float* y);
+    __declspec(dllexport) void  Framework_Joint_GetReactionForce(int jointHandle, float* fx, float* fy);
+    __declspec(dllexport) float Framework_Joint_GetReactionTorque(int jointHandle);
+
+    // Revolute joint configuration (hinge)
+    __declspec(dllexport) void  Framework_Joint_SetRevoluteLimits(int jointHandle, float lowerAngle, float upperAngle);
+    __declspec(dllexport) void  Framework_Joint_GetRevoluteLimits(int jointHandle, float* lowerAngle, float* upperAngle);
+    __declspec(dllexport) void  Framework_Joint_EnableRevoluteLimits(int jointHandle, bool enable);
+    __declspec(dllexport) bool  Framework_Joint_AreRevoluteLimitsEnabled(int jointHandle);
+    __declspec(dllexport) void  Framework_Joint_SetRevoluteMotor(int jointHandle, float speed, float maxTorque);
+    __declspec(dllexport) void  Framework_Joint_EnableRevoluteMotor(int jointHandle, bool enable);
+    __declspec(dllexport) bool  Framework_Joint_IsRevoluteMotorEnabled(int jointHandle);
+    __declspec(dllexport) float Framework_Joint_GetRevoluteAngle(int jointHandle);
+    __declspec(dllexport) float Framework_Joint_GetRevoluteSpeed(int jointHandle);
+
+    // Distance joint configuration (spring)
+    __declspec(dllexport) void  Framework_Joint_SetDistanceLength(int jointHandle, float length);
+    __declspec(dllexport) float Framework_Joint_GetDistanceLength(int jointHandle);
+    __declspec(dllexport) void  Framework_Joint_SetDistanceMinMax(int jointHandle, float minLength, float maxLength);
+    __declspec(dllexport) void  Framework_Joint_SetDistanceStiffness(int jointHandle, float stiffness);  // Spring stiffness
+    __declspec(dllexport) float Framework_Joint_GetDistanceStiffness(int jointHandle);
+    __declspec(dllexport) void  Framework_Joint_SetDistanceDamping(int jointHandle, float damping);
+    __declspec(dllexport) float Framework_Joint_GetDistanceDamping(int jointHandle);
+
+    // Prismatic joint configuration (slider/piston)
+    __declspec(dllexport) void  Framework_Joint_SetPrismaticLimits(int jointHandle, float lowerTranslation, float upperTranslation);
+    __declspec(dllexport) void  Framework_Joint_GetPrismaticLimits(int jointHandle, float* lower, float* upper);
+    __declspec(dllexport) void  Framework_Joint_EnablePrismaticLimits(int jointHandle, bool enable);
+    __declspec(dllexport) bool  Framework_Joint_ArePrismaticLimitsEnabled(int jointHandle);
+    __declspec(dllexport) void  Framework_Joint_SetPrismaticMotor(int jointHandle, float speed, float maxForce);
+    __declspec(dllexport) void  Framework_Joint_EnablePrismaticMotor(int jointHandle, bool enable);
+    __declspec(dllexport) bool  Framework_Joint_IsPrismaticMotorEnabled(int jointHandle);
+    __declspec(dllexport) float Framework_Joint_GetPrismaticTranslation(int jointHandle);
+    __declspec(dllexport) float Framework_Joint_GetPrismaticSpeed(int jointHandle);
+
+    // Motor joint configuration
+    __declspec(dllexport) void  Framework_Joint_SetMotorTarget(int jointHandle, float targetX, float targetY, float targetAngle);
+    __declspec(dllexport) void  Framework_Joint_SetMotorMaxForce(int jointHandle, float maxForce);
+    __declspec(dllexport) void  Framework_Joint_SetMotorMaxTorque(int jointHandle, float maxTorque);
+    __declspec(dllexport) void  Framework_Joint_SetMotorCorrectionFactor(int jointHandle, float factor);  // 0-1
+
+    // Wheel joint configuration (suspension)
+    __declspec(dllexport) void  Framework_Joint_SetWheelMotor(int jointHandle, float speed, float maxTorque);
+    __declspec(dllexport) void  Framework_Joint_EnableWheelMotor(int jointHandle, bool enable);
+    __declspec(dllexport) bool  Framework_Joint_IsWheelMotorEnabled(int jointHandle);
+    __declspec(dllexport) void  Framework_Joint_SetWheelStiffness(int jointHandle, float stiffness);
+    __declspec(dllexport) void  Framework_Joint_SetWheelDamping(int jointHandle, float damping);
+
+    // Rope joint configuration
+    __declspec(dllexport) void  Framework_Joint_SetRopeMaxLength(int jointHandle, float maxLength);
+    __declspec(dllexport) float Framework_Joint_GetRopeMaxLength(int jointHandle);
+
+    // General joint properties
+    __declspec(dllexport) void  Framework_Joint_SetCollideConnected(int jointHandle, bool collide);
+    __declspec(dllexport) bool  Framework_Joint_GetCollideConnected(int jointHandle);
+    __declspec(dllexport) void  Framework_Joint_SetUserData(int jointHandle, int userData);
+    __declspec(dllexport) int   Framework_Joint_GetUserData(int jointHandle);
+
+    // Joint count
+    __declspec(dllexport) int   Framework_Joint_GetCount();
+    __declspec(dllexport) int   Framework_Joint_GetByIndex(int index);  // Get joint handle by index
+
+    // Joint debug drawing
+    __declspec(dllexport) void  Framework_Joint_DrawDebug();
+
+    // ========================================================================
+    // BEHAVIOR TREES - AI Decision Making System
+    // ========================================================================
+    // Node status
+    enum BTNodeStatus {
+        BT_SUCCESS = 0,
+        BT_FAILURE = 1,
+        BT_RUNNING = 2
+    };
+
+    // Node types
+    enum BTNodeType {
+        BT_NODE_SELECTOR = 0,      // Runs children until one succeeds (OR)
+        BT_NODE_SEQUENCE = 1,      // Runs children until one fails (AND)
+        BT_NODE_PARALLEL = 2,      // Runs all children simultaneously
+        BT_NODE_DECORATOR = 3,     // Modifies child behavior
+        BT_NODE_ACTION = 4,        // Leaf node that performs action
+        BT_NODE_CONDITION = 5      // Leaf node that checks condition
+    };
+
+    // Decorator types
+    enum BTDecoratorType {
+        BT_DEC_INVERTER = 0,       // Inverts result
+        BT_DEC_SUCCEEDER = 1,      // Always returns success
+        BT_DEC_FAILER = 2,         // Always returns failure
+        BT_DEC_REPEATER = 3,       // Repeats N times or forever
+        BT_DEC_REPEAT_UNTIL_FAIL = 4,
+        BT_DEC_REPEAT_UNTIL_SUCCESS = 5,
+        BT_DEC_COOLDOWN = 6,       // Time-based cooldown
+        BT_DEC_LIMITER = 7         // Limits execution count
+    };
+
+    // Parallel policy
+    enum BTParallelPolicy {
+        BT_PARALLEL_REQUIRE_ONE = 0,   // Succeed if one child succeeds
+        BT_PARALLEL_REQUIRE_ALL = 1    // Succeed only if all children succeed
+    };
+
+    // Callback types
+    typedef int (*BTActionCallback)(int treeId, int nodeId, int entityId, float dt, void* userData);
+    typedef bool (*BTConditionCallback)(int treeId, int nodeId, int entityId, void* userData);
+
+    // Tree management
+    __declspec(dllexport) int   Framework_BT_CreateTree(const char* name);
+    __declspec(dllexport) void  Framework_BT_DestroyTree(int treeId);
+    __declspec(dllexport) int   Framework_BT_GetTree(const char* name);
+    __declspec(dllexport) bool  Framework_BT_IsTreeValid(int treeId);
+    __declspec(dllexport) int   Framework_BT_CloneTree(int treeId, const char* newName);
+
+    // Node creation (returns node ID within tree)
+    __declspec(dllexport) int   Framework_BT_CreateSelector(int treeId, int parentId);
+    __declspec(dllexport) int   Framework_BT_CreateSequence(int treeId, int parentId);
+    __declspec(dllexport) int   Framework_BT_CreateParallel(int treeId, int parentId, int successPolicy, int failurePolicy);
+    __declspec(dllexport) int   Framework_BT_CreateAction(int treeId, int parentId, const char* actionName);
+    __declspec(dllexport) int   Framework_BT_CreateCondition(int treeId, int parentId, const char* conditionName);
+
+    // Decorator creation
+    __declspec(dllexport) int   Framework_BT_CreateInverter(int treeId, int parentId);
+    __declspec(dllexport) int   Framework_BT_CreateSucceeder(int treeId, int parentId);
+    __declspec(dllexport) int   Framework_BT_CreateFailer(int treeId, int parentId);
+    __declspec(dllexport) int   Framework_BT_CreateRepeater(int treeId, int parentId, int repeatCount);  // -1 = forever
+    __declspec(dllexport) int   Framework_BT_CreateRepeatUntilFail(int treeId, int parentId);
+    __declspec(dllexport) int   Framework_BT_CreateRepeatUntilSuccess(int treeId, int parentId);
+    __declspec(dllexport) int   Framework_BT_CreateCooldown(int treeId, int parentId, float cooldownTime);
+    __declspec(dllexport) int   Framework_BT_CreateLimiter(int treeId, int parentId, int maxExecutions);
+
+    // Node configuration
+    __declspec(dllexport) void  Framework_BT_SetNodeName(int treeId, int nodeId, const char* name);
+    __declspec(dllexport) const char* Framework_BT_GetNodeName(int treeId, int nodeId);
+    __declspec(dllexport) int   Framework_BT_GetNodeType(int treeId, int nodeId);
+    __declspec(dllexport) int   Framework_BT_GetNodeParent(int treeId, int nodeId);
+    __declspec(dllexport) int   Framework_BT_GetNodeChildCount(int treeId, int nodeId);
+    __declspec(dllexport) int   Framework_BT_GetNodeChild(int treeId, int nodeId, int childIndex);
+    __declspec(dllexport) void  Framework_BT_RemoveNode(int treeId, int nodeId);
+
+    // Callback registration
+    __declspec(dllexport) void  Framework_BT_RegisterAction(const char* actionName, BTActionCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_BT_RegisterCondition(const char* conditionName, BTConditionCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_BT_UnregisterAction(const char* actionName);
+    __declspec(dllexport) void  Framework_BT_UnregisterCondition(const char* conditionName);
+
+    // Tree execution
+    __declspec(dllexport) int   Framework_BT_Execute(int treeId, int entityId, float dt);
+    __declspec(dllexport) void  Framework_BT_Reset(int treeId);
+    __declspec(dllexport) void  Framework_BT_Abort(int treeId);
+    __declspec(dllexport) int   Framework_BT_GetLastStatus(int treeId);
+    __declspec(dllexport) int   Framework_BT_GetRunningNode(int treeId);
+
+    // Blackboard (shared data for tree)
+    __declspec(dllexport) void  Framework_BT_SetBlackboardInt(int treeId, const char* key, int value);
+    __declspec(dllexport) int   Framework_BT_GetBlackboardInt(int treeId, const char* key, int defaultValue);
+    __declspec(dllexport) void  Framework_BT_SetBlackboardFloat(int treeId, const char* key, float value);
+    __declspec(dllexport) float Framework_BT_GetBlackboardFloat(int treeId, const char* key, float defaultValue);
+    __declspec(dllexport) void  Framework_BT_SetBlackboardBool(int treeId, const char* key, bool value);
+    __declspec(dllexport) bool  Framework_BT_GetBlackboardBool(int treeId, const char* key, bool defaultValue);
+    __declspec(dllexport) void  Framework_BT_SetBlackboardString(int treeId, const char* key, const char* value);
+    __declspec(dllexport) const char* Framework_BT_GetBlackboardString(int treeId, const char* key, const char* defaultValue);
+    __declspec(dllexport) void  Framework_BT_SetBlackboardVector2(int treeId, const char* key, float x, float y);
+    __declspec(dllexport) void  Framework_BT_GetBlackboardVector2(int treeId, const char* key, float* x, float* y);
+    __declspec(dllexport) void  Framework_BT_ClearBlackboard(int treeId);
+    __declspec(dllexport) bool  Framework_BT_HasBlackboardKey(int treeId, const char* key);
+    __declspec(dllexport) void  Framework_BT_RemoveBlackboardKey(int treeId, const char* key);
+
+    // Built-in actions (commonly used)
+    __declspec(dllexport) void  Framework_BT_RegisterBuiltinActions();  // Registers: Wait, Log, SetBlackboard, etc.
+
+    // Debug
+    __declspec(dllexport) void  Framework_BT_SetDebugEnabled(int treeId, bool enabled);
+    __declspec(dllexport) bool  Framework_BT_IsDebugEnabled(int treeId);
+    __declspec(dllexport) int   Framework_BT_GetTreeCount();
+    __declspec(dllexport) int   Framework_BT_GetNodeCount(int treeId);
+
+    // ========================================================================
     // INPUT MANAGER - Action-based Input System
     // ========================================================================
     // Input source types for binding
