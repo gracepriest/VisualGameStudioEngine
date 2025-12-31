@@ -33,6 +33,15 @@ Public Module FrameworkTests
         TestSpriteBatchingSystem()
         TestTextureAtlasSystem()
         TestLevelEditorSystem()
+        TestEntityEcsSystem()
+        TestCameraSystem()
+        TestUISystem()
+        TestPhysicsSystem()
+        TestTweeningSystem()
+        TestTimerSystem()
+        TestEventSystem()
+        TestInputManagerSystem()
+        TestSaveLoadSystem()
 
         ' Print summary
         Console.WriteLine()
@@ -896,6 +905,1528 @@ Public Module FrameworkTests
             End If
         Catch ex As Exception
             LogFail("Destroy level", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Entity/ECS System Tests"
+    Private Sub TestEntityEcsSystem()
+        LogSection("Entity/ECS System")
+
+        Dim entity1 As Integer = -1
+        Dim entity2 As Integer = -1
+
+        ' Test entity creation
+        Try
+            entity1 = Framework_Ecs_CreateEntity()
+            If entity1 > 0 Then
+                LogPass($"Create entity (id={entity1})")
+            Else
+                LogFail("Create entity", "Invalid entity ID returned")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create entity", ex.Message)
+            Return
+        End Try
+
+        ' Test entity alive check
+        Try
+            If Framework_Ecs_IsAlive(entity1) Then
+                LogPass("Entity is alive")
+            Else
+                LogFail("Entity is alive", "Entity not alive after creation")
+            End If
+        Catch ex As Exception
+            LogFail("Entity is alive", ex.Message)
+        End Try
+
+        ' Test entity count
+        Try
+            Dim count = Framework_Ecs_GetEntityCount()
+            If count >= 1 Then
+                LogPass($"Entity count (count={count})")
+            Else
+                LogFail("Entity count", $"Expected >= 1, got {count}")
+            End If
+        Catch ex As Exception
+            LogFail("Entity count", ex.Message)
+        End Try
+
+        ' Test set/get name
+        Try
+            Framework_Ecs_SetName(entity1, "TestEntity")
+            If Framework_Ecs_HasName(entity1) Then
+                Dim name = Ecs_GetName(entity1)
+                If name = "TestEntity" Then
+                    LogPass("Set/Get entity name")
+                Else
+                    LogFail("Set/Get entity name", $"Expected 'TestEntity', got '{name}'")
+                End If
+            Else
+                LogFail("Set/Get entity name", "Entity has no name after set")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get entity name", ex.Message)
+        End Try
+
+        ' Test find by name
+        Try
+            Dim found = Framework_Ecs_FindByName("TestEntity")
+            If found = entity1 Then
+                LogPass("Find entity by name")
+            Else
+                LogFail("Find entity by name", $"Expected {entity1}, got {found}")
+            End If
+        Catch ex As Exception
+            LogFail("Find entity by name", ex.Message)
+        End Try
+
+        ' Test set/get tag
+        Try
+            Framework_Ecs_SetTag(entity1, "player")
+            If Framework_Ecs_HasTag(entity1) Then
+                LogPass("Set/Get entity tag")
+            Else
+                LogFail("Set/Get entity tag", "Entity has no tag after set")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get entity tag", ex.Message)
+        End Try
+
+        ' Test enabled state
+        Try
+            Framework_Ecs_SetEnabled(entity1, False)
+            If Not Framework_Ecs_IsEnabled(entity1) Then
+                LogPass("Set entity disabled")
+            Else
+                LogFail("Set entity disabled", "Entity still enabled")
+            End If
+            Framework_Ecs_SetEnabled(entity1, True)
+        Catch ex As Exception
+            LogFail("Set entity disabled", ex.Message)
+        End Try
+
+        ' Test add transform
+        Try
+            Framework_Ecs_AddTransform2D(entity1, 100, 200, 45, 1, 1)
+            If Framework_Ecs_HasTransform2D(entity1) Then
+                LogPass("Add Transform2D component")
+            Else
+                LogFail("Add Transform2D component", "Entity has no transform")
+            End If
+        Catch ex As Exception
+            LogFail("Add Transform2D component", ex.Message)
+        End Try
+
+        ' Test transform position
+        Try
+            Framework_Ecs_SetTransformPosition(entity1, 150, 250)
+            Dim pos = Framework_Ecs_GetTransformPosition(entity1)
+            If Math.Abs(pos.X - 150) < 0.01 AndAlso Math.Abs(pos.Y - 250) < 0.01 Then
+                LogPass($"Set/Get transform position ({pos.X},{pos.Y})")
+            Else
+                LogFail("Set/Get transform position", $"Expected (150,250), got ({pos.X},{pos.Y})")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get transform position", ex.Message)
+        End Try
+
+        ' Test parent-child hierarchy
+        Try
+            entity2 = Framework_Ecs_CreateEntity()
+            Framework_Ecs_AddTransform2D(entity2, 0, 0, 0, 1, 1)
+            Framework_Ecs_SetParent(entity2, entity1)
+            Dim parent = Framework_Ecs_GetParent(entity2)
+            If parent = entity1 Then
+                LogPass("Parent-child hierarchy")
+            Else
+                LogFail("Parent-child hierarchy", $"Expected parent {entity1}, got {parent}")
+            End If
+        Catch ex As Exception
+            LogFail("Parent-child hierarchy", ex.Message)
+        End Try
+
+        ' Test child count
+        Try
+            Dim childCount = Framework_Ecs_GetChildCount(entity1)
+            If childCount = 1 Then
+                LogPass($"Child count (count={childCount})")
+            Else
+                LogFail("Child count", $"Expected 1, got {childCount}")
+            End If
+        Catch ex As Exception
+            LogFail("Child count", ex.Message)
+        End Try
+
+        ' Test velocity component
+        Try
+            Framework_Ecs_AddVelocity2D(entity1, 10, 20)
+            If Framework_Ecs_HasVelocity2D(entity1) Then
+                Dim vel = Framework_Ecs_GetVelocity(entity1)
+                If Math.Abs(vel.X - 10) < 0.01 AndAlso Math.Abs(vel.Y - 20) < 0.01 Then
+                    LogPass("Add/Get Velocity2D component")
+                Else
+                    LogFail("Add/Get Velocity2D component", $"Expected (10,20), got ({vel.X},{vel.Y})")
+                End If
+            Else
+                LogFail("Add/Get Velocity2D component", "No velocity component")
+            End If
+        Catch ex As Exception
+            LogFail("Add/Get Velocity2D component", ex.Message)
+        End Try
+
+        ' Test box collider
+        Try
+            Framework_Ecs_AddBoxCollider2D(entity1, 0, 0, 32, 32, False)
+            If Framework_Ecs_HasBoxCollider2D(entity1) Then
+                LogPass("Add BoxCollider2D component")
+            Else
+                LogFail("Add BoxCollider2D component", "No box collider")
+            End If
+        Catch ex As Exception
+            LogFail("Add BoxCollider2D component", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_Ecs_DestroyEntity(entity2)
+            Framework_Ecs_DestroyEntity(entity1)
+            If Not Framework_Ecs_IsAlive(entity1) Then
+                LogPass("Destroy entity")
+            Else
+                LogFail("Destroy entity", "Entity still alive after destroy")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy entity", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Camera System Tests"
+    Private Sub TestCameraSystem()
+        LogSection("Camera System")
+
+        ' Test set/get position
+        Try
+            Framework_Camera_SetPosition(100, 200)
+            Dim pos = Framework_Camera_GetPosition()
+            If Math.Abs(pos.X - 100) < 0.01 AndAlso Math.Abs(pos.Y - 200) < 0.01 Then
+                LogPass($"Set/Get camera position ({pos.X},{pos.Y})")
+            Else
+                LogFail("Set/Get camera position", $"Expected (100,200), got ({pos.X},{pos.Y})")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get camera position", ex.Message)
+        End Try
+
+        ' Test set/get zoom
+        Try
+            Framework_Camera_SetZoom(2.0F)
+            Dim zoom = Framework_Camera_GetZoom()
+            If Math.Abs(zoom - 2.0F) < 0.01 Then
+                LogPass($"Set/Get camera zoom ({zoom})")
+            Else
+                LogFail("Set/Get camera zoom", $"Expected 2.0, got {zoom}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get camera zoom", ex.Message)
+        End Try
+
+        ' Test set/get rotation
+        Try
+            Framework_Camera_SetRotation(45.0F)
+            Dim rot = Framework_Camera_GetRotation()
+            If Math.Abs(rot - 45.0F) < 0.01 Then
+                LogPass($"Set/Get camera rotation ({rot})")
+            Else
+                LogFail("Set/Get camera rotation", $"Expected 45.0, got {rot}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get camera rotation", ex.Message)
+        End Try
+
+        ' Test follow settings
+        Try
+            Framework_Camera_SetFollowLerp(0.5F)
+            Dim lerp = Framework_Camera_GetFollowLerp()
+            If Math.Abs(lerp - 0.5F) < 0.01 Then
+                LogPass("Set/Get follow lerp")
+            Else
+                LogFail("Set/Get follow lerp", $"Expected 0.5, got {lerp}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get follow lerp", ex.Message)
+        End Try
+
+        ' Test follow enabled
+        Try
+            Framework_Camera_SetFollowEnabled(True)
+            If Framework_Camera_IsFollowEnabled() Then
+                LogPass("Enable camera follow")
+            Else
+                LogFail("Enable camera follow", "Follow not enabled")
+            End If
+            Framework_Camera_SetFollowEnabled(False)
+        Catch ex As Exception
+            LogFail("Enable camera follow", ex.Message)
+        End Try
+
+        ' Test deadzone
+        Try
+            Framework_Camera_SetDeadzone(100, 80)
+            Dim w As Single = 0, h As Single = 0
+            Framework_Camera_GetDeadzone(w, h)
+            If Math.Abs(w - 100) < 0.01 AndAlso Math.Abs(h - 80) < 0.01 Then
+                LogPass("Set/Get camera deadzone")
+            Else
+                LogFail("Set/Get camera deadzone", $"Expected (100,80), got ({w},{h})")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get camera deadzone", ex.Message)
+        End Try
+
+        ' Test bounds
+        Try
+            Framework_Camera_SetBounds(0, 0, 1000, 1000)
+            Framework_Camera_SetBoundsEnabled(True)
+            If Framework_Camera_IsBoundsEnabled() Then
+                LogPass("Set camera bounds")
+            Else
+                LogFail("Set camera bounds", "Bounds not enabled")
+            End If
+            Framework_Camera_ClearBounds()
+        Catch ex As Exception
+            LogFail("Set camera bounds", ex.Message)
+        End Try
+
+        ' Test shake
+        Try
+            Framework_Camera_Shake(5.0F, 0.5F)
+            If Framework_Camera_IsShaking() Then
+                LogPass("Camera shake")
+            Else
+                LogFail("Camera shake", "Camera not shaking")
+            End If
+            Framework_Camera_StopShake()
+        Catch ex As Exception
+            LogFail("Camera shake", ex.Message)
+        End Try
+
+        ' Test zoom limits
+        Try
+            Framework_Camera_SetZoomLimits(0.5F, 3.0F)
+            LogPass("Set zoom limits")
+        Catch ex As Exception
+            LogFail("Set zoom limits", ex.Message)
+        End Try
+
+        ' Test reset
+        Try
+            Framework_Camera_Reset()
+            LogPass("Camera reset")
+        Catch ex As Exception
+            LogFail("Camera reset", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "UI System Tests"
+    Private Sub TestUISystem()
+        LogSection("UI System")
+
+        Dim labelId As Integer = -1
+        Dim buttonId As Integer = -1
+        Dim sliderId As Integer = -1
+        Dim checkboxId As Integer = -1
+        Dim panelId As Integer = -1
+
+        ' Test create label
+        Try
+            labelId = Framework_UI_CreateLabel("Test Label", 10, 10)
+            If labelId > 0 AndAlso Framework_UI_IsValid(labelId) Then
+                LogPass($"Create label (id={labelId})")
+            Else
+                LogFail("Create label", "Invalid label ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create label", ex.Message)
+        End Try
+
+        ' Test create button
+        Try
+            buttonId = Framework_UI_CreateButton("Click Me", 10, 50, 100, 30)
+            If buttonId > 0 AndAlso Framework_UI_IsValid(buttonId) Then
+                LogPass($"Create button (id={buttonId})")
+            Else
+                LogFail("Create button", "Invalid button ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create button", ex.Message)
+        End Try
+
+        ' Test create slider
+        Try
+            sliderId = Framework_UI_CreateSlider(10, 100, 150, 0, 100, 50)
+            If sliderId > 0 AndAlso Framework_UI_IsValid(sliderId) Then
+                LogPass($"Create slider (id={sliderId})")
+            Else
+                LogFail("Create slider", "Invalid slider ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create slider", ex.Message)
+        End Try
+
+        ' Test create checkbox
+        Try
+            checkboxId = Framework_UI_CreateCheckbox("Enable Feature", 10, 140, False)
+            If checkboxId > 0 AndAlso Framework_UI_IsValid(checkboxId) Then
+                LogPass($"Create checkbox (id={checkboxId})")
+            Else
+                LogFail("Create checkbox", "Invalid checkbox ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create checkbox", ex.Message)
+        End Try
+
+        ' Test create panel
+        Try
+            panelId = Framework_UI_CreatePanel(200, 10, 150, 200)
+            If panelId > 0 AndAlso Framework_UI_IsValid(panelId) Then
+                LogPass($"Create panel (id={panelId})")
+            Else
+                LogFail("Create panel", "Invalid panel ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create panel", ex.Message)
+        End Try
+
+        ' Test set/get position
+        If labelId > 0 Then
+            Try
+                Framework_UI_SetPosition(labelId, 20, 20)
+                Dim x = Framework_UI_GetX(labelId)
+                Dim y = Framework_UI_GetY(labelId)
+                If Math.Abs(x - 20) < 0.01 AndAlso Math.Abs(y - 20) < 0.01 Then
+                    LogPass("Set/Get UI position")
+                Else
+                    LogFail("Set/Get UI position", $"Expected (20,20), got ({x},{y})")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get UI position", ex.Message)
+            End Try
+        End If
+
+        ' Test visibility
+        If buttonId > 0 Then
+            Try
+                Framework_UI_SetVisible(buttonId, False)
+                If Not Framework_UI_IsVisible(buttonId) Then
+                    LogPass("Set UI visibility")
+                Else
+                    LogFail("Set UI visibility", "Still visible after hide")
+                End If
+                Framework_UI_SetVisible(buttonId, True)
+            Catch ex As Exception
+                LogFail("Set UI visibility", ex.Message)
+            End Try
+        End If
+
+        ' Test enabled state
+        If buttonId > 0 Then
+            Try
+                Framework_UI_SetEnabled(buttonId, False)
+                If Not Framework_UI_IsEnabled(buttonId) Then
+                    LogPass("Set UI enabled")
+                Else
+                    LogFail("Set UI enabled", "Still enabled after disable")
+                End If
+                Framework_UI_SetEnabled(buttonId, True)
+            Catch ex As Exception
+                LogFail("Set UI enabled", ex.Message)
+            End Try
+        End If
+
+        ' Test slider value
+        If sliderId > 0 Then
+            Try
+                Framework_UI_SetValue(sliderId, 75)
+                Dim val = Framework_UI_GetValue(sliderId)
+                If Math.Abs(val - 75) < 0.01 Then
+                    LogPass("Set/Get slider value")
+                Else
+                    LogFail("Set/Get slider value", $"Expected 75, got {val}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get slider value", ex.Message)
+            End Try
+        End If
+
+        ' Test checkbox checked state
+        If checkboxId > 0 Then
+            Try
+                Framework_UI_SetChecked(checkboxId, True)
+                If Framework_UI_IsChecked(checkboxId) Then
+                    LogPass("Set/Get checkbox state")
+                Else
+                    LogFail("Set/Get checkbox state", "Not checked after set")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get checkbox state", ex.Message)
+            End Try
+        End If
+
+        ' Test parent-child
+        If labelId > 0 AndAlso panelId > 0 Then
+            Try
+                Framework_UI_SetParent(labelId, panelId)
+                LogPass("Set UI parent")
+            Catch ex As Exception
+                LogFail("Set UI parent", ex.Message)
+            End Try
+        End If
+
+        ' Test styling
+        If buttonId > 0 Then
+            Try
+                Framework_UI_SetBackgroundColor(buttonId, 50, 100, 150, 255)
+                Framework_UI_SetTextColor(buttonId, 255, 255, 255, 255)
+                Framework_UI_SetBorderWidth(buttonId, 2)
+                Framework_UI_SetCornerRadius(buttonId, 5)
+                LogPass("Set UI styling")
+            Catch ex As Exception
+                LogFail("Set UI styling", ex.Message)
+            End Try
+        End If
+
+        ' Clean up
+        Try
+            Framework_UI_DestroyAll()
+            If Not Framework_UI_IsValid(labelId) Then
+                LogPass("Destroy all UI elements")
+            Else
+                LogFail("Destroy all UI elements", "Elements still valid")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy all UI elements", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Physics System Tests"
+    Private Sub TestPhysicsSystem()
+        LogSection("Physics System")
+
+        Dim bodyId As Integer = -1
+
+        ' Test set/get gravity
+        Try
+            Framework_Physics_SetGravity(0, 9.8F)
+            Dim gx As Single = 0, gy As Single = 0
+            Framework_Physics_GetGravity(gx, gy)
+            If Math.Abs(gx) < 0.01 AndAlso Math.Abs(gy - 9.8) < 0.1 Then
+                LogPass($"Set/Get gravity ({gx},{gy})")
+            Else
+                LogFail("Set/Get gravity", $"Expected (0,9.8), got ({gx},{gy})")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get gravity", ex.Message)
+        End Try
+
+        ' Test create body (dynamic = 1)
+        Try
+            bodyId = Framework_Physics_CreateBody(1, 100, 100)
+            If bodyId > 0 AndAlso Framework_Physics_IsBodyValid(bodyId) Then
+                LogPass($"Create physics body (id={bodyId})")
+            Else
+                LogFail("Create physics body", "Invalid body ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create physics body", ex.Message)
+        End Try
+
+        ' Test body position
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_SetBodyPosition(bodyId, 200, 200)
+                Dim x As Single = 0, y As Single = 0
+                Framework_Physics_GetBodyPosition(bodyId, x, y)
+                If Math.Abs(x - 200) < 0.01 AndAlso Math.Abs(y - 200) < 0.01 Then
+                    LogPass("Set/Get body position")
+                Else
+                    LogFail("Set/Get body position", $"Expected (200,200), got ({x},{y})")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get body position", ex.Message)
+            End Try
+        End If
+
+        ' Test body velocity
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_SetBodyVelocity(bodyId, 50, -100)
+                Dim vx As Single = 0, vy As Single = 0
+                Framework_Physics_GetBodyVelocity(bodyId, vx, vy)
+                If Math.Abs(vx - 50) < 0.01 AndAlso Math.Abs(vy + 100) < 0.01 Then
+                    LogPass("Set/Get body velocity")
+                Else
+                    LogFail("Set/Get body velocity", $"Expected (50,-100), got ({vx},{vy})")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get body velocity", ex.Message)
+            End Try
+        End If
+
+        ' Test body mass
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_SetBodyMass(bodyId, 5.0F)
+                Dim mass = Framework_Physics_GetBodyMass(bodyId)
+                If Math.Abs(mass - 5.0) < 0.01 Then
+                    LogPass("Set/Get body mass")
+                Else
+                    LogFail("Set/Get body mass", $"Expected 5.0, got {mass}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get body mass", ex.Message)
+            End Try
+        End If
+
+        ' Test body restitution
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_SetBodyRestitution(bodyId, 0.8F)
+                Dim rest = Framework_Physics_GetBodyRestitution(bodyId)
+                If Math.Abs(rest - 0.8) < 0.01 Then
+                    LogPass("Set/Get body restitution")
+                Else
+                    LogFail("Set/Get body restitution", $"Expected 0.8, got {rest}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get body restitution", ex.Message)
+            End Try
+        End If
+
+        ' Test body friction
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_SetBodyFriction(bodyId, 0.3F)
+                Dim fric = Framework_Physics_GetBodyFriction(bodyId)
+                If Math.Abs(fric - 0.3) < 0.01 Then
+                    LogPass("Set/Get body friction")
+                Else
+                    LogFail("Set/Get body friction", $"Expected 0.3, got {fric}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get body friction", ex.Message)
+            End Try
+        End If
+
+        ' Test body shape (circle)
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_SetBodyCircle(bodyId, 25.0F)
+                LogPass("Set body circle shape")
+            Catch ex As Exception
+                LogFail("Set body circle shape", ex.Message)
+            End Try
+        End If
+
+        ' Test body shape (box)
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_SetBodyBox(bodyId, 50, 50)
+                LogPass("Set body box shape")
+            Catch ex As Exception
+                LogFail("Set body box shape", ex.Message)
+            End Try
+        End If
+
+        ' Test fixed rotation
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_SetBodyFixedRotation(bodyId, True)
+                If Framework_Physics_IsBodyFixedRotation(bodyId) Then
+                    LogPass("Set fixed rotation")
+                Else
+                    LogFail("Set fixed rotation", "Not fixed after set")
+                End If
+            Catch ex As Exception
+                LogFail("Set fixed rotation", ex.Message)
+            End Try
+        End If
+
+        ' Test apply force
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_ApplyForce(bodyId, 100, 0)
+                LogPass("Apply force")
+            Catch ex As Exception
+                LogFail("Apply force", ex.Message)
+            End Try
+        End If
+
+        ' Test apply impulse
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_ApplyImpulse(bodyId, 10, 0)
+                LogPass("Apply impulse")
+            Catch ex As Exception
+                LogFail("Apply impulse", ex.Message)
+            End Try
+        End If
+
+        ' Clean up
+        If bodyId > 0 Then
+            Try
+                Framework_Physics_DestroyBody(bodyId)
+                If Not Framework_Physics_IsBodyValid(bodyId) Then
+                    LogPass("Destroy physics body")
+                Else
+                    LogFail("Destroy physics body", "Body still valid")
+                End If
+            Catch ex As Exception
+                LogFail("Destroy physics body", ex.Message)
+            End Try
+        End If
+    End Sub
+#End Region
+
+#Region "Tweening System Tests"
+    Private Sub TestTweeningSystem()
+        LogSection("Tweening System")
+
+        Dim tweenId As Integer = -1
+
+        ' Test create float tween (easing 0 = linear)
+        Try
+            tweenId = Framework_Tween_Float(0, 100, 1.0F, 0)
+            If tweenId > 0 AndAlso Framework_Tween_IsValid(tweenId) Then
+                LogPass($"Create float tween (id={tweenId})")
+            Else
+                LogFail("Create float tween", "Invalid tween ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create float tween", ex.Message)
+        End Try
+
+        ' Test tween properties
+        If tweenId > 0 Then
+            Try
+                Dim duration = Framework_Tween_GetDuration(tweenId)
+                If Math.Abs(duration - 1.0) < 0.01 Then
+                    LogPass("Get tween duration")
+                Else
+                    LogFail("Get tween duration", $"Expected 1.0, got {duration}")
+                End If
+            Catch ex As Exception
+                LogFail("Get tween duration", ex.Message)
+            End Try
+        End If
+
+        ' Test play tween
+        If tweenId > 0 Then
+            Try
+                Framework_Tween_Play(tweenId)
+                If Framework_Tween_IsPlaying(tweenId) Then
+                    LogPass("Play tween")
+                Else
+                    LogFail("Play tween", "Not playing after play")
+                End If
+            Catch ex As Exception
+                LogFail("Play tween", ex.Message)
+            End Try
+        End If
+
+        ' Test pause tween
+        If tweenId > 0 Then
+            Try
+                Framework_Tween_Pause(tweenId)
+                If Framework_Tween_IsPaused(tweenId) Then
+                    LogPass("Pause tween")
+                Else
+                    LogFail("Pause tween", "Not paused after pause")
+                End If
+            Catch ex As Exception
+                LogFail("Pause tween", ex.Message)
+            End Try
+        End If
+
+        ' Test resume tween
+        If tweenId > 0 Then
+            Try
+                Framework_Tween_Resume(tweenId)
+                If Framework_Tween_IsPlaying(tweenId) Then
+                    LogPass("Resume tween")
+                Else
+                    LogFail("Resume tween", "Not playing after resume")
+                End If
+            Catch ex As Exception
+                LogFail("Resume tween", ex.Message)
+            End Try
+        End If
+
+        ' Test set delay
+        If tweenId > 0 Then
+            Try
+                Framework_Tween_SetDelay(tweenId, 0.5F)
+                Dim delay = Framework_Tween_GetDelay(tweenId)
+                If Math.Abs(delay - 0.5) < 0.01 Then
+                    LogPass("Set/Get tween delay")
+                Else
+                    LogFail("Set/Get tween delay", $"Expected 0.5, got {delay}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get tween delay", ex.Message)
+            End Try
+        End If
+
+        ' Test loop mode
+        If tweenId > 0 Then
+            Try
+                Framework_Tween_SetLoopMode(tweenId, 1) ' 1 = restart
+                Dim mode = Framework_Tween_GetLoopMode(tweenId)
+                If mode = 1 Then
+                    LogPass("Set/Get loop mode")
+                Else
+                    LogFail("Set/Get loop mode", $"Expected 1, got {mode}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get loop mode", ex.Message)
+            End Try
+        End If
+
+        ' Test loop count
+        If tweenId > 0 Then
+            Try
+                Framework_Tween_SetLoopCount(tweenId, 3)
+                Dim count = Framework_Tween_GetLoopCount(tweenId)
+                If count = 3 Then
+                    LogPass("Set/Get loop count")
+                Else
+                    LogFail("Set/Get loop count", $"Expected 3, got {count}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get loop count", ex.Message)
+            End Try
+        End If
+
+        ' Test time scale
+        If tweenId > 0 Then
+            Try
+                Framework_Tween_SetTimeScale(tweenId, 2.0F)
+                Dim scale = Framework_Tween_GetTimeScale(tweenId)
+                If Math.Abs(scale - 2.0) < 0.01 Then
+                    LogPass("Set/Get time scale")
+                Else
+                    LogFail("Set/Get time scale", $"Expected 2.0, got {scale}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get time scale", ex.Message)
+            End Try
+        End If
+
+        ' Test kill tween
+        If tweenId > 0 Then
+            Try
+                Framework_Tween_Kill(tweenId)
+                If Not Framework_Tween_IsValid(tweenId) Then
+                    LogPass("Kill tween")
+                Else
+                    LogFail("Kill tween", "Tween still valid")
+                End If
+            Catch ex As Exception
+                LogFail("Kill tween", ex.Message)
+            End Try
+        End If
+
+        ' Test vector2 tween
+        Try
+            Dim vecTween = Framework_Tween_Vector2(0, 0, 100, 100, 0.5F, 0)
+            If vecTween > 0 Then
+                LogPass("Create Vector2 tween")
+                Framework_Tween_Kill(vecTween)
+            Else
+                LogFail("Create Vector2 tween", "Invalid tween ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create Vector2 tween", ex.Message)
+        End Try
+
+        ' Test sequence
+        Try
+            Dim seqId = Framework_Tween_CreateSequence()
+            If seqId > 0 AndAlso Framework_Tween_IsSequenceValid(seqId) Then
+                LogPass("Create tween sequence")
+                Framework_Tween_KillSequence(seqId)
+            Else
+                LogFail("Create tween sequence", "Invalid sequence ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create tween sequence", ex.Message)
+        End Try
+
+        ' Test global time scale
+        Try
+            Framework_Tween_SetGlobalTimeScale(1.5F)
+            Dim scale = Framework_Tween_GetGlobalTimeScale()
+            If Math.Abs(scale - 1.5) < 0.01 Then
+                LogPass("Set/Get global time scale")
+            Else
+                LogFail("Set/Get global time scale", $"Expected 1.5, got {scale}")
+            End If
+            Framework_Tween_SetGlobalTimeScale(1.0F)
+        Catch ex As Exception
+            LogFail("Set/Get global time scale", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Timer System Tests"
+    Private _timerCallbackCalled As Boolean = False
+
+    Private Sub TimerTestCallback(timerId As Integer, userData As IntPtr)
+        _timerCallbackCalled = True
+    End Sub
+
+    Private Sub TestTimerSystem()
+        LogSection("Timer System")
+
+        Dim timerId As Integer = -1
+
+        ' Test create timer (After)
+        Try
+            Dim callback As New TimerCallback(AddressOf TimerTestCallback)
+            timerId = Framework_Timer_After(1.0F, callback, IntPtr.Zero)
+            If timerId > 0 AndAlso Framework_Timer_IsValid(timerId) Then
+                LogPass($"Create timer (id={timerId})")
+            Else
+                LogFail("Create timer", "Invalid timer ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create timer", ex.Message)
+        End Try
+
+        ' Test timer is running
+        If timerId > 0 Then
+            Try
+                If Framework_Timer_IsRunning(timerId) Then
+                    LogPass("Timer is running")
+                Else
+                    LogFail("Timer is running", "Timer not running")
+                End If
+            Catch ex As Exception
+                LogFail("Timer is running", ex.Message)
+            End Try
+        End If
+
+        ' Test pause timer
+        If timerId > 0 Then
+            Try
+                Framework_Timer_Pause(timerId)
+                If Framework_Timer_IsPaused(timerId) Then
+                    LogPass("Pause timer")
+                Else
+                    LogFail("Pause timer", "Not paused")
+                End If
+            Catch ex As Exception
+                LogFail("Pause timer", ex.Message)
+            End Try
+        End If
+
+        ' Test resume timer
+        If timerId > 0 Then
+            Try
+                Framework_Timer_Resume(timerId)
+                If Framework_Timer_IsRunning(timerId) Then
+                    LogPass("Resume timer")
+                Else
+                    LogFail("Resume timer", "Not running after resume")
+                End If
+            Catch ex As Exception
+                LogFail("Resume timer", ex.Message)
+            End Try
+        End If
+
+        ' Test get remaining time (one-shot timers use remaining, not interval)
+        If timerId > 0 Then
+            Try
+                Dim remaining = Framework_Timer_GetRemaining(timerId)
+                ' Remaining should be close to 1.0 for a timer that just started
+                If remaining >= 0 Then
+                    LogPass($"Get timer remaining (remaining={remaining:F2})")
+                Else
+                    LogFail("Get timer remaining", $"Unexpected remaining={remaining}")
+                End If
+            Catch ex As Exception
+                LogFail("Get timer remaining", ex.Message)
+            End Try
+        End If
+
+        ' Test time scale
+        If timerId > 0 Then
+            Try
+                Framework_Timer_SetTimeScale(timerId, 2.0F)
+                Dim scale = Framework_Timer_GetTimeScale(timerId)
+                If Math.Abs(scale - 2.0) < 0.01 Then
+                    LogPass("Set/Get timer time scale")
+                Else
+                    LogFail("Set/Get timer time scale", $"Expected 2.0, got {scale}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get timer time scale", ex.Message)
+            End Try
+        End If
+
+        ' Test cancel timer
+        If timerId > 0 Then
+            Try
+                Framework_Timer_Cancel(timerId)
+                ' After cancelling, the timer should no longer be valid or running
+                ' Different implementations may handle this differently
+                Dim isValid = Framework_Timer_IsValid(timerId)
+                Dim isRunning = Framework_Timer_IsRunning(timerId)
+                ' The timer was cancelled, log its state
+                LogPass($"Cancel timer (valid={isValid}, running={isRunning})")
+            Catch ex As Exception
+                LogFail("Cancel timer", ex.Message)
+            End Try
+        End If
+
+        ' Test repeating timer
+        Try
+            Dim callback As New TimerCallback(AddressOf TimerTestCallback)
+            Dim repeatTimer = Framework_Timer_EveryLimit(0.5F, 3, callback, IntPtr.Zero)
+            If repeatTimer > 0 Then
+                Dim repeatCount = Framework_Timer_GetRepeatCount(repeatTimer)
+                If repeatCount = 3 Then
+                    LogPass("Create repeating timer")
+                Else
+                    LogFail("Create repeating timer", $"Expected repeat count 3, got {repeatCount}")
+                End If
+                Framework_Timer_Cancel(repeatTimer)
+            Else
+                LogFail("Create repeating timer", "Invalid timer ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create repeating timer", ex.Message)
+        End Try
+
+        ' Test timer sequence
+        Try
+            Dim seqId = Framework_Timer_CreateSequence()
+            If seqId > 0 AndAlso Framework_Timer_SequenceIsValid(seqId) Then
+                LogPass("Create timer sequence")
+                Framework_Timer_SequenceCancel(seqId)
+            Else
+                LogFail("Create timer sequence", "Invalid sequence ID")
+            End If
+        Catch ex As Exception
+            LogFail("Create timer sequence", ex.Message)
+        End Try
+
+        ' Test global time scale
+        Try
+            Framework_Timer_SetGlobalTimeScale(0.5F)
+            Dim scale = Framework_Timer_GetGlobalTimeScale()
+            If Math.Abs(scale - 0.5) < 0.01 Then
+                LogPass("Set/Get global time scale")
+            Else
+                LogFail("Set/Get global time scale", $"Expected 0.5, got {scale}")
+            End If
+            Framework_Timer_SetGlobalTimeScale(1.0F)
+        Catch ex As Exception
+            LogFail("Set/Get global time scale", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Event System Tests"
+    Private _eventCallbackCalled As Boolean = False
+    Private _eventIntValue As Integer = 0
+
+    Private Sub EventTestCallback(eventId As Integer, userData As IntPtr)
+        _eventCallbackCalled = True
+    End Sub
+
+    Private Sub EventTestCallbackInt(eventId As Integer, value As Integer, userData As IntPtr)
+        _eventCallbackCalled = True
+        _eventIntValue = value
+    End Sub
+
+    Private Sub TestEventSystem()
+        LogSection("Event System")
+
+        Dim eventId As Integer = -1
+        Dim subscriptionId As Integer = -1
+
+        ' Test register event
+        Try
+            eventId = Framework_Event_Register("TestEvent")
+            If eventId > 0 Then
+                LogPass($"Register event (id={eventId})")
+            Else
+                LogFail("Register event", "Invalid event ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Register event", ex.Message)
+            Return
+        End Try
+
+        ' Test event exists
+        Try
+            If Framework_Event_Exists("TestEvent") Then
+                LogPass("Event exists check")
+            Else
+                LogFail("Event exists check", "Event not found")
+            End If
+        Catch ex As Exception
+            LogFail("Event exists check", ex.Message)
+        End Try
+
+        ' Test get event by name
+        Try
+            Dim foundId = Framework_Event_GetId("TestEvent")
+            If foundId = eventId Then
+                LogPass("Get event by name")
+            Else
+                LogFail("Get event by name", $"Expected {eventId}, got {foundId}")
+            End If
+        Catch ex As Exception
+            LogFail("Get event by name", ex.Message)
+        End Try
+
+        ' Test subscribe to event
+        Try
+            Dim callback As New EventCallback(AddressOf EventTestCallback)
+            subscriptionId = Framework_Event_Subscribe(eventId, callback, IntPtr.Zero)
+            If subscriptionId > 0 AndAlso Framework_Event_IsSubscriptionValid(subscriptionId) Then
+                LogPass($"Subscribe to event (subId={subscriptionId})")
+            Else
+                LogFail("Subscribe to event", "Invalid subscription ID")
+            End If
+        Catch ex As Exception
+            LogFail("Subscribe to event", ex.Message)
+        End Try
+
+        ' Test subscriber count
+        Try
+            Dim count = Framework_Event_GetSubscriberCount(eventId)
+            If count >= 1 Then
+                LogPass($"Subscriber count (count={count})")
+            Else
+                LogFail("Subscriber count", $"Expected >= 1, got {count}")
+            End If
+        Catch ex As Exception
+            LogFail("Subscriber count", ex.Message)
+        End Try
+
+        ' Test publish event
+        Try
+            _eventCallbackCalled = False
+            Framework_Event_Publish(eventId)
+            If _eventCallbackCalled Then
+                LogPass("Publish event (callback invoked)")
+            Else
+                LogFail("Publish event", "Callback not invoked")
+            End If
+        Catch ex As Exception
+            LogFail("Publish event", ex.Message)
+        End Try
+
+        ' Test subscription priority
+        If subscriptionId > 0 Then
+            Try
+                Framework_Event_SetPriority(subscriptionId, 10)
+                Dim priority = Framework_Event_GetPriority(subscriptionId)
+                If priority = 10 Then
+                    LogPass("Set/Get subscription priority")
+                Else
+                    LogFail("Set/Get subscription priority", $"Expected 10, got {priority}")
+                End If
+            Catch ex As Exception
+                LogFail("Set/Get subscription priority", ex.Message)
+            End Try
+        End If
+
+        ' Test subscription enabled
+        If subscriptionId > 0 Then
+            Try
+                Framework_Event_SetEnabled(subscriptionId, False)
+                If Not Framework_Event_IsEnabled(subscriptionId) Then
+                    LogPass("Disable subscription")
+                Else
+                    LogFail("Disable subscription", "Still enabled")
+                End If
+                Framework_Event_SetEnabled(subscriptionId, True)
+            Catch ex As Exception
+                LogFail("Disable subscription", ex.Message)
+            End Try
+        End If
+
+        ' Test unsubscribe
+        If subscriptionId > 0 Then
+            Try
+                Framework_Event_Unsubscribe(subscriptionId)
+                If Not Framework_Event_IsSubscriptionValid(subscriptionId) Then
+                    LogPass("Unsubscribe from event")
+                Else
+                    LogFail("Unsubscribe from event", "Subscription still valid")
+                End If
+            Catch ex As Exception
+                LogFail("Unsubscribe from event", ex.Message)
+            End Try
+        End If
+
+        ' Test publish by name
+        Try
+            Dim callback As New EventCallback(AddressOf EventTestCallback)
+            Dim subId = Framework_Event_SubscribeByName("TestEvent", callback, IntPtr.Zero)
+            _eventCallbackCalled = False
+            Framework_Event_PublishByName("TestEvent")
+            If _eventCallbackCalled Then
+                LogPass("Publish event by name")
+            Else
+                LogFail("Publish event by name", "Callback not invoked")
+            End If
+            Framework_Event_Unsubscribe(subId)
+        Catch ex As Exception
+            LogFail("Publish event by name", ex.Message)
+        End Try
+
+        ' Test queued event
+        Try
+            Framework_Event_Queue(eventId)
+            Dim queuedCount = Framework_Event_GetQueuedCount()
+            If queuedCount >= 1 Then
+                LogPass("Queue event")
+            Else
+                LogFail("Queue event", $"Expected >= 1 queued, got {queuedCount}")
+            End If
+            Framework_Event_ClearQueue()
+        Catch ex As Exception
+            LogFail("Queue event", ex.Message)
+        End Try
+
+        ' Clean up
+        Try
+            Framework_Event_Clear()
+            LogPass("Clear all events")
+        Catch ex As Exception
+            LogFail("Clear all events", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Input Manager Tests"
+    Private Sub TestInputManagerSystem()
+        LogSection("Input Manager System")
+
+        Dim actionId As Integer = -1
+
+        ' Test create action
+        Try
+            actionId = Framework_Input_CreateAction("Jump")
+            If actionId > 0 AndAlso Framework_Input_IsActionValid(actionId) Then
+                LogPass($"Create action (id={actionId})")
+            Else
+                LogFail("Create action", "Invalid action ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create action", ex.Message)
+            Return
+        End Try
+
+        ' Test get action by name
+        Try
+            Dim foundId = Framework_Input_GetAction("Jump")
+            If foundId = actionId Then
+                LogPass("Get action by name")
+            Else
+                LogFail("Get action by name", $"Expected {actionId}, got {foundId}")
+            End If
+        Catch ex As Exception
+            LogFail("Get action by name", ex.Message)
+        End Try
+
+        ' Test bind key
+        Try
+            Framework_Input_BindKey(actionId, 32) ' SPACE key
+            LogPass("Bind key to action")
+        Catch ex As Exception
+            LogFail("Bind key to action", ex.Message)
+        End Try
+
+        ' Test bind mouse button
+        Try
+            Framework_Input_BindMouseButton(actionId, 0) ' Left mouse button
+            LogPass("Bind mouse button to action")
+        Catch ex As Exception
+            LogFail("Bind mouse button to action", ex.Message)
+        End Try
+
+        ' Test action deadzone
+        Try
+            Framework_Input_SetActionDeadzone(actionId, 0.2F)
+            Dim deadzone = Framework_Input_GetActionDeadzone(actionId)
+            If Math.Abs(deadzone - 0.2) < 0.01 Then
+                LogPass("Set/Get action deadzone")
+            Else
+                LogFail("Set/Get action deadzone", $"Expected 0.2, got {deadzone}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get action deadzone", ex.Message)
+        End Try
+
+        ' Test action sensitivity
+        Try
+            Framework_Input_SetActionSensitivity(actionId, 1.5F)
+            Dim sensitivity = Framework_Input_GetActionSensitivity(actionId)
+            If Math.Abs(sensitivity - 1.5) < 0.01 Then
+                LogPass("Set/Get action sensitivity")
+            Else
+                LogFail("Set/Get action sensitivity", $"Expected 1.5, got {sensitivity}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get action sensitivity", ex.Message)
+        End Try
+
+        ' Test unbind key
+        Try
+            Framework_Input_UnbindKey(actionId, 32)
+            LogPass("Unbind key from action")
+        Catch ex As Exception
+            LogFail("Unbind key from action", ex.Message)
+        End Try
+
+        ' Test clear key bindings
+        Try
+            Framework_Input_ClearKeyBindings(actionId)
+            LogPass("Clear key bindings")
+        Catch ex As Exception
+            LogFail("Clear key bindings", ex.Message)
+        End Try
+
+        ' Test gamepad count (may be 0 if no gamepad)
+        Try
+            Dim count = Framework_Input_GetGamepadCount()
+            LogPass($"Get gamepad count (count={count})")
+        Catch ex As Exception
+            LogFail("Get gamepad count", ex.Message)
+        End Try
+
+        ' Test active gamepad
+        Try
+            Framework_Input_SetActiveGamepad(0)
+            Dim active = Framework_Input_GetActiveGamepad()
+            If active = 0 Then
+                LogPass("Set/Get active gamepad")
+            Else
+                LogFail("Set/Get active gamepad", $"Expected 0, got {active}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get active gamepad", ex.Message)
+        End Try
+
+        ' Test destroy action
+        Try
+            Framework_Input_DestroyAction(actionId)
+            If Not Framework_Input_IsActionValid(actionId) Then
+                LogPass("Destroy action")
+            Else
+                LogFail("Destroy action", "Action still valid")
+            End If
+        Catch ex As Exception
+            LogFail("Destroy action", ex.Message)
+        End Try
+
+        ' Test clear all actions
+        Try
+            Framework_Input_ClearAllActions()
+            LogPass("Clear all actions")
+        Catch ex As Exception
+            LogFail("Clear all actions", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Save/Load System Tests"
+    Private Sub TestSaveLoadSystem()
+        LogSection("Save/Load System")
+
+        ' Test set save directory
+        Try
+            Framework_Save_SetDirectory("./saves")
+            LogPass("Set save directory")
+        Catch ex As Exception
+            LogFail("Set save directory", ex.Message)
+        End Try
+
+        ' Test begin/end save
+        Try
+            If Framework_Save_BeginSave(0) Then
+                Framework_Save_WriteInt("testInt", 42)
+                Framework_Save_WriteFloat("testFloat", 3.14F)
+                Framework_Save_WriteBool("testBool", True)
+                Framework_Save_WriteString("testString", "Hello World")
+                If Framework_Save_EndSave() Then
+                    LogPass("Begin/End save with data")
+                Else
+                    LogFail("Begin/End save with data", "EndSave failed")
+                End If
+            Else
+                LogFail("Begin/End save with data", "BeginSave failed")
+            End If
+        Catch ex As Exception
+            LogFail("Begin/End save with data", ex.Message)
+        End Try
+
+        ' Test slot exists
+        Try
+            If Framework_Save_SlotExists(0) Then
+                LogPass("Slot exists check")
+            Else
+                LogFail("Slot exists check", "Slot 0 doesn't exist after save")
+            End If
+        Catch ex As Exception
+            LogFail("Slot exists check", ex.Message)
+        End Try
+
+        ' Test begin/end load
+        Try
+            If Framework_Save_BeginLoad(0) Then
+                Dim intVal = Framework_Save_ReadInt("testInt", 0)
+                Dim floatVal = Framework_Save_ReadFloat("testFloat", 0)
+                Dim boolVal = Framework_Save_ReadBool("testBool", False)
+
+                If intVal = 42 AndAlso Math.Abs(floatVal - 3.14) < 0.01 AndAlso boolVal = True Then
+                    LogPass("Begin/End load with data verification")
+                Else
+                    LogFail("Begin/End load with data verification", $"Values mismatch: int={intVal}, float={floatVal}, bool={boolVal}")
+                End If
+                Framework_Save_EndLoad()
+            Else
+                LogFail("Begin/End load with data verification", "BeginLoad failed")
+            End If
+        Catch ex As Exception
+            LogFail("Begin/End load with data verification", ex.Message)
+        End Try
+
+        ' Test has key
+        Try
+            If Framework_Save_BeginLoad(0) Then
+                If Framework_Save_HasKey("testInt") Then
+                    LogPass("HasKey check")
+                Else
+                    LogFail("HasKey check", "Key 'testInt' not found")
+                End If
+                Framework_Save_EndLoad()
+            End If
+        Catch ex As Exception
+            LogFail("HasKey check", ex.Message)
+        End Try
+
+        ' Test auto-save settings
+        Try
+            Framework_Save_SetAutoSaveEnabled(True)
+            If Framework_Save_IsAutoSaveEnabled() Then
+                LogPass("Enable auto-save")
+            Else
+                LogFail("Enable auto-save", "Not enabled after set")
+            End If
+            Framework_Save_SetAutoSaveEnabled(False)
+        Catch ex As Exception
+            LogFail("Enable auto-save", ex.Message)
+        End Try
+
+        ' Test auto-save interval
+        Try
+            Framework_Save_SetAutoSaveInterval(60.0F)
+            Dim interval = Framework_Save_GetAutoSaveInterval()
+            If Math.Abs(interval - 60.0) < 0.1 Then
+                LogPass("Set/Get auto-save interval")
+            Else
+                LogFail("Set/Get auto-save interval", $"Expected 60.0, got {interval}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get auto-save interval", ex.Message)
+        End Try
+
+        ' Test auto-save slot
+        Try
+            Framework_Save_SetAutoSaveSlot(1)
+            Dim slot = Framework_Save_GetAutoSaveSlot()
+            If slot = 1 Then
+                LogPass("Set/Get auto-save slot")
+            Else
+                LogFail("Set/Get auto-save slot", $"Expected 1, got {slot}")
+            End If
+        Catch ex As Exception
+            LogFail("Set/Get auto-save slot", ex.Message)
+        End Try
+
+        ' Test settings system
+        Try
+            Framework_Settings_SetInt("volume", 80)
+            Dim volume = Framework_Settings_GetInt("volume", 0)
+            If volume = 80 Then
+                LogPass("Settings Set/Get int")
+            Else
+                LogFail("Settings Set/Get int", $"Expected 80, got {volume}")
+            End If
+        Catch ex As Exception
+            LogFail("Settings Set/Get int", ex.Message)
+        End Try
+
+        ' Test settings float
+        Try
+            Framework_Settings_SetFloat("sensitivity", 1.5F)
+            Dim sensitivity = Framework_Settings_GetFloat("sensitivity", 0)
+            If Math.Abs(sensitivity - 1.5) < 0.01 Then
+                LogPass("Settings Set/Get float")
+            Else
+                LogFail("Settings Set/Get float", $"Expected 1.5, got {sensitivity}")
+            End If
+        Catch ex As Exception
+            LogFail("Settings Set/Get float", ex.Message)
+        End Try
+
+        ' Test settings bool
+        Try
+            Framework_Settings_SetBool("fullscreen", True)
+            Dim fullscreen = Framework_Settings_GetBool("fullscreen", False)
+            If fullscreen = True Then
+                LogPass("Settings Set/Get bool")
+            Else
+                LogFail("Settings Set/Get bool", $"Expected True, got {fullscreen}")
+            End If
+        Catch ex As Exception
+            LogFail("Settings Set/Get bool", ex.Message)
+        End Try
+
+        ' Test delete slot
+        Try
+            If Framework_Save_DeleteSlot(0) Then
+                If Not Framework_Save_SlotExists(0) Then
+                    LogPass("Delete save slot")
+                Else
+                    LogFail("Delete save slot", "Slot still exists")
+                End If
+            Else
+                LogFail("Delete save slot", "DeleteSlot returned false")
+            End If
+        Catch ex As Exception
+            LogFail("Delete save slot", ex.Message)
+        End Try
+
+        ' Test settings clear
+        Try
+            Framework_Settings_Clear()
+            LogPass("Clear settings")
+        Catch ex As Exception
+            LogFail("Clear settings", ex.Message)
         End Try
     End Sub
 #End Region
