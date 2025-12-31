@@ -45,11 +45,10 @@
       </RuleSet>
     </Span>
 
-    <!-- Character Literals -->
-    <Span color="String">
-      <Begin>'</Begin>
-      <End>'c</End>
-    </Span>
+    <!-- Character Literals (VB-style: "x"c) -->
+    <Rule color="String">
+      "[^"]"c
+    </Rule>
 
     <!-- Control Flow Keywords -->
     <Keywords color="ControlKeyword">
