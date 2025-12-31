@@ -15,7 +15,7 @@ Public Module FrameworkWrapper
 
 #Region "Engine State & Lifecycle"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Initialize(width As Integer, height As Integer, title As String) As Boolean
+    Public Function Framework_Initialize(width As Integer, height As Integer, title As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -23,7 +23,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_ShouldClose() As Boolean
+    Public Function Framework_ShouldClose() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -47,7 +47,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsPaused() As Boolean
+    Public Function Framework_IsPaused() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 #End Region
 
@@ -151,7 +151,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_StepFixed() As Boolean
+    Public Function Framework_StepFixed() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -165,23 +165,23 @@ Public Module FrameworkWrapper
 
 #Region "Input - Keyboard"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyPressed(key As Integer) As Boolean
+    Public Function Framework_IsKeyPressed(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyPressedRepeat(key As Integer) As Boolean
+    Public Function Framework_IsKeyPressedRepeat(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyDown(key As Integer) As Boolean
+    Public Function Framework_IsKeyDown(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyReleased(key As Integer) As Boolean
+    Public Function Framework_IsKeyReleased(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsKeyUp(key As Integer) As Boolean
+    Public Function Framework_IsKeyUp(key As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -207,19 +207,19 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMouseButtonPressed(button As Integer) As Boolean
+    Public Function Framework_IsMouseButtonPressed(button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMouseButtonDown(button As Integer) As Boolean
+    Public Function Framework_IsMouseButtonDown(button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMouseButtonReleased(button As Integer) As Boolean
+    Public Function Framework_IsMouseButtonReleased(button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMouseButtonUp(button As Integer) As Boolean
+    Public Function Framework_IsMouseButtonUp(button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -263,7 +263,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsCursorHidden() As Boolean
+    Public Function Framework_IsCursorHidden() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -275,41 +275,41 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsCursorOnScreen() As Boolean
+    Public Function Framework_IsCursorOnScreen() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 #End Region
 
 #Region "Collisions"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_CheckCollisionRecs(rec1 As Rectangle, rec2 As Rectangle) As Boolean
+    Public Function Framework_CheckCollisionRecs(rec1 As Rectangle, rec2 As Rectangle) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_CheckCollisionCircles(center1 As Vector2, radius1 As Single, center2 As Vector2, radius2 As Single) As Boolean
+    Public Function Framework_CheckCollisionCircles(center1 As Vector2, radius1 As Single, center2 As Vector2, radius2 As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_CheckCollisionCircleRec(center As Vector2, radius As Single, rec As Rectangle) As Boolean
+    Public Function Framework_CheckCollisionCircleRec(center As Vector2, radius As Single, rec As Rectangle) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_CheckCollisionCircleLine(center As Vector2, radius As Single, p1 As Vector2, p2 As Vector2) As Boolean
+    Public Function Framework_CheckCollisionCircleLine(center As Vector2, radius As Single, p1 As Vector2, p2 As Vector2) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_CheckCollisionPointRec(point As Vector2, rec As Rectangle) As Boolean
+    Public Function Framework_CheckCollisionPointRec(point As Vector2, rec As Rectangle) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_CheckCollisionPointCircle(point As Vector2, center As Vector2, radius As Single) As Boolean
+    Public Function Framework_CheckCollisionPointCircle(point As Vector2, center As Vector2, radius As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_CheckCollisionPointTriangle(point As Vector2, p1 As Vector2, p2 As Vector2, p3 As Vector2) As Boolean
+    Public Function Framework_CheckCollisionPointTriangle(point As Vector2, p1 As Vector2, p2 As Vector2, p3 As Vector2) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_CheckCollisionPointLine(point As Vector2, p1 As Vector2, p2 As Vector2, threshold As Integer) As Boolean
+    Public Function Framework_CheckCollisionPointLine(point As Vector2, p1 As Vector2, p2 As Vector2, threshold As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -327,7 +327,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsTextureValid(tex As Texture2D) As Boolean
+    Public Function Framework_IsTextureValid(tex As Texture2D) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -385,7 +385,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsTextureValidH(h As Integer) As Boolean
+    Public Function Framework_IsTextureValidH(h As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -449,7 +449,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsRenderTextureValid(target As RenderTexture2D) As Boolean
+    Public Function Framework_IsRenderTextureValid(target As RenderTexture2D) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -540,11 +540,11 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Camera_SetFollowEnabled(enabled As Boolean)
+    Public Sub Framework_Camera_SetFollowEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Camera_IsFollowEnabled() As Boolean
+    Public Function Framework_Camera_IsFollowEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Enhanced Camera - Deadzone
@@ -557,11 +557,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Camera_SetDeadzoneEnabled(enabled As Boolean)
+    Public Sub Framework_Camera_SetDeadzoneEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Camera_IsDeadzoneEnabled() As Boolean
+    Public Function Framework_Camera_IsDeadzoneEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Enhanced Camera - Look-ahead
@@ -570,7 +570,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Camera_SetLookaheadEnabled(enabled As Boolean)
+    Public Sub Framework_Camera_SetLookaheadEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -591,7 +591,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Camera_IsShaking() As Boolean
+    Public Function Framework_Camera_IsShaking() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -608,11 +608,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Camera_SetBoundsEnabled(enabled As Boolean)
+    Public Sub Framework_Camera_SetBoundsEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Camera_IsBoundsEnabled() As Boolean
+    Public Function Framework_Camera_IsBoundsEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -647,7 +647,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Camera_IsPanning() As Boolean
+    Public Function Framework_Camera_IsPanning() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -660,7 +660,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Camera_IsFlashing() As Boolean
+    Public Function Framework_Camera_IsFlashing() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -701,7 +701,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsFontValidH(h As Integer) As Boolean
+    Public Function Framework_IsFontValidH(h As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -753,7 +753,7 @@ Public Module FrameworkWrapper
 
 #Region "Audio"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_InitAudio() As Boolean
+    Public Function Framework_InitAudio() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -823,7 +823,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_IsMusicValidH(h As Integer) As Boolean
+    Public Function Framework_IsMusicValidH(h As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -898,7 +898,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_SceneHas() As Boolean
+    Public Function Framework_SceneHas() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1002,7 +1002,7 @@ Public Module FrameworkWrapper
 
     ' Transition State Queries
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Scene_IsTransitioning() As Boolean
+    Public Function Framework_Scene_IsTransitioning() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1019,11 +1019,11 @@ Public Module FrameworkWrapper
 
     ' Loading Screen
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Scene_SetLoadingEnabled(enabled As Boolean)
+    Public Sub Framework_Scene_SetLoadingEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Scene_IsLoadingEnabled() As Boolean
+    Public Function Framework_Scene_IsLoadingEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1051,7 +1051,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Scene_IsLoading() As Boolean
+    Public Function Framework_Scene_IsLoading() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Scene Stack Queries
@@ -1082,7 +1082,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Scene_IsPreloading() As Boolean
+    Public Function Framework_Scene_IsPreloading() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1100,7 +1100,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_IsAlive(entity As Integer) As Boolean
+    Public Function Framework_Ecs_IsAlive(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1126,7 +1126,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasName(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasName(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -1150,7 +1150,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasTag(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasTag(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -1166,15 +1166,15 @@ Public Module FrameworkWrapper
 
 #Region "ECS - Enabled Component"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Ecs_SetEnabled(entity As Integer, enabled As Boolean)
+    Public Sub Framework_Ecs_SetEnabled(entity As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_IsEnabled(entity As Integer) As Boolean
+    Public Function Framework_Ecs_IsEnabled(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_IsActiveInHierarchy(entity As Integer) As Boolean
+    Public Function Framework_Ecs_IsActiveInHierarchy(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 #End Region
 
@@ -1214,7 +1214,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasTransform2D(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasTransform2D(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1260,7 +1260,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasVelocity2D(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasVelocity2D(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1278,11 +1278,11 @@ Public Module FrameworkWrapper
 
 #Region "ECS - BoxCollider2D Component"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Ecs_AddBoxCollider2D(entity As Integer, offsetX As Single, offsetY As Single, width As Single, height As Single, isTrigger As Boolean)
+    Public Sub Framework_Ecs_AddBoxCollider2D(entity As Integer, offsetX As Single, offsetY As Single, width As Single, height As Single, <MarshalAs(UnmanagedType.I1)> isTrigger As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasBoxCollider2D(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasBoxCollider2D(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1290,7 +1290,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Ecs_SetBoxColliderTrigger(entity As Integer, isTrigger As Boolean)
+    Public Sub Framework_Ecs_SetBoxColliderTrigger(entity As Integer, <MarshalAs(UnmanagedType.I1)> isTrigger As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1308,7 +1308,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasSprite2D(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasSprite2D(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1316,7 +1316,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Ecs_SetSpriteVisible(entity As Integer, visible As Boolean)
+    Public Sub Framework_Ecs_SetSpriteVisible(entity As Integer, <MarshalAs(UnmanagedType.I1)> visible As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1356,7 +1356,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Physics_CheckEntityOverlap(entityA As Integer, entityB As Integer) As Boolean
+    Public Function Framework_Physics_CheckEntityOverlap(entityA As Integer, entityB As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1366,23 +1366,23 @@ Public Module FrameworkWrapper
 
 #Region "Debug Overlay"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_SetEnabled(enabled As Boolean)
+    Public Sub Framework_Debug_SetEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Debug_IsEnabled() As Boolean
+    Public Function Framework_Debug_IsEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_DrawEntityBounds(enabled As Boolean)
+    Public Sub Framework_Debug_DrawEntityBounds(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_DrawHierarchy(enabled As Boolean)
+    Public Sub Framework_Debug_DrawHierarchy(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_DrawStats(enabled As Boolean)
+    Public Sub Framework_Debug_DrawStats(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1392,11 +1392,11 @@ Public Module FrameworkWrapper
 
 #Region "Prefabs & Serialization"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Scene_Save(path As String) As Boolean
+    Public Function Framework_Scene_Save(path As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Scene_Load(path As String) As Boolean
+    Public Function Framework_Scene_Load(path As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -1412,7 +1412,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Prefab_SaveEntity(entity As Integer, path As String) As Boolean
+    Public Function Framework_Prefab_SaveEntity(entity As Integer, path As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 #End Region
 
@@ -1427,7 +1427,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tileset_IsValid(tilesetHandle As Integer) As Boolean
+    Public Function Framework_Tileset_IsValid(tilesetHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1444,7 +1444,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasTilemap(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasTilemap(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1464,11 +1464,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Ecs_SetTileCollision(entity As Integer, tileIndex As Integer, solid As Boolean)
+    Public Sub Framework_Ecs_SetTileCollision(entity As Integer, tileIndex As Integer, <MarshalAs(UnmanagedType.I1)> solid As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_GetTileCollision(entity As Integer, tileIndex As Integer) As Boolean
+    Public Function Framework_Ecs_GetTileCollision(entity As Integer, tileIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1489,11 +1489,11 @@ Public Module FrameworkWrapper
 
     ' Tilemap collision queries
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tilemap_PointSolid(entity As Integer, worldX As Single, worldY As Single) As Boolean
+    Public Function Framework_Tilemap_PointSolid(entity As Integer, worldX As Single, worldY As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tilemap_BoxSolid(entity As Integer, worldX As Single, worldY As Single, w As Single, h As Single) As Boolean
+    Public Function Framework_Tilemap_BoxSolid(entity As Integer, worldX As Single, worldY As Single, w As Single, h As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 #End Region
 
@@ -1508,7 +1508,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_AnimClip_IsValid(clipHandle As Integer) As Boolean
+    Public Function Framework_AnimClip_IsValid(clipHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1537,7 +1537,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasAnimator(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasAnimator(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1569,7 +1569,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_AnimatorIsPlaying(entity As Integer) As Boolean
+    Public Function Framework_Ecs_AnimatorIsPlaying(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1592,7 +1592,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_HasParticleEmitter(entity As Integer) As Boolean
+    Public Function Framework_Ecs_HasParticleEmitter(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1658,7 +1658,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Ecs_EmitterIsActive(entity As Integer) As Boolean
+    Public Function Framework_Ecs_EmitterIsActive(entity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1698,7 +1698,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_UI_CreateCheckbox(text As String, x As Single, y As Single, initialState As Boolean) As Integer
+    Public Function Framework_UI_CreateCheckbox(text As String, x As Single, y As Single, <MarshalAs(UnmanagedType.I1)> initialState As Boolean) As Integer
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -1722,7 +1722,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_UI_IsValid(elementId As Integer) As Boolean
+    Public Function Framework_UI_IsValid(elementId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' UI Element properties - Common
@@ -1739,11 +1739,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_UI_SetVisible(elementId As Integer, visible As Boolean)
+    Public Sub Framework_UI_SetVisible(elementId As Integer, <MarshalAs(UnmanagedType.I1)> visible As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_UI_SetEnabled(elementId As Integer, enabled As Boolean)
+    Public Sub Framework_UI_SetEnabled(elementId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1779,11 +1779,11 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_UI_IsVisible(elementId As Integer) As Boolean
+    Public Function Framework_UI_IsVisible(elementId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_UI_IsEnabled(elementId As Integer) As Boolean
+    Public Function Framework_UI_IsEnabled(elementId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' UI Element properties - Text/Font
@@ -1858,11 +1858,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_UI_SetChecked(elementId As Integer, checked As Boolean)
+    Public Sub Framework_UI_SetChecked(elementId As Integer, <MarshalAs(UnmanagedType.I1)> checked As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_UI_IsChecked(elementId As Integer) As Boolean
+    Public Function Framework_UI_IsChecked(elementId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' UI Element properties - TextInput specific
@@ -1875,7 +1875,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_UI_SetPasswordMode(elementId As Integer, isPassword As Boolean)
+    Public Sub Framework_UI_SetPasswordMode(elementId As Integer, <MarshalAs(UnmanagedType.I1)> isPassword As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -1921,7 +1921,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_UI_HasFocus() As Boolean
+    Public Function Framework_UI_HasFocus() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' UI Layout helpers
@@ -1975,11 +1975,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Physics_SetEnabled(enabled As Boolean)
+    Public Sub Framework_Physics_SetEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Physics_IsEnabled() As Boolean
+    Public Function Framework_Physics_IsEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Body creation/destruction
@@ -1992,7 +1992,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Physics_IsBodyValid(bodyHandle As Integer) As Boolean
+    Public Function Framework_Physics_IsBodyValid(bodyHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2100,15 +2100,15 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Physics_SetBodyFixedRotation(bodyHandle As Integer, fixed As Boolean)
+    Public Sub Framework_Physics_SetBodyFixedRotation(bodyHandle As Integer, <MarshalAs(UnmanagedType.I1)> fixed As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Physics_IsBodyFixedRotation(bodyHandle As Integer) As Boolean
+    Public Function Framework_Physics_IsBodyFixedRotation(bodyHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Physics_SetBodySleepingAllowed(bodyHandle As Integer, allowed As Boolean)
+    Public Sub Framework_Physics_SetBodySleepingAllowed(bodyHandle As Integer, <MarshalAs(UnmanagedType.I1)> allowed As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2116,7 +2116,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Physics_IsBodyAwake(bodyHandle As Integer) As Boolean
+    Public Function Framework_Physics_IsBodyAwake(bodyHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Collision shapes
@@ -2154,11 +2154,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Physics_SetBodyTrigger(bodyHandle As Integer, isTrigger As Boolean)
+    Public Sub Framework_Physics_SetBodyTrigger(bodyHandle As Integer, <MarshalAs(UnmanagedType.I1)> isTrigger As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Physics_IsBodyTrigger(bodyHandle As Integer) As Boolean
+    Public Function Framework_Physics_IsBodyTrigger(bodyHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Entity binding
@@ -2203,7 +2203,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Physics_TestOverlap(bodyA As Integer, bodyB As Integer) As Boolean
+    Public Function Framework_Physics_TestOverlap(bodyA As Integer, bodyB As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Simulation
@@ -2217,11 +2217,11 @@ Public Module FrameworkWrapper
 
     ' Debug rendering
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Physics_SetDebugDraw(enabled As Boolean)
+    Public Sub Framework_Physics_SetDebugDraw(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Physics_IsDebugDrawEnabled() As Boolean
+    Public Function Framework_Physics_IsDebugDrawEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2250,11 +2250,11 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Audio_SetGroupMuted(group As Integer, muted As Boolean)
+    Public Sub Framework_Audio_SetGroupMuted(group As Integer, <MarshalAs(UnmanagedType.I1)> muted As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Audio_IsGroupMuted(group As Integer) As Boolean
+    Public Function Framework_Audio_IsGroupMuted(group As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2312,7 +2312,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Audio_SetSpatialEnabled(enabled As Boolean)
+    Public Sub Framework_Audio_SetSpatialEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     ' Sound pooling
@@ -2374,11 +2374,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Audio_SetMusicLooping(handle As Integer, looping As Boolean)
+    Public Sub Framework_Audio_SetMusicLooping(handle As Integer, <MarshalAs(UnmanagedType.I1)> looping As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Audio_IsMusicPlaying(handle As Integer) As Boolean
+    Public Function Framework_Audio_IsMusicPlaying(handle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2407,7 +2407,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Audio_IsCrossfading() As Boolean
+    Public Function Framework_Audio_IsCrossfading() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Playlist system
@@ -2448,7 +2448,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Audio_PlaylistSetShuffle(playlistHandle As Integer, shuffle As Boolean)
+    Public Sub Framework_Audio_PlaylistSetShuffle(playlistHandle As Integer, <MarshalAs(UnmanagedType.I1)> shuffle As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2517,7 +2517,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsActionValid(actionHandle As Integer) As Boolean
+    Public Function Framework_Input_IsActionValid(actionHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2570,15 +2570,15 @@ Public Module FrameworkWrapper
 
     ' Action state queries
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsActionPressed(actionHandle As Integer) As Boolean
+    Public Function Framework_Input_IsActionPressed(actionHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsActionDown(actionHandle As Integer) As Boolean
+    Public Function Framework_Input_IsActionDown(actionHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsActionReleased(actionHandle As Integer) As Boolean
+    Public Function Framework_Input_IsActionReleased(actionHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2608,7 +2608,7 @@ Public Module FrameworkWrapper
 
     ' Gamepad management
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsGamepadAvailable(gamepadId As Integer) As Boolean
+    Public Function Framework_Input_IsGamepadAvailable(gamepadId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2629,15 +2629,15 @@ Public Module FrameworkWrapper
 
     ' Direct gamepad queries
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsGamepadButtonPressed(gamepadId As Integer, button As Integer) As Boolean
+    Public Function Framework_Input_IsGamepadButtonPressed(gamepadId As Integer, button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsGamepadButtonDown(gamepadId As Integer, button As Integer) As Boolean
+    Public Function Framework_Input_IsGamepadButtonDown(gamepadId As Integer, button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsGamepadButtonReleased(gamepadId As Integer, button As Integer) As Boolean
+    Public Function Framework_Input_IsGamepadButtonReleased(gamepadId As Integer, button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2650,7 +2650,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_IsListening() As Boolean
+    Public Function Framework_Input_IsListening() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2658,7 +2658,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Input_WasBindingCaptured() As Boolean
+    Public Function Framework_Input_WasBindingCaptured() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2685,11 +2685,11 @@ Public Module FrameworkWrapper
 
     ' Serialization
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Input_SaveBindings(filename As String) As Boolean
+    Public Function Framework_Input_SaveBindings(filename As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Input_LoadBindings(filename As String) As Boolean
+    Public Function Framework_Input_LoadBindings(filename As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 #End Region
 
@@ -2708,15 +2708,15 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_SlotExists(slot As Integer) As Boolean
+    Public Function Framework_Save_SlotExists(slot As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_DeleteSlot(slot As Integer) As Boolean
+    Public Function Framework_Save_DeleteSlot(slot As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_CopySlot(fromSlot As Integer, toSlot As Integer) As Boolean
+    Public Function Framework_Save_CopySlot(fromSlot As Integer, toSlot As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2725,19 +2725,19 @@ Public Module FrameworkWrapper
 
     ' Save/Load operations
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_BeginSave(slot As Integer) As Boolean
+    Public Function Framework_Save_BeginSave(slot As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_EndSave() As Boolean
+    Public Function Framework_Save_EndSave() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_BeginLoad(slot As Integer) As Boolean
+    Public Function Framework_Save_BeginLoad(slot As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_EndLoad() As Boolean
+    Public Function Framework_Save_EndLoad() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Data serialization - Write
@@ -2750,7 +2750,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Sub Framework_Save_WriteBool(key As String, value As Boolean)
+    Public Sub Framework_Save_WriteBool(key As String, <MarshalAs(UnmanagedType.I1)> value As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -2779,7 +2779,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Save_ReadBool(key As String, defaultValue As Boolean) As Boolean
+    Public Function Framework_Save_ReadBool(key As String, defaultValue As Boolean) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -2799,7 +2799,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Save_HasKey(key As String) As Boolean
+    Public Function Framework_Save_HasKey(key As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Metadata
@@ -2813,11 +2813,11 @@ Public Module FrameworkWrapper
 
     ' Auto-save
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Save_SetAutoSaveEnabled(enabled As Boolean)
+    Public Sub Framework_Save_SetAutoSaveEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_IsAutoSaveEnabled() As Boolean
+    Public Function Framework_Save_IsAutoSaveEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -2846,11 +2846,11 @@ Public Module FrameworkWrapper
 
     ' Quick save/load
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_QuickSave() As Boolean
+    Public Function Framework_Save_QuickSave() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Save_QuickLoad() As Boolean
+    Public Function Framework_Save_QuickLoad() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Settings
@@ -2871,11 +2871,11 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Sub Framework_Settings_SetBool(key As String, value As Boolean)
+    Public Sub Framework_Settings_SetBool(key As String, <MarshalAs(UnmanagedType.I1)> value As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Settings_GetBool(key As String, defaultValue As Boolean) As Boolean
+    Public Function Framework_Settings_GetBool(key As String, defaultValue As Boolean) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -2887,11 +2887,11 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Settings_Save() As Boolean
+    Public Function Framework_Settings_Save() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Settings_Load() As Boolean
+    Public Function Framework_Settings_Load() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3006,7 +3006,7 @@ Public Module FrameworkWrapper
 
     ' Tween State Queries
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tween_IsValid(tweenId As Integer) As Boolean
+    Public Function Framework_Tween_IsValid(tweenId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3014,15 +3014,15 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tween_IsPlaying(tweenId As Integer) As Boolean
+    Public Function Framework_Tween_IsPlaying(tweenId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tween_IsPaused(tweenId As Integer) As Boolean
+    Public Function Framework_Tween_IsPaused(tweenId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tween_IsCompleted(tweenId As Integer) As Boolean
+    Public Function Framework_Tween_IsCompleted(tweenId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3088,7 +3088,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Tween_SetAutoKill(tweenId As Integer, autoKill As Boolean)
+    Public Sub Framework_Tween_SetAutoKill(tweenId As Integer, <MarshalAs(UnmanagedType.I1)> autoKill As Boolean)
     End Sub
 
     ' Tween Callbacks
@@ -3154,11 +3154,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tween_IsSequenceValid(seqId As Integer) As Boolean
+    Public Function Framework_Tween_IsSequenceValid(seqId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Tween_IsSequencePlaying(seqId As Integer) As Boolean
+    Public Function Framework_Tween_IsSequencePlaying(seqId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3266,7 +3266,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Event_Exists(eventName As String) As Boolean
+    Public Function Framework_Event_Exists(eventName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Subscribe to Events (returns subscription handle)
@@ -3412,15 +3412,15 @@ Public Module FrameworkWrapper
 
     ' Event State and Management
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Event_SetEnabled(subscriptionId As Integer, enabled As Boolean)
+    Public Sub Framework_Event_SetEnabled(subscriptionId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Event_IsEnabled(subscriptionId As Integer) As Boolean
+    Public Function Framework_Event_IsEnabled(subscriptionId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Event_IsSubscriptionValid(subscriptionId As Integer) As Boolean
+    Public Function Framework_Event_IsSubscriptionValid(subscriptionId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3450,7 +3450,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Event_IsPaused() As Boolean
+    Public Function Framework_Event_IsPaused() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3724,16 +3724,16 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Pool_IsValid(poolId As Integer) As Boolean
+    Public Function Framework_Pool_IsValid(poolId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Pool Configuration
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Pool_SetAutoGrow(poolId As Integer, autoGrow As Boolean)
+    Public Sub Framework_Pool_SetAutoGrow(poolId As Integer, <MarshalAs(UnmanagedType.I1)> autoGrow As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Pool_GetAutoGrow(poolId As Integer) As Boolean
+    Public Function Framework_Pool_GetAutoGrow(poolId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3779,15 +3779,15 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Pool_IsEmpty(poolId As Integer) As Boolean
+    Public Function Framework_Pool_IsEmpty(poolId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Pool_IsFull(poolId As Integer) As Boolean
+    Public Function Framework_Pool_IsFull(poolId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Pool_IsObjectActive(poolId As Integer, objectIndex As Integer) As Boolean
+    Public Function Framework_Pool_IsObjectActive(poolId As Integer, objectIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Pool Statistics
@@ -3873,7 +3873,7 @@ Public Module FrameworkWrapper
     Public Delegate Sub StateExitCallback(fsmId As Integer, stateId As Integer, nextState As Integer, userData As IntPtr)
 
     <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
-    Public Delegate Function TransitionCondition(fsmId As Integer, fromState As Integer, toState As Integer, userData As IntPtr) As Boolean
+    Public Delegate Function TransitionCondition(fsmId As Integer, fromState As Integer, toState As Integer, userData As IntPtr) As <MarshalAs(UnmanagedType.I1)> Boolean
 
     ' FSM creation and management
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3897,7 +3897,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_FSM_IsValid(fsmId As Integer) As Boolean
+    Public Function Framework_FSM_IsValid(fsmId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' State registration
@@ -3948,7 +3948,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_FSM_CanTransition(fsmId As Integer, fromState As Integer, toState As Integer) As Boolean
+    Public Function Framework_FSM_CanTransition(fsmId As Integer, fromState As Integer, toState As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Any-state transitions
@@ -3982,11 +3982,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_FSM_IsRunning(fsmId As Integer) As Boolean
+    Public Function Framework_FSM_IsRunning(fsmId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_FSM_IsPaused(fsmId As Integer) As Boolean
+    Public Function Framework_FSM_IsPaused(fsmId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' State queries
@@ -4008,15 +4008,15 @@ Public Module FrameworkWrapper
 
     ' Manual transitions
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_FSM_TransitionTo(fsmId As Integer, stateId As Integer) As Boolean
+    Public Function Framework_FSM_TransitionTo(fsmId As Integer, stateId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_FSM_TransitionToByName(fsmId As Integer, stateName As String) As Boolean
+    Public Function Framework_FSM_TransitionToByName(fsmId As Integer, stateName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_FSM_TryTransition(fsmId As Integer, toState As Integer) As Boolean
+    Public Function Framework_FSM_TryTransition(fsmId As Integer, toState As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4081,11 +4081,11 @@ Public Module FrameworkWrapper
 
     ' Debug
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_FSM_SetDebugEnabled(fsmId As Integer, enabled As Boolean)
+    Public Sub Framework_FSM_SetDebugEnabled(fsmId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_FSM_GetDebugEnabled(fsmId As Integer) As Boolean
+    Public Function Framework_FSM_GetDebugEnabled(fsmId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 #End Region
 
@@ -4188,7 +4188,7 @@ Public Module FrameworkWrapper
 
     ' Performance graphs
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Perf_SetGraphEnabled(enabled As Boolean)
+    Public Sub Framework_Perf_SetGraphEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4226,11 +4226,11 @@ Public Module FrameworkWrapper
 
     ' On-screen console
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Console_SetEnabled(enabled As Boolean)
+    Public Sub Framework_Console_SetEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Console_IsEnabled() As Boolean
+    Public Function Framework_Console_IsEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4304,15 +4304,15 @@ Public Module FrameworkWrapper
 
     ' Debug draw settings
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_DebugDraw_SetEnabled(enabled As Boolean)
+    Public Sub Framework_DebugDraw_SetEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_DebugDraw_IsEnabled() As Boolean
+    Public Function Framework_DebugDraw_IsEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_DebugDraw_SetPersistent(persistent As Boolean)
+    Public Sub Framework_DebugDraw_SetPersistent(<MarshalAs(UnmanagedType.I1)> persistent As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4325,31 +4325,31 @@ Public Module FrameworkWrapper
 
     ' System overlays
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_SetShowFPS(show As Boolean)
+    Public Sub Framework_Debug_SetShowFPS(<MarshalAs(UnmanagedType.I1)> show As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_SetShowFrameTime(show As Boolean)
+    Public Sub Framework_Debug_SetShowFrameTime(<MarshalAs(UnmanagedType.I1)> show As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_SetShowDrawCalls(show As Boolean)
+    Public Sub Framework_Debug_SetShowDrawCalls(<MarshalAs(UnmanagedType.I1)> show As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_SetShowEntityCount(show As Boolean)
+    Public Sub Framework_Debug_SetShowEntityCount(<MarshalAs(UnmanagedType.I1)> show As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_SetShowMemory(show As Boolean)
+    Public Sub Framework_Debug_SetShowMemory(<MarshalAs(UnmanagedType.I1)> show As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_SetShowPhysics(show As Boolean)
+    Public Sub Framework_Debug_SetShowPhysics(<MarshalAs(UnmanagedType.I1)> show As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Debug_SetShowColliders(show As Boolean)
+    Public Sub Framework_Debug_SetShowColliders(<MarshalAs(UnmanagedType.I1)> show As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4408,7 +4408,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_NavGrid_IsValid(gridId As Integer) As Boolean
+    Public Function Framework_NavGrid_IsValid(gridId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4416,11 +4416,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_NavGrid_SetWalkable(gridId As Integer, cellX As Integer, cellY As Integer, walkable As Boolean)
+    Public Sub Framework_NavGrid_SetWalkable(gridId As Integer, cellX As Integer, cellY As Integer, <MarshalAs(UnmanagedType.I1)> walkable As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_NavGrid_IsWalkable(gridId As Integer, cellX As Integer, cellY As Integer) As Boolean
+    Public Function Framework_NavGrid_IsWalkable(gridId As Integer, cellX As Integer, cellY As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4432,7 +4432,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_NavGrid_SetDiagonalEnabled(gridId As Integer, enabled As Boolean)
+    Public Sub Framework_NavGrid_SetDiagonalEnabled(gridId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4448,11 +4448,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_NavGrid_Fill(gridId As Integer, walkable As Boolean)
+    Public Sub Framework_NavGrid_Fill(gridId As Integer, <MarshalAs(UnmanagedType.I1)> walkable As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_NavGrid_SetRect(gridId As Integer, x As Integer, y As Integer, w As Integer, h As Integer, walkable As Boolean)
+    Public Sub Framework_NavGrid_SetRect(gridId As Integer, x As Integer, y As Integer, w As Integer, h As Integer, <MarshalAs(UnmanagedType.I1)> walkable As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4489,7 +4489,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Path_IsValid(pathId As Integer) As Boolean
+    Public Function Framework_Path_IsValid(pathId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4522,7 +4522,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Steer_IsValid(agentId As Integer) As Boolean
+    Public Function Framework_Steer_IsValid(agentId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4577,11 +4577,11 @@ Public Module FrameworkWrapper
 
     ' Behaviors
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Steer_EnableBehavior(agentId As Integer, behavior As Integer, enabled As Boolean)
+    Public Sub Framework_Steer_EnableBehavior(agentId As Integer, behavior As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Steer_IsBehaviorEnabled(agentId As Integer, behavior As Integer) As Boolean
+    Public Function Framework_Steer_IsBehaviorEnabled(agentId As Integer, behavior As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4612,7 +4612,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Steer_SetPathLooping(agentId As Integer, shouldLoop As Boolean)
+    Public Sub Framework_Steer_SetPathLooping(agentId As Integer, <MarshalAs(UnmanagedType.I1)> shouldLoop As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4624,7 +4624,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Steer_HasReachedEnd(agentId As Integer) As Boolean
+    Public Function Framework_Steer_HasReachedEnd(agentId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' Agent update
@@ -4660,7 +4660,7 @@ Public Module FrameworkWrapper
 
     ' Debug visualization
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_NavGrid_DrawDebug(gridId As Integer, showCosts As Boolean)
+    Public Sub Framework_NavGrid_DrawDebug(gridId As Integer, <MarshalAs(UnmanagedType.I1)> showCosts As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -4702,7 +4702,7 @@ Public Module FrameworkWrapper
     Public Delegate Sub DialogueChoiceCallback(dialogueId As Integer, nodeId As Integer, choiceIndex As Integer, userData As IntPtr)
 
     <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
-    Public Delegate Function DialogueConditionCallback(dialogueId As Integer, condition As String, userData As IntPtr) As Boolean
+    Public Delegate Function DialogueConditionCallback(dialogueId As Integer, condition As String, userData As IntPtr) As <MarshalAs(UnmanagedType.I1)> Boolean
 
     ' ---- Dialogue Creation and Management ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -4849,11 +4849,11 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Sub Framework_Dialogue_SetVarBool(varName As String, value As Boolean)
+    Public Sub Framework_Dialogue_SetVarBool(varName As String, <MarshalAs(UnmanagedType.I1)> value As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Dialogue_GetVarBool(varName As String) As Boolean
+    Public Function Framework_Dialogue_GetVarBool(varName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -5042,7 +5042,7 @@ Public Module FrameworkWrapper
 
     ' ---- Save/Load ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Dialogue_SaveToFile(dialogueId As Integer, filename As String) As Boolean
+    Public Function Framework_Dialogue_SaveToFile(dialogueId As Integer, filename As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -5094,7 +5094,7 @@ Public Module FrameworkWrapper
     Public Delegate Sub ItemUseCallback(inventoryId As Integer, slotIndex As Integer, itemId As Integer, quantity As Integer, userData As IntPtr)
 
     <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
-    Public Delegate Function ItemDropCallback(inventoryId As Integer, slotIndex As Integer, itemId As Integer, quantity As Integer, userData As IntPtr) As Boolean
+    Public Delegate Function ItemDropCallback(inventoryId As Integer, slotIndex As Integer, itemId As Integer, quantity As Integer, userData As IntPtr) As <MarshalAs(UnmanagedType.I1)> Boolean
 
     <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
     Public Delegate Sub EquipCallback(equipmentId As Integer, slot As Integer, itemId As Integer, userData As IntPtr)
@@ -5109,7 +5109,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Item_SetStackable(itemId As Integer, stackable As Boolean, maxStack As Integer)
+    Public Sub Framework_Item_SetStackable(itemId As Integer, <MarshalAs(UnmanagedType.I1)> stackable As Boolean, maxStack As Integer)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -5149,11 +5149,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Item_SetConsumable(itemId As Integer, consumable As Boolean)
+    Public Sub Framework_Item_SetConsumable(itemId As Integer, <MarshalAs(UnmanagedType.I1)> consumable As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Item_SetUsable(itemId As Integer, usable As Boolean)
+    Public Sub Framework_Item_SetUsable(itemId As Integer, <MarshalAs(UnmanagedType.I1)> usable As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -5189,7 +5189,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Item_IsStackable(itemId As Integer) As Boolean
+    Public Function Framework_Item_IsStackable(itemId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5197,11 +5197,11 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Item_IsConsumable(itemId As Integer) As Boolean
+    Public Function Framework_Item_IsConsumable(itemId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Item_Exists(itemId As Integer) As Boolean
+    Public Function Framework_Item_Exists(itemId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5254,7 +5254,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Inventory_SetAutoStack(inventoryId As Integer, autoStack As Boolean)
+    Public Sub Framework_Inventory_SetAutoStack(inventoryId As Integer, <MarshalAs(UnmanagedType.I1)> autoStack As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5294,15 +5294,15 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Inventory_IsSlotEmpty(inventoryId As Integer, slotIndex As Integer) As Boolean
+    Public Function Framework_Inventory_IsSlotEmpty(inventoryId As Integer, slotIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Inventory_LockSlot(inventoryId As Integer, slotIndex As Integer, locked As Boolean)
+    Public Sub Framework_Inventory_LockSlot(inventoryId As Integer, slotIndex As Integer, <MarshalAs(UnmanagedType.I1)> locked As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Inventory_IsSlotLocked(inventoryId As Integer, slotIndex As Integer) As Boolean
+    Public Function Framework_Inventory_IsSlotLocked(inventoryId As Integer, slotIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -5318,7 +5318,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Inventory_HasItem(inventoryId As Integer, itemId As Integer, quantity As Integer) As Boolean
+    Public Function Framework_Inventory_HasItem(inventoryId As Integer, itemId As Integer, quantity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5334,7 +5334,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Inventory_IsFull(inventoryId As Integer) As Boolean
+    Public Function Framework_Inventory_IsFull(inventoryId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5350,11 +5350,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Inventory_UseItem(inventoryId As Integer, slotIndex As Integer) As Boolean
+    Public Function Framework_Inventory_UseItem(inventoryId As Integer, slotIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Inventory_DropItem(inventoryId As Integer, slotIndex As Integer, quantity As Integer) As Boolean
+    Public Function Framework_Inventory_DropItem(inventoryId As Integer, slotIndex As Integer, quantity As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5387,11 +5387,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Equipment_Equip(equipmentId As Integer, itemId As Integer) As Boolean
+    Public Function Framework_Equipment_Equip(equipmentId As Integer, itemId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Equipment_EquipToSlot(equipmentId As Integer, slot As Integer, itemId As Integer) As Boolean
+    Public Function Framework_Equipment_EquipToSlot(equipmentId As Integer, slot As Integer, itemId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5403,7 +5403,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Equipment_IsSlotOccupied(equipmentId As Integer, slot As Integer) As Boolean
+    Public Function Framework_Equipment_IsSlotOccupied(equipmentId As Integer, slot As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -5423,11 +5423,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Equipment_EquipFromInventory(equipmentId As Integer, inventoryId As Integer, slotIndex As Integer) As Boolean
+    Public Function Framework_Equipment_EquipFromInventory(equipmentId As Integer, inventoryId As Integer, slotIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Equipment_UnequipToInventory(equipmentId As Integer, slot As Integer, inventoryId As Integer) As Boolean
+    Public Function Framework_Equipment_UnequipToInventory(equipmentId As Integer, slot As Integer, inventoryId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5456,7 +5456,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_LootTable_SetAllowDuplicates(tableId As Integer, allow As Boolean)
+    Public Sub Framework_LootTable_SetAllowDuplicates(tableId As Integer, <MarshalAs(UnmanagedType.I1)> allow As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5531,15 +5531,15 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Quest_SetRepeatable(questHandle As Integer, repeatable As Boolean)
+    Public Sub Framework_Quest_SetRepeatable(questHandle As Integer, <MarshalAs(UnmanagedType.I1)> repeatable As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Quest_SetAutoComplete(questHandle As Integer, autoComplete As Boolean)
+    Public Sub Framework_Quest_SetAutoComplete(questHandle As Integer, <MarshalAs(UnmanagedType.I1)> autoComplete As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Quest_SetHidden(questHandle As Integer, hidden As Boolean)
+    Public Sub Framework_Quest_SetHidden(questHandle As Integer, <MarshalAs(UnmanagedType.I1)> hidden As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5556,7 +5556,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_CheckPrerequisites(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_CheckPrerequisites(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Objectives ----
@@ -5573,11 +5573,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Quest_SetObjectiveOptional(questHandle As Integer, objectiveIndex As Integer, optional_ As Boolean)
+    Public Sub Framework_Quest_SetObjectiveOptional(questHandle As Integer, objectiveIndex As Integer, <MarshalAs(UnmanagedType.I1)> optional_ As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Quest_SetObjectiveHidden(questHandle As Integer, objectiveIndex As Integer, hidden As Boolean)
+    Public Sub Framework_Quest_SetObjectiveHidden(questHandle As Integer, objectiveIndex As Integer, <MarshalAs(UnmanagedType.I1)> hidden As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5601,7 +5601,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_IsObjectiveComplete(questHandle As Integer, objectiveIndex As Integer) As Boolean
+    Public Function Framework_Quest_IsObjectiveComplete(questHandle As Integer, objectiveIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Rewards ----
@@ -5623,23 +5623,23 @@ Public Module FrameworkWrapper
 
     ' ---- Quest State Management ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_Start(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_Start(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_Complete(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_Complete(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_Fail(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_Fail(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_Abandon(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_Abandon(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_Reset(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_Reset(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5647,15 +5647,15 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_IsActive(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_IsActive(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_IsCompleted(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_IsCompleted(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_CanStart(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_CanStart(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Progress Tracking ----
@@ -5756,11 +5756,11 @@ Public Module FrameworkWrapper
 
     ' ---- Quest Tracking (HUD) ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Quest_SetTracked(questHandle As Integer, tracked As Boolean)
+    Public Sub Framework_Quest_SetTracked(questHandle As Integer, <MarshalAs(UnmanagedType.I1)> tracked As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Quest_IsTracked(questHandle As Integer) As Boolean
+    Public Function Framework_Quest_IsTracked(questHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5806,16 +5806,16 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_QuestChain_IsComplete(chainHandle As Integer) As Boolean
+    Public Function Framework_QuestChain_IsComplete(chainHandle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Save/Load ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Quest_SaveProgress(saveSlot As Integer, key As String) As Boolean
+    Public Function Framework_Quest_SaveProgress(saveSlot As Integer, key As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Quest_LoadProgress(saveSlot As Integer, key As String) As Boolean
+    Public Function Framework_Quest_LoadProgress(saveSlot As Integer, key As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Global Management ----
@@ -5892,11 +5892,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Lighting_SetEnabled(enabled As Boolean)
+    Public Sub Framework_Lighting_SetEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Lighting_IsEnabled() As Boolean
+    Public Function Framework_Lighting_IsEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -5954,11 +5954,11 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Light_SetEnabled(lightId As Integer, enabled As Boolean)
+    Public Sub Framework_Light_SetEnabled(lightId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Light_IsEnabled(lightId As Integer) As Boolean
+    Public Function Framework_Light_IsEnabled(lightId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Spot Lights ----
@@ -6000,7 +6000,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Lighting_SetDirectionalEnabled(enabled As Boolean)
+    Public Sub Framework_Lighting_SetDirectionalEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     ' ---- Light Properties ----
@@ -6063,7 +6063,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Shadow_SetEnabled(occluderId As Integer, enabled As Boolean)
+    Public Sub Framework_Shadow_SetEnabled(occluderId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6105,7 +6105,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Lighting_SetDayNightEnabled(enabled As Boolean)
+    Public Sub Framework_Lighting_SetDayNightEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6195,11 +6195,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Effects_IsEnabled() As Boolean
+    Public Function Framework_Effects_IsEnabled() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6208,7 +6208,7 @@ Public Module FrameworkWrapper
 
     ' ---- Vignette Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetVignetteEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetVignetteEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6229,7 +6229,7 @@ Public Module FrameworkWrapper
 
     ' ---- Blur Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetBlurEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetBlurEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6242,7 +6242,7 @@ Public Module FrameworkWrapper
 
     ' ---- Chromatic Aberration ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetChromaticEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetChromaticEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6255,7 +6255,7 @@ Public Module FrameworkWrapper
 
     ' ---- Pixelate Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetPixelateEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetPixelateEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6264,7 +6264,7 @@ Public Module FrameworkWrapper
 
     ' ---- Scanlines Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetScanlinesEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetScanlinesEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6281,7 +6281,7 @@ Public Module FrameworkWrapper
 
     ' ---- CRT Effect ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetCRTEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetCRTEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6294,7 +6294,7 @@ Public Module FrameworkWrapper
 
     ' ---- Color Effects ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetGrayscaleEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetGrayscaleEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6302,7 +6302,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetSepiaEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetSepiaEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6310,7 +6310,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetInvertEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetInvertEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6319,7 +6319,7 @@ Public Module FrameworkWrapper
 
     ' ---- Color Grading ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetTintEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetTintEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6348,7 +6348,7 @@ Public Module FrameworkWrapper
 
     ' ---- Film Grain / Noise ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Effects_SetFilmGrainEnabled(enabled As Boolean)
+    Public Sub Framework_Effects_SetFilmGrainEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6373,7 +6373,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Effects_IsFlashing() As Boolean
+    Public Function Framework_Effects_IsFlashing() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Screen Fade ----
@@ -6398,7 +6398,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Effects_IsFading() As Boolean
+    Public Function Framework_Effects_IsFading() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Screen Shake ----
@@ -6415,7 +6415,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Effects_IsShaking() As Boolean
+    Public Function Framework_Effects_IsShaking() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6476,11 +6476,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Locale_LoadLanguage(languageCode As String, filePath As String) As Boolean
+    Public Function Framework_Locale_LoadLanguage(languageCode As String, filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Locale_SetLanguage(languageCode As String) As Boolean
+    Public Function Framework_Locale_SetLanguage(languageCode As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6517,7 +6517,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Locale_HasString(key As String) As Boolean
+    Public Function Framework_Locale_HasString(key As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- String Table Management ----
@@ -6539,11 +6539,11 @@ Public Module FrameworkWrapper
 
     ' ---- File Operations ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Locale_SaveLanguage(languageCode As String, filePath As String) As Boolean
+    Public Function Framework_Locale_SaveLanguage(languageCode As String, filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Locale_ReloadCurrent() As Boolean
+    Public Function Framework_Locale_ReloadCurrent() As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Callbacks ----
@@ -6571,7 +6571,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Achievement_SetHidden(achievementId As Integer, hidden As Boolean)
+    Public Sub Framework_Achievement_SetHidden(achievementId As Integer, <MarshalAs(UnmanagedType.I1)> hidden As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6613,7 +6613,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Achievement_IsUnlocked(achievementId As Integer) As Boolean
+    Public Function Framework_Achievement_IsUnlocked(achievementId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6655,7 +6655,7 @@ Public Module FrameworkWrapper
 
     ' ---- Notifications ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Achievement_SetNotificationsEnabled(enabled As Boolean)
+    Public Sub Framework_Achievement_SetNotificationsEnabled(<MarshalAs(UnmanagedType.I1)> enabled As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6676,11 +6676,11 @@ Public Module FrameworkWrapper
 
     ' ---- Persistence ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Achievement_Save(filePath As String) As Boolean
+    Public Function Framework_Achievement_Save(filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Achievement_Load(filePath As String) As Boolean
+    Public Function Framework_Achievement_Load(filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6778,7 +6778,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Cutscene_AddSetVisible(cutsceneId As Integer, entityId As Integer, visible As Boolean)
+    Public Sub Framework_Cutscene_AddSetVisible(cutsceneId As Integer, entityId As Integer, <MarshalAs(UnmanagedType.I1)> visible As Boolean)
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
@@ -6814,7 +6814,7 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Cutscene_SetSkippable(cutsceneId As Integer, skippable As Boolean)
+    Public Sub Framework_Cutscene_SetSkippable(cutsceneId As Integer, <MarshalAs(UnmanagedType.I1)> skippable As Boolean)
     End Sub
 
     ' ---- State Queries ----
@@ -6823,15 +6823,15 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Cutscene_IsPlaying(cutsceneId As Integer) As Boolean
+    Public Function Framework_Cutscene_IsPlaying(cutsceneId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Cutscene_IsPaused(cutsceneId As Integer) As Boolean
+    Public Function Framework_Cutscene_IsPaused(cutsceneId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Cutscene_IsFinished(cutsceneId As Integer) As Boolean
+    Public Function Framework_Cutscene_IsFinished(cutsceneId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6913,7 +6913,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Leaderboard_IsHighScore(leaderboardId As Integer, score As Integer) As Boolean
+    Public Function Framework_Leaderboard_IsHighScore(leaderboardId As Integer, score As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -6965,19 +6965,19 @@ Public Module FrameworkWrapper
 
     ' ---- Persistence ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Leaderboard_Save(leaderboardId As Integer, filePath As String) As Boolean
+    Public Function Framework_Leaderboard_Save(leaderboardId As Integer, filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Leaderboard_Load(leaderboardId As Integer, filePath As String) As Boolean
+    Public Function Framework_Leaderboard_Load(leaderboardId As Integer, filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Leaderboard_SaveAll(filePath As String) As Boolean
+    Public Function Framework_Leaderboard_SaveAll(filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
-    Public Function Framework_Leaderboard_LoadAll(filePath As String) As Boolean
+    Public Function Framework_Leaderboard_LoadAll(filePath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     ' ---- Global Management ----
@@ -7825,3 +7825,4 @@ Public Module FrameworkWrapper
 #End Region
 
 End Module
+
