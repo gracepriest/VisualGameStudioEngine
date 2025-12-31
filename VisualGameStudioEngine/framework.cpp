@@ -17120,8 +17120,13 @@ extern "C" {
 
     void Framework_Locale_Initialize() {
         g_locale.initialized = true;
-        g_locale.currentLanguage = "";
         g_locale.languages.clear();
+
+        // Create a default language so SetString works without loading a file
+        LocaleLanguage defaultLang;
+        defaultLang.code = "default";
+        g_locale.languages["default"] = defaultLang;
+        g_locale.currentLanguage = "default";
     }
 
     void Framework_Locale_Shutdown() {

@@ -4279,11 +4279,15 @@ Public Module FrameworkTests
             LogFail("Get string with default", ex.Message)
         End Try
 
-        ' Test has string (note: strings might not persist between calls depending on implementation)
+        ' Test has string
         Try
             Dim hasGreeting = Framework_Locale_HasString("greeting")
             Dim hasNonexistent = Framework_Locale_HasString("nonexistent_key_xyz")
-            LogPass($"Has string check (greeting={hasGreeting}, nonexistent={hasNonexistent})")
+            If hasGreeting AndAlso Not hasNonexistent Then
+                LogPass($"Has string check (greeting={hasGreeting}, nonexistent={hasNonexistent})")
+            Else
+                LogFail("Has string check", $"greeting={hasGreeting} should be True, nonexistent={hasNonexistent} should be False")
+            End If
         Catch ex As Exception
             LogFail("Has string check", ex.Message)
         End Try
@@ -4299,7 +4303,11 @@ Public Module FrameworkTests
         ' Test get string count
         Try
             Dim count = Framework_Locale_GetStringCount()
-            LogPass($"Get string count (count={count})")
+            If count = 3 Then
+                LogPass($"Get string count (count={count})")
+            Else
+                LogFail("Get string count", $"Expected 3, got {count}")
+            End If
         Catch ex As Exception
             LogFail("Get string count", ex.Message)
         End Try
@@ -4312,10 +4320,14 @@ Public Module FrameworkTests
             LogFail("Remove string", ex.Message)
         End Try
 
-        ' Test get language count
+        ' Test get language count (should be 1 for default language)
         Try
             Dim langCount = Framework_Locale_GetLanguageCount()
-            LogPass($"Get language count (count={langCount})")
+            If langCount >= 1 Then
+                LogPass($"Get language count (count={langCount})")
+            Else
+                LogFail("Get language count", $"Expected >= 1, got {langCount}")
+            End If
         Catch ex As Exception
             LogFail("Get language count", ex.Message)
         End Try
