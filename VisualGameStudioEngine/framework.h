@@ -1074,6 +1074,94 @@ extern "C" {
     __declspec(dllexport) void  Framework_Perf_EndFrame();
 
     // ========================================================================
+    // PERFORMANCE OPTIMIZATION SYSTEM
+    // ========================================================================
+    // Spatial Partitioning (Quadtree for fast spatial queries)
+    __declspec(dllexport) int   Framework_Spatial_CreateGrid(float worldWidth, float worldHeight, float cellSize);
+    __declspec(dllexport) void  Framework_Spatial_DestroyGrid(int gridId);
+    __declspec(dllexport) void  Framework_Spatial_Clear(int gridId);
+    __declspec(dllexport) void  Framework_Spatial_InsertEntity(int gridId, int entity);
+    __declspec(dllexport) void  Framework_Spatial_RemoveEntity(int gridId, int entity);
+    __declspec(dllexport) void  Framework_Spatial_UpdateEntity(int gridId, int entity);  // Call when entity moves
+    __declspec(dllexport) void  Framework_Spatial_UpdateAll(int gridId);                 // Rebuild entire grid
+    __declspec(dllexport) int   Framework_Spatial_QueryRect(int gridId, float x, float y, float w, float h, int* outEntities, int maxResults);
+    __declspec(dllexport) int   Framework_Spatial_QueryCircle(int gridId, float cx, float cy, float radius, int* outEntities, int maxResults);
+    __declspec(dllexport) int   Framework_Spatial_QueryPoint(int gridId, float x, float y, int* outEntities, int maxResults);
+    __declspec(dllexport) int   Framework_Spatial_GetNearestEntity(int gridId, float x, float y, float maxDist);
+    __declspec(dllexport) int   Framework_Spatial_GetCellCount(int gridId);
+    __declspec(dllexport) int   Framework_Spatial_GetEntityCount(int gridId);
+    __declspec(dllexport) void  Framework_Spatial_SetDebugDraw(int gridId, bool enabled);
+
+    // Viewport Culling (automatic render culling)
+    __declspec(dllexport) void  Framework_Culling_SetEnabled(bool enabled);
+    __declspec(dllexport) bool  Framework_Culling_IsEnabled();
+    __declspec(dllexport) void  Framework_Culling_SetViewport(float x, float y, float width, float height);
+    __declspec(dllexport) void  Framework_Culling_SetPadding(float padding);             // Extra margin around viewport
+    __declspec(dllexport) bool  Framework_Culling_IsVisible(int entity);
+    __declspec(dllexport) bool  Framework_Culling_IsRectVisible(float x, float y, float w, float h);
+    __declspec(dllexport) int   Framework_Culling_GetVisibleCount();
+    __declspec(dllexport) int   Framework_Culling_GetCulledCount();
+
+    // Memory Tracking
+    __declspec(dllexport) void  Framework_Memory_BeginTracking();
+    __declspec(dllexport) void  Framework_Memory_EndTracking();
+    __declspec(dllexport) long long Framework_Memory_GetTotalAllocated();                // Bytes allocated since tracking started
+    __declspec(dllexport) long long Framework_Memory_GetCurrentUsage();                  // Current memory in use
+    __declspec(dllexport) long long Framework_Memory_GetPeakUsage();                     // Peak memory usage
+    __declspec(dllexport) int   Framework_Memory_GetAllocationCount();                   // Number of allocations
+    __declspec(dllexport) int   Framework_Memory_GetActiveAllocations();                 // Allocations not yet freed
+    __declspec(dllexport) void  Framework_Memory_ResetPeak();
+    __declspec(dllexport) void  Framework_Memory_DumpLeaks();                            // Log suspected memory leaks
+    __declspec(dllexport) void  Framework_Memory_SetWarningThreshold(long long bytes);   // Warn when exceeded
+    __declspec(dllexport) bool  Framework_Memory_IsOverBudget();
+
+    // Frame Budget System
+    __declspec(dllexport) void  Framework_Budget_SetTargetFPS(int fps);                  // e.g., 60 = 16.67ms budget
+    __declspec(dllexport) void  Framework_Budget_SetWarningThreshold(float percent);     // Warn at % of budget (e.g., 80%)
+    __declspec(dllexport) float Framework_Budget_GetTargetFrameTime();                   // Target ms per frame
+    __declspec(dllexport) float Framework_Budget_GetBudgetUsed();                        // Current frame budget used (%)
+    __declspec(dllexport) float Framework_Budget_GetBudgetRemaining();                   // Ms remaining in budget
+    __declspec(dllexport) bool  Framework_Budget_IsOverBudget();
+    __declspec(dllexport) int   Framework_Budget_GetOverBudgetFrames();                  // Consecutive frames over budget
+    __declspec(dllexport) void  Framework_Budget_ResetStats();
+
+    // Async Asset Loading
+    __declspec(dllexport) int   Framework_Async_LoadTexture(const char* path);           // Returns request ID
+    __declspec(dllexport) int   Framework_Async_LoadSound(const char* path);
+    __declspec(dllexport) int   Framework_Async_LoadFont(const char* path, int size);
+    __declspec(dllexport) bool  Framework_Async_IsComplete(int requestId);
+    __declspec(dllexport) bool  Framework_Async_IsFailed(int requestId);
+    __declspec(dllexport) float Framework_Async_GetProgress(int requestId);              // 0-1
+    __declspec(dllexport) int   Framework_Async_GetResult(int requestId);                // Returns asset handle when complete
+    __declspec(dllexport) void  Framework_Async_Cancel(int requestId);
+    __declspec(dllexport) void  Framework_Async_CancelAll();
+    __declspec(dllexport) int   Framework_Async_GetPendingCount();
+    __declspec(dllexport) void  Framework_Async_SetMaxConcurrent(int maxLoads);          // Limit parallel loads
+    __declspec(dllexport) void  Framework_Async_Update();                                // Process completed loads
+
+    // Object Pooling Statistics
+    __declspec(dllexport) long long Framework_Pool_GetTotalMemory();                     // Memory used by all pools
+    __declspec(dllexport) int   Framework_Pool_GetActivePoolCount();
+    __declspec(dllexport) int   Framework_Pool_GetTotalObjectCount();                    // Objects across all pools
+    __declspec(dllexport) int   Framework_Pool_GetTotalAcquired();                       // Currently acquired objects
+    __declspec(dllexport) float Framework_Pool_GetUtilization();                         // % of pool capacity in use
+    __declspec(dllexport) void  Framework_Pool_ShrinkAll();                              // Shrink all pools to fit
+
+    // Batch Rendering Statistics
+    __declspec(dllexport) int   Framework_Render_GetBatchCount();
+    __declspec(dllexport) int   Framework_Render_GetSpritesRendered();
+    __declspec(dllexport) int   Framework_Render_GetTextureSwaps();
+    __declspec(dllexport) void  Framework_Render_SetAutoBatching(bool enabled);
+    __declspec(dllexport) bool  Framework_Render_IsAutoBatching();
+
+    // Performance Warnings/Alerts
+    __declspec(dllexport) void  Framework_Perf_SetWarningCallback(void (*callback)(const char* message));
+    __declspec(dllexport) void  Framework_Perf_EnableWarnings(bool enabled);
+    __declspec(dllexport) void  Framework_Perf_SetEntityWarningThreshold(int count);     // Warn if entity count exceeds
+    __declspec(dllexport) void  Framework_Perf_SetDrawCallWarningThreshold(int count);
+    __declspec(dllexport) void  Framework_Perf_SetMemoryWarningThreshold(long long bytes);
+
+    // ========================================================================
     // PREFABS & SERIALIZATION
     // ========================================================================
     __declspec(dllexport) bool  Framework_Scene_Save(const char* path);

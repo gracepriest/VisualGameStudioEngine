@@ -3940,6 +3940,481 @@ extern "C" {
     }
 
     // ========================================================================
+    // PERFORMANCE OPTIMIZATION SYSTEM - Implementation
+    // ========================================================================
+
+    // Spatial Grid structure
+    struct SpatialCell {
+        std::unordered_set<int> entities;
+    };
+
+    struct SpatialGrid {
+        int id = -1;
+        float worldWidth = 0;
+        float worldHeight = 0;
+        float cellSize = 64;
+        int cols = 0;
+        int rows = 0;
+        std::vector<SpatialCell> cells;
+        std::unordered_map<int, std::pair<int, int>> entityCells;  // entity -> (col, row)
+        bool debugDraw = false;
+        bool valid = true;
+    };
+    static std::unordered_map<int, SpatialGrid> g_spatialGrids;
+    static int g_nextSpatialGridId = 1;
+
+    // Culling state
+    static bool g_cullingEnabled = false;
+    static float g_cullViewX = 0, g_cullViewY = 0;
+    static float g_cullViewW = 800, g_cullViewH = 600;
+    static float g_cullPadding = 64;
+    static int g_visibleCount = 0;
+    static int g_culledCount = 0;
+
+    // Memory tracking state
+    static bool g_memoryTracking = false;
+    static long long g_memoryAllocated = 0;
+    static long long g_memoryFreed = 0;
+    static long long g_memoryPeak = 0;
+    static int g_allocationCount = 0;
+    static int g_freeCount = 0;
+    static long long g_memoryWarningThreshold = 512 * 1024 * 1024;  // 512MB default
+
+    // Frame budget state
+    static int g_targetFPS = 60;
+    static float g_budgetWarningPercent = 80.0f;
+    static int g_overBudgetFrames = 0;
+
+    // Async loading state
+    struct AsyncLoadRequest {
+        int id = -1;
+        int type = 0;  // 0=texture, 1=sound, 2=font
+        std::string path;
+        int fontSize = 0;  // For fonts
+        bool complete = false;
+        bool failed = false;
+        float progress = 0.0f;
+        int resultHandle = -1;
+    };
+    static std::unordered_map<int, AsyncLoadRequest> g_asyncRequests;
+    static int g_nextAsyncRequestId = 1;
+    static int g_maxConcurrentLoads = 4;
+
+    // Render stats
+    static int g_batchCount = 0;
+    static int g_spritesRendered = 0;
+    static int g_textureSwaps = 0;
+    static bool g_autoBatching = true;
+
+    // Performance warnings
+    static void (*g_perfWarningCallback)(const char*) = nullptr;
+    static bool g_perfWarningsEnabled = false;
+    static int g_entityWarningThreshold = 10000;
+    static int g_drawCallWarningThreshold = 500;
+    static long long g_memoryWarningThresholdPerf = 256 * 1024 * 1024;
+
+    // Helper: Get cell index from world position
+    static int GetCellIndex(const SpatialGrid& grid, float x, float y) {
+        int col = (int)(x / grid.cellSize);
+        int row = (int)(y / grid.cellSize);
+        if (col < 0) col = 0;
+        if (row < 0) row = 0;
+        if (col >= grid.cols) col = grid.cols - 1;
+        if (row >= grid.rows) row = grid.rows - 1;
+        return row * grid.cols + col;
+    }
+
+    // Spatial Partitioning
+    int Framework_Spatial_CreateGrid(float worldWidth, float worldHeight, float cellSize) {
+        SpatialGrid grid;
+        grid.id = g_nextSpatialGridId++;
+        grid.worldWidth = worldWidth;
+        grid.worldHeight = worldHeight;
+        grid.cellSize = cellSize > 0 ? cellSize : 64;
+        grid.cols = (int)ceilf(worldWidth / grid.cellSize);
+        grid.rows = (int)ceilf(worldHeight / grid.cellSize);
+        grid.cells.resize(grid.cols * grid.rows);
+        g_spatialGrids[grid.id] = grid;
+        return grid.id;
+    }
+
+    void Framework_Spatial_DestroyGrid(int gridId) {
+        g_spatialGrids.erase(gridId);
+    }
+
+    void Framework_Spatial_Clear(int gridId) {
+        auto it = g_spatialGrids.find(gridId);
+        if (it == g_spatialGrids.end()) return;
+        for (auto& cell : it->second.cells) {
+            cell.entities.clear();
+        }
+        it->second.entityCells.clear();
+    }
+
+    void Framework_Spatial_InsertEntity(int gridId, int entity) {
+        auto it = g_spatialGrids.find(gridId);
+        if (it == g_spatialGrids.end()) return;
+
+        auto trIt = g_transform2D.find(entity);
+        if (trIt == g_transform2D.end()) return;
+
+        float x = trIt->second.position.x;
+        float y = trIt->second.position.y;
+        int cellIdx = GetCellIndex(it->second, x, y);
+        int col = cellIdx % it->second.cols;
+        int row = cellIdx / it->second.cols;
+
+        it->second.cells[cellIdx].entities.insert(entity);
+        it->second.entityCells[entity] = { col, row };
+    }
+
+    void Framework_Spatial_RemoveEntity(int gridId, int entity) {
+        auto it = g_spatialGrids.find(gridId);
+        if (it == g_spatialGrids.end()) return;
+
+        auto cellIt = it->second.entityCells.find(entity);
+        if (cellIt != it->second.entityCells.end()) {
+            int cellIdx = cellIt->second.second * it->second.cols + cellIt->second.first;
+            it->second.cells[cellIdx].entities.erase(entity);
+            it->second.entityCells.erase(entity);
+        }
+    }
+
+    void Framework_Spatial_UpdateEntity(int gridId, int entity) {
+        Framework_Spatial_RemoveEntity(gridId, entity);
+        Framework_Spatial_InsertEntity(gridId, entity);
+    }
+
+    void Framework_Spatial_UpdateAll(int gridId) {
+        auto it = g_spatialGrids.find(gridId);
+        if (it == g_spatialGrids.end()) return;
+
+        // Collect all entities
+        std::vector<int> entities;
+        for (const auto& kv : it->second.entityCells) {
+            entities.push_back(kv.first);
+        }
+
+        // Clear and reinsert
+        Framework_Spatial_Clear(gridId);
+        for (int e : entities) {
+            Framework_Spatial_InsertEntity(gridId, e);
+        }
+    }
+
+    int Framework_Spatial_QueryRect(int gridId, float x, float y, float w, float h, int* outEntities, int maxResults) {
+        auto it = g_spatialGrids.find(gridId);
+        if (it == g_spatialGrids.end() || !outEntities) return 0;
+
+        int startCol = (int)(x / it->second.cellSize);
+        int startRow = (int)(y / it->second.cellSize);
+        int endCol = (int)((x + w) / it->second.cellSize);
+        int endRow = (int)((y + h) / it->second.cellSize);
+
+        if (startCol < 0) startCol = 0;
+        if (startRow < 0) startRow = 0;
+        if (endCol >= it->second.cols) endCol = it->second.cols - 1;
+        if (endRow >= it->second.rows) endRow = it->second.rows - 1;
+
+        int count = 0;
+        std::unordered_set<int> added;
+        for (int row = startRow; row <= endRow && count < maxResults; row++) {
+            for (int col = startCol; col <= endCol && count < maxResults; col++) {
+                int cellIdx = row * it->second.cols + col;
+                for (int e : it->second.cells[cellIdx].entities) {
+                    if (added.find(e) == added.end() && count < maxResults) {
+                        outEntities[count++] = e;
+                        added.insert(e);
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    int Framework_Spatial_QueryCircle(int gridId, float cx, float cy, float radius, int* outEntities, int maxResults) {
+        return Framework_Spatial_QueryRect(gridId, cx - radius, cy - radius, radius * 2, radius * 2, outEntities, maxResults);
+    }
+
+    int Framework_Spatial_QueryPoint(int gridId, float x, float y, int* outEntities, int maxResults) {
+        auto it = g_spatialGrids.find(gridId);
+        if (it == g_spatialGrids.end() || !outEntities) return 0;
+
+        int cellIdx = GetCellIndex(it->second, x, y);
+        int count = 0;
+        for (int e : it->second.cells[cellIdx].entities) {
+            if (count < maxResults) {
+                outEntities[count++] = e;
+            }
+        }
+        return count;
+    }
+
+    int Framework_Spatial_GetNearestEntity(int gridId, float x, float y, float maxDist) {
+        int entities[100];
+        int count = Framework_Spatial_QueryCircle(gridId, x, y, maxDist, entities, 100);
+
+        int nearest = -1;
+        float nearestDist = maxDist * maxDist;
+        for (int i = 0; i < count; i++) {
+            auto trIt = g_transform2D.find(entities[i]);
+            if (trIt != g_transform2D.end()) {
+                float dx = trIt->second.position.x - x;
+                float dy = trIt->second.position.y - y;
+                float dist = dx * dx + dy * dy;
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearest = entities[i];
+                }
+            }
+        }
+        return nearest;
+    }
+
+    int Framework_Spatial_GetCellCount(int gridId) {
+        auto it = g_spatialGrids.find(gridId);
+        return (it != g_spatialGrids.end()) ? it->second.cols * it->second.rows : 0;
+    }
+
+    int Framework_Spatial_GetEntityCount(int gridId) {
+        auto it = g_spatialGrids.find(gridId);
+        return (it != g_spatialGrids.end()) ? (int)it->second.entityCells.size() : 0;
+    }
+
+    void Framework_Spatial_SetDebugDraw(int gridId, bool enabled) {
+        auto it = g_spatialGrids.find(gridId);
+        if (it != g_spatialGrids.end()) it->second.debugDraw = enabled;
+    }
+
+    // Viewport Culling
+    void Framework_Culling_SetEnabled(bool enabled) { g_cullingEnabled = enabled; }
+    bool Framework_Culling_IsEnabled() { return g_cullingEnabled; }
+
+    void Framework_Culling_SetViewport(float x, float y, float width, float height) {
+        g_cullViewX = x;
+        g_cullViewY = y;
+        g_cullViewW = width;
+        g_cullViewH = height;
+    }
+
+    void Framework_Culling_SetPadding(float padding) { g_cullPadding = padding; }
+
+    bool Framework_Culling_IsVisible(int entity) {
+        if (!g_cullingEnabled) return true;
+
+        auto trIt = g_transform2D.find(entity);
+        if (trIt == g_transform2D.end()) return true;
+
+        float ex = trIt->second.position.x;
+        float ey = trIt->second.position.y;
+        float size = 32.0f;  // Default size estimate
+
+        auto sprIt = g_sprite2D.find(entity);
+        if (sprIt != g_sprite2D.end()) {
+            size = fmaxf(sprIt->second.source.width, sprIt->second.source.height) *
+                   fmaxf(trIt->second.scale.x, trIt->second.scale.y);
+        }
+
+        return Framework_Culling_IsRectVisible(ex - size/2, ey - size/2, size, size);
+    }
+
+    bool Framework_Culling_IsRectVisible(float x, float y, float w, float h) {
+        float vx = g_cullViewX - g_cullPadding;
+        float vy = g_cullViewY - g_cullPadding;
+        float vw = g_cullViewW + g_cullPadding * 2;
+        float vh = g_cullViewH + g_cullPadding * 2;
+
+        return !(x + w < vx || x > vx + vw || y + h < vy || y > vy + vh);
+    }
+
+    int Framework_Culling_GetVisibleCount() { return g_visibleCount; }
+    int Framework_Culling_GetCulledCount() { return g_culledCount; }
+
+    // Memory Tracking
+    void Framework_Memory_BeginTracking() {
+        g_memoryTracking = true;
+        g_memoryAllocated = 0;
+        g_memoryFreed = 0;
+        g_memoryPeak = 0;
+        g_allocationCount = 0;
+        g_freeCount = 0;
+    }
+
+    void Framework_Memory_EndTracking() {
+        g_memoryTracking = false;
+    }
+
+    long long Framework_Memory_GetTotalAllocated() { return g_memoryAllocated; }
+    long long Framework_Memory_GetCurrentUsage() { return g_memoryAllocated - g_memoryFreed; }
+    long long Framework_Memory_GetPeakUsage() { return g_memoryPeak; }
+    int Framework_Memory_GetAllocationCount() { return g_allocationCount; }
+    int Framework_Memory_GetActiveAllocations() { return g_allocationCount - g_freeCount; }
+    void Framework_Memory_ResetPeak() { g_memoryPeak = g_memoryAllocated - g_memoryFreed; }
+
+    void Framework_Memory_DumpLeaks() {
+        TraceLog(LOG_WARNING, "MEMORY: Active allocations: %d", g_allocationCount - g_freeCount);
+        TraceLog(LOG_WARNING, "MEMORY: Current usage: %lld bytes", g_memoryAllocated - g_memoryFreed);
+    }
+
+    void Framework_Memory_SetWarningThreshold(long long bytes) { g_memoryWarningThreshold = bytes; }
+    bool Framework_Memory_IsOverBudget() { return (g_memoryAllocated - g_memoryFreed) > g_memoryWarningThreshold; }
+
+    // Frame Budget System
+    void Framework_Budget_SetTargetFPS(int fps) { g_targetFPS = fps > 0 ? fps : 60; }
+    void Framework_Budget_SetWarningThreshold(float percent) { g_budgetWarningPercent = percent; }
+
+    float Framework_Budget_GetTargetFrameTime() {
+        return 1000.0f / (float)g_targetFPS;
+    }
+
+    float Framework_Budget_GetBudgetUsed() {
+        float target = Framework_Budget_GetTargetFrameTime();
+        return (g_currentFrameTime / target) * 100.0f;
+    }
+
+    float Framework_Budget_GetBudgetRemaining() {
+        return Framework_Budget_GetTargetFrameTime() - g_currentFrameTime;
+    }
+
+    bool Framework_Budget_IsOverBudget() {
+        return g_currentFrameTime > Framework_Budget_GetTargetFrameTime();
+    }
+
+    int Framework_Budget_GetOverBudgetFrames() { return g_overBudgetFrames; }
+    void Framework_Budget_ResetStats() { g_overBudgetFrames = 0; }
+
+    // Async Asset Loading (simplified - synchronous for now, tracks requests)
+    int Framework_Async_LoadTexture(const char* path) {
+        AsyncLoadRequest req;
+        req.id = g_nextAsyncRequestId++;
+        req.type = 0;
+        req.path = path ? path : "";
+        // For simplicity, load synchronously
+        req.resultHandle = Framework_AcquireTextureH(path);
+        req.complete = req.resultHandle > 0;
+        req.failed = req.resultHandle <= 0;
+        req.progress = 1.0f;
+        g_asyncRequests[req.id] = req;
+        return req.id;
+    }
+
+    int Framework_Async_LoadSound(const char* path) {
+        AsyncLoadRequest req;
+        req.id = g_nextAsyncRequestId++;
+        req.type = 1;
+        req.path = path ? path : "";
+        req.resultHandle = Framework_Audio_LoadSound(path, AUDIO_GROUP_SFX);
+        req.complete = req.resultHandle > 0;
+        req.failed = req.resultHandle <= 0;
+        req.progress = 1.0f;
+        g_asyncRequests[req.id] = req;
+        return req.id;
+    }
+
+    int Framework_Async_LoadFont(const char* path, int size) {
+        AsyncLoadRequest req;
+        req.id = g_nextAsyncRequestId++;
+        req.type = 2;
+        req.path = path ? path : "";
+        req.fontSize = size;
+        req.resultHandle = Framework_AcquireFontH(path, size);
+        req.complete = req.resultHandle > 0;
+        req.failed = req.resultHandle <= 0;
+        req.progress = 1.0f;
+        g_asyncRequests[req.id] = req;
+        return req.id;
+    }
+
+    bool Framework_Async_IsComplete(int requestId) {
+        auto it = g_asyncRequests.find(requestId);
+        return (it != g_asyncRequests.end()) ? it->second.complete : false;
+    }
+
+    bool Framework_Async_IsFailed(int requestId) {
+        auto it = g_asyncRequests.find(requestId);
+        return (it != g_asyncRequests.end()) ? it->second.failed : true;
+    }
+
+    float Framework_Async_GetProgress(int requestId) {
+        auto it = g_asyncRequests.find(requestId);
+        return (it != g_asyncRequests.end()) ? it->second.progress : 0.0f;
+    }
+
+    int Framework_Async_GetResult(int requestId) {
+        auto it = g_asyncRequests.find(requestId);
+        return (it != g_asyncRequests.end() && it->second.complete) ? it->second.resultHandle : -1;
+    }
+
+    void Framework_Async_Cancel(int requestId) {
+        g_asyncRequests.erase(requestId);
+    }
+
+    void Framework_Async_CancelAll() {
+        g_asyncRequests.clear();
+    }
+
+    int Framework_Async_GetPendingCount() {
+        int count = 0;
+        for (const auto& kv : g_asyncRequests) {
+            if (!kv.second.complete && !kv.second.failed) count++;
+        }
+        return count;
+    }
+
+    void Framework_Async_SetMaxConcurrent(int maxLoads) { g_maxConcurrentLoads = maxLoads; }
+    void Framework_Async_Update() { /* For future async implementation */ }
+
+    // Object Pooling Statistics - Forward declarations (implementations after pool system)
+    long long Framework_Pool_GetTotalMemoryImpl();
+    int Framework_Pool_GetActivePoolCountImpl();
+    int Framework_Pool_GetTotalObjectCountImpl();
+    int Framework_Pool_GetTotalAcquiredImpl();
+    void Framework_Pool_ShrinkAllImpl();
+
+    long long Framework_Pool_GetTotalMemory() {
+        return Framework_Pool_GetTotalMemoryImpl();
+    }
+
+    int Framework_Pool_GetActivePoolCount() {
+        return Framework_Pool_GetActivePoolCountImpl();
+    }
+
+    int Framework_Pool_GetTotalObjectCount() {
+        return Framework_Pool_GetTotalObjectCountImpl();
+    }
+
+    int Framework_Pool_GetTotalAcquired() {
+        return Framework_Pool_GetTotalAcquiredImpl();
+    }
+
+    float Framework_Pool_GetUtilization() {
+        int total = Framework_Pool_GetTotalObjectCount();
+        int acquired = Framework_Pool_GetTotalAcquired();
+        return total > 0 ? (float)acquired / (float)total * 100.0f : 0.0f;
+    }
+
+    void Framework_Pool_ShrinkAll() {
+        Framework_Pool_ShrinkAllImpl();
+    }
+
+    // Batch Rendering Statistics
+    int Framework_Render_GetBatchCount() { return g_batchCount; }
+    int Framework_Render_GetSpritesRendered() { return g_spritesRendered; }
+    int Framework_Render_GetTextureSwaps() { return g_textureSwaps; }
+    void Framework_Render_SetAutoBatching(bool enabled) { g_autoBatching = enabled; }
+    bool Framework_Render_IsAutoBatching() { return g_autoBatching; }
+
+    // Performance Warnings
+    void Framework_Perf_SetWarningCallback(void (*callback)(const char* message)) {
+        g_perfWarningCallback = callback;
+    }
+
+    void Framework_Perf_EnableWarnings(bool enabled) { g_perfWarningsEnabled = enabled; }
+    void Framework_Perf_SetEntityWarningThreshold(int count) { g_entityWarningThreshold = count; }
+    void Framework_Perf_SetDrawCallWarningThreshold(int count) { g_drawCallWarningThreshold = count; }
+    void Framework_Perf_SetMemoryWarningThreshold(long long bytes) { g_memoryWarningThresholdPerf = bytes; }
+
+    // ========================================================================
     // PREFABS & SERIALIZATION (Basic implementation)
     // ========================================================================
 
@@ -15064,6 +15539,48 @@ extern "C" {
     void Framework_Pool_ReleaseAllPools() {
         for (auto& pair : g_pools) {
             Framework_Pool_ReleaseAll(pair.first);
+        }
+    }
+
+    // Pool Statistics (real implementations now that g_pools is defined)
+    long long Framework_Pool_GetTotalMemoryImpl() {
+        long long total = 0;
+        for (const auto& kv : g_pools) {
+            total += kv.second.objects.size() * sizeof(PoolObject);
+        }
+        return total;
+    }
+
+    int Framework_Pool_GetActivePoolCountImpl() { return (int)g_pools.size(); }
+
+    int Framework_Pool_GetTotalObjectCountImpl() {
+        int total = 0;
+        for (const auto& kv : g_pools) {
+            total += (int)kv.second.objects.size();
+        }
+        return total;
+    }
+
+    int Framework_Pool_GetTotalAcquiredImpl() {
+        int total = 0;
+        for (const auto& kv : g_pools) {
+            for (const auto& obj : kv.second.objects) {
+                if (obj.active) total++;
+            }
+        }
+        return total;
+    }
+
+    void Framework_Pool_ShrinkAllImpl() {
+        for (auto& kv : g_pools) {
+            auto& objs = kv.second.objects;
+            objs.erase(
+                std::remove_if(objs.begin(), objs.end(),
+                    [](const PoolObject& o) { return !o.active; }),
+                objs.end()
+            );
+            // Rebuild available indices
+            kv.second.availableIndices.clear();
         }
     }
 
