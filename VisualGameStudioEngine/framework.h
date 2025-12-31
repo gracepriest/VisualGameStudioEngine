@@ -1022,6 +1022,42 @@ extern "C" {
     __declspec(dllexport) void  Framework_Animators_Update(float dt);  // Update all animators
 
     // ========================================================================
+    // SPRITE SHEET TOOLS
+    // ========================================================================
+    // Helper functions for working with sprite sheets and creating animations
+
+    // Create a sprite sheet definition (grid-based layout)
+    __declspec(dllexport) int   Framework_SpriteSheet_Create(int textureHandle, int frameWidth, int frameHeight, int columns, int rows, int paddingX, int paddingY);
+    __declspec(dllexport) void  Framework_SpriteSheet_Destroy(int sheetId);
+    __declspec(dllexport) bool  Framework_SpriteSheet_IsValid(int sheetId);
+
+    // Query sprite sheet info
+    __declspec(dllexport) int   Framework_SpriteSheet_GetTextureHandle(int sheetId);
+    __declspec(dllexport) int   Framework_SpriteSheet_GetFrameCount(int sheetId);
+    __declspec(dllexport) int   Framework_SpriteSheet_GetColumns(int sheetId);
+    __declspec(dllexport) int   Framework_SpriteSheet_GetRows(int sheetId);
+    __declspec(dllexport) void  Framework_SpriteSheet_GetFrameSize(int sheetId, int* width, int* height);
+
+    // Get frame rectangle by index (0-based, row-major order)
+    __declspec(dllexport) void  Framework_SpriteSheet_GetFrameRect(int sheetId, int frameIndex, float* x, float* y, float* w, float* h);
+
+    // Get frame rectangle by row and column
+    __declspec(dllexport) void  Framework_SpriteSheet_GetFrameRectRC(int sheetId, int row, int col, float* x, float* y, float* w, float* h);
+
+    // Create animation clip from sprite sheet
+    __declspec(dllexport) int   Framework_AnimClip_CreateFromSheet(const char* name, int sheetId, int startFrame, int frameCount, float frameDuration, int loopMode);
+
+    // Create animation clip from a row in sprite sheet
+    __declspec(dllexport) int   Framework_AnimClip_CreateFromSheetRow(const char* name, int sheetId, int row, int startCol, int colCount, float frameDuration, int loopMode);
+
+    // Quick draw from sprite sheet (doesn't require entity)
+    __declspec(dllexport) void  Framework_SpriteSheet_DrawFrame(int sheetId, int frameIndex, float x, float y, float scale, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // Global sprite sheet management
+    __declspec(dllexport) int   Framework_SpriteSheet_GetCount();
+    __declspec(dllexport) void  Framework_SpriteSheet_DestroyAll();
+
+    // ========================================================================
     // PARTICLE SYSTEM
     // ========================================================================
     // Particle emitter component
@@ -3044,6 +3080,43 @@ extern "C" {
     __declspec(dllexport) int   Framework_Level_GetCount();
     __declspec(dllexport) void  Framework_Level_DestroyAll();
 
+    // Coordinate conversion
+    __declspec(dllexport) void  Framework_Level_WorldToTile(int levelId, float worldX, float worldY, int* tileX, int* tileY);
+    __declspec(dllexport) void  Framework_Level_TileToWorld(int levelId, int tileX, int tileY, float* worldX, float* worldY);
+    __declspec(dllexport) void  Framework_Level_TileToWorldCenter(int levelId, int tileX, int tileY, float* worldX, float* worldY);
+
+    // Flood fill
+    __declspec(dllexport) int   Framework_Level_FloodFill(int levelId, int layerIndex, int x, int y, int newTileId);
+
+    // Selection/Region operations
+    __declspec(dllexport) void  Framework_Level_CopyRegion(int levelId, int layerIndex, int x, int y, int w, int h);
+    __declspec(dllexport) void  Framework_Level_PasteRegion(int levelId, int layerIndex, int x, int y);
+    __declspec(dllexport) void  Framework_Level_ClearSelection();
+    __declspec(dllexport) void  Framework_Level_GetSelectionSize(int* width, int* height);
+
+    // Undo/Redo
+    __declspec(dllexport) void  Framework_Level_Undo(int levelId);
+    __declspec(dllexport) void  Framework_Level_Redo(int levelId);
+    __declspec(dllexport) bool  Framework_Level_CanUndo(int levelId);
+    __declspec(dllexport) bool  Framework_Level_CanRedo(int levelId);
+    __declspec(dllexport) void  Framework_Level_BeginEdit(int levelId);  // Call before batch edits
+    __declspec(dllexport) void  Framework_Level_EndEdit(int levelId);    // Call after batch edits to commit
+
+    // Tile properties/flags
+    __declspec(dllexport) void  Framework_Level_SetTileCollision(int levelId, int tileId, bool solid);
+    __declspec(dllexport) bool  Framework_Level_GetTileCollision(int levelId, int tileId);
+    __declspec(dllexport) void  Framework_Level_SetTileProperty(int levelId, int tileId, const char* key, const char* value);
+    __declspec(dllexport) const char* Framework_Level_GetTileProperty(int levelId, int tileId, const char* key);
+
+    // Auto-tiling support
+    __declspec(dllexport) void  Framework_Level_SetAutoTileRules(int levelId, int baseTileId, const int* tileMapping);  // 16 tile IDs for 4-bit neighbors
+    __declspec(dllexport) void  Framework_Level_PlaceAutoTile(int levelId, int layerIndex, int x, int y, int baseTileId);
+    __declspec(dllexport) void  Framework_Level_RefreshAutoTiles(int levelId, int layerIndex);
+
+    // Query helpers
+    __declspec(dllexport) bool  Framework_Level_IsTileSolid(int levelId, int layerIndex, int x, int y);
+    __declspec(dllexport) bool  Framework_Level_RaycastTiles(int levelId, int layerIndex, float startX, float startY, float endX, float endY, int* hitTileX, int* hitTileY);
+
     // ========================================================================
     // NETWORKING SYSTEM
     // ========================================================================
@@ -3147,6 +3220,12 @@ extern "C" {
     __declspec(dllexport) int   Framework_Shader_LoadDistortion();
     __declspec(dllexport) int   Framework_Shader_LoadChromatic();
     __declspec(dllexport) int   Framework_Shader_LoadPixelate();
+    __declspec(dllexport) int   Framework_Shader_LoadVignette();
+    __declspec(dllexport) int   Framework_Shader_LoadBloom();
+    __declspec(dllexport) int   Framework_Shader_LoadWave();
+    __declspec(dllexport) int   Framework_Shader_LoadSharpen();
+    __declspec(dllexport) int   Framework_Shader_LoadFilmGrain();
+    __declspec(dllexport) int   Framework_Shader_LoadColorAdjust();
 
     // Global
     __declspec(dllexport) int   Framework_Shader_GetCount();

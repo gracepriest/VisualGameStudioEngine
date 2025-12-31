@@ -1585,6 +1585,76 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Sprite Sheet Tools"
+    ' Create a sprite sheet definition (grid-based layout)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_SpriteSheet_Create(textureHandle As Integer, frameWidth As Integer, frameHeight As Integer, columns As Integer, rows As Integer, paddingX As Integer, paddingY As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SpriteSheet_Destroy(sheetId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_SpriteSheet_IsValid(sheetId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' Query sprite sheet info
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_SpriteSheet_GetTextureHandle(sheetId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_SpriteSheet_GetFrameCount(sheetId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_SpriteSheet_GetColumns(sheetId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_SpriteSheet_GetRows(sheetId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SpriteSheet_GetFrameSize(sheetId As Integer, ByRef width As Integer, ByRef height As Integer)
+    End Sub
+
+    ' Get frame rectangle by index (0-based, row-major order)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SpriteSheet_GetFrameRect(sheetId As Integer, frameIndex As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
+    End Sub
+
+    ' Get frame rectangle by row and column
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SpriteSheet_GetFrameRectRC(sheetId As Integer, row As Integer, col As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
+    End Sub
+
+    ' Create animation clip from sprite sheet
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimClip_CreateFromSheet(name As String, sheetId As Integer, startFrame As Integer, frameCount As Integer, frameDuration As Single, loopMode As Integer) As Integer
+    End Function
+
+    ' Create animation clip from a row in sprite sheet
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimClip_CreateFromSheetRow(name As String, sheetId As Integer, row As Integer, startCol As Integer, colCount As Integer, frameDuration As Single, loopMode As Integer) As Integer
+    End Function
+
+    ' Quick draw from sprite sheet (doesn't require entity)
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SpriteSheet_DrawFrame(sheetId As Integer, frameIndex As Integer, x As Single, y As Single, scale As Single, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ' Global sprite sheet management
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_SpriteSheet_GetCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SpriteSheet_DestroyAll()
+    End Sub
+#End Region
+
 #Region "Particle System"
     ' Particle emitter component
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -7287,6 +7357,105 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_Level_DrawCollisions(levelId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
     End Sub
+
+    ' ---- Coordinate conversion ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_WorldToTile(levelId As Integer, worldX As Single, worldY As Single, ByRef tileX As Integer, ByRef tileY As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_TileToWorld(levelId As Integer, tileX As Integer, tileY As Integer, ByRef worldX As Single, ByRef worldY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_TileToWorldCenter(levelId As Integer, tileX As Integer, tileY As Integer, ByRef worldX As Single, ByRef worldY As Single)
+    End Sub
+
+    ' ---- Flood fill ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_FloodFill(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, newTileId As Integer) As Integer
+    End Function
+
+    ' ---- Selection/Region operations ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_CopyRegion(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, w As Integer, h As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_PasteRegion(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_ClearSelection()
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_GetSelectionSize(ByRef width As Integer, ByRef height As Integer)
+    End Sub
+
+    ' ---- Undo/Redo ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_Undo(levelId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_Redo(levelId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_CanUndo(levelId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_CanRedo(levelId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_BeginEdit(levelId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_EndEdit(levelId As Integer)
+    End Sub
+
+    ' ---- Tile properties/flags ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetTileCollision(levelId As Integer, tileId As Integer, <MarshalAs(UnmanagedType.I1)> solid As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_GetTileCollision(levelId As Integer, tileId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_Level_SetTileProperty(levelId As Integer, tileId As Integer, key As String, value As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Level_GetTileProperty(levelId As Integer, tileId As Integer, key As String) As IntPtr
+    End Function
+
+    ' ---- Auto-tiling ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_SetAutoTileRules(levelId As Integer, baseTileId As Integer, tileMapping As Integer())
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_PlaceAutoTile(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, baseTileId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Level_RefreshAutoTiles(levelId As Integer, layerIndex As Integer)
+    End Sub
+
+    ' ---- Query helpers ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_IsTileSolid(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Level_RaycastTiles(levelId As Integer, layerIndex As Integer, startX As Single, startY As Single, endX As Single, endY As Single, ByRef hitTileX As Integer, ByRef hitTileY As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
 #End Region
 
 #Region "Networking System"
@@ -7521,6 +7690,30 @@ Public Module FrameworkWrapper
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_Shader_LoadPixelate() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadVignette() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadBloom() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadWave() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadSharpen() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadFilmGrain() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadColorAdjust() As Integer
     End Function
 
     ' ---- Global ----

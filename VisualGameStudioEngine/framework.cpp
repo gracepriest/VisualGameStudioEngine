@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <vector>
 #include <queue>
+#include <array>
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -4533,6 +4534,202 @@ extern "C" {
                 sprIt->second.source = clip.frames[anim.currentFrame].source;
             }
         }
+    }
+
+    // ========================================================================
+    // SPRITE SHEET TOOLS
+    // ========================================================================
+    namespace {
+        struct SpriteSheet {
+            int textureHandle;
+            int frameWidth, frameHeight;
+            int columns, rows;
+            int paddingX, paddingY;
+            bool valid;
+        };
+
+        std::unordered_map<int, SpriteSheet> g_spriteSheets;
+        int g_nextSpriteSheetId = 1;
+    }
+
+    int Framework_SpriteSheet_Create(int textureHandle, int frameWidth, int frameHeight, int columns, int rows, int paddingX, int paddingY) {
+        if (textureHandle <= 0 || frameWidth <= 0 || frameHeight <= 0 || columns <= 0 || rows <= 0) {
+            return -1;
+        }
+
+        int id = g_nextSpriteSheetId++;
+        SpriteSheet& sheet = g_spriteSheets[id];
+        sheet.textureHandle = textureHandle;
+        sheet.frameWidth = frameWidth;
+        sheet.frameHeight = frameHeight;
+        sheet.columns = columns;
+        sheet.rows = rows;
+        sheet.paddingX = paddingX;
+        sheet.paddingY = paddingY;
+        sheet.valid = true;
+        return id;
+    }
+
+    void Framework_SpriteSheet_Destroy(int sheetId) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it != g_spriteSheets.end()) {
+            g_spriteSheets.erase(it);
+        }
+    }
+
+    bool Framework_SpriteSheet_IsValid(int sheetId) {
+        auto it = g_spriteSheets.find(sheetId);
+        return it != g_spriteSheets.end() && it->second.valid;
+    }
+
+    int Framework_SpriteSheet_GetTextureHandle(int sheetId) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end()) return -1;
+        return it->second.textureHandle;
+    }
+
+    int Framework_SpriteSheet_GetFrameCount(int sheetId) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end()) return 0;
+        return it->second.columns * it->second.rows;
+    }
+
+    int Framework_SpriteSheet_GetColumns(int sheetId) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end()) return 0;
+        return it->second.columns;
+    }
+
+    int Framework_SpriteSheet_GetRows(int sheetId) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end()) return 0;
+        return it->second.rows;
+    }
+
+    void Framework_SpriteSheet_GetFrameSize(int sheetId, int* width, int* height) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end()) {
+            if (width) *width = 0;
+            if (height) *height = 0;
+            return;
+        }
+        if (width) *width = it->second.frameWidth;
+        if (height) *height = it->second.frameHeight;
+    }
+
+    void Framework_SpriteSheet_GetFrameRect(int sheetId, int frameIndex, float* x, float* y, float* w, float* h) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end() || frameIndex < 0) {
+            if (x) *x = 0; if (y) *y = 0; if (w) *w = 0; if (h) *h = 0;
+            return;
+        }
+        const SpriteSheet& sheet = it->second;
+        int col = frameIndex % sheet.columns;
+        int row = frameIndex / sheet.columns;
+        if (row >= sheet.rows) {
+            if (x) *x = 0; if (y) *y = 0; if (w) *w = 0; if (h) *h = 0;
+            return;
+        }
+        float fx = (float)(col * (sheet.frameWidth + sheet.paddingX));
+        float fy = (float)(row * (sheet.frameHeight + sheet.paddingY));
+        if (x) *x = fx;
+        if (y) *y = fy;
+        if (w) *w = (float)sheet.frameWidth;
+        if (h) *h = (float)sheet.frameHeight;
+    }
+
+    void Framework_SpriteSheet_GetFrameRectRC(int sheetId, int row, int col, float* x, float* y, float* w, float* h) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end() || row < 0 || col < 0) {
+            if (x) *x = 0; if (y) *y = 0; if (w) *w = 0; if (h) *h = 0;
+            return;
+        }
+        const SpriteSheet& sheet = it->second;
+        if (row >= sheet.rows || col >= sheet.columns) {
+            if (x) *x = 0; if (y) *y = 0; if (w) *w = 0; if (h) *h = 0;
+            return;
+        }
+        float fx = (float)(col * (sheet.frameWidth + sheet.paddingX));
+        float fy = (float)(row * (sheet.frameHeight + sheet.paddingY));
+        if (x) *x = fx;
+        if (y) *y = fy;
+        if (w) *w = (float)sheet.frameWidth;
+        if (h) *h = (float)sheet.frameHeight;
+    }
+
+    int Framework_AnimClip_CreateFromSheet(const char* name, int sheetId, int startFrame, int frameCount, float frameDuration, int loopMode) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end() || frameCount <= 0 || !name) return -1;
+
+        int clipId = Framework_AnimClip_Create(name, frameCount);
+        if (clipId <= 0) return -1;
+
+        const SpriteSheet& sheet = it->second;
+        int totalFrames = sheet.columns * sheet.rows;
+
+        for (int i = 0; i < frameCount; i++) {
+            int frameIndex = startFrame + i;
+            if (frameIndex >= totalFrames) break;
+
+            int col = frameIndex % sheet.columns;
+            int row = frameIndex / sheet.columns;
+            float fx = (float)(col * (sheet.frameWidth + sheet.paddingX));
+            float fy = (float)(row * (sheet.frameHeight + sheet.paddingY));
+            Framework_AnimClip_SetFrame(clipId, i, fx, fy, (float)sheet.frameWidth, (float)sheet.frameHeight, frameDuration);
+        }
+
+        Framework_AnimClip_SetLoopMode(clipId, loopMode);
+        return clipId;
+    }
+
+    int Framework_AnimClip_CreateFromSheetRow(const char* name, int sheetId, int row, int startCol, int colCount, float frameDuration, int loopMode) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end() || colCount <= 0 || !name || row < 0 || startCol < 0) return -1;
+
+        const SpriteSheet& sheet = it->second;
+        if (row >= sheet.rows) return -1;
+
+        int actualCount = std::min(colCount, sheet.columns - startCol);
+        if (actualCount <= 0) return -1;
+
+        int clipId = Framework_AnimClip_Create(name, actualCount);
+        if (clipId <= 0) return -1;
+
+        for (int i = 0; i < actualCount; i++) {
+            int col = startCol + i;
+            float fx = (float)(col * (sheet.frameWidth + sheet.paddingX));
+            float fy = (float)(row * (sheet.frameHeight + sheet.paddingY));
+            Framework_AnimClip_SetFrame(clipId, i, fx, fy, (float)sheet.frameWidth, (float)sheet.frameHeight, frameDuration);
+        }
+
+        Framework_AnimClip_SetLoopMode(clipId, loopMode);
+        return clipId;
+    }
+
+    void Framework_SpriteSheet_DrawFrame(int sheetId, int frameIndex, float x, float y, float scale, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        auto it = g_spriteSheets.find(sheetId);
+        if (it == g_spriteSheets.end()) return;
+
+        const SpriteSheet& sheet = it->second;
+
+        float srcX, srcY, srcW, srcH;
+        Framework_SpriteSheet_GetFrameRect(sheetId, frameIndex, &srcX, &srcY, &srcW, &srcH);
+        if (srcW <= 0 || srcH <= 0) return;
+
+        Rectangle source = { srcX, srcY, srcW, srcH };
+        Rectangle dest = { x, y, srcW * scale, srcH * scale };
+        Vector2 origin = { dest.width * 0.5f, dest.height * 0.5f };
+
+        Framework_DrawTextureProH(sheet.textureHandle, source, dest, origin, rotation, r, g, b, a);
+    }
+
+    int Framework_SpriteSheet_GetCount() {
+        return (int)g_spriteSheets.size();
+    }
+
+    void Framework_SpriteSheet_DestroyAll() {
+        g_spriteSheets.clear();
+        g_nextSpriteSheetId = 1;
     }
 
     // ========================================================================
@@ -19347,6 +19544,389 @@ extern "C" {
         g_nextLevelId = 1;
     }
 
+    // Clipboard for copy/paste
+    namespace {
+        struct LevelClipboard {
+            std::vector<std::vector<int>> tiles;
+            int width = 0, height = 0;
+        };
+        LevelClipboard g_levelClipboard;
+
+        // Undo/Redo per level
+        struct TileEdit {
+            int layerIndex;
+            int x, y;
+            int oldTileId, newTileId;
+        };
+        struct EditBatch {
+            std::vector<TileEdit> edits;
+        };
+        std::unordered_map<int, std::vector<EditBatch>> g_levelUndoStack;
+        std::unordered_map<int, std::vector<EditBatch>> g_levelRedoStack;
+        std::unordered_map<int, EditBatch> g_levelCurrentEdit;
+        std::unordered_map<int, bool> g_levelEditMode;
+
+        // Tile properties
+        struct TileProps {
+            bool solid = false;
+            std::unordered_map<std::string, std::string> properties;
+        };
+        std::unordered_map<int, std::unordered_map<int, TileProps>> g_levelTileProps; // levelId -> tileId -> props
+
+        // Auto-tile rules
+        std::unordered_map<int, std::unordered_map<int, std::array<int, 16>>> g_autoTileRules; // levelId -> baseTileId -> 16 tiles
+    }
+
+    void Framework_Level_WorldToTile(int levelId, float worldX, float worldY, int* tileX, int* tileY) {
+        Level* level = GetLevel(levelId);
+        if (!level) {
+            if (tileX) *tileX = 0;
+            if (tileY) *tileY = 0;
+            return;
+        }
+        if (tileX) *tileX = (int)(worldX / level->tileWidth);
+        if (tileY) *tileY = (int)(worldY / level->tileHeight);
+    }
+
+    void Framework_Level_TileToWorld(int levelId, int tileX, int tileY, float* worldX, float* worldY) {
+        Level* level = GetLevel(levelId);
+        if (!level) {
+            if (worldX) *worldX = 0;
+            if (worldY) *worldY = 0;
+            return;
+        }
+        if (worldX) *worldX = (float)(tileX * level->tileWidth);
+        if (worldY) *worldY = (float)(tileY * level->tileHeight);
+    }
+
+    void Framework_Level_TileToWorldCenter(int levelId, int tileX, int tileY, float* worldX, float* worldY) {
+        Level* level = GetLevel(levelId);
+        if (!level) {
+            if (worldX) *worldX = 0;
+            if (worldY) *worldY = 0;
+            return;
+        }
+        if (worldX) *worldX = (float)(tileX * level->tileWidth + level->tileWidth / 2);
+        if (worldY) *worldY = (float)(tileY * level->tileHeight + level->tileHeight / 2);
+    }
+
+    int Framework_Level_FloodFill(int levelId, int layerIndex, int x, int y, int newTileId) {
+        Level* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return 0;
+        TileLayer& layer = level->layers[layerIndex];
+        if (x < 0 || x >= level->widthTiles || y < 0 || y >= level->heightTiles) return 0;
+
+        int oldTileId = layer.tiles[y * level->widthTiles + x];
+        if (oldTileId == newTileId) return 0;
+
+        std::vector<std::pair<int, int>> stack;
+        stack.push_back({ x, y });
+        int count = 0;
+
+        while (!stack.empty()) {
+            auto [cx, cy] = stack.back();
+            stack.pop_back();
+
+            if (cx < 0 || cx >= level->widthTiles || cy < 0 || cy >= level->heightTiles) continue;
+            int idx = cy * level->widthTiles + cx;
+            if (layer.tiles[idx] != oldTileId) continue;
+
+            layer.tiles[idx] = newTileId;
+            count++;
+
+            stack.push_back({ cx + 1, cy });
+            stack.push_back({ cx - 1, cy });
+            stack.push_back({ cx, cy + 1 });
+            stack.push_back({ cx, cy - 1 });
+        }
+        return count;
+    }
+
+    void Framework_Level_CopyRegion(int levelId, int layerIndex, int x, int y, int w, int h) {
+        Level* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size() || w <= 0 || h <= 0) {
+            g_levelClipboard.width = 0;
+            g_levelClipboard.height = 0;
+            g_levelClipboard.tiles.clear();
+            return;
+        }
+
+        g_levelClipboard.width = w;
+        g_levelClipboard.height = h;
+        g_levelClipboard.tiles.resize(h);
+
+        TileLayer& layer = level->layers[layerIndex];
+        for (int dy = 0; dy < h; dy++) {
+            g_levelClipboard.tiles[dy].resize(w);
+            for (int dx = 0; dx < w; dx++) {
+                int tx = x + dx, ty = y + dy;
+                if (tx >= 0 && tx < level->widthTiles && ty >= 0 && ty < level->heightTiles) {
+                    g_levelClipboard.tiles[dy][dx] = layer.tiles[ty * level->widthTiles + tx];
+                } else {
+                    g_levelClipboard.tiles[dy][dx] = -1;
+                }
+            }
+        }
+    }
+
+    void Framework_Level_PasteRegion(int levelId, int layerIndex, int x, int y) {
+        Level* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return;
+        if (g_levelClipboard.width <= 0 || g_levelClipboard.height <= 0) return;
+
+        TileLayer& layer = level->layers[layerIndex];
+        for (int dy = 0; dy < g_levelClipboard.height; dy++) {
+            for (int dx = 0; dx < g_levelClipboard.width; dx++) {
+                int tx = x + dx, ty = y + dy;
+                if (tx >= 0 && tx < level->widthTiles && ty >= 0 && ty < level->heightTiles) {
+                    int tileId = g_levelClipboard.tiles[dy][dx];
+                    if (tileId >= 0) {
+                        layer.tiles[ty * level->widthTiles + tx] = tileId;
+                    }
+                }
+            }
+        }
+    }
+
+    void Framework_Level_ClearSelection() {
+        g_levelClipboard.width = 0;
+        g_levelClipboard.height = 0;
+        g_levelClipboard.tiles.clear();
+    }
+
+    void Framework_Level_GetSelectionSize(int* width, int* height) {
+        if (width) *width = g_levelClipboard.width;
+        if (height) *height = g_levelClipboard.height;
+    }
+
+    void Framework_Level_Undo(int levelId) {
+        auto& undoStack = g_levelUndoStack[levelId];
+        if (undoStack.empty()) return;
+
+        EditBatch batch = undoStack.back();
+        undoStack.pop_back();
+
+        Level* level = GetLevel(levelId);
+        if (!level) return;
+
+        for (auto& edit : batch.edits) {
+            if (edit.layerIndex >= 0 && edit.layerIndex < (int)level->layers.size()) {
+                TileLayer& layer = level->layers[edit.layerIndex];
+                int idx = edit.y * level->widthTiles + edit.x;
+                if (idx >= 0 && idx < (int)layer.tiles.size()) {
+                    layer.tiles[idx] = edit.oldTileId;
+                }
+            }
+        }
+
+        g_levelRedoStack[levelId].push_back(batch);
+    }
+
+    void Framework_Level_Redo(int levelId) {
+        auto& redoStack = g_levelRedoStack[levelId];
+        if (redoStack.empty()) return;
+
+        EditBatch batch = redoStack.back();
+        redoStack.pop_back();
+
+        Level* level = GetLevel(levelId);
+        if (!level) return;
+
+        for (auto& edit : batch.edits) {
+            if (edit.layerIndex >= 0 && edit.layerIndex < (int)level->layers.size()) {
+                TileLayer& layer = level->layers[edit.layerIndex];
+                int idx = edit.y * level->widthTiles + edit.x;
+                if (idx >= 0 && idx < (int)layer.tiles.size()) {
+                    layer.tiles[idx] = edit.newTileId;
+                }
+            }
+        }
+
+        g_levelUndoStack[levelId].push_back(batch);
+    }
+
+    bool Framework_Level_CanUndo(int levelId) {
+        auto it = g_levelUndoStack.find(levelId);
+        return it != g_levelUndoStack.end() && !it->second.empty();
+    }
+
+    bool Framework_Level_CanRedo(int levelId) {
+        auto it = g_levelRedoStack.find(levelId);
+        return it != g_levelRedoStack.end() && !it->second.empty();
+    }
+
+    void Framework_Level_BeginEdit(int levelId) {
+        g_levelEditMode[levelId] = true;
+        g_levelCurrentEdit[levelId] = EditBatch();
+    }
+
+    void Framework_Level_EndEdit(int levelId) {
+        if (!g_levelEditMode[levelId]) return;
+        g_levelEditMode[levelId] = false;
+
+        auto& batch = g_levelCurrentEdit[levelId];
+        if (!batch.edits.empty()) {
+            g_levelUndoStack[levelId].push_back(batch);
+            g_levelRedoStack[levelId].clear();
+        }
+        g_levelCurrentEdit[levelId] = EditBatch();
+    }
+
+    void Framework_Level_SetTileCollision(int levelId, int tileId, bool solid) {
+        g_levelTileProps[levelId][tileId].solid = solid;
+    }
+
+    bool Framework_Level_GetTileCollision(int levelId, int tileId) {
+        auto levelIt = g_levelTileProps.find(levelId);
+        if (levelIt == g_levelTileProps.end()) return false;
+        auto tileIt = levelIt->second.find(tileId);
+        if (tileIt == levelIt->second.end()) return false;
+        return tileIt->second.solid;
+    }
+
+    void Framework_Level_SetTileProperty(int levelId, int tileId, const char* key, const char* value) {
+        if (!key) return;
+        g_levelTileProps[levelId][tileId].properties[key] = value ? value : "";
+    }
+
+    const char* Framework_Level_GetTileProperty(int levelId, int tileId, const char* key) {
+        if (!key) return "";
+        auto levelIt = g_levelTileProps.find(levelId);
+        if (levelIt == g_levelTileProps.end()) return "";
+        auto tileIt = levelIt->second.find(tileId);
+        if (tileIt == levelIt->second.end()) return "";
+        auto propIt = tileIt->second.properties.find(key);
+        if (propIt == tileIt->second.properties.end()) return "";
+        strncpy(s_levelPropBuf, propIt->second.c_str(), sizeof(s_levelPropBuf) - 1);
+        return s_levelPropBuf;
+    }
+
+    void Framework_Level_SetAutoTileRules(int levelId, int baseTileId, const int* tileMapping) {
+        if (!tileMapping) return;
+        auto& rules = g_autoTileRules[levelId][baseTileId];
+        for (int i = 0; i < 16; i++) {
+            rules[i] = tileMapping[i];
+        }
+    }
+
+    void Framework_Level_PlaceAutoTile(int levelId, int layerIndex, int x, int y, int baseTileId) {
+        Level* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return;
+        if (x < 0 || x >= level->widthTiles || y < 0 || y >= level->heightTiles) return;
+
+        auto levelIt = g_autoTileRules.find(levelId);
+        if (levelIt == g_autoTileRules.end()) {
+            level->layers[layerIndex].tiles[y * level->widthTiles + x] = baseTileId;
+            return;
+        }
+        auto baseIt = levelIt->second.find(baseTileId);
+        if (baseIt == levelIt->second.end()) {
+            level->layers[layerIndex].tiles[y * level->widthTiles + x] = baseTileId;
+            return;
+        }
+
+        TileLayer& layer = level->layers[layerIndex];
+        const std::array<int, 16>& rules = baseIt->second;
+
+        auto isSameBase = [&](int tx, int ty) -> bool {
+            if (tx < 0 || tx >= level->widthTiles || ty < 0 || ty >= level->heightTiles) return false;
+            int t = layer.tiles[ty * level->widthTiles + tx];
+            if (t == baseTileId) return true;
+            for (int i = 0; i < 16; i++) {
+                if (rules[i] == t) return true;
+            }
+            return false;
+        };
+
+        int mask = 0;
+        if (isSameBase(x, y - 1)) mask |= 1;  // North
+        if (isSameBase(x + 1, y)) mask |= 2;  // East
+        if (isSameBase(x, y + 1)) mask |= 4;  // South
+        if (isSameBase(x - 1, y)) mask |= 8;  // West
+
+        layer.tiles[y * level->widthTiles + x] = rules[mask];
+    }
+
+    void Framework_Level_RefreshAutoTiles(int levelId, int layerIndex) {
+        Level* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return;
+
+        auto levelIt = g_autoTileRules.find(levelId);
+        if (levelIt == g_autoTileRules.end()) return;
+
+        TileLayer& layer = level->layers[layerIndex];
+        for (int y = 0; y < level->heightTiles; y++) {
+            for (int x = 0; x < level->widthTiles; x++) {
+                int tileId = layer.tiles[y * level->widthTiles + x];
+                for (const auto& pair : levelIt->second) {
+                    int baseTileId = pair.first;
+                    const std::array<int, 16>& rules = pair.second;
+                    bool isAutoTile = (tileId == baseTileId);
+                    for (int i = 0; i < 16 && !isAutoTile; i++) {
+                        if (rules[i] == tileId) isAutoTile = true;
+                    }
+                    if (isAutoTile) {
+                        Framework_Level_PlaceAutoTile(levelId, layerIndex, x, y, baseTileId);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    bool Framework_Level_IsTileSolid(int levelId, int layerIndex, int x, int y) {
+        Level* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) return false;
+        if (x < 0 || x >= level->widthTiles || y < 0 || y >= level->heightTiles) return false;
+
+        int tileId = level->layers[layerIndex].tiles[y * level->widthTiles + x];
+        return Framework_Level_GetTileCollision(levelId, tileId);
+    }
+
+    bool Framework_Level_RaycastTiles(int levelId, int layerIndex, float startX, float startY, float endX, float endY, int* hitTileX, int* hitTileY) {
+        Level* level = GetLevel(levelId);
+        if (!level || layerIndex < 0 || layerIndex >= (int)level->layers.size()) {
+            if (hitTileX) *hitTileX = -1;
+            if (hitTileY) *hitTileY = -1;
+            return false;
+        }
+
+        float dx = endX - startX;
+        float dy = endY - startY;
+        float dist = sqrtf(dx * dx + dy * dy);
+        if (dist < 0.001f) {
+            if (hitTileX) *hitTileX = -1;
+            if (hitTileY) *hitTileY = -1;
+            return false;
+        }
+
+        dx /= dist;
+        dy /= dist;
+
+        float step = (float)std::min(level->tileWidth, level->tileHeight) * 0.5f;
+        float traveled = 0;
+
+        while (traveled < dist) {
+            float cx = startX + dx * traveled;
+            float cy = startY + dy * traveled;
+            int tx = (int)(cx / level->tileWidth);
+            int ty = (int)(cy / level->tileHeight);
+
+            if (tx >= 0 && tx < level->widthTiles && ty >= 0 && ty < level->heightTiles) {
+                if (Framework_Level_IsTileSolid(levelId, layerIndex, tx, ty)) {
+                    if (hitTileX) *hitTileX = tx;
+                    if (hitTileY) *hitTileY = ty;
+                    return true;
+                }
+            }
+            traveled += step;
+        }
+
+        if (hitTileX) *hitTileX = -1;
+        if (hitTileY) *hitTileY = -1;
+        return false;
+    }
+
 } // Temporarily close extern "C" for networking namespace
 
     // ========================================================================
@@ -20223,6 +20803,158 @@ extern "C" {
             "    uv = floor(uv / psize) * psize;\n"
             "    uv = uv / resolution;\n"
             "    finalColor = texture(texture0, uv) * fragColor;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadVignette() {
+        // Vignette shader - darkens edges of screen
+        // Uniforms: vignetteRadius (0.5-1.0), vignetteSoftness (0.1-0.5), vignetteIntensity (0-1)
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform float vignetteRadius;\n"
+            "uniform float vignetteSoftness;\n"
+            "uniform float vignetteIntensity;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec4 color = texture(texture0, fragTexCoord) * fragColor;\n"
+            "    vec2 center = fragTexCoord - vec2(0.5);\n"
+            "    float dist = length(center) * 1.414;\n"
+            "    float radius = max(vignetteRadius, 0.5);\n"
+            "    float softness = max(vignetteSoftness, 0.1);\n"
+            "    float vignette = smoothstep(radius, radius - softness, dist);\n"
+            "    float intensity = clamp(vignetteIntensity, 0.0, 1.0);\n"
+            "    color.rgb *= mix(1.0, vignette, intensity);\n"
+            "    finalColor = color;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadBloom() {
+        // Bloom shader - makes bright areas glow
+        // Uniforms: bloomThreshold (0-1), bloomIntensity (0-2), bloomSpread (1-10)
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform vec2 resolution;\n"
+            "uniform float bloomThreshold;\n"
+            "uniform float bloomIntensity;\n"
+            "uniform float bloomSpread;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec4 color = texture(texture0, fragTexCoord);\n"
+            "    vec4 bloom = vec4(0.0);\n"
+            "    float spread = max(bloomSpread, 1.0);\n"
+            "    vec2 texelSize = spread / resolution;\n"
+            "    for(int x = -2; x <= 2; x++) {\n"
+            "        for(int y = -2; y <= 2; y++) {\n"
+            "            vec2 offset = vec2(float(x), float(y)) * texelSize;\n"
+            "            vec4 sample = texture(texture0, fragTexCoord + offset);\n"
+            "            float brightness = dot(sample.rgb, vec3(0.2126, 0.7152, 0.0722));\n"
+            "            float threshold = max(bloomThreshold, 0.5);\n"
+            "            if(brightness > threshold) {\n"
+            "                bloom += sample * (brightness - threshold);\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "    bloom /= 25.0;\n"
+            "    float intensity = max(bloomIntensity, 0.5);\n"
+            "    finalColor = (color + bloom * intensity) * fragColor;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadWave() {
+        // Wave shader - wavy distortion effect
+        // Uniforms: waveAmplitude (0-0.1), waveFrequency (1-20), waveSpeed (1-10), time
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform float waveAmplitude;\n"
+            "uniform float waveFrequency;\n"
+            "uniform float waveSpeed;\n"
+            "uniform float time;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    float amp = max(waveAmplitude, 0.01);\n"
+            "    float freq = max(waveFrequency, 5.0);\n"
+            "    float speed = max(waveSpeed, 2.0);\n"
+            "    vec2 uv = fragTexCoord;\n"
+            "    uv.x += sin(uv.y * freq + time * speed) * amp;\n"
+            "    uv.y += cos(uv.x * freq + time * speed) * amp * 0.5;\n"
+            "    finalColor = texture(texture0, uv) * fragColor;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadSharpen() {
+        // Sharpen shader - enhances edges
+        // Uniforms: sharpenAmount (0-2)
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform vec2 resolution;\n"
+            "uniform float sharpenAmount;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec2 texelSize = 1.0 / resolution;\n"
+            "    vec4 color = texture(texture0, fragTexCoord);\n"
+            "    vec4 n = texture(texture0, fragTexCoord + vec2(0, -texelSize.y));\n"
+            "    vec4 s = texture(texture0, fragTexCoord + vec2(0, texelSize.y));\n"
+            "    vec4 e = texture(texture0, fragTexCoord + vec2(texelSize.x, 0));\n"
+            "    vec4 w = texture(texture0, fragTexCoord + vec2(-texelSize.x, 0));\n"
+            "    float amount = max(sharpenAmount, 0.5);\n"
+            "    vec4 sharpened = color * (1.0 + 4.0 * amount) - (n + s + e + w) * amount;\n"
+            "    finalColor = clamp(sharpened, 0.0, 1.0) * fragColor;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadFilmGrain() {
+        // Film grain shader - adds noise/grain effect
+        // Uniforms: grainIntensity (0-0.5), grainSize (1-3), time
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform float grainIntensity;\n"
+            "uniform float grainSize;\n"
+            "uniform float time;\n"
+            "out vec4 finalColor;\n"
+            "float rand(vec2 co) {\n"
+            "    return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);\n"
+            "}\n"
+            "void main() {\n"
+            "    vec4 color = texture(texture0, fragTexCoord) * fragColor;\n"
+            "    float gsize = max(grainSize, 1.0);\n"
+            "    vec2 uv = floor(fragTexCoord * 500.0 / gsize) * gsize;\n"
+            "    float noise = rand(uv + time) * 2.0 - 1.0;\n"
+            "    float intensity = clamp(grainIntensity, 0.0, 0.5);\n"
+            "    color.rgb += noise * intensity;\n"
+            "    finalColor = color;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadColorAdjust() {
+        // Color adjustment shader - brightness, contrast, saturation
+        // Uniforms: brightness (-1 to 1), contrast (0-2), saturation (0-2)
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform float brightness;\n"
+            "uniform float contrast;\n"
+            "uniform float saturation;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec4 color = texture(texture0, fragTexCoord) * fragColor;\n"
+            "    color.rgb += brightness;\n"
+            "    float c = max(contrast, 0.0);\n"
+            "    color.rgb = (color.rgb - 0.5) * c + 0.5;\n"
+            "    float gray = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));\n"
+            "    float s = max(saturation, 0.0);\n"
+            "    color.rgb = mix(vec3(gray), color.rgb, s);\n"
+            "    finalColor = clamp(color, 0.0, 1.0);\n"
             "}\n";
         return Framework_Shader_LoadFromMemory(nullptr, fs);
     }
