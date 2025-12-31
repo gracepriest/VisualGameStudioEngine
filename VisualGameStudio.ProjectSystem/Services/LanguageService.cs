@@ -40,10 +40,16 @@ public class LanguageService : ILanguageService
         var baseDir = AppContext.BaseDirectory;
         _compilerPath = Path.Combine(baseDir, "BasicLang.dll");
 
-        // Fall back to development path
+        // Fall back to development paths
         if (!File.Exists(_compilerPath))
         {
-            _compilerPath = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "..", "..", "gracepriest", "BasicLangvb", "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"));
+            // Try Release build in same solution
+            _compilerPath = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "BasicLang", "bin", "Release", "net8.0", "BasicLang.dll"));
+        }
+        if (!File.Exists(_compilerPath))
+        {
+            // Try Debug build in same solution
+            _compilerPath = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"));
         }
     }
 
