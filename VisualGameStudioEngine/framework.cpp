@@ -19892,6 +19892,57 @@ extern "C" {
         Framework_Shader_SetVec2ByName(shaderId, "mouse", x, y);
     }
 
+    // Built-in shaders
+    int Framework_Shader_LoadGrayscale() {
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec4 c = texture(texture0, fragTexCoord) * fragColor;\n"
+            "    float gray = dot(c.rgb, vec3(0.299, 0.587, 0.114));\n"
+            "    finalColor = vec4(vec3(gray), c.a);\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadBlur() {
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform vec2 resolution;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec2 texel = 1.0 / resolution;\n"
+            "    vec4 c = vec4(0.0);\n"
+            "    for(int x = -2; x <= 2; x++) {\n"
+            "        for(int y = -2; y <= 2; y++) {\n"
+            "            c += texture(texture0, fragTexCoord + vec2(x,y) * texel);\n"
+            "        }\n"
+            "    }\n"
+            "    finalColor = (c / 25.0) * fragColor;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadCRT() {
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform vec2 resolution;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec2 uv = fragTexCoord;\n"
+            "    vec4 c = texture(texture0, uv) * fragColor;\n"
+            "    float scanline = sin(uv.y * resolution.y * 3.14159) * 0.04;\n"
+            "    c.rgb -= scanline;\n"
+            "    float vignette = 1.0 - length((uv - 0.5) * 1.5);\n"
+            "    c.rgb *= clamp(vignette, 0.0, 1.0);\n"
+            "    finalColor = c;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
     int Framework_Shader_GetCount() { return (int)g_shaders.size(); }
 
     void Framework_Shader_UnloadAll() {
@@ -19940,6 +19991,9 @@ extern "C" {
             float length = 50;
             float worldX = 0, worldY = 0;
             float worldRotation = 0;
+            // Bind pose (original pose to reset to)
+            float bindX = 0, bindY = 0;
+            float bindRotation = 0;
             BoneSprite sprite;
         };
 
@@ -20019,6 +20073,10 @@ extern "C" {
         bone.localY = y;
         bone.localRotation = rotation;
         bone.length = length;
+        // Store bind pose
+        bone.bindX = x;
+        bone.bindY = y;
+        bone.bindRotation = rotation;
         skel->bones.push_back(bone);
         if (!bone.name.empty()) skel->boneByName[bone.name] = bone.id;
         return bone.id;
@@ -20067,6 +20125,17 @@ extern "C" {
     void Framework_Skeleton_SetBoneScale(int skeletonId, int boneId, float scaleX, float scaleY) {
         auto* skel = GetSkeleton(skeletonId);
         if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            skel->bones[boneId].localScaleX = scaleX;
+            skel->bones[boneId].localScaleY = scaleY;
+        }
+    }
+
+    void Framework_Skeleton_SetBoneLocalTransform(int skeletonId, int boneId, float x, float y, float rotation, float scaleX, float scaleY) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (skel && boneId >= 0 && boneId < (int)skel->bones.size()) {
+            skel->bones[boneId].localX = x;
+            skel->bones[boneId].localY = y;
+            skel->bones[boneId].localRotation = rotation;
             skel->bones[boneId].localScaleX = scaleX;
             skel->bones[boneId].localScaleY = scaleY;
         }
@@ -20242,6 +20311,58 @@ extern "C" {
         if (skel && skel->blendDuration > 0) {
             skel->blendTime = skel->blendDuration * weight;
         }
+    }
+
+    void Framework_Skeleton_SetPose(int skeletonId, int animId, float time) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel || animId < 0 || animId >= (int)skel->animations.size()) return;
+
+        auto& anim = skel->animations[animId];
+        // Apply the animation at the given time to all bones
+        for (auto& boneAnim : anim.boneAnims) {
+            int boneId = boneAnim.first;
+            if (boneId < 0 || boneId >= (int)skel->bones.size()) continue;
+
+            auto& keyframes = boneAnim.second.keyframes;
+            if (keyframes.empty()) continue;
+
+            // Find keyframes to interpolate between
+            BoneKeyframe kf = keyframes[0];
+            for (size_t i = 0; i < keyframes.size() - 1; i++) {
+                if (time >= keyframes[i].time && time <= keyframes[i+1].time) {
+                    float t = (time - keyframes[i].time) / (keyframes[i+1].time - keyframes[i].time);
+                    kf.x = keyframes[i].x + t * (keyframes[i+1].x - keyframes[i].x);
+                    kf.y = keyframes[i].y + t * (keyframes[i+1].y - keyframes[i].y);
+                    kf.rotation = keyframes[i].rotation + t * (keyframes[i+1].rotation - keyframes[i].rotation);
+                    kf.scaleX = keyframes[i].scaleX + t * (keyframes[i+1].scaleX - keyframes[i].scaleX);
+                    kf.scaleY = keyframes[i].scaleY + t * (keyframes[i+1].scaleY - keyframes[i].scaleY);
+                    break;
+                }
+            }
+
+            skel->bones[boneId].localX = kf.x;
+            skel->bones[boneId].localY = kf.y;
+            skel->bones[boneId].localRotation = kf.rotation;
+            skel->bones[boneId].localScaleX = kf.scaleX;
+            skel->bones[boneId].localScaleY = kf.scaleY;
+        }
+
+        Framework_Skeleton_UpdateWorldTransforms(skeletonId);
+    }
+
+    void Framework_Skeleton_ResetPose(int skeletonId) {
+        auto* skel = GetSkeleton(skeletonId);
+        if (!skel) return;
+
+        for (auto& bone : skel->bones) {
+            bone.localX = bone.bindX;
+            bone.localY = bone.bindY;
+            bone.localRotation = bone.bindRotation;
+            bone.localScaleX = 1.0f;
+            bone.localScaleY = 1.0f;
+        }
+
+        Framework_Skeleton_UpdateWorldTransforms(skeletonId);
     }
 
     void Framework_Skeleton_Update(int skeletonId, float deltaTime) {

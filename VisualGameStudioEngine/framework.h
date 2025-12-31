@@ -3107,6 +3107,11 @@ extern "C" {
     __declspec(dllexport) void  Framework_Shader_SetResolution(int shaderId, float width, float height);
     __declspec(dllexport) void  Framework_Shader_SetMouse(int shaderId, float x, float y);
 
+    // Built-in shaders
+    __declspec(dllexport) int   Framework_Shader_LoadGrayscale();
+    __declspec(dllexport) int   Framework_Shader_LoadBlur();
+    __declspec(dllexport) int   Framework_Shader_LoadCRT();
+
     // Global
     __declspec(dllexport) int   Framework_Shader_GetCount();
     __declspec(dllexport) void  Framework_Shader_UnloadAll();
@@ -3132,6 +3137,7 @@ extern "C" {
     __declspec(dllexport) void  Framework_Skeleton_SetBonePosition(int skeletonId, int boneId, float x, float y);
     __declspec(dllexport) void  Framework_Skeleton_SetBoneRotation(int skeletonId, int boneId, float rotation);
     __declspec(dllexport) void  Framework_Skeleton_SetBoneScale(int skeletonId, int boneId, float scaleX, float scaleY);
+    __declspec(dllexport) void  Framework_Skeleton_SetBoneLocalTransform(int skeletonId, int boneId, float x, float y, float rotation, float scaleX, float scaleY);
     __declspec(dllexport) void  Framework_Skeleton_GetBonePosition(int skeletonId, int boneId, float* x, float* y);
     __declspec(dllexport) float Framework_Skeleton_GetBoneRotation(int skeletonId, int boneId);
 
@@ -3165,6 +3171,10 @@ extern "C" {
     // Animation blending
     __declspec(dllexport) void  Framework_Skeleton_BlendToAnimation(int skeletonId, int animId, float blendTime, bool loop);
     __declspec(dllexport) void  Framework_Skeleton_SetBlendWeight(int skeletonId, int animId, float weight);
+
+    // Pose
+    __declspec(dllexport) void  Framework_Skeleton_SetPose(int skeletonId, int animId, float time);
+    __declspec(dllexport) void  Framework_Skeleton_ResetPose(int skeletonId);
 
     // Update and render
     __declspec(dllexport) void  Framework_Skeleton_Update(int skeletonId, float deltaTime);

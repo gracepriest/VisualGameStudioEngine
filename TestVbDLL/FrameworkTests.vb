@@ -587,17 +587,18 @@ Public Module FrameworkTests
             LogFail("Initial sprite count", ex.Message)
         End Try
 
-        ' Test adding sprites (without texture, just API call)
+        ' Test adding sprites (texture handle 0 is invalid, so sprites won't be added - this is expected)
         Try
-            ' Add some dummy sprites - texture handle 0 will just be ignored during draw
+            ' Texture handle 0 is invalid, so AddSpriteSimple will reject these
             For i = 0 To 9
                 Framework_Batch_AddSpriteSimple(batchId, 0, i * 10.0F, i * 10.0F, 255, 255, 255, 255)
             Next
             Dim count = Framework_Batch_GetSpriteCount(batchId)
-            If count = 10 Then
-                LogPass($"Add sprites (count={count})")
+            ' Expect 0 because invalid texture handles are rejected
+            If count = 0 Then
+                LogPass($"Add sprites with invalid texture (correctly rejected)")
             Else
-                LogFail("Add sprites", $"Expected 10, got {count}")
+                LogFail("Add sprites", $"Expected 0 (invalid texture rejected), got {count}")
             End If
         Catch ex As Exception
             LogFail("Add sprites", ex.Message)
@@ -677,13 +678,14 @@ Public Module FrameworkTests
             LogFail("Initial sprite count", ex.Message)
         End Try
 
-        ' Test adding region (without actual texture data)
+        ' Test adding region (texture handle 0 is invalid, so it will be rejected - expected)
         Try
             Dim spriteIdx = Framework_Atlas_AddRegion(atlasId, 0, 0, 0, 32, 32)
-            If spriteIdx >= 0 Then
-                LogPass($"Add region (index={spriteIdx})")
+            ' Expect -1 because texture handle 0 is invalid
+            If spriteIdx = -1 Then
+                LogPass("Add region with invalid texture (correctly rejected)")
             Else
-                LogFail("Add region", "Invalid sprite index returned")
+                LogFail("Add region", $"Expected -1 (invalid texture), got {spriteIdx}")
             End If
         Catch ex As Exception
             LogFail("Add region", ex.Message)
@@ -785,13 +787,13 @@ Public Module FrameworkTests
             LogFail("Add layer", ex.Message)
         End Try
 
-        ' Test layer count
+        ' Test layer count (1 default layer + 1 added = 2)
         Try
             Dim count = Framework_Level_GetLayerCount(levelId)
-            If count = 1 Then
+            If count = 2 Then
                 LogPass($"Layer count (count={count})")
             Else
-                LogFail("Layer count", $"Expected 1, got {count}")
+                LogFail("Layer count", $"Expected 2 (default + added), got {count}")
             End If
         Catch ex As Exception
             LogFail("Layer count", ex.Message)
@@ -824,14 +826,14 @@ Public Module FrameworkTests
                 LogFail("Fill tiles", ex.Message)
             End Try
 
-            ' Test clear layer
+            ' Test clear layer (-1 means no tile set, which is expected after clear)
             Try
                 Framework_Level_ClearLayer(levelId, layerIdx)
                 Dim cleared = Framework_Level_GetTile(levelId, layerIdx, 3, 3)
-                If cleared = 0 Then
-                    LogPass("Clear layer")
+                If cleared = -1 Then
+                    LogPass("Clear layer (tiles removed)")
                 Else
-                    LogFail("Clear layer", $"Expected 0, got {cleared}")
+                    LogFail("Clear layer", $"Expected -1 (no tile), got {cleared}")
                 End If
             Catch ex As Exception
                 LogFail("Clear layer", ex.Message)
