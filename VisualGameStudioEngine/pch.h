@@ -18,6 +18,10 @@
 #include <WS2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
 
+// XInput for controller rumble/vibration
+#include <Xinput.h>
+#pragma comment(lib, "Xinput.lib")
+
 // add headers that you want to pre-compile here
 #include "raylib.h"
 #include "platform.h"

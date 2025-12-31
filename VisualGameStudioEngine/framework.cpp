@@ -7819,15 +7819,24 @@ extern "C" {
         return g_capturedCode;
     }
 
-    // Rumble/vibration
+    // Rumble/vibration - uses XInput for actual controller vibration
     void Framework_Input_SetGamepadVibration(int gamepadId, float leftMotor, float rightMotor, float duration) {
         if (gamepadId < 0 || gamepadId >= 4) return;
-        g_vibration[gamepadId].leftMotor = leftMotor < 0 ? 0 : (leftMotor > 1 ? 1 : leftMotor);
-        g_vibration[gamepadId].rightMotor = rightMotor < 0 ? 0 : (rightMotor > 1 ? 1 : rightMotor);
+
+        // Clamp motor values to 0-1 range
+        leftMotor = leftMotor < 0 ? 0 : (leftMotor > 1 ? 1 : leftMotor);
+        rightMotor = rightMotor < 0 ? 0 : (rightMotor > 1 ? 1 : rightMotor);
+
+        g_vibration[gamepadId].leftMotor = leftMotor;
+        g_vibration[gamepadId].rightMotor = rightMotor;
         g_vibration[gamepadId].duration = duration;
         g_vibration[gamepadId].timer = duration;
-        // Note: raylib doesn't have built-in vibration, this is a placeholder
-        // Could be extended with platform-specific code
+
+        // Apply XInput vibration (works on Windows with Xbox controllers)
+        XINPUT_VIBRATION vibration;
+        vibration.wLeftMotorSpeed = (WORD)(leftMotor * 65535.0f);
+        vibration.wRightMotorSpeed = (WORD)(rightMotor * 65535.0f);
+        XInputSetState(gamepadId, &vibration);
     }
 
     void Framework_Input_StopGamepadVibration(int gamepadId) {
@@ -7835,6 +7844,44 @@ extern "C" {
         g_vibration[gamepadId].leftMotor = 0;
         g_vibration[gamepadId].rightMotor = 0;
         g_vibration[gamepadId].timer = 0;
+
+        // Stop XInput vibration
+        XINPUT_VIBRATION vibration = { 0, 0 };
+        XInputSetState(gamepadId, &vibration);
+    }
+
+    void Framework_Input_PulseGamepad(int gamepadId, float intensity, float duration) {
+        // Quick pulse on both motors - good for pickups, small hits
+        Framework_Input_SetGamepadVibration(gamepadId, intensity, intensity, duration);
+    }
+
+    void Framework_Input_ImpactRumble(int gamepadId, float intensity) {
+        // Heavy impact on left motor (low frequency) - good for explosions, big hits
+        Framework_Input_SetGamepadVibration(gamepadId, intensity, intensity * 0.3f, 0.15f);
+    }
+
+    void Framework_Input_EngineRumble(int gamepadId, float intensity) {
+        // Constant right motor (high frequency) - good for engines, ongoing effects
+        // No duration - stays on until stopped
+        if (gamepadId < 0 || gamepadId >= 4) return;
+        float motor = intensity < 0 ? 0 : (intensity > 1 ? 1 : intensity);
+        g_vibration[gamepadId].rightMotor = motor;
+        g_vibration[gamepadId].timer = 0;  // Continuous until stopped
+
+        XINPUT_VIBRATION vibration;
+        vibration.wLeftMotorSpeed = (WORD)(g_vibration[gamepadId].leftMotor * 65535.0f);
+        vibration.wRightMotorSpeed = (WORD)(motor * 65535.0f);
+        XInputSetState(gamepadId, &vibration);
+    }
+
+    bool Framework_Input_IsGamepadVibrating(int gamepadId) {
+        if (gamepadId < 0 || gamepadId >= 4) return false;
+        return g_vibration[gamepadId].leftMotor > 0 || g_vibration[gamepadId].rightMotor > 0;
+    }
+
+    float Framework_Input_GetVibrationTimeRemaining(int gamepadId) {
+        if (gamepadId < 0 || gamepadId >= 4) return 0;
+        return g_vibration[gamepadId].timer;
     }
 
     // Input system update
@@ -7892,6 +7939,9 @@ extern "C" {
                 if (g_vibration[i].timer <= 0) {
                     g_vibration[i].leftMotor = 0;
                     g_vibration[i].rightMotor = 0;
+                    // Stop XInput vibration when timer expires
+                    XINPUT_VIBRATION vibration = { 0, 0 };
+                    XInputSetState(i, &vibration);
                 }
             }
         }

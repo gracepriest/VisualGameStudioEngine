@@ -2678,6 +2678,26 @@ Public Module FrameworkWrapper
     Public Sub Framework_Input_StopGamepadVibration(gamepadId As Integer)
     End Sub
 
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_PulseGamepad(gamepadId As Integer, intensity As Single, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_ImpactRumble(gamepadId As Integer, intensity As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Input_EngineRumble(gamepadId As Integer, intensity As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_IsGamepadVibrating(gamepadId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Input_GetVibrationTimeRemaining(gamepadId As Integer) As Single
+    End Function
+
     ' Input system update
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_Input_Update()

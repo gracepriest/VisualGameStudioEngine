@@ -1333,9 +1333,14 @@ extern "C" {
     __declspec(dllexport) int   Framework_Input_GetCapturedSourceType();  // InputSourceType
     __declspec(dllexport) int   Framework_Input_GetCapturedCode();  // Key/button code that was captured
 
-    // Rumble/vibration (gamepad)
+    // Rumble/vibration (gamepad) - XInput-based for Windows
     __declspec(dllexport) void  Framework_Input_SetGamepadVibration(int gamepadId, float leftMotor, float rightMotor, float duration);
     __declspec(dllexport) void  Framework_Input_StopGamepadVibration(int gamepadId);
+    __declspec(dllexport) void  Framework_Input_PulseGamepad(int gamepadId, float intensity, float duration);  // Quick pulse both motors
+    __declspec(dllexport) void  Framework_Input_ImpactRumble(int gamepadId, float intensity);  // Heavy impact (left motor)
+    __declspec(dllexport) void  Framework_Input_EngineRumble(int gamepadId, float intensity);  // Constant engine (right motor)
+    __declspec(dllexport) bool  Framework_Input_IsGamepadVibrating(int gamepadId);  // Check if vibrating
+    __declspec(dllexport) float Framework_Input_GetVibrationTimeRemaining(int gamepadId);  // Get remaining duration
 
     // Input system update
     __declspec(dllexport) void  Framework_Input_Update();  // Call each frame to update action states
