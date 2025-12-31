@@ -678,7 +678,26 @@ Framework_Input_SetActionSensitivity(actionHandle As Integer, sensitivity As Sin
 ```vb
 Framework_Input_IsGamepadAvailable(gamepadId As Integer) As Boolean
 Framework_Input_GetGamepadName(gamepadId As Integer) As String
+```
+
+### Rumble/Vibration (XInput-based for Windows)
+
+```vb
+' Core vibration control
 Framework_Input_SetGamepadVibration(gamepadId As Integer, leftMotor As Single, rightMotor As Single, duration As Single)
+Framework_Input_StopGamepadVibration(gamepadId As Integer)
+
+' Convenience patterns (NEW)
+Framework_Input_PulseGamepad(gamepadId As Integer, intensity As Single, duration As Single)
+  ' Quick pulse on both motors - good for pickups, small hits
+Framework_Input_ImpactRumble(gamepadId As Integer, intensity As Single)
+  ' Heavy left motor rumble for explosions, big hits (0.15s duration)
+Framework_Input_EngineRumble(gamepadId As Integer, intensity As Single)
+  ' Continuous right motor for engines, ongoing effects (no timeout)
+
+' State queries
+Framework_Input_IsGamepadVibrating(gamepadId As Integer) As Boolean
+Framework_Input_GetVibrationTimeRemaining(gamepadId As Integer) As Single
 ```
 
 ### Rebinding
@@ -1886,9 +1905,22 @@ Framework_Shader_SetVec4ByName(shaderId As Integer, name As String, x As Single,
 ### Built-in Shaders
 
 ```vb
-Framework_Shader_LoadGrayscale() As Integer
-Framework_Shader_LoadBlur() As Integer
-Framework_Shader_LoadCRT() As Integer
+' Basic effects
+Framework_Shader_LoadGrayscale() As Integer    ' Converts to grayscale
+Framework_Shader_LoadBlur() As Integer          ' 5x5 box blur
+Framework_Shader_LoadCRT() As Integer           ' CRT monitor effect with scanlines
+
+' Advanced effects (NEW)
+Framework_Shader_LoadOutline() As Integer       ' Edge detection outline
+  ' Uniforms: outlineColor (vec4), outlineThickness (float)
+Framework_Shader_LoadGlow() As Integer          ' Soft glow effect
+  ' Uniforms: glowIntensity (float), glowRadius (float)
+Framework_Shader_LoadDistortion() As Integer    ' Wavy distortion
+  ' Uniforms: time (float), distortionStrength (float), waveFrequency (float)
+Framework_Shader_LoadChromatic() As Integer     ' RGB channel separation
+  ' Uniforms: aberrationAmount (float)
+Framework_Shader_LoadPixelate() As Integer      ' Retro pixelation
+  ' Uniforms: pixelSize (float)
 ```
 
 ---
