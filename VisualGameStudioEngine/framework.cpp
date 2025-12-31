@@ -11828,6 +11828,56 @@ extern "C" {
         for (auto& cell : grid->cells) cell.walkable = walkable;
     }
 
+    // Alias for SetAllWalkable (used by VB wrapper)
+    void Framework_NavGrid_Fill(int gridId, bool walkable) {
+        Framework_NavGrid_SetAllWalkable(gridId, walkable);
+    }
+
+    int Framework_NavGrid_GetWidth(int gridId) {
+        auto* grid = GetNavGrid(gridId);
+        return grid ? grid->width : 0;
+    }
+
+    int Framework_NavGrid_GetHeight(int gridId) {
+        auto* grid = GetNavGrid(gridId);
+        return grid ? grid->height : 0;
+    }
+
+    float Framework_NavGrid_GetCellSize(int gridId) {
+        auto* grid = GetNavGrid(gridId);
+        return grid ? grid->cellSize : 0.0f;
+    }
+
+    void Framework_NavGrid_SetDiagonalEnabled(int gridId, bool enabled) {
+        auto* grid = GetNavGrid(gridId);
+        if (grid) grid->diagonalEnabled = enabled;
+    }
+
+    bool Framework_NavGrid_GetDiagonalEnabled(int gridId) {
+        auto* grid = GetNavGrid(gridId);
+        return grid ? grid->diagonalEnabled : false;
+    }
+
+    void Framework_NavGrid_SetDiagonalCost(int gridId, float cost) {
+        auto* grid = GetNavGrid(gridId);
+        if (grid) grid->diagonalCost = cost;
+    }
+
+    float Framework_NavGrid_GetDiagonalCost(int gridId) {
+        auto* grid = GetNavGrid(gridId);
+        return grid ? grid->diagonalCost : 1.414f;
+    }
+
+    void Framework_NavGrid_SetHeuristic(int gridId, int heuristic) {
+        auto* grid = GetNavGrid(gridId);
+        if (grid) grid->heuristic = heuristic;
+    }
+
+    int Framework_NavGrid_GetHeuristic(int gridId) {
+        auto* grid = GetNavGrid(gridId);
+        return grid ? grid->heuristic : 1;
+    }
+
     void Framework_NavGrid_SetRect(int gridId, int x, int y, int w, int h, bool walkable) {
         auto* grid = GetNavGrid(gridId);
         if (!grid) return;
@@ -12554,6 +12604,61 @@ extern "C" {
     void Framework_Steer_SetDebugEnabled(int agentId, bool enabled) {
         auto* agent = GetSteerAgent(agentId);
         if (agent) agent->debugEnabled = enabled;
+    }
+
+    // Aliases for VB wrapper compatibility
+    bool Framework_Steer_IsValid(int agentId) {
+        return Framework_Steer_IsAgentValid(agentId);
+    }
+
+    void Framework_Steer_SetTarget(int agentId, float x, float y) {
+        Framework_Steer_SetTargetPosition(agentId, x, y);
+    }
+
+    void Framework_Steer_ClearTarget(int agentId) {
+        auto* agent = GetSteerAgent(agentId);
+        if (agent) {
+            agent->targetX = 0;
+            agent->targetY = 0;
+            agent->targetEntity = -1;
+            agent->reachedTarget = true;  // Consider target cleared as "reached"
+        }
+    }
+
+    // Obstacle management for steering
+    static std::vector<Vector3> g_obstacles;  // x, y, radius
+
+    void Framework_Steer_AddObstacle(float x, float y, float radius) {
+        g_obstacles.push_back({ x, y, radius });
+    }
+
+    void Framework_Steer_ClearObstacles() {
+        g_obstacles.clear();
+    }
+
+    int Framework_Steer_GetObstacleCount() {
+        return (int)g_obstacles.size();
+    }
+
+    // AI/Pathfinding global counts
+    int Framework_AI_GetAgentCount() {
+        return (int)g_steerAgents.size();
+    }
+
+    int Framework_AI_GetPathCount() {
+        return (int)g_navPaths.size();
+    }
+
+    int Framework_AI_GetGridCount() {
+        return (int)g_navGrids.size();
+    }
+
+    void Framework_AI_DestroyAll() {
+        g_navGrids.clear();
+        g_navPaths.clear();
+        g_steerAgents.clear();
+        g_agentByEntity.clear();
+        g_obstacles.clear();
     }
 
     // Global management

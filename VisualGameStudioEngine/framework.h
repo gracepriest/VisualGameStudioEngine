@@ -1882,6 +1882,16 @@ extern "C" {
     __declspec(dllexport) void  Framework_NavGrid_SetCost(int gridId, int cellX, int cellY, float cost);
     __declspec(dllexport) float Framework_NavGrid_GetCost(int gridId, int cellX, int cellY);
     __declspec(dllexport) void  Framework_NavGrid_SetAllWalkable(int gridId, bool walkable);
+    __declspec(dllexport) void  Framework_NavGrid_Fill(int gridId, bool walkable);  // Alias for SetAllWalkable
+    __declspec(dllexport) int   Framework_NavGrid_GetWidth(int gridId);
+    __declspec(dllexport) int   Framework_NavGrid_GetHeight(int gridId);
+    __declspec(dllexport) float Framework_NavGrid_GetCellSize(int gridId);
+    __declspec(dllexport) void  Framework_NavGrid_SetDiagonalEnabled(int gridId, bool enabled);
+    __declspec(dllexport) bool  Framework_NavGrid_GetDiagonalEnabled(int gridId);
+    __declspec(dllexport) void  Framework_NavGrid_SetDiagonalCost(int gridId, float cost);
+    __declspec(dllexport) float Framework_NavGrid_GetDiagonalCost(int gridId);
+    __declspec(dllexport) void  Framework_NavGrid_SetHeuristic(int gridId, int heuristic);
+    __declspec(dllexport) int   Framework_NavGrid_GetHeuristic(int gridId);
     __declspec(dllexport) void  Framework_NavGrid_SetRect(int gridId, int x, int y, int w, int h, bool walkable);
     __declspec(dllexport) void  Framework_NavGrid_SetCircle(int gridId, int centerX, int centerY, int radius, bool walkable);
 
@@ -1966,6 +1976,22 @@ extern "C" {
     __declspec(dllexport) void  Framework_Path_DrawDebug(int pathId, unsigned char r, unsigned char g, unsigned char b);
     __declspec(dllexport) void  Framework_Steer_DrawDebug(int agentId);
     __declspec(dllexport) void  Framework_Steer_SetDebugEnabled(int agentId, bool enabled);
+
+    // Steering aliases for VB wrapper
+    __declspec(dllexport) bool  Framework_Steer_IsValid(int agentId);
+    __declspec(dllexport) void  Framework_Steer_SetTarget(int agentId, float x, float y);
+    __declspec(dllexport) void  Framework_Steer_ClearTarget(int agentId);
+
+    // Obstacle management
+    __declspec(dllexport) void  Framework_Steer_AddObstacle(float x, float y, float radius);
+    __declspec(dllexport) void  Framework_Steer_ClearObstacles();
+    __declspec(dllexport) int   Framework_Steer_GetObstacleCount();
+
+    // AI/Pathfinding global counts
+    __declspec(dllexport) int   Framework_AI_GetAgentCount();
+    __declspec(dllexport) int   Framework_AI_GetPathCount();
+    __declspec(dllexport) int   Framework_AI_GetGridCount();
+    __declspec(dllexport) void  Framework_AI_DestroyAll();
 
     // Global management
     __declspec(dllexport) void  Framework_NavGrid_DestroyAll();
