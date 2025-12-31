@@ -6,6 +6,7 @@ using BasicLang.Compiler.StdLib.CSharp;
 using BasicLang.Compiler.StdLib.Cpp;
 using BasicLang.Compiler.StdLib.LLVM;
 using BasicLang.Compiler.StdLib.MSIL;
+using BasicLang.Compiler.StdLib.Framework;
 
 namespace BasicLang.Compiler.StdLib
 {
@@ -15,8 +16,8 @@ namespace BasicLang.Compiler.StdLib
     /// </summary>
     public static class StdLibRegistry
     {
-        private static readonly Dictionary<TargetPlatform, IStdLibProvider> _providers
-            = new Dictionary<TargetPlatform, IStdLibProvider>();
+        private static readonly Dictionary<TargetPlatform, List<IStdLibProvider>> _providers
+            = new Dictionary<TargetPlatform, List<IStdLibProvider>>();
 
         private static bool _initialized = false;
 
@@ -27,7 +28,8 @@ namespace BasicLang.Compiler.StdLib
         {
             if (_initialized) return;
 
-            // Register providers for each backend
+            // Register providers for each backend (order matters - checked first to last)
+            Register(TargetPlatform.CSharp, new FrameworkStdLibProvider()); // Game engine first
             Register(TargetPlatform.CSharp, new CSharpStdLibProvider());
             Register(TargetPlatform.Cpp, new CppStdLibProvider());
             Register(TargetPlatform.LLVM, new LLVMStdLibProvider());
@@ -41,20 +43,54 @@ namespace BasicLang.Compiler.StdLib
         /// </summary>
         public static void Register(TargetPlatform target, IStdLibProvider provider)
         {
-            _providers[target] = provider;
+            if (!_providers.ContainsKey(target))
+                _providers[target] = new List<IStdLibProvider>();
+            _providers[target].Add(provider);
         }
 
         /// <summary>
-        /// Get the stdlib provider for a target platform
+        /// Get all stdlib providers for a target platform
+        /// </summary>
+        public static IEnumerable<IStdLibProvider> GetProviders(TargetPlatform target)
+        {
+            Initialize();
+
+            if (_providers.TryGetValue(target, out var providers))
+                return providers;
+
+            return Enumerable.Empty<IStdLibProvider>();
+        }
+
+        /// <summary>
+        /// Get the first provider that can handle a function for a target platform
         /// </summary>
         public static IStdLibProvider GetProvider(TargetPlatform target)
         {
             Initialize();
 
-            if (_providers.TryGetValue(target, out var provider))
-                return provider;
+            if (_providers.TryGetValue(target, out var providers) && providers.Count > 0)
+                return providers[0];
 
             throw new NotSupportedException($"No stdlib provider registered for target: {target}");
+        }
+
+        /// <summary>
+        /// Get provider that can handle a specific function
+        /// </summary>
+        public static IStdLibProvider GetProviderForFunction(TargetPlatform target, string functionName)
+        {
+            Initialize();
+
+            if (_providers.TryGetValue(target, out var providers))
+            {
+                foreach (var provider in providers)
+                {
+                    if (provider.CanHandle(functionName))
+                        return provider;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -63,7 +99,7 @@ namespace BasicLang.Compiler.StdLib
         public static bool IsStdLibFunction(string functionName)
         {
             Initialize();
-            return _providers.Values.Any(p => p.CanHandle(functionName));
+            return _providers.Values.SelectMany(p => p).Any(p => p.CanHandle(functionName));
         }
 
         /// <summary>
@@ -73,8 +109,8 @@ namespace BasicLang.Compiler.StdLib
         {
             Initialize();
 
-            if (_providers.TryGetValue(target, out var provider))
-                return provider.CanHandle(functionName);
+            if (_providers.TryGetValue(target, out var providers))
+                return providers.Any(p => p.CanHandle(functionName));
 
             return false;
         }
@@ -84,7 +120,9 @@ namespace BasicLang.Compiler.StdLib
         /// </summary>
         public static string EmitCall(TargetPlatform target, string functionName, params string[] arguments)
         {
-            var provider = GetProvider(target);
+            var provider = GetProviderForFunction(target, functionName);
+            if (provider == null)
+                throw new NotSupportedException($"No provider found for function: {functionName}");
             return provider.EmitCall(functionName, arguments);
         }
 
@@ -93,7 +131,9 @@ namespace BasicLang.Compiler.StdLib
         /// </summary>
         public static IEnumerable<string> GetRequiredImports(TargetPlatform target, string functionName)
         {
-            var provider = GetProvider(target);
+            var provider = GetProviderForFunction(target, functionName);
+            if (provider == null)
+                return Enumerable.Empty<string>();
             return provider.GetRequiredImports(functionName);
         }
 
@@ -102,8 +142,32 @@ namespace BasicLang.Compiler.StdLib
         /// </summary>
         public static string GetInlineImplementation(TargetPlatform target, string functionName)
         {
-            var provider = GetProvider(target);
-            return provider.GetInlineImplementation(functionName);
+            var provider = GetProviderForFunction(target, functionName);
+            return provider?.GetInlineImplementation(functionName);
+        }
+
+        /// <summary>
+        /// Check if game framework bindings are being used
+        /// </summary>
+        public static bool UsesFramework(TargetPlatform target, IEnumerable<string> functionNames)
+        {
+            Initialize();
+            if (!_providers.TryGetValue(target, out var providers))
+                return false;
+
+            var frameworkProvider = providers.OfType<FrameworkStdLibProvider>().FirstOrDefault();
+            if (frameworkProvider == null)
+                return false;
+
+            return functionNames.Any(f => frameworkProvider.CanHandle(f));
+        }
+
+        /// <summary>
+        /// Get the Framework runtime helper code to include in generated code
+        /// </summary>
+        public static string GetFrameworkRuntimeCode()
+        {
+            return FrameworkStdLibProvider.GetRuntimeHelperCode();
         }
 
         /// <summary>
