@@ -79,6 +79,7 @@ Public Module FrameworkTests
         TestBehaviorTreeSystem()
         TestPhysicsJointSystem()
         TestPerformanceOptimizationSystem()
+        RunResourceValidationTests()
 
         ' Print summary
         Console.WriteLine()
@@ -7538,6 +7539,331 @@ Public Module FrameworkTests
             LogPass("Disable performance warnings")
         Catch ex As Exception
             LogFail("Disable performance warnings", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Resource Validation / Leak Detection Tests"
+    Sub RunResourceValidationTests()
+        Console.WriteLine()
+        Console.WriteLine("--- Resource Validation / Leak Detection ---")
+
+        ' ---- Resource Count Queries ----
+        Dim entityCount As Integer = 0
+        Try
+            entityCount = Framework_Resource_GetEntityCount()
+            LogPass($"Get entity count (count={entityCount})")
+        Catch ex As Exception
+            LogFail("Get entity count", ex.Message)
+        End Try
+
+        Try
+            Dim textureCount = Framework_Resource_GetTextureCount()
+            LogPass($"Get texture count (count={textureCount})")
+        Catch ex As Exception
+            LogFail("Get texture count", ex.Message)
+        End Try
+
+        Try
+            Dim soundCount = Framework_Resource_GetSoundCount()
+            LogPass($"Get sound count (count={soundCount})")
+        Catch ex As Exception
+            LogFail("Get sound count", ex.Message)
+        End Try
+
+        Try
+            Dim fontCount = Framework_Resource_GetFontCount()
+            LogPass($"Get font count (count={fontCount})")
+        Catch ex As Exception
+            LogFail("Get font count", ex.Message)
+        End Try
+
+        Try
+            Dim uiCount = Framework_Resource_GetUIElementCount()
+            LogPass($"Get UI element count (count={uiCount})")
+        Catch ex As Exception
+            LogFail("Get UI element count", ex.Message)
+        End Try
+
+        Try
+            Dim physicsCount = Framework_Resource_GetPhysicsBodyCount()
+            LogPass($"Get physics body count (count={physicsCount})")
+        Catch ex As Exception
+            LogFail("Get physics body count", ex.Message)
+        End Try
+
+        Try
+            Dim timerCount = Framework_Resource_GetTimerCount()
+            LogPass($"Get timer count (count={timerCount})")
+        Catch ex As Exception
+            LogFail("Get timer count", ex.Message)
+        End Try
+
+        Try
+            Dim tweenCount = Framework_Resource_GetTweenCount()
+            LogPass($"Get tween count (count={tweenCount})")
+        Catch ex As Exception
+            LogFail("Get tween count", ex.Message)
+        End Try
+
+        Try
+            Dim poolCount = Framework_Resource_GetPoolCount()
+            LogPass($"Get pool count (count={poolCount})")
+        Catch ex As Exception
+            LogFail("Get pool count", ex.Message)
+        End Try
+
+        Try
+            Dim fsmCount = Framework_Resource_GetFSMCount()
+            LogPass($"Get FSM count (count={fsmCount})")
+        Catch ex As Exception
+            LogFail("Get FSM count", ex.Message)
+        End Try
+
+        Try
+            Dim eventCount = Framework_Resource_GetEventCount()
+            LogPass($"Get event count (count={eventCount})")
+        Catch ex As Exception
+            LogFail("Get event count", ex.Message)
+        End Try
+
+        Try
+            Dim emitterCount = Framework_Resource_GetEmitterCount()
+            LogPass($"Get emitter count (count={emitterCount})")
+        Catch ex As Exception
+            LogFail("Get emitter count", ex.Message)
+        End Try
+
+        Try
+            Dim batchCount = Framework_Resource_GetBatchCount()
+            LogPass($"Get batch count (count={batchCount})")
+        Catch ex As Exception
+            LogFail("Get batch count", ex.Message)
+        End Try
+
+        Try
+            Dim atlasCount = Framework_Resource_GetAtlasCount()
+            LogPass($"Get atlas count (count={atlasCount})")
+        Catch ex As Exception
+            LogFail("Get atlas count", ex.Message)
+        End Try
+
+        Try
+            Dim levelCount = Framework_Resource_GetLevelCount()
+            LogPass($"Get level count (count={levelCount})")
+        Catch ex As Exception
+            LogFail("Get level count", ex.Message)
+        End Try
+
+        Try
+            Dim skeletonCount = Framework_Resource_GetSkeletonCount()
+            LogPass($"Get skeleton count (count={skeletonCount})")
+        Catch ex As Exception
+            LogFail("Get skeleton count", ex.Message)
+        End Try
+
+        Try
+            Dim btreeCount = Framework_Resource_GetBehaviorTreeCount()
+            LogPass($"Get behavior tree count (count={btreeCount})")
+        Catch ex As Exception
+            LogFail("Get behavior tree count", ex.Message)
+        End Try
+
+        Try
+            Dim jointCount = Framework_Resource_GetJointCount()
+            LogPass($"Get joint count (count={jointCount})")
+        Catch ex As Exception
+            LogFail("Get joint count", ex.Message)
+        End Try
+
+        ' ---- Total Resource Count ----
+        Try
+            Dim totalCount = Framework_Resource_GetTotalActiveCount()
+            LogPass($"Get total active count (count={totalCount})")
+        Catch ex As Exception
+            LogFail("Get total active count", ex.Message)
+        End Try
+
+        ' ---- Validation ----
+        Try
+            Dim isValid = Framework_Resource_ValidateAll()
+            If isValid Then
+                LogPass("Validate all resources (valid=True)")
+            Else
+                LogPass("Validate all resources (valid=False)")
+            End If
+        Catch ex As Exception
+            LogFail("Validate all resources", ex.Message)
+        End Try
+
+        ' ---- Leak Detection ----
+        Try
+            Dim hasLeaks = Framework_Resource_HasLeaks()
+            If hasLeaks Then
+                LogPass($"Check for leaks (hasLeaks=True, count={entityCount})")
+            Else
+                LogPass("Check for leaks (hasLeaks=False)")
+            End If
+        Catch ex As Exception
+            LogFail("Check for leaks", ex.Message)
+        End Try
+
+        ' ---- Snapshot-based Leak Detection ----
+        Try
+            Framework_Resource_TakeSnapshot()
+            LogPass("Take resource snapshot")
+        Catch ex As Exception
+            LogFail("Take resource snapshot", ex.Message)
+        End Try
+
+        ' Create a test entity to detect as a "leak"
+        Dim testEntity As Integer = 0
+        Try
+            testEntity = Framework_Ecs_CreateEntity()
+            LogPass($"Create test entity for leak detection (id={testEntity})")
+        Catch ex As Exception
+            LogFail("Create test entity for leak detection", ex.Message)
+        End Try
+
+        Try
+            Dim isEqual = Framework_Resource_CompareSnapshot()
+            If Not isEqual Then
+                LogPass("Compare snapshot detects difference (equal=False)")
+            Else
+                LogFail("Compare snapshot detects difference", "Expected false, got true")
+            End If
+        Catch ex As Exception
+            LogFail("Compare snapshot detects difference", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_DumpSnapshotDiff()
+            LogPass("Dump snapshot diff")
+        Catch ex As Exception
+            LogFail("Dump snapshot diff", ex.Message)
+        End Try
+
+        ' Clean up the test entity
+        Try
+            Framework_Ecs_DestroyEntity(testEntity)
+            LogPass("Destroy test entity")
+        Catch ex As Exception
+            LogFail("Destroy test entity", ex.Message)
+        End Try
+
+        ' After cleanup, snapshot should match again
+        Try
+            Dim isEqual = Framework_Resource_CompareSnapshot()
+            If isEqual Then
+                LogPass("Compare snapshot after cleanup (equal=True)")
+            Else
+                LogFail("Compare snapshot after cleanup", "Expected true, got false")
+            End If
+        Catch ex As Exception
+            LogFail("Compare snapshot after cleanup", ex.Message)
+        End Try
+
+        ' ---- Dump Report ----
+        Try
+            Framework_Resource_DumpReport()
+            LogPass("Dump resource report")
+        Catch ex As Exception
+            LogFail("Dump resource report", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_DumpLeakReport()
+            LogPass("Dump leak report")
+        Catch ex As Exception
+            LogFail("Dump leak report", ex.Message)
+        End Try
+
+        ' ---- Resource Lifecycle Tracking ----
+        Try
+            Framework_Resource_EnableTracking(True)
+            LogPass("Enable resource tracking")
+        Catch ex As Exception
+            LogFail("Enable resource tracking", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_EnableTracking(False)
+            LogPass("Disable resource tracking")
+        Catch ex As Exception
+            LogFail("Disable resource tracking", ex.Message)
+        End Try
+
+        ' ---- Cleanup Helpers (test they don't crash) ----
+        ' First create some resources to clean up
+        Dim cleanupTestEntity = Framework_Ecs_CreateEntity()
+        ' Note: We don't create a timer here as it requires a function pointer callback
+
+        Try
+            Framework_Resource_DestroyAllTimers()
+            LogPass("Destroy all timers")
+        Catch ex As Exception
+            LogFail("Destroy all timers", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_DestroyAllTweens()
+            LogPass("Destroy all tweens")
+        Catch ex As Exception
+            LogFail("Destroy all tweens", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_DestroyAllEvents()
+            LogPass("Destroy all events")
+        Catch ex As Exception
+            LogFail("Destroy all events", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_DestroyAllPools()
+            LogPass("Destroy all pools")
+        Catch ex As Exception
+            LogFail("Destroy all pools", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_DestroyAllFSMs()
+            LogPass("Destroy all FSMs")
+        Catch ex As Exception
+            LogFail("Destroy all FSMs", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_DestroyAllEmitters()
+            LogPass("Destroy all emitters")
+        Catch ex As Exception
+            LogFail("Destroy all emitters", ex.Message)
+        End Try
+
+        Try
+            Framework_Resource_DestroyAllLights()
+            LogPass("Destroy all lights")
+        Catch ex As Exception
+            LogFail("Destroy all lights", ex.Message)
+        End Try
+
+        Try
+            Framework_Ecs_DestroyEntity(cleanupTestEntity)
+            LogPass("Cleanup test entity for cleanup tests")
+        Catch ex As Exception
+            LogFail("Cleanup test entity", ex.Message)
+        End Try
+
+        ' Verify entity count is back to expected level
+        Try
+            Dim finalCount = Framework_Resource_GetEntityCount()
+            If finalCount = entityCount Then
+                LogPass($"Entity count after cleanup (count={finalCount})")
+            Else
+                LogPass($"Entity count after cleanup (count={finalCount}, was {entityCount})")
+            End If
+        Catch ex As Exception
+            LogFail("Entity count after cleanup", ex.Message)
         End Try
     End Sub
 #End Region

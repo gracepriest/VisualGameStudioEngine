@@ -4415,6 +4415,517 @@ extern "C" {
     void Framework_Perf_SetMemoryWarningThreshold(long long bytes) { g_memoryWarningThresholdPerf = bytes; }
 
     // ========================================================================
+    // RESOURCE VALIDATION / LEAK DETECTION
+    // ========================================================================
+
+    // Resource tracking callbacks
+    static ResourceCreatedCallback g_resourceCreatedCallback = nullptr;
+    static ResourceDestroyedCallback g_resourceDestroyedCallback = nullptr;
+    static bool g_resourceTrackingEnabled = false;
+
+    // Snapshot storage for leak detection
+    struct ResourceSnapshot {
+        int entities = 0;
+        int textures = 0;
+        int sounds = 0;
+        int fonts = 0;
+        int uiElements = 0;
+        int physicsBodies = 0;
+        int tweens = 0;
+        int timers = 0;
+        int pools = 0;
+        int fsms = 0;
+        int events = 0;
+        int dialogues = 0;
+        int quests = 0;
+        int lights = 0;
+        int emitters = 0;
+        int batches = 0;
+        int atlases = 0;
+        int levels = 0;
+        int skeletons = 0;
+        int behaviorTrees = 0;
+        int joints = 0;
+        int spatialGrids = 0;
+    };
+    static ResourceSnapshot g_resourceSnapshot;
+    static bool g_snapshotTaken = false;
+
+    // Forward declarations for count functions (some resources defined later)
+    int GetUIElementCountImpl();
+    int GetTimerCountImpl();
+    int GetTweenCountImpl();
+    int GetPoolCountImpl();
+    int GetFSMCountImpl();
+    int GetEventCountImpl();
+    int GetDialogueCountImpl();
+    int GetQuestCountImpl();
+    int GetLightCountImpl();
+    int GetEmitterCountImpl();
+    int GetBatchCountImpl();
+    int GetAtlasCountImpl();
+    int GetLevelCountImpl();
+    int GetSkeletonCountImpl();
+    int GetBehaviorTreeCountImpl();
+    int GetJointCountImpl();
+    int GetTextureCountImpl();
+    int GetSoundCountImpl();
+    int GetFontCountImpl();
+    int GetPhysicsBodyCountImpl();
+    int GetAnimClipCountImpl();
+    int GetTilesetCountImpl();
+    int GetInventoryCountImpl();
+
+    // Resource counts by type
+    int Framework_Resource_GetEntityCount() {
+        return (int)g_entities.size();
+    }
+
+    int Framework_Resource_GetTextureCount() {
+        return GetTextureCountImpl();
+    }
+
+    int Framework_Resource_GetSoundCount() {
+        return GetSoundCountImpl();
+    }
+
+    int Framework_Resource_GetFontCount() {
+        return GetFontCountImpl();
+    }
+
+    int Framework_Resource_GetUIElementCount() {
+        return GetUIElementCountImpl();
+    }
+
+    int Framework_Resource_GetPhysicsBodyCount() {
+        return GetPhysicsBodyCountImpl();
+    }
+
+    int Framework_Resource_GetAnimClipCount() {
+        return GetAnimClipCountImpl();
+    }
+
+    int Framework_Resource_GetTilesetCount() {
+        return GetTilesetCountImpl();
+    }
+
+    int Framework_Resource_GetInventoryCount() {
+        return GetInventoryCountImpl();
+    }
+
+    int Framework_Resource_GetTweenCount() {
+        return GetTweenCountImpl();
+    }
+
+    int Framework_Resource_GetTimerCount() {
+        return GetTimerCountImpl();
+    }
+
+    int Framework_Resource_GetPoolCount() {
+        return GetPoolCountImpl();
+    }
+
+    int Framework_Resource_GetFSMCount() {
+        return GetFSMCountImpl();
+    }
+
+    int Framework_Resource_GetEventCount() {
+        return GetEventCountImpl();
+    }
+
+    int Framework_Resource_GetDialogueCount() {
+        return GetDialogueCountImpl();
+    }
+
+    int Framework_Resource_GetQuestCount() {
+        return GetQuestCountImpl();
+    }
+
+    int Framework_Resource_GetLightCount() {
+        return GetLightCountImpl();
+    }
+
+    int Framework_Resource_GetEmitterCount() {
+        return GetEmitterCountImpl();
+    }
+
+    int Framework_Resource_GetBatchCount() {
+        return GetBatchCountImpl();
+    }
+
+    int Framework_Resource_GetAtlasCount() {
+        return GetAtlasCountImpl();
+    }
+
+    int Framework_Resource_GetLevelCount() {
+        return GetLevelCountImpl();
+    }
+
+    int Framework_Resource_GetSkeletonCount() {
+        return GetSkeletonCountImpl();
+    }
+
+    int Framework_Resource_GetBehaviorTreeCount() {
+        return GetBehaviorTreeCountImpl();
+    }
+
+    int Framework_Resource_GetJointCount() {
+        return GetJointCountImpl();
+    }
+
+    int Framework_Resource_GetSpatialGridCount() {
+        return (int)g_spatialGrids.size();
+    }
+
+    // Total active resources
+    int Framework_Resource_GetTotalActiveCount() {
+        return Framework_Resource_GetEntityCount() +
+               Framework_Resource_GetTextureCount() +
+               Framework_Resource_GetSoundCount() +
+               Framework_Resource_GetFontCount() +
+               Framework_Resource_GetUIElementCount() +
+               Framework_Resource_GetPhysicsBodyCount() +
+               Framework_Resource_GetTweenCount() +
+               Framework_Resource_GetTimerCount() +
+               Framework_Resource_GetPoolCount() +
+               Framework_Resource_GetFSMCount() +
+               Framework_Resource_GetEventCount() +
+               Framework_Resource_GetDialogueCount() +
+               Framework_Resource_GetQuestCount() +
+               Framework_Resource_GetLightCount() +
+               Framework_Resource_GetEmitterCount() +
+               Framework_Resource_GetBatchCount() +
+               Framework_Resource_GetAtlasCount() +
+               Framework_Resource_GetLevelCount() +
+               Framework_Resource_GetSkeletonCount() +
+               Framework_Resource_GetBehaviorTreeCount() +
+               Framework_Resource_GetJointCount() +
+               Framework_Resource_GetSpatialGridCount();
+    }
+
+    // Check if any resources are still active (potential leaks)
+    bool Framework_Resource_HasLeaks() {
+        return Framework_Resource_GetTotalActiveCount() > 0;
+    }
+
+    // Validate all resources (returns true if no leaks)
+    bool Framework_Resource_ValidateAll() {
+        return !Framework_Resource_HasLeaks();
+    }
+
+    // Log detailed resource report
+    void Framework_Resource_DumpReport() {
+        TraceLog(LOG_INFO, "========================================");
+        TraceLog(LOG_INFO, "RESOURCE REPORT");
+        TraceLog(LOG_INFO, "========================================");
+        TraceLog(LOG_INFO, "Entities:       %d", Framework_Resource_GetEntityCount());
+        TraceLog(LOG_INFO, "Textures:       %d", Framework_Resource_GetTextureCount());
+        TraceLog(LOG_INFO, "Sounds:         %d", Framework_Resource_GetSoundCount());
+        TraceLog(LOG_INFO, "Fonts:          %d", Framework_Resource_GetFontCount());
+        TraceLog(LOG_INFO, "UI Elements:    %d", Framework_Resource_GetUIElementCount());
+        TraceLog(LOG_INFO, "Physics Bodies: %d", Framework_Resource_GetPhysicsBodyCount());
+        TraceLog(LOG_INFO, "Tweens:         %d", Framework_Resource_GetTweenCount());
+        TraceLog(LOG_INFO, "Timers:         %d", Framework_Resource_GetTimerCount());
+        TraceLog(LOG_INFO, "Pools:          %d", Framework_Resource_GetPoolCount());
+        TraceLog(LOG_INFO, "FSMs:           %d", Framework_Resource_GetFSMCount());
+        TraceLog(LOG_INFO, "Events:         %d", Framework_Resource_GetEventCount());
+        TraceLog(LOG_INFO, "Dialogues:      %d", Framework_Resource_GetDialogueCount());
+        TraceLog(LOG_INFO, "Quests:         %d", Framework_Resource_GetQuestCount());
+        TraceLog(LOG_INFO, "Lights:         %d", Framework_Resource_GetLightCount());
+        TraceLog(LOG_INFO, "Emitters:       %d", Framework_Resource_GetEmitterCount());
+        TraceLog(LOG_INFO, "Batches:        %d", Framework_Resource_GetBatchCount());
+        TraceLog(LOG_INFO, "Atlases:        %d", Framework_Resource_GetAtlasCount());
+        TraceLog(LOG_INFO, "Levels:         %d", Framework_Resource_GetLevelCount());
+        TraceLog(LOG_INFO, "Skeletons:      %d", Framework_Resource_GetSkeletonCount());
+        TraceLog(LOG_INFO, "BehaviorTrees:  %d", Framework_Resource_GetBehaviorTreeCount());
+        TraceLog(LOG_INFO, "Joints:         %d", Framework_Resource_GetJointCount());
+        TraceLog(LOG_INFO, "SpatialGrids:   %d", Framework_Resource_GetSpatialGridCount());
+        TraceLog(LOG_INFO, "----------------------------------------");
+        TraceLog(LOG_INFO, "TOTAL ACTIVE:   %d", Framework_Resource_GetTotalActiveCount());
+        TraceLog(LOG_INFO, "========================================");
+    }
+
+    // Log only if there are leaks
+    void Framework_Resource_DumpLeakReport() {
+        if (Framework_Resource_HasLeaks()) {
+            TraceLog(LOG_WARNING, "========================================");
+            TraceLog(LOG_WARNING, "POTENTIAL RESOURCE LEAKS DETECTED");
+            TraceLog(LOG_WARNING, "========================================");
+            if (Framework_Resource_GetEntityCount() > 0)
+                TraceLog(LOG_WARNING, "  Entities:       %d LEAKED", Framework_Resource_GetEntityCount());
+            if (Framework_Resource_GetTextureCount() > 0)
+                TraceLog(LOG_WARNING, "  Textures:       %d LEAKED", Framework_Resource_GetTextureCount());
+            if (Framework_Resource_GetSoundCount() > 0)
+                TraceLog(LOG_WARNING, "  Sounds:         %d LEAKED", Framework_Resource_GetSoundCount());
+            if (Framework_Resource_GetFontCount() > 0)
+                TraceLog(LOG_WARNING, "  Fonts:          %d LEAKED", Framework_Resource_GetFontCount());
+            if (Framework_Resource_GetUIElementCount() > 0)
+                TraceLog(LOG_WARNING, "  UI Elements:    %d LEAKED", Framework_Resource_GetUIElementCount());
+            if (Framework_Resource_GetPhysicsBodyCount() > 0)
+                TraceLog(LOG_WARNING, "  Physics Bodies: %d LEAKED", Framework_Resource_GetPhysicsBodyCount());
+            if (Framework_Resource_GetTweenCount() > 0)
+                TraceLog(LOG_WARNING, "  Tweens:         %d LEAKED", Framework_Resource_GetTweenCount());
+            if (Framework_Resource_GetTimerCount() > 0)
+                TraceLog(LOG_WARNING, "  Timers:         %d LEAKED", Framework_Resource_GetTimerCount());
+            if (Framework_Resource_GetPoolCount() > 0)
+                TraceLog(LOG_WARNING, "  Pools:          %d LEAKED", Framework_Resource_GetPoolCount());
+            if (Framework_Resource_GetFSMCount() > 0)
+                TraceLog(LOG_WARNING, "  FSMs:           %d LEAKED", Framework_Resource_GetFSMCount());
+            if (Framework_Resource_GetEventCount() > 0)
+                TraceLog(LOG_WARNING, "  Events:         %d LEAKED", Framework_Resource_GetEventCount());
+            if (Framework_Resource_GetDialogueCount() > 0)
+                TraceLog(LOG_WARNING, "  Dialogues:      %d LEAKED", Framework_Resource_GetDialogueCount());
+            if (Framework_Resource_GetQuestCount() > 0)
+                TraceLog(LOG_WARNING, "  Quests:         %d LEAKED", Framework_Resource_GetQuestCount());
+            if (Framework_Resource_GetLightCount() > 0)
+                TraceLog(LOG_WARNING, "  Lights:         %d LEAKED", Framework_Resource_GetLightCount());
+            if (Framework_Resource_GetEmitterCount() > 0)
+                TraceLog(LOG_WARNING, "  Emitters:       %d LEAKED", Framework_Resource_GetEmitterCount());
+            if (Framework_Resource_GetBatchCount() > 0)
+                TraceLog(LOG_WARNING, "  Batches:        %d LEAKED", Framework_Resource_GetBatchCount());
+            if (Framework_Resource_GetAtlasCount() > 0)
+                TraceLog(LOG_WARNING, "  Atlases:        %d LEAKED", Framework_Resource_GetAtlasCount());
+            if (Framework_Resource_GetLevelCount() > 0)
+                TraceLog(LOG_WARNING, "  Levels:         %d LEAKED", Framework_Resource_GetLevelCount());
+            if (Framework_Resource_GetSkeletonCount() > 0)
+                TraceLog(LOG_WARNING, "  Skeletons:      %d LEAKED", Framework_Resource_GetSkeletonCount());
+            if (Framework_Resource_GetBehaviorTreeCount() > 0)
+                TraceLog(LOG_WARNING, "  BehaviorTrees:  %d LEAKED", Framework_Resource_GetBehaviorTreeCount());
+            if (Framework_Resource_GetJointCount() > 0)
+                TraceLog(LOG_WARNING, "  Joints:         %d LEAKED", Framework_Resource_GetJointCount());
+            if (Framework_Resource_GetSpatialGridCount() > 0)
+                TraceLog(LOG_WARNING, "  SpatialGrids:   %d LEAKED", Framework_Resource_GetSpatialGridCount());
+            TraceLog(LOG_WARNING, "========================================");
+        }
+    }
+
+    // Snapshot-based leak detection
+    void Framework_Resource_TakeSnapshot() {
+        g_resourceSnapshot.entities = Framework_Resource_GetEntityCount();
+        g_resourceSnapshot.textures = Framework_Resource_GetTextureCount();
+        g_resourceSnapshot.sounds = Framework_Resource_GetSoundCount();
+        g_resourceSnapshot.fonts = Framework_Resource_GetFontCount();
+        g_resourceSnapshot.uiElements = Framework_Resource_GetUIElementCount();
+        g_resourceSnapshot.physicsBodies = Framework_Resource_GetPhysicsBodyCount();
+        g_resourceSnapshot.tweens = Framework_Resource_GetTweenCount();
+        g_resourceSnapshot.timers = Framework_Resource_GetTimerCount();
+        g_resourceSnapshot.pools = Framework_Resource_GetPoolCount();
+        g_resourceSnapshot.fsms = Framework_Resource_GetFSMCount();
+        g_resourceSnapshot.events = Framework_Resource_GetEventCount();
+        g_resourceSnapshot.dialogues = Framework_Resource_GetDialogueCount();
+        g_resourceSnapshot.quests = Framework_Resource_GetQuestCount();
+        g_resourceSnapshot.lights = Framework_Resource_GetLightCount();
+        g_resourceSnapshot.emitters = Framework_Resource_GetEmitterCount();
+        g_resourceSnapshot.batches = Framework_Resource_GetBatchCount();
+        g_resourceSnapshot.atlases = Framework_Resource_GetAtlasCount();
+        g_resourceSnapshot.levels = Framework_Resource_GetLevelCount();
+        g_resourceSnapshot.skeletons = Framework_Resource_GetSkeletonCount();
+        g_resourceSnapshot.behaviorTrees = Framework_Resource_GetBehaviorTreeCount();
+        g_resourceSnapshot.joints = Framework_Resource_GetJointCount();
+        g_resourceSnapshot.spatialGrids = Framework_Resource_GetSpatialGridCount();
+        g_snapshotTaken = true;
+    }
+
+    bool Framework_Resource_CompareSnapshot() {
+        if (!g_snapshotTaken) return true;
+        return Framework_Resource_GetEntityCount() == g_resourceSnapshot.entities &&
+               Framework_Resource_GetTextureCount() == g_resourceSnapshot.textures &&
+               Framework_Resource_GetSoundCount() == g_resourceSnapshot.sounds &&
+               Framework_Resource_GetFontCount() == g_resourceSnapshot.fonts &&
+               Framework_Resource_GetUIElementCount() == g_resourceSnapshot.uiElements &&
+               Framework_Resource_GetPhysicsBodyCount() == g_resourceSnapshot.physicsBodies &&
+               Framework_Resource_GetTweenCount() == g_resourceSnapshot.tweens &&
+               Framework_Resource_GetTimerCount() == g_resourceSnapshot.timers &&
+               Framework_Resource_GetPoolCount() == g_resourceSnapshot.pools &&
+               Framework_Resource_GetFSMCount() == g_resourceSnapshot.fsms &&
+               Framework_Resource_GetEventCount() == g_resourceSnapshot.events &&
+               Framework_Resource_GetDialogueCount() == g_resourceSnapshot.dialogues &&
+               Framework_Resource_GetQuestCount() == g_resourceSnapshot.quests &&
+               Framework_Resource_GetLightCount() == g_resourceSnapshot.lights &&
+               Framework_Resource_GetEmitterCount() == g_resourceSnapshot.emitters &&
+               Framework_Resource_GetBatchCount() == g_resourceSnapshot.batches &&
+               Framework_Resource_GetAtlasCount() == g_resourceSnapshot.atlases &&
+               Framework_Resource_GetLevelCount() == g_resourceSnapshot.levels &&
+               Framework_Resource_GetSkeletonCount() == g_resourceSnapshot.skeletons &&
+               Framework_Resource_GetBehaviorTreeCount() == g_resourceSnapshot.behaviorTrees &&
+               Framework_Resource_GetJointCount() == g_resourceSnapshot.joints &&
+               Framework_Resource_GetSpatialGridCount() == g_resourceSnapshot.spatialGrids;
+    }
+
+    void Framework_Resource_DumpSnapshotDiff() {
+        if (!g_snapshotTaken) {
+            TraceLog(LOG_WARNING, "No snapshot taken - call Framework_Resource_TakeSnapshot() first");
+            return;
+        }
+
+        int diff;
+        bool hasChanges = false;
+        TraceLog(LOG_INFO, "========================================");
+        TraceLog(LOG_INFO, "RESOURCE SNAPSHOT DIFF");
+        TraceLog(LOG_INFO, "========================================");
+
+        #define DUMP_DIFF(name, getter, field) \
+            diff = getter() - g_resourceSnapshot.field; \
+            if (diff != 0) { \
+                TraceLog(diff > 0 ? LOG_WARNING : LOG_INFO, "  %s: %+d (%d -> %d)", \
+                    name, diff, g_resourceSnapshot.field, getter()); \
+                hasChanges = true; \
+            }
+
+        DUMP_DIFF("Entities", Framework_Resource_GetEntityCount, entities);
+        DUMP_DIFF("Textures", Framework_Resource_GetTextureCount, textures);
+        DUMP_DIFF("Sounds", Framework_Resource_GetSoundCount, sounds);
+        DUMP_DIFF("Fonts", Framework_Resource_GetFontCount, fonts);
+        DUMP_DIFF("UI Elements", Framework_Resource_GetUIElementCount, uiElements);
+        DUMP_DIFF("Physics Bodies", Framework_Resource_GetPhysicsBodyCount, physicsBodies);
+        DUMP_DIFF("Tweens", Framework_Resource_GetTweenCount, tweens);
+        DUMP_DIFF("Timers", Framework_Resource_GetTimerCount, timers);
+        DUMP_DIFF("Pools", Framework_Resource_GetPoolCount, pools);
+        DUMP_DIFF("FSMs", Framework_Resource_GetFSMCount, fsms);
+        DUMP_DIFF("Events", Framework_Resource_GetEventCount, events);
+        DUMP_DIFF("Dialogues", Framework_Resource_GetDialogueCount, dialogues);
+        DUMP_DIFF("Quests", Framework_Resource_GetQuestCount, quests);
+        DUMP_DIFF("Lights", Framework_Resource_GetLightCount, lights);
+        DUMP_DIFF("Emitters", Framework_Resource_GetEmitterCount, emitters);
+        DUMP_DIFF("Batches", Framework_Resource_GetBatchCount, batches);
+        DUMP_DIFF("Atlases", Framework_Resource_GetAtlasCount, atlases);
+        DUMP_DIFF("Levels", Framework_Resource_GetLevelCount, levels);
+        DUMP_DIFF("Skeletons", Framework_Resource_GetSkeletonCount, skeletons);
+        DUMP_DIFF("BehaviorTrees", Framework_Resource_GetBehaviorTreeCount, behaviorTrees);
+        DUMP_DIFF("Joints", Framework_Resource_GetJointCount, joints);
+        DUMP_DIFF("SpatialGrids", Framework_Resource_GetSpatialGridCount, spatialGrids);
+
+        #undef DUMP_DIFF
+
+        if (!hasChanges) {
+            TraceLog(LOG_INFO, "  No changes since snapshot");
+        }
+        TraceLog(LOG_INFO, "========================================");
+    }
+
+    // Cleanup helpers - forward declare DestroyAll functions
+    void Framework_UI_DestroyAll();
+    void Framework_Physics_DestroyAllBodies();
+    void Framework_Joint_DestroyAll();
+    void Framework_Timer_CancelAll();
+    void Framework_Tween_KillAll();
+    void Framework_Pool_DestroyAll();
+    void Framework_FSM_DestroyAll();
+    void Framework_Event_Clear();
+    void Framework_Light_DestroyAll();
+    void Framework_Batch_DestroyAll();
+    void Framework_Atlas_DestroyAll();
+    void Framework_Level_DestroyAll();
+    void Framework_Skeleton_DestroyAll();
+    void Framework_BTree_DestroyAll();
+
+    void Framework_Resource_DestroyAllEntities() {
+        std::vector<Entity> entitiesToDestroy(g_entities.begin(), g_entities.end());
+        for (Entity e : entitiesToDestroy) {
+            Framework_Ecs_DestroyEntity(e);
+        }
+    }
+
+    void Framework_Resource_DestroyAllUI() {
+        Framework_UI_DestroyAll();
+    }
+
+    void Framework_Resource_DestroyAllPhysics() {
+        Framework_Joint_DestroyAll();
+        Framework_Physics_DestroyAllBodies();
+    }
+
+    void Framework_Resource_DestroyAllTimers() {
+        Framework_Timer_CancelAll();
+    }
+
+    void Framework_Resource_DestroyAllTweens() {
+        Framework_Tween_KillAll();
+    }
+
+    void Framework_Resource_DestroyAllPools() {
+        Framework_Pool_DestroyAll();
+    }
+
+    void Framework_Resource_DestroyAllFSMs() {
+        Framework_FSM_DestroyAll();
+    }
+
+    void Framework_Resource_DestroyAllEvents() {
+        Framework_Event_Clear();
+    }
+
+    void Framework_Resource_DestroyAllLights() {
+        Framework_Light_DestroyAll();
+    }
+
+    void Framework_Resource_DestroyAllEmitters() {
+        // Particle emitters are entity components - they're destroyed with entities
+        g_particleEmitter.clear();
+    }
+
+    void Framework_Resource_DestroyAllBatches() {
+        Framework_Batch_DestroyAll();
+    }
+
+    void Framework_Resource_DestroyAllAtlases() {
+        Framework_Atlas_DestroyAll();
+    }
+
+    void Framework_Resource_DestroyAllLevels() {
+        Framework_Level_DestroyAll();
+    }
+
+    void Framework_Resource_CleanupAll() {
+        // Destroy in reverse order of typical creation
+        Framework_Resource_DestroyAllTimers();
+        Framework_Resource_DestroyAllTweens();
+        Framework_Resource_DestroyAllFSMs();
+        Framework_Resource_DestroyAllPools();
+        Framework_Resource_DestroyAllEvents();
+        Framework_Resource_DestroyAllLights();
+        Framework_Resource_DestroyAllEmitters();
+        Framework_Resource_DestroyAllBatches();
+        Framework_Resource_DestroyAllAtlases();
+        Framework_Resource_DestroyAllLevels();
+        Framework_Resource_DestroyAllUI();
+        Framework_Resource_DestroyAllPhysics();
+        Framework_Resource_DestroyAllEntities();
+
+        // Clear spatial grids
+        g_spatialGrids.clear();
+
+        // Note: Textures, sounds, and fonts are typically managed by the user
+        // and loaded/unloaded explicitly, so we don't auto-destroy them here
+    }
+
+    // Resource lifecycle callbacks
+    void Framework_Resource_SetCreatedCallback(ResourceCreatedCallback callback) {
+        g_resourceCreatedCallback = callback;
+    }
+
+    void Framework_Resource_SetDestroyedCallback(ResourceDestroyedCallback callback) {
+        g_resourceDestroyedCallback = callback;
+    }
+
+    void Framework_Resource_EnableTracking(bool enabled) {
+        g_resourceTrackingEnabled = enabled;
+    }
+
+    // Helper to notify callbacks (call from resource creation/destruction)
+    void NotifyResourceCreated(const char* type, int id) {
+        if (g_resourceTrackingEnabled && g_resourceCreatedCallback) {
+            g_resourceCreatedCallback(type, id);
+        }
+    }
+
+    void NotifyResourceDestroyed(const char* type, int id) {
+        if (g_resourceTrackingEnabled && g_resourceDestroyedCallback) {
+            g_resourceDestroyedCallback(type, id);
+        }
+    }
+
+    // ========================================================================
     // PREFABS & SERIALIZATION (Basic implementation)
     // ========================================================================
 
@@ -26062,5 +26573,35 @@ extern "C" {
     void Framework_Cmd_SetTextColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { g_cmdTextColor = { r, g, b, a }; }
     void Framework_Cmd_SetFontSize(int size) { g_cmdFontSize = size > 8 ? size : 8; }
     void Framework_Cmd_SetToggleKey(int keyCode) { g_cmdToggleKey = keyCode; }
+
+    // ========================================================================
+    // RESOURCE COUNT IMPLEMENTATIONS (for leak detection)
+    // ========================================================================
+    // These are implementations for the forward-declared count functions
+    // Now that all resources are defined, we can properly count them
+
+    int GetUIElementCountImpl() { return (int)g_uiElements.size(); }
+    int GetTimerCountImpl() { return (int)g_timers.size(); }
+    int GetTweenCountImpl() { return (int)g_tweens.size(); }
+    int GetPoolCountImpl() { return (int)g_pools.size(); }
+    int GetFSMCountImpl() { return (int)g_fsms.size(); }
+    int GetEventCountImpl() { return (int)g_events.size(); }
+    int GetDialogueCountImpl() { return (int)g_dialogues.size(); }
+    int GetQuestCountImpl() { return (int)g_quests.size(); }
+    int GetLightCountImpl() { return (int)g_lights.size(); }
+    int GetEmitterCountImpl() { return (int)g_particleEmitter.size(); }
+    int GetBatchCountImpl() { return (int)g_batches.size(); }
+    int GetAtlasCountImpl() { return (int)g_atlases.size(); }
+    int GetLevelCountImpl() { return (int)g_levels.size(); }
+    int GetSkeletonCountImpl() { return (int)g_skeletons.size(); }
+    int GetBehaviorTreeCountImpl() { return (int)g_behaviorTrees.size(); }
+    int GetJointCountImpl() { return (int)g_physicsJoints.size(); }
+    int GetTextureCountImpl() { return (int)g_texByHandle.size(); }
+    int GetSoundCountImpl() { return (int)g_sounds.size(); }
+    int GetFontCountImpl() { return (int)g_fontByHandle.size(); }
+    int GetPhysicsBodyCountImpl() { return (int)g_physicsBodies.size(); }
+    int GetAnimClipCountImpl() { return (int)g_animClips.size(); }
+    int GetTilesetCountImpl() { return (int)g_tilesets.size(); }
+    int GetInventoryCountImpl() { return (int)g_inventories.size(); }
 
 } // extern "C"

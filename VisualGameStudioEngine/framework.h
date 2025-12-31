@@ -1162,6 +1162,68 @@ extern "C" {
     __declspec(dllexport) void  Framework_Perf_SetMemoryWarningThreshold(long long bytes);
 
     // ========================================================================
+    // RESOURCE VALIDATION / LEAK DETECTION
+    // ========================================================================
+    // Resource counts by type
+    __declspec(dllexport) int   Framework_Resource_GetEntityCount();
+    __declspec(dllexport) int   Framework_Resource_GetTextureCount();
+    __declspec(dllexport) int   Framework_Resource_GetSoundCount();
+    __declspec(dllexport) int   Framework_Resource_GetFontCount();
+    __declspec(dllexport) int   Framework_Resource_GetUIElementCount();
+    __declspec(dllexport) int   Framework_Resource_GetPhysicsBodyCount();
+    __declspec(dllexport) int   Framework_Resource_GetTweenCount();
+    __declspec(dllexport) int   Framework_Resource_GetTimerCount();
+    __declspec(dllexport) int   Framework_Resource_GetPoolCount();
+    __declspec(dllexport) int   Framework_Resource_GetFSMCount();
+    __declspec(dllexport) int   Framework_Resource_GetEventCount();
+    __declspec(dllexport) int   Framework_Resource_GetDialogueCount();
+    __declspec(dllexport) int   Framework_Resource_GetQuestCount();
+    __declspec(dllexport) int   Framework_Resource_GetLightCount();
+    __declspec(dllexport) int   Framework_Resource_GetEmitterCount();
+    __declspec(dllexport) int   Framework_Resource_GetBatchCount();
+    __declspec(dllexport) int   Framework_Resource_GetAtlasCount();
+    __declspec(dllexport) int   Framework_Resource_GetLevelCount();
+    __declspec(dllexport) int   Framework_Resource_GetSkeletonCount();
+    __declspec(dllexport) int   Framework_Resource_GetBehaviorTreeCount();
+    __declspec(dllexport) int   Framework_Resource_GetJointCount();
+    __declspec(dllexport) int   Framework_Resource_GetSpatialGridCount();
+
+    // Validation and leak detection
+    __declspec(dllexport) bool  Framework_Resource_ValidateAll();                         // Returns true if no leaks detected
+    __declspec(dllexport) int   Framework_Resource_GetTotalActiveCount();                 // Total active resources
+    __declspec(dllexport) void  Framework_Resource_DumpReport();                          // Log detailed resource report
+    __declspec(dllexport) void  Framework_Resource_DumpLeakReport();                      // Log only if leaks detected
+    __declspec(dllexport) bool  Framework_Resource_HasLeaks();                            // Quick check for any leaks
+
+    // Snapshot-based leak detection
+    __declspec(dllexport) void  Framework_Resource_TakeSnapshot();                        // Capture current resource counts
+    __declspec(dllexport) bool  Framework_Resource_CompareSnapshot();                     // Returns true if counts match snapshot
+    __declspec(dllexport) void  Framework_Resource_DumpSnapshotDiff();                    // Log difference from snapshot
+
+    // Cleanup helpers
+    __declspec(dllexport) void  Framework_Resource_DestroyAllEntities();                  // Destroy all entities
+    __declspec(dllexport) void  Framework_Resource_DestroyAllUI();                        // Destroy all UI elements
+    __declspec(dllexport) void  Framework_Resource_DestroyAllPhysics();                   // Destroy all physics bodies and joints
+    __declspec(dllexport) void  Framework_Resource_DestroyAllTimers();                    // Cancel all timers
+    __declspec(dllexport) void  Framework_Resource_DestroyAllTweens();                    // Kill all tweens
+    __declspec(dllexport) void  Framework_Resource_DestroyAllPools();                     // Destroy all object pools
+    __declspec(dllexport) void  Framework_Resource_DestroyAllFSMs();                      // Destroy all state machines
+    __declspec(dllexport) void  Framework_Resource_DestroyAllEvents();                    // Unregister all events
+    __declspec(dllexport) void  Framework_Resource_DestroyAllLights();                    // Destroy all lights
+    __declspec(dllexport) void  Framework_Resource_DestroyAllEmitters();                  // Destroy all particle emitters
+    __declspec(dllexport) void  Framework_Resource_DestroyAllBatches();                   // Destroy all sprite batches
+    __declspec(dllexport) void  Framework_Resource_DestroyAllAtlases();                   // Destroy all texture atlases
+    __declspec(dllexport) void  Framework_Resource_DestroyAllLevels();                    // Destroy all levels
+    __declspec(dllexport) void  Framework_Resource_CleanupAll();                          // Destroy all resources (full cleanup)
+
+    // Resource lifecycle callbacks (for debugging)
+    typedef void (*ResourceCreatedCallback)(const char* resourceType, int resourceId);
+    typedef void (*ResourceDestroyedCallback)(const char* resourceType, int resourceId);
+    __declspec(dllexport) void  Framework_Resource_SetCreatedCallback(ResourceCreatedCallback callback);
+    __declspec(dllexport) void  Framework_Resource_SetDestroyedCallback(ResourceDestroyedCallback callback);
+    __declspec(dllexport) void  Framework_Resource_EnableTracking(bool enabled);          // Enable/disable lifecycle tracking
+
+    // ========================================================================
     // PREFABS & SERIALIZATION
     // ========================================================================
     __declspec(dllexport) bool  Framework_Scene_Save(const char* path);
