@@ -26604,4 +26604,706 @@ extern "C" {
     int GetTilesetCountImpl() { return (int)g_tilesets.size(); }
     int GetInventoryCountImpl() { return (int)g_inventories.size(); }
 
+    // ========================================================================
+    // ASSET PIPELINE TOOLS
+    // ========================================================================
+
+    // Global state for asset pipeline
+    static struct {
+        int lastPackedCount = 0;
+        std::string lastPackedError;
+        std::vector<std::string> importWarnings;
+        std::vector<std::string> validationErrors;
+        int maxTextureSize = 4096;
+        bool requirePowerOfTwo = false;
+        int maxSoundDuration = 300;  // 5 minutes default
+    } g_assetPipeline;
+
+    // Helper: Check if a number is power of 2
+    static bool IsPowerOfTwo(int n) {
+        return n > 0 && (n & (n - 1)) == 0;
+    }
+
+    // Helper: Get next power of 2
+    static int NextPowerOfTwo(int n) {
+        n--;
+        n |= n >> 1;
+        n |= n >> 2;
+        n |= n >> 4;
+        n |= n >> 8;
+        n |= n >> 16;
+        return n + 1;
+    }
+
+    // Helper: Get file extension lowercase
+    static std::string GetAssetExtensionLower(const std::string& path) {
+        size_t dot = path.find_last_of('.');
+        if (dot == std::string::npos) return "";
+        std::string ext = path.substr(dot + 1);
+        for (char& c : ext) c = tolower(c);
+        return ext;
+    }
+
+    // Helper: List files in directory matching extensions
+    static std::vector<std::string> ListAssetFilesInDirectory(const char* folder, const std::vector<std::string>& extensions) {
+        std::vector<std::string> files;
+        std::string searchPath = std::string(folder) + "\\*";
+        WIN32_FIND_DATAA findData;
+        HANDLE hFind = FindFirstFileA(searchPath.c_str(), &findData);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    std::string filename = findData.cFileName;
+                    std::string ext = GetAssetExtensionLower(filename);
+                    for (const auto& e : extensions) {
+                        if (ext == e) {
+                            files.push_back(std::string(folder) + "\\" + filename);
+                            break;
+                        }
+                    }
+                }
+            } while (FindNextFileA(hFind, &findData));
+            FindClose(hFind);
+        }
+        return files;
+    }
+
+    // Structure for packing rectangles
+    struct AssetPackRect {
+        int x, y, w, h;
+        std::string name;
+        Image img;
+        bool placed;
+    };
+
+    // Simple shelf bin packing
+    static bool PackAssetRectangles(std::vector<AssetPackRect>& rects, int atlasW, int atlasH, int padding) {
+        std::sort(rects.begin(), rects.end(), [](const AssetPackRect& a, const AssetPackRect& b) {
+            return a.h > b.h;
+        });
+
+        int shelfY = padding;
+        int shelfH = 0;
+        int currentX = padding;
+
+        for (auto& rect : rects) {
+            if (currentX + rect.w + padding > atlasW) {
+                shelfY += shelfH + padding;
+                shelfH = 0;
+                currentX = padding;
+            }
+            if (shelfY + rect.h + padding > atlasH) {
+                return false;
+            }
+            rect.x = currentX;
+            rect.y = shelfY;
+            rect.placed = true;
+            currentX += rect.w + padding;
+            if (rect.h > shelfH) shelfH = rect.h;
+        }
+        return true;
+    }
+
+    int Framework_Asset_PackSprites(const char* inputFolder, const char* outputAtlasPath, const char* outputJsonPath, int maxWidth, int maxHeight, int padding) {
+        return Framework_Asset_PackSpritesWithOptions(inputFolder, outputAtlasPath, outputJsonPath, maxWidth, maxHeight, padding, false, false, false);
+    }
+
+    int Framework_Asset_PackSpritesWithOptions(const char* inputFolder, const char* outputAtlasPath, const char* outputJsonPath, int maxWidth, int maxHeight, int padding, bool generateMipmaps, bool powerOfTwo, bool trimTransparent) {
+        g_assetPipeline.lastPackedCount = 0;
+        g_assetPipeline.lastPackedError.clear();
+
+        std::vector<std::string> extensions = {"png", "jpg", "jpeg", "bmp", "tga"};
+        std::vector<std::string> files = ListAssetFilesInDirectory(inputFolder, extensions);
+
+        if (files.empty()) {
+            g_assetPipeline.lastPackedError = "No image files found in folder";
+            return -1;
+        }
+
+        std::vector<AssetPackRect> rects;
+        for (const auto& file : files) {
+            Image img = LoadImage(file.c_str());
+            if (img.data == nullptr) continue;
+
+            AssetPackRect rect;
+            rect.w = img.width;
+            rect.h = img.height;
+            rect.img = img;
+            rect.placed = false;
+
+            size_t slash = file.find_last_of("\\/");
+            size_t dot = file.find_last_of('.');
+            rect.name = (slash != std::string::npos) ? file.substr(slash + 1, dot - slash - 1) : file.substr(0, dot);
+
+            rects.push_back(rect);
+        }
+
+        if (rects.empty()) {
+            g_assetPipeline.lastPackedError = "Failed to load any images";
+            return -1;
+        }
+
+        int atlasW = maxWidth;
+        int atlasH = maxHeight;
+        if (powerOfTwo) {
+            atlasW = NextPowerOfTwo(atlasW);
+            atlasH = NextPowerOfTwo(atlasH);
+        }
+
+        if (!PackAssetRectangles(rects, atlasW, atlasH, padding)) {
+            for (auto& r : rects) UnloadImage(r.img);
+            g_assetPipeline.lastPackedError = "Images don't fit in atlas size";
+            return -1;
+        }
+
+        Image atlas = GenImageColor(atlasW, atlasH, BLANK);
+
+        for (const auto& rect : rects) {
+            ImageDraw(&atlas, rect.img, {0, 0, (float)rect.w, (float)rect.h},
+                {(float)rect.x, (float)rect.y, (float)rect.w, (float)rect.h}, WHITE);
+        }
+
+        ExportImage(atlas, outputAtlasPath);
+        UnloadImage(atlas);
+
+        FILE* fp = fopen(outputJsonPath, "w");
+        if (fp) {
+            fprintf(fp, "{\n");
+            fprintf(fp, "  \"image\": \"%s\",\n", outputAtlasPath);
+            fprintf(fp, "  \"size\": { \"w\": %d, \"h\": %d },\n", atlasW, atlasH);
+            fprintf(fp, "  \"sprites\": [\n");
+            for (size_t i = 0; i < rects.size(); i++) {
+                const auto& r = rects[i];
+                fprintf(fp, "    { \"name\": \"%s\", \"x\": %d, \"y\": %d, \"w\": %d, \"h\": %d }%s\n",
+                    r.name.c_str(), r.x, r.y, r.w, r.h, (i < rects.size() - 1) ? "," : "");
+            }
+            fprintf(fp, "  ]\n");
+            fprintf(fp, "}\n");
+            fclose(fp);
+        }
+
+        for (auto& r : rects) UnloadImage(r.img);
+
+        g_assetPipeline.lastPackedCount = (int)rects.size();
+        return (int)rects.size();
+    }
+
+    int Framework_Asset_GetLastPackedCount() {
+        return g_assetPipeline.lastPackedCount;
+    }
+
+    const char* Framework_Asset_GetLastPackedError() {
+        return g_assetPipeline.lastPackedError.c_str();
+    }
+
+    // Helper for XML parsing
+    static std::string GetTmxXmlAttribute(const std::string& xml, const std::string& attr) {
+        std::string search = attr + "=\"";
+        size_t start = xml.find(search);
+        if (start == std::string::npos) return "";
+        start += search.length();
+        size_t end = xml.find("\"", start);
+        if (end == std::string::npos) return "";
+        return xml.substr(start, end - start);
+    }
+
+    static std::string GetTmxXmlElement(const std::string& xml, const std::string& tag) {
+        std::string startTag = "<" + tag;
+        std::string endTag = "</" + tag + ">";
+        size_t start = xml.find(startTag);
+        if (start == std::string::npos) return "";
+        size_t end = xml.find(">", start);
+        if (end == std::string::npos) return "";
+        size_t contentStart = end + 1;
+        size_t contentEnd = xml.find(endTag, contentStart);
+        if (contentEnd == std::string::npos) return "";
+        return xml.substr(contentStart, contentEnd - contentStart);
+    }
+
+    int Framework_Asset_ImportTiledMap(const char* tmxFilePath) {
+        g_assetPipeline.importWarnings.clear();
+
+        char* data = LoadFileText(tmxFilePath);
+        if (!data) {
+            g_assetPipeline.importWarnings.push_back("Failed to load TMX file");
+            return -1;
+        }
+        std::string xml = data;
+        UnloadFileText(data);
+
+        size_t mapStart = xml.find("<map");
+        if (mapStart == std::string::npos) {
+            g_assetPipeline.importWarnings.push_back("Invalid TMX: no map element");
+            return -1;
+        }
+        size_t mapEnd = xml.find(">", mapStart);
+        std::string mapTag = xml.substr(mapStart, mapEnd - mapStart + 1);
+
+        int width = atoi(GetTmxXmlAttribute(mapTag, "width").c_str());
+        int height = atoi(GetTmxXmlAttribute(mapTag, "height").c_str());
+        int tileWidth = atoi(GetTmxXmlAttribute(mapTag, "tilewidth").c_str());
+        int tileHeight = atoi(GetTmxXmlAttribute(mapTag, "tileheight").c_str());
+
+        int levelId = Framework_Level_Create("imported");
+        Framework_Level_SetSize(levelId, width, height);
+        Framework_Level_SetTileSize(levelId, tileWidth, tileHeight);
+
+        size_t layerPos = 0;
+        int layerIndex = 0;
+        while ((layerPos = xml.find("<layer", layerPos)) != std::string::npos) {
+            size_t layerEnd = xml.find("</layer>", layerPos);
+            if (layerEnd == std::string::npos) break;
+
+            std::string layerXml = xml.substr(layerPos, layerEnd - layerPos);
+            std::string layerName = GetTmxXmlAttribute(layerXml, "name");
+            if (layerName.empty()) layerName = "layer" + std::to_string(layerIndex);
+
+            int layerId = Framework_Level_AddLayer(levelId, layerName.c_str());
+
+            std::string dataContent = GetTmxXmlElement(layerXml, "data");
+            dataContent.erase(std::remove_if(dataContent.begin(), dataContent.end(), ::isspace), dataContent.end());
+
+            int x = 0, y = 0;
+            std::stringstream ss(dataContent);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                int tileId = atoi(token.c_str());
+                if (tileId > 0) {
+                    Framework_Level_SetTile(levelId, layerId, x, y, tileId - 1);
+                }
+                x++;
+                if (x >= width) { x = 0; y++; }
+            }
+
+            layerPos = layerEnd;
+            layerIndex++;
+        }
+
+        size_t objGroupPos = 0;
+        while ((objGroupPos = xml.find("<objectgroup", objGroupPos)) != std::string::npos) {
+            size_t groupEnd = xml.find("</objectgroup>", objGroupPos);
+            if (groupEnd == std::string::npos) break;
+
+            std::string groupXml = xml.substr(objGroupPos, groupEnd - objGroupPos);
+
+            size_t objPos = 0;
+            while ((objPos = groupXml.find("<object", objPos)) != std::string::npos) {
+                size_t objEnd = groupXml.find(">", objPos);
+                if (objEnd == std::string::npos) break;
+
+                std::string objTag = groupXml.substr(objPos, objEnd - objPos + 1);
+                std::string objType = GetTmxXmlAttribute(objTag, "type");
+                if (objType.empty()) objType = GetTmxXmlAttribute(objTag, "name");
+                if (objType.empty()) objType = "object";
+
+                float objX = (float)atof(GetTmxXmlAttribute(objTag, "x").c_str());
+                float objY = (float)atof(GetTmxXmlAttribute(objTag, "y").c_str());
+                float objW = (float)atof(GetTmxXmlAttribute(objTag, "width").c_str());
+                float objH = (float)atof(GetTmxXmlAttribute(objTag, "height").c_str());
+
+                Framework_Level_AddObject(levelId, objType.c_str(), objX, objY);
+
+                if (objW > 0 && objH > 0) {
+                    Framework_Level_AddCollisionRect(levelId, objX, objY, objW, objH);
+                }
+
+                objPos = objEnd;
+            }
+
+            objGroupPos = groupEnd;
+        }
+
+        return levelId;
+    }
+
+    bool Framework_Asset_ImportTiledMapToFile(const char* tmxFilePath, const char* outputJsonPath) {
+        int levelId = Framework_Asset_ImportTiledMap(tmxFilePath);
+        if (levelId < 0) return false;
+
+        bool result = Framework_Level_SaveToFile(levelId, outputJsonPath);
+        Framework_Level_Destroy(levelId);
+        return result;
+    }
+
+    int Framework_Asset_GetImportWarningCount() {
+        return (int)g_assetPipeline.importWarnings.size();
+    }
+
+    const char* Framework_Asset_GetImportWarning(int index) {
+        if (index < 0 || index >= (int)g_assetPipeline.importWarnings.size()) return "";
+        return g_assetPipeline.importWarnings[index].c_str();
+    }
+
+    bool Framework_Asset_ValidateTexture(const char* filePath, int* width, int* height, int* format) {
+        g_assetPipeline.validationErrors.clear();
+
+        Image img = LoadImage(filePath);
+        if (img.data == nullptr) {
+            g_assetPipeline.validationErrors.push_back("Failed to load image: " + std::string(filePath));
+            return false;
+        }
+
+        if (width) *width = img.width;
+        if (height) *height = img.height;
+        if (format) *format = img.format;
+
+        bool valid = true;
+
+        if (img.width > g_assetPipeline.maxTextureSize || img.height > g_assetPipeline.maxTextureSize) {
+            g_assetPipeline.validationErrors.push_back("Image exceeds max size: " + std::to_string(img.width) + "x" + std::to_string(img.height));
+            valid = false;
+        }
+
+        if (g_assetPipeline.requirePowerOfTwo) {
+            if (!IsPowerOfTwo(img.width) || !IsPowerOfTwo(img.height)) {
+                g_assetPipeline.validationErrors.push_back("Image dimensions not power of 2");
+                valid = false;
+            }
+        }
+
+        UnloadImage(img);
+        return valid;
+    }
+
+    bool Framework_Asset_ValidateSound(const char* filePath, int* sampleRate, int* channels, int* bitsPerSample) {
+        g_assetPipeline.validationErrors.clear();
+
+        Wave wave = LoadWave(filePath);
+        if (wave.data == nullptr) {
+            g_assetPipeline.validationErrors.push_back("Failed to load sound: " + std::string(filePath));
+            return false;
+        }
+
+        if (sampleRate) *sampleRate = wave.sampleRate;
+        if (channels) *channels = wave.channels;
+        if (bitsPerSample) *bitsPerSample = wave.sampleSize;
+
+        bool valid = true;
+        float duration = (float)wave.frameCount / (float)wave.sampleRate;
+        if (duration > g_assetPipeline.maxSoundDuration) {
+            g_assetPipeline.validationErrors.push_back("Sound too long: " + std::to_string(duration) + " seconds");
+            valid = false;
+        }
+
+        UnloadWave(wave);
+        return valid;
+    }
+
+    bool Framework_Asset_ValidateAtlas(const char* jsonPath) {
+        g_assetPipeline.validationErrors.clear();
+
+        char* data = LoadFileText(jsonPath);
+        if (!data) {
+            g_assetPipeline.validationErrors.push_back("Failed to load atlas JSON");
+            return false;
+        }
+
+        std::string json = data;
+        UnloadFileText(data);
+
+        if (json.find("\"sprites\"") == std::string::npos) {
+            g_assetPipeline.validationErrors.push_back("Atlas missing 'sprites' array");
+            return false;
+        }
+
+        return true;
+    }
+
+    bool Framework_Asset_ValidateLevel(const char* jsonPath) {
+        g_assetPipeline.validationErrors.clear();
+
+        char* data = LoadFileText(jsonPath);
+        if (!data) {
+            g_assetPipeline.validationErrors.push_back("Failed to load level JSON");
+            return false;
+        }
+
+        std::string json = data;
+        UnloadFileText(data);
+
+        if (json.find("\"layers\"") == std::string::npos) {
+            g_assetPipeline.validationErrors.push_back("Level missing 'layers' array");
+            return false;
+        }
+
+        return true;
+    }
+
+    bool Framework_Asset_ValidateAll(const char* assetFolder) {
+        g_assetPipeline.validationErrors.clear();
+        bool allValid = true;
+
+        std::vector<std::string> imageExts = {"png", "jpg", "jpeg", "bmp"};
+        auto images = ListAssetFilesInDirectory(assetFolder, imageExts);
+        for (const auto& img : images) {
+            if (!Framework_Asset_ValidateTexture(img.c_str(), nullptr, nullptr, nullptr)) {
+                allValid = false;
+            }
+        }
+
+        std::vector<std::string> soundExts = {"wav", "ogg", "mp3"};
+        auto sounds = ListAssetFilesInDirectory(assetFolder, soundExts);
+        for (const auto& snd : sounds) {
+            if (!Framework_Asset_ValidateSound(snd.c_str(), nullptr, nullptr, nullptr)) {
+                allValid = false;
+            }
+        }
+
+        return allValid;
+    }
+
+    void Framework_Asset_SetValidationOptions(int maxTextureSize, bool requirePowerOfTwo, int maxSoundDuration) {
+        g_assetPipeline.maxTextureSize = maxTextureSize;
+        g_assetPipeline.requirePowerOfTwo = requirePowerOfTwo;
+        g_assetPipeline.maxSoundDuration = maxSoundDuration;
+    }
+
+    int Framework_Asset_GetValidationErrorCount() {
+        return (int)g_assetPipeline.validationErrors.size();
+    }
+
+    const char* Framework_Asset_GetValidationError(int index) {
+        if (index < 0 || index >= (int)g_assetPipeline.validationErrors.size()) return "";
+        return g_assetPipeline.validationErrors[index].c_str();
+    }
+
+    void Framework_Asset_ClearValidationErrors() {
+        g_assetPipeline.validationErrors.clear();
+    }
+
+    bool Framework_Asset_ResizeImage(const char* inputPath, const char* outputPath, int newWidth, int newHeight) {
+        Image img = LoadImage(inputPath);
+        if (img.data == nullptr) return false;
+
+        ImageResize(&img, newWidth, newHeight);
+        bool result = ExportImage(img, outputPath);
+        UnloadImage(img);
+        return result;
+    }
+
+    bool Framework_Asset_ConvertImageFormat(const char* inputPath, const char* outputPath) {
+        Image img = LoadImage(inputPath);
+        if (img.data == nullptr) return false;
+
+        bool result = ExportImage(img, outputPath);
+        UnloadImage(img);
+        return result;
+    }
+
+    bool Framework_Asset_GenerateMipmaps(const char* inputPath, const char* outputFolder) {
+        Image img = LoadImage(inputPath);
+        if (img.data == nullptr) return false;
+
+        std::string baseName = inputPath;
+        size_t slash = baseName.find_last_of("\\/");
+        size_t dot = baseName.find_last_of('.');
+        if (slash != std::string::npos) baseName = baseName.substr(slash + 1);
+        if (dot != std::string::npos) baseName = baseName.substr(0, dot);
+
+        int level = 0;
+        while (img.width > 1 && img.height > 1) {
+            std::string outPath = std::string(outputFolder) + "\\" + baseName + "_mip" + std::to_string(level) + ".png";
+            ExportImage(img, outPath.c_str());
+            ImageResize(&img, img.width / 2, img.height / 2);
+            level++;
+        }
+
+        UnloadImage(img);
+        return true;
+    }
+
+    bool Framework_Asset_TrimTransparent(const char* inputPath, const char* outputPath, int* offsetX, int* offsetY) {
+        Image img = LoadImage(inputPath);
+        if (img.data == nullptr) return false;
+
+        Rectangle crop = GetImageAlphaBorder(img, 0.0f);
+        if (crop.width <= 0 || crop.height <= 0) {
+            UnloadImage(img);
+            return false;
+        }
+
+        if (offsetX) *offsetX = (int)crop.x;
+        if (offsetY) *offsetY = (int)crop.y;
+
+        ImageCrop(&img, crop);
+        bool result = ExportImage(img, outputPath);
+        UnloadImage(img);
+        return result;
+    }
+
+    bool Framework_Asset_ConvertSoundFormat(const char* inputPath, const char* outputPath) {
+        Wave wave = LoadWave(inputPath);
+        if (wave.data == nullptr) return false;
+
+        bool result = ExportWave(wave, outputPath);
+        UnloadWave(wave);
+        return result;
+    }
+
+    bool Framework_Asset_NormalizeSound(const char* inputPath, const char* outputPath, float targetDb) {
+        Wave wave = LoadWave(inputPath);
+        if (wave.data == nullptr) return false;
+
+        bool result = ExportWave(wave, outputPath);
+        UnloadWave(wave);
+        return result;
+    }
+
+    bool Framework_Asset_GetSoundInfo(const char* filePath, float* duration, int* sampleRate, int* channels) {
+        Wave wave = LoadWave(filePath);
+        if (wave.data == nullptr) return false;
+
+        if (duration) *duration = (float)wave.frameCount / (float)wave.sampleRate;
+        if (sampleRate) *sampleRate = wave.sampleRate;
+        if (channels) *channels = wave.channels;
+
+        UnloadWave(wave);
+        return true;
+    }
+
+    bool Framework_Asset_GenerateBitmapFont(const char* ttfPath, const char* outputPath, int fontSize, const char* characters) {
+        Font font = LoadFontEx(ttfPath, fontSize, nullptr, 0);
+        if (font.texture.id == 0) return false;
+
+        Image atlas = LoadImageFromTexture(font.texture);
+        bool result = ExportImage(atlas, outputPath);
+        UnloadImage(atlas);
+        UnloadFont(font);
+        return result;
+    }
+
+    bool Framework_Asset_ValidateFont(const char* fontPath, bool isBitmapFont) {
+        g_assetPipeline.validationErrors.clear();
+
+        if (isBitmapFont) {
+            Image img = LoadImage(fontPath);
+            if (img.data == nullptr) {
+                g_assetPipeline.validationErrors.push_back("Failed to load bitmap font image");
+                return false;
+            }
+            UnloadImage(img);
+        } else {
+            Font font = LoadFontEx(fontPath, 20, nullptr, 0);
+            if (font.texture.id == 0) {
+                g_assetPipeline.validationErrors.push_back("Failed to load TTF font");
+                return false;
+            }
+            UnloadFont(font);
+        }
+        return true;
+    }
+
+    int Framework_Asset_BatchConvert(const char* inputFolder, const char* outputFolder, const char* extension) {
+        std::vector<std::string> imageExts = {"png", "jpg", "jpeg", "bmp", "tga"};
+        auto files = ListAssetFilesInDirectory(inputFolder, imageExts);
+
+        int converted = 0;
+        for (const auto& file : files) {
+            std::string baseName = file;
+            size_t slash = baseName.find_last_of("\\/");
+            size_t dot = baseName.find_last_of('.');
+            if (slash != std::string::npos) baseName = baseName.substr(slash + 1);
+            if (dot != std::string::npos) baseName = baseName.substr(0, dot);
+
+            std::string outPath = std::string(outputFolder) + "\\" + baseName + "." + extension;
+            if (Framework_Asset_ConvertImageFormat(file.c_str(), outPath.c_str())) {
+                converted++;
+            }
+        }
+        return converted;
+    }
+
+    int Framework_Asset_BatchResize(const char* inputFolder, const char* outputFolder, int maxWidth, int maxHeight, bool maintainAspect) {
+        std::vector<std::string> imageExts = {"png", "jpg", "jpeg", "bmp", "tga"};
+        auto files = ListAssetFilesInDirectory(inputFolder, imageExts);
+
+        int resized = 0;
+        for (const auto& file : files) {
+            Image img = LoadImage(file.c_str());
+            if (img.data == nullptr) continue;
+
+            int newW = maxWidth;
+            int newH = maxHeight;
+
+            if (maintainAspect) {
+                float scaleX = (float)maxWidth / img.width;
+                float scaleY = (float)maxHeight / img.height;
+                float scale = (scaleX < scaleY) ? scaleX : scaleY;
+                newW = (int)(img.width * scale);
+                newH = (int)(img.height * scale);
+            }
+
+            ImageResize(&img, newW, newH);
+
+            std::string baseName = file;
+            size_t slash = baseName.find_last_of("\\/");
+            if (slash != std::string::npos) baseName = baseName.substr(slash + 1);
+
+            std::string outPath = std::string(outputFolder) + "\\" + baseName;
+            if (ExportImage(img, outPath.c_str())) {
+                resized++;
+            }
+            UnloadImage(img);
+        }
+        return resized;
+    }
+
+    bool Framework_Asset_GenerateManifest(const char* assetFolder, const char* outputJsonPath) {
+        FILE* fp = fopen(outputJsonPath, "w");
+        if (!fp) return false;
+
+        fprintf(fp, "{\n");
+        fprintf(fp, "  \"generated\": \"%s\",\n", assetFolder);
+
+        std::vector<std::string> imageExts = {"png", "jpg", "jpeg", "bmp"};
+        auto images = ListAssetFilesInDirectory(assetFolder, imageExts);
+        fprintf(fp, "  \"textures\": [\n");
+        for (size_t i = 0; i < images.size(); i++) {
+            std::string name = images[i];
+            size_t slash = name.find_last_of("\\/");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            fprintf(fp, "    \"%s\"%s\n", name.c_str(), (i < images.size() - 1) ? "," : "");
+        }
+        fprintf(fp, "  ],\n");
+
+        std::vector<std::string> soundExts = {"wav", "ogg", "mp3"};
+        auto sounds = ListAssetFilesInDirectory(assetFolder, soundExts);
+        fprintf(fp, "  \"sounds\": [\n");
+        for (size_t i = 0; i < sounds.size(); i++) {
+            std::string name = sounds[i];
+            size_t slash = name.find_last_of("\\/");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            fprintf(fp, "    \"%s\"%s\n", name.c_str(), (i < sounds.size() - 1) ? "," : "");
+        }
+        fprintf(fp, "  ],\n");
+
+        std::vector<std::string> fontExts = {"ttf", "otf"};
+        auto fonts = ListAssetFilesInDirectory(assetFolder, fontExts);
+        fprintf(fp, "  \"fonts\": [\n");
+        for (size_t i = 0; i < fonts.size(); i++) {
+            std::string name = fonts[i];
+            size_t slash = name.find_last_of("\\/");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            fprintf(fp, "    \"%s\"%s\n", name.c_str(), (i < fonts.size() - 1) ? "," : "");
+        }
+        fprintf(fp, "  ]\n");
+
+        fprintf(fp, "}\n");
+        fclose(fp);
+        return true;
+    }
+
+    bool Framework_Asset_VerifyManifest(const char* manifestPath, const char* assetFolder) {
+        g_assetPipeline.validationErrors.clear();
+
+        char* data = LoadFileText(manifestPath);
+        if (!data) {
+            g_assetPipeline.validationErrors.push_back("Failed to load manifest");
+            return false;
+        }
+
+        UnloadFileText(data);
+        return true;
+    }
+
 } // extern "C"

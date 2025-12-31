@@ -9556,6 +9556,136 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Asset Pipeline Tools"
+    ' ---- Sprite Packer ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_PackSprites(<MarshalAs(UnmanagedType.LPStr)> inputFolder As String, <MarshalAs(UnmanagedType.LPStr)> outputAtlasPath As String, <MarshalAs(UnmanagedType.LPStr)> outputJsonPath As String, maxWidth As Integer, maxHeight As Integer, padding As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_PackSpritesWithOptions(<MarshalAs(UnmanagedType.LPStr)> inputFolder As String, <MarshalAs(UnmanagedType.LPStr)> outputAtlasPath As String, <MarshalAs(UnmanagedType.LPStr)> outputJsonPath As String, maxWidth As Integer, maxHeight As Integer, padding As Integer, <MarshalAs(UnmanagedType.I1)> generateMipmaps As Boolean, <MarshalAs(UnmanagedType.I1)> powerOfTwo As Boolean, <MarshalAs(UnmanagedType.I1)> trimTransparent As Boolean) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GetLastPackedCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GetLastPackedError() As IntPtr
+    End Function
+
+    ' ---- Tiled Map Importer ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ImportTiledMap(<MarshalAs(UnmanagedType.LPStr)> tmxFilePath As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ImportTiledMapToFile(<MarshalAs(UnmanagedType.LPStr)> tmxFilePath As String, <MarshalAs(UnmanagedType.LPStr)> outputJsonPath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GetImportWarningCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GetImportWarning(index As Integer) As IntPtr
+    End Function
+
+    ' ---- Asset Validator ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ValidateTexture(<MarshalAs(UnmanagedType.LPStr)> filePath As String, ByRef width As Integer, ByRef height As Integer, ByRef format As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ValidateSound(<MarshalAs(UnmanagedType.LPStr)> filePath As String, ByRef sampleRate As Integer, ByRef channels As Integer, ByRef bitsPerSample As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ValidateAtlas(<MarshalAs(UnmanagedType.LPStr)> jsonPath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ValidateLevel(<MarshalAs(UnmanagedType.LPStr)> jsonPath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ValidateAll(<MarshalAs(UnmanagedType.LPStr)> assetFolder As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Asset_SetValidationOptions(maxTextureSize As Integer, <MarshalAs(UnmanagedType.I1)> requirePowerOfTwo As Boolean, maxSoundDuration As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GetValidationErrorCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GetValidationError(index As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Asset_ClearValidationErrors()
+    End Sub
+
+    ' ---- Image Processing ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ResizeImage(<MarshalAs(UnmanagedType.LPStr)> inputPath As String, <MarshalAs(UnmanagedType.LPStr)> outputPath As String, newWidth As Integer, newHeight As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ConvertImageFormat(<MarshalAs(UnmanagedType.LPStr)> inputPath As String, <MarshalAs(UnmanagedType.LPStr)> outputPath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GenerateMipmaps(<MarshalAs(UnmanagedType.LPStr)> inputPath As String, <MarshalAs(UnmanagedType.LPStr)> outputFolder As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_TrimTransparent(<MarshalAs(UnmanagedType.LPStr)> inputPath As String, <MarshalAs(UnmanagedType.LPStr)> outputPath As String, ByRef offsetX As Integer, ByRef offsetY As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Sound Processing ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ConvertSoundFormat(<MarshalAs(UnmanagedType.LPStr)> inputPath As String, <MarshalAs(UnmanagedType.LPStr)> outputPath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_NormalizeSound(<MarshalAs(UnmanagedType.LPStr)> inputPath As String, <MarshalAs(UnmanagedType.LPStr)> outputPath As String, targetDb As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GetSoundInfo(<MarshalAs(UnmanagedType.LPStr)> filePath As String, ByRef duration As Single, ByRef sampleRate As Integer, ByRef channels As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Font Utilities ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GenerateBitmapFont(<MarshalAs(UnmanagedType.LPStr)> ttfPath As String, <MarshalAs(UnmanagedType.LPStr)> outputPath As String, fontSize As Integer, <MarshalAs(UnmanagedType.LPStr)> characters As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_ValidateFont(<MarshalAs(UnmanagedType.LPStr)> fontPath As String, <MarshalAs(UnmanagedType.I1)> isBitmapFont As Boolean) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Batch Processing ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_BatchConvert(<MarshalAs(UnmanagedType.LPStr)> inputFolder As String, <MarshalAs(UnmanagedType.LPStr)> outputFolder As String, <MarshalAs(UnmanagedType.LPStr)> extension As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_BatchResize(<MarshalAs(UnmanagedType.LPStr)> inputFolder As String, <MarshalAs(UnmanagedType.LPStr)> outputFolder As String, maxWidth As Integer, maxHeight As Integer, <MarshalAs(UnmanagedType.I1)> maintainAspect As Boolean) As Integer
+    End Function
+
+    ' ---- Asset Manifest ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_GenerateManifest(<MarshalAs(UnmanagedType.LPStr)> assetFolder As String, <MarshalAs(UnmanagedType.LPStr)> outputJsonPath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Asset_VerifyManifest(<MarshalAs(UnmanagedType.LPStr)> manifestPath As String, <MarshalAs(UnmanagedType.LPStr)> assetFolder As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+#End Region
+
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()

@@ -4063,6 +4063,59 @@ extern "C" {
     __declspec(dllexport) void  Framework_Cmd_SetToggleKey(int keyCode);
 
     // ========================================================================
+    // ASSET PIPELINE TOOLS
+    // ========================================================================
+    // Tools for processing and validating game assets
+
+    // Sprite Packer - Pack loose images into atlas
+    __declspec(dllexport) int   Framework_Asset_PackSprites(const char* inputFolder, const char* outputAtlasPath, const char* outputJsonPath, int maxWidth, int maxHeight, int padding);
+    __declspec(dllexport) int   Framework_Asset_PackSpritesWithOptions(const char* inputFolder, const char* outputAtlasPath, const char* outputJsonPath, int maxWidth, int maxHeight, int padding, bool generateMipmaps, bool powerOfTwo, bool trimTransparent);
+    __declspec(dllexport) int   Framework_Asset_GetLastPackedCount();  // Returns number of sprites packed
+    __declspec(dllexport) const char* Framework_Asset_GetLastPackedError();  // Returns error message if failed
+
+    // Tiled Map Importer - Import .tmx files
+    __declspec(dllexport) int   Framework_Asset_ImportTiledMap(const char* tmxFilePath);  // Returns levelId
+    __declspec(dllexport) bool  Framework_Asset_ImportTiledMapToFile(const char* tmxFilePath, const char* outputJsonPath);
+    __declspec(dllexport) int   Framework_Asset_GetImportWarningCount();
+    __declspec(dllexport) const char* Framework_Asset_GetImportWarning(int index);
+
+    // Asset Validator - Validate game assets
+    __declspec(dllexport) bool  Framework_Asset_ValidateTexture(const char* filePath, int* width, int* height, int* format);
+    __declspec(dllexport) bool  Framework_Asset_ValidateSound(const char* filePath, int* sampleRate, int* channels, int* bitsPerSample);
+    __declspec(dllexport) bool  Framework_Asset_ValidateAtlas(const char* jsonPath);
+    __declspec(dllexport) bool  Framework_Asset_ValidateLevel(const char* jsonPath);
+    __declspec(dllexport) bool  Framework_Asset_ValidateAll(const char* assetFolder);  // Validates all assets in folder
+
+    // Validation options and results
+    __declspec(dllexport) void  Framework_Asset_SetValidationOptions(int maxTextureSize, bool requirePowerOfTwo, int maxSoundDuration);
+    __declspec(dllexport) int   Framework_Asset_GetValidationErrorCount();
+    __declspec(dllexport) const char* Framework_Asset_GetValidationError(int index);
+    __declspec(dllexport) void  Framework_Asset_ClearValidationErrors();
+
+    // Image processing utilities
+    __declspec(dllexport) bool  Framework_Asset_ResizeImage(const char* inputPath, const char* outputPath, int newWidth, int newHeight);
+    __declspec(dllexport) bool  Framework_Asset_ConvertImageFormat(const char* inputPath, const char* outputPath);  // Auto-detects format from extension
+    __declspec(dllexport) bool  Framework_Asset_GenerateMipmaps(const char* inputPath, const char* outputFolder);
+    __declspec(dllexport) bool  Framework_Asset_TrimTransparent(const char* inputPath, const char* outputPath, int* offsetX, int* offsetY);
+
+    // Sound processing utilities
+    __declspec(dllexport) bool  Framework_Asset_ConvertSoundFormat(const char* inputPath, const char* outputPath);  // Convert between wav/ogg
+    __declspec(dllexport) bool  Framework_Asset_NormalizeSound(const char* inputPath, const char* outputPath, float targetDb);
+    __declspec(dllexport) bool  Framework_Asset_GetSoundInfo(const char* filePath, float* duration, int* sampleRate, int* channels);
+
+    // Font utilities
+    __declspec(dllexport) bool  Framework_Asset_GenerateBitmapFont(const char* ttfPath, const char* outputPath, int fontSize, const char* characters);
+    __declspec(dllexport) bool  Framework_Asset_ValidateFont(const char* fontPath, bool isBitmapFont);
+
+    // Batch processing
+    __declspec(dllexport) int   Framework_Asset_BatchConvert(const char* inputFolder, const char* outputFolder, const char* extension);
+    __declspec(dllexport) int   Framework_Asset_BatchResize(const char* inputFolder, const char* outputFolder, int maxWidth, int maxHeight, bool maintainAspect);
+
+    // Asset manifest
+    __declspec(dllexport) bool  Framework_Asset_GenerateManifest(const char* assetFolder, const char* outputJsonPath);
+    __declspec(dllexport) bool  Framework_Asset_VerifyManifest(const char* manifestPath, const char* assetFolder);
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

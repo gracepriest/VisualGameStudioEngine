@@ -25,5 +25,6 @@
 // add headers that you want to pre-compile here
 #include "raylib.h"
 #include "platform.h"
+#include <sstream>  // For stringstream in asset pipeline
 
 #endif //PCH_H

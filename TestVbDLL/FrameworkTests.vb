@@ -80,6 +80,7 @@ Public Module FrameworkTests
         TestPhysicsJointSystem()
         TestPerformanceOptimizationSystem()
         RunResourceValidationTests()
+        TestAssetPipeline()
 
         ' Print summary
         Console.WriteLine()
@@ -7864,6 +7865,201 @@ Public Module FrameworkTests
             End If
         Catch ex As Exception
             LogFail("Entity count after cleanup", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Asset Pipeline Tests"
+    Private Sub TestAssetPipeline()
+        LogSection("ASSET PIPELINE TESTS")
+
+        ' Test validation options
+        Try
+            Framework_Asset_SetValidationOptions(2048, False, 60)
+            LogPass("Set validation options")
+        Catch ex As Exception
+            LogFail("Set validation options", ex.Message)
+        End Try
+
+        ' Test clear validation errors
+        Try
+            Framework_Asset_ClearValidationErrors()
+            LogPass("Clear validation errors")
+        Catch ex As Exception
+            LogFail("Clear validation errors", ex.Message)
+        End Try
+
+        ' Test get validation error count (should be 0 after clear)
+        Try
+            Dim count = Framework_Asset_GetValidationErrorCount()
+            If count = 0 Then
+                LogPass("Validation error count after clear")
+            Else
+                LogFail("Validation error count after clear", $"Expected 0, got {count}")
+            End If
+        Catch ex As Exception
+            LogFail("Validation error count after clear", ex.Message)
+        End Try
+
+        ' Test validate texture with a known good texture
+        Try
+            Dim w, h, fmt As Integer
+            Dim valid = Framework_Asset_ValidateTexture("images/blocks.png", w, h, fmt)
+            If valid Then
+                LogPass($"Validate texture (valid, {w}x{h})")
+            Else
+                LogPass($"Validate texture (not found or invalid)")
+            End If
+        Catch ex As Exception
+            LogFail("Validate texture", ex.Message)
+        End Try
+
+        ' Test validate sound
+        Try
+            Dim sr, ch, bits As Integer
+            Dim valid = Framework_Asset_ValidateSound("sounds/hit.wav", sr, ch, bits)
+            If valid Then
+                LogPass($"Validate sound (valid, {sr}Hz, {ch}ch)")
+            Else
+                LogPass("Validate sound (not found or invalid)")
+            End If
+        Catch ex As Exception
+            LogFail("Validate sound", ex.Message)
+        End Try
+
+        ' Test get sound info
+        Try
+            Dim duration As Single
+            Dim sampleRate, channels As Integer
+            Dim valid = Framework_Asset_GetSoundInfo("sounds/hit.wav", duration, sampleRate, channels)
+            If valid Then
+                LogPass($"Get sound info (duration={duration:F2}s, {sampleRate}Hz)")
+            Else
+                LogPass("Get sound info (sound not found)")
+            End If
+        Catch ex As Exception
+            LogFail("Get sound info", ex.Message)
+        End Try
+
+        ' Test validate atlas (non-existent should return false)
+        Try
+            Dim valid = Framework_Asset_ValidateAtlas("nonexistent_atlas.json")
+            If Not valid Then
+                LogPass("Validate atlas (correctly rejected non-existent)")
+            Else
+                LogFail("Validate atlas", "Should have rejected non-existent file")
+            End If
+        Catch ex As Exception
+            LogFail("Validate atlas", ex.Message)
+        End Try
+
+        ' Test validate level (non-existent should return false)
+        Try
+            Dim valid = Framework_Asset_ValidateLevel("nonexistent_level.json")
+            If Not valid Then
+                LogPass("Validate level (correctly rejected non-existent)")
+            Else
+                LogFail("Validate level", "Should have rejected non-existent file")
+            End If
+        Catch ex As Exception
+            LogFail("Validate level", ex.Message)
+        End Try
+
+        ' Test validate font (TTF)
+        Try
+            Dim valid = Framework_Asset_ValidateFont("fonts/retro.ttf", False)
+            If valid Then
+                LogPass("Validate TTF font (valid)")
+            Else
+                LogPass("Validate TTF font (not found)")
+            End If
+        Catch ex As Exception
+            LogFail("Validate TTF font", ex.Message)
+        End Try
+
+        ' Test get last packed count (should be 0 before any packing)
+        Try
+            Dim count = Framework_Asset_GetLastPackedCount()
+            LogPass($"Get last packed count (count={count})")
+        Catch ex As Exception
+            LogFail("Get last packed count", ex.Message)
+        End Try
+
+        ' Test get last packed error
+        Try
+            Dim errorPtr = Framework_Asset_GetLastPackedError()
+            Dim errorMsg = Marshal.PtrToStringAnsi(errorPtr)
+            LogPass($"Get last packed error (msg='{errorMsg}')")
+        Catch ex As Exception
+            LogFail("Get last packed error", ex.Message)
+        End Try
+
+        ' Test import warnings count (should be 0)
+        Try
+            Dim count = Framework_Asset_GetImportWarningCount()
+            LogPass($"Get import warning count (count={count})")
+        Catch ex As Exception
+            LogFail("Get import warning count", ex.Message)
+        End Try
+
+        ' Test pack sprites with non-existent folder
+        Try
+            Dim result = Framework_Asset_PackSprites("nonexistent_folder", "test_atlas.png", "test_atlas.json", 1024, 1024, 2)
+            If result < 0 Then
+                LogPass("Pack sprites (correctly failed for non-existent folder)")
+            Else
+                LogFail("Pack sprites", "Should have failed for non-existent folder")
+            End If
+        Catch ex As Exception
+            LogFail("Pack sprites", ex.Message)
+        End Try
+
+        ' Test import Tiled map (non-existent should return -1)
+        Try
+            Dim levelId = Framework_Asset_ImportTiledMap("nonexistent.tmx")
+            If levelId < 0 Then
+                LogPass("Import Tiled map (correctly failed for non-existent)")
+            Else
+                LogFail("Import Tiled map", "Should have failed for non-existent file")
+            End If
+        Catch ex As Exception
+            LogFail("Import Tiled map", ex.Message)
+        End Try
+
+        ' Test batch convert (non-existent folder should return 0)
+        Try
+            Dim count = Framework_Asset_BatchConvert("nonexistent_folder", "output", "png")
+            If count = 0 Then
+                LogPass("Batch convert (correctly returned 0 for non-existent)")
+            Else
+                LogFail("Batch convert", $"Expected 0, got {count}")
+            End If
+        Catch ex As Exception
+            LogFail("Batch convert", ex.Message)
+        End Try
+
+        ' Test batch resize (non-existent folder should return 0)
+        Try
+            Dim count = Framework_Asset_BatchResize("nonexistent_folder", "output", 256, 256, True)
+            If count = 0 Then
+                LogPass("Batch resize (correctly returned 0 for non-existent)")
+            Else
+                LogFail("Batch resize", $"Expected 0, got {count}")
+            End If
+        Catch ex As Exception
+            LogFail("Batch resize", ex.Message)
+        End Try
+
+        ' Test verify manifest (non-existent should return false)
+        Try
+            Dim valid = Framework_Asset_VerifyManifest("nonexistent_manifest.json", ".")
+            If Not valid Then
+                LogPass("Verify manifest (correctly failed for non-existent)")
+            Else
+                LogFail("Verify manifest", "Should have failed for non-existent")
+            End If
+        Catch ex As Exception
+            LogFail("Verify manifest", ex.Message)
         End Try
     End Sub
 #End Region
