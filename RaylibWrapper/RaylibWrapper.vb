@@ -7483,6 +7483,26 @@ Public Module FrameworkWrapper
     Public Function Framework_Shader_LoadCRT() As Integer
     End Function
 
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadOutline() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadGlow() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadDistortion() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadChromatic() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Shader_LoadPixelate() As Integer
+    End Function
+
     ' ---- Global ----
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_Shader_GetCount() As Integer

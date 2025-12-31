@@ -3137,6 +3137,11 @@ extern "C" {
     __declspec(dllexport) int   Framework_Shader_LoadGrayscale();
     __declspec(dllexport) int   Framework_Shader_LoadBlur();
     __declspec(dllexport) int   Framework_Shader_LoadCRT();
+    __declspec(dllexport) int   Framework_Shader_LoadOutline();
+    __declspec(dllexport) int   Framework_Shader_LoadGlow();
+    __declspec(dllexport) int   Framework_Shader_LoadDistortion();
+    __declspec(dllexport) int   Framework_Shader_LoadChromatic();
+    __declspec(dllexport) int   Framework_Shader_LoadPixelate();
 
     // Global
     __declspec(dllexport) int   Framework_Shader_GetCount();

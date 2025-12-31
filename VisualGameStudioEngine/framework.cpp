@@ -20053,6 +20053,130 @@ extern "C" {
         return Framework_Shader_LoadFromMemory(nullptr, fs);
     }
 
+    int Framework_Shader_LoadOutline() {
+        // Outline shader - detects edges and draws an outline
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform vec2 resolution;\n"
+            "uniform vec4 outlineColor;\n"
+            "uniform float outlineThickness;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec2 texel = 1.0 / resolution;\n"
+            "    float thickness = max(outlineThickness, 1.0);\n"
+            "    vec4 c = texture(texture0, fragTexCoord);\n"
+            "    if (c.a > 0.1) {\n"
+            "        finalColor = c * fragColor;\n"
+            "        return;\n"
+            "    }\n"
+            "    float outline = 0.0;\n"
+            "    for(float x = -thickness; x <= thickness; x++) {\n"
+            "        for(float y = -thickness; y <= thickness; y++) {\n"
+            "            outline = max(outline, texture(texture0, fragTexCoord + vec2(x,y) * texel).a);\n"
+            "        }\n"
+            "    }\n"
+            "    if (outline > 0.1) {\n"
+            "        vec4 oc = outlineColor.a > 0.0 ? outlineColor : vec4(0.0, 0.0, 0.0, 1.0);\n"
+            "        finalColor = oc;\n"
+            "    } else {\n"
+            "        finalColor = vec4(0.0);\n"
+            "    }\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadGlow() {
+        // Glow shader - adds a soft glow around bright areas
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform vec2 resolution;\n"
+            "uniform float glowIntensity;\n"
+            "uniform float glowRadius;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    vec2 texel = 1.0 / resolution;\n"
+            "    vec4 c = texture(texture0, fragTexCoord) * fragColor;\n"
+            "    float radius = max(glowRadius, 2.0);\n"
+            "    float intensity = max(glowIntensity, 0.5);\n"
+            "    vec4 glow = vec4(0.0);\n"
+            "    float totalWeight = 0.0;\n"
+            "    for(float x = -radius; x <= radius; x++) {\n"
+            "        for(float y = -radius; y <= radius; y++) {\n"
+            "            float dist = length(vec2(x, y));\n"
+            "            if (dist <= radius) {\n"
+            "                float weight = 1.0 - (dist / radius);\n"
+            "                glow += texture(texture0, fragTexCoord + vec2(x,y) * texel) * weight;\n"
+            "                totalWeight += weight;\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "    glow = glow / totalWeight;\n"
+            "    finalColor = c + glow * intensity * c.a;\n"
+            "    finalColor.a = max(c.a, glow.a * intensity * 0.5);\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadDistortion() {
+        // Distortion shader - creates wavy distortion effect
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform float time;\n"
+            "uniform float distortionStrength;\n"
+            "uniform float waveFrequency;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    float strength = max(distortionStrength, 0.01);\n"
+            "    float freq = max(waveFrequency, 5.0);\n"
+            "    vec2 uv = fragTexCoord;\n"
+            "    uv.x += sin(uv.y * freq + time) * strength;\n"
+            "    uv.y += cos(uv.x * freq + time) * strength;\n"
+            "    vec4 c = texture(texture0, uv) * fragColor;\n"
+            "    finalColor = c;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadChromatic() {
+        // Chromatic aberration shader - RGB channel separation
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform float aberrationAmount;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    float amount = max(aberrationAmount, 0.005);\n"
+            "    vec2 dir = fragTexCoord - vec2(0.5);\n"
+            "    float r = texture(texture0, fragTexCoord + dir * amount).r;\n"
+            "    float g = texture(texture0, fragTexCoord).g;\n"
+            "    float b = texture(texture0, fragTexCoord - dir * amount).b;\n"
+            "    float a = texture(texture0, fragTexCoord).a;\n"
+            "    finalColor = vec4(r, g, b, a) * fragColor;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
+    int Framework_Shader_LoadPixelate() {
+        // Pixelate shader - reduces resolution for retro effect
+        const char* fs = "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D texture0;\n"
+            "uniform vec2 resolution;\n"
+            "uniform float pixelSize;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    float psize = max(pixelSize, 2.0);\n"
+            "    vec2 uv = fragTexCoord * resolution;\n"
+            "    uv = floor(uv / psize) * psize;\n"
+            "    uv = uv / resolution;\n"
+            "    finalColor = texture(texture0, uv) * fragColor;\n"
+            "}\n";
+        return Framework_Shader_LoadFromMemory(nullptr, fs);
+    }
+
     int Framework_Shader_GetCount() { return (int)g_shaders.size(); }
 
     void Framework_Shader_UnloadAll() {
