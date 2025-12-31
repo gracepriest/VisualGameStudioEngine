@@ -1492,6 +1492,129 @@ extern "C" {
     __declspec(dllexport) int   Framework_BT_GetNodeCount(int treeId);
 
     // ========================================================================
+    // ANIMATION STATE MACHINE - Blend Trees and State-based Animation
+    // ========================================================================
+    // State machine types
+    enum AnimStateType {
+        ANIM_STATE_SINGLE = 0,     // Single animation clip
+        ANIM_STATE_BLEND_1D = 1,   // Blend between clips based on 1D parameter
+        ANIM_STATE_BLEND_2D = 2    // Blend between clips based on 2D parameter
+    };
+
+    // Transition condition types
+    enum AnimConditionType {
+        ANIM_COND_GREATER = 0,     // param > threshold
+        ANIM_COND_LESS = 1,        // param < threshold
+        ANIM_COND_EQUALS = 2,      // param == threshold (with epsilon)
+        ANIM_COND_NOT_EQUALS = 3,  // param != threshold
+        ANIM_COND_TRUE = 4,        // bool param is true
+        ANIM_COND_FALSE = 5        // bool param is false
+    };
+
+    // Controller management
+    __declspec(dllexport) int   Framework_AnimCtrl_Create(const char* name);
+    __declspec(dllexport) void  Framework_AnimCtrl_Destroy(int controllerId);
+    __declspec(dllexport) int   Framework_AnimCtrl_Get(const char* name);
+    __declspec(dllexport) bool  Framework_AnimCtrl_IsValid(int controllerId);
+    __declspec(dllexport) int   Framework_AnimCtrl_Clone(int controllerId, const char* newName);
+
+    // State management
+    __declspec(dllexport) int   Framework_AnimCtrl_AddState(int controllerId, const char* stateName, int animClipId);
+    __declspec(dllexport) int   Framework_AnimCtrl_AddBlendState1D(int controllerId, const char* stateName, const char* paramName);
+    __declspec(dllexport) int   Framework_AnimCtrl_AddBlendState2D(int controllerId, const char* stateName, const char* paramX, const char* paramY);
+    __declspec(dllexport) void  Framework_AnimCtrl_RemoveState(int controllerId, int stateId);
+    __declspec(dllexport) int   Framework_AnimCtrl_GetState(int controllerId, const char* stateName);
+    __declspec(dllexport) int   Framework_AnimCtrl_GetStateCount(int controllerId);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetDefaultState(int controllerId, int stateId);
+    __declspec(dllexport) int   Framework_AnimCtrl_GetDefaultState(int controllerId);
+
+    // Blend state configuration
+    __declspec(dllexport) void  Framework_AnimCtrl_AddBlendClip(int controllerId, int stateId, int animClipId, float threshold);  // 1D blend
+    __declspec(dllexport) void  Framework_AnimCtrl_AddBlendClip2D(int controllerId, int stateId, int animClipId, float x, float y);  // 2D blend
+    __declspec(dllexport) int   Framework_AnimCtrl_GetBlendClipCount(int controllerId, int stateId);
+
+    // State properties
+    __declspec(dllexport) void  Framework_AnimCtrl_SetStateSpeed(int controllerId, int stateId, float speed);
+    __declspec(dllexport) float Framework_AnimCtrl_GetStateSpeed(int controllerId, int stateId);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetStateLoop(int controllerId, int stateId, bool loop);
+    __declspec(dllexport) bool  Framework_AnimCtrl_GetStateLoop(int controllerId, int stateId);
+
+    // Transition management
+    __declspec(dllexport) int   Framework_AnimCtrl_AddTransition(int controllerId, int fromState, int toState, float duration);
+    __declspec(dllexport) void  Framework_AnimCtrl_RemoveTransition(int controllerId, int transitionId);
+    __declspec(dllexport) int   Framework_AnimCtrl_GetTransitionCount(int controllerId);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetTransitionDuration(int controllerId, int transitionId, float duration);
+    __declspec(dllexport) float Framework_AnimCtrl_GetTransitionDuration(int controllerId, int transitionId);
+
+    // Any-state transitions (can trigger from any state)
+    __declspec(dllexport) int   Framework_AnimCtrl_AddAnyStateTransition(int controllerId, int toState, float duration);
+
+    // Transition conditions
+    __declspec(dllexport) void  Framework_AnimCtrl_AddCondition(int controllerId, int transitionId, const char* paramName, int conditionType, float threshold);
+    __declspec(dllexport) void  Framework_AnimCtrl_AddBoolCondition(int controllerId, int transitionId, const char* paramName, bool value);
+    __declspec(dllexport) void  Framework_AnimCtrl_AddTriggerCondition(int controllerId, int transitionId, const char* triggerName);
+    __declspec(dllexport) void  Framework_AnimCtrl_ClearConditions(int controllerId, int transitionId);
+    __declspec(dllexport) int   Framework_AnimCtrl_GetConditionCount(int controllerId, int transitionId);
+
+    // Exit time (auto-transition when animation ends)
+    __declspec(dllexport) void  Framework_AnimCtrl_SetExitTime(int controllerId, int transitionId, bool hasExitTime, float exitTimeNormalized);
+    __declspec(dllexport) bool  Framework_AnimCtrl_HasExitTime(int controllerId, int transitionId);
+
+    // Parameters (shared state for controller)
+    __declspec(dllexport) void  Framework_AnimCtrl_SetFloat(int controllerId, const char* paramName, float value);
+    __declspec(dllexport) float Framework_AnimCtrl_GetFloat(int controllerId, const char* paramName, float defaultValue);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetInt(int controllerId, const char* paramName, int value);
+    __declspec(dllexport) int   Framework_AnimCtrl_GetInt(int controllerId, const char* paramName, int defaultValue);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetBool(int controllerId, const char* paramName, bool value);
+    __declspec(dllexport) bool  Framework_AnimCtrl_GetBool(int controllerId, const char* paramName, bool defaultValue);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetTrigger(int controllerId, const char* triggerName);
+    __declspec(dllexport) void  Framework_AnimCtrl_ResetTrigger(int controllerId, const char* triggerName);
+    __declspec(dllexport) bool  Framework_AnimCtrl_HasParameter(int controllerId, const char* paramName);
+
+    // Controller instance (bound to entity)
+    __declspec(dllexport) int   Framework_AnimCtrl_CreateInstance(int controllerId, int entityId);
+    __declspec(dllexport) void  Framework_AnimCtrl_DestroyInstance(int instanceId);
+    __declspec(dllexport) bool  Framework_AnimCtrl_IsInstanceValid(int instanceId);
+
+    // Instance state
+    __declspec(dllexport) void  Framework_AnimCtrl_UpdateInstance(int instanceId, float dt);
+    __declspec(dllexport) int   Framework_AnimCtrl_GetCurrentState(int instanceId);
+    __declspec(dllexport) const char* Framework_AnimCtrl_GetCurrentStateName(int instanceId);
+    __declspec(dllexport) bool  Framework_AnimCtrl_IsInTransition(int instanceId);
+    __declspec(dllexport) float Framework_AnimCtrl_GetTransitionProgress(int instanceId);
+    __declspec(dllexport) float Framework_AnimCtrl_GetNormalizedTime(int instanceId);  // 0-1 in current state
+
+    // Instance parameters (override controller defaults)
+    __declspec(dllexport) void  Framework_AnimCtrl_InstanceSetFloat(int instanceId, const char* paramName, float value);
+    __declspec(dllexport) float Framework_AnimCtrl_InstanceGetFloat(int instanceId, const char* paramName, float defaultValue);
+    __declspec(dllexport) void  Framework_AnimCtrl_InstanceSetInt(int instanceId, const char* paramName, int value);
+    __declspec(dllexport) int   Framework_AnimCtrl_InstanceGetInt(int instanceId, const char* paramName, int defaultValue);
+    __declspec(dllexport) void  Framework_AnimCtrl_InstanceSetBool(int instanceId, const char* paramName, bool value);
+    __declspec(dllexport) bool  Framework_AnimCtrl_InstanceGetBool(int instanceId, const char* paramName, bool defaultValue);
+    __declspec(dllexport) void  Framework_AnimCtrl_InstanceSetTrigger(int instanceId, const char* triggerName);
+    __declspec(dllexport) void  Framework_AnimCtrl_InstanceResetTrigger(int instanceId, const char* triggerName);
+
+    // Force state change
+    __declspec(dllexport) void  Framework_AnimCtrl_ForceState(int instanceId, int stateId);
+    __declspec(dllexport) void  Framework_AnimCtrl_CrossFade(int instanceId, int stateId, float duration);
+
+    // Playback control
+    __declspec(dllexport) void  Framework_AnimCtrl_Pause(int instanceId);
+    __declspec(dllexport) void  Framework_AnimCtrl_Resume(int instanceId);
+    __declspec(dllexport) bool  Framework_AnimCtrl_IsPaused(int instanceId);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetSpeed(int instanceId, float speed);
+    __declspec(dllexport) float Framework_AnimCtrl_GetSpeed(int instanceId);
+
+    // Callbacks
+    typedef void (*AnimStateCallback)(int instanceId, int stateId, void* userData);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetOnStateEnter(int controllerId, AnimStateCallback callback, void* userData);
+    __declspec(dllexport) void  Framework_AnimCtrl_SetOnStateExit(int controllerId, AnimStateCallback callback, void* userData);
+
+    // Debug
+    __declspec(dllexport) int   Framework_AnimCtrl_GetControllerCount();
+    __declspec(dllexport) int   Framework_AnimCtrl_GetInstanceCount();
+
+    // ========================================================================
     // INPUT MANAGER - Action-based Input System
     // ========================================================================
     // Input source types for binding

@@ -8722,6 +8722,986 @@ extern "C" {
     }
 
     // ========================================================================
+    // ANIMATION STATE MACHINE - Blend Trees and State-based Animation
+    // ========================================================================
+
+    // Blend clip info
+    struct AnimBlendClip {
+        int animClipId;
+        float threshold;  // For 1D blend
+        float x, y;       // For 2D blend
+    };
+
+    // Animation state
+    struct AnimState {
+        int id;
+        std::string name;
+        AnimStateType type;
+        int animClipId;           // For single state
+        std::string blendParamX;  // For blend states
+        std::string blendParamY;  // For 2D blend
+        std::vector<AnimBlendClip> blendClips;
+        float speed = 1.0f;
+        bool loop = true;
+    };
+
+    // Transition condition
+    struct AnimCondition {
+        std::string paramName;
+        AnimConditionType type;
+        float threshold;
+        bool boolValue;
+        bool isTrigger;
+    };
+
+    // State transition
+    struct AnimTransition {
+        int id;
+        int fromState;  // -1 for any-state
+        int toState;
+        float duration;
+        bool hasExitTime;
+        float exitTime;
+        std::vector<AnimCondition> conditions;
+    };
+
+    // Animation parameter
+    struct AnimParameter {
+        enum Type { FLOAT, INT, BOOL, TRIGGER };
+        Type type;
+        float floatValue;
+        int intValue;
+        bool boolValue;
+        bool triggered;
+    };
+
+    // Animation controller (template)
+    struct AnimController {
+        int id;
+        std::string name;
+        std::unordered_map<int, AnimState> states;
+        std::unordered_map<int, AnimTransition> transitions;
+        std::unordered_map<std::string, AnimParameter> parameters;
+        int defaultState = -1;
+        int nextStateId = 0;
+        int nextTransitionId = 0;
+        AnimStateCallback onStateEnter = nullptr;
+        AnimStateCallback onStateExit = nullptr;
+        void* callbackUserData = nullptr;
+    };
+
+    // Animation controller instance (runtime)
+    struct AnimControllerInstance {
+        int id;
+        int controllerId;
+        int entityId;
+        int currentState;
+        int targetState;
+        float stateTime;
+        float transitionTime;
+        float transitionDuration;
+        bool inTransition;
+        bool paused;
+        float speed;
+        std::unordered_map<std::string, AnimParameter> localParams;  // Override controller params
+    };
+
+    static std::unordered_map<int, AnimController> g_animControllers;
+    static std::unordered_map<int, AnimControllerInstance> g_animInstances;
+    static int g_nextAnimControllerId = 1;
+    static int g_nextAnimInstanceId = 1;
+
+    // Helper to calculate clip duration from frames
+    static float CalcClipDuration(const AnimClip& clip) {
+        if (clip.frames.empty()) return 1.0f;
+        float total = 0;
+        for (const auto& frame : clip.frames) {
+            total += frame.duration;
+        }
+        return total > 0 ? total : 1.0f;
+    }
+
+    // Helper to get state duration
+    static float GetStateDuration(const AnimController& ctrl, int stateId) {
+        auto stateIt = ctrl.states.find(stateId);
+        if (stateIt == ctrl.states.end()) return 1.0f;
+
+        const AnimState& state = stateIt->second;
+        if (state.type == ANIM_STATE_SINGLE && state.animClipId >= 0) {
+            auto clipIt = g_animClips.find(state.animClipId);
+            if (clipIt != g_animClips.end()) {
+                return CalcClipDuration(clipIt->second);
+            }
+        }
+        // For blend states, use average duration
+        if (!state.blendClips.empty()) {
+            float total = 0;
+            for (const auto& bc : state.blendClips) {
+                auto clipIt = g_animClips.find(bc.animClipId);
+                if (clipIt != g_animClips.end()) {
+                    total += CalcClipDuration(clipIt->second);
+                }
+            }
+            return total / state.blendClips.size();
+        }
+        return 1.0f;
+    }
+
+    // Helper to get parameter value from instance or controller
+    static float GetParamFloat(const AnimControllerInstance& inst, const AnimController& ctrl, const std::string& name, float def) {
+        auto it = inst.localParams.find(name);
+        if (it != inst.localParams.end() && it->second.type == AnimParameter::FLOAT) {
+            return it->second.floatValue;
+        }
+        auto it2 = ctrl.parameters.find(name);
+        if (it2 != ctrl.parameters.end() && it2->second.type == AnimParameter::FLOAT) {
+            return it2->second.floatValue;
+        }
+        return def;
+    }
+
+    static int GetParamInt(const AnimControllerInstance& inst, const AnimController& ctrl, const std::string& name, int def) {
+        auto it = inst.localParams.find(name);
+        if (it != inst.localParams.end() && it->second.type == AnimParameter::INT) {
+            return it->second.intValue;
+        }
+        auto it2 = ctrl.parameters.find(name);
+        if (it2 != ctrl.parameters.end() && it2->second.type == AnimParameter::INT) {
+            return it2->second.intValue;
+        }
+        return def;
+    }
+
+    static bool GetParamBool(const AnimControllerInstance& inst, const AnimController& ctrl, const std::string& name, bool def) {
+        auto it = inst.localParams.find(name);
+        if (it != inst.localParams.end() && it->second.type == AnimParameter::BOOL) {
+            return it->second.boolValue;
+        }
+        auto it2 = ctrl.parameters.find(name);
+        if (it2 != ctrl.parameters.end() && it2->second.type == AnimParameter::BOOL) {
+            return it2->second.boolValue;
+        }
+        return def;
+    }
+
+    static bool GetParamTrigger(AnimControllerInstance& inst, AnimController& ctrl, const std::string& name) {
+        // Check local triggers first
+        auto it = inst.localParams.find(name);
+        if (it != inst.localParams.end() && it->second.type == AnimParameter::TRIGGER) {
+            if (it->second.triggered) {
+                it->second.triggered = false;  // Consume trigger
+                return true;
+            }
+        }
+        // Check controller triggers
+        auto it2 = ctrl.parameters.find(name);
+        if (it2 != ctrl.parameters.end() && it2->second.type == AnimParameter::TRIGGER) {
+            if (it2->second.triggered) {
+                it2->second.triggered = false;  // Consume trigger
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Check if a transition should fire
+    static bool CheckTransitionConditions(AnimControllerInstance& inst, AnimController& ctrl, const AnimTransition& trans, float normalizedTime) {
+        // Check exit time
+        if (trans.hasExitTime && normalizedTime < trans.exitTime) {
+            return false;
+        }
+
+        // Check all conditions (AND)
+        for (const auto& cond : trans.conditions) {
+            if (cond.isTrigger) {
+                if (!GetParamTrigger(inst, ctrl, cond.paramName)) {
+                    return false;
+                }
+            } else {
+                float val = GetParamFloat(inst, ctrl, cond.paramName, 0.0f);
+                bool satisfied = false;
+
+                switch (cond.type) {
+                case ANIM_COND_GREATER:
+                    satisfied = val > cond.threshold;
+                    break;
+                case ANIM_COND_LESS:
+                    satisfied = val < cond.threshold;
+                    break;
+                case ANIM_COND_EQUALS:
+                    satisfied = fabsf(val - cond.threshold) < 0.001f;
+                    break;
+                case ANIM_COND_NOT_EQUALS:
+                    satisfied = fabsf(val - cond.threshold) >= 0.001f;
+                    break;
+                case ANIM_COND_TRUE:
+                    satisfied = GetParamBool(inst, ctrl, cond.paramName, false);
+                    break;
+                case ANIM_COND_FALSE:
+                    satisfied = !GetParamBool(inst, ctrl, cond.paramName, true);
+                    break;
+                }
+
+                if (!satisfied) return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Controller management
+    int Framework_AnimCtrl_Create(const char* name) {
+        AnimController ctrl;
+        ctrl.id = g_nextAnimControllerId++;
+        ctrl.name = name ? name : "";
+        g_animControllers[ctrl.id] = ctrl;
+        return ctrl.id;
+    }
+
+    void Framework_AnimCtrl_Destroy(int controllerId) {
+        g_animControllers.erase(controllerId);
+    }
+
+    int Framework_AnimCtrl_Get(const char* name) {
+        if (!name) return -1;
+        for (const auto& pair : g_animControllers) {
+            if (pair.second.name == name) return pair.first;
+        }
+        return -1;
+    }
+
+    bool Framework_AnimCtrl_IsValid(int controllerId) {
+        return g_animControllers.find(controllerId) != g_animControllers.end();
+    }
+
+    int Framework_AnimCtrl_Clone(int controllerId, const char* newName) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return -1;
+
+        AnimController clone = it->second;
+        clone.id = g_nextAnimControllerId++;
+        clone.name = newName ? newName : "";
+        g_animControllers[clone.id] = clone;
+        return clone.id;
+    }
+
+    // State management
+    int Framework_AnimCtrl_AddState(int controllerId, const char* stateName, int animClipId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return -1;
+
+        AnimState state;
+        state.id = it->second.nextStateId++;
+        state.name = stateName ? stateName : "";
+        state.type = ANIM_STATE_SINGLE;
+        state.animClipId = animClipId;
+        it->second.states[state.id] = state;
+
+        // Set as default if first state
+        if (it->second.defaultState < 0) {
+            it->second.defaultState = state.id;
+        }
+
+        return state.id;
+    }
+
+    int Framework_AnimCtrl_AddBlendState1D(int controllerId, const char* stateName, const char* paramName) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return -1;
+
+        AnimState state;
+        state.id = it->second.nextStateId++;
+        state.name = stateName ? stateName : "";
+        state.type = ANIM_STATE_BLEND_1D;
+        state.animClipId = -1;
+        state.blendParamX = paramName ? paramName : "";
+        it->second.states[state.id] = state;
+
+        if (it->second.defaultState < 0) {
+            it->second.defaultState = state.id;
+        }
+
+        return state.id;
+    }
+
+    int Framework_AnimCtrl_AddBlendState2D(int controllerId, const char* stateName, const char* paramX, const char* paramY) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return -1;
+
+        AnimState state;
+        state.id = it->second.nextStateId++;
+        state.name = stateName ? stateName : "";
+        state.type = ANIM_STATE_BLEND_2D;
+        state.animClipId = -1;
+        state.blendParamX = paramX ? paramX : "";
+        state.blendParamY = paramY ? paramY : "";
+        it->second.states[state.id] = state;
+
+        if (it->second.defaultState < 0) {
+            it->second.defaultState = state.id;
+        }
+
+        return state.id;
+    }
+
+    void Framework_AnimCtrl_RemoveState(int controllerId, int stateId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+        it->second.states.erase(stateId);
+    }
+
+    int Framework_AnimCtrl_GetState(int controllerId, const char* stateName) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !stateName) return -1;
+        for (const auto& pair : it->second.states) {
+            if (pair.second.name == stateName) return pair.first;
+        }
+        return -1;
+    }
+
+    int Framework_AnimCtrl_GetStateCount(int controllerId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return 0;
+        return (int)it->second.states.size();
+    }
+
+    void Framework_AnimCtrl_SetDefaultState(int controllerId, int stateId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it != g_animControllers.end()) {
+            it->second.defaultState = stateId;
+        }
+    }
+
+    int Framework_AnimCtrl_GetDefaultState(int controllerId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return -1;
+        return it->second.defaultState;
+    }
+
+    // Blend state configuration
+    void Framework_AnimCtrl_AddBlendClip(int controllerId, int stateId, int animClipId, float threshold) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto stateIt = it->second.states.find(stateId);
+        if (stateIt == it->second.states.end()) return;
+
+        AnimBlendClip clip;
+        clip.animClipId = animClipId;
+        clip.threshold = threshold;
+        clip.x = threshold;
+        clip.y = 0;
+        stateIt->second.blendClips.push_back(clip);
+    }
+
+    void Framework_AnimCtrl_AddBlendClip2D(int controllerId, int stateId, int animClipId, float x, float y) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto stateIt = it->second.states.find(stateId);
+        if (stateIt == it->second.states.end()) return;
+
+        AnimBlendClip clip;
+        clip.animClipId = animClipId;
+        clip.threshold = 0;
+        clip.x = x;
+        clip.y = y;
+        stateIt->second.blendClips.push_back(clip);
+    }
+
+    int Framework_AnimCtrl_GetBlendClipCount(int controllerId, int stateId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return 0;
+
+        auto stateIt = it->second.states.find(stateId);
+        if (stateIt == it->second.states.end()) return 0;
+
+        return (int)stateIt->second.blendClips.size();
+    }
+
+    // State properties
+    void Framework_AnimCtrl_SetStateSpeed(int controllerId, int stateId, float speed) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto stateIt = it->second.states.find(stateId);
+        if (stateIt != it->second.states.end()) {
+            stateIt->second.speed = speed;
+        }
+    }
+
+    float Framework_AnimCtrl_GetStateSpeed(int controllerId, int stateId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return 1.0f;
+
+        auto stateIt = it->second.states.find(stateId);
+        if (stateIt == it->second.states.end()) return 1.0f;
+
+        return stateIt->second.speed;
+    }
+
+    void Framework_AnimCtrl_SetStateLoop(int controllerId, int stateId, bool loop) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto stateIt = it->second.states.find(stateId);
+        if (stateIt != it->second.states.end()) {
+            stateIt->second.loop = loop;
+        }
+    }
+
+    bool Framework_AnimCtrl_GetStateLoop(int controllerId, int stateId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return true;
+
+        auto stateIt = it->second.states.find(stateId);
+        if (stateIt == it->second.states.end()) return true;
+
+        return stateIt->second.loop;
+    }
+
+    // Transition management
+    int Framework_AnimCtrl_AddTransition(int controllerId, int fromState, int toState, float duration) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return -1;
+
+        AnimTransition trans;
+        trans.id = it->second.nextTransitionId++;
+        trans.fromState = fromState;
+        trans.toState = toState;
+        trans.duration = duration;
+        trans.hasExitTime = false;
+        trans.exitTime = 1.0f;
+        it->second.transitions[trans.id] = trans;
+
+        return trans.id;
+    }
+
+    void Framework_AnimCtrl_RemoveTransition(int controllerId, int transitionId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+        it->second.transitions.erase(transitionId);
+    }
+
+    int Framework_AnimCtrl_GetTransitionCount(int controllerId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return 0;
+        return (int)it->second.transitions.size();
+    }
+
+    void Framework_AnimCtrl_SetTransitionDuration(int controllerId, int transitionId, float duration) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt != it->second.transitions.end()) {
+            transIt->second.duration = duration;
+        }
+    }
+
+    float Framework_AnimCtrl_GetTransitionDuration(int controllerId, int transitionId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return 0.0f;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt == it->second.transitions.end()) return 0.0f;
+
+        return transIt->second.duration;
+    }
+
+    int Framework_AnimCtrl_AddAnyStateTransition(int controllerId, int toState, float duration) {
+        return Framework_AnimCtrl_AddTransition(controllerId, -1, toState, duration);
+    }
+
+    // Transition conditions
+    void Framework_AnimCtrl_AddCondition(int controllerId, int transitionId, const char* paramName, int conditionType, float threshold) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt == it->second.transitions.end()) return;
+
+        AnimCondition cond;
+        cond.paramName = paramName ? paramName : "";
+        cond.type = (AnimConditionType)conditionType;
+        cond.threshold = threshold;
+        cond.boolValue = threshold > 0.5f;
+        cond.isTrigger = false;
+        transIt->second.conditions.push_back(cond);
+    }
+
+    void Framework_AnimCtrl_AddBoolCondition(int controllerId, int transitionId, const char* paramName, bool value) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt == it->second.transitions.end()) return;
+
+        AnimCondition cond;
+        cond.paramName = paramName ? paramName : "";
+        cond.type = value ? ANIM_COND_TRUE : ANIM_COND_FALSE;
+        cond.threshold = 0;
+        cond.boolValue = value;
+        cond.isTrigger = false;
+        transIt->second.conditions.push_back(cond);
+    }
+
+    void Framework_AnimCtrl_AddTriggerCondition(int controllerId, int transitionId, const char* triggerName) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt == it->second.transitions.end()) return;
+
+        AnimCondition cond;
+        cond.paramName = triggerName ? triggerName : "";
+        cond.type = ANIM_COND_TRUE;
+        cond.threshold = 0;
+        cond.boolValue = true;
+        cond.isTrigger = true;
+        transIt->second.conditions.push_back(cond);
+    }
+
+    void Framework_AnimCtrl_ClearConditions(int controllerId, int transitionId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt != it->second.transitions.end()) {
+            transIt->second.conditions.clear();
+        }
+    }
+
+    int Framework_AnimCtrl_GetConditionCount(int controllerId, int transitionId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return 0;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt == it->second.transitions.end()) return 0;
+
+        return (int)transIt->second.conditions.size();
+    }
+
+    void Framework_AnimCtrl_SetExitTime(int controllerId, int transitionId, bool hasExitTime, float exitTimeNormalized) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt != it->second.transitions.end()) {
+            transIt->second.hasExitTime = hasExitTime;
+            transIt->second.exitTime = exitTimeNormalized;
+        }
+    }
+
+    bool Framework_AnimCtrl_HasExitTime(int controllerId, int transitionId) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end()) return false;
+
+        auto transIt = it->second.transitions.find(transitionId);
+        if (transIt == it->second.transitions.end()) return false;
+
+        return transIt->second.hasExitTime;
+    }
+
+    // Parameters
+    void Framework_AnimCtrl_SetFloat(int controllerId, const char* paramName, float value) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !paramName) return;
+
+        AnimParameter& param = it->second.parameters[paramName];
+        param.type = AnimParameter::FLOAT;
+        param.floatValue = value;
+    }
+
+    float Framework_AnimCtrl_GetFloat(int controllerId, const char* paramName, float defaultValue) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !paramName) return defaultValue;
+
+        auto paramIt = it->second.parameters.find(paramName);
+        if (paramIt == it->second.parameters.end()) return defaultValue;
+        if (paramIt->second.type != AnimParameter::FLOAT) return defaultValue;
+
+        return paramIt->second.floatValue;
+    }
+
+    void Framework_AnimCtrl_SetInt(int controllerId, const char* paramName, int value) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !paramName) return;
+
+        AnimParameter& param = it->second.parameters[paramName];
+        param.type = AnimParameter::INT;
+        param.intValue = value;
+    }
+
+    int Framework_AnimCtrl_GetInt(int controllerId, const char* paramName, int defaultValue) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !paramName) return defaultValue;
+
+        auto paramIt = it->second.parameters.find(paramName);
+        if (paramIt == it->second.parameters.end()) return defaultValue;
+        if (paramIt->second.type != AnimParameter::INT) return defaultValue;
+
+        return paramIt->second.intValue;
+    }
+
+    void Framework_AnimCtrl_SetBool(int controllerId, const char* paramName, bool value) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !paramName) return;
+
+        AnimParameter& param = it->second.parameters[paramName];
+        param.type = AnimParameter::BOOL;
+        param.boolValue = value;
+    }
+
+    bool Framework_AnimCtrl_GetBool(int controllerId, const char* paramName, bool defaultValue) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !paramName) return defaultValue;
+
+        auto paramIt = it->second.parameters.find(paramName);
+        if (paramIt == it->second.parameters.end()) return defaultValue;
+        if (paramIt->second.type != AnimParameter::BOOL) return defaultValue;
+
+        return paramIt->second.boolValue;
+    }
+
+    void Framework_AnimCtrl_SetTrigger(int controllerId, const char* triggerName) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !triggerName) return;
+
+        AnimParameter& param = it->second.parameters[triggerName];
+        param.type = AnimParameter::TRIGGER;
+        param.triggered = true;
+    }
+
+    void Framework_AnimCtrl_ResetTrigger(int controllerId, const char* triggerName) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !triggerName) return;
+
+        auto paramIt = it->second.parameters.find(triggerName);
+        if (paramIt != it->second.parameters.end()) {
+            paramIt->second.triggered = false;
+        }
+    }
+
+    bool Framework_AnimCtrl_HasParameter(int controllerId, const char* paramName) {
+        auto it = g_animControllers.find(controllerId);
+        if (it == g_animControllers.end() || !paramName) return false;
+        return it->second.parameters.find(paramName) != it->second.parameters.end();
+    }
+
+    // Instance management
+    int Framework_AnimCtrl_CreateInstance(int controllerId, int entityId) {
+        auto ctrlIt = g_animControllers.find(controllerId);
+        if (ctrlIt == g_animControllers.end()) return -1;
+
+        AnimControllerInstance inst;
+        inst.id = g_nextAnimInstanceId++;
+        inst.controllerId = controllerId;
+        inst.entityId = entityId;
+        inst.currentState = ctrlIt->second.defaultState;
+        inst.targetState = -1;
+        inst.stateTime = 0;
+        inst.transitionTime = 0;
+        inst.transitionDuration = 0;
+        inst.inTransition = false;
+        inst.paused = false;
+        inst.speed = 1.0f;
+        g_animInstances[inst.id] = inst;
+
+        return inst.id;
+    }
+
+    void Framework_AnimCtrl_DestroyInstance(int instanceId) {
+        g_animInstances.erase(instanceId);
+    }
+
+    bool Framework_AnimCtrl_IsInstanceValid(int instanceId) {
+        return g_animInstances.find(instanceId) != g_animInstances.end();
+    }
+
+    // Instance state
+    void Framework_AnimCtrl_UpdateInstance(int instanceId, float dt) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return;
+
+        AnimControllerInstance& inst = instIt->second;
+        if (inst.paused) return;
+
+        auto ctrlIt = g_animControllers.find(inst.controllerId);
+        if (ctrlIt == g_animControllers.end()) return;
+
+        AnimController& ctrl = ctrlIt->second;
+
+        float scaledDt = dt * inst.speed;
+
+        // Handle transition
+        if (inst.inTransition && inst.transitionDuration > 0) {
+            inst.transitionTime += scaledDt;
+            if (inst.transitionTime >= inst.transitionDuration) {
+                // Transition complete
+                if (ctrl.onStateExit && inst.currentState >= 0) {
+                    ctrl.onStateExit(inst.id, inst.currentState, ctrl.callbackUserData);
+                }
+                inst.currentState = inst.targetState;
+                inst.targetState = -1;
+                inst.inTransition = false;
+                inst.stateTime = 0;
+                if (ctrl.onStateEnter && inst.currentState >= 0) {
+                    ctrl.onStateEnter(inst.id, inst.currentState, ctrl.callbackUserData);
+                }
+            }
+        } else {
+            // Update state time
+            auto stateIt = ctrl.states.find(inst.currentState);
+            if (stateIt != ctrl.states.end()) {
+                float duration = GetStateDuration(ctrl, inst.currentState);
+                float stateSpeed = stateIt->second.speed;
+                inst.stateTime += scaledDt * stateSpeed;
+
+                // Handle looping
+                if (stateIt->second.loop && duration > 0 && inst.stateTime >= duration) {
+                    inst.stateTime = fmodf(inst.stateTime, duration);
+                }
+            }
+
+            // Check transitions
+            float normalizedTime = 0;
+            if (inst.currentState >= 0) {
+                float duration = GetStateDuration(ctrl, inst.currentState);
+                if (duration > 0) {
+                    normalizedTime = inst.stateTime / duration;
+                }
+            }
+
+            for (auto& transPair : ctrl.transitions) {
+                AnimTransition& trans = transPair.second;
+
+                // Check if transition applies (from current state or any-state)
+                if (trans.fromState != inst.currentState && trans.fromState != -1) continue;
+
+                // Check conditions
+                if (CheckTransitionConditions(inst, ctrl, trans, normalizedTime)) {
+                    // Start transition
+                    inst.targetState = trans.toState;
+                    inst.transitionTime = 0;
+                    inst.transitionDuration = trans.duration;
+                    inst.inTransition = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    int Framework_AnimCtrl_GetCurrentState(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return -1;
+        return instIt->second.currentState;
+    }
+
+    static std::string g_animStateNameBuffer;
+    const char* Framework_AnimCtrl_GetCurrentStateName(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return "";
+
+        auto ctrlIt = g_animControllers.find(instIt->second.controllerId);
+        if (ctrlIt == g_animControllers.end()) return "";
+
+        auto stateIt = ctrlIt->second.states.find(instIt->second.currentState);
+        if (stateIt == ctrlIt->second.states.end()) return "";
+
+        g_animStateNameBuffer = stateIt->second.name;
+        return g_animStateNameBuffer.c_str();
+    }
+
+    bool Framework_AnimCtrl_IsInTransition(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return false;
+        return instIt->second.inTransition;
+    }
+
+    float Framework_AnimCtrl_GetTransitionProgress(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return 0.0f;
+
+        if (!instIt->second.inTransition || instIt->second.transitionDuration <= 0) return 0.0f;
+        return instIt->second.transitionTime / instIt->second.transitionDuration;
+    }
+
+    float Framework_AnimCtrl_GetNormalizedTime(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return 0.0f;
+
+        auto ctrlIt = g_animControllers.find(instIt->second.controllerId);
+        if (ctrlIt == g_animControllers.end()) return 0.0f;
+
+        float duration = GetStateDuration(ctrlIt->second, instIt->second.currentState);
+        if (duration <= 0) return 0.0f;
+
+        return instIt->second.stateTime / duration;
+    }
+
+    // Instance parameters
+    void Framework_AnimCtrl_InstanceSetFloat(int instanceId, const char* paramName, float value) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end() || !paramName) return;
+
+        AnimParameter& param = instIt->second.localParams[paramName];
+        param.type = AnimParameter::FLOAT;
+        param.floatValue = value;
+    }
+
+    float Framework_AnimCtrl_InstanceGetFloat(int instanceId, const char* paramName, float defaultValue) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end() || !paramName) return defaultValue;
+
+        auto paramIt = instIt->second.localParams.find(paramName);
+        if (paramIt == instIt->second.localParams.end()) return defaultValue;
+        if (paramIt->second.type != AnimParameter::FLOAT) return defaultValue;
+
+        return paramIt->second.floatValue;
+    }
+
+    void Framework_AnimCtrl_InstanceSetInt(int instanceId, const char* paramName, int value) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end() || !paramName) return;
+
+        AnimParameter& param = instIt->second.localParams[paramName];
+        param.type = AnimParameter::INT;
+        param.intValue = value;
+    }
+
+    int Framework_AnimCtrl_InstanceGetInt(int instanceId, const char* paramName, int defaultValue) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end() || !paramName) return defaultValue;
+
+        auto paramIt = instIt->second.localParams.find(paramName);
+        if (paramIt == instIt->second.localParams.end()) return defaultValue;
+        if (paramIt->second.type != AnimParameter::INT) return defaultValue;
+
+        return paramIt->second.intValue;
+    }
+
+    void Framework_AnimCtrl_InstanceSetBool(int instanceId, const char* paramName, bool value) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end() || !paramName) return;
+
+        AnimParameter& param = instIt->second.localParams[paramName];
+        param.type = AnimParameter::BOOL;
+        param.boolValue = value;
+    }
+
+    bool Framework_AnimCtrl_InstanceGetBool(int instanceId, const char* paramName, bool defaultValue) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end() || !paramName) return defaultValue;
+
+        auto paramIt = instIt->second.localParams.find(paramName);
+        if (paramIt == instIt->second.localParams.end()) return defaultValue;
+        if (paramIt->second.type != AnimParameter::BOOL) return defaultValue;
+
+        return paramIt->second.boolValue;
+    }
+
+    void Framework_AnimCtrl_InstanceSetTrigger(int instanceId, const char* triggerName) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end() || !triggerName) return;
+
+        AnimParameter& param = instIt->second.localParams[triggerName];
+        param.type = AnimParameter::TRIGGER;
+        param.triggered = true;
+    }
+
+    void Framework_AnimCtrl_InstanceResetTrigger(int instanceId, const char* triggerName) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end() || !triggerName) return;
+
+        auto paramIt = instIt->second.localParams.find(triggerName);
+        if (paramIt != instIt->second.localParams.end()) {
+            paramIt->second.triggered = false;
+        }
+    }
+
+    // Force state change
+    void Framework_AnimCtrl_ForceState(int instanceId, int stateId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return;
+
+        instIt->second.currentState = stateId;
+        instIt->second.targetState = -1;
+        instIt->second.stateTime = 0;
+        instIt->second.inTransition = false;
+    }
+
+    void Framework_AnimCtrl_CrossFade(int instanceId, int stateId, float duration) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return;
+
+        instIt->second.targetState = stateId;
+        instIt->second.transitionTime = 0;
+        instIt->second.transitionDuration = duration;
+        instIt->second.inTransition = true;
+    }
+
+    // Playback control
+    void Framework_AnimCtrl_Pause(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt != g_animInstances.end()) {
+            instIt->second.paused = true;
+        }
+    }
+
+    void Framework_AnimCtrl_Resume(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt != g_animInstances.end()) {
+            instIt->second.paused = false;
+        }
+    }
+
+    bool Framework_AnimCtrl_IsPaused(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return false;
+        return instIt->second.paused;
+    }
+
+    void Framework_AnimCtrl_SetSpeed(int instanceId, float speed) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt != g_animInstances.end()) {
+            instIt->second.speed = speed;
+        }
+    }
+
+    float Framework_AnimCtrl_GetSpeed(int instanceId) {
+        auto instIt = g_animInstances.find(instanceId);
+        if (instIt == g_animInstances.end()) return 1.0f;
+        return instIt->second.speed;
+    }
+
+    // Callbacks
+    void Framework_AnimCtrl_SetOnStateEnter(int controllerId, AnimStateCallback callback, void* userData) {
+        auto it = g_animControllers.find(controllerId);
+        if (it != g_animControllers.end()) {
+            it->second.onStateEnter = callback;
+            it->second.callbackUserData = userData;
+        }
+    }
+
+    void Framework_AnimCtrl_SetOnStateExit(int controllerId, AnimStateCallback callback, void* userData) {
+        auto it = g_animControllers.find(controllerId);
+        if (it != g_animControllers.end()) {
+            it->second.onStateExit = callback;
+            it->second.callbackUserData = userData;
+        }
+    }
+
+    // Debug
+    int Framework_AnimCtrl_GetControllerCount() {
+        return (int)g_animControllers.size();
+    }
+
+    int Framework_AnimCtrl_GetInstanceCount() {
+        return (int)g_animInstances.size();
+    }
+
+    // ========================================================================
     // AUDIO MANAGER - Advanced Audio System Implementation
     // ========================================================================
 
