@@ -16,7 +16,7 @@ Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "RaylibWrapper", "RaylibWrap
 EndProject
 Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "VisualGameStudio", "VisualGameStudio\VisualGameStudio.vbproj", "{48BFF45F-7B72-48FB-897C-B8D1AD89CC72}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BasicLang", "..\BasicLang\BasicLang\BasicLang.csproj", "{7EC41E3A-A351-C7EE-4F9D-14FEB411B5FB}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BasicLang", "BasicLang\BasicLang.csproj", "{7EC41E3A-A351-C7EE-4F9D-14FEB411B5FB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
