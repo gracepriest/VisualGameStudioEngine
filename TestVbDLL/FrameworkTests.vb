@@ -66,6 +66,13 @@ Public Module FrameworkTests
         TestIntegration_UIInputState()
         TestIntegration_SaveLoadMultiSystem()
 
+        ' Stress/Performance tests
+        TestStress_EntityCreation()
+        TestStress_TimerSystem()
+        TestStress_EventSystem()
+        TestStress_UIElements()
+        TestStress_SpriteBatching()
+
         ' Print summary
         Console.WriteLine()
         Console.WriteLine("========================================")
@@ -5237,6 +5244,250 @@ Public Module FrameworkTests
             LogPass("Cleanup test save slot")
         Catch ex As Exception
             LogFail("Cleanup test save slot", ex.Message)
+        End Try
+    End Sub
+#End Region
+
+#Region "Performance/Stress Tests"
+    ' Performance Test: Entity Creation Stress
+    Private Sub TestStress_EntityCreation()
+        LogSection("Stress: Entity Creation")
+
+        Const ENTITY_COUNT = 1000
+        Dim entities(ENTITY_COUNT - 1) As Integer
+        Dim sw As New System.Diagnostics.Stopwatch()
+
+        ' Create many entities
+        Try
+            sw.Start()
+            For i = 0 To ENTITY_COUNT - 1
+                entities(i) = Framework_Ecs_CreateEntity()
+            Next
+            sw.Stop()
+
+            Dim allValid = True
+            For i = 0 To ENTITY_COUNT - 1
+                If entities(i) < 0 OrElse Not Framework_Ecs_IsAlive(entities(i)) Then
+                    allValid = False
+                    Exit For
+                End If
+            Next
+
+            If allValid Then
+                LogPass("Create " & ENTITY_COUNT.ToString() & " entities (" & sw.ElapsedMilliseconds.ToString() & "ms)")
+            Else
+                LogFail("Create " & ENTITY_COUNT.ToString() & " entities", "Some entities invalid")
+            End If
+        Catch ex As Exception
+            LogFail("Create " & ENTITY_COUNT.ToString() & " entities", ex.Message)
+        End Try
+
+        ' Destroy all entities
+        Try
+            sw.Restart()
+            For i = 0 To ENTITY_COUNT - 1
+                If entities(i) >= 0 Then
+                    Framework_Ecs_DestroyEntity(entities(i))
+                End If
+            Next
+            sw.Stop()
+            LogPass("Destroy " & ENTITY_COUNT.ToString() & " entities (" & sw.ElapsedMilliseconds.ToString() & "ms)")
+        Catch ex As Exception
+            LogFail("Destroy " & ENTITY_COUNT.ToString() & " entities", ex.Message)
+        End Try
+    End Sub
+
+    ' Performance Test: Timer System Stress
+    Private Sub TestStress_TimerSystem()
+        LogSection("Stress: Timer System")
+
+        Const TIMER_COUNT = 100
+        Dim timers(TIMER_COUNT - 1) As Integer
+        Dim callback As New TimerCallback(AddressOf StressTimerCallback)
+
+        ' Create many timers
+        Try
+            For i = 0 To TIMER_COUNT - 1
+                timers(i) = Framework_Timer_After(10.0F + i * 0.1F, callback, IntPtr.Zero)
+            Next
+
+            Dim validCount = 0
+            For i = 0 To TIMER_COUNT - 1
+                If timers(i) > 0 AndAlso Framework_Timer_IsValid(timers(i)) Then
+                    validCount += 1
+                End If
+            Next
+
+            If validCount = TIMER_COUNT Then
+                LogPass("Create " & TIMER_COUNT.ToString() & " timers")
+            Else
+                LogFail("Create " & TIMER_COUNT.ToString() & " timers", "Only " & validCount.ToString() & " valid")
+            End If
+        Catch ex As Exception
+            LogFail("Create " & TIMER_COUNT.ToString() & " timers", ex.Message)
+        End Try
+
+        ' Update timers
+        Try
+            For i = 0 To 9
+                Framework_Timer_Update(0.016F)
+            Next
+            LogPass("Update timer system (10 frames)")
+        Catch ex As Exception
+            LogFail("Update timer system", ex.Message)
+        End Try
+
+        ' Cancel all timers
+        Try
+            For i = 0 To TIMER_COUNT - 1
+                If timers(i) > 0 Then
+                    Framework_Timer_Cancel(timers(i))
+                End If
+            Next
+            LogPass("Cancel " & TIMER_COUNT.ToString() & " timers")
+        Catch ex As Exception
+            LogFail("Cancel " & TIMER_COUNT.ToString() & " timers", ex.Message)
+        End Try
+    End Sub
+
+    Private Sub StressTimerCallback(timerId As Integer, userData As IntPtr)
+        ' Empty callback for stress testing
+    End Sub
+
+    ' Performance Test: Event System Stress
+    Private Sub TestStress_EventSystem()
+        LogSection("Stress: Event System")
+
+        Const EVENT_COUNT = 50
+        Dim events(EVENT_COUNT - 1) As Integer
+
+        ' Register many events
+        Try
+            For i = 0 To EVENT_COUNT - 1
+                events(i) = Framework_Event_Register("StressEvent_" & i.ToString())
+            Next
+
+            Dim validCount = 0
+            For i = 0 To EVENT_COUNT - 1
+                If events(i) >= 0 Then validCount += 1
+            Next
+
+            If validCount = EVENT_COUNT Then
+                LogPass("Register " & EVENT_COUNT.ToString() & " events")
+            Else
+                LogFail("Register " & EVENT_COUNT.ToString() & " events", "Only " & validCount.ToString() & " valid")
+            End If
+        Catch ex As Exception
+            LogFail("Register " & EVENT_COUNT.ToString() & " events", ex.Message)
+        End Try
+
+        ' Publish all events
+        Try
+            For i = 0 To EVENT_COUNT - 1
+                If events(i) >= 0 Then
+                    Framework_Event_Publish(events(i))
+                End If
+            Next
+            LogPass("Publish " & EVENT_COUNT.ToString() & " events")
+        Catch ex As Exception
+            LogFail("Publish " & EVENT_COUNT.ToString() & " events", ex.Message)
+        End Try
+    End Sub
+
+    ' Performance Test: UI Element Stress
+    Private Sub TestStress_UIElements()
+        LogSection("Stress: UI Elements")
+
+        Const UI_COUNT = 50
+        Dim elements(UI_COUNT - 1) As Integer
+
+        ' Create many UI elements
+        Try
+            For i = 0 To UI_COUNT - 1
+                elements(i) = Framework_UI_CreateLabel("Label_" & i.ToString(), 10 + (i Mod 10) * 80, 10 + (i \ 10) * 30)
+            Next
+
+            Dim validCount = 0
+            For i = 0 To UI_COUNT - 1
+                If elements(i) >= 0 Then validCount += 1
+            Next
+
+            If validCount = UI_COUNT Then
+                LogPass("Create " & UI_COUNT.ToString() & " UI labels")
+            Else
+                LogFail("Create " & UI_COUNT.ToString() & " UI labels", "Only " & validCount.ToString() & " valid")
+            End If
+        Catch ex As Exception
+            LogFail("Create " & UI_COUNT.ToString() & " UI labels", ex.Message)
+        End Try
+
+        ' Update all UI elements
+        Try
+            For i = 0 To UI_COUNT - 1
+                If elements(i) >= 0 Then
+                    Framework_UI_SetVisible(elements(i), (i Mod 2) = 0)
+                End If
+            Next
+            LogPass("Toggle visibility on " & UI_COUNT.ToString() & " UI elements")
+        Catch ex As Exception
+            LogFail("Toggle visibility", ex.Message)
+        End Try
+
+        ' Destroy all UI elements
+        Try
+            For i = 0 To UI_COUNT - 1
+                If elements(i) >= 0 Then
+                    Framework_UI_Destroy(elements(i))
+                End If
+            Next
+            LogPass("Destroy " & UI_COUNT.ToString() & " UI elements")
+        Catch ex As Exception
+            LogFail("Destroy " & UI_COUNT.ToString() & " UI elements", ex.Message)
+        End Try
+    End Sub
+
+    ' Performance Test: Batch Sprite Creation
+    Private Sub TestStress_SpriteBatching()
+        LogSection("Stress: Sprite Batching")
+
+        Dim batchId As Integer = -1
+
+        ' Create batch
+        Try
+            batchId = Framework_Batch_Create(5000)
+            If batchId >= 0 AndAlso Framework_Batch_IsValid(batchId) Then
+                LogPass("Create batch with 5000 capacity")
+            Else
+                LogFail("Create batch", "Invalid batch ID")
+                Return
+            End If
+        Catch ex As Exception
+            LogFail("Create batch", ex.Message)
+            Return
+        End Try
+
+        ' Add many sprites (without actual texture, just API stress)
+        Try
+            For i = 0 To 999
+                Framework_Batch_AddSpriteSimple(batchId, 0, i Mod 800, i \ 800 * 32, 255, 255, 255, 255)
+            Next
+            Dim count = Framework_Batch_GetSpriteCount(batchId)
+            If count = 1000 Then
+                LogPass("Add 1000 sprites to batch")
+            Else
+                LogFail("Add 1000 sprites to batch", "Count=" & count.ToString())
+            End If
+        Catch ex As Exception
+            LogFail("Add 1000 sprites to batch", ex.Message)
+        End Try
+
+        ' Clear and destroy
+        Try
+            Framework_Batch_Clear(batchId)
+            Framework_Batch_Destroy(batchId)
+            LogPass("Clear and destroy batch")
+        Catch ex As Exception
+            LogFail("Clear and destroy batch", ex.Message)
         End Try
     End Sub
 #End Region
