@@ -3222,6 +3222,339 @@ Public Module FrameworkWrapper
     Public Const AUDIO_GROUP_SFX As Integer = 2
     Public Const AUDIO_GROUP_VOICE As Integer = 3
     Public Const AUDIO_GROUP_AMBIENT As Integer = 4
+
+    ' Enhanced Audio - Filter type constants
+    Public Const AUDIO_FILTER_LOWPASS As Integer = 0
+    Public Const AUDIO_FILTER_HIGHPASS As Integer = 1
+    Public Const AUDIO_FILTER_BANDPASS As Integer = 2
+    Public Const AUDIO_FILTER_NOTCH As Integer = 3
+    Public Const AUDIO_FILTER_PEAKING As Integer = 4
+
+    ' Enhanced Audio - Effect type constants
+    Public Const AUDIO_EFFECT_REVERB As Integer = 0
+    Public Const AUDIO_EFFECT_ECHO As Integer = 1
+    Public Const AUDIO_EFFECT_DISTORTION As Integer = 2
+    Public Const AUDIO_EFFECT_COMPRESSOR As Integer = 3
+    Public Const AUDIO_EFFECT_CHORUS As Integer = 4
+    Public Const AUDIO_EFFECT_FLANGER As Integer = 5
+
+    ' Enhanced Audio - Filters
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_CreateFilter(filterType As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_DestroyFilter(filterId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetFilterCutoff(filterId As Integer, frequency As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetFilterResonance(filterId As Integer, q As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetFilterGain(filterId As Integer, gain As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyFilterToSound(soundHandle As Integer, filterId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyFilterToGroup(group As Integer, filterId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_RemoveFilterFromSound(soundHandle As Integer, filterId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_RemoveFilterFromGroup(group As Integer, filterId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetFilterEnabled(filterId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_IsFilterEnabled(filterId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' Enhanced Audio - Reverb
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_CreateReverb() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_DestroyReverb(reverbId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetReverbDecay(reverbId As Integer, decayTime As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetReverbDensity(reverbId As Integer, density As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetReverbDiffusion(reverbId As Integer, diffusion As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetReverbRoomSize(reverbId As Integer, size As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetReverbWetDry(reverbId As Integer, wet As Single, dry As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetReverbPreDelay(reverbId As Integer, delayMs As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyReverbToSound(soundHandle As Integer, reverbId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyReverbToGroup(group As Integer, reverbId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_RemoveReverbFromSound(soundHandle As Integer, reverbId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_RemoveReverbFromGroup(group As Integer, reverbId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetReverbPreset(reverbId As Integer, preset As Integer)
+    End Sub
+
+    ' Enhanced Audio - Echo
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_CreateEcho() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_DestroyEcho(echoId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetEchoDelay(echoId As Integer, delayMs As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetEchoFeedback(echoId As Integer, feedback As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetEchoWetDry(echoId As Integer, wet As Single, dry As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyEchoToSound(soundHandle As Integer, echoId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_RemoveEchoFromSound(soundHandle As Integer, echoId As Integer)
+    End Sub
+
+    ' Enhanced Audio - Distortion
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_CreateDistortion() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_DestroyDistortion(distortionId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetDistortionGain(distortionId As Integer, gain As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetDistortionTone(distortionId As Integer, tone As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetDistortionOutput(distortionId As Integer, output As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyDistortionToSound(soundHandle As Integer, distortionId As Integer)
+    End Sub
+
+    ' Enhanced Audio - Compressor
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_CreateCompressor() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_DestroyCompressor(compressorId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetCompressorThreshold(compressorId As Integer, thresholdDb As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetCompressorRatio(compressorId As Integer, ratio As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetCompressorAttack(compressorId As Integer, attackMs As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetCompressorRelease(compressorId As Integer, releaseMs As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetCompressorMakeupGain(compressorId As Integer, gainDb As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyCompressorToGroup(group As Integer, compressorId As Integer)
+    End Sub
+
+    ' Enhanced Audio - 3D Audio
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetListenerVelocity(vx As Single, vy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetListenerOrientation(forwardX As Single, forwardY As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetDopplerFactor(factor As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetSpeedOfSound(speed As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_PlaySoundWithVelocity(handle As Integer, x As Single, y As Single, vx As Single, vy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetSoundVelocity(handle As Integer, vx As Single, vy As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetSoundPosition(handle As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetSpatialRolloff(rolloffMode As Integer)
+    End Sub
+
+    ' Enhanced Audio - Ducking
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetDuckingTarget(group As Integer, duckVolume As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetDuckingDurations(group As Integer, attackMs As Single, releaseMs As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_TriggerDucking(group As Integer, durationMs As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_PlaySoundWithDucking(handle As Integer, duckGroup As Integer)
+    End Sub
+
+    ' Enhanced Audio - Bus System
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Audio_CreateBus(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_DestroyBus(busId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_RouteSoundToBus(soundHandle As Integer, busId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_RouteGroupToBus(group As Integer, busId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetBusVolume(busId As Integer, volume As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SetBusMuted(busId As Integer, <MarshalAs(UnmanagedType.I1)> muted As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyFilterToBus(busId As Integer, filterId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ApplyReverbToBus(busId As Integer, reverbId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_ChainBuses(sourceBusId As Integer, destBusId As Integer)
+    End Sub
+
+    ' Enhanced Audio - Snapshots
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_Audio_CreateSnapshot(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_DestroySnapshot(snapshotId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SnapshotSetGroupVolume(snapshotId As Integer, group As Integer, volume As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SnapshotSetBusVolume(snapshotId As Integer, busId As Integer, volume As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_SnapshotSetFilterEnabled(snapshotId As Integer, filterId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_TransitionToSnapshot(snapshotId As Integer, durationMs As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_GetActiveSnapshot() As Integer
+    End Function
+
+    ' Enhanced Audio - Analysis
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_GetMasterLevel() As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_GetGroupLevel(group As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Audio_GetSoundLevel(soundHandle As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Audio_GetSpectrum(bandCount As Integer, outBands As Single())
+    End Sub
 #End Region
 
 #Region "Input Manager"

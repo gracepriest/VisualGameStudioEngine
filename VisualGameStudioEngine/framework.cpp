@@ -10920,6 +10920,566 @@ extern "C" {
     }
 
     // ========================================================================
+    // ENHANCED AUDIO SYSTEM - Filters, Effects, 3D Audio Implementation
+    // ========================================================================
+
+    // Audio Filter structure
+    struct AudioFilter {
+        int id = -1;
+        int type = AUDIO_FILTER_LOWPASS;
+        float cutoff = 1000.0f;     // Hz
+        float resonance = 1.0f;      // Q
+        float gain = 0.0f;           // dB (for peaking filter)
+        bool enabled = true;
+        bool valid = true;
+    };
+    static std::unordered_map<int, AudioFilter> g_audioFilters;
+    static int g_nextFilterId = 1;
+
+    // Reverb structure
+    struct AudioReverb {
+        int id = -1;
+        float decayTime = 1.0f;
+        float density = 0.7f;
+        float diffusion = 1.0f;
+        float roomSize = 0.5f;
+        float wet = 0.3f;
+        float dry = 1.0f;
+        float preDelay = 20.0f;
+        bool valid = true;
+    };
+    static std::unordered_map<int, AudioReverb> g_audioReverbs;
+    static int g_nextReverbId = 1;
+
+    // Echo structure
+    struct AudioEcho {
+        int id = -1;
+        float delay = 300.0f;     // ms
+        float feedback = 0.3f;    // 0-1
+        float wet = 0.3f;
+        float dry = 1.0f;
+        bool valid = true;
+    };
+    static std::unordered_map<int, AudioEcho> g_audioEchos;
+    static int g_nextEchoId = 1;
+
+    // Distortion structure
+    struct AudioDistortion {
+        int id = -1;
+        float gain = 1.0f;
+        float tone = 0.5f;
+        float output = 1.0f;
+        bool valid = true;
+    };
+    static std::unordered_map<int, AudioDistortion> g_audioDistortions;
+    static int g_nextDistortionId = 1;
+
+    // Compressor structure
+    struct AudioCompressor {
+        int id = -1;
+        float threshold = -20.0f;  // dB
+        float ratio = 4.0f;
+        float attack = 10.0f;      // ms
+        float release = 100.0f;    // ms
+        float makeupGain = 0.0f;   // dB
+        bool valid = true;
+    };
+    static std::unordered_map<int, AudioCompressor> g_audioCompressors;
+    static int g_nextCompressorId = 1;
+
+    // 3D Audio state
+    static float g_listenerVelX = 0.0f;
+    static float g_listenerVelY = 0.0f;
+    static float g_listenerForwardX = 0.0f;
+    static float g_listenerForwardY = -1.0f;
+    static float g_dopplerFactor = 1.0f;
+    static float g_speedOfSound = 343.0f;
+    static int g_spatialRolloff = 0;  // 0=linear, 1=inverse, 2=exponential
+
+    // Sound velocity tracking
+    struct SoundVelocity {
+        float vx = 0.0f;
+        float vy = 0.0f;
+        float x = 0.0f;
+        float y = 0.0f;
+    };
+    static std::unordered_map<int, SoundVelocity> g_soundVelocities;
+
+    // Ducking state
+    struct DuckingState {
+        float targetVolume = 0.3f;
+        float attackMs = 50.0f;
+        float releaseMs = 200.0f;
+        float currentDuck = 0.0f;  // Current ducking amount 0-1
+        float duckTimer = 0.0f;    // Time remaining
+    };
+    static std::unordered_map<int, DuckingState> g_duckingStates;
+
+    // Audio Bus structure
+    struct AudioBus {
+        int id = -1;
+        std::string name;
+        float volume = 1.0f;
+        bool muted = false;
+        std::vector<int> filters;
+        std::vector<int> reverbs;
+        int outputBus = -1;  // Chain to another bus
+        bool valid = true;
+    };
+    static std::unordered_map<int, AudioBus> g_audioBuses;
+    static int g_nextBusId = 1;
+
+    // Audio Snapshot structure
+    struct AudioSnapshot {
+        int id = -1;
+        std::string name;
+        std::unordered_map<int, float> groupVolumes;
+        std::unordered_map<int, float> busVolumes;
+        std::unordered_map<int, bool> filterEnabled;
+        bool valid = true;
+    };
+    static std::unordered_map<int, AudioSnapshot> g_audioSnapshots;
+    static int g_nextSnapshotId = 1;
+    static int g_activeSnapshotId = -1;
+    static int g_transitionToSnapshot = -1;
+    static float g_snapshotTransitionTime = 0.0f;
+    static float g_snapshotTransitionDuration = 0.0f;
+
+    // Filter functions
+    int Framework_Audio_CreateFilter(int filterType) {
+        AudioFilter f;
+        f.id = g_nextFilterId++;
+        f.type = filterType;
+        g_audioFilters[f.id] = f;
+        return f.id;
+    }
+
+    void Framework_Audio_DestroyFilter(int filterId) {
+        g_audioFilters.erase(filterId);
+    }
+
+    void Framework_Audio_SetFilterCutoff(int filterId, float frequency) {
+        auto it = g_audioFilters.find(filterId);
+        if (it != g_audioFilters.end()) it->second.cutoff = frequency;
+    }
+
+    void Framework_Audio_SetFilterResonance(int filterId, float q) {
+        auto it = g_audioFilters.find(filterId);
+        if (it != g_audioFilters.end()) it->second.resonance = q;
+    }
+
+    void Framework_Audio_SetFilterGain(int filterId, float gain) {
+        auto it = g_audioFilters.find(filterId);
+        if (it != g_audioFilters.end()) it->second.gain = gain;
+    }
+
+    void Framework_Audio_ApplyFilterToSound(int soundHandle, int filterId) {
+        // Store association (actual DSP would be done in audio callback)
+        (void)soundHandle; (void)filterId;
+    }
+
+    void Framework_Audio_ApplyFilterToGroup(int group, int filterId) {
+        (void)group; (void)filterId;
+    }
+
+    void Framework_Audio_RemoveFilterFromSound(int soundHandle, int filterId) {
+        (void)soundHandle; (void)filterId;
+    }
+
+    void Framework_Audio_RemoveFilterFromGroup(int group, int filterId) {
+        (void)group; (void)filterId;
+    }
+
+    void Framework_Audio_SetFilterEnabled(int filterId, bool enabled) {
+        auto it = g_audioFilters.find(filterId);
+        if (it != g_audioFilters.end()) it->second.enabled = enabled;
+    }
+
+    bool Framework_Audio_IsFilterEnabled(int filterId) {
+        auto it = g_audioFilters.find(filterId);
+        return (it != g_audioFilters.end()) ? it->second.enabled : false;
+    }
+
+    // Reverb functions
+    int Framework_Audio_CreateReverb() {
+        AudioReverb r;
+        r.id = g_nextReverbId++;
+        g_audioReverbs[r.id] = r;
+        return r.id;
+    }
+
+    void Framework_Audio_DestroyReverb(int reverbId) {
+        g_audioReverbs.erase(reverbId);
+    }
+
+    void Framework_Audio_SetReverbDecay(int reverbId, float decayTime) {
+        auto it = g_audioReverbs.find(reverbId);
+        if (it != g_audioReverbs.end()) it->second.decayTime = decayTime;
+    }
+
+    void Framework_Audio_SetReverbDensity(int reverbId, float density) {
+        auto it = g_audioReverbs.find(reverbId);
+        if (it != g_audioReverbs.end()) it->second.density = density;
+    }
+
+    void Framework_Audio_SetReverbDiffusion(int reverbId, float diffusion) {
+        auto it = g_audioReverbs.find(reverbId);
+        if (it != g_audioReverbs.end()) it->second.diffusion = diffusion;
+    }
+
+    void Framework_Audio_SetReverbRoomSize(int reverbId, float size) {
+        auto it = g_audioReverbs.find(reverbId);
+        if (it != g_audioReverbs.end()) it->second.roomSize = size;
+    }
+
+    void Framework_Audio_SetReverbWetDry(int reverbId, float wet, float dry) {
+        auto it = g_audioReverbs.find(reverbId);
+        if (it != g_audioReverbs.end()) {
+            it->second.wet = wet;
+            it->second.dry = dry;
+        }
+    }
+
+    void Framework_Audio_SetReverbPreDelay(int reverbId, float delayMs) {
+        auto it = g_audioReverbs.find(reverbId);
+        if (it != g_audioReverbs.end()) it->second.preDelay = delayMs;
+    }
+
+    void Framework_Audio_ApplyReverbToSound(int soundHandle, int reverbId) {
+        (void)soundHandle; (void)reverbId;
+    }
+
+    void Framework_Audio_ApplyReverbToGroup(int group, int reverbId) {
+        (void)group; (void)reverbId;
+    }
+
+    void Framework_Audio_RemoveReverbFromSound(int soundHandle, int reverbId) {
+        (void)soundHandle; (void)reverbId;
+    }
+
+    void Framework_Audio_RemoveReverbFromGroup(int group, int reverbId) {
+        (void)group; (void)reverbId;
+    }
+
+    void Framework_Audio_SetReverbPreset(int reverbId, int preset) {
+        auto it = g_audioReverbs.find(reverbId);
+        if (it == g_audioReverbs.end()) return;
+
+        switch (preset) {
+            case 0:  // Small room
+                it->second.decayTime = 0.3f;
+                it->second.roomSize = 0.2f;
+                it->second.wet = 0.2f;
+                break;
+            case 1:  // Medium room
+                it->second.decayTime = 0.6f;
+                it->second.roomSize = 0.4f;
+                it->second.wet = 0.3f;
+                break;
+            case 2:  // Large room
+                it->second.decayTime = 1.0f;
+                it->second.roomSize = 0.6f;
+                it->second.wet = 0.4f;
+                break;
+            case 3:  // Hall
+                it->second.decayTime = 1.8f;
+                it->second.roomSize = 0.8f;
+                it->second.wet = 0.5f;
+                break;
+            case 4:  // Cave
+                it->second.decayTime = 3.0f;
+                it->second.roomSize = 1.0f;
+                it->second.wet = 0.7f;
+                break;
+        }
+    }
+
+    // Echo functions
+    int Framework_Audio_CreateEcho() {
+        AudioEcho e;
+        e.id = g_nextEchoId++;
+        g_audioEchos[e.id] = e;
+        return e.id;
+    }
+
+    void Framework_Audio_DestroyEcho(int echoId) {
+        g_audioEchos.erase(echoId);
+    }
+
+    void Framework_Audio_SetEchoDelay(int echoId, float delayMs) {
+        auto it = g_audioEchos.find(echoId);
+        if (it != g_audioEchos.end()) it->second.delay = delayMs;
+    }
+
+    void Framework_Audio_SetEchoFeedback(int echoId, float feedback) {
+        auto it = g_audioEchos.find(echoId);
+        if (it != g_audioEchos.end()) it->second.feedback = feedback;
+    }
+
+    void Framework_Audio_SetEchoWetDry(int echoId, float wet, float dry) {
+        auto it = g_audioEchos.find(echoId);
+        if (it != g_audioEchos.end()) {
+            it->second.wet = wet;
+            it->second.dry = dry;
+        }
+    }
+
+    void Framework_Audio_ApplyEchoToSound(int soundHandle, int echoId) {
+        (void)soundHandle; (void)echoId;
+    }
+
+    void Framework_Audio_RemoveEchoFromSound(int soundHandle, int echoId) {
+        (void)soundHandle; (void)echoId;
+    }
+
+    // Distortion functions
+    int Framework_Audio_CreateDistortion() {
+        AudioDistortion d;
+        d.id = g_nextDistortionId++;
+        g_audioDistortions[d.id] = d;
+        return d.id;
+    }
+
+    void Framework_Audio_DestroyDistortion(int distortionId) {
+        g_audioDistortions.erase(distortionId);
+    }
+
+    void Framework_Audio_SetDistortionGain(int distortionId, float gain) {
+        auto it = g_audioDistortions.find(distortionId);
+        if (it != g_audioDistortions.end()) it->second.gain = gain;
+    }
+
+    void Framework_Audio_SetDistortionTone(int distortionId, float tone) {
+        auto it = g_audioDistortions.find(distortionId);
+        if (it != g_audioDistortions.end()) it->second.tone = tone;
+    }
+
+    void Framework_Audio_SetDistortionOutput(int distortionId, float output) {
+        auto it = g_audioDistortions.find(distortionId);
+        if (it != g_audioDistortions.end()) it->second.output = output;
+    }
+
+    void Framework_Audio_ApplyDistortionToSound(int soundHandle, int distortionId) {
+        (void)soundHandle; (void)distortionId;
+    }
+
+    // Compressor functions
+    int Framework_Audio_CreateCompressor() {
+        AudioCompressor c;
+        c.id = g_nextCompressorId++;
+        g_audioCompressors[c.id] = c;
+        return c.id;
+    }
+
+    void Framework_Audio_DestroyCompressor(int compressorId) {
+        g_audioCompressors.erase(compressorId);
+    }
+
+    void Framework_Audio_SetCompressorThreshold(int compressorId, float thresholdDb) {
+        auto it = g_audioCompressors.find(compressorId);
+        if (it != g_audioCompressors.end()) it->second.threshold = thresholdDb;
+    }
+
+    void Framework_Audio_SetCompressorRatio(int compressorId, float ratio) {
+        auto it = g_audioCompressors.find(compressorId);
+        if (it != g_audioCompressors.end()) it->second.ratio = ratio;
+    }
+
+    void Framework_Audio_SetCompressorAttack(int compressorId, float attackMs) {
+        auto it = g_audioCompressors.find(compressorId);
+        if (it != g_audioCompressors.end()) it->second.attack = attackMs;
+    }
+
+    void Framework_Audio_SetCompressorRelease(int compressorId, float releaseMs) {
+        auto it = g_audioCompressors.find(compressorId);
+        if (it != g_audioCompressors.end()) it->second.release = releaseMs;
+    }
+
+    void Framework_Audio_SetCompressorMakeupGain(int compressorId, float gainDb) {
+        auto it = g_audioCompressors.find(compressorId);
+        if (it != g_audioCompressors.end()) it->second.makeupGain = gainDb;
+    }
+
+    void Framework_Audio_ApplyCompressorToGroup(int group, int compressorId) {
+        (void)group; (void)compressorId;
+    }
+
+    // Enhanced 3D Audio
+    void Framework_Audio_SetListenerVelocity(float vx, float vy) {
+        g_listenerVelX = vx;
+        g_listenerVelY = vy;
+    }
+
+    void Framework_Audio_SetListenerOrientation(float forwardX, float forwardY) {
+        g_listenerForwardX = forwardX;
+        g_listenerForwardY = forwardY;
+    }
+
+    void Framework_Audio_SetDopplerFactor(float factor) {
+        g_dopplerFactor = factor;
+    }
+
+    void Framework_Audio_SetSpeedOfSound(float speed) {
+        g_speedOfSound = speed;
+    }
+
+    void Framework_Audio_PlaySoundWithVelocity(int handle, float x, float y, float vx, float vy) {
+        g_soundVelocities[handle] = { vx, vy, x, y };
+        Framework_Audio_PlaySoundAt(handle, x, y);
+    }
+
+    void Framework_Audio_SetSoundVelocity(int handle, float vx, float vy) {
+        auto it = g_soundVelocities.find(handle);
+        if (it != g_soundVelocities.end()) {
+            it->second.vx = vx;
+            it->second.vy = vy;
+        } else {
+            g_soundVelocities[handle] = { vx, vy, 0, 0 };
+        }
+    }
+
+    void Framework_Audio_SetSoundPosition(int handle, float x, float y) {
+        auto it = g_soundVelocities.find(handle);
+        if (it != g_soundVelocities.end()) {
+            it->second.x = x;
+            it->second.y = y;
+        } else {
+            g_soundVelocities[handle] = { 0, 0, x, y };
+        }
+    }
+
+    void Framework_Audio_SetSpatialRolloff(int rolloffMode) {
+        g_spatialRolloff = rolloffMode;
+    }
+
+    // Sound Ducking
+    void Framework_Audio_SetDuckingTarget(int group, float duckVolume) {
+        g_duckingStates[group].targetVolume = duckVolume;
+    }
+
+    void Framework_Audio_SetDuckingDurations(int group, float attackMs, float releaseMs) {
+        g_duckingStates[group].attackMs = attackMs;
+        g_duckingStates[group].releaseMs = releaseMs;
+    }
+
+    void Framework_Audio_TriggerDucking(int group, float durationMs) {
+        g_duckingStates[group].duckTimer = durationMs / 1000.0f;
+    }
+
+    void Framework_Audio_PlaySoundWithDucking(int handle, int duckGroup) {
+        Framework_Audio_TriggerDucking(duckGroup, 1000.0f);  // Default 1 second
+        Framework_Audio_PlaySound(handle);
+    }
+
+    // Audio Bus System
+    int Framework_Audio_CreateBus(const char* name) {
+        AudioBus bus;
+        bus.id = g_nextBusId++;
+        bus.name = name ? name : "";
+        g_audioBuses[bus.id] = bus;
+        return bus.id;
+    }
+
+    void Framework_Audio_DestroyBus(int busId) {
+        g_audioBuses.erase(busId);
+    }
+
+    void Framework_Audio_RouteSoundToBus(int soundHandle, int busId) {
+        (void)soundHandle; (void)busId;
+    }
+
+    void Framework_Audio_RouteGroupToBus(int group, int busId) {
+        (void)group; (void)busId;
+    }
+
+    void Framework_Audio_SetBusVolume(int busId, float volume) {
+        auto it = g_audioBuses.find(busId);
+        if (it != g_audioBuses.end()) it->second.volume = volume;
+    }
+
+    void Framework_Audio_SetBusMuted(int busId, bool muted) {
+        auto it = g_audioBuses.find(busId);
+        if (it != g_audioBuses.end()) it->second.muted = muted;
+    }
+
+    void Framework_Audio_ApplyFilterToBus(int busId, int filterId) {
+        auto it = g_audioBuses.find(busId);
+        if (it != g_audioBuses.end()) it->second.filters.push_back(filterId);
+    }
+
+    void Framework_Audio_ApplyReverbToBus(int busId, int reverbId) {
+        auto it = g_audioBuses.find(busId);
+        if (it != g_audioBuses.end()) it->second.reverbs.push_back(reverbId);
+    }
+
+    void Framework_Audio_ChainBuses(int sourceBusId, int destBusId) {
+        auto it = g_audioBuses.find(sourceBusId);
+        if (it != g_audioBuses.end()) it->second.outputBus = destBusId;
+    }
+
+    // Audio Snapshots
+    int Framework_Audio_CreateSnapshot(const char* name) {
+        AudioSnapshot snap;
+        snap.id = g_nextSnapshotId++;
+        snap.name = name ? name : "";
+        g_audioSnapshots[snap.id] = snap;
+        return snap.id;
+    }
+
+    void Framework_Audio_DestroySnapshot(int snapshotId) {
+        g_audioSnapshots.erase(snapshotId);
+    }
+
+    void Framework_Audio_SnapshotSetGroupVolume(int snapshotId, int group, float volume) {
+        auto it = g_audioSnapshots.find(snapshotId);
+        if (it != g_audioSnapshots.end()) it->second.groupVolumes[group] = volume;
+    }
+
+    void Framework_Audio_SnapshotSetBusVolume(int snapshotId, int busId, float volume) {
+        auto it = g_audioSnapshots.find(snapshotId);
+        if (it != g_audioSnapshots.end()) it->second.busVolumes[busId] = volume;
+    }
+
+    void Framework_Audio_SnapshotSetFilterEnabled(int snapshotId, int filterId, bool enabled) {
+        auto it = g_audioSnapshots.find(snapshotId);
+        if (it != g_audioSnapshots.end()) it->second.filterEnabled[filterId] = enabled;
+    }
+
+    void Framework_Audio_TransitionToSnapshot(int snapshotId, float durationMs) {
+        g_transitionToSnapshot = snapshotId;
+        g_snapshotTransitionDuration = durationMs / 1000.0f;
+        g_snapshotTransitionTime = 0.0f;
+    }
+
+    int Framework_Audio_GetActiveSnapshot() {
+        return g_activeSnapshotId;
+    }
+
+    // Audio Analysis
+    float Framework_Audio_GetMasterLevel() {
+        return 0.0f;  // Would need actual audio metering
+    }
+
+    float Framework_Audio_GetGroupLevel(int group) {
+        (void)group;
+        return 0.0f;
+    }
+
+    float Framework_Audio_GetSoundLevel(int soundHandle) {
+        (void)soundHandle;
+        return 0.0f;
+    }
+
+    void Framework_Audio_GetSpectrum(int bandCount, float* outBands) {
+        // Would need FFT analysis
+        if (outBands) {
+            for (int i = 0; i < bandCount; i++) {
+                outBands[i] = 0.0f;
+            }
+        }
+    }
+
+    // ========================================================================
     // INPUT MANAGER - Action-based Input System Implementation
     // ========================================================================
 

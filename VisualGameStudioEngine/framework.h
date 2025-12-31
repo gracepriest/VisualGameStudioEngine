@@ -617,6 +617,125 @@ extern "C" {
     __declspec(dllexport) void  Framework_Audio_Update(float dt);
 
     // ========================================================================
+    // ENHANCED AUDIO SYSTEM - Filters, Effects, 3D Audio
+    // ========================================================================
+    // Filter types
+    enum AudioFilterType {
+        AUDIO_FILTER_LOWPASS = 0,
+        AUDIO_FILTER_HIGHPASS = 1,
+        AUDIO_FILTER_BANDPASS = 2,
+        AUDIO_FILTER_NOTCH = 3,
+        AUDIO_FILTER_PEAKING = 4
+    };
+
+    // Effect types
+    enum AudioEffectType {
+        AUDIO_EFFECT_REVERB = 0,
+        AUDIO_EFFECT_ECHO = 1,
+        AUDIO_EFFECT_DISTORTION = 2,
+        AUDIO_EFFECT_COMPRESSOR = 3,
+        AUDIO_EFFECT_CHORUS = 4,
+        AUDIO_EFFECT_FLANGER = 5
+    };
+
+    // Audio Filters
+    __declspec(dllexport) int   Framework_Audio_CreateFilter(int filterType);
+    __declspec(dllexport) void  Framework_Audio_DestroyFilter(int filterId);
+    __declspec(dllexport) void  Framework_Audio_SetFilterCutoff(int filterId, float frequency);  // Hz
+    __declspec(dllexport) void  Framework_Audio_SetFilterResonance(int filterId, float q);       // 0.1 to 10
+    __declspec(dllexport) void  Framework_Audio_SetFilterGain(int filterId, float gain);         // dB, for peaking filter
+    __declspec(dllexport) void  Framework_Audio_ApplyFilterToSound(int soundHandle, int filterId);
+    __declspec(dllexport) void  Framework_Audio_ApplyFilterToGroup(int group, int filterId);
+    __declspec(dllexport) void  Framework_Audio_RemoveFilterFromSound(int soundHandle, int filterId);
+    __declspec(dllexport) void  Framework_Audio_RemoveFilterFromGroup(int group, int filterId);
+    __declspec(dllexport) void  Framework_Audio_SetFilterEnabled(int filterId, bool enabled);
+    __declspec(dllexport) bool  Framework_Audio_IsFilterEnabled(int filterId);
+
+    // Reverb Effects
+    __declspec(dllexport) int   Framework_Audio_CreateReverb();
+    __declspec(dllexport) void  Framework_Audio_DestroyReverb(int reverbId);
+    __declspec(dllexport) void  Framework_Audio_SetReverbDecay(int reverbId, float decayTime);    // Seconds
+    __declspec(dllexport) void  Framework_Audio_SetReverbDensity(int reverbId, float density);    // 0-1
+    __declspec(dllexport) void  Framework_Audio_SetReverbDiffusion(int reverbId, float diffusion); // 0-1
+    __declspec(dllexport) void  Framework_Audio_SetReverbRoomSize(int reverbId, float size);      // 0-1
+    __declspec(dllexport) void  Framework_Audio_SetReverbWetDry(int reverbId, float wet, float dry);
+    __declspec(dllexport) void  Framework_Audio_SetReverbPreDelay(int reverbId, float delayMs);
+    __declspec(dllexport) void  Framework_Audio_ApplyReverbToSound(int soundHandle, int reverbId);
+    __declspec(dllexport) void  Framework_Audio_ApplyReverbToGroup(int group, int reverbId);
+    __declspec(dllexport) void  Framework_Audio_RemoveReverbFromSound(int soundHandle, int reverbId);
+    __declspec(dllexport) void  Framework_Audio_RemoveReverbFromGroup(int group, int reverbId);
+    __declspec(dllexport) void  Framework_Audio_SetReverbPreset(int reverbId, int preset);  // 0=small, 1=medium, 2=large, 3=hall, 4=cave
+
+    // Echo Effect
+    __declspec(dllexport) int   Framework_Audio_CreateEcho();
+    __declspec(dllexport) void  Framework_Audio_DestroyEcho(int echoId);
+    __declspec(dllexport) void  Framework_Audio_SetEchoDelay(int echoId, float delayMs);
+    __declspec(dllexport) void  Framework_Audio_SetEchoFeedback(int echoId, float feedback);  // 0-1
+    __declspec(dllexport) void  Framework_Audio_SetEchoWetDry(int echoId, float wet, float dry);
+    __declspec(dllexport) void  Framework_Audio_ApplyEchoToSound(int soundHandle, int echoId);
+    __declspec(dllexport) void  Framework_Audio_RemoveEchoFromSound(int soundHandle, int echoId);
+
+    // Distortion Effect
+    __declspec(dllexport) int   Framework_Audio_CreateDistortion();
+    __declspec(dllexport) void  Framework_Audio_DestroyDistortion(int distortionId);
+    __declspec(dllexport) void  Framework_Audio_SetDistortionGain(int distortionId, float gain);      // Drive amount
+    __declspec(dllexport) void  Framework_Audio_SetDistortionTone(int distortionId, float tone);      // 0-1 (low to high)
+    __declspec(dllexport) void  Framework_Audio_SetDistortionOutput(int distortionId, float output);  // Output level
+    __declspec(dllexport) void  Framework_Audio_ApplyDistortionToSound(int soundHandle, int distortionId);
+
+    // Compressor Effect
+    __declspec(dllexport) int   Framework_Audio_CreateCompressor();
+    __declspec(dllexport) void  Framework_Audio_DestroyCompressor(int compressorId);
+    __declspec(dllexport) void  Framework_Audio_SetCompressorThreshold(int compressorId, float thresholdDb);
+    __declspec(dllexport) void  Framework_Audio_SetCompressorRatio(int compressorId, float ratio);    // e.g., 4.0 = 4:1
+    __declspec(dllexport) void  Framework_Audio_SetCompressorAttack(int compressorId, float attackMs);
+    __declspec(dllexport) void  Framework_Audio_SetCompressorRelease(int compressorId, float releaseMs);
+    __declspec(dllexport) void  Framework_Audio_SetCompressorMakeupGain(int compressorId, float gainDb);
+    __declspec(dllexport) void  Framework_Audio_ApplyCompressorToGroup(int group, int compressorId);
+
+    // Enhanced 3D Audio
+    __declspec(dllexport) void  Framework_Audio_SetListenerVelocity(float vx, float vy);
+    __declspec(dllexport) void  Framework_Audio_SetListenerOrientation(float forwardX, float forwardY);
+    __declspec(dllexport) void  Framework_Audio_SetDopplerFactor(float factor);          // 0 = disabled, 1 = normal
+    __declspec(dllexport) void  Framework_Audio_SetSpeedOfSound(float speed);            // Default 343 m/s
+    __declspec(dllexport) void  Framework_Audio_PlaySoundWithVelocity(int handle, float x, float y, float vx, float vy);
+    __declspec(dllexport) void  Framework_Audio_SetSoundVelocity(int handle, float vx, float vy);
+    __declspec(dllexport) void  Framework_Audio_SetSoundPosition(int handle, float x, float y);
+    __declspec(dllexport) void  Framework_Audio_SetSpatialRolloff(int rolloffMode);      // 0=linear, 1=inverse, 2=exp
+
+    // Sound Ducking (auto-lower other sounds when important sound plays)
+    __declspec(dllexport) void  Framework_Audio_SetDuckingTarget(int group, float duckVolume);       // Target volume when ducked
+    __declspec(dllexport) void  Framework_Audio_SetDuckingDurations(int group, float attackMs, float releaseMs);
+    __declspec(dllexport) void  Framework_Audio_TriggerDucking(int group, float durationMs);         // Duck for duration
+    __declspec(dllexport) void  Framework_Audio_PlaySoundWithDucking(int handle, int duckGroup);     // Play and duck group
+
+    // Audio Bus System
+    __declspec(dllexport) int   Framework_Audio_CreateBus(const char* name);
+    __declspec(dllexport) void  Framework_Audio_DestroyBus(int busId);
+    __declspec(dllexport) void  Framework_Audio_RouteSoundToBus(int soundHandle, int busId);
+    __declspec(dllexport) void  Framework_Audio_RouteGroupToBus(int group, int busId);
+    __declspec(dllexport) void  Framework_Audio_SetBusVolume(int busId, float volume);
+    __declspec(dllexport) void  Framework_Audio_SetBusMuted(int busId, bool muted);
+    __declspec(dllexport) void  Framework_Audio_ApplyFilterToBus(int busId, int filterId);
+    __declspec(dllexport) void  Framework_Audio_ApplyReverbToBus(int busId, int reverbId);
+    __declspec(dllexport) void  Framework_Audio_ChainBuses(int sourceBusId, int destBusId);
+
+    // Audio Snapshots (preset configurations)
+    __declspec(dllexport) int   Framework_Audio_CreateSnapshot(const char* name);
+    __declspec(dllexport) void  Framework_Audio_DestroySnapshot(int snapshotId);
+    __declspec(dllexport) void  Framework_Audio_SnapshotSetGroupVolume(int snapshotId, int group, float volume);
+    __declspec(dllexport) void  Framework_Audio_SnapshotSetBusVolume(int snapshotId, int busId, float volume);
+    __declspec(dllexport) void  Framework_Audio_SnapshotSetFilterEnabled(int snapshotId, int filterId, bool enabled);
+    __declspec(dllexport) void  Framework_Audio_TransitionToSnapshot(int snapshotId, float durationMs);
+    __declspec(dllexport) int   Framework_Audio_GetActiveSnapshot();
+
+    // Audio Analysis
+    __declspec(dllexport) float Framework_Audio_GetMasterLevel();                         // Current output level (RMS)
+    __declspec(dllexport) float Framework_Audio_GetGroupLevel(int group);
+    __declspec(dllexport) float Framework_Audio_GetSoundLevel(int soundHandle);
+    __declspec(dllexport) void  Framework_Audio_GetSpectrum(int bandCount, float* outBands);  // FFT spectrum
+
+    // ========================================================================
     // SHADERS
     // ========================================================================
     __declspec(dllexport) Shader Framework_LoadShaderF(const char* vsPath, const char* fsPath);
