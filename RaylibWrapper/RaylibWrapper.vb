@@ -3540,15 +3540,15 @@ Public Module FrameworkWrapper
 
     ' Timer State Queries
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Timer_IsValid(timerId As Integer) As Boolean
+    Public Function Framework_Timer_IsValid(timerId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Timer_IsRunning(timerId As Integer) As Boolean
+    Public Function Framework_Timer_IsRunning(timerId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Timer_IsPaused(timerId As Integer) As Boolean
+    Public Function Framework_Timer_IsPaused(timerId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3635,11 +3635,11 @@ Public Module FrameworkWrapper
     End Sub
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Timer_SequenceIsValid(seqId As Integer) As Boolean
+    Public Function Framework_Timer_SequenceIsValid(seqId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Function Framework_Timer_SequenceIsRunning(seqId As Integer) As Boolean
+    Public Function Framework_Timer_SequenceIsRunning(seqId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -3651,7 +3651,7 @@ Public Module FrameworkWrapper
     End Function
 
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
-    Public Sub Framework_Timer_SequenceSetLoop(seqId As Integer, shouldLoop As Boolean)
+    Public Sub Framework_Timer_SequenceSetLoop(seqId As Integer, <MarshalAs(UnmanagedType.I1)> shouldLoop As Boolean)
     End Sub
 
     ' Global Timer Management
