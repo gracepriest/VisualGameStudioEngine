@@ -142,6 +142,12 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler<DataTipRequestEventArgs>? DataTipRequested;
     public event EventHandler<CompletionRequestEventArgs>? CompletionRequested;
     public event EventHandler<int>? BreakpointToggled;
+    public event EventHandler? EditorReady;
+
+    /// <summary>
+    /// Returns true if the editor is fully initialized and ready for use
+    /// </summary>
+    public bool IsReady => _isInitialized && _textEditor != null;
 
     /// <summary>
     /// Initializes bookmark support for this editor
@@ -266,6 +272,9 @@ public partial class CodeEditorControl : UserControl
             _textEditor.Document.Text = Text;
             UpdateFoldings();
         }
+
+        // Notify that the editor is ready for use
+        EditorReady?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)

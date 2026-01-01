@@ -65,11 +65,18 @@ public partial class CodeEditorDocumentView : UserControl
             if (MainEditor != null)
             {
                 MainEditor.CompletionRequested += OnCompletionRequested;
+
+                // Initialize breakpoints when editor is ready
+                if (MainEditor.IsReady)
+                {
+                    InitializeBreakpointSupport(vm);
+                }
+                else
+                {
+                    MainEditor.EditorReady += (s, e) => InitializeBreakpointSupport(vm);
+                }
             }
             vm.CompletionReceived += OnCompletionReceived;
-
-            // Initialize breakpoints
-            InitializeBreakpointSupport(vm);
         }
     }
 
@@ -131,7 +138,7 @@ public partial class CodeEditorDocumentView : UserControl
 
         MainEditor.InitializeBreakpoints(_breakpointLines, line =>
         {
-            // Toggle breakpoint
+            // Toggle breakpoint visually
             if (_breakpointLines.Contains(line))
             {
                 _breakpointLines.Remove(line);
@@ -141,7 +148,19 @@ public partial class CodeEditorDocumentView : UserControl
                 _breakpointLines.Add(line);
             }
             MainEditor.UpdateBreakpoints(_breakpointLines);
+
+            // Notify the ViewModel so breakpoint is registered with debugger
+            vm.OnBreakpointToggled(line);
         });
+    }
+
+    /// <summary>
+    /// Updates the visual breakpoints to match the debugger's state
+    /// </summary>
+    public void SyncBreakpoints(IEnumerable<int> lines)
+    {
+        _breakpointLines = new HashSet<int>(lines);
+        MainEditor?.UpdateBreakpoints(_breakpointLines);
     }
 
     /// <summary>

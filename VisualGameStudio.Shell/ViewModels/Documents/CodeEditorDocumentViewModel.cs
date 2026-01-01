@@ -94,6 +94,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler? IntroduceFieldRequested;
     public event EventHandler? SurroundWithRequested;
     public event EventHandler? PeekDefinitionRequested;
+    public event EventHandler<int>? BreakpointToggled;
 
     /// <summary>
     /// Callback to get selection info from the view
@@ -376,6 +377,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void RequestPeekDefinition()
     {
         PeekDefinitionRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void OnBreakpointToggled(int line)
+    {
+        BreakpointToggled?.Invoke(this, line);
     }
 
     public void RequestAddToWatch(string expression)

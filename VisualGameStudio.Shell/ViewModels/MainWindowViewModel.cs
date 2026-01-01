@@ -543,6 +543,15 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
             };
 
+            // Wire up breakpoint toggle from editor margin to debugger
+            document.BreakpointToggled += (s, line) =>
+            {
+                if (!string.IsNullOrEmpty(document.FilePath))
+                {
+                    Breakpoints.AddBreakpoint(document.FilePath, line);
+                }
+            };
+
             _openDocuments[filePath] = document;
             _dockFactory.AddDocument(document);
         }
