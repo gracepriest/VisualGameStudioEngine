@@ -3,10 +3,13 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using AvaloniaEdit;
+using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Folding;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Rendering;
 using VisualGameStudio.Core.Abstractions.Services;
+using VisualGameStudio.Core.Models;
+using VisualGameStudio.Editor.Completion;
 using VisualGameStudio.Editor.Folding;
 using VisualGameStudio.Editor.Highlighting;
 using VisualGameStudio.Editor.Margins;
@@ -31,6 +34,8 @@ public partial class CodeEditorControl : UserControl
     private MultiCursorRenderer? _multiCursorRenderer;
     private MultiCursorInputHandler? _multiCursorInputHandler;
     private bool _isInitialized = false;
+    private CompletionWindow? _completionWindow;
+    private BreakpointMargin? _breakpointMargin;
 
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
@@ -135,6 +140,8 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler? CaretPositionChanged;
     public event EventHandler<string>? AddToWatchRequested;
     public event EventHandler<DataTipRequestEventArgs>? DataTipRequested;
+    public event EventHandler<CompletionRequestEventArgs>? CompletionRequested;
+    public event EventHandler<int>? BreakpointToggled;
 
     /// <summary>
     /// Initializes bookmark support for this editor
@@ -394,6 +401,14 @@ public partial class CodeEditorControl : UserControl
 
     private void OnTextAreaKeyDown(object? sender, KeyEventArgs e)
     {
+        // Handle Ctrl+Space for code completion
+        if (e.Key == Key.Space && e.KeyModifiers == KeyModifiers.Control)
+        {
+            TriggerCompletion();
+            e.Handled = true;
+            return;
+        }
+
         // Handle Ctrl+M to toggle folding at current line
         if (e.Key == Key.M && e.KeyModifiers == KeyModifiers.Control)
         {
@@ -1382,6 +1397,178 @@ public partial class CodeEditorControl : UserControl
     }
 
     #endregion
+
+    #region Code Completion
+
+    /// <summary>
+    /// Shows the code completion window with the given items
+    /// </summary>
+    public void ShowCompletion(IEnumerable<CompletionData> completionItems)
+    {
+        if (_textEditor == null) return;
+
+        // Close any existing completion window
+        _completionWindow?.Close();
+
+        _completionWindow = new CompletionWindow(_textEditor.TextArea);
+        var data = _completionWindow.CompletionList.CompletionData;
+
+        foreach (var item in completionItems)
+        {
+            data.Add(item);
+        }
+
+        if (data.Count > 0)
+        {
+            _completionWindow.Show();
+            _completionWindow.Closed += (s, e) => _completionWindow = null;
+        }
+    }
+
+    /// <summary>
+    /// Triggers completion request at the current caret position
+    /// </summary>
+    public void TriggerCompletion()
+    {
+        if (_textEditor == null) return;
+
+        var args = new CompletionRequestEventArgs(
+            CaretLine,
+            CaretColumn,
+            CaretOffset);
+
+        CompletionRequested?.Invoke(this, args);
+    }
+
+    /// <summary>
+    /// Returns true if a completion window is currently shown
+    /// </summary>
+    public bool IsCompletionWindowOpen => _completionWindow != null;
+
+    #endregion
+
+    #region Diagnostics / Error Markers
+
+    /// <summary>
+    /// Updates the diagnostic markers in the editor
+    /// </summary>
+    public void UpdateDiagnostics(IEnumerable<DiagnosticItem> diagnostics)
+    {
+        if (_textMarkerService == null || _textEditor == null) return;
+
+        // Clear existing markers
+        _textMarkerService.Clear();
+
+        foreach (var diagnostic in diagnostics)
+        {
+            try
+            {
+                // Convert line/column to offset
+                var line = _textEditor.Document.GetLineByNumber(
+                    Math.Min(diagnostic.Line, _textEditor.Document.LineCount));
+                var startOffset = line.Offset + Math.Min(diagnostic.Column - 1, line.Length);
+
+                // Calculate length - use end position if available, otherwise highlight to end of line
+                int length;
+                if (diagnostic.EndLine > 0 && diagnostic.EndColumn > 0)
+                {
+                    var endLine = _textEditor.Document.GetLineByNumber(
+                        Math.Min(diagnostic.EndLine, _textEditor.Document.LineCount));
+                    var endOffset = endLine.Offset + Math.Min(diagnostic.EndColumn - 1, endLine.Length);
+                    length = Math.Max(1, endOffset - startOffset);
+                }
+                else
+                {
+                    // Default to highlighting the word at this position or rest of line
+                    length = Math.Min(10, line.EndOffset - startOffset);
+                    if (length < 1) length = 1;
+                }
+
+                var markerType = diagnostic.Severity switch
+                {
+                    DiagnosticSeverity.Error => TextMarkerType.Error,
+                    DiagnosticSeverity.Warning => TextMarkerType.Warning,
+                    DiagnosticSeverity.Info => TextMarkerType.Info,
+                    _ => TextMarkerType.Hint
+                };
+
+                _textMarkerService.Create(startOffset, length, markerType, diagnostic.Message);
+            }
+            catch
+            {
+                // Ignore invalid diagnostics
+            }
+        }
+
+        _textEditor.TextArea.TextView.Redraw();
+    }
+
+    #endregion
+
+    #region Breakpoints
+
+    /// <summary>
+    /// Initializes breakpoint margin support
+    /// </summary>
+    public void InitializeBreakpoints(HashSet<int> breakpointLines, Action<int> onBreakpointToggled)
+    {
+        if (_textEditor == null || _breakpointMargin != null) return;
+
+        _breakpointMargin = new BreakpointMargin(_textEditor, breakpointLines);
+        _breakpointMargin.BreakpointToggled += (s, line) =>
+        {
+            onBreakpointToggled(line);
+            BreakpointToggled?.Invoke(this, line);
+        };
+
+        // Insert after bookmark margin (if present) but before line numbers
+        var insertIndex = _bookmarkMargin != null ? 1 : 0;
+        _textEditor.TextArea.LeftMargins.Insert(insertIndex, _breakpointMargin);
+    }
+
+    /// <summary>
+    /// Updates which lines have breakpoints
+    /// </summary>
+    public void UpdateBreakpoints(HashSet<int> breakpointLines)
+    {
+        _breakpointMargin?.UpdateBreakpoints(breakpointLines);
+        _textEditor?.TextArea.TextView.Redraw();
+    }
+
+    /// <summary>
+    /// Highlights the current execution line (during debugging)
+    /// </summary>
+    public void SetCurrentExecutionLine(int? line)
+    {
+        _breakpointMargin?.SetCurrentLine(line);
+        _textEditor?.TextArea.TextView.Redraw();
+
+        // Also scroll to the line if set
+        if (line.HasValue && _textEditor != null)
+        {
+            _textEditor.TextArea.Caret.Line = line.Value;
+            _textEditor.ScrollToLine(line.Value);
+        }
+    }
+
+    #endregion
+}
+
+/// <summary>
+/// Event args for completion requests
+/// </summary>
+public class CompletionRequestEventArgs : EventArgs
+{
+    public int Line { get; }
+    public int Column { get; }
+    public int Offset { get; }
+
+    public CompletionRequestEventArgs(int line, int column, int offset)
+    {
+        Line = line;
+        Column = column;
+        Offset = offset;
+    }
 }
 
 /// <summary>

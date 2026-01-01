@@ -1,6 +1,9 @@
+using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using VisualGameStudio.Core.Models;
+using VisualGameStudio.Editor.Completion;
 using VisualGameStudio.Editor.Controls;
 using VisualGameStudio.Shell.ViewModels;
 using VisualGameStudio.Shell.ViewModels.Documents;
@@ -54,8 +57,105 @@ public partial class CodeEditorDocumentView : UserControl
             {
                 MainEditor.InitializeBookmarks(vm.BookmarkService, vm.FilePath);
             }
+
+            // Wire up diagnostics (error highlighting)
+            vm.DiagnosticsUpdated += OnDiagnosticsUpdated;
+
+            // Wire up code completion
+            if (MainEditor != null)
+            {
+                MainEditor.CompletionRequested += OnCompletionRequested;
+            }
+            vm.CompletionReceived += OnCompletionReceived;
+
+            // Initialize breakpoints
+            InitializeBreakpointSupport(vm);
         }
     }
+
+    private void OnDiagnosticsUpdated(object? sender, IEnumerable<DiagnosticItem> diagnostics)
+    {
+        MainEditor?.UpdateDiagnostics(diagnostics);
+    }
+
+    private void OnCompletionRequested(object? sender, CompletionRequestEventArgs e)
+    {
+        if (DataContext is CodeEditorDocumentViewModel vm)
+        {
+            vm.RequestCompletion(e.Line, e.Column);
+        }
+    }
+
+    private void OnCompletionReceived(object? sender, IEnumerable<Core.Abstractions.Services.CompletionItem> completions)
+    {
+        if (MainEditor == null) return;
+
+        // Convert CompletionItem to CompletionData for AvaloniaEdit
+        var completionDataList = completions.Select(c => new CompletionData(
+            c.Label,
+            c.Detail,
+            ConvertCompletionKind(c.Kind),
+            c.InsertText ?? c.Label
+        ));
+
+        MainEditor.ShowCompletion(completionDataList);
+    }
+
+    private static Editor.Completion.CompletionItemKind ConvertCompletionKind(Core.Abstractions.Services.CompletionItemKind kind)
+    {
+        return kind switch
+        {
+            Core.Abstractions.Services.CompletionItemKind.Method => Editor.Completion.CompletionItemKind.Method,
+            Core.Abstractions.Services.CompletionItemKind.Function => Editor.Completion.CompletionItemKind.Function,
+            Core.Abstractions.Services.CompletionItemKind.Constructor => Editor.Completion.CompletionItemKind.Constructor,
+            Core.Abstractions.Services.CompletionItemKind.Field => Editor.Completion.CompletionItemKind.Field,
+            Core.Abstractions.Services.CompletionItemKind.Variable => Editor.Completion.CompletionItemKind.Variable,
+            Core.Abstractions.Services.CompletionItemKind.Class => Editor.Completion.CompletionItemKind.Class,
+            Core.Abstractions.Services.CompletionItemKind.Interface => Editor.Completion.CompletionItemKind.Interface,
+            Core.Abstractions.Services.CompletionItemKind.Module => Editor.Completion.CompletionItemKind.Module,
+            Core.Abstractions.Services.CompletionItemKind.Property => Editor.Completion.CompletionItemKind.Property,
+            Core.Abstractions.Services.CompletionItemKind.Keyword => Editor.Completion.CompletionItemKind.Keyword,
+            Core.Abstractions.Services.CompletionItemKind.Snippet => Editor.Completion.CompletionItemKind.Snippet,
+            Core.Abstractions.Services.CompletionItemKind.Enum => Editor.Completion.CompletionItemKind.Enum,
+            Core.Abstractions.Services.CompletionItemKind.Constant => Editor.Completion.CompletionItemKind.Constant,
+            Core.Abstractions.Services.CompletionItemKind.Struct => Editor.Completion.CompletionItemKind.Struct,
+            _ => Editor.Completion.CompletionItemKind.Text
+        };
+    }
+
+    private HashSet<int> _breakpointLines = new();
+
+    private void InitializeBreakpointSupport(CodeEditorDocumentViewModel vm)
+    {
+        if (MainEditor == null) return;
+
+        MainEditor.InitializeBreakpoints(_breakpointLines, line =>
+        {
+            // Toggle breakpoint
+            if (_breakpointLines.Contains(line))
+            {
+                _breakpointLines.Remove(line);
+            }
+            else
+            {
+                _breakpointLines.Add(line);
+            }
+            MainEditor.UpdateBreakpoints(_breakpointLines);
+        });
+    }
+
+    /// <summary>
+    /// Sets the current execution line (during debugging)
+    /// </summary>
+    public void SetCurrentExecutionLine(int? line)
+    {
+        MainEditor?.SetCurrentExecutionLine(line);
+    }
+
+    /// <summary>
+    /// Gets the breakpoint lines
+    /// </summary>
+    public HashSet<int> GetBreakpointLines() => _breakpointLines;
 
     private void OnViewKeyDown(object? sender, KeyEventArgs e)
     {

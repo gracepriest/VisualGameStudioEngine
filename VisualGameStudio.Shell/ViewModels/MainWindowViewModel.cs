@@ -194,8 +194,24 @@ public partial class MainWindowViewModel : ViewModelBase
         // Wire up Find in Files navigation
         FindInFiles.SetNavigationCallback(OpenFileAtLine);
 
+        // Subscribe to language service diagnostics for error highlighting
+        _languageService.DiagnosticsReceived += OnDiagnosticsReceived;
+
         // Start language service
         _ = _languageService.StartAsync();
+    }
+
+    private void OnDiagnosticsReceived(object? sender, DiagnosticsEventArgs e)
+    {
+        // Forward diagnostics to the error list
+        ErrorList.UpdateDiagnostics(e.Diagnostics);
+
+        // Forward to the specific document for error highlighting
+        var filePath = e.Uri.Replace("file:///", "").Replace("/", "\\");
+        if (_openDocuments.TryGetValue(filePath, out var doc))
+        {
+            doc.UpdateDiagnostics(e.Diagnostics);
+        }
     }
 
     private void OpenFileAtLine(string filePath, int line)
@@ -509,6 +525,23 @@ public partial class MainWindowViewModel : ViewModelBase
             document.IntroduceFieldRequested += async (s, e) => await IntroduceFieldAsync();
             document.SurroundWithRequested += async (s, e) => await SurroundWithAsync();
             document.PeekDefinitionRequested += async (s, e) => await PeekDefinitionAsync();
+
+            // Wire up code completion requests
+            document.CompletionRequested += async (s, e) =>
+            {
+                if (_languageService.IsConnected && e != null)
+                {
+                    var completions = await _languageService.GetCompletionsAsync(
+                        document.FilePath ?? "",
+                        e.Line,
+                        e.Column);
+
+                    if (completions?.Any() == true)
+                    {
+                        document.ProvideCompletions(completions);
+                    }
+                }
+            };
 
             _openDocuments[filePath] = document;
             _dockFactory.AddDocument(document);

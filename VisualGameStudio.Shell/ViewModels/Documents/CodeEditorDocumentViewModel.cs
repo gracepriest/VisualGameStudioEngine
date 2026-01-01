@@ -4,6 +4,7 @@ using Dock.Model.Mvvm.Controls;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
 using VisualGameStudio.Core.Events;
+using VisualGameStudio.Core.Models;
 using VisualGameStudio.Shell.ViewModels;
 
 namespace VisualGameStudio.Shell.ViewModels.Documents;
@@ -468,6 +469,50 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     private void CloseSplit()
     {
         IsSplitView = false;
+    }
+
+    #region Diagnostics and Completion
+
+    public event EventHandler<IEnumerable<DiagnosticItem>>? DiagnosticsUpdated;
+    public event EventHandler<CompletionRequestedEventArgs>? CompletionRequested;
+    public event EventHandler<IEnumerable<Core.Abstractions.Services.CompletionItem>>? CompletionReceived;
+
+    /// <summary>
+    /// Updates diagnostics for this document (error highlighting)
+    /// </summary>
+    public void UpdateDiagnostics(IEnumerable<DiagnosticItem> diagnostics)
+    {
+        DiagnosticsUpdated?.Invoke(this, diagnostics);
+    }
+
+    /// <summary>
+    /// Requests code completion at the specified position
+    /// </summary>
+    public void RequestCompletion(int line, int column)
+    {
+        CompletionRequested?.Invoke(this, new CompletionRequestedEventArgs(line, column));
+    }
+
+    /// <summary>
+    /// Provides completion items to the editor
+    /// </summary>
+    public void ProvideCompletions(IEnumerable<Core.Abstractions.Services.CompletionItem> completions)
+    {
+        CompletionReceived?.Invoke(this, completions);
+    }
+
+    #endregion
+}
+
+public class CompletionRequestedEventArgs : EventArgs
+{
+    public int Line { get; }
+    public int Column { get; }
+
+    public CompletionRequestedEventArgs(int line, int column)
+    {
+        Line = line;
+        Column = column;
     }
 }
 
