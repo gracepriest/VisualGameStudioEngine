@@ -167,6 +167,9 @@ public partial class MainWindowViewModel : ViewModelBase
         Layout = _dockFactory.CreateLayout();
         _dockFactory.InitLayout(Layout);
 
+        // Subscribe to document close event
+        _dockFactory.DocumentClosed += OnDocumentClosed;
+
         // Subscribe to events
         _projectService.ProjectOpened += OnProjectOpened;
         _projectService.ProjectClosed += OnProjectClosed;
@@ -215,6 +218,11 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         Title = $"{e.Project.Name} - Visual Game Studio";
         StatusText = $"Project loaded: {e.Project.Name}";
+    }
+
+    private void OnDocumentClosed(object? sender, string filePath)
+    {
+        _openDocuments.Remove(filePath);
     }
 
     private void OnProjectClosed(object? sender, ProjectEventArgs e)
@@ -449,6 +457,7 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             var content = await _fileService.ReadFileAsync(filePath);
+
             var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
             {
                 FilePath = filePath,

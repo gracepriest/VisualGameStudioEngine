@@ -46,7 +46,7 @@
           <MenuItem Header="Peek Definition" Click="OnPeekDefinition" InputGesture="Alt+F12"/>
           <MenuItem Header="Find All References" Click="OnFindAllReferences" InputGesture="Shift+F12"/>
           <Separator/>
-          <MenuItem Header="Surround With..." Click="OnSurroundWith" InputGesture="Ctrl+K, Ctrl+S"/>
+          <MenuItem Header="Surround With..." Click="OnSurroundWith"/>
           <Separator/>
           <MenuItem Header="Rename Symbol..." Click="OnRenameSymbol" InputGesture="Ctrl+R"/>
           <MenuItem Header="Extract Method..." Click="OnExtractMethod" InputGesture="Ctrl+Shift+M"/>
@@ -79,10 +79,10 @@
           <MenuItem Header="Convert to Interface..." Click="OnConvertToInterface" InputGesture="Ctrl+Shift+W"/>
           <MenuItem Header="Invert If..." Click="OnInvertIf" InputGesture="Ctrl+Shift+H"/>
           <MenuItem Header="Convert to Select Case..." Click="OnConvertToSelectCase" InputGesture="Ctrl+Alt+C"/>
-          <MenuItem Header="Split Declaration" Click="OnSplitDeclaration" InputGesture="Ctrl+Shift+;"/>
+          <MenuItem Header="Split Declaration" Click="OnSplitDeclaration"/>
           <MenuItem Header="Introduce Field..." Click="OnIntroduceField" InputGesture="Ctrl+Alt+F"/>
           <Separator/>
-          <MenuItem Header="Toggle Comment" Click="OnToggleComment" InputGesture="Ctrl+/"/>
+          <MenuItem Header="Toggle Comment" Click="OnToggleComment" InputGesture="Ctrl+OemQuestion"/>
         </ContextMenu>
       </editor:CodeEditorControl.ContextMenu>
     </editor:CodeEditorControl>

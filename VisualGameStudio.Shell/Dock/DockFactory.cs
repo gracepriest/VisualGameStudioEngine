@@ -9,6 +9,8 @@ namespace VisualGameStudio.Shell.Dock;
 
 public class DockFactory : Factory
 {
+    public event EventHandler<string>? DocumentClosed;
+
     private SolutionExplorerViewModel? _solutionExplorer;
     private OutputPanelViewModel? _outputPanel;
     private ErrorListViewModel? _errorList;
@@ -317,6 +319,17 @@ public class DockFactory : Factory
         };
 
         base.InitLayout(layout);
+    }
+
+    public override void CloseDockable(IDockable dockable)
+    {
+        // Fire DocumentClosed event before closing if it's a code editor document
+        if (dockable is CodeEditorDocument editorDoc && editorDoc.ViewModel?.FilePath != null)
+        {
+            DocumentClosed?.Invoke(this, editorDoc.ViewModel.FilePath);
+        }
+
+        base.CloseDockable(dockable);
     }
 
     public void AddDocument(CodeEditorDocumentViewModel document)

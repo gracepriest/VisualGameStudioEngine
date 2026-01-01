@@ -16,7 +16,6 @@ public partial class CodeEditorDocumentView : UserControl
     public CodeEditorDocumentView()
     {
         InitializeComponent();
-
         DataContextChanged += OnDataContextChanged;
         KeyDown += OnViewKeyDown;
     }

@@ -30,6 +30,7 @@ public partial class CodeEditorControl : UserControl
     private MultiCursorManager? _multiCursorManager;
     private MultiCursorRenderer? _multiCursorRenderer;
     private MultiCursorInputHandler? _multiCursorInputHandler;
+    private bool _isInitialized = false;
 
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
@@ -250,6 +251,14 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.PointerMoved += OnTextAreaPointerMoved;
         _textEditor.TextArea.PointerExited += OnTextAreaPointerExited;
 
+        // Mark as initialized and apply any pending text from binding
+        _isInitialized = true;
+
+        if (!string.IsNullOrEmpty(Text) && _textEditor.Document.Text != Text)
+        {
+            _textEditor.Document.Text = Text;
+            UpdateFoldings();
+        }
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -551,7 +560,8 @@ public partial class CodeEditorControl : UserControl
     {
         base.OnPropertyChanged(change);
 
-        if (_textEditor == null) return;
+        // Skip if not initialized yet - OnInitialized will apply pending values
+        if (!_isInitialized || _textEditor == null) return;
 
         if (change.Property == TextProperty)
         {
