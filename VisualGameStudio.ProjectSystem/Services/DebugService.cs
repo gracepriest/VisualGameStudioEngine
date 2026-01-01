@@ -50,7 +50,23 @@ public class DebugService : IDebugService
 
         if (!File.Exists(_compilerPath))
         {
-            _compilerPath = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "..", "..", "gracepriest", "BasicLangvb", "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"));
+            // Try to find BasicLang.dll in the solution's BasicLang project
+            var solutionDir = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", ".."));
+            var possiblePaths = new[]
+            {
+                Path.Combine(solutionDir, "BasicLang", "bin", "Release", "net8.0", "BasicLang.dll"),
+                Path.Combine(solutionDir, "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"),
+                Path.Combine(solutionDir, "BasicLang", "binReleaseFinal", "BasicLang.dll"),
+            };
+
+            foreach (var path in possiblePaths)
+            {
+                if (File.Exists(path))
+                {
+                    _compilerPath = path;
+                    break;
+                }
+            }
         }
     }
 
@@ -191,8 +207,12 @@ public class DebugService : IDebugService
             _targetProcess.EnableRaisingEvents = true;
             _targetProcess.Exited += (s, e) =>
             {
+                // Wait a short time to ensure all output is captured before signaling completion
+                Thread.Sleep(100);
+                var exitCode = 0;
+                try { exitCode = _targetProcess?.ExitCode ?? 0; } catch { }
+                OutputReceived?.Invoke(this, new DebugOutputEventArgs { Category = "stdout", Output = $"\nProgram exited with code {exitCode}\n" });
                 SetState(DebugState.Stopped);
-                _outputService.WriteLine($"Program exited with code {_targetProcess?.ExitCode}", OutputCategory.Debug);
             };
 
             _targetProcess.Start();

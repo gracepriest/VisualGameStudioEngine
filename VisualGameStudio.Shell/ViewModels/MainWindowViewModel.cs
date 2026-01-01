@@ -707,19 +707,40 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Find the main source file
-        var mainFile = _projectService.CurrentProject.GetSourceFiles().FirstOrDefault();
+        // Use the executable path from build result
+        if (string.IsNullOrEmpty(buildResult.ExecutablePath) || !File.Exists(buildResult.ExecutablePath))
+        {
+            await _dialogService.ShowMessageAsync("Debug", "No executable found after build.",
+                DialogButtons.Ok, DialogIcon.Error);
+            return;
+        }
+
+        // Find main source file for the debug adapter (it interprets source, not executable)
+        var mainFile = _projectService.CurrentProject.Items
+            .FirstOrDefault(i => i.ItemType == ProjectItemType.Compile);
+
         if (mainFile == null)
         {
-            await _dialogService.ShowMessageAsync("Debug", "No source files found.",
+            await _dialogService.ShowMessageAsync("Debug", "No source file found in project.",
+                DialogButtons.Ok, DialogIcon.Error);
+            return;
+        }
+
+        var sourceFilePath = Path.Combine(_projectService.CurrentProject.ProjectDirectory, mainFile.Include);
+        if (!File.Exists(sourceFilePath))
+        {
+            await _dialogService.ShowMessageAsync("Debug", $"Source file not found: {sourceFilePath}",
                 DialogButtons.Ok, DialogIcon.Error);
             return;
         }
 
         StatusText = "Starting debugger...";
+        OutputPanel.SelectedCategory = OutputCategory.General;  // Switch to General output to see program output
+        OutputPanel.AppendOutput($"\n========== Debugging: {Path.GetFileName(sourceFilePath)} ==========\n");
+
         var config = new DebugConfiguration
         {
-            Program = Path.Combine(_projectService.CurrentProject.ProjectDirectory, mainFile.Include),
+            Program = sourceFilePath,  // Pass source file, not executable - debug adapter interprets source
             WorkingDirectory = _projectService.CurrentProject.ProjectDirectory,
             StopOnEntry = false
         };
@@ -727,7 +748,11 @@ public partial class MainWindowViewModel : ViewModelBase
         // Collect breakpoints to pass to debug service
         var breakpointsDict = Breakpoints.GetAllBreakpoints();
 
-        await _debugService.StartDebuggingAsync(config, breakpointsDict);
+        var success = await _debugService.StartDebuggingAsync(config, breakpointsDict);
+        if (!success)
+        {
+            OutputPanel.AppendOutput("Failed to start debugger.\n");
+        }
     }
 
     [RelayCommand]
@@ -753,7 +778,14 @@ public partial class MainWindowViewModel : ViewModelBase
             WorkingDirectory = _projectService.CurrentProject.ProjectDirectory
         };
 
-        await _debugService.StartWithoutDebuggingAsync(config);
+        OutputPanel.SelectedCategory = OutputCategory.General;  // Switch to General output to see program output
+        OutputPanel.AppendOutput($"\n========== Running: {Path.GetFileName(buildResult.ExecutablePath)} ==========\n");
+
+        var success = await _debugService.StartWithoutDebuggingAsync(config);
+        if (!success)
+        {
+            OutputPanel.AppendOutput("Failed to start program.\n");
+        }
     }
 
     [RelayCommand]

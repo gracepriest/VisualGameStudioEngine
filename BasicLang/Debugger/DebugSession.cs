@@ -440,7 +440,44 @@ namespace BasicLang.Debugger
             // Start execution if not stopping on entry
             if (!_stopOnEntry && _interpreter != null)
             {
-                Task.Run(() => _interpreter.Run());
+                Task.Run(async () =>
+                {
+                    int exitCode = 0;
+                    try
+                    {
+                        _interpreter.Run();
+                    }
+                    catch (Exception ex)
+                    {
+                        exitCode = 1;
+                        await SendEventAsync("output", new Dictionary<string, object>
+                        {
+                            ["category"] = "stderr",
+                            ["output"] = $"Runtime error: {ex.Message}\n"
+                        });
+                    }
+                    finally
+                    {
+                        // Wait a bit to ensure all output events are flushed
+                        await Task.Delay(100);
+
+                        // Send output message with exit code (like run mode does)
+                        await SendEventAsync("output", new Dictionary<string, object>
+                        {
+                            ["category"] = "stdout",
+                            ["output"] = $"\nProgram exited with code {exitCode}\n"
+                        });
+
+                        // Send exited event with exit code (DAP protocol)
+                        await SendEventAsync("exited", new Dictionary<string, object>
+                        {
+                            ["exitCode"] = exitCode
+                        });
+
+                        // Send terminated event when program completes
+                        await SendEventAsync("terminated", new Dictionary<string, object>());
+                    }
+                });
             }
             return CreateResponse(request, true);
         }
@@ -774,11 +811,12 @@ namespace BasicLang.Debugger
 
         private void OnOutputProduced(object sender, OutputEventArgs e)
         {
-            Task.Run(() => SendEventAsync("output", new Dictionary<string, object>
+            // Use synchronous wait to ensure output is sent before continuing
+            SendEventAsync("output", new Dictionary<string, object>
             {
                 ["category"] = "stdout",
                 ["output"] = e.Text
-            }));
+            }).Wait();
         }
 
         private void OnLogpointHit(object sender, LogpointEventArgs e)
