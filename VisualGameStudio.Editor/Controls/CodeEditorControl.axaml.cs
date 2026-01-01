@@ -36,6 +36,8 @@ public partial class CodeEditorControl : UserControl
     private bool _isInitialized = false;
     private CompletionWindow? _completionWindow;
     private BreakpointMargin? _breakpointMargin;
+    private bool _isUpdatingFoldings = false;
+    private bool _isFoldingEnabled = true;
 
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
@@ -298,39 +300,54 @@ public partial class CodeEditorControl : UserControl
     private void OnTextAreaPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         // Check if click is in the fold margin area (left side before line numbers)
-        var point = e.GetCurrentPoint(_textEditor!.TextArea);
-        if (point.Properties.IsLeftButtonPressed)
+        if (_textEditor == null) return;
+
+        try
         {
-            // The fold margin is typically the first ~12 pixels on the left
-            // Line number margin comes after that
-            var textView = _textEditor.TextArea.TextView;
-            var leftMarginWidth = GetLeftMarginWidth();
-
-            System.IO.File.AppendAllText(@"C:\Users\melvi\source\repos\Visual Game Studio\click_debug.txt",
-                $"Click at X={point.Position.X}, leftMarginWidth={leftMarginWidth}\n");
-
-            if (point.Position.X < leftMarginWidth)
+            var point = e.GetCurrentPoint(_textEditor.TextArea);
+            if (point.Properties.IsLeftButtonPressed && !_isUpdatingFoldings && !_isFoldingInProgress)
             {
-                // Click is in margin area - check for fold toggle
-                var visualLine = textView.GetVisualLineFromVisualTop(point.Position.Y + textView.ScrollOffset.Y);
-                if (visualLine != null && _foldingManager != null)
+                // The fold margin is typically the first ~12 pixels on the left
+                // Line number margin comes after that
+                var textView = _textEditor.TextArea.TextView;
+                var leftMarginWidth = GetLeftMarginWidth();
+
+                if (point.Position.X < leftMarginWidth)
                 {
-                    var lineStartOffset = visualLine.FirstDocumentLine.Offset;
-                    var lineEndOffset = visualLine.FirstDocumentLine.EndOffset;
-
-                    var folding = _foldingManager.GetFoldingsContaining(lineStartOffset).FirstOrDefault()
-                               ?? _foldingManager.AllFoldings.FirstOrDefault(f =>
-                                   f.StartOffset >= lineStartOffset && f.StartOffset <= lineEndOffset);
-
-                    if (folding != null)
+                    // Click is in margin area - check for fold toggle
+                    var visualLine = textView.GetVisualLineFromVisualTop(point.Position.Y + textView.ScrollOffset.Y);
+                    if (visualLine != null && _foldingManager != null)
                     {
-                        folding.IsFolded = !folding.IsFolded;
-                        textView.Redraw();
-                        e.Handled = true;
-                        return;
+                        var lineStartOffset = visualLine.FirstDocumentLine.Offset;
+                        var lineEndOffset = visualLine.FirstDocumentLine.EndOffset;
+
+                        // Validate offsets
+                        if (lineStartOffset >= 0 && lineEndOffset <= _textEditor.Document.TextLength)
+                        {
+                            var allFoldings = _foldingManager.AllFoldings?.ToList();
+                            var folding = _foldingManager.GetFoldingsContaining(lineStartOffset).FirstOrDefault()
+                                       ?? allFoldings?.FirstOrDefault(f =>
+                                           f.StartOffset >= lineStartOffset && f.StartOffset <= lineEndOffset);
+
+                            if (folding != null)
+                            {
+                                folding.IsFolded = !folding.IsFolded;
+                                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                                {
+                                    try { textView?.Redraw(); }
+                                    catch { /* Ignore */ }
+                                });
+                                e.Handled = true;
+                                return;
+                            }
+                        }
                     }
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error in text area pointer pressed: {ex.Message}");
         }
 
         _multiCursorInputHandler?.HandlePointerPressed(e);
@@ -348,63 +365,109 @@ public partial class CodeEditorControl : UserControl
 
     private void OnEditorPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (_textEditor == null || _foldingManager == null) return;
+        if (_textEditor == null || _foldingManager == null || _isUpdatingFoldings || _isFoldingInProgress) return;
 
-        var point = e.GetCurrentPoint(_textEditor);
-        if (!point.Properties.IsLeftButtonPressed) return;
-
-        // Check if click is in the fold margin area (first ~15 pixels)
-        if (point.Position.X >= 0 && point.Position.X < 15)
+        try
         {
-            var textView = _textEditor.TextArea.TextView;
+            var point = e.GetCurrentPoint(_textEditor);
+            if (!point.Properties.IsLeftButtonPressed) return;
+
+            // Check if click is in the fold margin area (first ~15 pixels)
+            if (point.Position.X >= 0 && point.Position.X < 15)
+            {
+                var textView = _textEditor.TextArea.TextView;
+                var visualLine = textView.GetVisualLineFromVisualTop(point.Position.Y + textView.ScrollOffset.Y);
+                if (visualLine != null)
+                {
+                    var lineStartOffset = visualLine.FirstDocumentLine.Offset;
+                    var lineEndOffset = visualLine.FirstDocumentLine.EndOffset;
+
+                    // Validate offsets
+                    if (lineStartOffset >= 0 && lineEndOffset <= _textEditor.Document.TextLength)
+                    {
+                        var allFoldings = _foldingManager.AllFoldings?.ToList();
+                        var folding = _foldingManager.GetFoldingsContaining(lineStartOffset).FirstOrDefault()
+                                   ?? allFoldings?.FirstOrDefault(f =>
+                                       f.StartOffset >= lineStartOffset && f.StartOffset <= lineEndOffset);
+
+                        if (folding != null)
+                        {
+                            folding.IsFolded = !folding.IsFolded;
+                            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                            {
+                                try { textView?.Redraw(); }
+                                catch { /* Ignore */ }
+                            });
+                            e.Handled = true;
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error in editor pointer pressed: {ex.Message}");
+        }
+    }
+
+    private bool _isFoldingInProgress;
+
+    private void OnFoldingMarginPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        // Prevent re-entrancy or clicks during folding update
+        if (_isFoldingInProgress || _isUpdatingFoldings) return;
+
+        try
+        {
+            _isFoldingInProgress = true;
+
+            if (_foldingManager == null || _textEditor == null || sender == null) return;
+
+            var point = e.GetCurrentPoint((Avalonia.Visual)sender);
+            if (!point.Properties.IsLeftButtonPressed) return;
+
+            // Get the visual line at the click position
+            var textView = _textEditor.TextArea?.TextView;
+            if (textView == null || !textView.VisualLinesValid) return;
+
             var visualLine = textView.GetVisualLineFromVisualTop(point.Position.Y + textView.ScrollOffset.Y);
-            if (visualLine != null)
+
+            if (visualLine?.FirstDocumentLine != null)
             {
                 var lineStartOffset = visualLine.FirstDocumentLine.Offset;
                 var lineEndOffset = visualLine.FirstDocumentLine.EndOffset;
 
+                // Validate offsets
+                if (lineStartOffset < 0 || lineEndOffset > _textEditor.Document.TextLength) return;
+
+                // Find folding at this line - use ToList() to avoid collection modification issues
+                var allFoldings = _foldingManager.AllFoldings?.ToList();
+                if (allFoldings == null) return;
+
                 var folding = _foldingManager.GetFoldingsContaining(lineStartOffset).FirstOrDefault()
-                           ?? _foldingManager.AllFoldings.FirstOrDefault(f =>
+                           ?? allFoldings.FirstOrDefault(f =>
                                f.StartOffset >= lineStartOffset && f.StartOffset <= lineEndOffset);
 
                 if (folding != null)
                 {
                     folding.IsFolded = !folding.IsFolded;
-                    textView.Redraw();
+                    // Use dispatcher to avoid issues during event handling
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        try { textView?.Redraw(); }
+                        catch { /* Ignore redraw errors */ }
+                    });
                     e.Handled = true;
                 }
             }
         }
-    }
-
-    private void OnFoldingMarginPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (_foldingManager == null || _textEditor == null) return;
-
-        var point = e.GetCurrentPoint((Avalonia.Visual)sender!);
-        if (!point.Properties.IsLeftButtonPressed) return;
-
-        // Get the visual line at the click position
-        var textView = _textEditor.TextArea.TextView;
-        var visualLine = textView.GetVisualLineFromVisualTop(point.Position.Y + textView.ScrollOffset.Y);
-
-        if (visualLine != null)
+        catch (Exception ex)
         {
-            var lineNumber = visualLine.FirstDocumentLine.LineNumber;
-            var lineStartOffset = visualLine.FirstDocumentLine.Offset;
-            var lineEndOffset = visualLine.FirstDocumentLine.EndOffset;
-
-            // Find folding at this line
-            var folding = _foldingManager.GetFoldingsContaining(lineStartOffset).FirstOrDefault()
-                       ?? _foldingManager.AllFoldings.FirstOrDefault(f =>
-                           f.StartOffset >= lineStartOffset && f.StartOffset <= lineEndOffset);
-
-            if (folding != null)
-            {
-                folding.IsFolded = !folding.IsFolded;
-                textView.Redraw();
-                e.Handled = true;
-            }
+            System.Diagnostics.Debug.WriteLine($"Error in folding margin click: {ex.Message}");
+        }
+        finally
+        {
+            _isFoldingInProgress = false;
         }
     }
 
@@ -531,9 +594,93 @@ public partial class CodeEditorControl : UserControl
 
     private void UpdateFoldings()
     {
-        if (_foldingManager != null && _textEditor.Document != null)
+        // Prevent re-entrancy and skip if folding disabled
+        if (_isUpdatingFoldings || !_isFoldingEnabled) return;
+        if (_foldingManager == null || _textEditor?.Document == null || _textEditor?.TextArea == null) return;
+
+        _isUpdatingFoldings = true;
+        try
         {
+            // Store which lines were folded before update
+            var foldedLines = new HashSet<int>();
+            try
+            {
+                foreach (var folding in _foldingManager.AllFoldings)
+                {
+                    if (folding.IsFolded)
+                    {
+                        // Get line number from offset - may throw if offset is now invalid
+                        try
+                        {
+                            var line = _textEditor.Document.GetLineByOffset(
+                                Math.Min(folding.StartOffset, _textEditor.Document.TextLength));
+                            foldedLines.Add(line.LineNumber);
+                        }
+                        catch { /* Offset invalid, skip */ }
+                    }
+                }
+            }
+            catch { /* Collection may have been modified, skip preservation */ }
+
+            // Completely reinstall folding manager to avoid stale state
+            try
+            {
+                FoldingManager.Uninstall(_foldingManager);
+            }
+            catch { /* May already be invalid */ }
+
+            _foldingManager = FoldingManager.Install(_textEditor.TextArea);
+
+            // Apply new foldings
             _foldingStrategy.UpdateFoldings(_foldingManager, _textEditor.Document);
+
+            // Re-attach fold margin click handlers
+            foreach (var margin in _textEditor.TextArea.LeftMargins)
+            {
+                if (margin is FoldingMargin foldingMargin)
+                {
+                    // Remove any existing handlers first to avoid duplicates
+                    foldingMargin.PointerPressed -= OnFoldingMarginPointerPressed;
+                    foldingMargin.PointerPressed += OnFoldingMarginPointerPressed;
+                }
+            }
+
+            // Restore folded state for lines that were previously folded
+            if (foldedLines.Count > 0)
+            {
+                foreach (var folding in _foldingManager.AllFoldings)
+                {
+                    try
+                    {
+                        var line = _textEditor.Document.GetLineByOffset(
+                            Math.Min(folding.StartOffset, _textEditor.Document.TextLength));
+                        if (foldedLines.Contains(line.LineNumber))
+                        {
+                            folding.IsFolded = true;
+                        }
+                    }
+                    catch { /* Ignore invalid folding */ }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error updating foldings: {ex.Message}");
+            // If update fails, try to reinstall a fresh folding manager
+            try
+            {
+                if (_foldingManager != null)
+                {
+                    try { FoldingManager.Uninstall(_foldingManager); }
+                    catch { /* Already uninstalled or invalid */ }
+                }
+                _foldingManager = FoldingManager.Install(_textEditor!.TextArea);
+            }
+            catch { /* Give up on folding for now */ }
+        }
+        finally
+        {
+            _isUpdatingFoldings = false;
         }
     }
 
@@ -542,15 +689,28 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void ToggleFoldAtCaret()
     {
-        if (_foldingManager == null || _textEditor == null) return;
+        if (_foldingManager == null || _textEditor == null || _isUpdatingFoldings) return;
 
-        var offset = _textEditor.CaretOffset;
-        var folding = _foldingManager.GetFoldingsContaining(offset).FirstOrDefault();
-
-        if (folding != null)
+        try
         {
-            folding.IsFolded = !folding.IsFolded;
-            _textEditor.TextArea.TextView.Redraw();
+            var offset = _textEditor.CaretOffset;
+            if (offset < 0 || offset > _textEditor.Document.TextLength) return;
+
+            var folding = _foldingManager.GetFoldingsContaining(offset).FirstOrDefault();
+
+            if (folding != null)
+            {
+                folding.IsFolded = !folding.IsFolded;
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    try { _textEditor?.TextArea?.TextView?.Redraw(); }
+                    catch { /* Ignore redraw errors */ }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error toggling fold: {ex.Message}");
         }
     }
 
@@ -559,12 +719,24 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void FoldAll()
     {
-        if (_foldingManager == null) return;
-        foreach (var folding in _foldingManager.AllFoldings)
+        if (_foldingManager == null || _isUpdatingFoldings) return;
+        try
         {
-            folding.IsFolded = true;
+            foreach (var folding in _foldingManager.AllFoldings.ToList())
+            {
+                try { folding.IsFolded = true; }
+                catch { /* Ignore invalid folding */ }
+            }
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                try { _textEditor?.TextArea?.TextView?.Redraw(); }
+                catch { /* Ignore redraw errors */ }
+            });
         }
-        _textEditor?.TextArea.TextView.Redraw();
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error folding all: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -572,12 +744,24 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void UnfoldAll()
     {
-        if (_foldingManager == null) return;
-        foreach (var folding in _foldingManager.AllFoldings)
+        if (_foldingManager == null || _isUpdatingFoldings) return;
+        try
         {
-            folding.IsFolded = false;
+            foreach (var folding in _foldingManager.AllFoldings.ToList())
+            {
+                try { folding.IsFolded = false; }
+                catch { /* Ignore invalid folding */ }
+            }
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                try { _textEditor?.TextArea?.TextView?.Redraw(); }
+                catch { /* Ignore redraw errors */ }
+            });
         }
-        _textEditor?.TextArea.TextView.Redraw();
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error unfolding all: {ex.Message}");
+        }
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
