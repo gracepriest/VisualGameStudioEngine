@@ -156,7 +156,10 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Const))
                 return ParseConstantDeclaration();
 
-            throw new ParseException($"Unexpected token at top level: {Peek().Type}", Peek());
+            throw new ParseException(
+                $"Unexpected token at top level: '{Peek().Lexeme}' ({Peek().Type})",
+                Peek(),
+                "Top-level code must be inside a Module, Class, Function, or Sub. Valid declarations include: Module, Class, Interface, Function, Sub, Dim, Const, or Namespace.");
         }
 
         // ====================================================================
@@ -281,7 +284,10 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Extension))
                 return ParseExtensionMethod();
 
-            throw new ParseException($"Unexpected token in module: {Peek().Type}", Peek());
+            throw new ParseException(
+                $"Unexpected token in module: '{Peek().Lexeme}' ({Peek().Type})",
+                Peek(),
+                "Inside a Module, valid declarations include: Function, Sub, Dim, Const, Type, Structure, or nested Class.");
         }
 
         private UsingDirectiveNode ParseUsing()
@@ -637,7 +643,10 @@ namespace BasicLang.Compiler
                 }
             }
 
-            throw new ParseException($"Unexpected token in class: {Peek().Type}", Peek());
+            throw new ParseException(
+                $"Unexpected token in class: '{Peek().Lexeme}' ({Peek().Type})",
+                Peek(),
+                "Inside a Class, valid members include: Function, Sub, Property, Event, Field declarations (Dim), Const, or nested Class.");
         }
 
         private ConstructorNode ParseConstructor()
@@ -3292,7 +3301,10 @@ namespace BasicLang.Compiler
                 return node;
             }
 
-            throw new ParseException($"Unexpected token in expression: {Peek().Type}", Peek());
+            throw new ParseException(
+                $"Unexpected token in expression: '{Peek().Lexeme}' ({Peek().Type})",
+                Peek(),
+                "Expected a value, variable, function call, or operator. Valid expression elements include: literals, identifiers, parentheses, or operators like +, -, *, /.");
         }
 
         private InterpolatedStringNode ParseInterpolatedString()

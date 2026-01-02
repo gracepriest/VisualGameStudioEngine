@@ -894,7 +894,12 @@ namespace BasicLang.Compiler
             
             if (IsAtEnd())
             {
-                throw new Exception($"Unterminated string at line {startLine}, column {startColumn}");
+                throw new LexerException(
+                    ErrorCode.BL1001_UnterminatedString,
+                    "Unterminated string literal. Did you forget the closing quote?",
+                    startLine,
+                    startColumn,
+                    _source);
             }
             
             Advance(); // Consume closing quote
@@ -954,7 +959,12 @@ namespace BasicLang.Compiler
 
             if (IsAtEnd())
             {
-                throw new Exception($"Unterminated interpolated string at line {startLine}, column {startColumn}");
+                throw new LexerException(
+                    ErrorCode.BL1002_UnterminatedInterpolatedString,
+                    "Unterminated interpolated string literal. Did you forget the closing quote?",
+                    startLine,
+                    startColumn,
+                    _source);
             }
 
             Advance(); // Consume closing quote
@@ -1231,7 +1241,12 @@ namespace BasicLang.Compiler
 
             if (braceDepth > 0)
             {
-                throw new Exception($"Unterminated inline code block at line {_line}");
+                throw new LexerException(
+                    ErrorCode.BL2004_MismatchedBlock,
+                    "Unterminated inline code block. Did you forget the closing '}'?",
+                    _line,
+                    _column,
+                    _source);
             }
 
             return sb.ToString().Trim();

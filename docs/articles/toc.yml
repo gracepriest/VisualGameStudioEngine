@@ -1,0 +1,12 @@
+- name: Getting Started
+  href: getting-started.md
+- name: BasicLang Language Guide
+  href: basiclang-guide.md
+- name: IDE User Guide
+  href: ide-guide.md
+- name: Game Engine Guide
+  href: engine-guide.md
+- name: Debugging Guide
+  href: debugging-guide.md
+- name: Code Coverage
+  href: code-coverage.md
