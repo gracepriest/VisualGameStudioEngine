@@ -307,10 +307,151 @@ public class RefactoringService : IRefactoringService
         return Task.FromResult<IReadOnlyList<CodeAction>>(actions);
     }
 
-    public Task<TextEdit[]> ApplyCodeActionAsync(CodeAction action, CancellationToken cancellationToken = default)
+    public async Task<TextEdit[]> ApplyCodeActionAsync(CodeAction action, CancellationToken cancellationToken = default)
     {
-        // Implementation depends on the action
-        return Task.FromResult(Array.Empty<TextEdit>());
+        // Extract context from action.Data if available
+        if (action.Data is not CodeActionContext context)
+        {
+            return Array.Empty<TextEdit>();
+        }
+
+        var edits = new List<TextEdit>();
+
+        switch (action.Id)
+        {
+            case "rename":
+                if (!string.IsNullOrEmpty(context.NewName))
+                {
+                    var result = await RenameSymbolAsync(
+                        context.FilePath,
+                        context.Line,
+                        context.Column,
+                        context.NewName,
+                        cancellationToken);
+
+                    if (result.Success && result.FileEdits.Count > 0)
+                    {
+                        foreach (var fileEdit in result.FileEdits.Where(f => f.FilePath == context.FilePath))
+                        {
+                            edits.AddRange(fileEdit.Edits);
+                        }
+                    }
+                }
+                break;
+
+            case "extract-method":
+                if (!string.IsNullOrEmpty(context.MethodName))
+                {
+                    var result = await ExtractMethodAsync(
+                        context.FilePath,
+                        context.StartLine,
+                        context.StartColumn,
+                        context.EndLine,
+                        context.EndColumn,
+                        context.MethodName,
+                        cancellationToken);
+
+                    if (result.Success && result.FileEdit != null)
+                    {
+                        edits.AddRange(result.FileEdit.Edits);
+                    }
+                }
+                break;
+
+            case "inline-method":
+                var inlineResult = await InlineMethodAsync(
+                    context.FilePath,
+                    context.Line,
+                    context.Column,
+                    context.RemoveDefinition,
+                    cancellationToken);
+
+                if (inlineResult.Success && inlineResult.FileEdits.Count > 0)
+                {
+                    foreach (var fileEdit in inlineResult.FileEdits.Where(f => f.FilePath == context.FilePath))
+                    {
+                        edits.AddRange(fileEdit.Edits);
+                    }
+                }
+                break;
+
+            case "introduce-variable":
+                if (!string.IsNullOrEmpty(context.VariableName))
+                {
+                    var result = await IntroduceVariableAsync(
+                        context.FilePath,
+                        context.StartLine,
+                        context.StartColumn,
+                        context.EndLine,
+                        context.EndColumn,
+                        context.VariableName,
+                        context.VariableType,
+                        context.ReplaceAll,
+                        cancellationToken);
+
+                    if (result.Success && result.FileEdit != null)
+                    {
+                        edits.AddRange(result.FileEdit.Edits);
+                    }
+                }
+                break;
+
+            case "generate-sub":
+                // Generate a stub subroutine at the current location
+                if (!string.IsNullOrEmpty(context.MethodName))
+                {
+                    edits.Add(new TextEdit
+                    {
+                        StartLine = context.Line + 1,
+                        StartColumn = 0,
+                        EndLine = context.Line + 1,
+                        EndColumn = 0,
+                        NewText = $"\n    Sub {context.MethodName}()\n        ' TODO: Implement\n    End Sub\n"
+                    });
+                }
+                break;
+
+            case "generate-function":
+                if (!string.IsNullOrEmpty(context.MethodName))
+                {
+                    var returnType = context.VariableType ?? "Object";
+                    edits.Add(new TextEdit
+                    {
+                        StartLine = context.Line + 1,
+                        StartColumn = 0,
+                        EndLine = context.Line + 1,
+                        EndColumn = 0,
+                        NewText = $"\n    Function {context.MethodName}() As {returnType}\n        ' TODO: Implement\n        Return Nothing\n    End Function\n"
+                    });
+                }
+                break;
+
+            default:
+                // Unknown action - return empty
+                break;
+        }
+
+        return edits.ToArray();
+    }
+
+    /// <summary>
+    /// Context data for code actions containing position and refactoring parameters
+    /// </summary>
+    public class CodeActionContext
+    {
+        public string FilePath { get; set; } = "";
+        public int Line { get; set; }
+        public int Column { get; set; }
+        public int StartLine { get; set; }
+        public int StartColumn { get; set; }
+        public int EndLine { get; set; }
+        public int EndColumn { get; set; }
+        public string? NewName { get; set; }
+        public string? MethodName { get; set; }
+        public string? VariableName { get; set; }
+        public string? VariableType { get; set; }
+        public bool ReplaceAll { get; set; }
+        public bool RemoveDefinition { get; set; }
     }
 
     public async Task<MethodInfo?> GetMethodInfoAsync(string filePath, int line, int column, CancellationToken cancellationToken = default)

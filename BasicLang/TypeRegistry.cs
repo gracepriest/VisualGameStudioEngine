@@ -21,8 +21,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         // All loaded types by full name for quick lookup
         private readonly Dictionary<string, NetTypeInfo> _typesByName;
 
-        // Assembly search paths
-        private readonly List<string> _searchPaths;
+        // Assembly search paths (HashSet for O(1) Contains checks)
+        private readonly HashSet<string> _searchPaths;
 
         // Cache file path for the namespace index
         private readonly string _cacheFilePath;
@@ -35,7 +35,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _namespaceIndex = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             _loadedTypes = new Dictionary<string, List<NetTypeInfo>>(StringComparer.OrdinalIgnoreCase);
             _typesByName = new Dictionary<string, NetTypeInfo>(StringComparer.OrdinalIgnoreCase);
-            _searchPaths = new List<string>();
+            _searchPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             _loadedNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             // Default cache location
@@ -48,9 +48,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public void AddSearchPath(string path)
         {
-            if (Directory.Exists(path) && !_searchPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
+            if (Directory.Exists(path))
             {
-                _searchPaths.Add(path);
+                _searchPaths.Add(path);  // HashSet.Add ignores duplicates
             }
         }
 
