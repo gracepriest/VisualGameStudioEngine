@@ -21,7 +21,8 @@ public class DebugServiceTests
     [TearDown]
     public void TearDown()
     {
-        _service.Dispose();
+        // Fast dispose - returns immediately when service was never started
+        _service?.Dispose();
     }
 
     [Test]

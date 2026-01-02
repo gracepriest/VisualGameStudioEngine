@@ -855,6 +855,24 @@ public class DebugService : IDebugService
 
     public void Dispose()
     {
-        StopDebuggingAsync().Wait(TimeSpan.FromSeconds(2));
+        // Fast path: if never started or already stopped, nothing to do
+        if (State == DebugState.NotStarted || State == DebugState.Stopped)
+        {
+            return;
+        }
+
+        try
+        {
+            // Use Task.Run to avoid deadlocks when called from sync context
+            Task.Run(async () => await StopDebuggingAsync()).Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (AggregateException)
+        {
+            // Ignore exceptions during dispose
+        }
+        catch (TimeoutException)
+        {
+            // Timeout is acceptable during dispose
+        }
     }
 }
