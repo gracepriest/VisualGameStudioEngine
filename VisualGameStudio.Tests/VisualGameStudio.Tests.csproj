@@ -8,6 +8,8 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Suppress VSTHRD200 for test methods - they follow test naming conventions, not Async suffix -->
+    <NoWarn>$(NoWarn);VSTHRD200</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

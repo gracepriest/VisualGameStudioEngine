@@ -162,36 +162,28 @@ public class DebugServiceTests
     [Test]
     public void StateChanged_Event_CanBeSubscribed()
     {
-        var stateChanged = false;
-        _service.StateChanged += (s, e) => stateChanged = true;
-
+        _service.StateChanged += (s, e) => { };
         Assert.Pass();
     }
 
     [Test]
     public void Stopped_Event_CanBeSubscribed()
     {
-        var stopped = false;
-        _service.Stopped += (s, e) => stopped = true;
-
+        _service.Stopped += (s, e) => { };
         Assert.Pass();
     }
 
     [Test]
     public void OutputReceived_Event_CanBeSubscribed()
     {
-        var outputReceived = false;
-        _service.OutputReceived += (s, e) => outputReceived = true;
-
+        _service.OutputReceived += (s, e) => { };
         Assert.Pass();
     }
 
     [Test]
     public void BreakpointsChanged_Event_CanBeSubscribed()
     {
-        var breakpointsChanged = false;
-        _service.BreakpointsChanged += (s, e) => breakpointsChanged = true;
-
+        _service.BreakpointsChanged += (s, e) => { };
         Assert.Pass();
     }
 

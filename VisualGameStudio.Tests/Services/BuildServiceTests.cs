@@ -50,36 +50,28 @@ public class BuildServiceTests
     [Test]
     public void BuildStarted_Event_CanBeSubscribed()
     {
-        var buildStarted = false;
-        _service.BuildStarted += (s, e) => buildStarted = true;
-
+        _service.BuildStarted += (s, e) => { };
         Assert.Pass();
     }
 
     [Test]
     public void BuildProgress_Event_CanBeSubscribed()
     {
-        var progressReceived = false;
-        _service.BuildProgress += (s, e) => progressReceived = true;
-
+        _service.BuildProgress += (s, e) => { };
         Assert.Pass();
     }
 
     [Test]
     public void BuildCompleted_Event_CanBeSubscribed()
     {
-        var buildCompleted = false;
-        _service.BuildCompleted += (s, e) => buildCompleted = true;
-
+        _service.BuildCompleted += (s, e) => { };
         Assert.Pass();
     }
 
     [Test]
     public void BuildCancelled_Event_CanBeSubscribed()
     {
-        var buildCancelled = false;
-        _service.BuildCancelled += (s, e) => buildCancelled = true;
-
+        _service.BuildCancelled += (s, e) => { };
         Assert.Pass();
     }
 }

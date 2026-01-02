@@ -160,7 +160,7 @@ public class CachedParseResultTests
     {
         var cached = new CachedParseResult
         {
-            AST = null
+            AST = null!
         };
 
         Assert.That(cached.AST, Is.Null);

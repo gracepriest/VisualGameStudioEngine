@@ -248,9 +248,7 @@ public class GitServiceTests
     [Test]
     public void StatusChanged_Event_CanBeSubscribed()
     {
-        var eventFired = false;
-        _service.StatusChanged += (s, e) => eventFired = true;
-
+        _service.StatusChanged += (s, e) => { };
         Assert.Pass("Event subscription successful");
     }
 

@@ -114,18 +114,14 @@ public class LanguageServiceTests
     [Test]
     public void ConnectionChanged_Event_CanBeSubscribed()
     {
-        var connectionChanged = false;
-        _service.ConnectionChanged += (s, e) => connectionChanged = true;
-
+        _service.ConnectionChanged += (s, e) => { };
         Assert.Pass();
     }
 
     [Test]
     public void DiagnosticsReceived_Event_CanBeSubscribed()
     {
-        var diagnosticsReceived = false;
-        _service.DiagnosticsReceived += (s, e) => diagnosticsReceived = true;
-
+        _service.DiagnosticsReceived += (s, e) => { };
         Assert.Pass();
     }
 

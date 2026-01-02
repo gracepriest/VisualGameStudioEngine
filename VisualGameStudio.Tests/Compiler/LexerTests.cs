@@ -536,7 +536,7 @@ public class TokenTests
     [Test]
     public void Token_CanBeCreated()
     {
-        var token = new Token(TokenType.Sub, "Sub", null, 1, 1);
+        var token = new Token(TokenType.Sub, "Sub", null!, 1, 1);
 
         Assert.That(token.Type, Is.EqualTo(TokenType.Sub));
         Assert.That(token.Lexeme, Is.EqualTo("Sub"));
@@ -557,7 +557,7 @@ public class TokenTests
     [Test]
     public void Token_ToString_ContainsTypeAndLexeme()
     {
-        var token = new Token(TokenType.Sub, "Sub", null, 1, 1);
+        var token = new Token(TokenType.Sub, "Sub", null!, 1, 1);
 
         var str = token.ToString();
 
@@ -568,8 +568,8 @@ public class TokenTests
     [Test]
     public void Token_Equality()
     {
-        var token1 = new Token(TokenType.Sub, "Sub", null, 1, 1);
-        var token2 = new Token(TokenType.Sub, "Sub", null, 1, 1);
+        var token1 = new Token(TokenType.Sub, "Sub", null!, 1, 1);
+        var token2 = new Token(TokenType.Sub, "Sub", null!, 1, 1);
 
         Assert.That(token1.Type, Is.EqualTo(token2.Type));
         Assert.That(token1.Lexeme, Is.EqualTo(token2.Lexeme));
