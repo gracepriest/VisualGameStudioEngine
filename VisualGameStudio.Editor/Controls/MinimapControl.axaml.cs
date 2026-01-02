@@ -13,7 +13,6 @@ public partial class MinimapControl : UserControl
     private TextEditor? _editor;
     private Canvas? _codeCanvas;
     private Border? _viewportIndicator;
-    private double _scale = 0.15;
     private bool _isDragging;
 
     public MinimapControl()

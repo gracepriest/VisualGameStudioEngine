@@ -23,7 +23,7 @@ public class CompletionData : ICompletionData
     public CompletionItemKind Kind { get; }
 
     public object Content => Text;
-    public object Description { get; }
+    public object? Description { get; }
     public double Priority => GetPriority();
 
     public IImage? Image => null;

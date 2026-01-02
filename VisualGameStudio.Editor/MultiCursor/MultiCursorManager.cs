@@ -243,7 +243,7 @@ public class MultiCursorManager
     public void SelectAllOccurrences()
     {
         var selection = _editor.TextArea.Selection;
-        string searchText;
+        string? searchText;
 
         if (selection.IsEmpty)
         {

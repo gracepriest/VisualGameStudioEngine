@@ -54,7 +54,7 @@ namespace BasicLang.Compiler
         /// Format a lexer error with context
         /// </summary>
         public static string FormatLexerError(ErrorCode code, string message, int line, int column,
-            string sourceCode = null, string suggestion = null)
+            string? sourceCode = null, string? suggestion = null)
         {
             var sb = new StringBuilder();
             sb.AppendLine($"Error {GetErrorCodeString(code)}: {message}");
@@ -78,7 +78,7 @@ namespace BasicLang.Compiler
         /// Format a parser error with context
         /// </summary>
         public static string FormatParserError(ErrorCode code, string message, Token token,
-            string sourceCode = null, string expected = null, string suggestion = null)
+            string? sourceCode = null, string? expected = null, string? suggestion = null)
         {
             var sb = new StringBuilder();
             sb.AppendLine($"Error {GetErrorCodeString(code)}: {message}");
@@ -109,7 +109,7 @@ namespace BasicLang.Compiler
         /// Format a semantic error with context
         /// </summary>
         public static string FormatSemanticError(ErrorCode code, string message, int line, int column,
-            string sourceCode = null, string suggestion = null)
+            string? sourceCode = null, string? suggestion = null)
         {
             var sb = new StringBuilder();
             sb.AppendLine($"Error {GetErrorCodeString(code)}: {message}");
@@ -133,7 +133,7 @@ namespace BasicLang.Compiler
         /// Format a type mismatch error with detailed type information
         /// </summary>
         public static string FormatTypeMismatchError(string expectedType, string actualType,
-            int line, int column, string sourceCode = null, string context = null)
+            int line, int column, string? sourceCode = null, string? context = null)
         {
             var message = $"Type mismatch: cannot convert '{actualType}' to '{expectedType}'";
             if (!string.IsNullOrEmpty(context))
@@ -149,10 +149,10 @@ namespace BasicLang.Compiler
         /// Format an undefined symbol error with suggestions for similar names
         /// </summary>
         public static string FormatUndefinedSymbolError(string symbolName, int line, int column,
-            string sourceCode = null, IEnumerable<string> similarNames = null)
+            string? sourceCode = null, IEnumerable<string>? similarNames = null)
         {
             var message = $"Undefined symbol '{symbolName}'";
-            string suggestion = null;
+            string? suggestion = null;
 
             if (similarNames != null && similarNames.Any())
             {
@@ -171,7 +171,7 @@ namespace BasicLang.Compiler
         /// Format a wrong number of arguments error
         /// </summary>
         public static string FormatArgumentCountError(string functionName, int expected, int actual,
-            int line, int column, string sourceCode = null, bool hasOptionalParams = false,
+            int line, int column, string? sourceCode = null, bool hasOptionalParams = false,
             int minRequired = 0)
         {
             string message;
@@ -205,7 +205,7 @@ namespace BasicLang.Compiler
         /// Format a block mismatch error showing what was opened
         /// </summary>
         public static string FormatBlockMismatchError(string openedBlock, string closedBlock,
-            int openLine, int closeLine, int closeColumn, string sourceCode = null)
+            int openLine, int closeLine, int closeColumn, string? sourceCode = null)
         {
             var message = $"Block mismatch: '{openedBlock}' opened at line {openLine} but '{closedBlock}' found";
             var suggestion = $"Expected 'End {openedBlock}' to match the '{openedBlock}' at line {openLine}";
@@ -357,7 +357,7 @@ namespace BasicLang.Compiler
         /// <summary>
         /// Get common typo suggestions for keywords
         /// </summary>
-        public static string SuggestKeywordCorrection(string typo)
+        public static string? SuggestKeywordCorrection(string typo)
         {
             var commonTypos = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -408,13 +408,13 @@ namespace BasicLang.Compiler
         public int Column { get; }
         public string SourceCode { get; }
 
-        public LexerException(ErrorCode code, string message, int line, int column, string sourceCode = null)
+        public LexerException(ErrorCode code, string message, int line, int column, string? sourceCode = null)
             : base(message)
         {
             ErrorCode = code;
             Line = line;
             Column = column;
-            SourceCode = sourceCode;
+            SourceCode = sourceCode ?? string.Empty;
         }
 
         public override string ToString()
@@ -460,7 +460,7 @@ namespace BasicLang.Compiler
         public List<SemanticError> RelatedErrors { get; set; }
         public string CommonCause { get; set; }
 
-        public ErrorGroup(SemanticError primaryError, string commonCause = null)
+        public ErrorGroup(SemanticError primaryError, string? commonCause = null)
         {
             PrimaryError = primaryError;
             RelatedErrors = new List<SemanticError>();
@@ -508,10 +508,10 @@ namespace BasicLang.Compiler
         /// Format an operator type error with available overloads
         /// </summary>
         public static string FormatOperatorError(string op, string leftType, string rightType,
-            int line, int column, string sourceCode = null, IEnumerable<string> availableOverloads = null)
+            int line, int column, string? sourceCode = null, IEnumerable<string>? availableOverloads = null)
         {
             var message = $"Operator '{op}' cannot be applied to operands of type '{leftType}' and '{rightType}'";
-            string suggestion = null;
+            string? suggestion = null;
 
             if (availableOverloads != null && availableOverloads.Any())
             {
@@ -530,10 +530,10 @@ namespace BasicLang.Compiler
         /// Format a member access error with similar member suggestions
         /// </summary>
         public static string FormatMemberAccessError(string typeName, string memberName,
-            int line, int column, string sourceCode = null, IEnumerable<string> similarMembers = null)
+            int line, int column, string? sourceCode = null, IEnumerable<string>? similarMembers = null)
         {
             var message = $"'{typeName}' does not contain a definition for '{memberName}'";
-            string suggestion = null;
+            string? suggestion = null;
 
             if (similarMembers != null && similarMembers.Any())
             {
@@ -552,11 +552,11 @@ namespace BasicLang.Compiler
         /// Format an overload resolution error showing all candidates
         /// </summary>
         public static string FormatOverloadResolutionError(string functionName, IEnumerable<string> argTypes,
-            int line, int column, string sourceCode = null, IEnumerable<string> candidates = null)
+            int line, int column, string? sourceCode = null, IEnumerable<string>? candidates = null)
         {
             var argTypesStr = string.Join(", ", argTypes);
             var message = $"No overload of '{functionName}' matches argument types ({argTypesStr})";
-            string suggestion = null;
+            string? suggestion = null;
 
             if (candidates != null && candidates.Any())
             {
@@ -576,7 +576,7 @@ namespace BasicLang.Compiler
         /// Format a generic constraint error
         /// </summary>
         public static string FormatGenericConstraintError(string typeParam, string constraint, string actualType,
-            int line, int column, string sourceCode = null)
+            int line, int column, string? sourceCode = null)
         {
             var message = $"Type argument '{actualType}' does not satisfy constraint '{constraint}' for type parameter '{typeParam}'";
             string suggestion = $"Provide a type that implements or inherits from '{constraint}'";
@@ -621,7 +621,7 @@ namespace BasicLang.Compiler
                 insertLine, 1, insertLine, 1);
         }
 
-        private static string GetOperatorSuggestion(string op, string leftType, string rightType)
+        private static string? GetOperatorSuggestion(string op, string leftType, string rightType)
         {
             // String concatenation
             if (op == "+" && (leftType == "String" || rightType == "String"))
@@ -687,7 +687,7 @@ namespace BasicLang.Compiler
             }
         }
 
-        public string GetCurrentContext()
+        public string? GetCurrentContext()
         {
             if (_contextStack.Count == 0) return null;
             return string.Join(" -> ", _contextStack.Reverse());
@@ -773,14 +773,14 @@ namespace BasicLang.Compiler
             return false;
         }
 
-        private static string ExtractSymbolName(string message)
+        private static string? ExtractSymbolName(string message)
         {
             // Extract symbol name from quotes in error message
             var match = System.Text.RegularExpressions.Regex.Match(message, @"'([^']+)'");
             return match.Success ? match.Groups[1].Value : null;
         }
 
-        private static string DetermineCommonCause(ErrorGroup group)
+        private static string? DetermineCommonCause(ErrorGroup group)
         {
             var primary = group.PrimaryError.Message;
 
