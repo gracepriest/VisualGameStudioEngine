@@ -76,6 +76,26 @@ public interface ILanguageService : IDisposable
     /// Get signature help at a position
     /// </summary>
     Task<SignatureHelp?> GetSignatureHelpAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get supertypes (base classes/interfaces) for a type at the given position
+    /// </summary>
+    Task<IReadOnlyList<TypeHierarchyItemInfo>> GetSupertypesAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get subtypes (derived classes) for a type at the given position
+    /// </summary>
+    Task<IReadOnlyList<TypeHierarchyItemInfo>> GetSubtypesAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get incoming calls (callers) for a method at the given position
+    /// </summary>
+    Task<IReadOnlyList<CallHierarchyItemInfo>> GetIncomingCallsAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get outgoing calls (callees) for a method at the given position
+    /// </summary>
+    Task<IReadOnlyList<CallHierarchyItemInfo>> GetOutgoingCallsAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
 }
 
 public class DiagnosticsEventArgs : EventArgs
@@ -202,4 +222,65 @@ public class ParameterInfo
 {
     public string Label { get; set; } = "";
     public string? Documentation { get; set; }
+}
+
+/// <summary>
+/// Information about a type in the type hierarchy
+/// </summary>
+public class TypeHierarchyItemInfo
+{
+    public string Name { get; set; } = "";
+    public HierarchyTypeKind Kind { get; set; }
+    public string? Detail { get; set; }
+    public string FilePath { get; set; } = "";
+    public int Line { get; set; }
+    public int Column { get; set; }
+}
+
+/// <summary>
+/// Kind of type in the hierarchy
+/// </summary>
+public enum HierarchyTypeKind
+{
+    Class,
+    Interface,
+    Struct,
+    Module
+}
+
+/// <summary>
+/// Information about a callable in the call hierarchy
+/// </summary>
+public class CallHierarchyItemInfo
+{
+    public string Name { get; set; } = "";
+    public HierarchyCallableKind Kind { get; set; }
+    public string? Detail { get; set; }
+    public string FilePath { get; set; } = "";
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public List<CallSiteItemInfo> CallSites { get; set; } = new();
+}
+
+/// <summary>
+/// Kind of callable in the hierarchy
+/// </summary>
+public enum HierarchyCallableKind
+{
+    Function,
+    Method,
+    Subroutine,
+    Constructor,
+    Property
+}
+
+/// <summary>
+/// Information about a specific call site
+/// </summary>
+public class CallSiteItemInfo
+{
+    public string FilePath { get; set; } = "";
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public string? Preview { get; set; }
 }

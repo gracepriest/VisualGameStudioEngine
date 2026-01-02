@@ -729,6 +729,283 @@ public class LanguageService : ILanguageService
         return help;
     }
 
+    public async Task<IReadOnlyList<TypeHierarchyItemInfo>> GetSupertypesAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<TypeHierarchyItemInfo>();
+
+        try
+        {
+            // First, prepare type hierarchy to get the starting item
+            var prepareResult = await SendRequestAsync("textDocument/prepareTypeHierarchy", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 }
+            }, cancellationToken);
+
+            if (prepareResult.ValueKind != JsonValueKind.Array || !prepareResult.EnumerateArray().Any())
+                return Array.Empty<TypeHierarchyItemInfo>();
+
+            var item = prepareResult.EnumerateArray().First();
+
+            // Get supertypes
+            var result = await SendRequestAsync("typeHierarchy/supertypes", new
+            {
+                item
+            }, cancellationToken);
+
+            return ParseTypeHierarchyItems(result);
+        }
+        catch
+        {
+            return Array.Empty<TypeHierarchyItemInfo>();
+        }
+    }
+
+    public async Task<IReadOnlyList<TypeHierarchyItemInfo>> GetSubtypesAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<TypeHierarchyItemInfo>();
+
+        try
+        {
+            // First, prepare type hierarchy to get the starting item
+            var prepareResult = await SendRequestAsync("textDocument/prepareTypeHierarchy", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 }
+            }, cancellationToken);
+
+            if (prepareResult.ValueKind != JsonValueKind.Array || !prepareResult.EnumerateArray().Any())
+                return Array.Empty<TypeHierarchyItemInfo>();
+
+            var item = prepareResult.EnumerateArray().First();
+
+            // Get subtypes
+            var result = await SendRequestAsync("typeHierarchy/subtypes", new
+            {
+                item
+            }, cancellationToken);
+
+            return ParseTypeHierarchyItems(result);
+        }
+        catch
+        {
+            return Array.Empty<TypeHierarchyItemInfo>();
+        }
+    }
+
+    public async Task<IReadOnlyList<CallHierarchyItemInfo>> GetIncomingCallsAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<CallHierarchyItemInfo>();
+
+        try
+        {
+            // First, prepare call hierarchy to get the starting item
+            var prepareResult = await SendRequestAsync("textDocument/prepareCallHierarchy", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 }
+            }, cancellationToken);
+
+            if (prepareResult.ValueKind != JsonValueKind.Array || !prepareResult.EnumerateArray().Any())
+                return Array.Empty<CallHierarchyItemInfo>();
+
+            var item = prepareResult.EnumerateArray().First();
+
+            // Get incoming calls
+            var result = await SendRequestAsync("callHierarchy/incomingCalls", new
+            {
+                item
+            }, cancellationToken);
+
+            return ParseIncomingCalls(result);
+        }
+        catch
+        {
+            return Array.Empty<CallHierarchyItemInfo>();
+        }
+    }
+
+    public async Task<IReadOnlyList<CallHierarchyItemInfo>> GetOutgoingCallsAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<CallHierarchyItemInfo>();
+
+        try
+        {
+            // First, prepare call hierarchy to get the starting item
+            var prepareResult = await SendRequestAsync("textDocument/prepareCallHierarchy", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 }
+            }, cancellationToken);
+
+            if (prepareResult.ValueKind != JsonValueKind.Array || !prepareResult.EnumerateArray().Any())
+                return Array.Empty<CallHierarchyItemInfo>();
+
+            var item = prepareResult.EnumerateArray().First();
+
+            // Get outgoing calls
+            var result = await SendRequestAsync("callHierarchy/outgoingCalls", new
+            {
+                item
+            }, cancellationToken);
+
+            return ParseOutgoingCalls(result);
+        }
+        catch
+        {
+            return Array.Empty<CallHierarchyItemInfo>();
+        }
+    }
+
+    private static IReadOnlyList<TypeHierarchyItemInfo> ParseTypeHierarchyItems(JsonElement result)
+    {
+        var items = new List<TypeHierarchyItemInfo>();
+        if (result.ValueKind != JsonValueKind.Array) return items;
+
+        foreach (var item in result.EnumerateArray())
+        {
+            var info = new TypeHierarchyItemInfo
+            {
+                Name = item.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                Detail = item.TryGetProperty("detail", out var d) ? d.GetString() : null,
+                Kind = item.TryGetProperty("kind", out var k) ? MapSymbolKindToTypeKind(k.GetInt32()) : HierarchyTypeKind.Class
+            };
+
+            if (item.TryGetProperty("uri", out var uri))
+                info.FilePath = UriToPath(uri.GetString() ?? "");
+
+            if (item.TryGetProperty("selectionRange", out var range) && range.TryGetProperty("start", out var start))
+            {
+                info.Line = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                info.Column = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+            }
+
+            items.Add(info);
+        }
+
+        return items;
+    }
+
+    private static IReadOnlyList<CallHierarchyItemInfo> ParseIncomingCalls(JsonElement result)
+    {
+        var items = new List<CallHierarchyItemInfo>();
+        if (result.ValueKind != JsonValueKind.Array) return items;
+
+        foreach (var call in result.EnumerateArray())
+        {
+            if (!call.TryGetProperty("from", out var from)) continue;
+
+            var info = new CallHierarchyItemInfo
+            {
+                Name = from.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                Detail = from.TryGetProperty("detail", out var d) ? d.GetString() : null,
+                Kind = from.TryGetProperty("kind", out var k) ? MapSymbolKindToCallableKind(k.GetInt32()) : HierarchyCallableKind.Method
+            };
+
+            if (from.TryGetProperty("uri", out var uri))
+                info.FilePath = UriToPath(uri.GetString() ?? "");
+
+            if (from.TryGetProperty("selectionRange", out var range) && range.TryGetProperty("start", out var start))
+            {
+                info.Line = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                info.Column = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+            }
+
+            // Parse call sites (fromRanges)
+            if (call.TryGetProperty("fromRanges", out var ranges) && ranges.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var r in ranges.EnumerateArray())
+                {
+                    if (r.TryGetProperty("start", out var s))
+                    {
+                        info.CallSites.Add(new CallSiteItemInfo
+                        {
+                            FilePath = info.FilePath,
+                            Line = s.TryGetProperty("line", out var ln) ? ln.GetInt32() + 1 : 0,
+                            Column = s.TryGetProperty("character", out var ch) ? ch.GetInt32() + 1 : 0
+                        });
+                    }
+                }
+            }
+
+            items.Add(info);
+        }
+
+        return items;
+    }
+
+    private static IReadOnlyList<CallHierarchyItemInfo> ParseOutgoingCalls(JsonElement result)
+    {
+        var items = new List<CallHierarchyItemInfo>();
+        if (result.ValueKind != JsonValueKind.Array) return items;
+
+        foreach (var call in result.EnumerateArray())
+        {
+            if (!call.TryGetProperty("to", out var to)) continue;
+
+            var info = new CallHierarchyItemInfo
+            {
+                Name = to.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                Detail = to.TryGetProperty("detail", out var d) ? d.GetString() : null,
+                Kind = to.TryGetProperty("kind", out var k) ? MapSymbolKindToCallableKind(k.GetInt32()) : HierarchyCallableKind.Method
+            };
+
+            if (to.TryGetProperty("uri", out var uri))
+                info.FilePath = UriToPath(uri.GetString() ?? "");
+
+            if (to.TryGetProperty("selectionRange", out var range) && range.TryGetProperty("start", out var start))
+            {
+                info.Line = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                info.Column = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+            }
+
+            // Parse call sites (fromRanges)
+            if (call.TryGetProperty("fromRanges", out var ranges) && ranges.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var r in ranges.EnumerateArray())
+                {
+                    if (r.TryGetProperty("start", out var s))
+                    {
+                        info.CallSites.Add(new CallSiteItemInfo
+                        {
+                            FilePath = info.FilePath,
+                            Line = s.TryGetProperty("line", out var ln) ? ln.GetInt32() + 1 : 0,
+                            Column = s.TryGetProperty("character", out var ch) ? ch.GetInt32() + 1 : 0
+                        });
+                    }
+                }
+            }
+
+            items.Add(info);
+        }
+
+        return items;
+    }
+
+    private static HierarchyTypeKind MapSymbolKindToTypeKind(int symbolKind)
+    {
+        return symbolKind switch
+        {
+            5 => HierarchyTypeKind.Class,      // Class
+            11 => HierarchyTypeKind.Interface, // Interface
+            23 => HierarchyTypeKind.Struct,    // Struct
+            2 => HierarchyTypeKind.Module,     // Module
+            _ => HierarchyTypeKind.Class
+        };
+    }
+
+    private static HierarchyCallableKind MapSymbolKindToCallableKind(int symbolKind)
+    {
+        return symbolKind switch
+        {
+            6 => HierarchyCallableKind.Method,      // Method
+            12 => HierarchyCallableKind.Function,   // Function
+            9 => HierarchyCallableKind.Constructor, // Constructor
+            7 => HierarchyCallableKind.Property,    // Property
+            _ => HierarchyCallableKind.Method
+        };
+    }
+
     public void Dispose()
     {
         StopAsync().Wait(TimeSpan.FromSeconds(2));
