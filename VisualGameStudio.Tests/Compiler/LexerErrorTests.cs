@@ -186,7 +186,8 @@ public class LexerErrorTests
     [Test]
     public void Lex_Keywords_ReturnsCorrectTypes()
     {
-        var source = "Dim If Then Else End Sub Function";
+        // Note: "End" alone is not a keyword - it combines with other keywords like "End Sub", "End If"
+        var source = "Dim If Then Else Sub Function";
         var lexer = new Lexer(source);
 
         var tokens = lexer.Tokenize();
