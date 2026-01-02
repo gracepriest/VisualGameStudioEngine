@@ -1,31 +1,70 @@
 # Visual Game Studio Engine
 
-A Raylib-based 2D game engine with C++ core and VB.NET bindings.
+A Raylib-based 2D game engine with C++ core, VB.NET bindings, and a full-featured IDE with IntelliSense support.
 
-Visual Game Studio is a modern game development environment designed to make creating 2D games fast, flexible, and fun. At its core is a lightweight yet powerful framework built on top of the proven RayLib library.
+Visual Game Studio is a modern game development environment designed to make creating 2D games fast, flexible, and fun. It combines a lightweight yet powerful framework built on top of the proven RayLib library with a complete IDE featuring code completion, syntax highlighting, debugging, and more.
 
-Unlike traditional engines, the framework lives inside a DLL, giving developers a single, efficient framework that can be called from multiple languages including Visual Basic, C++, and C#.
+## Components
 
-## Overview
-
-Visual Game Studio Engine provides two tiers of functionality:
-
+### Game Engine (C++ DLL)
 - **Framework v1.0**: Direct Raylib wrapper for immediate-mode 2D game development
 - **Engine v0.5**: Unity-like runtime with ECS, scene management, prefabs, and serialization
+
+### BasicLang Compiler
+A custom programming language compiler with:
+- Full lexer and parser for a VB-like syntax
+- Semantic analysis with type checking
+- LINQ support for queries
+- Async/Await support
+- Class, interface, and module support
+- Template/generic support
+- Inline code blocks (C#, C++, LLVM, MSIL)
+- Preprocessor directives
+
+### Visual Game Studio IDE
+A full-featured Avalonia-based IDE with:
+- **IntelliSense**: Code completion, parameter hints, quick info
+- **LSP Integration**: Language Server Protocol for advanced editor features
+- **Syntax Highlighting**: Semantic token-based highlighting
+- **Code Folding**: Collapsible regions for code organization
+- **Bracket Matching**: Automatic bracket highlighting
+- **Multi-Cursor Editing**: Multiple cursor support
+- **Bookmarks**: Navigate code with bookmarks
+- **Breakpoints**: Set breakpoints for debugging
+- **Diagnostics**: Real-time error and warning display
+- **Go to Definition**: Navigate to symbol definitions
+- **Find References**: Find all usages of symbols
+- **Document Symbols**: Outline view of code structure
+- **Hover Documentation**: Rich hover information
 
 ## Architecture
 
 ```
-VisualGameStudioEngine.dll (C++)
-        |
-        v
-   Stable C ABI
-        |
-        v
-  RaylibWrapper.vb (P/Invoke)
-        |
-        v
-   Your VB.NET Game
+VisualGameStudioEngine.dll (C++)    BasicLang.dll (C#)
+        |                                  |
+        v                                  v
+   Stable C ABI                     LSP Server
+        |                                  |
+        v                                  v
+  RaylibWrapper.vb (P/Invoke)     VisualGameStudio IDE
+        |                                  |
+        v                                  v
+   Your VB.NET Game              Code Editor Features
+```
+
+## Project Structure
+
+```
+VisualGameStudioEngine/
+├── BasicLang/                    # Compiler and LSP server
+│   ├── Compiler/                 # Lexer, parser, semantic analysis
+│   └── LSP/                      # Language Server Protocol handlers
+├── VisualGameStudio.Core/        # Core models and services
+├── VisualGameStudio.Editor/      # Editor components (Avalonia)
+├── VisualGameStudio.ProjectSystem/# Project and solution management
+├── VisualGameStudio.Tests/       # Unit test suite (800+ tests)
+├── RaylibWrapper/                # VB.NET bindings for engine
+└── TestVbDLL/                    # Sample games
 ```
 
 ## Quick Start
@@ -79,6 +118,131 @@ Framework_Prefab_SaveEntity(player, "player.prefab")
 ' Instantiate prefab
 Dim prefab As Integer = Framework_Prefab_Load("player.prefab")
 Dim instance As Integer = Framework_Prefab_Instantiate(prefab, -1, 100, 100)
+```
+
+## BasicLang Language Features
+
+### Variable Declaration
+```vb
+Dim x As Integer = 10
+Dim name As String = "Hello"
+Auto y = 3.14  ' Type inference
+Const PI = 3.14159
+```
+
+### Control Flow
+```vb
+If condition Then
+    ' statements
+ElseIf otherCondition Then
+    ' statements
+Else
+    ' statements
+End If
+
+For i = 0 To 10 Step 2
+    ' statements
+Next
+
+While condition
+    ' statements
+Wend
+
+Do
+    ' statements
+Loop Until condition
+```
+
+### Functions and Subroutines
+```vb
+Sub MySub(x As Integer, Optional y As Integer = 0)
+    ' statements
+End Sub
+
+Function Add(a As Integer, b As Integer) As Integer
+    Return a + b
+End Function
+```
+
+### Object-Oriented Programming
+```vb
+Class Player
+    Private _health As Integer
+
+    Public Property Health As Integer
+        Get
+            Return _health
+        End Get
+        Set
+            _health = value
+        End Set
+    End Property
+
+    Public Sub TakeDamage(amount As Integer)
+        _health -= amount
+    End Sub
+End Class
+```
+
+### LINQ Support
+```vb
+Dim numbers = {1, 2, 3, 4, 5}
+Dim evens = From n In numbers
+            Where n Mod 2 = 0
+            Select n
+```
+
+### Async/Await
+```vb
+Async Function LoadDataAsync() As Task(Of String)
+    Dim result = Await FetchFromServer()
+    Return result
+End Function
+```
+
+## IDE Features
+
+### IntelliSense
+The IDE provides intelligent code completion with:
+- Keywords and language constructs
+- Local variables and parameters
+- Type members (properties, methods, fields)
+- Built-in functions and types
+- Context-aware suggestions
+
+### Diagnostics
+Real-time error checking with:
+- Syntax errors
+- Semantic errors (type mismatches, undefined symbols)
+- Warnings (unused variables, deprecated features)
+- Information messages (suggestions)
+
+### Navigation
+- **Go to Definition**: Jump to where a symbol is defined
+- **Find All References**: Find all usages of a symbol
+- **Document Outline**: View all symbols in the current file
+- **Bookmarks**: Mark important locations in code
+
+### Debugging
+- Set breakpoints by clicking the gutter
+- Step through code execution
+- View variable values
+- Debug output window
+
+## Testing
+
+The project includes a comprehensive test suite with 800+ unit tests covering:
+
+- **Core Models**: Project, solution, build configuration
+- **Editor Features**: Folding, bracket highlighting, completion, multi-cursor
+- **Services**: Bookmark, build, debug, language services
+- **LSP/IntelliSense**: Completion, document management, diagnostics, symbols
+- **Compiler**: Lexer, parser, token types
+
+### Running Tests
+
+```bash
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj
 ```
 
 ## API Reference
@@ -223,14 +387,6 @@ Dim instance As Integer = Framework_Prefab_Instantiate(prefab, -1, 100, 100)
 | `Framework_Debug_DrawStats(enabled)` | Show entity stats |
 | `Framework_Debug_Render()` | Render debug overlay |
 
-### Introspection
-
-| Function | Description |
-|----------|-------------|
-| `Framework_Introspection_GetComponentCount(id)` | Get component count |
-| `Framework_Introspection_GetComponentType(id, idx)` | Get component type |
-| `Framework_Introspection_HasComponent(id, type)` | Check for component |
-
 ## Samples
 
 ### Sample A: Framework-Only
@@ -253,10 +409,29 @@ Dim instance As Integer = Framework_Prefab_Instantiate(prefab, -1, 100, 100)
 
 ## Building
 
+### Prerequisites
+- .NET 8.0 SDK
+- Visual Studio 2022 or VS Code
+- C++ compiler (for engine DLL)
+
+### Build Steps
+
 1. Build `VisualGameStudioEngine` (C++ DLL)
-2. Build `RaylibWrapper` (VB.NET class library)
-3. Build `TestVbDLL` (VB.NET executable)
-4. Ensure `VisualGameStudioEngine.dll` is in the output directory
+2. Build `BasicLang` (C# compiler/LSP)
+3. Build `VisualGameStudio.Core`, `VisualGameStudio.Editor`, `VisualGameStudio.ProjectSystem`
+4. Build `RaylibWrapper` (VB.NET class library)
+5. Build `TestVbDLL` (VB.NET executable)
+
+```bash
+# Build all projects
+dotnet build VisualGameStudioEngine.sln
+
+# Run tests
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj
+
+# Run IDE
+dotnet run --project VisualGameStudio.Editor/VisualGameStudio.Editor.csproj
+```
 
 ## Key Constants
 
@@ -297,7 +472,9 @@ End Enum
 - **RayLib Powered**: Built on one of the most beginner-friendly and performance-focused game libraries available.
 - **DLL Framework**: The heart of Visual Game Basic is a DLL, making it reusable, compact, and easy to integrate.
 - **Multi-Language Support**: Call the same framework from Visual Basic, C++, or C#, giving you freedom of choice.
-- **Future-Proof Studio**: Visual Game Studio is a complete environment, with plans for full IDE support, templates, and tooling.
+- **Full IDE**: Complete development environment with IntelliSense, debugging, and project management.
+- **Comprehensive Testing**: 800+ unit tests ensuring code quality and reliability.
+- **LSP Integration**: Modern editor features through Language Server Protocol.
 
 ## License
 
