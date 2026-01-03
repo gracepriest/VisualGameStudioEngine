@@ -6,6 +6,8 @@
     <AssemblyName>VisualGameStudio.ProjectSystem</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Suppress async/threading warnings that require significant refactoring -->
+    <NoWarn>$(NoWarn);CS1998;CS0067;CS0219;VSTHRD002;VSTHRD103;VSTHRD200</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
