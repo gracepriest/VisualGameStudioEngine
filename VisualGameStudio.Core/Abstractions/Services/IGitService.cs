@@ -169,6 +169,126 @@ public interface IGitService
     /// Gets remote URL
     /// </summary>
     Task<string?> GetRemoteUrlAsync();
+
+    /// <summary>
+    /// Renames a branch
+    /// </summary>
+    Task<bool> RenameBranchAsync(string oldName, string newName);
+
+    /// <summary>
+    /// Rebases current branch onto another branch
+    /// </summary>
+    Task<GitRebaseResult> RebaseAsync(string ontoBranch);
+
+    /// <summary>
+    /// Aborts an ongoing rebase
+    /// </summary>
+    Task<bool> RebaseAbortAsync();
+
+    /// <summary>
+    /// Continues a rebase after resolving conflicts
+    /// </summary>
+    Task<GitRebaseResult> RebaseContinueAsync();
+
+    /// <summary>
+    /// Cherry-picks a commit
+    /// </summary>
+    Task<GitCherryPickResult> CherryPickAsync(string commitHash);
+
+    /// <summary>
+    /// Reverts a commit
+    /// </summary>
+    Task<GitRevertResult> RevertCommitAsync(string commitHash);
+
+    /// <summary>
+    /// Gets all tags
+    /// </summary>
+    Task<IReadOnlyList<GitTagInfo>> GetTagsAsync();
+
+    /// <summary>
+    /// Creates a new tag
+    /// </summary>
+    Task<bool> CreateTagAsync(string tagName, string? commitHash = null, string? message = null);
+
+    /// <summary>
+    /// Deletes a tag
+    /// </summary>
+    Task<bool> DeleteTagAsync(string tagName, bool deleteRemote = false);
+
+    /// <summary>
+    /// Pushes tags to remote
+    /// </summary>
+    Task<bool> PushTagsAsync();
+
+    /// <summary>
+    /// Gets submodule information
+    /// </summary>
+    Task<IReadOnlyList<GitSubmoduleInfo>> GetSubmodulesAsync();
+
+    /// <summary>
+    /// Updates submodules
+    /// </summary>
+    Task<bool> UpdateSubmodulesAsync(bool init = true, bool recursive = true);
+
+    /// <summary>
+    /// Clones a repository
+    /// </summary>
+    Task<GitCloneResult> CloneAsync(string url, string destinationPath, IProgress<GitProgress>? progress = null);
+
+    /// <summary>
+    /// Gets the log for commits between two refs
+    /// </summary>
+    Task<IReadOnlyList<GitCommitInfo>> GetLogAsync(string? fromRef = null, string? toRef = null, int maxCount = 100);
+
+    /// <summary>
+    /// Gets ahead/behind counts for a branch relative to its tracking branch
+    /// </summary>
+    Task<(int ahead, int behind)> GetAheadBehindAsync(string? branchName = null);
+
+    /// <summary>
+    /// Checks out a specific commit or file
+    /// </summary>
+    Task<bool> CheckoutAsync(string target, string? filePath = null);
+
+    /// <summary>
+    /// Resets to a specific commit
+    /// </summary>
+    Task<bool> ResetAsync(string commitHash, GitResetMode mode = GitResetMode.Mixed);
+
+    /// <summary>
+    /// Gets the root directory of the repository
+    /// </summary>
+    Task<string?> GetRepositoryRootAsync();
+
+    /// <summary>
+    /// Gets configured remotes
+    /// </summary>
+    Task<IReadOnlyList<GitRemoteInfo>> GetRemotesAsync();
+
+    /// <summary>
+    /// Adds a remote
+    /// </summary>
+    Task<bool> AddRemoteAsync(string name, string url);
+
+    /// <summary>
+    /// Removes a remote
+    /// </summary>
+    Task<bool> RemoveRemoteAsync(string name);
+
+    /// <summary>
+    /// Clean untracked files
+    /// </summary>
+    Task<bool> CleanAsync(bool removeDirectories = false, bool force = true);
+
+    /// <summary>
+    /// Gets the content of a file at a specific commit
+    /// </summary>
+    Task<string?> GetFileContentAtCommitAsync(string filePath, string commitHash);
+
+    /// <summary>
+    /// Raised when an operation progresses
+    /// </summary>
+    event EventHandler<GitProgress>? Progress;
 }
 
 public class GitStatus
@@ -267,4 +387,81 @@ public class GitBlameLine
     public DateTime Date { get; set; }
     public string LineContent { get; set; } = "";
     public bool IsOriginal { get; set; }
+}
+
+public class GitRebaseResult
+{
+    public bool Success { get; set; }
+    public bool HasConflicts { get; set; }
+    public string? ErrorMessage { get; set; }
+    public IReadOnlyList<string> ConflictedFiles { get; set; } = Array.Empty<string>();
+    public int CommitsApplied { get; set; }
+}
+
+public class GitCherryPickResult
+{
+    public bool Success { get; set; }
+    public bool HasConflicts { get; set; }
+    public string? ErrorMessage { get; set; }
+    public IReadOnlyList<string> ConflictedFiles { get; set; } = Array.Empty<string>();
+}
+
+public class GitRevertResult
+{
+    public bool Success { get; set; }
+    public bool HasConflicts { get; set; }
+    public string? ErrorMessage { get; set; }
+    public string? NewCommitHash { get; set; }
+}
+
+public class GitTagInfo
+{
+    public string Name { get; set; } = "";
+    public string? CommitHash { get; set; }
+    public string? Message { get; set; }
+    public string? Tagger { get; set; }
+    public DateTime? Date { get; set; }
+    public bool IsAnnotated { get; set; }
+}
+
+public class GitSubmoduleInfo
+{
+    public string Name { get; set; } = "";
+    public string Path { get; set; } = "";
+    public string Url { get; set; } = "";
+    public string? CommitHash { get; set; }
+    public string? Branch { get; set; }
+    public bool IsInitialized { get; set; }
+}
+
+public class GitCloneResult
+{
+    public bool Success { get; set; }
+    public string? Path { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+public class GitRemoteInfo
+{
+    public string Name { get; set; } = "";
+    public string FetchUrl { get; set; } = "";
+    public string PushUrl { get; set; } = "";
+}
+
+public enum GitResetMode
+{
+    Soft,
+    Mixed,
+    Hard
+}
+
+public class GitProgress
+{
+    public string Operation { get; set; } = "";
+    public int? TotalObjects { get; set; }
+    public int? ReceivedObjects { get; set; }
+    public int? IndexedObjects { get; set; }
+    public long? BytesReceived { get; set; }
+    public double? ProgressPercentage { get; set; }
+    public string? Message { get; set; }
 }

@@ -30,7 +30,7 @@ public interface IProjectService
     /// <param name="template">The project template to use.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>The created project.</returns>
-    Task<BasicLangProject> CreateProjectAsync(string name, string path, ProjectTemplate template, CancellationToken cancellationToken = default);
+    Task<BasicLangProject> CreateProjectAsync(string name, string path, ProjectTemplateKind template, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens an existing project from the specified path.
@@ -162,9 +162,9 @@ public class SolutionEventArgs : EventArgs
 }
 
 /// <summary>
-/// Project templates available for creating new projects.
+/// Project template kinds for creating new projects.
 /// </summary>
-public enum ProjectTemplate
+public enum ProjectTemplateKind
 {
     /// <summary>A console application that runs in a terminal window.</summary>
     ConsoleApplication,

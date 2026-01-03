@@ -21,6 +21,7 @@ public class GitService : IGitService
     public int PendingChangesCount => _pendingChangesCount;
 
     public event EventHandler? StatusChanged;
+    public event EventHandler<GitProgress>? Progress;
 
     public GitService()
     {
@@ -698,5 +699,486 @@ public class GitService : IGitService
     private async Task<(int ExitCode, string Output)> RunGitCommandAsync(string arguments, string? workingDirectory = null)
     {
         return await Task.Run(() => RunGitCommand(arguments, workingDirectory));
+    }
+
+    public async Task<bool> RenameBranchAsync(string oldName, string newName)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandAsync($"branch -m \"{oldName}\" \"{newName}\"");
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return true;
+        }
+        return false;
+    }
+
+    public async Task<GitRebaseResult> RebaseAsync(string ontoBranch)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return new GitRebaseResult { Success = false, ErrorMessage = "Not a git repository" };
+
+        var result = await RunGitCommandAsync($"rebase \"{ontoBranch}\"");
+
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return new GitRebaseResult { Success = true };
+        }
+
+        var statusResult = await GetStatusAsync();
+        var conflicted = statusResult.Changes.Where(c => c.Status == GitFileStatus.Conflicted).Select(c => c.FilePath).ToList();
+
+        return new GitRebaseResult
+        {
+            Success = false,
+            HasConflicts = conflicted.Any(),
+            ConflictedFiles = conflicted,
+            ErrorMessage = result.Output
+        };
+    }
+
+    public async Task<bool> RebaseAbortAsync()
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandAsync("rebase --abort");
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return true;
+        }
+        return false;
+    }
+
+    public async Task<GitRebaseResult> RebaseContinueAsync()
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return new GitRebaseResult { Success = false, ErrorMessage = "Not a git repository" };
+
+        var result = await RunGitCommandAsync("rebase --continue");
+
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return new GitRebaseResult { Success = true };
+        }
+
+        var statusResult = await GetStatusAsync();
+        var conflicted = statusResult.Changes.Where(c => c.Status == GitFileStatus.Conflicted).Select(c => c.FilePath).ToList();
+
+        return new GitRebaseResult
+        {
+            Success = false,
+            HasConflicts = conflicted.Any(),
+            ConflictedFiles = conflicted,
+            ErrorMessage = result.Output
+        };
+    }
+
+    public async Task<GitCherryPickResult> CherryPickAsync(string commitHash)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return new GitCherryPickResult { Success = false, ErrorMessage = "Not a git repository" };
+
+        var result = await RunGitCommandAsync($"cherry-pick \"{commitHash}\"");
+
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return new GitCherryPickResult { Success = true };
+        }
+
+        var statusResult = await GetStatusAsync();
+        var conflicted = statusResult.Changes.Where(c => c.Status == GitFileStatus.Conflicted).Select(c => c.FilePath).ToList();
+
+        return new GitCherryPickResult
+        {
+            Success = false,
+            HasConflicts = conflicted.Any(),
+            ConflictedFiles = conflicted,
+            ErrorMessage = result.Output
+        };
+    }
+
+    public async Task<GitRevertResult> RevertCommitAsync(string commitHash)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return new GitRevertResult { Success = false, ErrorMessage = "Not a git repository" };
+
+        var result = await RunGitCommandAsync($"revert --no-edit \"{commitHash}\"");
+
+        if (result.ExitCode == 0)
+        {
+            var logResult = await RunGitCommandAsync("rev-parse HEAD");
+            await RefreshAsync();
+            return new GitRevertResult
+            {
+                Success = true,
+                NewCommitHash = logResult.Output.Trim()
+            };
+        }
+
+        var statusResult = await GetStatusAsync();
+        var conflicted = statusResult.Changes.Where(c => c.Status == GitFileStatus.Conflicted).Select(c => c.FilePath).ToList();
+
+        return new GitRevertResult
+        {
+            Success = false,
+            HasConflicts = conflicted.Any(),
+            ErrorMessage = result.Output
+        };
+    }
+
+    public async Task<IReadOnlyList<GitTagInfo>> GetTagsAsync()
+    {
+        var tags = new List<GitTagInfo>();
+
+        if (!_isGitRepository || _repositoryPath == null)
+            return tags;
+
+        var result = await RunGitCommandAsync("tag --list --format=\"%(refname:short)|%(objectname:short)|%(taggername)|%(creatordate:iso)\"");
+        if (result.ExitCode == 0)
+        {
+            var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var parts = line.Split('|');
+                if (parts.Length >= 1)
+                {
+                    tags.Add(new GitTagInfo
+                    {
+                        Name = parts[0],
+                        CommitHash = parts.Length > 1 ? parts[1] : null,
+                        Tagger = parts.Length > 2 ? parts[2] : null,
+                        Date = parts.Length > 3 && DateTime.TryParse(parts[3], out var date) ? date : null,
+                        IsAnnotated = parts.Length > 2 && !string.IsNullOrEmpty(parts[2])
+                    });
+                }
+            }
+        }
+
+        return tags;
+    }
+
+    public async Task<bool> CreateTagAsync(string tagName, string? commitHash = null, string? message = null)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        string command;
+        if (!string.IsNullOrEmpty(message))
+        {
+            command = $"tag -a \"{tagName}\" -m \"{message}\"";
+        }
+        else
+        {
+            command = $"tag \"{tagName}\"";
+        }
+
+        if (!string.IsNullOrEmpty(commitHash))
+        {
+            command += $" \"{commitHash}\"";
+        }
+
+        var result = await RunGitCommandAsync(command);
+        return result.ExitCode == 0;
+    }
+
+    public async Task<bool> DeleteTagAsync(string tagName, bool deleteRemote = false)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandAsync($"tag -d \"{tagName}\"");
+        if (result.ExitCode != 0) return false;
+
+        if (deleteRemote)
+        {
+            await RunGitCommandAsync($"push origin --delete \"{tagName}\"");
+        }
+
+        return true;
+    }
+
+    public async Task<bool> PushTagsAsync()
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandAsync("push --tags");
+        return result.ExitCode == 0;
+    }
+
+    public async Task<IReadOnlyList<GitSubmoduleInfo>> GetSubmodulesAsync()
+    {
+        var submodules = new List<GitSubmoduleInfo>();
+
+        if (!_isGitRepository || _repositoryPath == null)
+            return submodules;
+
+        var result = await RunGitCommandAsync("submodule status");
+        if (result.ExitCode == 0)
+        {
+            var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var parts = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2)
+                {
+                    var hash = parts[0].TrimStart('-', '+');
+                    var path = parts[1];
+
+                    submodules.Add(new GitSubmoduleInfo
+                    {
+                        Path = path,
+                        Name = Path.GetFileName(path),
+                        CommitHash = hash,
+                        IsInitialized = !parts[0].StartsWith('-')
+                    });
+                }
+            }
+        }
+
+        return submodules;
+    }
+
+    public async Task<bool> UpdateSubmodulesAsync(bool init = true, bool recursive = true)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var command = "submodule update";
+        if (init) command += " --init";
+        if (recursive) command += " --recursive";
+
+        var result = await RunGitCommandAsync(command);
+        return result.ExitCode == 0;
+    }
+
+    public async Task<GitCloneResult> CloneAsync(string url, string destinationPath, IProgress<GitProgress>? progress = null)
+    {
+        Progress?.Invoke(this, new GitProgress { Operation = "Cloning", Message = $"Cloning {url}..." });
+
+        var result = await RunGitCommandAsync($"clone \"{url}\" \"{destinationPath}\"", Path.GetDirectoryName(destinationPath));
+
+        if (result.ExitCode == 0)
+        {
+            return new GitCloneResult { Success = true, Path = destinationPath };
+        }
+
+        return new GitCloneResult { Success = false, ErrorMessage = result.Output };
+    }
+
+    public async Task<IReadOnlyList<GitCommitInfo>> GetLogAsync(string? fromRef = null, string? toRef = null, int maxCount = 100)
+    {
+        var commits = new List<GitCommitInfo>();
+
+        if (!_isGitRepository || _repositoryPath == null)
+            return commits;
+
+        var range = "";
+        if (!string.IsNullOrEmpty(fromRef) && !string.IsNullOrEmpty(toRef))
+        {
+            range = $"{fromRef}..{toRef}";
+        }
+        else if (!string.IsNullOrEmpty(toRef))
+        {
+            range = toRef;
+        }
+
+        var result = await RunGitCommandAsync($"log -n {maxCount} --format=\"%H|%s|%an|%aI\" {range}");
+
+        if (result.ExitCode == 0)
+        {
+            var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var parts = line.Split('|');
+                if (parts.Length >= 4)
+                {
+                    commits.Add(new GitCommitInfo
+                    {
+                        Hash = parts[0],
+                        Message = parts[1],
+                        Author = parts[2],
+                        Date = DateTime.TryParse(parts[3], out var date) ? date : DateTime.Now
+                    });
+                }
+            }
+        }
+
+        return commits;
+    }
+
+    public async Task<(int ahead, int behind)> GetAheadBehindAsync(string? branchName = null)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return (0, 0);
+
+        var branch = branchName ?? _currentBranch ?? "HEAD";
+        var result = await RunGitCommandAsync($"rev-list --left-right --count @{{u}}...{branch}");
+
+        if (result.ExitCode == 0)
+        {
+            var parts = result.Output.Trim().Split('\t');
+            if (parts.Length == 2)
+            {
+                int.TryParse(parts[0], out var behind);
+                int.TryParse(parts[1], out var ahead);
+                return (ahead, behind);
+            }
+        }
+
+        return (0, 0);
+    }
+
+    public async Task<bool> CheckoutAsync(string target, string? filePath = null)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var command = filePath != null
+            ? $"checkout \"{target}\" -- \"{GetRelativePath(filePath)}\""
+            : $"checkout \"{target}\"";
+
+        var result = await RunGitCommandAsync(command);
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return true;
+        }
+        return false;
+    }
+
+    public async Task<bool> ResetAsync(string commitHash, GitResetMode mode = GitResetMode.Mixed)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var modeFlag = mode switch
+        {
+            GitResetMode.Soft => "--soft",
+            GitResetMode.Mixed => "--mixed",
+            GitResetMode.Hard => "--hard",
+            _ => "--mixed"
+        };
+
+        var result = await RunGitCommandAsync($"reset {modeFlag} \"{commitHash}\"");
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return true;
+        }
+        return false;
+    }
+
+    public async Task<string?> GetRepositoryRootAsync()
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return null;
+
+        var result = await RunGitCommandAsync("rev-parse --show-toplevel");
+        if (result.ExitCode == 0)
+        {
+            return result.Output.Trim();
+        }
+        return null;
+    }
+
+    public async Task<IReadOnlyList<GitRemoteInfo>> GetRemotesAsync()
+    {
+        var remotes = new List<GitRemoteInfo>();
+
+        if (!_isGitRepository || _repositoryPath == null)
+            return remotes;
+
+        var result = await RunGitCommandAsync("remote -v");
+        if (result.ExitCode == 0)
+        {
+            var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var remoteDict = new Dictionary<string, GitRemoteInfo>();
+
+            foreach (var line in lines)
+            {
+                var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2)
+                {
+                    var name = parts[0];
+                    var urlAndType = parts[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    var url = urlAndType[0];
+                    var isFetch = urlAndType.Length > 1 && urlAndType[1].Contains("fetch");
+
+                    if (!remoteDict.TryGetValue(name, out var remote))
+                    {
+                        remote = new GitRemoteInfo { Name = name };
+                        remoteDict[name] = remote;
+                    }
+
+                    if (isFetch)
+                        remote.FetchUrl = url;
+                    else
+                        remote.PushUrl = url;
+                }
+            }
+
+            remotes.AddRange(remoteDict.Values);
+        }
+
+        return remotes;
+    }
+
+    public async Task<bool> AddRemoteAsync(string name, string url)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandAsync($"remote add \"{name}\" \"{url}\"");
+        return result.ExitCode == 0;
+    }
+
+    public async Task<bool> RemoveRemoteAsync(string name)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandAsync($"remote remove \"{name}\"");
+        return result.ExitCode == 0;
+    }
+
+    public async Task<bool> CleanAsync(bool removeDirectories = false, bool force = true)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var flags = "";
+        if (force) flags += "f";
+        if (removeDirectories) flags += "d";
+
+        var result = await RunGitCommandAsync($"clean -{flags}");
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return true;
+        }
+        return false;
+    }
+
+    public async Task<string?> GetFileContentAtCommitAsync(string filePath, string commitHash)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return null;
+
+        var relativePath = GetRelativePath(filePath);
+        var result = await RunGitCommandAsync($"show \"{commitHash}:{relativePath}\"");
+
+        if (result.ExitCode == 0)
+        {
+            return result.Output;
+        }
+        return null;
     }
 }

@@ -14,10 +14,10 @@ public partial class NewProjectViewModel : ViewModelBase
     private string _location = "";
 
     [ObservableProperty]
-    private ProjectTemplate? _selectedTemplate;
+    private SimpleProjectTemplate? _selectedTemplate;
 
     [ObservableProperty]
-    private ObservableCollection<ProjectTemplate> _templates = new();
+    private ObservableCollection<SimpleProjectTemplate> _templates = new();
 
     [ObservableProperty]
     private bool _createDirectory = true;
@@ -38,12 +38,12 @@ public partial class NewProjectViewModel : ViewModelBase
             "BasicLang Projects");
 
         // Add project templates
-        Templates.Add(new ProjectTemplate
+        Templates.Add(new SimpleProjectTemplate
         {
             Name = "Console Application",
             Description = "A command-line application that runs in the console.",
             Icon = "🖥️",
-            TemplateType = ProjectTemplateType.Console,
+            TemplateType = SimpleProjectTemplateType.Console,
             DefaultCode = """
                 ' Console Application
                 Module Program
@@ -54,12 +54,12 @@ public partial class NewProjectViewModel : ViewModelBase
                 """
         });
 
-        Templates.Add(new ProjectTemplate
+        Templates.Add(new SimpleProjectTemplate
         {
             Name = "Class Library",
             Description = "A library of reusable classes and functions.",
             Icon = "📚",
-            TemplateType = ProjectTemplateType.Library,
+            TemplateType = SimpleProjectTemplateType.Library,
             DefaultCode = """
                 ' Class Library
                 Namespace MyLibrary
@@ -72,12 +72,12 @@ public partial class NewProjectViewModel : ViewModelBase
                 """
         });
 
-        Templates.Add(new ProjectTemplate
+        Templates.Add(new SimpleProjectTemplate
         {
             Name = "Game Project",
             Description = "A game project with a main game loop.",
             Icon = "🎮",
-            TemplateType = ProjectTemplateType.Game,
+            TemplateType = SimpleProjectTemplateType.Game,
             DefaultCode = """
                 ' Game Project
                 Module Game
@@ -114,12 +114,12 @@ public partial class NewProjectViewModel : ViewModelBase
                 """
         });
 
-        Templates.Add(new ProjectTemplate
+        Templates.Add(new SimpleProjectTemplate
         {
             Name = "Empty Project",
             Description = "An empty project with no default files.",
             Icon = "📄",
-            TemplateType = ProjectTemplateType.Empty,
+            TemplateType = SimpleProjectTemplateType.Empty,
             DefaultCode = ""
         });
 
@@ -182,7 +182,7 @@ public partial class NewProjectViewModel : ViewModelBase
 
             // Create project file
             var projectPath = Path.Combine(projectDir, $"{ProjectName}.blproj");
-            var outputType = SelectedTemplate.TemplateType == ProjectTemplateType.Library ? "Library" : "Exe";
+            var outputType = SelectedTemplate.TemplateType == SimpleProjectTemplateType.Library ? "Library" : "Exe";
 
             var projectContent = $"""
                 <?xml version="1.0" encoding="utf-8"?>
@@ -194,7 +194,7 @@ public partial class NewProjectViewModel : ViewModelBase
                     <TargetBackend>Interpreter</TargetBackend>
                   </PropertyGroup>
                   <ItemGroup>
-                    {(SelectedTemplate.TemplateType != ProjectTemplateType.Empty ? "<Compile Include=\"Program.bas\" />" : "")}
+                    {(SelectedTemplate.TemplateType != SimpleProjectTemplateType.Empty ? "<Compile Include=\"Program.bas\" />" : "")}
                   </ItemGroup>
                   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
                     <OutputPath>bin\Debug\</OutputPath>
@@ -210,7 +210,7 @@ public partial class NewProjectViewModel : ViewModelBase
             await File.WriteAllTextAsync(projectPath, projectContent);
 
             // Create main source file
-            if (SelectedTemplate.TemplateType != ProjectTemplateType.Empty && !string.IsNullOrEmpty(SelectedTemplate.DefaultCode))
+            if (SelectedTemplate.TemplateType != SimpleProjectTemplateType.Empty && !string.IsNullOrEmpty(SelectedTemplate.DefaultCode))
             {
                 var sourcePath = Path.Combine(projectDir, "Program.bas");
                 await File.WriteAllTextAsync(sourcePath, SelectedTemplate.DefaultCode);
@@ -234,16 +234,16 @@ public partial class NewProjectViewModel : ViewModelBase
     }
 }
 
-public class ProjectTemplate
+public class SimpleProjectTemplate
 {
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
     public string Icon { get; set; } = "";
-    public ProjectTemplateType TemplateType { get; set; }
+    public SimpleProjectTemplateType TemplateType { get; set; }
     public string DefaultCode { get; set; } = "";
 }
 
-public enum ProjectTemplateType
+public enum SimpleProjectTemplateType
 {
     Console,
     Library,

@@ -28,7 +28,7 @@ public class ProjectService : IProjectService
         _solutionSerializer = new SolutionSerializer();
     }
 
-    public async Task<BasicLangProject> CreateProjectAsync(string name, string path, ProjectTemplate template, CancellationToken cancellationToken = default)
+    public async Task<BasicLangProject> CreateProjectAsync(string name, string path, ProjectTemplateKind template, CancellationToken cancellationToken = default)
     {
         var projectDir = Path.Combine(path, name);
         var projectFile = Path.Combine(projectDir, $"{name}{FileExtensions.Project}");
@@ -40,7 +40,7 @@ public class ProjectService : IProjectService
             Name = name,
             FilePath = projectFile,
             RootNamespace = name,
-            OutputType = template == ProjectTemplate.ClassLibrary ? OutputType.Library : OutputType.Exe,
+            OutputType = template == ProjectTemplateKind.ClassLibrary ? OutputType.Library : OutputType.Exe,
             TargetBackend = TargetBackend.CSharp,
             Version = "1.0"
         };
@@ -231,11 +231,11 @@ public class ProjectService : IProjectService
         return Uri.UnescapeDataString(baseUri.MakeRelativeUri(fullUri).ToString().Replace('/', Path.DirectorySeparatorChar));
     }
 
-    private static string GetTemplateContent(ProjectTemplate template, string projectName)
+    private static string GetTemplateContent(ProjectTemplateKind template, string projectName)
     {
         return template switch
         {
-            ProjectTemplate.ConsoleApplication => $@"' {projectName} - Console Application
+            ProjectTemplateKind.ConsoleApplication => $@"' {projectName} - Console Application
 ' Created by Visual Game Studio
 
 Module Program
@@ -245,7 +245,7 @@ Module Program
     End Sub
 End Module
 ",
-            ProjectTemplate.WindowsFormsApplication => $@"' {projectName} - Windows Forms Application
+            ProjectTemplateKind.WindowsFormsApplication => $@"' {projectName} - Windows Forms Application
 ' Created by Visual Game Studio
 
 Module Program
@@ -255,7 +255,7 @@ Module Program
     End Sub
 End Module
 ",
-            ProjectTemplate.GameApplication => $@"' {projectName} - Game Application
+            ProjectTemplateKind.GameApplication => $@"' {projectName} - Game Application
 ' Created by Visual Game Studio
 
 Module Program
@@ -273,7 +273,7 @@ Module Program
     End Sub
 End Module
 ",
-            ProjectTemplate.ClassLibrary => $@"' {projectName} - Class Library
+            ProjectTemplateKind.ClassLibrary => $@"' {projectName} - Class Library
 ' Created by Visual Game Studio
 
 Namespace {projectName}

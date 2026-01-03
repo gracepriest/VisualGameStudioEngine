@@ -396,7 +396,7 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             SetBusy(true, "Creating project...");
-            await _projectService.CreateProjectAsync(projectName, folderPath, ProjectTemplate.ConsoleApplication);
+            await _projectService.CreateProjectAsync(projectName, folderPath, ProjectTemplateKind.ConsoleApplication);
             StatusText = $"Project created: {projectName}";
         }
         catch (Exception ex)
