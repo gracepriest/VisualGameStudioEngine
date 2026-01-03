@@ -54,6 +54,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IFileService _fileService;
     private readonly IBookmarkService _bookmarkService;
     private readonly IRefactoringService _refactoringService;
+    private readonly IProjectTemplateService _projectTemplateService;
     private readonly IEventAggregator _eventAggregator;
     private readonly DockFactory _dockFactory;
 
@@ -115,6 +116,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IFileService fileService,
         IBookmarkService bookmarkService,
         IRefactoringService refactoringService,
+        IProjectTemplateService projectTemplateService,
         IEventAggregator eventAggregator,
         DockFactory dockFactory,
         SolutionExplorerViewModel solutionExplorer,
@@ -142,6 +144,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _fileService = fileService;
         _bookmarkService = bookmarkService;
         _refactoringService = refactoringService;
+        _projectTemplateService = projectTemplateService;
         _eventAggregator = eventAggregator;
         _dockFactory = dockFactory;
 
@@ -379,34 +382,26 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task NewProjectAsync()
     {
-        var folderPath = await _dialogService.ShowFolderDialogAsync(new FolderDialogOptions
-        {
-            Title = "Select Project Location"
-        });
+        var dialog = new Views.Dialogs.CreateProjectView(_projectTemplateService);
 
-        if (string.IsNullOrEmpty(folderPath)) return;
+        var result = await dialog.ShowDialog<bool?>(App.MainWindow);
 
-        var projectName = await _dialogService.ShowInputDialogAsync(
-            "New Project",
-            "Enter project name:",
-            "MyProject");
-
-        if (string.IsNullOrEmpty(projectName)) return;
-
-        try
+        if (result == true && dialog.Result != null)
         {
-            SetBusy(true, "Creating project...");
-            await _projectService.CreateProjectAsync(projectName, folderPath, ProjectTemplateKind.ConsoleApplication);
-            StatusText = $"Project created: {projectName}";
-        }
-        catch (Exception ex)
-        {
-            await _dialogService.ShowMessageAsync("Error", $"Failed to create project: {ex.Message}",
-                DialogButtons.Ok, DialogIcon.Error);
-        }
-        finally
-        {
-            SetBusy(false);
+            var projectResult = dialog.Result;
+            if (projectResult.Success && !string.IsNullOrEmpty(projectResult.ProjectPath))
+            {
+                try
+                {
+                    await _projectService.OpenProjectAsync(projectResult.ProjectPath);
+                    StatusText = $"Project created: {Path.GetFileNameWithoutExtension(projectResult.ProjectPath)}";
+                }
+                catch (Exception ex)
+                {
+                    await _dialogService.ShowMessageAsync("Error", $"Failed to open created project: {ex.Message}",
+                        DialogButtons.Ok, DialogIcon.Error);
+                }
+            }
         }
     }
 
