@@ -29,6 +29,7 @@ public static class ServiceConfiguration
         services.AddSingleton<IBookmarkService, BookmarkService>();
         services.AddSingleton<IRefactoringService, RefactoringService>();
         services.AddSingleton<ISnippetService, SnippetService>();
+        services.AddSingleton<IProjectTemplateService, ProjectTemplateService>();
         services.AddSingleton<RecentProjectsService>();
 
         // Shell Services

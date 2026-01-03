@@ -215,7 +215,9 @@
       "Bash(Select-String \"error\")",
       "Bash(Select-Object -First 20)",
       "Bash(timeout 120 dotnet test:*)",
-      "Bash(Select-String -Pattern \"error CS\")"
+      "Bash(Select-String -Pattern \"error CS\")",
+      "Bash(./VisualGameStudio.exe)",
+      "Bash(Start-Sleep -Seconds 2)"
     ]
   }
 }
