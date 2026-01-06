@@ -2144,10 +2144,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRNewObject newObj:
                     {
-                        var className = SanitizeName(newObj.ClassName);
+                        // Use MapType to get the full type including generic arguments
+                        var typeName = MapType(newObj.Type);
                         var argExprs = newObj.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
                         var args = string.Join(", ", argExprs);
-                        return $"new {className}({args})";
+                        return $"new {typeName}({args})";
                     }
 
                     case IRInstanceMethodCall methodCall:
@@ -2603,10 +2604,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRNewObject newObj)
         {
-            var className = SanitizeName(newObj.ClassName);
             var args = string.Join(", ", newObj.Arguments.Select(EmitExpression));
             var type = MapType(newObj.Type);
-            WriteLine($"{type} {newObj.Name} = new {className}({args});");
+            // Use the full type (including generic arguments) for the constructor
+            WriteLine($"{type} {newObj.Name} = new {type}({args});");
         }
 
         public void Visit(IRInstanceMethodCall methodCall)
@@ -2615,7 +2616,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var methodName = SanitizeName(methodCall.MethodName);
             var args = string.Join(", ", methodCall.Arguments.Select(EmitExpression));
 
-            if (methodCall.Type == null || methodCall.Type.Name == "Void")
+            // Emit as statement (no assignment) if:
+            // - Type is null or Void
+            // - Name is null (no temp var was assigned)
+            // - Result is unused (GetUseCount == 0)
+            // This handles .NET method calls where we don't know the actual return type
+            if (methodCall.Type == null || methodCall.Type.Name == "Void" ||
+                string.IsNullOrEmpty(methodCall.Name) || GetUseCount(methodCall) == 0)
             {
                 WriteLine($"{obj}.{methodName}({args});");
             }
@@ -2871,6 +2878,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 var elementType = MapType(type.ElementType);
                 return $"{elementType}[]";
+            }
+
+            // Handle generic types with type arguments
+            if (type.GenericArguments != null && type.GenericArguments.Count > 0)
+            {
+                var typeName = MapTypeName(type.Name);
+                var typeArgs = string.Join(", ", type.GenericArguments.Select(MapType));
+                var result = $"{typeName}<{typeArgs}>";
+                return type.IsNullable ? $"{result}?" : result;
             }
 
             return type.IsNullable ? $"{type.Name}?" : type.Name;

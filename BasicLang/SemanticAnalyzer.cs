@@ -41,21 +41,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // System types
             "Console", "Math", "Environment", "DateTime", "TimeSpan", "Guid", "Random",
             "Convert", "BitConverter", "Buffer", "Array", "Enum", "Type", "Activator",
+            "Object", "String", "Int32", "Int64", "Double", "Single", "Boolean", "Char", "Byte",
+            "Int16", "UInt16", "UInt32", "UInt64", "Decimal", "SByte",
+            // System enums
+            "ConsoleColor", "ConsoleKey", "DayOfWeek", "DateTimeKind", "StringComparison",
+            "StringSplitOptions", "TypeCode", "MidpointRounding",
             // System.Text
             "StringBuilder", "Encoding", "UTF8Encoding", "ASCIIEncoding",
             // System.Collections.Generic
             "List", "Dictionary", "HashSet", "Queue", "Stack", "LinkedList",
-            "SortedList", "SortedDictionary", "SortedSet",
+            "SortedList", "SortedDictionary", "SortedSet", "KeyValuePair",
             // System.IO
             "File", "Directory", "Path", "Stream", "FileStream", "MemoryStream",
             "StreamReader", "StreamWriter", "BinaryReader", "BinaryWriter",
             "TextReader", "TextWriter", "StringReader", "StringWriter",
+            "FileMode", "FileAccess", "FileShare", "SearchOption",
             // System.Threading
-            "Thread", "Task", "Mutex", "Semaphore", "Monitor",
+            "Thread", "Task", "Mutex", "Semaphore", "Monitor", "Interlocked",
+            "CancellationToken", "CancellationTokenSource",
             // System.Net
             "WebClient", "HttpClient", "WebRequest", "WebResponse",
             // System.Linq
-            "Enumerable", "Queryable"
+            "Enumerable", "Queryable",
+            // System.Diagnostics
+            "Process", "Stopwatch", "Debug", "Trace"
         };
 
         public List<SemanticError> Errors => _errors;
@@ -130,6 +139,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _errors.Clear();
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
+            _netNamespaces.Clear();
 
             GlobalScope = new Scope("Global", ScopeKind.Global, null);
             _currentScope = GlobalScope;
@@ -660,7 +670,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var typeArgs = typeRef.GenericArguments
                     .Select(t => ResolveTypeReference(t))
                     .ToList();
-                return _typeManager.CreateGenericType(typeRef.Name, typeArgs);
+                var genericType = _typeManager.CreateGenericType(typeRef.Name, typeArgs);
+
+                // If CreateGenericType returns null (base type not registered),
+                // create a synthetic generic type for .NET types like List, Dictionary, etc.
+                if (genericType == null && IsNetType(typeRef.Name))
+                {
+                    genericType = new TypeInfo(typeRef.Name, TypeKind.Class);
+                    genericType.GenericArguments.AddRange(typeArgs);
+                }
+
+                return genericType ?? _typeManager.ObjectType;
             }
 
             // Regular type lookup (check scope for type parameters first, then type manager)
@@ -727,6 +747,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private bool IsNetType(string name)
         {
+            if (string.IsNullOrEmpty(name))
+                return false;
+
             // Fully qualified .NET type (e.g., System.IO.File)
             if (name.Contains('.'))
             {
@@ -744,8 +767,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check if it's a commonly known .NET type
             if (CommonNetTypes.Contains(name))
             {
-                // Only allow if we have any .NET usings imported
-                return _netNamespaces.Count > 0;
+                return true;
+            }
+
+            // Be VERY permissive: any PascalCase identifier could be a .NET type
+            // The C# compiler will validate the actual type existence
+            if (char.IsUpper(name[0]) && name.Length > 1 && !name.Contains('_'))
+            {
+                return true;
             }
 
             return false;
@@ -3255,33 +3284,90 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
-            if (arrayType.Kind != TypeKind.Array)
-            {
-                Error($"Cannot index non-array type '{arrayType}'", node.Line, node.Column);
-                SetNodeType(node, _typeManager.ObjectType);
-                return;
-            }
-
             // Check indices
             foreach (var index in node.Indices)
             {
                 index.Accept(this);
-                var indexType = GetNodeType(index);
-
-                if (indexType != null && !indexType.IsIntegral())
-                {
-                    Error($"Array index must be an integer type, got '{indexType}'",
-                          index.Line, index.Column);
-                }
             }
 
-            if (node.Indices.Count != arrayType.ArrayRank)
+            // Handle actual arrays
+            if (arrayType.Kind == TypeKind.Array)
             {
-                Error($"Array expects {arrayType.ArrayRank} indices, got {node.Indices.Count}",
-                      node.Line, node.Column);
+                // Validate integer indices for arrays
+                foreach (var index in node.Indices)
+                {
+                    var indexType = GetNodeType(index);
+                    if (indexType != null && !indexType.IsIntegral())
+                    {
+                        Error($"Array index must be an integer type, got '{indexType}'",
+                              index.Line, index.Column);
+                    }
+                }
+
+                if (node.Indices.Count != arrayType.ArrayRank)
+                {
+                    Error($"Array expects {arrayType.ArrayRank} indices, got {node.Indices.Count}",
+                          node.Line, node.Column);
+                }
+
+                SetNodeType(node, arrayType.ElementType ?? _typeManager.ObjectType);
+                return;
             }
 
-            SetNodeType(node, arrayType.ElementType ?? _typeManager.ObjectType);
+            // Allow indexing on .NET collection types (List, Dictionary, etc.)
+            // These have indexers that the C# compiler will validate
+            if (IsNetType(arrayType.Name) || IsIndexableNetType(arrayType.Name))
+            {
+                // For generic types like List<String>, try to infer the element type
+                if (arrayType.GenericArguments != null && arrayType.GenericArguments.Count > 0)
+                {
+                    // List<T> returns T, Dictionary<K,V> returns V
+                    var elementType = arrayType.GenericArguments[arrayType.GenericArguments.Count - 1];
+                    SetNodeType(node, elementType);
+                }
+                else
+                {
+                    SetNodeType(node, _typeManager.ObjectType);
+                }
+                return;
+            }
+
+            // Not an array or known indexable type
+            Error($"Cannot index non-array type '{arrayType}'", node.Line, node.Column);
+            SetNodeType(node, _typeManager.ObjectType);
+        }
+
+        /// <summary>
+        /// Check if a type name is a known .NET collection type that supports indexing
+        /// </summary>
+        private bool IsIndexableNetType(string typeName)
+        {
+            // Extract base type name (handle generics like "List<String>" -> "List")
+            var baseName = typeName;
+            var genericStart = typeName.IndexOf('<');
+            if (genericStart > 0)
+                baseName = typeName.Substring(0, genericStart);
+
+            // Also handle VB-style generics "List(Of String)" -> "List"
+            var ofIndex = typeName.IndexOf("(Of", StringComparison.OrdinalIgnoreCase);
+            if (ofIndex > 0)
+                baseName = typeName.Substring(0, ofIndex).Trim();
+
+            return baseName switch
+            {
+                "List" => true,
+                "Dictionary" => true,
+                "ArrayList" => true,
+                "Hashtable" => true,
+                "SortedList" => true,
+                "SortedDictionary" => true,
+                "Collection" => true,
+                "ObservableCollection" => true,
+                "IList" => true,
+                "IDictionary" => true,
+                "ICollection" => true,
+                _ => false
+            };
         }
 
         public void Visit(NewExpressionNode node)
