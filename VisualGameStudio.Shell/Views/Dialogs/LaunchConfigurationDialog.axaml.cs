@@ -6,7 +6,12 @@ namespace VisualGameStudio.Shell.Views.Dialogs;
 
 public partial class LaunchConfigurationDialog : Window
 {
-    private readonly LaunchConfigurationDialogViewModel _viewModel;
+    private LaunchConfigurationDialogViewModel? _viewModel;
+
+    public LaunchConfigurationDialog()
+    {
+        InitializeComponent();
+    }
 
     public LaunchConfigurationDialog(LaunchConfigurationDialogViewModel viewModel)
     {

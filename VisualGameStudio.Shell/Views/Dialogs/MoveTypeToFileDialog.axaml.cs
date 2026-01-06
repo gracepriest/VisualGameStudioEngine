@@ -32,7 +32,14 @@ public partial class MoveTypeToFileDialog : Window
     // Handle browse directory from the view via button click
     private async void OnBrowseDirectory(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await BrowseDirectoryAsync();
+        try
+        {
+            await BrowseDirectoryAsync();
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
+        }
     }
 
     private async Task BrowseDirectoryAsync()

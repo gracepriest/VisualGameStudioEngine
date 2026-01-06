@@ -19,49 +19,58 @@ namespace BasicLang.Compiler.LSP
 
         public async Task RunAsync()
         {
-            _server = await LanguageServer.From(options =>
+            try
             {
-                options
-                    .WithInput(Console.OpenStandardInput())
-                    .WithOutput(Console.OpenStandardOutput())
-                    .ConfigureLogging(lb => lb
-                        .AddLanguageProtocolLogging()
-                        .SetMinimumLevel(LogLevel.Debug))
-                    .WithServices(ConfigureServices)
-                    .WithHandler<TextDocumentSyncHandler>()
-                    .WithHandler<CompletionHandler>()
-                    .WithHandler<HoverHandler>()
-                    .WithHandler<DefinitionHandler>()
-                    .WithHandler<DocumentSymbolHandler>()
-                    .WithHandler<SemanticTokensHandler>()
-                    .WithHandler<ReferencesHandler>()
-                    .WithHandler<RenameHandler>()
-                    .WithHandler<PrepareRenameHandler>()
-                    .WithHandler<SignatureHelpHandler>()
-                    .WithHandler<CodeActionHandler>()
-                    .WithHandler<FormattingHandler>()
-                    .WithHandler<RangeFormattingHandler>()
-                    .WithHandler<FoldingRangeHandler>()
-                    .WithHandler<InlayHintsHandler>()
-                    .WithHandler<DocumentLinkHandler>()
-                    .WithHandler<CallHierarchyPrepareHandler>()
-                    .WithHandler<CallHierarchyIncomingHandler>()
-                    .WithHandler<CallHierarchyOutgoingHandler>()
-                    .WithHandler<WorkspaceSymbolHandler>()
-                    .WithHandler<CodeLensHandler>()
-                    .WithHandler<SelectionRangeHandler>()
-                    .WithHandler<LinkedEditingRangeHandler>()
-                    .WithHandler<TypeHierarchyPrepareHandler>()
-                    .WithHandler<TypeHierarchySupertypesHandler>()
-                    .WithHandler<TypeHierarchySubtypesHandler>()
-                    .WithHandler<ExecuteCommandHandler>()
-                    .WithHandler<ImplementationHandler>()
-                    .WithHandler<DocumentHighlightHandler>()
-                    .OnInitialize(OnInitializeAsync)
-                    .OnInitialized(OnInitializedAsync);
-            }).ConfigureAwait(false);
+                _server = await LanguageServer.From(options =>
+                {
+                    options
+                        .WithInput(Console.OpenStandardInput())
+                        .WithOutput(Console.OpenStandardOutput())
+                        .ConfigureLogging(lb => lb
+                            .SetMinimumLevel(LogLevel.Warning)
+                            .AddFilter("OmniSharp", LogLevel.Warning))
+                        .WithServices(ConfigureServices)
+                        .WithHandler<TextDocumentSyncHandler>()
+                        .WithHandler<CompletionHandler>()
+                        .WithHandler<HoverHandler>()
+                        .WithHandler<DefinitionHandler>()
+                        .WithHandler<DocumentSymbolHandler>()
+                        .WithHandler<SemanticTokensHandler>()
+                        .WithHandler<ReferencesHandler>()
+                        .WithHandler<RenameHandler>()
+                        .WithHandler<PrepareRenameHandler>()
+                        .WithHandler<SignatureHelpHandler>()
+                        .WithHandler<CodeActionHandler>()
+                        .WithHandler<FormattingHandler>()
+                        .WithHandler<RangeFormattingHandler>()
+                        .WithHandler<FoldingRangeHandler>()
+                        .WithHandler<InlayHintsHandler>()
+                        .WithHandler<DocumentLinkHandler>()
+                        .WithHandler<CallHierarchyPrepareHandler>()
+                        .WithHandler<CallHierarchyIncomingHandler>()
+                        .WithHandler<CallHierarchyOutgoingHandler>()
+                        .WithHandler<WorkspaceSymbolHandler>()
+                        .WithHandler<CodeLensHandler>()
+                        .WithHandler<SelectionRangeHandler>()
+                        .WithHandler<LinkedEditingRangeHandler>()
+                        .WithHandler<TypeHierarchyPrepareHandler>()
+                        .WithHandler<TypeHierarchySupertypesHandler>()
+                        .WithHandler<TypeHierarchySubtypesHandler>()
+                        .WithHandler<ExecuteCommandHandler>()
+                        .WithHandler<ImplementationHandler>()
+                        .WithHandler<DocumentHighlightHandler>()
+                        .OnInitialize(OnInitializeAsync)
+                        .OnInitialized(OnInitializedAsync);
+                }).ConfigureAwait(false);
 
-            await _server.WaitForExit.ConfigureAwait(false);
+                await _server.WaitForExit.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Log to stderr so it doesn't interfere with LSP protocol
+                Console.Error.WriteLine($"LSP Server Error: {ex.Message}");
+                Console.Error.WriteLine(ex.StackTrace);
+            }
         }
 
         private void ConfigureServices(IServiceCollection services)

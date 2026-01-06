@@ -23,9 +23,16 @@ public partial class MakeParameterOptionalDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is MakeParameterOptionalDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is MakeParameterOptionalDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

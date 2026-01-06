@@ -347,6 +347,10 @@ namespace BasicLang.Compiler.LSP
 
                 SemanticSuccessful = SemanticAnalyzer.Analyze(AST);
 
+                // Note: Even if SemanticSuccessful is false, the SemanticAnalyzer
+                // still contains useful scope/symbol information for IntelliSense.
+                // We keep the analyzer instance to provide partial completions.
+
                 // Collect semantic errors
                 foreach (var error in SemanticAnalyzer.Errors)
                 {
@@ -360,9 +364,13 @@ namespace BasicLang.Compiler.LSP
                         Column = error.Column
                     });
                 }
+
+                Console.Error.WriteLine($"[DocumentState] Semantic analysis: successful={SemanticSuccessful}, errors={SemanticAnalyzer.Errors.Count}, globalScope={SemanticAnalyzer.GlobalScope != null}");
             }
             catch (Exception ex)
             {
+                // Even on exception, try to keep partial semantic info
+                Console.Error.WriteLine($"[DocumentState] Semantic analysis exception: {ex.Message}");
                 Diagnostics.Add(new Diagnostic
                 {
                     Message = $"Semantic analysis error: {ex.Message}",

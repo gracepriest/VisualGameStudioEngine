@@ -23,9 +23,16 @@ public partial class ReorderParametersDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is ReorderParametersDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is ReorderParametersDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

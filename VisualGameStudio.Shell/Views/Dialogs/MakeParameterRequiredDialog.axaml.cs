@@ -23,9 +23,16 @@ public partial class MakeParameterRequiredDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is MakeParameterRequiredDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is MakeParameterRequiredDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

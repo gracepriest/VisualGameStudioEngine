@@ -7,7 +7,12 @@ namespace VisualGameStudio.Shell.Views.Dialogs;
 
 public partial class ListSelectionDialog : Window
 {
-    private readonly ListSelectionDialogViewModel _viewModel;
+    private ListSelectionDialogViewModel? _viewModel;
+
+    public ListSelectionDialog()
+    {
+        InitializeComponent();
+    }
 
     public ListSelectionDialog(ListSelectionDialogViewModel viewModel)
     {
@@ -18,7 +23,7 @@ public partial class ListSelectionDialog : Window
 
     private void OnOkClick(object? sender, RoutedEventArgs e)
     {
-        if (_viewModel.SelectedIndex >= 0)
+        if (_viewModel != null && _viewModel.SelectedIndex >= 0)
         {
             Close(_viewModel.SelectedIndex);
         }
@@ -31,7 +36,7 @@ public partial class ListSelectionDialog : Window
 
     private void OnItemDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (_viewModel.SelectedIndex >= 0)
+        if (_viewModel != null && _viewModel.SelectedIndex >= 0)
         {
             Close(_viewModel.SelectedIndex);
         }

@@ -59,7 +59,7 @@ public partial class MainWindow : Window
             {
                 Child = _dataTipContent,
                 IsLightDismissEnabled = true,
-                PlacementMode = PlacementMode.Pointer,
+                Placement = PlacementMode.Pointer,
                 WindowManagerAddShadowHint = true
             };
 
@@ -113,10 +113,17 @@ public partial class MainWindow : Window
 
     private async void OnDataTipAddToWatch(object? sender, string expression)
     {
-        HideDataTip();
-        if (DataContext is MainWindowViewModel vm)
+        try
         {
-            await vm.Watch.AddExpressionCommand.ExecuteAsync(expression);
+            HideDataTip();
+            if (DataContext is MainWindowViewModel vm)
+            {
+                await vm.Watch.AddExpressionCommand.ExecuteAsync(expression);
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

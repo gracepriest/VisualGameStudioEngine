@@ -8,9 +8,10 @@
         x:Class="VisualGameStudio.Shell.Views.Dialogs.CreateProjectView"
         x:DataType="vm:CreateProjectViewModel"
         Title="Create a new project"
-        Width="900" Height="650"
+        Width="900" Height="700"
+        MinHeight="550"
         WindowStartupLocation="CenterOwner"
-        CanResize="False"
+        CanResize="True"
         ShowInTaskbar="False">
 
     <Design.DataContext>
@@ -97,7 +98,9 @@
             </Border>
 
             <!-- Right Panel - Project Configuration -->
-            <ScrollViewer Grid.Column="1" Padding="20">
+            <ScrollViewer Grid.Column="1" Padding="20"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Spacing="16">
 
                     <!-- Template Info -->
@@ -172,16 +175,20 @@
                                   IsChecked="{Binding CreateGitRepository}"/>
                     </StackPanel>
 
-                    <!-- Advanced -->
-                    <Expander Header="Advanced options">
-                        <StackPanel Margin="0,8,0,0" Spacing="12">
-                            <StackPanel>
-                                <TextBlock Text="Custom namespace (optional)" Margin="0,0,0,4"/>
-                                <TextBox Text="{Binding CustomNamespace}"
-                                         Watermark="Leave empty to use project name"/>
+                    <!-- Advanced Options -->
+                    <Border Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}"
+                            CornerRadius="4"
+                            Padding="12">
+                        <Expander Header="Advanced Options" IsExpanded="False">
+                            <StackPanel Margin="0,12,0,0" Spacing="12">
+                                <StackPanel>
+                                    <TextBlock Text="Custom namespace (optional)" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBox Text="{Binding CustomNamespace}"
+                                             Watermark="Leave empty to use project name"/>
+                                </StackPanel>
                             </StackPanel>
-                        </StackPanel>
-                    </Expander>
+                        </Expander>
+                    </Border>
 
                     <!-- Error Message -->
                     <Border Background="#44FF0000"

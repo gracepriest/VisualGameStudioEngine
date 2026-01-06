@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using NUnit.Framework;
 using VisualGameStudio.Editor.Completion;
 
@@ -63,11 +64,13 @@ public class CompletionDataTests
     }
 
     [Test]
-    public void Content_ReturnsText()
+    public void Content_ReturnsTextBlock()
     {
         var data = new CompletionData("TestItem", "Description");
 
-        Assert.That(data.Content, Is.EqualTo("TestItem"));
+        Assert.That(data.Content, Is.InstanceOf<TextBlock>());
+        var textBlock = (TextBlock)data.Content;
+        Assert.That(textBlock.Text, Is.EqualTo("TestItem"));
     }
 
     [Test]

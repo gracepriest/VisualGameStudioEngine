@@ -183,7 +183,7 @@ public class KeybindingService : IKeybindingService
 
         if (!args.Handled && _commandService != null)
         {
-            _commandService.ExecuteAsync(keybinding.CommandId, keybinding.Args);
+            _ = _commandService.ExecuteAsync(keybinding.CommandId, keybinding.Args);
             args.Handled = true;
         }
 

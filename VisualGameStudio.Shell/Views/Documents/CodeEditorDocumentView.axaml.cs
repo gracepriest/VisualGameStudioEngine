@@ -95,17 +95,29 @@ public partial class CodeEditorDocumentView : UserControl
 
     private void OnCompletionReceived(object? sender, IEnumerable<Core.Abstractions.Services.CompletionItem> completions)
     {
-        if (MainEditor == null) return;
+        if (MainEditor == null)
+        {
+            System.Diagnostics.Debug.WriteLine("[View] OnCompletionReceived: MainEditor is null!");
+            return;
+        }
 
         // Convert CompletionItem to CompletionData for AvaloniaEdit
+        // Materialize the list immediately to avoid deferred execution issues
         var completionDataList = completions.Select(c => new CompletionData(
             c.Label,
             c.Detail,
             ConvertCompletionKind(c.Kind),
             c.InsertText ?? c.Label
-        ));
+        )).ToList();
 
-        MainEditor.ShowCompletion(completionDataList);
+        System.Diagnostics.Debug.WriteLine($"[View] OnCompletionReceived: {completionDataList.Count} items, posting to UI thread");
+
+        // Ensure we're on the UI thread
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            System.Diagnostics.Debug.WriteLine($"[View] UI thread: calling ShowCompletion with {completionDataList.Count} items");
+            MainEditor?.ShowCompletion(completionDataList);
+        });
     }
 
     private static Editor.Completion.CompletionItemKind ConvertCompletionKind(Core.Abstractions.Services.CompletionItemKind kind)

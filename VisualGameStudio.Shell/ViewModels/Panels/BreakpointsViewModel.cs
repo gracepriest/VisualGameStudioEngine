@@ -270,7 +270,7 @@ public partial class BreakpointsViewModel : Tool
         BreakpointsChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private async void SyncBreakpointsToDebugger(string filePath)
+    private void SyncBreakpointsToDebugger(string filePath)
     {
         if (!_debugService.IsDebugging) return;
 
@@ -283,7 +283,20 @@ public partial class BreakpointsViewModel : Tool
                 LogMessage = bp.LogMessage
             });
 
-        await _debugService.SetBreakpointsAsync(filePath, breakpoints);
+        // Fire and forget with exception handling
+        _ = SyncBreakpointsToDebuggerAsync(filePath, breakpoints);
+    }
+
+    private async Task SyncBreakpointsToDebuggerAsync(string filePath, IEnumerable<SourceBreakpoint> breakpoints)
+    {
+        try
+        {
+            await _debugService.SetBreakpointsAsync(filePath, breakpoints);
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions when syncing breakpoints
+        }
     }
 
     public async Task SyncAllBreakpointsAsync()

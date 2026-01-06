@@ -30,7 +30,8 @@ namespace BasicLang.Compiler.Driver
             // Check for LSP mode
             if (args.Contains("--lsp") || args.Contains("--language-server"))
             {
-                var server = new BasicLangLanguageServer();
+                // Use simple LSP server for better compatibility
+                var server = new SimpleLspServer(Console.OpenStandardInput(), Console.OpenStandardOutput());
                 await server.RunAsync();
                 return;
             }

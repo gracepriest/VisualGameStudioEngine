@@ -30,21 +30,35 @@ public partial class CallStackViewModel : Tool
 
     private async void OnDebugStopped(object? sender, StoppedEventArgs e)
     {
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+        try
         {
-            await RefreshStackTraceAsync();
-        });
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                await RefreshStackTraceAsync();
+            });
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler to prevent crashes
+        }
     }
 
-    private void OnDebugStateChanged(object? sender, DebugStateChangedEventArgs e)
+    private async void OnDebugStateChanged(object? sender, DebugStateChangedEventArgs e)
     {
-        Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+        try
         {
-            if (e.NewState == DebugState.Stopped || e.NewState == DebugState.NotStarted)
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
             {
-                StackFrames.Clear();
-            }
-        });
+                if (e.NewState == DebugState.Stopped || e.NewState == DebugState.NotStarted)
+                {
+                    StackFrames.Clear();
+                }
+            });
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler to prevent crashes
+        }
     }
 
     [RelayCommand]

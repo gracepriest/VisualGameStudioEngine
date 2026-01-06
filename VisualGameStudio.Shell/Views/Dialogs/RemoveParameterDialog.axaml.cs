@@ -23,9 +23,16 @@ public partial class RemoveParameterDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is RemoveParameterDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is RemoveParameterDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

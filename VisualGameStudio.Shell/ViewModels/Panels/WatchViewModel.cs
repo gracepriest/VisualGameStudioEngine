@@ -35,19 +35,33 @@ public partial class WatchViewModel : ViewModelBase
 
     private async void OnDebugStateChanged(object? sender, DebugStateChangedEventArgs e)
     {
-        if (e.NewState == DebugState.Paused)
+        try
         {
-            await RefreshAllAsync();
+            if (e.NewState == DebugState.Paused)
+            {
+                await RefreshAllAsync();
+            }
+            else if (e.NewState == DebugState.Stopped)
+            {
+                ClearValues();
+            }
         }
-        else if (e.NewState == DebugState.Stopped)
+        catch (Exception)
         {
-            ClearValues();
+            // Ignore exceptions in event handler
         }
     }
 
     private async void OnDebugStopped(object? sender, StoppedEventArgs e)
     {
-        await RefreshAllAsync();
+        try
+        {
+            await RefreshAllAsync();
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
+        }
     }
 
     [RelayCommand]

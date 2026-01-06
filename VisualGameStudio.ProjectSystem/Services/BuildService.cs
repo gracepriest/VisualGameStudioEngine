@@ -295,22 +295,15 @@ public class BuildService : IBuildService
 
                 // Create temporary csproj for compilation
                 var csprojPath = Path.Combine(outputDir, $"{project.Name}.csproj");
-                var csprojContent = $@"<Project Sdk=""Microsoft.NET.Sdk"">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>disable</ImplicitUsings>
-    <Nullable>disable</Nullable>
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
-    <OutputPath>.\</OutputPath>
-  </PropertyGroup>
-  <ItemGroup>
-    <Compile Include=""{Path.GetFileName(csFilePath)}"" />
-  </ItemGroup>
-</Project>";
+                var csprojContent = GenerateCsprojContent(result.GeneratedCode, Path.GetFileName(csFilePath));
                 File.WriteAllText(csprojPath, csprojContent);
+                _outputService.WriteLine($"Generated csproj: {csprojPath}", OutputCategory.Build);
+
+                // Log if Windows Forms is detected
+                if (result.GeneratedCode.Contains("using System.Windows.Forms;"))
+                {
+                    _outputService.WriteLine("Detected Windows Forms - using net8.0-windows with UseWindowsForms", OutputCategory.Build);
+                }
 
                 BuildProgress?.Invoke(this, new BuildProgressEventArgs("Compiling C#...", 90));
 
@@ -337,12 +330,15 @@ public class BuildService : IBuildService
                 if (buildProcess.ExitCode != 0)
                 {
                     result.Success = false;
+                    // Show both stdout and stderr for better error diagnostics
+                    var errorMessage = !string.IsNullOrWhiteSpace(buildError) ? buildError : buildOutput;
                     result.Diagnostics.Add(new DiagnosticItem
                     {
                         Id = "BL5001",
-                        Message = $"C# compilation failed: {buildError}",
+                        Message = $"C# compilation failed: {errorMessage}",
                         Severity = DiagnosticSeverity.Error
                     });
+                    _outputService.WriteLine($"Build error: {errorMessage}", OutputCategory.Build);
                 }
                 else
                 {
@@ -524,5 +520,83 @@ public class BuildService : IBuildService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Generate .csproj content with appropriate framework references based on the namespaces used
+    /// </summary>
+    private string GenerateCsprojContent(string generatedCode, string csFileName)
+    {
+        var sb = new System.Text.StringBuilder();
+
+        // Detect which namespaces are used (case-insensitive)
+        var codeUpper = generatedCode.ToUpperInvariant();
+        bool usesWindowsForms = codeUpper.Contains("USING SYSTEM.WINDOWS.FORMS;");
+        bool usesWpf = codeUpper.Contains("USING SYSTEM.WINDOWS;") &&
+                       (codeUpper.Contains("USING SYSTEM.WINDOWS.CONTROLS;") ||
+                        codeUpper.Contains("USING SYSTEM.WINDOWS.MEDIA;"));
+        bool usesDrawing = codeUpper.Contains("USING SYSTEM.DRAWING;");
+        bool usesAspNet = codeUpper.Contains("USING MICROSOFT.ASPNETCORE;");
+
+        // Determine SDK and output type
+        string sdk = "Microsoft.NET.Sdk";
+        string outputType = "Exe";
+
+        if (usesWindowsForms)
+        {
+            sdk = "Microsoft.NET.Sdk";
+            outputType = "WinExe";
+        }
+        else if (usesWpf)
+        {
+            sdk = "Microsoft.NET.Sdk";
+            outputType = "WinExe";
+        }
+        else if (usesAspNet)
+        {
+            sdk = "Microsoft.NET.Sdk.Web";
+        }
+
+        sb.AppendLine($@"<Project Sdk=""{sdk}"">");
+        sb.AppendLine("  <PropertyGroup>");
+        sb.AppendLine($"    <OutputType>{outputType}</OutputType>");
+        sb.AppendLine("    <TargetFramework>net8.0-windows</TargetFramework>");
+        sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
+        sb.AppendLine("    <Nullable>disable</Nullable>");
+        sb.AppendLine("    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>");
+        sb.AppendLine("    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>");
+        sb.AppendLine("    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>");
+        sb.AppendLine("    <OutputPath>.\\</OutputPath>");
+
+        // Add Windows Forms support
+        if (usesWindowsForms)
+        {
+            sb.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
+        }
+
+        // Add WPF support
+        if (usesWpf)
+        {
+            sb.AppendLine("    <UseWPF>true</UseWPF>");
+        }
+
+        sb.AppendLine("  </PropertyGroup>");
+
+        // Add compile items
+        sb.AppendLine("  <ItemGroup>");
+        sb.AppendLine($"    <Compile Include=\"{csFileName}\" />");
+        sb.AppendLine("  </ItemGroup>");
+
+        // Add package references for System.Drawing if needed (for non-Windows Forms projects)
+        if (usesDrawing && !usesWindowsForms)
+        {
+            sb.AppendLine("  <ItemGroup>");
+            sb.AppendLine("    <PackageReference Include=\"System.Drawing.Common\" Version=\"8.0.0\" />");
+            sb.AppendLine("  </ItemGroup>");
+        }
+
+        sb.AppendLine("</Project>");
+
+        return sb.ToString();
     }
 }

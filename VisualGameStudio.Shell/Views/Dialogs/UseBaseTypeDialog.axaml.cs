@@ -23,9 +23,16 @@ public partial class UseBaseTypeDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is UseBaseTypeDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is UseBaseTypeDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

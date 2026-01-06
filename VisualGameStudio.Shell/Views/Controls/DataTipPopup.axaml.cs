@@ -10,7 +10,6 @@ public partial class DataTipPopup : UserControl
     public string Type { get; private set; } = "";
 
     public event EventHandler<string>? AddToWatchClicked;
-    public event EventHandler<string>? CopyClicked;
 
     public DataTipPopup()
     {

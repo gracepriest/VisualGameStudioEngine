@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Media;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Document;
@@ -10,6 +11,8 @@ namespace VisualGameStudio.Editor.Completion;
 /// </summary>
 public class CompletionData : ICompletionData
 {
+    private static readonly SolidColorBrush TextBrush = new SolidColorBrush(Color.FromRgb(220, 220, 220));
+
     public CompletionData(string text, string? description = null, CompletionItemKind kind = CompletionItemKind.Text, string? insertText = null)
     {
         Text = text;
@@ -22,7 +25,11 @@ public class CompletionData : ICompletionData
     public string InsertText { get; }
     public CompletionItemKind Kind { get; }
 
-    public object Content => Text;
+    public object Content => new TextBlock
+    {
+        Text = Text,
+        Foreground = TextBrush
+    };
     public object? Description { get; }
     public double Priority => GetPriority();
 

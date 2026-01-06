@@ -47,6 +47,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler? DirtyChanged;
     public event EventHandler? TitleChanged;
     public event EventHandler? CaretPositionChanged;
+    public event EventHandler<string>? TextChanged;
     public event EventHandler<NavigationRequestedEventArgs>? NavigationRequested;
     public event EventHandler<string>? AddToWatchRequested;
     public event EventHandler<DataTipEvaluationRequestEventArgs>? DataTipEvaluationRequested;
@@ -130,6 +131,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             OnPropertyChanged(nameof(Title));
             TitleChanged?.Invoke(this, EventArgs.Empty);
         }
+
+        // Notify listeners about text change (for LSP synchronization)
+        TextChanged?.Invoke(this, value);
     }
 
     partial void OnFilePathChanged(string? value)
@@ -504,7 +508,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// </summary>
     public void ProvideCompletions(IEnumerable<Core.Abstractions.Services.CompletionItem> completions)
     {
-        CompletionReceived?.Invoke(this, completions);
+        var list = completions.ToList();
+        var hasSubscribers = CompletionReceived != null;
+        System.Diagnostics.Trace.WriteLine($"[ViewModel] ProvideCompletions: {list.Count} items, hasSubscribers={hasSubscribers}");
+        Console.WriteLine($"[ViewModel] ProvideCompletions: {list.Count} items, hasSubscribers={hasSubscribers}");
+        CompletionReceived?.Invoke(this, list);
     }
 
     #endregion

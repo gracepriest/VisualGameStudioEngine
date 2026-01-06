@@ -23,9 +23,16 @@ public partial class ExtractConstantDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is ExtractConstantDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is ExtractConstantDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

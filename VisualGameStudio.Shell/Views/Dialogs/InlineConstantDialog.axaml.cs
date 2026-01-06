@@ -23,9 +23,16 @@ public partial class InlineConstantDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is InlineConstantDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is InlineConstantDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

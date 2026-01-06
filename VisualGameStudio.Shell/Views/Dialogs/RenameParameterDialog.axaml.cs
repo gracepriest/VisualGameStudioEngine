@@ -23,9 +23,16 @@ public partial class RenameParameterDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is RenameParameterDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is RenameParameterDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

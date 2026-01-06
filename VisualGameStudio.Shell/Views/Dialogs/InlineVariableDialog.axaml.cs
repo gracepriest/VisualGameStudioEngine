@@ -23,9 +23,16 @@ public partial class InlineVariableDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is InlineVariableDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is InlineVariableDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

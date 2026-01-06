@@ -544,9 +544,159 @@ namespace BasicLang.Debugger
 
                 case IRCall call:
                     return ExecuteCall(call, frame);
+
+                case IRFieldAccess fieldAccess:
+                    return EvaluateFieldAccess(fieldAccess, frame);
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Evaluate field/property access like Environment.MachineName or DateTime.Now
+        /// </summary>
+        private object EvaluateFieldAccess(IRFieldAccess fieldAccess, CallFrame frame)
+        {
+            var obj = EvaluateValue(fieldAccess.Object, frame);
+            var fieldName = fieldAccess.FieldName;
+
+            // Check if this is a static property access on a .NET type
+            if (fieldAccess.Object is IRVariable varRef)
+            {
+                var typeName = varRef.Name;
+
+                // Handle DateTime static properties
+                if (typeName.Equals("DateTime", StringComparison.OrdinalIgnoreCase))
+                {
+                    switch (fieldName.ToLowerInvariant())
+                    {
+                        case "now": return DateTime.Now;
+                        case "utcnow": return DateTime.UtcNow;
+                        case "today": return DateTime.Today;
+                        case "minvalue": return DateTime.MinValue;
+                        case "maxvalue": return DateTime.MaxValue;
+                    }
+                }
+
+                // Handle Environment static properties
+                if (typeName.Equals("Environment", StringComparison.OrdinalIgnoreCase))
+                {
+                    switch (fieldName.ToLowerInvariant())
+                    {
+                        case "machinename": return Environment.MachineName;
+                        case "username": return Environment.UserName;
+                        case "userdomain": return Environment.UserDomainName;
+                        case "currentdirectory": return Environment.CurrentDirectory;
+                        case "osversion": return Environment.OSVersion.ToString();
+                        case "newline": return Environment.NewLine;
+                        case "tickcount": return Environment.TickCount;
+                        case "processorcount": return Environment.ProcessorCount;
+                        case "is64bitoperatingsystem": return Environment.Is64BitOperatingSystem;
+                        case "is64bitprocess": return Environment.Is64BitProcess;
+                    }
+                }
+
+                // Handle String static properties
+                if (typeName.Equals("String", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (fieldName.Equals("Empty", StringComparison.OrdinalIgnoreCase))
+                        return string.Empty;
+                }
+
+                // Handle Console properties
+                if (typeName.Equals("Console", StringComparison.OrdinalIgnoreCase))
+                {
+                    switch (fieldName.ToLowerInvariant())
+                    {
+                        case "title": return "[Console Title]";
+                        case "cursorleft": return 0;
+                        case "cursortop": return 0;
+                        case "windowwidth": return 80;
+                        case "windowheight": return 25;
+                    }
+                }
+
+                // Handle Directory static properties
+                if (typeName.Equals("Directory", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Directory doesn't have many static properties, but check just in case
+                }
+
+                // Handle Path static properties
+                if (typeName.Equals("Path", StringComparison.OrdinalIgnoreCase))
+                {
+                    switch (fieldName.ToLowerInvariant())
+                    {
+                        case "directoryseparatorchar": return System.IO.Path.DirectorySeparatorChar;
+                        case "altdirectoryseparatorchar": return System.IO.Path.AltDirectorySeparatorChar;
+                        case "pathseparator": return System.IO.Path.PathSeparator;
+                        case "volumeseparatorchar": return System.IO.Path.VolumeSeparatorChar;
+                    }
+                }
+
+                // Try reflection for other .NET types
+                var netResult = GetStaticPropertyViaReflection(typeName, fieldName);
+                if (netResult != NetCallNotFound)
+                    return netResult;
+            }
+
+            // Instance property access
+            if (obj != null)
+            {
+                try
+                {
+                    var type = obj.GetType();
+                    var prop = type.GetProperty(fieldName, System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                    if (prop != null)
+                        return prop.GetValue(obj);
+
+                    var field = type.GetField(fieldName, System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                    if (field != null)
+                        return field.GetValue(obj);
+                }
+                catch
+                {
+                    // Ignore reflection errors
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Get a static property value via reflection
+        /// </summary>
+        private object GetStaticPropertyViaReflection(string typeName, string propertyName)
+        {
+            // Try to find the type in common assemblies
+            Type type = Type.GetType($"System.{typeName}") ??
+                        Type.GetType($"System.IO.{typeName}") ??
+                        Type.GetType($"System.Text.{typeName}") ??
+                        Type.GetType(typeName);
+
+            if (type == null)
+                return NetCallNotFound;
+
+            try
+            {
+                var prop = type.GetProperty(propertyName, System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.IgnoreCase);
+                if (prop != null)
+                    return prop.GetValue(null);
+
+                var field = type.GetField(propertyName, System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.IgnoreCase);
+                if (field != null)
+                    return field.GetValue(null);
+            }
+            catch
+            {
+                // Ignore reflection errors
+            }
+
+            return NetCallNotFound;
         }
 
         private object ExecuteCall(IRCall call, CallFrame frame)
@@ -557,10 +707,18 @@ namespace BasicLang.Debugger
                 args.Add(EvaluateValue(arg, frame));
             }
 
-            // Check built-in functions
-            var result = ExecuteBuiltIn(call.FunctionName, args.ToArray());
-            if (result != null)
-                return result;
+            // Check built-in functions first
+            var builtInResult = ExecuteBuiltIn(call.FunctionName, args.ToArray());
+            if (builtInResult != BuiltInNotFound)
+                return builtInResult;
+
+            // Check for .NET static method calls (e.g., Console.WriteLine, Math.Sqrt)
+            if (call.FunctionName.Contains("."))
+            {
+                var netResult = ExecuteNetStaticCall(call.FunctionName, args.ToArray());
+                if (netResult != NetCallNotFound)
+                    return netResult;
+            }
 
             // User function
             var func = _module.Functions.FirstOrDefault(f =>
@@ -572,6 +730,274 @@ namespace BasicLang.Debugger
             }
 
             return null;
+        }
+
+        // Sentinel objects to distinguish "not found" from null return
+        private static readonly object BuiltInNotFound = new object();
+        private static readonly object NetCallNotFound = new object();
+
+        /// <summary>
+        /// Execute .NET static method calls like Console.WriteLine, Math.Sqrt, etc.
+        /// </summary>
+        private object ExecuteNetStaticCall(string fullName, object[] args)
+        {
+            var lastDot = fullName.LastIndexOf('.');
+            if (lastDot < 0)
+                return NetCallNotFound;
+
+            var typeName = fullName.Substring(0, lastDot);
+            var methodName = fullName.Substring(lastDot + 1);
+
+            // Handle Console output methods - route to debug output
+            if (typeName.Equals("Console", StringComparison.OrdinalIgnoreCase))
+            {
+                switch (methodName.ToLowerInvariant())
+                {
+                    case "writeline":
+                        var text = args.Length > 0 ? args[0]?.ToString() ?? "" : "";
+                        OnOutput(text + "\n");
+                        return null;
+                    case "write":
+                        OnOutput(args.Length > 0 ? args[0]?.ToString() ?? "" : "");
+                        return null;
+                    case "clear":
+                        // Just ignore Clear in debugger
+                        return null;
+                    case "readkey":
+                    case "readline":
+                        // Can't do input in debugger, return empty
+                        OnOutput("[Debug: Input not available during debugging]\n");
+                        return "";
+                }
+            }
+
+            // Handle Math methods
+            if (typeName.Equals("Math", StringComparison.OrdinalIgnoreCase))
+            {
+                return ExecuteMathMethod(methodName, args);
+            }
+
+            // Handle DateTime
+            if (typeName.Equals("DateTime", StringComparison.OrdinalIgnoreCase))
+            {
+                return ExecuteDateTimeMethod(methodName, args);
+            }
+
+            // Handle Environment
+            if (typeName.Equals("Environment", StringComparison.OrdinalIgnoreCase))
+            {
+                return ExecuteEnvironmentMethod(methodName, args);
+            }
+
+            // Handle File (System.IO)
+            if (typeName.Equals("File", StringComparison.OrdinalIgnoreCase))
+            {
+                return ExecuteFileMethod(methodName, args);
+            }
+
+            // Handle Directory (System.IO)
+            if (typeName.Equals("Directory", StringComparison.OrdinalIgnoreCase))
+            {
+                return ExecuteDirectoryMethod(methodName, args);
+            }
+
+            // Handle Path (System.IO)
+            if (typeName.Equals("Path", StringComparison.OrdinalIgnoreCase))
+            {
+                return ExecutePathMethod(methodName, args);
+            }
+
+            // Try reflection for other .NET types
+            return ExecuteNetCallViaReflection(typeName, methodName, args);
+        }
+
+        private object ExecuteMathMethod(string method, object[] args)
+        {
+            switch (method.ToLowerInvariant())
+            {
+                case "sqrt": return Math.Sqrt(Convert.ToDouble(args[0]));
+                case "abs": return Math.Abs(Convert.ToDouble(args[0]));
+                case "sin": return Math.Sin(Convert.ToDouble(args[0]));
+                case "cos": return Math.Cos(Convert.ToDouble(args[0]));
+                case "tan": return Math.Tan(Convert.ToDouble(args[0]));
+                case "pow": return Math.Pow(Convert.ToDouble(args[0]), Convert.ToDouble(args[1]));
+                case "max": return Math.Max(Convert.ToDouble(args[0]), Convert.ToDouble(args[1]));
+                case "min": return Math.Min(Convert.ToDouble(args[0]), Convert.ToDouble(args[1]));
+                case "floor": return Math.Floor(Convert.ToDouble(args[0]));
+                case "ceiling": return Math.Ceiling(Convert.ToDouble(args[0]));
+                case "round": return Math.Round(Convert.ToDouble(args[0]));
+                case "log": return args.Length > 1 ? Math.Log(Convert.ToDouble(args[0]), Convert.ToDouble(args[1])) : Math.Log(Convert.ToDouble(args[0]));
+                case "log10": return Math.Log10(Convert.ToDouble(args[0]));
+                case "exp": return Math.Exp(Convert.ToDouble(args[0]));
+                default: return NetCallNotFound;
+            }
+        }
+
+        private object ExecuteDateTimeMethod(string method, object[] args)
+        {
+            switch (method.ToLowerInvariant())
+            {
+                case "now": return DateTime.Now;
+                case "utcnow": return DateTime.UtcNow;
+                case "today": return DateTime.Today;
+                case "parse": return args.Length > 0 ? DateTime.Parse(args[0]?.ToString() ?? "") : DateTime.MinValue;
+                default: return NetCallNotFound;
+            }
+        }
+
+        private object ExecuteEnvironmentMethod(string method, object[] args)
+        {
+            switch (method.ToLowerInvariant())
+            {
+                case "machinename": return Environment.MachineName;
+                case "username": return Environment.UserName;
+                case "currentdirectory": return Environment.CurrentDirectory;
+                case "osversion": return Environment.OSVersion.ToString();
+                case "getenvironmentvariable": return args.Length > 0 ? Environment.GetEnvironmentVariable(args[0]?.ToString() ?? "") : null;
+                case "newline": return Environment.NewLine;
+                case "tickcount": return Environment.TickCount;
+                default: return NetCallNotFound;
+            }
+        }
+
+        private object ExecuteFileMethod(string method, object[] args)
+        {
+            try
+            {
+                switch (method.ToLowerInvariant())
+                {
+                    case "exists": return args.Length > 0 && System.IO.File.Exists(args[0]?.ToString() ?? "");
+                    case "readalltext": return args.Length > 0 ? System.IO.File.ReadAllText(args[0]?.ToString() ?? "") : "";
+                    case "writealltext":
+                        if (args.Length >= 2)
+                            System.IO.File.WriteAllText(args[0]?.ToString() ?? "", args[1]?.ToString() ?? "");
+                        return null;
+                    case "appendalltext":
+                        if (args.Length >= 2)
+                            System.IO.File.AppendAllText(args[0]?.ToString() ?? "", args[1]?.ToString() ?? "");
+                        return null;
+                    case "delete":
+                        if (args.Length > 0)
+                            System.IO.File.Delete(args[0]?.ToString() ?? "");
+                        return null;
+                    case "copy":
+                        if (args.Length >= 2)
+                            System.IO.File.Copy(args[0]?.ToString() ?? "", args[1]?.ToString() ?? "", args.Length > 2 && Convert.ToBoolean(args[2]));
+                        return null;
+                    case "move":
+                        if (args.Length >= 2)
+                            System.IO.File.Move(args[0]?.ToString() ?? "", args[1]?.ToString() ?? "");
+                        return null;
+                    default: return NetCallNotFound;
+                }
+            }
+            catch (Exception ex)
+            {
+                OnOutput($"[File operation error: {ex.Message}]\n");
+                return null;
+            }
+        }
+
+        private object ExecuteDirectoryMethod(string method, object[] args)
+        {
+            try
+            {
+                switch (method.ToLowerInvariant())
+                {
+                    case "exists": return args.Length > 0 && System.IO.Directory.Exists(args[0]?.ToString() ?? "");
+                    case "getcurrentdirectory": return System.IO.Directory.GetCurrentDirectory();
+                    case "createdirectory":
+                        if (args.Length > 0)
+                            System.IO.Directory.CreateDirectory(args[0]?.ToString() ?? "");
+                        return null;
+                    case "delete":
+                        if (args.Length > 0)
+                            System.IO.Directory.Delete(args[0]?.ToString() ?? "", args.Length > 1 && Convert.ToBoolean(args[1]));
+                        return null;
+                    default: return NetCallNotFound;
+                }
+            }
+            catch (Exception ex)
+            {
+                OnOutput($"[Directory operation error: {ex.Message}]\n");
+                return null;
+            }
+        }
+
+        private object ExecutePathMethod(string method, object[] args)
+        {
+            switch (method.ToLowerInvariant())
+            {
+                case "combine":
+                    return args.Length >= 2 ? System.IO.Path.Combine(args[0]?.ToString() ?? "", args[1]?.ToString() ?? "") : "";
+                case "getfilename":
+                    return args.Length > 0 ? System.IO.Path.GetFileName(args[0]?.ToString() ?? "") : "";
+                case "getdirectoryname":
+                    return args.Length > 0 ? System.IO.Path.GetDirectoryName(args[0]?.ToString() ?? "") : "";
+                case "getextension":
+                    return args.Length > 0 ? System.IO.Path.GetExtension(args[0]?.ToString() ?? "") : "";
+                case "getfilenamewithoutextension":
+                    return args.Length > 0 ? System.IO.Path.GetFileNameWithoutExtension(args[0]?.ToString() ?? "") : "";
+                default: return NetCallNotFound;
+            }
+        }
+
+        private object ExecuteNetCallViaReflection(string typeName, string methodName, object[] args)
+        {
+            // Try to find the type in common assemblies
+            Type type = null;
+
+            // Try System namespace first
+            type = Type.GetType($"System.{typeName}") ??
+                   Type.GetType($"System.IO.{typeName}") ??
+                   Type.GetType($"System.Text.{typeName}") ??
+                   Type.GetType(typeName);
+
+            if (type == null)
+                return NetCallNotFound;
+
+            try
+            {
+                // Try to find a matching static method
+                var methods = type.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                    .Where(m => m.Name.Equals(methodName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var method in methods)
+                {
+                    var parameters = method.GetParameters();
+                    if (parameters.Length == args.Length)
+                    {
+                        try
+                        {
+                            // Convert arguments to expected types
+                            var convertedArgs = new object[args.Length];
+                            for (int i = 0; i < args.Length; i++)
+                            {
+                                convertedArgs[i] = Convert.ChangeType(args[i], parameters[i].ParameterType);
+                            }
+                            return method.Invoke(null, convertedArgs);
+                        }
+                        catch
+                        {
+                            continue; // Try next overload
+                        }
+                    }
+                }
+
+                // Try property getter
+                var prop = type.GetProperty(methodName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (prop != null)
+                {
+                    return prop.GetValue(null);
+                }
+            }
+            catch
+            {
+                // Reflection failed, return not found
+            }
+
+            return NetCallNotFound;
         }
 
         private object ExecuteBuiltIn(string name, object[] args)
@@ -609,7 +1035,7 @@ namespace BasicLang.Debugger
                     return _random.NextDouble();
             }
 
-            return null;
+            return BuiltInNotFound;
         }
 
         private object PerformBinaryOp(BinaryOpKind op, object left, object right)

@@ -23,9 +23,16 @@ public partial class InlineFieldDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is InlineFieldDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is InlineFieldDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

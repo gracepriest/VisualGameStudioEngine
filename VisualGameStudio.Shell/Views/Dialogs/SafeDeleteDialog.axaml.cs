@@ -23,9 +23,16 @@ public partial class SafeDeleteDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is SafeDeleteDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is SafeDeleteDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

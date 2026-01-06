@@ -23,9 +23,16 @@ public partial class PushMembersDownDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is PushMembersDownDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is PushMembersDownDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

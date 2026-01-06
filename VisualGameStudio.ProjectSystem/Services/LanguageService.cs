@@ -61,6 +61,15 @@ public class LanguageService : ILanguageService
         {
             _cts = new CancellationTokenSource();
 
+            // Log the path being used
+            _outputService.WriteLine($"[LSP] Looking for BasicLang at: {_compilerPath}", OutputCategory.Debug);
+
+            if (!File.Exists(_compilerPath))
+            {
+                _outputService.WriteError($"[LSP] BasicLang.dll not found at: {_compilerPath}", OutputCategory.Build);
+                return;
+            }
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
@@ -74,12 +83,14 @@ public class LanguageService : ILanguageService
                 StandardOutputEncoding = Encoding.UTF8
             };
 
+            _outputService.WriteLine($"[LSP] Starting: dotnet \"{_compilerPath}\" --lsp", OutputCategory.Debug);
+
             _serverProcess = new Process { StartInfo = startInfo };
             _serverProcess.ErrorDataReceived += (s, e) =>
             {
                 if (!string.IsNullOrEmpty(e.Data))
                 {
-                    _outputService.WriteLine($"[LSP Error] {e.Data}", OutputCategory.Debug);
+                    _outputService.WriteLine($"{e.Data}", OutputCategory.Build);
                 }
             };
 
@@ -95,8 +106,22 @@ public class LanguageService : ILanguageService
             // Start reading messages
             _readTask = Task.Run(() => ReadMessagesAsync(_cts.Token), _cts.Token);
 
-            // Initialize the server
-            await InitializeAsync(cancellationToken);
+            _outputService.WriteLine("[LSP] Sending initialize request...", OutputCategory.Debug);
+
+            // Initialize the server with timeout
+            using var initCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            initCts.CancelAfter(TimeSpan.FromSeconds(10));
+
+            try
+            {
+                await InitializeAsync(initCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                _outputService.WriteError("[LSP] Initialize timed out after 10 seconds", OutputCategory.Build);
+                await StopAsync();
+                return;
+            }
 
             IsConnected = true;
             ConnectionChanged?.Invoke(this, true);
@@ -209,20 +234,32 @@ public class LanguageService : ILanguageService
 
     public async Task<IReadOnlyList<CompletionItem>> GetCompletionsAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
     {
-        if (!IsConnected) return Array.Empty<CompletionItem>();
+        _outputService.WriteLine($"[LSP] GetCompletionsAsync: uri={uri}, line={line}, col={column}", OutputCategory.Build);
+
+        if (!IsConnected)
+        {
+            _outputService.WriteLine($"[LSP] Not connected, returning empty", OutputCategory.Build);
+            return Array.Empty<CompletionItem>();
+        }
 
         try
         {
+            var lspUri = PathToUri(uri);
+            _outputService.WriteLine($"[LSP] Sending completion request...", OutputCategory.Build);
+
             var result = await SendRequestAsync("textDocument/completion", new
             {
-                textDocument = new { uri = PathToUri(uri) },
+                textDocument = new { uri = lspUri },
                 position = new { line = line - 1, character = column - 1 }
             }, cancellationToken);
 
-            return ParseCompletions(result);
+            var completions = ParseCompletions(result);
+            _outputService.WriteLine($"[LSP] Received {completions.Count} completions", OutputCategory.Build);
+            return completions;
         }
-        catch
+        catch (Exception ex)
         {
+            _outputService.WriteLine($"[LSP] Completion error: {ex.Message}", OutputCategory.Build);
             return Array.Empty<CompletionItem>();
         }
     }
@@ -512,21 +549,26 @@ public class LanguageService : ILanguageService
         return uri.Substring(8).Replace("/", "\\").Replace("%20", " ");
     }
 
-    private static IReadOnlyList<CompletionItem> ParseCompletions(JsonElement result)
+    private IReadOnlyList<CompletionItem> ParseCompletions(JsonElement result)
     {
         var items = new List<CompletionItem>();
+
+        _outputService.WriteLine($"[LSP Client] ParseCompletions: result.ValueKind={result.ValueKind}", OutputCategory.Debug);
 
         JsonElement itemsArray;
         if (result.ValueKind == JsonValueKind.Array)
         {
             itemsArray = result;
+            _outputService.WriteLine($"[LSP Client] Result is array with {result.GetArrayLength()} items", OutputCategory.Debug);
         }
         else if (result.TryGetProperty("items", out var arr))
         {
             itemsArray = arr;
+            _outputService.WriteLine($"[LSP Client] Result has 'items' property with {arr.GetArrayLength()} items", OutputCategory.Debug);
         }
         else
         {
+            _outputService.WriteLine($"[LSP Client] Result has no items - raw: {result.ToString()?.Substring(0, Math.Min(200, result.ToString()?.Length ?? 0))}", OutputCategory.Debug);
             return items;
         }
 

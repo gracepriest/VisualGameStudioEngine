@@ -7,7 +7,12 @@ namespace VisualGameStudio.Shell.Views.Dialogs;
 
 public partial class GoToSymbolDialog : Window
 {
-    private readonly GoToSymbolDialogViewModel _viewModel;
+    private GoToSymbolDialogViewModel? _viewModel;
+
+    public GoToSymbolDialog()
+    {
+        InitializeComponent();
+    }
 
     public GoToSymbolDialog(GoToSymbolDialogViewModel viewModel)
     {
@@ -30,6 +35,7 @@ public partial class GoToSymbolDialog : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if (_viewModel == null) return;
 
         switch (e.Key)
         {
@@ -60,7 +66,7 @@ public partial class GoToSymbolDialog : Window
     private void ScrollToSelected()
     {
         var listBox = this.FindControl<ListBox>("SymbolListBox");
-        if (listBox != null && _viewModel.SelectedSymbol != null)
+        if (listBox != null && _viewModel?.SelectedSymbol != null)
         {
             listBox.ScrollIntoView(_viewModel.SelectedSymbol);
         }
@@ -68,7 +74,7 @@ public partial class GoToSymbolDialog : Window
 
     private void OnSymbolSelected(object? sender, EventArgs e)
     {
-        Close(_viewModel.ResultSymbol);
+        Close(_viewModel?.ResultSymbol);
     }
 
     private void OnCancelled(object? sender, EventArgs e)

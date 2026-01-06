@@ -268,54 +268,92 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async void OnFileOpenRequested(object? sender, string filePath)
     {
-        await OpenFileAsync(filePath);
+        try
+        {
+            await OpenFileAsync(filePath);
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
+        }
     }
 
     private async void OnDiagnosticDoubleClicked(object? sender, DiagnosticItem diagnostic)
     {
-        await OpenFileAndNavigateAsync(diagnostic.FilePath, diagnostic.Line, diagnostic.Column);
+        try
+        {
+            if (diagnostic.FilePath != null)
+            {
+                await OpenFileAndNavigateAsync(diagnostic.FilePath, diagnostic.Line, diagnostic.Column);
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
+        }
     }
 
     private async void OnEditBreakpointCondition(object? sender, BreakpointItem breakpoint)
     {
-        var location = $"{breakpoint.FileName}:{breakpoint.Line}";
-        var result = await _dialogService.ShowBreakpointConditionDialogAsync(
-            location,
-            breakpoint.Condition,
-            breakpoint.HitCondition,
-            breakpoint.LogMessage);
-
-        if (result != null && result.DialogResult)
+        try
         {
-            Breakpoints.UpdateBreakpointCondition(
-                breakpoint,
-                result.Condition,
-                result.HitCount,
-                result.LogMessage);
+            var location = $"{breakpoint.FileName}:{breakpoint.Line}";
+            var result = await _dialogService.ShowBreakpointConditionDialogAsync(
+                location,
+                breakpoint.Condition,
+                breakpoint.HitCondition,
+                breakpoint.LogMessage);
+
+            if (result != null && result.DialogResult)
+            {
+                Breakpoints.UpdateBreakpointCondition(
+                    breakpoint,
+                    result.Condition,
+                    result.HitCount,
+                    result.LogMessage);
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 
     private async void OnEditFunctionBreakpointCondition(object? sender, FunctionBreakpointItem breakpoint)
     {
-        var result = await _dialogService.ShowBreakpointConditionDialogAsync(
-            $"Function: {breakpoint.FunctionName}",
-            breakpoint.Condition,
-            breakpoint.HitCondition,
-            null); // Function breakpoints don't support log messages
-
-        if (result != null && result.DialogResult)
+        try
         {
-            await Breakpoints.UpdateFunctionBreakpointConditionAsync(
-                breakpoint,
-                result.Condition,
-                result.HitCount);
+            var result = await _dialogService.ShowBreakpointConditionDialogAsync(
+                $"Function: {breakpoint.FunctionName}",
+                breakpoint.Condition,
+                breakpoint.HitCondition,
+                null); // Function breakpoints don't support log messages
+
+            if (result != null && result.DialogResult)
+            {
+                await Breakpoints.UpdateFunctionBreakpointConditionAsync(
+                    breakpoint,
+                    result.Condition,
+                    result.HitCount);
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 
     private async void OnAddToWatchRequested(object? sender, string expression)
     {
-        await Watch.AddExpressionCommand.ExecuteAsync(expression);
-        _dockFactory.ActivateTool("Watch");
+        try
+        {
+            await Watch.AddExpressionCommand.ExecuteAsync(expression);
+            _dockFactory.ActivateTool("Watch");
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
+        }
     }
 
     public event EventHandler<DataTipResultEventArgs>? DataTipResult;
@@ -382,6 +420,8 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task NewProjectAsync()
     {
+        if (App.MainWindow == null) return;
+
         var dialog = new Views.Dialogs.CreateProjectView(_projectTemplateService);
 
         var result = await dialog.ShowDialog<bool?>(App.MainWindow);
@@ -469,6 +509,12 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             var content = await _fileService.ReadFileAsync(filePath);
 
+            // Notify LSP about opened document
+            if (_languageService.IsConnected && filePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase))
+            {
+                await _languageService.OpenDocumentAsync(filePath, content);
+            }
+
             var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
             {
                 FilePath = filePath,
@@ -524,17 +570,51 @@ public partial class MainWindowViewModel : ViewModelBase
             // Wire up code completion requests
             document.CompletionRequested += async (s, e) =>
             {
-                if (_languageService.IsConnected && e != null)
+                System.Diagnostics.Debug.WriteLine($"[Completion] Request received: Line={e?.Line}, Col={e?.Column}, LSP={_languageService.IsConnected}, FilePath={document.FilePath}");
+
+                if (e == null) return;
+
+                IReadOnlyList<CompletionItem>? completions = null;
+
+                if (_languageService.IsConnected)
                 {
-                    var completions = await _languageService.GetCompletionsAsync(
+                    completions = await _languageService.GetCompletionsAsync(
                         document.FilePath ?? "",
                         e.Line,
                         e.Column);
 
-                    if (completions?.Any() == true)
+                    System.Diagnostics.Debug.WriteLine($"[Completion] Got {completions?.Count ?? 0} completions from LSP");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Completion] LSP not connected, using fallback completions");
+                }
+
+                // Provide completions (either from LSP or fallback)
+                if (completions?.Any() == true)
+                {
+                    document.ProvideCompletions(completions);
+                }
+                else
+                {
+                    // Fallback to basic completions when LSP is not available or returns nothing
+                    var fallbackCompletions = GetFallbackCompletions();
+                    if (fallbackCompletions.Any())
                     {
-                        document.ProvideCompletions(completions);
+                        document.ProvideCompletions(fallbackCompletions);
                     }
+                }
+            };
+
+            // Wire up text change notifications for LSP
+            var documentVersion = 1;
+            document.TextChanged += async (s, newText) =>
+            {
+                if (_languageService.IsConnected && document.FilePath != null &&
+                    document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase))
+                {
+                    documentVersion++;
+                    await _languageService.ChangeDocumentAsync(document.FilePath, newText, documentVersion);
                 }
             };
 
@@ -625,11 +705,11 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void CancelBuild()
+    private async Task CancelBuildAsync()
     {
         if (_buildService.IsBuilding)
         {
-            _buildService.CancelBuildAsync();
+            await _buildService.CancelBuildAsync();
         }
     }
 
@@ -701,10 +781,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
             // Navigate to the stopped location
             var frames = await _debugService.GetStackTraceAsync();
-            if (frames.Any() && frames[0].FilePath != null)
+            var firstFrame = frames.FirstOrDefault();
+            if (firstFrame?.FilePath != null)
             {
-                await OpenFileAsync(frames[0].FilePath);
-                var doc = _openDocuments.GetValueOrDefault(frames[0].FilePath);
+                await OpenFileAsync(firstFrame.FilePath);
                 // Could set caret position here
             }
         });
@@ -2753,6 +2833,81 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             StatusText = result.ErrorMessage ?? "Definition not found";
         }
+    }
+
+    /// <summary>
+    /// Gets fallback completions when LSP is not connected
+    /// </summary>
+    private static IReadOnlyList<CompletionItem> GetFallbackCompletions()
+    {
+        var completions = new List<CompletionItem>();
+
+        // BasicLang keywords
+        var keywords = new[]
+        {
+            "Function", "Sub", "End", "If", "Then", "Else", "ElseIf", "EndIf",
+            "For", "To", "Step", "Next", "While", "Wend", "Do", "Loop", "Until",
+            "Select", "Case", "EndSelect", "Dim", "As", "Integer", "String", "Double",
+            "Boolean", "Object", "True", "False", "And", "Or", "Not", "Return",
+            "Class", "EndClass", "Public", "Private", "Property", "Get", "Set",
+            "New", "Me", "MyBase", "Imports", "Module", "EndModule", "Const",
+            "Static", "ByVal", "ByRef", "Optional", "ParamArray", "Inherits",
+            "Implements", "Interface", "EndInterface", "Enum", "EndEnum",
+            "Try", "Catch", "Finally", "EndTry", "Throw", "Exit", "Continue"
+        };
+
+        foreach (var keyword in keywords)
+        {
+            completions.Add(new CompletionItem
+            {
+                Label = keyword,
+                Kind = CompletionItemKind.Keyword,
+                Detail = "Keyword"
+            });
+        }
+
+        // Built-in functions
+        var builtins = new[]
+        {
+            ("Print", "Output text to console"),
+            ("Input", "Read input from user"),
+            ("Len", "Get string length"),
+            ("Mid", "Get substring"),
+            ("Left", "Get left portion of string"),
+            ("Right", "Get right portion of string"),
+            ("InStr", "Find substring position"),
+            ("Val", "Convert string to number"),
+            ("Str", "Convert number to string"),
+            ("Int", "Convert to integer"),
+            ("Abs", "Absolute value"),
+            ("Sin", "Sine function"),
+            ("Cos", "Cosine function"),
+            ("Tan", "Tangent function"),
+            ("Sqrt", "Square root"),
+            ("Log", "Natural logarithm"),
+            ("Exp", "Exponential function"),
+            ("Rnd", "Random number"),
+            ("Timer", "System timer"),
+            ("Date", "Current date"),
+            ("Time", "Current time"),
+            ("UCase", "Convert to uppercase"),
+            ("LCase", "Convert to lowercase"),
+            ("Trim", "Remove whitespace"),
+            ("Chr", "Character from ASCII"),
+            ("Asc", "ASCII from character")
+        };
+
+        foreach (var (name, description) in builtins)
+        {
+            completions.Add(new CompletionItem
+            {
+                Label = name,
+                Kind = CompletionItemKind.Function,
+                Detail = description
+            });
+        }
+
+        return completions;
     }
 
     #endregion

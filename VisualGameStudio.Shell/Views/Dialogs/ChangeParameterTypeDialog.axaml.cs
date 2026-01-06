@@ -23,9 +23,16 @@ public partial class ChangeParameterTypeDialog : Window
     {
         base.OnOpened(e);
 
-        if (DataContext is ChangeParameterTypeDialogViewModel vm)
+        try
         {
-            await vm.InitializeAsync();
+            if (DataContext is ChangeParameterTypeDialogViewModel vm)
+            {
+                await vm.InitializeAsync();
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
         }
     }
 }

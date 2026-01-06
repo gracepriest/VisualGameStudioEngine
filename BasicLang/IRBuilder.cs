@@ -2888,17 +2888,46 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         private static readonly HashSet<string> KnownNetStaticTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
+            // System types
             "Console", "Math", "Environment", "Convert", "BitConverter",
-            "File", "Directory", "Path",
-            "String", "Char", "Int32", "Int64", "Double", "Boolean",
+            "String", "Char", "Int32", "Int64", "Double", "Single", "Boolean", "Byte",
+            "Int16", "UInt16", "UInt32", "UInt64", "Decimal", "SByte",
+            "Object", "DateTime", "TimeSpan", "Guid", "Random",
             "Activator", "Type", "Enum", "Array", "Buffer",
             "GC", "AppDomain", "Assembly",
-            "Task", "Thread", "Monitor", "Interlocked"
+            // System enums (for static member access like ConsoleColor.Green)
+            "ConsoleColor", "ConsoleKey", "DayOfWeek", "DateTimeKind", "StringComparison",
+            "StringSplitOptions", "TypeCode", "MidpointRounding",
+            // System.IO
+            "File", "Directory", "Path", "FileMode", "FileAccess", "FileShare", "SearchOption",
+            // System.Text
+            "Encoding", "StringBuilder",
+            // System.Threading
+            "Task", "Thread", "Monitor", "Interlocked",
+            // System.Diagnostics
+            "Process", "Stopwatch", "Debug", "Trace"
         };
 
         private bool IsKnownNetStaticType(string name)
         {
-            return KnownNetStaticTypes.Contains(name);
+            // Check the hardcoded list first
+            if (KnownNetStaticTypes.Contains(name))
+                return true;
+
+            // If any .NET namespace is imported and the name looks like a type (PascalCase),
+            // treat it as a potential .NET static type
+            // This allows System.Windows.Forms, System.Drawing, etc.
+            if (!string.IsNullOrEmpty(name) && char.IsUpper(name[0]))
+            {
+                // Check if the semantic analyzer knows about imported .NET namespaces
+                var currentUnit = _semanticAnalyzer?.CurrentUnit;
+                if (currentUnit != null && currentUnit.Usings.Any(u => u.IsNetNamespace))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private class LoopContext
