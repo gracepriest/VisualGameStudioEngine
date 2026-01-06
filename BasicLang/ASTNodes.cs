@@ -1353,9 +1353,14 @@ namespace BasicLang.Compiler.AST
     {
         public ExpressionNode Object { get; set; }
         public string MemberName { get; set; }
-        
+        /// <summary>
+        /// Indicates the member access is incomplete (e.g., "obj." with no member name yet).
+        /// Used for IntelliSense to provide completions when user is typing after a dot.
+        /// </summary>
+        public bool IsIncomplete { get; set; }
+
         public MemberAccessExpressionNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     

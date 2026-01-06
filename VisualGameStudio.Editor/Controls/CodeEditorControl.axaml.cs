@@ -535,6 +535,61 @@ public partial class CodeEditorControl : UserControl
     private void OnTextAreaTextEntering(object? sender, TextInputEventArgs e)
     {
         _multiCursorInputHandler?.HandleTextInput(e);
+
+        // Auto-trigger completion when typing a dot (for member access)
+        if (e.Text == ".")
+        {
+            // Schedule completion trigger after the dot is inserted
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                TriggerCompletion();
+            }, Avalonia.Threading.DispatcherPriority.Background);
+        }
+        // Auto-trigger completion after typing 2+ identifier characters
+        else if (!string.IsNullOrEmpty(e.Text) && e.Text.Length == 1 && char.IsLetterOrDigit(e.Text[0]))
+        {
+            // Schedule check after the character is inserted
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                var prefix = GetCurrentWordPrefix();
+                if (prefix != null && prefix.Length >= 2)
+                {
+                    TriggerCompletion();
+                }
+            }, Avalonia.Threading.DispatcherPriority.Background);
+        }
+    }
+
+    /// <summary>
+    /// Get the current word being typed (prefix before cursor)
+    /// </summary>
+    private string? GetCurrentWordPrefix()
+    {
+        if (_textEditor?.Document == null) return null;
+
+        var offset = _textEditor.CaretOffset;
+        if (offset <= 0) return null;
+
+        var document = _textEditor.Document;
+        int start = offset;
+
+        // Walk backwards to find the start of the word
+        while (start > 0)
+        {
+            char c = document.GetCharAt(start - 1);
+            if (char.IsLetterOrDigit(c) || c == '_')
+            {
+                start--;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        if (start == offset) return null;
+
+        return document.GetText(start, offset - start);
     }
 
     private void OnMultiCursorsChanged(object? sender, EventArgs e)
@@ -1600,22 +1655,49 @@ public partial class CodeEditorControl : UserControl
     {
         if (_textEditor == null) return;
 
+        // Materialize the list first to check count
+        var itemsList = completionItems.ToList();
+
+        // Don't do anything if no items - preserve any existing completion window
+        if (itemsList.Count == 0) return;
+
         // Close any existing completion window
         _completionWindow?.Close();
 
         _completionWindow = new CompletionWindow(_textEditor.TextArea);
+
+        // Calculate the start offset for text replacement
+        // Find the start of the current word/identifier being typed
+        var caretOffset = _textEditor.CaretOffset;
+        var document = _textEditor.Document;
+        var startOffset = caretOffset;
+
+        // Move back to find the start of the identifier
+        while (startOffset > 0)
+        {
+            var prevChar = document.GetCharAt(startOffset - 1);
+            if (char.IsLetterOrDigit(prevChar) || prevChar == '_')
+            {
+                startOffset--;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // Set the start offset so the completion replaces the typed text
+        _completionWindow.StartOffset = startOffset;
+
         var data = _completionWindow.CompletionList.CompletionData;
 
-        foreach (var item in completionItems)
+        foreach (var item in itemsList)
         {
             data.Add(item);
         }
 
-        if (data.Count > 0)
-        {
-            _completionWindow.Show();
-            _completionWindow.Closed += (s, e) => _completionWindow = null;
-        }
+        _completionWindow.Show();
+        _completionWindow.Closed += (s, e) => _completionWindow = null;
     }
 
     /// <summary>
@@ -1623,6 +1705,7 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void TriggerCompletion()
     {
+        System.Diagnostics.Debug.WriteLine($"[Editor] TriggerCompletion called at line {CaretLine}, col {CaretColumn}");
         if (_textEditor == null) return;
 
         var args = new CompletionRequestEventArgs(

@@ -1818,10 +1818,37 @@ namespace BasicLang.Compiler
             else
             {
                 Consume(TokenType.As, "Expected 'As'");
-                node.Type = ParseTypeReference();
+
+                // Handle "As New Type" pattern - creates initializer with New expression
+                if (Match(TokenType.New))
+                {
+                    var newToken = Previous();
+                    var newExpr = new NewExpressionNode(newToken.Line, newToken.Column);
+                    newExpr.Type = ParseTypeReference();
+
+                    // Check for constructor arguments
+                    if (Match(TokenType.LeftParen))
+                    {
+                        if (!Check(TokenType.RightParen))
+                        {
+                            do
+                            {
+                                newExpr.Arguments.Add(ParseExpression());
+                            } while (Match(TokenType.Comma));
+                        }
+                        Consume(TokenType.RightParen, "Expected ')' after arguments");
+                    }
+
+                    node.Type = newExpr.Type;
+                    node.Initializer = newExpr;
+                }
+                else
+                {
+                    node.Type = ParseTypeReference();
+                }
             }
 
-            // Initializer
+            // Initializer (for regular "Dim x As Type = value" pattern)
             if (Match(TokenType.Assignment))
             {
                 node.Initializer = ParseExpression();
@@ -2050,10 +2077,24 @@ namespace BasicLang.Compiler
                 if (Check(endToken) || IsAtEnd())
                     break;
 
-                var statement = ParseStatement();
-                if (statement != null)
+                try
                 {
-                    block.Statements.Add(statement);
+                    var statement = ParseStatement();
+                    if (statement != null)
+                    {
+                        block.Statements.Add(statement);
+                    }
+                }
+                catch (ParseException ex)
+                {
+                    // Error-tolerant: Record error and skip to next statement
+                    // This allows IntelliSense to work with partial/incomplete code
+                    RecordError(ex.Message, ex.Token, ex.Suggestion);
+                    Synchronize();
+
+                    // If we've synchronized to the end token, break out
+                    if (Check(endToken))
+                        break;
                 }
 
                 SkipNewlines();
@@ -3058,7 +3099,14 @@ namespace BasicLang.Compiler
                     }
                     else
                     {
-                        throw new ParseException($"Expected member name but found {memberToken.Type}", memberToken);
+                        // Error-tolerant: If no member name after dot, create incomplete member access
+                        // This allows IntelliSense to still work when user has typed "obj." and waiting for completion
+                        var incompleteMemberAccess = new MemberAccessExpressionNode(expr.Line, expr.Column);
+                        incompleteMemberAccess.Object = expr;
+                        incompleteMemberAccess.MemberName = ""; // Empty member name indicates incomplete
+                        incompleteMemberAccess.IsIncomplete = true;
+                        expr = incompleteMemberAccess;
+                        break; // Stop parsing this expression - it's incomplete
                     }
                     var memberAccess = new MemberAccessExpressionNode(expr.Line, expr.Column);
                     memberAccess.Object = expr;
