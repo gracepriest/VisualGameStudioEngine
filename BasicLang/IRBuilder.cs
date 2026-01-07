@@ -2865,6 +2865,7 @@ namespace BasicLang.Compiler.IR
                 "Not" or "!" => UnaryOpKind.Not,
                 "++" => UnaryOpKind.Inc,
                 "--" => UnaryOpKind.Dec,
+                "AddressOf" => UnaryOpKind.AddressOf,
                 _ => throw new Exception($"Unknown unary operator: {op}")
             };
         }

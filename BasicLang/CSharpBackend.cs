@@ -2331,6 +2331,26 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRCall call)
         {
+            var functionName = call.FunctionName;
+
+            // Handle event subscription: Delegate.Combine -> +=
+            if (functionName == "Delegate.Combine" && call.Arguments.Count >= 2)
+            {
+                var eventExpr = EmitExpression(call.Arguments[0]);
+                var handlerExpr = EmitExpression(call.Arguments[1]);
+                WriteLine($"{eventExpr} += {handlerExpr};");
+                return;
+            }
+
+            // Handle event unsubscription: Delegate.Remove -> -=
+            if (functionName == "Delegate.Remove" && call.Arguments.Count >= 2)
+            {
+                var eventExpr = EmitExpression(call.Arguments[0]);
+                var handlerExpr = EmitExpression(call.Arguments[1]);
+                WriteLine($"{eventExpr} -= {handlerExpr};");
+                return;
+            }
+
             // Format arguments, adding 'ref' prefix for ByRef parameters
             var argExprs = call.Arguments.Select((arg, i) =>
             {
@@ -2338,7 +2358,6 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 bool isByRef = call.ByRefArguments != null && i < call.ByRefArguments.Count && call.ByRefArguments[i];
                 return isByRef ? $"ref {expr}" : expr;
             }).ToArray();
-            var functionName = call.FunctionName;
 
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
@@ -2942,6 +2961,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             UnaryOpKind.BitwiseNot => "~",
             UnaryOpKind.Inc => "++",
             UnaryOpKind.Dec => "--",
+            UnaryOpKind.AddressOf => "",  // In C#, method reference is just the method name
             _ => "?"
         };
 

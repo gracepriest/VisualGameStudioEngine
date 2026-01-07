@@ -199,7 +199,8 @@ namespace BasicLang.Compiler.IR
         Not,        // Logical negation
         BitwiseNot, // Bitwise negation
         Inc,        // Increment
-        Dec         // Decrement
+        Dec,        // Decrement
+        AddressOf   // Method reference for delegates/events
     }
     
     /// <summary>
