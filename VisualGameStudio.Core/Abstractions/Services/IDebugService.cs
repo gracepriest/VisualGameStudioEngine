@@ -51,6 +51,11 @@ public interface IDebugService : IDisposable
     Task<bool> StartWithoutDebuggingAsync(DebugConfiguration config, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Send input to the running program's stdin
+    /// </summary>
+    Task SendInputAsync(string input);
+
+    /// <summary>
     /// Stop the current debug session
     /// </summary>
     Task StopDebuggingAsync();

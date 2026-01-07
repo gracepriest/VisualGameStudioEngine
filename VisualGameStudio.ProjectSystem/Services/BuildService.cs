@@ -295,15 +295,12 @@ public class BuildService : IBuildService
 
                 // Create temporary csproj for compilation
                 var csprojPath = Path.Combine(outputDir, $"{project.Name}.csproj");
-                var csprojContent = GenerateCsprojContent(result.GeneratedCode, Path.GetFileName(csFilePath));
+                var csprojContent = GenerateCsprojContent(result.GeneratedCode, Path.GetFileName(csFilePath), project);
                 File.WriteAllText(csprojPath, csprojContent);
                 _outputService.WriteLine($"Generated csproj: {csprojPath}", OutputCategory.Build);
 
-                // Log if Windows Forms is detected
-                if (result.GeneratedCode.Contains("using System.Windows.Forms;"))
-                {
-                    _outputService.WriteLine("Detected Windows Forms - using net8.0-windows with UseWindowsForms", OutputCategory.Build);
-                }
+                // Check for library/app type mismatches and warn
+                CheckForMismatchWarnings(result.GeneratedCode, project);
 
                 BuildProgress?.Invoke(this, new BuildProgressEventArgs("Compiling C#...", 90));
 
@@ -523,9 +520,9 @@ public class BuildService : IBuildService
     }
 
     /// <summary>
-    /// Generate .csproj content with appropriate framework references based on the namespaces used
+    /// Generate .csproj content with appropriate framework references based on the project settings
     /// </summary>
-    private string GenerateCsprojContent(string generatedCode, string csFileName)
+    private string GenerateCsprojContent(string generatedCode, string csFileName, BasicLangProject project)
     {
         var sb = new System.Text.StringBuilder();
 
@@ -538,21 +535,20 @@ public class BuildService : IBuildService
         bool usesDrawing = codeUpper.Contains("USING SYSTEM.DRAWING;");
         bool usesAspNet = codeUpper.Contains("USING MICROSOFT.ASPNETCORE;");
 
-        // Determine SDK and output type
+        // Use project's OutputType setting instead of auto-detecting
         string sdk = "Microsoft.NET.Sdk";
-        string outputType = "Exe";
+        string outputType = project.OutputType switch
+        {
+            OutputType.WinExe => "WinExe",
+            OutputType.Library => "Library",
+            _ => "Exe"
+        };
 
-        if (usesWindowsForms)
-        {
-            sdk = "Microsoft.NET.Sdk";
-            outputType = "WinExe";
-        }
-        else if (usesWpf)
-        {
-            sdk = "Microsoft.NET.Sdk";
-            outputType = "WinExe";
-        }
-        else if (usesAspNet)
+        // For WinExe, enable Windows Forms or WPF based on what's used
+        bool enableWindowsForms = project.OutputType == OutputType.WinExe && (usesWindowsForms || !usesWpf);
+        bool enableWpf = project.OutputType == OutputType.WinExe && usesWpf;
+
+        if (usesAspNet)
         {
             sdk = "Microsoft.NET.Sdk.Web";
         }
@@ -569,13 +565,13 @@ public class BuildService : IBuildService
         sb.AppendLine("    <OutputPath>.\\</OutputPath>");
 
         // Add Windows Forms support
-        if (usesWindowsForms)
+        if (enableWindowsForms)
         {
             sb.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
         }
 
         // Add WPF support
-        if (usesWpf)
+        if (enableWpf)
         {
             sb.AppendLine("    <UseWPF>true</UseWPF>");
         }
@@ -598,5 +594,60 @@ public class BuildService : IBuildService
         sb.AppendLine("</Project>");
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Check for mismatches between project type and code usage, and output warnings
+    /// </summary>
+    private void CheckForMismatchWarnings(string generatedCode, BasicLangProject project)
+    {
+        var codeUpper = generatedCode.ToUpperInvariant();
+        bool usesWindowsForms = codeUpper.Contains("USING SYSTEM.WINDOWS.FORMS;");
+        bool usesWpf = codeUpper.Contains("USING SYSTEM.WINDOWS;") &&
+                       (codeUpper.Contains("USING SYSTEM.WINDOWS.CONTROLS;") ||
+                        codeUpper.Contains("USING SYSTEM.WINDOWS.MEDIA;"));
+        bool usesDrawing = codeUpper.Contains("USING SYSTEM.DRAWING;");
+        bool usesConsoleIO = codeUpper.Contains("CONSOLE.READLINE()") ||
+                             codeUpper.Contains("CONSOLE.READKEY()") ||
+                             generatedCode.Contains("Console.Write(") ||
+                             generatedCode.Contains("Console.WriteLine(");
+
+        // Console app using GUI libraries
+        if (project.OutputType == OutputType.Exe)
+        {
+            if (usesWindowsForms)
+            {
+                _outputService.WriteLine("WARNING: Console app uses System.Windows.Forms - forms won't display properly.", OutputCategory.Build);
+                _outputService.WriteLine("  Consider changing project type to 'Windows Forms Application'.", OutputCategory.Build);
+            }
+            if (usesWpf)
+            {
+                _outputService.WriteLine("WARNING: Console app uses WPF - windows won't display properly.", OutputCategory.Build);
+                _outputService.WriteLine("  Consider changing project type to 'WPF Application'.", OutputCategory.Build);
+            }
+            if (usesDrawing && !usesWindowsForms)
+            {
+                _outputService.WriteLine("Note: Console app uses System.Drawing - this is supported.", OutputCategory.Build);
+            }
+        }
+
+        // GUI app using console I/O
+        if (project.OutputType == OutputType.WinExe)
+        {
+            if (usesConsoleIO)
+            {
+                _outputService.WriteLine("WARNING: GUI app uses Console I/O (ReadLine, WriteLine) - no console window available.", OutputCategory.Build);
+                _outputService.WriteLine("  Use MessageBox, TextBox, or change project type to 'Console Application'.", OutputCategory.Build);
+            }
+        }
+
+        // Log the project type being used
+        string appType = project.OutputType switch
+        {
+            OutputType.WinExe => "Windows GUI Application",
+            OutputType.Library => "Class Library",
+            _ => "Console Application"
+        };
+        _outputService.WriteLine($"Building as: {appType}", OutputCategory.Build);
     }
 }

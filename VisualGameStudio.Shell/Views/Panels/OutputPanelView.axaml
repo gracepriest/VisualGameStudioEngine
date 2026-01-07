@@ -23,6 +23,27 @@
         </DockPanel>
       </Border>
 
+      <!-- Input area at the bottom -->
+      <Border DockPanel.Dock="Bottom"
+              Background="#252526"
+              Padding="4"
+              IsVisible="{Binding IsInputEnabled}">
+        <DockPanel>
+          <Button DockPanel.Dock="Right"
+                  Content="Send"
+                  Command="{Binding SendInputCommand}"
+                  Padding="12,4"
+                  Margin="4,0,0,0"/>
+          <TextBox Text="{Binding InputText}"
+                   Watermark="Type input and press Enter..."
+                   FontFamily="Cascadia Code, Consolas, monospace"
+                   FontSize="12"
+                   Background="#1E1E1E"
+                   Foreground="#CCCCCC"
+                   x:Name="InputTextBox"/>
+        </DockPanel>
+      </Border>
+
       <TextBox Text="{Binding OutputText}"
                IsReadOnly="True"
                AcceptsReturn="True"

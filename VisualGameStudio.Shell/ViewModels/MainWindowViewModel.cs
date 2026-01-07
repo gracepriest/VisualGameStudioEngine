@@ -832,43 +832,21 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Find main source file for the debug adapter (it interprets source, not executable)
-        var mainFile = _projectService.CurrentProject.Items
-            .FirstOrDefault(i => i.ItemType == ProjectItemType.Compile);
-
-        if (mainFile == null)
-        {
-            await _dialogService.ShowMessageAsync("Debug", "No source file found in project.",
-                DialogButtons.Ok, DialogIcon.Error);
-            return;
-        }
-
-        var sourceFilePath = Path.Combine(_projectService.CurrentProject.ProjectDirectory, mainFile.Include);
-        if (!File.Exists(sourceFilePath))
-        {
-            await _dialogService.ShowMessageAsync("Debug", $"Source file not found: {sourceFilePath}",
-                DialogButtons.Ok, DialogIcon.Error);
-            return;
-        }
-
-        StatusText = "Starting debugger...";
+        // Run the compiled executable with output capture
+        StatusText = "Starting program...";
         OutputPanel.SelectedCategory = OutputCategory.General;  // Switch to General output to see program output
-        OutputPanel.AppendOutput($"\n========== Debugging: {Path.GetFileName(sourceFilePath)} ==========\n");
+        OutputPanel.AppendOutput($"\n========== Running: {Path.GetFileName(buildResult.ExecutablePath)} ==========\n");
 
         var config = new DebugConfiguration
         {
-            Program = sourceFilePath,  // Pass source file, not executable - debug adapter interprets source
-            WorkingDirectory = _projectService.CurrentProject.ProjectDirectory,
-            StopOnEntry = false
+            Program = buildResult.ExecutablePath,  // Run the compiled executable
+            WorkingDirectory = _projectService.CurrentProject.ProjectDirectory
         };
 
-        // Collect breakpoints to pass to debug service
-        var breakpointsDict = Breakpoints.GetAllBreakpoints();
-
-        var success = await _debugService.StartDebuggingAsync(config, breakpointsDict);
+        var success = await _debugService.StartWithoutDebuggingAsync(config);
         if (!success)
         {
-            OutputPanel.AppendOutput("Failed to start debugger.\n");
+            OutputPanel.AppendOutput("Failed to start program.\n");
         }
     }
 
@@ -902,6 +880,56 @@ public partial class MainWindowViewModel : ViewModelBase
         if (!success)
         {
             OutputPanel.AppendOutput("Failed to start program.\n");
+        }
+    }
+
+    [RelayCommand]
+    private async Task RunInExternalConsoleAsync()
+    {
+        if (_projectService.CurrentProject == null) return;
+
+        await SaveAllAsync();
+        var buildResult = await _buildService.BuildProjectAsync(_projectService.CurrentProject);
+        if (!buildResult.Success) return;
+
+        if (string.IsNullOrEmpty(buildResult.ExecutablePath) || !File.Exists(buildResult.ExecutablePath))
+        {
+            OutputPanel.AppendOutput("Error: No executable found after build.\n");
+            return;
+        }
+
+        try
+        {
+            // Create a batch file to run the exe and pause
+            var batchPath = Path.Combine(Path.GetTempPath(), "vgs_run.bat");
+            var exePath = buildResult.ExecutablePath;
+            var batchContent = $"@echo off\r\n" +
+                $"echo Running: {Path.GetFileName(exePath)}\r\n" +
+                $"echo.\r\n" +
+                $"cd /d \"{_projectService.CurrentProject.ProjectDirectory}\"\r\n" +
+                $"call \"{exePath}\"\r\n" +
+                $"echo.\r\n" +
+                $"echo Exit code: %ERRORLEVEL%\r\n" +
+                $"echo.\r\n" +
+                $"echo Program finished. Press any key to close...\r\n" +
+                $"pause > nul";
+            File.WriteAllText(batchPath, batchContent);
+
+            OutputPanel.AppendOutput($"Exe path: {exePath}\n");
+
+            var startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = batchPath,
+                UseShellExecute = true,
+                WorkingDirectory = _projectService.CurrentProject.ProjectDirectory
+            };
+
+            System.Diagnostics.Process.Start(startInfo);
+            OutputPanel.AppendOutput($"Launched in external console: {Path.GetFileName(buildResult.ExecutablePath)}\n");
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.AppendOutput($"Failed to launch external console: {ex.Message}\n");
         }
     }
 

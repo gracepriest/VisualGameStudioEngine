@@ -15,6 +15,7 @@ public class DebugService : IDebugService
     private Process? _targetProcess;
     private StreamWriter? _writer;
     private StreamReader? _reader;
+    private StreamWriter? _stdinWriter;
     private Task? _readTask;
     private CancellationTokenSource? _cts;
     private int _requestSeq;
@@ -185,6 +186,7 @@ public class DebugService : IDebugService
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                RedirectStandardInput = true,
                 CreateNoWindow = true,
                 WorkingDirectory = config.WorkingDirectory
             };
@@ -218,6 +220,7 @@ public class DebugService : IDebugService
             _targetProcess.Start();
             _targetProcess.BeginOutputReadLine();
             _targetProcess.BeginErrorReadLine();
+            _stdinWriter = _targetProcess.StandardInput;
 
             _outputService.WriteLine("Program started (no debugging)", OutputCategory.Debug);
             return true;
@@ -227,6 +230,22 @@ public class DebugService : IDebugService
             _outputService.WriteError($"Failed to run program: {ex.Message}", OutputCategory.Debug);
             SetState(DebugState.Stopped);
             return false;
+        }
+    }
+
+    public async Task SendInputAsync(string input)
+    {
+        if (_stdinWriter != null && _targetProcess != null && !_targetProcess.HasExited)
+        {
+            try
+            {
+                await _stdinWriter.WriteLineAsync(input);
+                await _stdinWriter.FlushAsync();
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError($"Failed to send input: {ex.Message}", OutputCategory.Debug);
+            }
         }
     }
 
@@ -263,6 +282,8 @@ public class DebugService : IDebugService
     {
         _writer?.Dispose();
         _reader?.Dispose();
+        _stdinWriter?.Dispose();
+        _stdinWriter = null;
 
         if (_debugProcess != null && !_debugProcess.HasExited)
         {
