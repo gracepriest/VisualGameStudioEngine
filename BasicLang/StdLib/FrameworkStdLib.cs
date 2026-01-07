@@ -105,100 +105,106 @@ namespace BasicLang.Compiler.StdLib.Framework
 
             var args = string.Join(", ", arguments);
 
-            // Map BasicLang function name to Framework DLL function
+            // Map BasicLang function name to RaylibWrapper (FrameworkWrapper module) function
             return functionName switch
             {
-                // Core
-                "GameInit" => $"FrameworkRuntime.Initialize({args})",
-                "GameShutdown" => "FrameworkRuntime.Shutdown()",
-                "GameBeginFrame" => "FrameworkRuntime.BeginFrame()",
-                "GameEndFrame" => "FrameworkRuntime.EndFrame()",
-                "GameShouldClose" => "FrameworkRuntime.ShouldClose()",
-                "GameGetDeltaTime" => "FrameworkRuntime.GetDeltaTime()",
-                "GameGetFPS" => "FrameworkRuntime.GetFPS()",
+                // Core - maps to FrameworkWrapper module from RaylibWrapper.dll
+                "GameInit" => $"FrameworkWrapper.Framework_Initialize({args})",
+                "GameShutdown" => "FrameworkWrapper.Framework_Shutdown()",
+                "GameBeginFrame" => "FrameworkWrapper.Framework_BeginDrawing()",
+                "GameEndFrame" => "FrameworkWrapper.Framework_EndDrawing()",
+                "GameShouldClose" => "FrameworkWrapper.Framework_ShouldClose()",
+                "GameGetDeltaTime" => "FrameworkWrapper.Framework_GetDeltaTime()",
+                "GameGetFPS" => "FrameworkWrapper.Framework_GetFPS()",
 
                 // Input
-                "IsKeyPressed" => $"FrameworkRuntime.IsKeyPressed({args})",
-                "IsKeyDown" => $"FrameworkRuntime.IsKeyDown({args})",
-                "IsKeyReleased" => $"FrameworkRuntime.IsKeyReleased({args})",
-                "IsMouseButtonPressed" => $"FrameworkRuntime.IsMouseButtonPressed({args})",
-                "IsMouseButtonDown" => $"FrameworkRuntime.IsMouseButtonDown({args})",
-                "GetMouseX" => "FrameworkRuntime.GetMouseX()",
-                "GetMouseY" => "FrameworkRuntime.GetMouseY()",
+                "IsKeyPressed" => $"FrameworkWrapper.Framework_IsKeyPressed({args})",
+                "IsKeyDown" => $"FrameworkWrapper.Framework_IsKeyDown({args})",
+                "IsKeyReleased" => $"FrameworkWrapper.Framework_IsKeyReleased({args})",
+                "IsMouseButtonPressed" => $"FrameworkWrapper.Framework_IsMouseButtonPressed({args})",
+                "IsMouseButtonDown" => $"FrameworkWrapper.Framework_IsMouseButtonDown({args})",
+                "GetMouseX" => "FrameworkWrapper.Framework_GetMouseX()",
+                "GetMouseY" => "FrameworkWrapper.Framework_GetMouseY()",
 
-                // Drawing
-                "ClearBackground" => $"FrameworkRuntime.ClearBackground({args})",
-                "DrawRectangle" => $"FrameworkRuntime.DrawRectangle({args})",
-                "DrawCircle" => $"FrameworkRuntime.DrawCircle({args})",
-                "DrawLine" => $"FrameworkRuntime.DrawLine({args})",
-                "DrawText" => $"FrameworkRuntime.DrawText({args})",
+                // Drawing - RaylibWrapper uses byte for color params
+                "ClearBackground" => $"FrameworkWrapper.Framework_ClearBackground((byte)({GetArg(arguments, 0)}), (byte)({GetArg(arguments, 1)}), (byte)({GetArg(arguments, 2)}), 255)",
+                "DrawRectangle" => $"FrameworkWrapper.Framework_DrawRectangle({GetArg(arguments, 0)}, {GetArg(arguments, 1)}, {GetArg(arguments, 2)}, {GetArg(arguments, 3)}, (byte)({GetArg(arguments, 4)}), (byte)({GetArg(arguments, 5)}), (byte)({GetArg(arguments, 6)}), (byte)({GetArg(arguments, 7)}))",
+                "DrawCircle" => $"FrameworkWrapper.Framework_DrawCircle({GetArg(arguments, 0)}, {GetArg(arguments, 1)}, {GetArg(arguments, 2)}, (byte)({GetArg(arguments, 3)}), (byte)({GetArg(arguments, 4)}), (byte)({GetArg(arguments, 5)}), (byte)({GetArg(arguments, 6)}))",
+                "DrawLine" => $"FrameworkWrapper.Framework_DrawLine({GetArg(arguments, 0)}, {GetArg(arguments, 1)}, {GetArg(arguments, 2)}, {GetArg(arguments, 3)}, (byte)({GetArg(arguments, 4)}), (byte)({GetArg(arguments, 5)}), (byte)({GetArg(arguments, 6)}), (byte)({GetArg(arguments, 7)}))",
+                "DrawText" => $"FrameworkWrapper.Framework_DrawText({GetArg(arguments, 0)}, {GetArg(arguments, 1)}, {GetArg(arguments, 2)}, {GetArg(arguments, 3)}, (byte)({GetArg(arguments, 4)}), (byte)({GetArg(arguments, 5)}), (byte)({GetArg(arguments, 6)}), (byte)({GetArg(arguments, 7)}))",
 
                 // Textures
-                "LoadTexture" => $"FrameworkRuntime.LoadTexture({args})",
-                "UnloadTexture" => $"FrameworkRuntime.UnloadTexture({args})",
-                "DrawTexture" => $"FrameworkRuntime.DrawTexture({args})",
-                "DrawTextureEx" => $"FrameworkRuntime.DrawTextureEx({args})",
+                "LoadTexture" => $"FrameworkWrapper.Framework_LoadTexture({args})",
+                "UnloadTexture" => $"FrameworkWrapper.Framework_UnloadTexture({args})",
+                "DrawTexture" => $"FrameworkWrapper.Framework_DrawTextureSimple({GetArg(arguments, 0)}, {GetArg(arguments, 1)}, {GetArg(arguments, 2)}, (byte)({GetArg(arguments, 3)}), (byte)({GetArg(arguments, 4)}), (byte)({GetArg(arguments, 5)}), (byte)({GetArg(arguments, 6)}))",
+                "DrawTextureEx" => $"FrameworkWrapper.Framework_DrawTextureEx({GetArg(arguments, 0)}, {GetArg(arguments, 1)}, {GetArg(arguments, 2)}, {GetArg(arguments, 3)}, {GetArg(arguments, 4)}, (byte)({GetArg(arguments, 5)}), (byte)({GetArg(arguments, 6)}), (byte)({GetArg(arguments, 7)}), (byte)({GetArg(arguments, 8)}))",
 
                 // Entities
-                "CreateEntity" => "FrameworkRuntime.CreateEntity()",
-                "DestroyEntity" => $"FrameworkRuntime.DestroyEntity({args})",
-                "EntitySetPosition" => $"FrameworkRuntime.EntitySetPosition({args})",
-                "EntityGetX" => $"FrameworkRuntime.EntityGetX({args})",
-                "EntityGetY" => $"FrameworkRuntime.EntityGetY({args})",
-                "EntitySetVelocity" => $"FrameworkRuntime.EntitySetVelocity({args})",
-                "EntitySetSprite" => $"FrameworkRuntime.EntitySetSprite({args})",
-                "EntitySetCollider" => $"FrameworkRuntime.EntitySetCollider({args})",
-                "EntityIsActive" => $"FrameworkRuntime.EntityIsActive({args})",
-                "EntitySetActive" => $"FrameworkRuntime.EntitySetActive({args})",
+                "CreateEntity" => "FrameworkWrapper.Framework_Entity_Create()",
+                "DestroyEntity" => $"FrameworkWrapper.Framework_Entity_Destroy({args})",
+                "EntitySetPosition" => $"FrameworkWrapper.Framework_Entity_SetPosition({args})",
+                "EntityGetX" => $"FrameworkWrapper.Framework_Entity_GetPositionX({args})",
+                "EntityGetY" => $"FrameworkWrapper.Framework_Entity_GetPositionY({args})",
+                "EntitySetVelocity" => $"FrameworkWrapper.Framework_Entity_SetVelocity({args})",
+                "EntitySetSprite" => $"FrameworkWrapper.Framework_Entity_SetSprite({args})",
+                "EntitySetCollider" => $"FrameworkWrapper.Framework_Entity_SetColliderBox({args})",
+                "EntityIsActive" => $"FrameworkWrapper.Framework_Entity_IsActive({args})",
+                "EntitySetActive" => $"FrameworkWrapper.Framework_Entity_SetActive({args})",
 
                 // Audio
-                "LoadSound" => $"FrameworkRuntime.LoadSound({args})",
-                "PlaySound" => $"FrameworkRuntime.PlaySound({args})",
-                "StopSound" => $"FrameworkRuntime.StopSound({args})",
-                "SetSoundVolume" => $"FrameworkRuntime.SetSoundVolume({args})",
-                "LoadMusic" => $"FrameworkRuntime.LoadMusic({args})",
-                "PlayMusic" => $"FrameworkRuntime.PlayMusic({args})",
-                "StopMusic" => $"FrameworkRuntime.StopMusic({args})",
+                "LoadSound" => $"FrameworkWrapper.Framework_LoadSound({args})",
+                "PlaySound" => $"FrameworkWrapper.Framework_PlaySound({args})",
+                "StopSound" => $"FrameworkWrapper.Framework_StopSound({args})",
+                "SetSoundVolume" => $"FrameworkWrapper.Framework_SetSoundVolume({args})",
+                "LoadMusic" => $"FrameworkWrapper.Framework_LoadMusic({args})",
+                "PlayMusic" => $"FrameworkWrapper.Framework_PlayMusic({args})",
+                "StopMusic" => $"FrameworkWrapper.Framework_StopMusic({args})",
 
                 // Physics
-                "PhysicsSetGravity" => $"FrameworkRuntime.PhysicsSetGravity({args})",
-                "PhysicsUpdate" => $"FrameworkRuntime.PhysicsUpdate({args})",
-                "CreatePhysicsBody" => $"FrameworkRuntime.CreatePhysicsBody({args})",
-                "PhysicsBodyApplyForce" => $"FrameworkRuntime.PhysicsBodyApplyForce({args})",
+                "PhysicsSetGravity" => $"FrameworkWrapper.Framework_Physics_SetGravity({args})",
+                "PhysicsUpdate" => $"FrameworkWrapper.Framework_Physics_Update({args})",
+                "CreatePhysicsBody" => $"FrameworkWrapper.Framework_Physics_CreateBody({args})",
+                "PhysicsBodyApplyForce" => $"FrameworkWrapper.Framework_Physics_ApplyForce({args})",
 
                 // UI
-                "UICreateLabel" => $"FrameworkRuntime.UICreateLabel({args})",
-                "UICreateButton" => $"FrameworkRuntime.UICreateButton({args})",
-                "UIIsButtonClicked" => $"FrameworkRuntime.UIIsButtonClicked({args})",
-                "UISetText" => $"FrameworkRuntime.UISetText({args})",
-                "UIUpdate" => "FrameworkRuntime.UIUpdate()",
-                "UIRender" => "FrameworkRuntime.UIRender()",
+                "UICreateLabel" => $"FrameworkWrapper.Framework_UI_CreateLabel({args})",
+                "UICreateButton" => $"FrameworkWrapper.Framework_UI_CreateButton({args})",
+                "UIIsButtonClicked" => $"FrameworkWrapper.Framework_UI_IsClicked({args})",
+                "UISetText" => $"FrameworkWrapper.Framework_UI_SetText({args})",
+                "UIUpdate" => "FrameworkWrapper.Framework_UI_Update()",
+                "UIRender" => "FrameworkWrapper.Framework_UI_Render()",
 
                 // Camera
-                "CameraSetPosition" => $"FrameworkRuntime.CameraSetPosition({args})",
-                "CameraSetZoom" => $"FrameworkRuntime.CameraSetZoom({args})",
-                "CameraFollow" => $"FrameworkRuntime.CameraFollow({args})",
-                "CameraShake" => $"FrameworkRuntime.CameraShake({args})",
+                "CameraSetPosition" => $"FrameworkWrapper.Framework_Camera_SetPosition({args})",
+                "CameraSetZoom" => $"FrameworkWrapper.Framework_Camera_SetZoom({args})",
+                "CameraFollow" => $"FrameworkWrapper.Framework_Camera_Follow({args})",
+                "CameraShake" => $"FrameworkWrapper.Framework_Camera_Shake({args})",
 
                 // Tweening
-                "TweenFloat" => $"FrameworkRuntime.TweenFloat({args})",
-                "TweenEntityPosition" => $"FrameworkRuntime.TweenEntityPosition({args})",
-                "TweenUpdate" => $"FrameworkRuntime.TweenUpdate({args})",
+                "TweenFloat" => $"FrameworkWrapper.Framework_Tween_Float({args})",
+                "TweenEntityPosition" => $"FrameworkWrapper.Framework_Tween_EntityPosition({args})",
+                "TweenUpdate" => $"FrameworkWrapper.Framework_Tween_Update({args})",
 
                 // Timer
-                "TimerAfter" => $"FrameworkRuntime.TimerAfter({args})",
-                "TimerIsFinished" => $"FrameworkRuntime.TimerIsFinished({args})",
-                "TimerCancel" => $"FrameworkRuntime.TimerCancel({args})",
-                "TimerUpdate" => $"FrameworkRuntime.TimerUpdate({args})",
+                "TimerAfter" => $"FrameworkWrapper.Framework_Timer_After({args})",
+                "TimerIsFinished" => $"FrameworkWrapper.Framework_Timer_IsFinished({args})",
+                "TimerCancel" => $"FrameworkWrapper.Framework_Timer_Cancel({args})",
+                "TimerUpdate" => $"FrameworkWrapper.Framework_Timer_Update({args})",
 
                 _ => null
             };
+        }
+
+        private static string GetArg(string[] args, int index)
+        {
+            return index < args.Length ? args[index] : "0";
         }
 
         public IEnumerable<string> GetRequiredImports(string functionName)
         {
             yield return "System";
             yield return "System.Runtime.InteropServices";
+            yield return "RaylibWrapper";  // For FrameworkWrapper module
         }
 
         public string GetInlineImplementation(string functionName)
@@ -208,174 +214,11 @@ namespace BasicLang.Compiler.StdLib.Framework
         }
 
         /// <summary>
-        /// Get the runtime helper class source code that needs to be included in generated code
+        /// Get the runtime helper class source code that needs to be included in generated code.
+        /// Since we use RaylibWrapper.dll, we only need key and easing constants.
         /// </summary>
         public static string GetRuntimeHelperCode() => @"
-/// <summary>
-/// Runtime helper for VisualGameStudioEngine Framework P/Invoke calls
-/// </summary>
-public static class FrameworkRuntime
-{
-    private const string DllName = ""VisualGameStudioEngine.dll"";
-
-    // Core
-    [DllImport(DllName)] public static extern void Framework_Initialize(int width, int height, [MarshalAs(UnmanagedType.LPStr)] string title);
-    [DllImport(DllName)] public static extern void Framework_Shutdown();
-    [DllImport(DllName)] public static extern void Framework_BeginFrame();
-    [DllImport(DllName)] public static extern void Framework_EndFrame();
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_WindowShouldClose();
-    [DllImport(DllName)] public static extern float Framework_GetDeltaTime();
-    [DllImport(DllName)] public static extern int Framework_GetFPS();
-
-    // Input
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_IsKeyPressed(int key);
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_IsKeyDown(int key);
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_IsKeyReleased(int key);
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_IsMouseButtonPressed(int button);
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_IsMouseButtonDown(int button);
-    [DllImport(DllName)] public static extern int Framework_GetMouseX();
-    [DllImport(DllName)] public static extern int Framework_GetMouseY();
-
-    // Drawing
-    [DllImport(DllName)] public static extern void Framework_ClearBackground(byte r, byte g, byte b, byte a);
-    [DllImport(DllName)] public static extern void Framework_DrawRectangle(float x, float y, float w, float h, byte r, byte g, byte b, byte a);
-    [DllImport(DllName)] public static extern void Framework_DrawCircle(float x, float y, float radius, byte r, byte g, byte b, byte a);
-    [DllImport(DllName)] public static extern void Framework_DrawLine(float x1, float y1, float x2, float y2, byte r, byte g, byte b, byte a);
-    [DllImport(DllName)] public static extern void Framework_DrawText([MarshalAs(UnmanagedType.LPStr)] string text, float x, float y, int fontSize, byte r, byte g, byte b, byte a);
-
-    // Textures
-    [DllImport(DllName)] public static extern int Framework_LoadTexture([MarshalAs(UnmanagedType.LPStr)] string path);
-    [DllImport(DllName)] public static extern void Framework_UnloadTexture(int handle);
-    [DllImport(DllName)] public static extern void Framework_DrawTextureSimple(int handle, float x, float y, byte r, byte g, byte b, byte a);
-    [DllImport(DllName)] public static extern void Framework_DrawTextureEx(int handle, float x, float y, float rotation, float scale, byte r, byte g, byte b, byte a);
-
-    // Entities
-    [DllImport(DllName)] public static extern int Framework_Entity_Create();
-    [DllImport(DllName)] public static extern void Framework_Entity_Destroy(int entity);
-    [DllImport(DllName)] public static extern void Framework_Entity_SetPosition(int entity, float x, float y);
-    [DllImport(DllName)] public static extern float Framework_Entity_GetPositionX(int entity);
-    [DllImport(DllName)] public static extern float Framework_Entity_GetPositionY(int entity);
-    [DllImport(DllName)] public static extern void Framework_Entity_SetVelocity(int entity, float vx, float vy);
-    [DllImport(DllName)] public static extern void Framework_Entity_SetSprite(int entity, int textureHandle);
-    [DllImport(DllName)] public static extern void Framework_Entity_SetColliderBox(int entity, float w, float h);
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_Entity_IsActive(int entity);
-    [DllImport(DllName)] public static extern void Framework_Entity_SetActive(int entity, [MarshalAs(UnmanagedType.I1)] bool active);
-
-    // Audio
-    [DllImport(DllName)] public static extern int Framework_LoadSound([MarshalAs(UnmanagedType.LPStr)] string path);
-    [DllImport(DllName)] public static extern void Framework_PlaySound(int handle);
-    [DllImport(DllName)] public static extern void Framework_StopSound(int handle);
-    [DllImport(DllName)] public static extern void Framework_SetSoundVolume(int handle, float volume);
-    [DllImport(DllName)] public static extern int Framework_LoadMusic([MarshalAs(UnmanagedType.LPStr)] string path);
-    [DllImport(DllName)] public static extern void Framework_PlayMusic(int handle);
-    [DllImport(DllName)] public static extern void Framework_StopMusic(int handle);
-
-    // Physics
-    [DllImport(DllName)] public static extern void Framework_Physics_SetGravity(float x, float y);
-    [DllImport(DllName)] public static extern void Framework_Physics_Update(float deltaTime);
-    [DllImport(DllName)] public static extern int Framework_Physics_CreateBody(int entity, int bodyType);
-    [DllImport(DllName)] public static extern void Framework_Physics_ApplyForce(int bodyId, float fx, float fy);
-
-    // UI
-    [DllImport(DllName)] public static extern int Framework_UI_CreateLabel([MarshalAs(UnmanagedType.LPStr)] string text, float x, float y);
-    [DllImport(DllName)] public static extern int Framework_UI_CreateButton([MarshalAs(UnmanagedType.LPStr)] string text, float x, float y, float w, float h);
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_UI_IsClicked(int elementId);
-    [DllImport(DllName)] public static extern void Framework_UI_SetText(int elementId, [MarshalAs(UnmanagedType.LPStr)] string text);
-    [DllImport(DllName)] public static extern void Framework_UI_Update();
-    [DllImport(DllName)] public static extern void Framework_UI_Render();
-
-    // Camera
-    [DllImport(DllName)] public static extern void Framework_Camera_SetPosition(float x, float y);
-    [DllImport(DllName)] public static extern void Framework_Camera_SetZoom(float zoom);
-    [DllImport(DllName)] public static extern void Framework_Camera_Follow(int entity, float smoothing);
-    [DllImport(DllName)] public static extern void Framework_Camera_Shake(float intensity, float duration);
-
-    // Tweening
-    [DllImport(DllName)] public static extern int Framework_Tween_Float(float from, float to, float duration, int easing);
-    [DllImport(DllName)] public static extern int Framework_Tween_EntityPosition(int entity, float toX, float toY, float duration, int easing);
-    [DllImport(DllName)] public static extern void Framework_Tween_Update(float deltaTime);
-
-    // Timer
-    [DllImport(DllName)] public static extern int Framework_Timer_After(float delay);
-    [DllImport(DllName)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool Framework_Timer_IsFinished(int timerId);
-    [DllImport(DllName)] public static extern void Framework_Timer_Cancel(int timerId);
-    [DllImport(DllName)] public static extern void Framework_Timer_Update(float deltaTime);
-
-    // Wrapper methods for BasicLang
-    public static void Initialize(int w, int h, string title) => Framework_Initialize(w, h, title);
-    public static void Shutdown() => Framework_Shutdown();
-    public static void BeginFrame() => Framework_BeginFrame();
-    public static void EndFrame() => Framework_EndFrame();
-    public static bool ShouldClose() => Framework_WindowShouldClose();
-    public static float GetDeltaTime() => Framework_GetDeltaTime();
-    public static int GetFPS() => Framework_GetFPS();
-
-    public static bool IsKeyPressed(int key) => Framework_IsKeyPressed(key);
-    public static bool IsKeyDown(int key) => Framework_IsKeyDown(key);
-    public static bool IsKeyReleased(int key) => Framework_IsKeyReleased(key);
-    public static bool IsMouseButtonPressed(int btn) => Framework_IsMouseButtonPressed(btn);
-    public static bool IsMouseButtonDown(int btn) => Framework_IsMouseButtonDown(btn);
-    public static int GetMouseX() => Framework_GetMouseX();
-    public static int GetMouseY() => Framework_GetMouseY();
-
-    public static void ClearBackground(int r, int g, int b) => Framework_ClearBackground((byte)r, (byte)g, (byte)b, 255);
-    public static void DrawRectangle(float x, float y, float w, float h, int r, int g, int b, int a) => Framework_DrawRectangle(x, y, w, h, (byte)r, (byte)g, (byte)b, (byte)a);
-    public static void DrawCircle(float x, float y, float radius, int r, int g, int b, int a) => Framework_DrawCircle(x, y, radius, (byte)r, (byte)g, (byte)b, (byte)a);
-    public static void DrawLine(float x1, float y1, float x2, float y2, int r, int g, int b, int a) => Framework_DrawLine(x1, y1, x2, y2, (byte)r, (byte)g, (byte)b, (byte)a);
-    public static void DrawText(string text, float x, float y, int size, int r, int g, int b, int a) => Framework_DrawText(text, x, y, size, (byte)r, (byte)g, (byte)b, (byte)a);
-
-    public static int LoadTexture(string path) => Framework_LoadTexture(path);
-    public static void UnloadTexture(int h) => Framework_UnloadTexture(h);
-    public static void DrawTexture(int h, float x, float y, int r, int g, int b, int a) => Framework_DrawTextureSimple(h, x, y, (byte)r, (byte)g, (byte)b, (byte)a);
-    public static void DrawTextureEx(int h, float x, float y, float rot, float scale, int r, int g, int b, int a) => Framework_DrawTextureEx(h, x, y, rot, scale, (byte)r, (byte)g, (byte)b, (byte)a);
-
-    public static int CreateEntity() => Framework_Entity_Create();
-    public static void DestroyEntity(int e) => Framework_Entity_Destroy(e);
-    public static void EntitySetPosition(int e, float x, float y) => Framework_Entity_SetPosition(e, x, y);
-    public static float EntityGetX(int e) => Framework_Entity_GetPositionX(e);
-    public static float EntityGetY(int e) => Framework_Entity_GetPositionY(e);
-    public static void EntitySetVelocity(int e, float vx, float vy) => Framework_Entity_SetVelocity(e, vx, vy);
-    public static void EntitySetSprite(int e, int tex) => Framework_Entity_SetSprite(e, tex);
-    public static void EntitySetCollider(int e, float w, float h) => Framework_Entity_SetColliderBox(e, w, h);
-    public static bool EntityIsActive(int e) => Framework_Entity_IsActive(e);
-    public static void EntitySetActive(int e, bool a) => Framework_Entity_SetActive(e, a);
-
-    public static int LoadSound(string p) => Framework_LoadSound(p);
-    public static void PlaySound(int h) => Framework_PlaySound(h);
-    public static void StopSound(int h) => Framework_StopSound(h);
-    public static void SetSoundVolume(int h, float v) => Framework_SetSoundVolume(h, v);
-    public static int LoadMusic(string p) => Framework_LoadMusic(p);
-    public static void PlayMusic(int h) => Framework_PlayMusic(h);
-    public static void StopMusic(int h) => Framework_StopMusic(h);
-
-    public static void PhysicsSetGravity(float x, float y) => Framework_Physics_SetGravity(x, y);
-    public static void PhysicsUpdate(float dt) => Framework_Physics_Update(dt);
-    public static int CreatePhysicsBody(int e, int type) => Framework_Physics_CreateBody(e, type);
-    public static void PhysicsBodyApplyForce(int b, float fx, float fy) => Framework_Physics_ApplyForce(b, fx, fy);
-
-    public static int UICreateLabel(string t, float x, float y) => Framework_UI_CreateLabel(t, x, y);
-    public static int UICreateButton(string t, float x, float y, float w, float h) => Framework_UI_CreateButton(t, x, y, w, h);
-    public static bool UIIsButtonClicked(int e) => Framework_UI_IsClicked(e);
-    public static void UISetText(int e, string t) => Framework_UI_SetText(e, t);
-    public static void UIUpdate() => Framework_UI_Update();
-    public static void UIRender() => Framework_UI_Render();
-
-    public static void CameraSetPosition(float x, float y) => Framework_Camera_SetPosition(x, y);
-    public static void CameraSetZoom(float z) => Framework_Camera_SetZoom(z);
-    public static void CameraFollow(int e, float s) => Framework_Camera_Follow(e, s);
-    public static void CameraShake(float i, float d) => Framework_Camera_Shake(i, d);
-
-    public static int TweenFloat(float from, float to, float dur, int ease) => Framework_Tween_Float(from, to, dur, ease);
-    public static int TweenEntityPosition(int e, float tx, float ty, float dur, int ease) => Framework_Tween_EntityPosition(e, tx, ty, dur, ease);
-    public static void TweenUpdate(float dt) => Framework_Tween_Update(dt);
-
-    public static int TimerAfter(float delay) => Framework_Timer_After(delay);
-    public static bool TimerIsFinished(int t) => Framework_Timer_IsFinished(t);
-    public static void TimerCancel(int t) => Framework_Timer_Cancel(t);
-    public static void TimerUpdate(float dt) => Framework_Timer_Update(dt);
-}
-
-// Key codes for BasicLang
+// Key codes for BasicLang game development
 public static class Keys
 {
     public const int Space = 32, Escape = 256, Enter = 257, Tab = 258, Backspace = 259;

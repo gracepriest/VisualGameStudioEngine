@@ -570,6 +570,64 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             RegisterStdLibFunction("NewGuid", SymbolKind.Function, _typeManager.GetType("String"),
                 Array.Empty<(string, TypeInfo)>());
+
+            // ==================== GAME FRAMEWORK FUNCTIONS ====================
+            // Core
+            RegisterStdLibFunction("GameInit", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("width", _typeManager.GetType("Integer")), ("height", _typeManager.GetType("Integer")), ("title", _typeManager.GetType("String")) });
+            RegisterStdLibFunction("GameShutdown", SymbolKind.Subroutine, _typeManager.VoidType,
+                Array.Empty<(string, TypeInfo)>());
+            RegisterStdLibFunction("GameBeginFrame", SymbolKind.Subroutine, _typeManager.VoidType,
+                Array.Empty<(string, TypeInfo)>());
+            RegisterStdLibFunction("GameEndFrame", SymbolKind.Subroutine, _typeManager.VoidType,
+                Array.Empty<(string, TypeInfo)>());
+            RegisterStdLibFunction("GameShouldClose", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                Array.Empty<(string, TypeInfo)>());
+            RegisterStdLibFunction("GameGetDeltaTime", SymbolKind.Function, _typeManager.GetType("Single"),
+                Array.Empty<(string, TypeInfo)>());
+            RegisterStdLibFunction("GameGetFPS", SymbolKind.Function, _typeManager.GetType("Integer"),
+                Array.Empty<(string, TypeInfo)>());
+
+            // Input
+            RegisterStdLibFunction("IsKeyPressed", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("key", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("IsKeyDown", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("key", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("IsKeyReleased", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("key", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("IsMouseButtonPressed", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("button", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("IsMouseButtonDown", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("button", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("GetMouseX", SymbolKind.Function, _typeManager.GetType("Integer"),
+                Array.Empty<(string, TypeInfo)>());
+            RegisterStdLibFunction("GetMouseY", SymbolKind.Function, _typeManager.GetType("Integer"),
+                Array.Empty<(string, TypeInfo)>());
+
+            // Drawing
+            RegisterStdLibFunction("ClearBackground", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("DrawRectangle", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("w", _typeManager.GetType("Single")), ("h", _typeManager.GetType("Single")),
+                        ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("DrawCircle", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("radius", _typeManager.GetType("Single")),
+                        ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("DrawLine", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("x1", _typeManager.GetType("Single")), ("y1", _typeManager.GetType("Single")), ("x2", _typeManager.GetType("Single")), ("y2", _typeManager.GetType("Single")),
+                        ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("DrawText", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("text", _typeManager.GetType("String")), ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("fontSize", _typeManager.GetType("Integer")),
+                        ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
+
+            // Textures
+            RegisterStdLibFunction("LoadTexture", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("path", _typeManager.GetType("String")) });
+            RegisterStdLibFunction("UnloadTexture", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("handle", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("DrawTexture", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("handle", _typeManager.GetType("Integer")), ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")),
+                        ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
         }
 
         private void RegisterStdLibFunction(string name, SymbolKind kind, TypeInfo returnType, (string name, TypeInfo type)[] parameters)

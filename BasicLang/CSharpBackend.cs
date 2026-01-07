@@ -7,6 +7,7 @@ using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
 using BasicLang.Compiler.StdLib;
 using BasicLang.Compiler.StdLib.CSharp;
+using BasicLang.Compiler.StdLib.Framework;
 
 namespace BasicLang.Compiler.CodeGen.CSharp
 {
@@ -50,8 +51,29 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         // Standard library provider for built-in functions
         private readonly CSharpStdLibProvider _stdLib;
+        private readonly FrameworkStdLibProvider _frameworkStdLib;
 
         public string GeneratedCode => _output.ToString();
+
+        // Helper methods to check both stdlib providers (Framework first, then CSharp)
+        private bool StdLibCanHandle(string functionName)
+        {
+            return _frameworkStdLib.CanHandle(functionName) || _stdLib.CanHandle(functionName);
+        }
+
+        private string StdLibEmitCall(string functionName, string[] arguments)
+        {
+            if (_frameworkStdLib.CanHandle(functionName))
+                return _frameworkStdLib.EmitCall(functionName, arguments);
+            return _stdLib.EmitCall(functionName, arguments);
+        }
+
+        private IEnumerable<string> StdLibGetRequiredImports(string functionName)
+        {
+            if (_frameworkStdLib.CanHandle(functionName))
+                return _frameworkStdLib.GetRequiredImports(functionName);
+            return _stdLib.GetRequiredImports(functionName);
+        }
 
         public ImprovedCSharpCodeGenerator(CodeGenOptions options = null)
         {
@@ -66,7 +88,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _tempDefsByName = new Dictionary<string, IRValue>(StringComparer.OrdinalIgnoreCase);
             _useCounts = new Dictionary<IRValue, int>();
 
-            // Initialize standard library provider
+            // Initialize standard library providers (Framework first, then CSharp fallback)
+            _frameworkStdLib = new FrameworkStdLibProvider();
             _stdLib = new CSharpStdLibProvider();
 
             // Initialize type mapping
@@ -122,6 +145,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 _usings.Add(netUsing.Namespace);
             }
+
+            // Pre-scan for stdlib function calls to collect required imports
+            CollectStdLibImports(module);
 
             // Emit using directives
             foreach (var usingDirective in _usings.OrderBy(u => u))
@@ -224,15 +250,39 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     WriteLine("{");
                     Indent();
 
-                    // Globals
-                    if (module.GlobalVariables.Count > 0)
+                    // Constants
+                    var constants = module.GlobalVariables.Values.Where(v => v.IsConst).ToList();
+                    if (constants.Count > 0)
+                    {
+                        WriteLine("// Constants");
+                        foreach (var constVar in constants)
+                        {
+                            var type = MapType(constVar.Type);
+                            var name = SanitizeName(constVar.Name);
+                            var value = constVar.InitialValue != null ? EmitExpression(constVar.InitialValue) : "default";
+                            WriteLine($"private const {type} {name} = {value};");
+                        }
+                        WriteLine();
+                    }
+
+                    // Globals (non-const)
+                    var globals = module.GlobalVariables.Values.Where(v => !v.IsConst).ToList();
+                    if (globals.Count > 0)
                     {
                         WriteLine("// Global variables");
-                        foreach (var globalVar in module.GlobalVariables.Values)
+                        foreach (var globalVar in globals)
                         {
                             var type = MapType(globalVar.Type);
                             var name = SanitizeName(globalVar.Name);
-                            WriteLine($"private static {type} {name};");
+                            if (globalVar.InitialValue != null)
+                            {
+                                var initVal = EmitExpression(globalVar.InitialValue);
+                                WriteLine($"private static {type} {name} = {initVal};");
+                            }
+                            else
+                            {
+                                WriteLine($"private static {type} {name};");
+                            }
                         }
                         WriteLine();
                     }
@@ -291,6 +341,92 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Pre-scan the module for stdlib function calls and collect required imports
+        /// </summary>
+        private void CollectStdLibImports(IRModule module)
+        {
+            // Scan all functions
+            foreach (var function in module.Functions)
+            {
+                CollectStdLibImportsFromFunction(function);
+            }
+
+            // Scan class methods
+            foreach (var irClass in module.Classes.Values)
+            {
+                foreach (var method in irClass.Methods)
+                {
+                    if (method.Implementation != null)
+                        CollectStdLibImportsFromFunction(method.Implementation);
+                }
+                foreach (var ctor in irClass.Constructors)
+                {
+                    if (ctor.Implementation != null)
+                        CollectStdLibImportsFromFunction(ctor.Implementation);
+                }
+            }
+        }
+
+        private void CollectStdLibImportsFromFunction(IRFunction function)
+        {
+            foreach (var block in function.Blocks)
+            {
+                foreach (var instr in block.Instructions)
+                {
+                    CollectStdLibImportsFromInstruction(instr);
+                }
+            }
+        }
+
+        private void CollectStdLibImportsFromInstruction(IRInstruction instr)
+        {
+            if (instr is IRCall call && StdLibCanHandle(call.FunctionName))
+            {
+                foreach (var import in StdLibGetRequiredImports(call.FunctionName))
+                {
+                    _usings.Add(import);
+                }
+            }
+            else if (instr is IRAssignment assign)
+            {
+                CollectStdLibImportsFromExpression(assign.Value);
+            }
+            else if (instr is IRReturn ret && ret.Value != null)
+            {
+                CollectStdLibImportsFromExpression(ret.Value);
+            }
+            else if (instr is IRConditionalBranch condBranch)
+            {
+                CollectStdLibImportsFromExpression(condBranch.Condition);
+            }
+        }
+
+        private void CollectStdLibImportsFromExpression(IRValue expr)
+        {
+            if (expr is IRCall call && StdLibCanHandle(call.FunctionName))
+            {
+                foreach (var import in StdLibGetRequiredImports(call.FunctionName))
+                {
+                    _usings.Add(import);
+                }
+                // Also check arguments
+                foreach (var arg in call.Arguments)
+                {
+                    CollectStdLibImportsFromExpression(arg);
+                }
+            }
+            else if (expr is IRBinaryOp binOp)
+            {
+                CollectStdLibImportsFromExpression(binOp.Left);
+                CollectStdLibImportsFromExpression(binOp.Right);
+            }
+            else if (expr is IRUnaryOp unaryOp)
+            {
+                CollectStdLibImportsFromExpression(unaryOp.Operand);
+            }
         }
 
         /// <summary>
@@ -2076,14 +2212,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
 
                         // Check if this is a standard library function
-                        if (_stdLib.CanHandle(call.FunctionName))
+                        if (StdLibCanHandle(call.FunctionName))
                         {
                             // Add required imports
-                            foreach (var import in _stdLib.GetRequiredImports(call.FunctionName))
+                            foreach (var import in StdLibGetRequiredImports(call.FunctionName))
                             {
                                 _usings.Add(import);
                             }
-                            return _stdLib.EmitCall(call.FunctionName, argExprs);
+                            return StdLibEmitCall(call.FunctionName, argExprs);
                         }
 
                         // Handle qualified names (e.g., "ClassName.MethodName") by sanitizing each part
@@ -2120,13 +2256,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
 
                             // Check if this is a standard library function
-                            if (_stdLib.CanHandle(call.FunctionName))
+                            if (StdLibCanHandle(call.FunctionName))
                             {
-                                foreach (var import in _stdLib.GetRequiredImports(call.FunctionName))
+                                foreach (var import in StdLibGetRequiredImports(call.FunctionName))
                                 {
                                     _usings.Add(import);
                                 }
-                                innerExpr = _stdLib.EmitCall(call.FunctionName, argExprs);
+                                innerExpr = StdLibEmitCall(call.FunctionName, argExprs);
                             }
                             else
                             {
@@ -2395,12 +2531,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             // Check if this is a standard library function
-            if (_stdLib.CanHandle(functionName))
+            if (StdLibCanHandle(functionName))
             {
-                var stdLibCall = _stdLib.EmitCall(functionName, argExprs);
+                var stdLibCall = StdLibEmitCall(functionName, argExprs);
 
                 // Add required imports
-                foreach (var import in _stdLib.GetRequiredImports(functionName))
+                foreach (var import in StdLibGetRequiredImports(functionName))
                 {
                     _usings.Add(import);
                 }
@@ -2945,8 +3081,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             BinaryOpKind.Div => "/",
             BinaryOpKind.Mod => "%",
             BinaryOpKind.IntDiv => "/",
-            BinaryOpKind.And => "&",
-            BinaryOpKind.Or => "|",
+            BinaryOpKind.And => "&&",
+            BinaryOpKind.Or => "||",
             BinaryOpKind.Xor => "^",
             BinaryOpKind.Shl => "<<",
             BinaryOpKind.Shr => ">>",

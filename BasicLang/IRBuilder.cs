@@ -331,8 +331,9 @@ namespace BasicLang.Compiler.IR
 
                 if (node.Initializer != null)
                 {
-                    // Global initializers need special handling
-                    // For now, we'll create an initialization function
+                    // Evaluate the initializer and store it
+                    node.Initializer.Accept(this);
+                    globalVar.InitialValue = _expressionResult;
                 }
             }
             else
@@ -443,11 +444,30 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ConstantDeclarationNode node)
         {
-            // Constants are typically inlined during expression evaluation
-            // But we can store them for reference
+            // Store constants as global variables with IsConst = true
             if (node.Value != null)
             {
+                // Evaluate the constant value
                 node.Value.Accept(this);
+                var value = _expressionResult;
+
+                // Resolve the type
+                var typeName = node.Type?.Name ?? "Integer";
+                var typeInfo = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo(typeName, TypeKind.Primitive);
+
+                // Create the constant as a global variable
+                var constVar = new IRVariable(node.Name, typeInfo)
+                {
+                    IsGlobal = true,
+                    IsConst = true,
+                    InitialValue = value
+                };
+
+                // Add to module's global variables
+                if (_module != null && !_module.GlobalVariables.ContainsKey(node.Name))
+                {
+                    _module.GlobalVariables[node.Name] = constVar;
+                }
             }
         }
 

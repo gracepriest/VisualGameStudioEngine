@@ -295,7 +295,7 @@ public class BuildService : IBuildService
 
                 // Create temporary csproj for compilation
                 var csprojPath = Path.Combine(outputDir, $"{project.Name}.csproj");
-                var csprojContent = GenerateCsprojContent(result.GeneratedCode, Path.GetFileName(csFilePath), project);
+                var csprojContent = GenerateCsprojContent(result.GeneratedCode, Path.GetFileName(csFilePath), project, outputDir);
                 File.WriteAllText(csprojPath, csprojContent);
                 _outputService.WriteLine($"Generated csproj: {csprojPath}", OutputCategory.Build);
 
@@ -522,7 +522,7 @@ public class BuildService : IBuildService
     /// <summary>
     /// Generate .csproj content with appropriate framework references based on the project settings
     /// </summary>
-    private string GenerateCsprojContent(string generatedCode, string csFileName, BasicLangProject project)
+    private string GenerateCsprojContent(string generatedCode, string csFileName, BasicLangProject project, string outputDir)
     {
         var sb = new System.Text.StringBuilder();
 
@@ -534,6 +534,9 @@ public class BuildService : IBuildService
                         codeUpper.Contains("USING SYSTEM.WINDOWS.MEDIA;"));
         bool usesDrawing = codeUpper.Contains("USING SYSTEM.DRAWING;");
         bool usesAspNet = codeUpper.Contains("USING MICROSOFT.ASPNETCORE;");
+
+        // Detect if game framework is used (FrameworkWrapper calls)
+        bool usesGameFramework = generatedCode.Contains("FrameworkWrapper.");
 
         // Use project's OutputType setting instead of auto-detecting
         string sdk = "Microsoft.NET.Sdk";
@@ -591,9 +594,109 @@ public class BuildService : IBuildService
             sb.AppendLine("  </ItemGroup>");
         }
 
+        // Add RaylibWrapper.dll reference for game projects
+        if (usesGameFramework)
+        {
+            // Copy the framework DLLs to output directory
+            CopyGameFrameworkDlls(outputDir);
+
+            sb.AppendLine("  <ItemGroup>");
+            sb.AppendLine("    <Reference Include=\"RaylibWrapper\">");
+            sb.AppendLine("      <HintPath>RaylibWrapper.dll</HintPath>");
+            sb.AppendLine("    </Reference>");
+            sb.AppendLine("  </ItemGroup>");
+        }
+
         sb.AppendLine("</Project>");
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Copy game framework DLLs to the output directory
+    /// </summary>
+    private void CopyGameFrameworkDlls(string outputDir)
+    {
+        // Find the RaylibWrapper.dll and VisualGameStudioEngine.dll
+        var ideDir = AppDomain.CurrentDomain.BaseDirectory;
+
+        // Possible locations for RaylibWrapper.dll
+        var possibleRaylibPaths = new[]
+        {
+            Path.Combine(ideDir, "RaylibWrapper.dll"),
+            Path.Combine(ideDir, "..", "RaylibWrapper", "bin", "Release", "net8.0", "RaylibWrapper.dll"),
+            Path.Combine(ideDir, "..", "RaylibWrapper", "bin", "Debug", "net8.0", "RaylibWrapper.dll"),
+            Path.Combine(ideDir, "..", "..", "..", "RaylibWrapper", "bin", "Release", "net8.0", "RaylibWrapper.dll"),
+            Path.Combine(ideDir, "..", "..", "..", "RaylibWrapper", "bin", "Debug", "net8.0", "RaylibWrapper.dll"),
+        };
+
+        // Possible locations for VisualGameStudioEngine.dll (native)
+        var possibleEnginePaths = new[]
+        {
+            Path.Combine(ideDir, "VisualGameStudioEngine.dll"),
+            Path.Combine(ideDir, "..", "x64", "Release", "VisualGameStudioEngine.dll"),
+            Path.Combine(ideDir, "..", "x64", "Debug", "VisualGameStudioEngine.dll"),
+            Path.Combine(ideDir, "..", "..", "..", "x64", "Release", "VisualGameStudioEngine.dll"),
+            Path.Combine(ideDir, "..", "..", "..", "x64", "Debug", "VisualGameStudioEngine.dll"),
+        };
+
+        // Copy RaylibWrapper.dll
+        string raylibSource = null;
+        foreach (var path in possibleRaylibPaths)
+        {
+            if (File.Exists(path))
+            {
+                raylibSource = path;
+                break;
+            }
+        }
+
+        if (raylibSource != null)
+        {
+            var destPath = Path.Combine(outputDir, "RaylibWrapper.dll");
+            try
+            {
+                File.Copy(raylibSource, destPath, true);
+                _outputService.WriteLine($"Copied: RaylibWrapper.dll", OutputCategory.Build);
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError($"Failed to copy RaylibWrapper.dll: {ex.Message}", OutputCategory.Build);
+            }
+        }
+        else
+        {
+            _outputService.WriteError("RaylibWrapper.dll not found - game may not run correctly", OutputCategory.Build);
+        }
+
+        // Copy VisualGameStudioEngine.dll (native engine)
+        string engineSource = null;
+        foreach (var path in possibleEnginePaths)
+        {
+            if (File.Exists(path))
+            {
+                engineSource = path;
+                break;
+            }
+        }
+
+        if (engineSource != null)
+        {
+            var destPath = Path.Combine(outputDir, "VisualGameStudioEngine.dll");
+            try
+            {
+                File.Copy(engineSource, destPath, true);
+                _outputService.WriteLine($"Copied: VisualGameStudioEngine.dll", OutputCategory.Build);
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError($"Failed to copy VisualGameStudioEngine.dll: {ex.Message}", OutputCategory.Build);
+            }
+        }
+        else
+        {
+            _outputService.WriteError("VisualGameStudioEngine.dll not found - game may not run correctly", OutputCategory.Build);
+        }
     }
 
     /// <summary>

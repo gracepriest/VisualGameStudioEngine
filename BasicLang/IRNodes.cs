@@ -107,10 +107,12 @@ namespace BasicLang.Compiler.IR
         public int Version { get; set; }
         public bool IsParameter { get; set; }
         public bool IsGlobal { get; set; }
+        public bool IsConst { get; set; }
         public bool IsOptional { get; set; }
         public bool IsParamArray { get; set; }
         public bool IsByRef { get; set; }
         public IRValue DefaultValue { get; set; }
+        public IRValue InitialValue { get; set; }
 
         public IRVariable(string name, TypeInfo type, int version = 0)
             : base(name, type)
