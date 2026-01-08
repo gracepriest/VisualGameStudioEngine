@@ -11,3 +11,7 @@ End Function
 Public Sub PrintMessage(msg As String)
     Console.WriteLine(msg)
 End Sub
+
+Public Sub kprint(msg as String)
+Console.WriteLine(msg)
+END Sub 

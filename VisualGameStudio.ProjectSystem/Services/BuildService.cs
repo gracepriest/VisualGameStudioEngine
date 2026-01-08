@@ -1,4 +1,8 @@
 using System.Diagnostics;
+using System.Linq;
+using BasicLang.Compiler;
+using BasicLang.Compiler.AST;
+using BasicLang.Compiler.SemanticAnalysis;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Models;
 
@@ -210,17 +214,19 @@ public class BuildService : IBuildService
             int totalFiles = sourceFiles.Count;
             int processedFiles = 0;
 
+            // ========== PHASE 1: Parse all files and collect symbols ==========
+            _outputService.WriteLine($"Phase 1: Parsing {totalFiles} file(s)...", OutputCategory.Build);
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Parsing source files...", 10));
+
+            var compilationUnits = new List<CompilationUnit>();
+            var projectSymbolTable = new ProjectSymbolTable();
+            var allErrors = new List<DiagnosticItem>();
+
             foreach (var sourceFile in sourceFiles)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var filePath = Path.Combine(project.ProjectDirectory, sourceFile.Include);
-                _outputService.WriteLine($"Compiling: {sourceFile.Include}", OutputCategory.Build);
-
-                BuildProgress?.Invoke(this, new BuildProgressEventArgs(
-                    $"Compiling {sourceFile.FileName}...",
-                    (int)((double)processedFiles / totalFiles * 80),
-                    sourceFile.FileName));
 
                 if (!File.Exists(filePath))
                 {
@@ -234,44 +240,157 @@ public class BuildService : IBuildService
                     continue;
                 }
 
-                // Read the source file
+                // Read and parse the source file
                 var sourceCode = await File.ReadAllTextAsync(filePath, cancellationToken);
+                var unit = new CompilationUnit(filePath) { SourceCode = sourceCode };
 
-                // Use the BasicLang compiler API
-                try
+                var parseResult = ParseSourceFile(unit, filePath);
+                if (parseResult.Errors.Count > 0)
                 {
-                    var compileResult = CompileSource(sourceCode, filePath, project, config);
-
-                    foreach (var diagnostic in compileResult.Diagnostics)
+                    allErrors.AddRange(parseResult.Errors);
+                    foreach (var err in parseResult.Errors)
                     {
-                        result.Diagnostics.Add(diagnostic);
-
-                        var prefix = diagnostic.Severity == DiagnosticSeverity.Error ? "error" : "warning";
-                        _outputService.WriteLine(
-                            $"  {diagnostic.Location}: {prefix} {diagnostic.Id}: {diagnostic.Message}",
-                            OutputCategory.Build);
-                    }
-
-                    // Copy generated code from compile result
-                    if (compileResult.Success && !string.IsNullOrEmpty(compileResult.GeneratedCode))
-                    {
-                        result.GeneratedCode = compileResult.GeneratedCode;
-                        result.GeneratedFileName = compileResult.GeneratedFileName;
+                        var prefix = err.Severity == DiagnosticSeverity.Error ? "error" : "warning";
+                        _outputService.WriteLine($"  {err.Location}: {prefix} {err.Id}: {err.Message}", OutputCategory.Build);
                     }
                 }
-                catch (Exception ex)
+
+                if (parseResult.AST != null)
                 {
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL0003",
-                        Message = $"Compilation error: {ex.Message}",
-                        FilePath = filePath,
-                        Severity = DiagnosticSeverity.Error
-                    });
+                    unit.AST = parseResult.AST;
+                    compilationUnits.Add(unit);
+                    _outputService.WriteLine($"  Parsed: {sourceFile.Include}", OutputCategory.Build);
                 }
 
                 processedFiles++;
             }
+
+            // Check for parse errors
+            if (allErrors.Any(e => e.Severity == DiagnosticSeverity.Error))
+            {
+                result.Diagnostics.AddRange(allErrors);
+                result.Success = false;
+                return result;
+            }
+
+            // ========== PHASE 2: Collect symbols from all files ==========
+            _outputService.WriteLine($"Phase 2: Collecting symbols...", OutputCategory.Build);
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Collecting symbols...", 30));
+
+            foreach (var unit in compilationUnits)
+            {
+                CollectModuleSymbols(unit, projectSymbolTable);
+            }
+
+            var moduleNames = projectSymbolTable.GetModuleNames().ToList();
+            _outputService.WriteLine($"  Found {moduleNames.Count} module(s): {string.Join(", ", moduleNames)}", OutputCategory.Build);
+
+            // ========== PHASE 3: Semantic analysis with shared symbol table ==========
+            _outputService.WriteLine($"Phase 3: Semantic analysis...", OutputCategory.Build);
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Analyzing...", 50));
+
+            var analyzers = new List<SemanticAnalyzer>();
+            foreach (var unit in compilationUnits)
+            {
+                var analyzer = new SemanticAnalyzer();
+                // Configure the analyzer with the project symbol table for cross-file references
+                analyzer.ConfigureProjectSymbols(projectSymbolTable, unit.ModuleName);
+                analyzer.Analyze(unit.AST);
+
+                if (analyzer.Errors.Any(e => e.Severity == ErrorSeverity.Error))
+                {
+                    foreach (var error in analyzer.Errors.Where(e => e.Severity == ErrorSeverity.Error))
+                    {
+                        result.Diagnostics.Add(new DiagnosticItem
+                        {
+                            Id = "BL3001",
+                            Message = error.Message,
+                            FilePath = unit.FilePath,
+                            Line = error.Line,
+                            Column = error.Column,
+                            Severity = DiagnosticSeverity.Error
+                        });
+                        _outputService.WriteLine($"  {unit.FilePath}({error.Line},{error.Column}): error BL3001: {error.Message}", OutputCategory.Build);
+                    }
+                }
+
+                foreach (var warning in analyzer.Errors.Where(e => e.Severity == ErrorSeverity.Warning))
+                {
+                    result.Diagnostics.Add(new DiagnosticItem
+                    {
+                        Id = "BL3002",
+                        Message = warning.Message,
+                        FilePath = unit.FilePath,
+                        Line = warning.Line,
+                        Column = warning.Column,
+                        Severity = DiagnosticSeverity.Warning
+                    });
+                }
+
+                unit.Symbols = analyzer.GlobalScope;
+                analyzers.Add(analyzer);
+            }
+
+            result.Success = result.ErrorCount == 0;
+
+            if (!result.Success)
+            {
+                return result;
+            }
+
+            // ========== PHASE 4: IR generation and code output ==========
+            _outputService.WriteLine($"Phase 4: Generating code...", OutputCategory.Build);
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Generating code...", 70));
+
+            // Generate IR for each module and merge
+            var allIRModules = new List<BasicLang.Compiler.IR.IRModule>();
+            for (int i = 0; i < compilationUnits.Count; i++)
+            {
+                var unit = compilationUnits[i];
+                var analyzer = analyzers[i];
+
+                try
+                {
+                    var irBuilder = new BasicLang.Compiler.IR.IRBuilder(analyzer);
+                    irBuilder.Build(unit.AST, unit.ModuleName);
+                    allIRModules.Add(irBuilder.Module);
+                    unit.IR = irBuilder.Module;
+                }
+                catch (Exception ex)
+                {
+                    result.Success = false;
+                    result.Diagnostics.Add(new DiagnosticItem
+                    {
+                        Id = "BL4001",
+                        Message = $"IR generation error: {ex.Message}",
+                        FilePath = unit.FilePath,
+                        Severity = DiagnosticSeverity.Error
+                    });
+                    _outputService.WriteError($"  IR error in {unit.ModuleName}: {ex.Message}", OutputCategory.Build);
+                }
+            }
+
+            if (!result.Success)
+            {
+                return result;
+            }
+
+            // Merge IR modules into combined output
+            var mergedIR = MergeIRModules(allIRModules, project.Name);
+
+            // Apply optimizations
+            var pipeline = new BasicLang.Compiler.IR.Optimization.OptimizationPipeline();
+            pipeline.AddStandardPasses();
+            pipeline.Run(mergedIR);
+
+            // Generate C# code
+            var generator = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator();
+            var csharpCode = generator.Generate(mergedIR);
+
+            result.GeneratedCode = csharpCode;
+            result.GeneratedFileName = $"{project.Name}.cs";
+
+            _outputService.WriteLine($"  Generated {result.GeneratedFileName}", OutputCategory.Build);
 
             // If we have errors, the build failed
             result.Success = result.ErrorCount == 0;
@@ -367,6 +486,302 @@ public class BuildService : IBuildService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Parse a source file and return the AST with any errors
+    /// </summary>
+    private (ProgramNode AST, List<DiagnosticItem> Errors) ParseSourceFile(CompilationUnit unit, string filePath)
+    {
+        var errors = new List<DiagnosticItem>();
+        ProgramNode ast = null;
+
+        try
+        {
+            var lexer = new BasicLang.Compiler.Lexer(unit.SourceCode);
+            var tokens = lexer.Tokenize();
+
+            // Check for lexer errors
+            foreach (var token in tokens.Where(t => t.Type == BasicLang.Compiler.TokenType.Unknown))
+            {
+                errors.Add(new DiagnosticItem
+                {
+                    Id = "BL1001",
+                    Message = $"Unknown token: {token.Value}",
+                    FilePath = filePath,
+                    Line = token.Line,
+                    Column = token.Column,
+                    Severity = DiagnosticSeverity.Error
+                });
+            }
+
+            try
+            {
+                var parser = new BasicLang.Compiler.Parser(tokens);
+                ast = parser.Parse();
+
+                foreach (var error in parser.Errors)
+                {
+                    errors.Add(new DiagnosticItem
+                    {
+                        Id = "BL2001",
+                        Message = error.Message,
+                        FilePath = filePath,
+                        Line = error.Token?.Line ?? 0,
+                        Column = error.Token?.Column ?? 0,
+                        Severity = DiagnosticSeverity.Error
+                    });
+                }
+            }
+            catch (Exception parseEx) when (parseEx.Message.Contains("Too many parse errors"))
+            {
+                var tokenSummary = string.Join(", ", tokens.Take(10).Select(t => $"{t.Type}:{t.Value}"));
+                errors.Add(new DiagnosticItem
+                {
+                    Id = "BL2000",
+                    Message = $"Parse failed: {parseEx.Message}. First tokens: {tokenSummary}",
+                    FilePath = filePath,
+                    Severity = DiagnosticSeverity.Error
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            errors.Add(new DiagnosticItem
+            {
+                Id = "BL9000",
+                Message = ex.Message,
+                FilePath = filePath,
+                Severity = DiagnosticSeverity.Error
+            });
+        }
+
+        return (ast, errors);
+    }
+
+    /// <summary>
+    /// Collect public/friend symbols from a compilation unit into the project symbol table
+    /// </summary>
+    private void CollectModuleSymbols(CompilationUnit unit, ProjectSymbolTable projectSymbolTable)
+    {
+        var extension = Path.GetExtension(unit.FilePath).ToLowerInvariant();
+        var isModuleFile = extension == ".mod"; // .mod files are public by default
+        var moduleSymbols = new ModuleSymbols(unit.ModuleName, unit.FilePath) { IsModuleFile = isModuleFile };
+
+        // Walk the AST and collect top-level declarations
+        foreach (var declaration in unit.AST.Declarations)
+        {
+            switch (declaration)
+            {
+                case FunctionNode func:
+                    var funcAccess = isModuleFile && func.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public  // .mod files default to public
+                        : func.Access;
+                    if (funcAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        funcAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(func.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function, ConvertTypeReference(func.ReturnType), func.Line, func.Column);
+                        // Copy function parameters
+                        symbol.Parameters = func.Parameters?.Select(p => new Symbol(p.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Parameter, ConvertTypeReference(p.Type), p.Line, p.Column)).ToList()
+                            ?? new List<Symbol>();
+                        symbol.ReturnType = ConvertTypeReference(func.ReturnType);
+                        symbol.Access = (BasicLang.Compiler.AST.AccessModifier)(int)funcAccess;
+                        moduleSymbols.AddSymbol(symbol, funcAccess);
+                    }
+                    break;
+
+                case VariableDeclarationNode varDecl:
+                    var varAccess = isModuleFile && varDecl.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : varDecl.Access;
+                    if (varAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        varAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(varDecl.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Variable, ConvertTypeReference(varDecl.Type), varDecl.Line, varDecl.Column);
+                        moduleSymbols.AddSymbol(symbol, varAccess);
+                    }
+                    break;
+
+                case ConstantDeclarationNode constDecl:
+                    var constAccess = isModuleFile && constDecl.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : constDecl.Access;
+                    if (constAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        constAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(constDecl.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Constant, null, constDecl.Line, constDecl.Column);
+                        moduleSymbols.AddSymbol(symbol, constAccess);
+                    }
+                    break;
+
+                case ClassNode classNode:
+                    var classAccess = isModuleFile && classNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : classNode.Access;
+                    if (classAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        classAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(classNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Class, new TypeInfo(classNode.Name, TypeKind.Class), classNode.Line, classNode.Column);
+                        moduleSymbols.AddSymbol(symbol, classAccess);
+                    }
+                    break;
+
+                case StructureNode structNode:
+                    var structAccess = isModuleFile && structNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : structNode.Access;
+                    if (structAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        structAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(structNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Structure, new TypeInfo(structNode.Name, TypeKind.Structure), structNode.Line, structNode.Column);
+                        moduleSymbols.AddSymbol(symbol, structAccess);
+                    }
+                    break;
+
+                case EnumNode enumNode:
+                    var enumAccess = isModuleFile && enumNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : enumNode.Access;
+                    if (enumAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        enumAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(enumNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Type, new TypeInfo(enumNode.Name, TypeKind.Enum), enumNode.Line, enumNode.Column);
+                        moduleSymbols.AddSymbol(symbol, enumAccess);
+                    }
+                    break;
+
+                case SubroutineNode sub:
+                    var subAccess = isModuleFile && sub.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public  // .mod files default to public
+                        : sub.Access;
+                    if (subAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        subAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(sub.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function, new TypeInfo("Void", TypeKind.Primitive), sub.Line, sub.Column);
+                        // Copy subroutine parameters
+                        symbol.Parameters = sub.Parameters?.Select(p => new Symbol(p.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Parameter, ConvertTypeReference(p.Type), p.Line, p.Column)).ToList()
+                            ?? new List<Symbol>();
+                        symbol.ReturnType = new TypeInfo("Void", TypeKind.Primitive);
+                        symbol.Access = (BasicLang.Compiler.AST.AccessModifier)(int)subAccess;
+                        moduleSymbols.AddSymbol(symbol, subAccess);
+                    }
+                    break;
+            }
+        }
+
+        projectSymbolTable.RegisterModule(unit.ModuleName, moduleSymbols);
+    }
+
+    /// <summary>
+    /// Convert AST TypeReference to SemanticAnalysis TypeInfo
+    /// </summary>
+    private TypeInfo ConvertTypeReference(TypeReference typeRef)
+    {
+        if (typeRef == null)
+            return null;
+
+        // Simple conversion - determine TypeKind from the type name
+        var kind = typeRef.Name.ToLowerInvariant() switch
+        {
+            "integer" or "int" or "int32" => TypeKind.Primitive,
+            "long" or "int64" => TypeKind.Primitive,
+            "short" or "int16" => TypeKind.Primitive,
+            "byte" => TypeKind.Primitive,
+            "single" or "float" => TypeKind.Primitive,
+            "double" => TypeKind.Primitive,
+            "decimal" => TypeKind.Primitive,
+            "boolean" or "bool" => TypeKind.Primitive,
+            "string" => TypeKind.Primitive,
+            "char" => TypeKind.Primitive,
+            "object" => TypeKind.Class,
+            "void" => TypeKind.Void,
+            _ => TypeKind.UserDefinedType
+        };
+
+        return new TypeInfo(typeRef.Name, kind);
+    }
+
+    /// <summary>
+    /// Merge multiple IR modules into a single module
+    /// </summary>
+    private BasicLang.Compiler.IR.IRModule MergeIRModules(List<BasicLang.Compiler.IR.IRModule> modules, string projectName)
+    {
+        if (modules.Count == 0)
+            return new BasicLang.Compiler.IR.IRModule(projectName);
+
+        if (modules.Count == 1)
+            return modules[0];
+
+        // Create a merged module
+        var merged = new BasicLang.Compiler.IR.IRModule(projectName);
+
+        foreach (var module in modules)
+        {
+            // Merge functions - set ModuleName for tracking
+            foreach (var func in module.Functions)
+            {
+                func.ModuleName = module.Name;
+                merged.Functions.Add(func);
+            }
+
+            // Merge global variables - set ModuleName for tracking
+            foreach (var kvp in module.GlobalVariables)
+            {
+                var globalVar = kvp.Value;
+                globalVar.ModuleName = module.Name;
+                var key = kvp.Key.Contains(".")
+                    ? kvp.Key
+                    : $"{module.Name}.{kvp.Key}";
+                merged.GlobalVariables[key] = globalVar;
+            }
+
+            // Merge types
+            foreach (var kvp in module.Types)
+            {
+                if (!merged.Types.ContainsKey(kvp.Key))
+                {
+                    merged.Types[kvp.Key] = kvp.Value;
+                }
+            }
+
+            // Merge classes
+            foreach (var kvp in module.Classes)
+            {
+                if (!merged.Classes.ContainsKey(kvp.Key))
+                {
+                    merged.Classes[kvp.Key] = kvp.Value;
+                }
+            }
+
+            // Merge enums
+            foreach (var kvp in module.Enums)
+            {
+                if (!merged.Enums.ContainsKey(kvp.Key))
+                {
+                    merged.Enums[kvp.Key] = kvp.Value;
+                }
+            }
+
+            // Merge .NET usings
+            foreach (var using_ in module.NetUsings)
+            {
+                if (!merged.NetUsings.Any(u => u.Namespace == using_.Namespace))
+                {
+                    merged.NetUsings.Add(using_);
+                }
+            }
+
+            // Merge namespaces
+            foreach (var ns in module.Namespaces)
+            {
+                if (!merged.Namespaces.Contains(ns))
+                {
+                    merged.Namespaces.Add(ns);
+                }
+            }
+        }
+
+        return merged;
     }
 
     private BuildResult CompileSource(string sourceCode, string filePath, BasicLangProject project, BuildConfiguration config)

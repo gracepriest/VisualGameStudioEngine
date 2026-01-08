@@ -6,15 +6,20 @@ Import MathUtils
 Import StringUtils
 
 Sub Main()
-    ' Test qualified access
-    Dim sum As Integer = MathUtils.Add(5, 3)
-    Console.WriteLine("Sum = " & sum)
+    Dim sum As Integer
+    Dim product As Integer
+    Dim greeting As String
 
-    ' Test shorthand access via Import
-    Dim product As Integer = Multiply(4, 7)
+    ' Test imported function with shorthand
+    sum = Add(5, 3)
+    Console.WriteLine("Sum = " & Add(5, 3))
+
+    ' Test qualified access
+    product = MathUtils.Multiply(4, 7)
     Console.WriteLine("Product = " & product)
 
     ' Test string utilities
-    Dim greeting As String = Concat("Hello ", "World")
-    PrintMessage(greeting)
+    greeting = StringUtils.Concat("Hello ", "World")
+    StringUtils.PrintMessage(greeting)
+    Kprint("hello")
 End Sub

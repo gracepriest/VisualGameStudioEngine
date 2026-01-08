@@ -2735,11 +2735,12 @@ namespace BasicLang.Compiler.IR
                 var funcSymbol = _semanticAnalyzer.GetNodeSymbol(node.Callee);
 
                 // Determine qualified function name (add module prefix if imported)
-                var functionName = idExpr.Name;
+                // Use funcSymbol.Name for correct casing (BASIC is case-insensitive, C# is not)
+                var functionName = funcSymbol?.Name ?? idExpr.Name;
                 if (funcSymbol != null && funcSymbol.IsImported && !string.IsNullOrEmpty(funcSymbol.SourceModule))
                 {
                     // Prefix with source module name for imported functions
-                    functionName = $"{funcSymbol.SourceModule}.{idExpr.Name}";
+                    functionName = $"{funcSymbol.SourceModule}.{funcSymbol.Name}";
                 }
 
                 // Regular function call

@@ -154,7 +154,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     var symbol = _projectSymbols.LookupQualified(importedModule, name);
                     if (symbol != null)
+                    {
+                        // Mark as imported so IRBuilder can qualify the call
+                        symbol.IsImported = true;
+                        symbol.SourceModule = importedModule;
                         return symbol;
+                    }
                 }
 
                 // Check external libraries
@@ -162,7 +167,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     var symbol = library.GetSymbol(name);
                     if (symbol != null && symbol.IsPublic)
+                    {
+                        symbol.IsImported = true;
+                        symbol.SourceModule = importedModule;
                         return symbol;
+                    }
                 }
             }
 
@@ -3517,6 +3526,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.Callee is IdentifierExpressionNode idExpr)
             {
                 calleeSymbol = _currentScope.Resolve(idExpr.Name);
+                // If not found in local scope, check imported modules from project symbol table
+                if (calleeSymbol == null)
+                {
+                    calleeSymbol = ResolveQualifiedName(idExpr.Name);
+                }
             }
             else if (node.Callee is MemberAccessExpressionNode memberExpr)
             {

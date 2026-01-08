@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<BasicLangProject Version="1.0">
+  <PropertyGroup>
+    <ProjectName>TestMultiFile</ProjectName>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>TestMultiFile</RootNamespace>
+    <TargetBackend>CSharp</TargetBackend>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Main.bas" />
+    <Compile Include="MathUtils.bas" />
+    <Compile Include="StringUtils.bas" />
+  </ItemGroup>
+</BasicLangProject>
