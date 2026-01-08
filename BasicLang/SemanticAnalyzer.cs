@@ -24,11 +24,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private ModuleResolver _moduleResolver;
         private CompilationUnit _currentUnit;
 
+        // Project-wide symbol table for multi-file compilation
+        private ProjectSymbolTable _projectSymbols;
+        private string _currentModuleName;
+
+        // Imported modules for shorthand access (no prefix needed)
+        private readonly HashSet<string> _importedModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         // .NET namespace tracking
         private readonly HashSet<string> _netNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Type registry for .NET assemblies (lazy loading)
         private TypeRegistry _typeRegistry;
+
+        // External library loader for Import statements
+        private ExternalLibraryLoader _libraryLoader;
+
+        // Loaded external libraries for symbol resolution
+        private readonly Dictionary<string, ExternalLibrary> _externalLibraries = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Get the TypeRegistry for .NET type lookups
@@ -92,9 +105,71 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// Configure the project-wide symbol table for cross-file resolution
+        /// </summary>
+        public void ConfigureProjectSymbols(ProjectSymbolTable projectSymbols, string currentModuleName)
+        {
+            _projectSymbols = projectSymbols;
+            _currentModuleName = currentModuleName;
+        }
+
+        /// <summary>
         /// Get the current compilation unit
         /// </summary>
         public CompilationUnit CurrentUnit => _currentUnit;
+
+        /// <summary>
+        /// Resolve a qualified name (ModuleName.Symbol) from the project symbol table or external libraries
+        /// </summary>
+        private Symbol ResolveQualifiedName(string name)
+        {
+            // Check if name contains a dot (qualified name like ModuleName.Symbol)
+            var dotIndex = name.IndexOf('.');
+            if (dotIndex > 0)
+            {
+                var moduleName = name.Substring(0, dotIndex);
+                var symbolName = name.Substring(dotIndex + 1);
+
+                // First check project symbols
+                if (_projectSymbols != null)
+                {
+                    var symbol = _projectSymbols.LookupQualified(moduleName, symbolName);
+                    if (symbol != null)
+                        return symbol;
+                }
+
+                // Then check external libraries
+                if (_externalLibraries.TryGetValue(moduleName, out var library))
+                {
+                    return library.GetSymbol(symbolName);
+                }
+            }
+
+            // Unqualified name - first check imported modules (from "Import ModuleName" statements)
+            // These have priority for shorthand access
+            foreach (var importedModule in _importedModules)
+            {
+                // Check project symbols
+                if (_projectSymbols != null)
+                {
+                    var symbol = _projectSymbols.LookupQualified(importedModule, name);
+                    if (symbol != null)
+                        return symbol;
+                }
+
+                // Check external libraries
+                if (_externalLibraries.TryGetValue(importedModule, out var library))
+                {
+                    var symbol = library.GetSymbol(name);
+                    if (symbol != null && symbol.IsPublic)
+                        return symbol;
+                }
+            }
+
+            // Not found in imports - symbol not accessible without qualification
+            // (Public symbols require either "Import" or "ModuleName.Symbol" access)
+            return null;
+        }
 
         /// <summary>
         /// Configure the type registry for .NET assembly loading
@@ -102,6 +177,65 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void ConfigureTypeRegistry(TypeRegistry registry)
         {
             _typeRegistry = registry;
+        }
+
+        /// <summary>
+        /// Configure the external library loader
+        /// </summary>
+        public void ConfigureExternalLibraryLoader(ExternalLibraryLoader loader)
+        {
+            _libraryLoader = loader;
+        }
+
+        /// <summary>
+        /// Get the external library loader
+        /// </summary>
+        public ExternalLibraryLoader LibraryLoader => _libraryLoader;
+
+        /// <summary>
+        /// Resolve a symbol from external libraries
+        /// </summary>
+        private Symbol ResolveFromExternalLibraries(string name)
+        {
+            // Check if name contains a dot (LibraryName.Symbol)
+            var dotIndex = name.IndexOf('.');
+            if (dotIndex > 0)
+            {
+                var libraryName = name.Substring(0, dotIndex);
+                var symbolName = name.Substring(dotIndex + 1);
+
+                if (_externalLibraries.TryGetValue(libraryName, out var library))
+                {
+                    return library.GetSymbol(symbolName);
+                }
+            }
+
+            // Check all imported external libraries for unqualified access
+            foreach (var kvp in _externalLibraries)
+            {
+                var symbol = kvp.Value.GetSymbol(name);
+                if (symbol != null && symbol.IsPublic)
+                    return symbol;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Find a compilation unit by module name
+        /// </summary>
+        private CompilationUnit FindModuleByName(string moduleName)
+        {
+            if (_moduleRegistry == null) return null;
+
+            foreach (var unit in _moduleRegistry.Modules)
+            {
+                if (unit.ModuleName.Equals(moduleName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return unit;
+                }
+            }
+            return null;
         }
 
         /// <summary>
@@ -1631,7 +1765,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(ImportDirectiveNode node)
         {
-            // Track the import directive for module resolution
+            // Check if this is an external library import
+            if (node.IsExternalLibrary)
+            {
+                LoadExternalLibrary(node);
+                return;
+            }
+
+            // Track the imported module for shorthand access (no prefix needed)
+            _importedModules.Add(node.Module);
+
+            // Verify the module exists in the project symbol table
+            if (_projectSymbols != null && !_projectSymbols.HasModule(node.Module))
+            {
+                // Module not found in project - might be an external library or not compiled yet
+                // Don't error here, let the module registry handle it if available
+            }
+
+            // Track the import directive for module resolution (legacy support)
             if (_moduleRegistry != null && _currentUnit != null)
             {
                 var importInfo = new ImportInfo(node.Module, node.Line, node.Column);
@@ -1647,9 +1798,70 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // Import symbols from the module
                     ImportSymbolsFromFile(resolvedPath, node.Line, node.Column);
                 }
-                else
+                else if (_projectSymbols == null || !_projectSymbols.HasModule(node.Module))
                 {
+                    // Only error if the module wasn't found in project symbols either
                     Error($"Cannot resolve import '{node.Module}'", node.Line, node.Column);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Load an external library and make its symbols available
+        /// </summary>
+        private void LoadExternalLibrary(ImportDirectiveNode node)
+        {
+            if (_libraryLoader == null)
+            {
+                // Create a default loader if not configured
+                _libraryLoader = new ExternalLibraryLoader();
+            }
+
+            // Resolve the library path relative to current file if needed
+            var libraryPath = node.LibraryPath;
+            if (!System.IO.Path.IsPathRooted(libraryPath) && _currentUnit != null)
+            {
+                var currentDir = System.IO.Path.GetDirectoryName(_currentUnit.FilePath);
+                if (!string.IsNullOrEmpty(currentDir))
+                {
+                    var relativePath = System.IO.Path.Combine(currentDir, libraryPath);
+                    if (System.IO.File.Exists(relativePath))
+                    {
+                        libraryPath = relativePath;
+                    }
+                }
+            }
+
+            // Load the library
+            var library = _libraryLoader.LoadLibrary(libraryPath);
+            if (library == null)
+            {
+                foreach (var error in _libraryLoader.Errors)
+                {
+                    Error(error, node.Line, node.Column);
+                }
+                return;
+            }
+
+            // Store the library for symbol resolution
+            _externalLibraries[node.Module] = library;
+            _importedModules.Add(node.Module);
+
+            // Register symbols in the global scope for immediate access
+            foreach (var kvp in library.Symbols)
+            {
+                var symbol = kvp.Value;
+                if (symbol.IsPublic)
+                {
+                    // Mark as imported
+                    symbol.IsImported = true;
+                    symbol.SourceModule = node.Module;
+
+                    // Register in global scope if not already defined
+                    if (_currentScope.Resolve(symbol.Name) == null)
+                    {
+                        _currentScope.Define(symbol);
+                    }
                 }
             }
         }
@@ -1685,7 +1897,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         column)
                     {
                         IsImported = true,
-                        SourceModule = unit.ModuleName
+                        SourceModule = unit.ModuleName,
+                        // Copy function-related properties
+                        Parameters = symbol.Parameters,
+                        ReturnType = symbol.ReturnType,
+                        Access = symbol.Access,
+                        IsExtern = symbol.IsExtern
                     };
 
                     _currentScope.Define(importedSymbol);
@@ -3173,6 +3390,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (symbol == null)
             {
+                // Try project symbol table for cross-module references (ModuleName.Symbol or imported symbols)
+                symbol = ResolveQualifiedName(node.Name);
+            }
+
+            if (symbol == null)
+            {
                 // Check if this could be a .NET static class (e.g., Console, Math, File)
                 if (IsNetType(node.Name))
                 {
@@ -3194,6 +3417,67 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(MemberAccessExpressionNode node)
         {
+            // First, check if this is a module reference (ModuleName.Symbol)
+            if (node.Object is IdentifierExpressionNode objId)
+            {
+                var moduleName = objId.Name;
+
+                // Check ProjectSymbolTable (used by IDE)
+                if (_projectSymbols != null && _projectSymbols.HasModule(moduleName))
+                {
+                    var symbol = _projectSymbols.LookupQualified(moduleName, node.MemberName);
+                    if (symbol != null)
+                    {
+                        SetNodeSymbol(node, symbol);
+                        SetNodeType(node, symbol.Type);
+                        return;
+                    }
+                    else
+                    {
+                        Error($"Module '{moduleName}' does not have a public member '{node.MemberName}'",
+                              node.Line, node.Column);
+                        SetNodeType(node, _typeManager.ObjectType);
+                        return;
+                    }
+                }
+
+                // Check ModuleRegistry (used by CLI)
+                if (_moduleRegistry != null)
+                {
+                    var unit = FindModuleByName(moduleName);
+                    if (unit != null && unit.IsComplete)
+                    {
+                        var symbol = unit.ExportedSymbols.FirstOrDefault(s =>
+                            s.Name.Equals(node.MemberName, StringComparison.OrdinalIgnoreCase));
+                        if (symbol != null)
+                        {
+                            SetNodeSymbol(node, symbol);
+                            SetNodeType(node, symbol.Type);
+                            return;
+                        }
+                        else
+                        {
+                            Error($"Module '{moduleName}' does not have a public member '{node.MemberName}'",
+                                  node.Line, node.Column);
+                            SetNodeType(node, _typeManager.ObjectType);
+                            return;
+                        }
+                    }
+                }
+
+                // Check external libraries
+                if (_externalLibraries.TryGetValue(moduleName, out var library))
+                {
+                    var symbol = library.GetSymbol(node.MemberName);
+                    if (symbol != null)
+                    {
+                        SetNodeSymbol(node, symbol);
+                        SetNodeType(node, symbol.Type);
+                        return;
+                    }
+                }
+            }
+
             node.Object.Accept(this);
             var objectType = GetNodeType(node.Object);
 

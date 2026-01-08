@@ -180,6 +180,12 @@ namespace BasicLang.Compiler.IR
 
             _currentFunction = _module.CreateFunction(node.Name, returnType);
 
+            // Set module name for multi-file compilation
+            _currentFunction.ModuleName = _module.Name;
+
+            // Set access modifier (convert from AST to IR enum)
+            _currentFunction.Access = (IR.AccessModifier)(int)node.Access;
+
             // Set async/iterator flags
             _currentFunction.IsAsync = node.IsAsync;
             _currentFunction.IsIterator = node.IsIterator;
@@ -252,6 +258,12 @@ namespace BasicLang.Compiler.IR
             var voidType = new TypeInfo("Void", TypeKind.Void);
 
             _currentFunction = _module.CreateFunction(node.Name, voidType);
+
+            // Set module name for multi-file compilation
+            _currentFunction.ModuleName = _module.Name;
+
+            // Set access modifier (convert from AST to IR enum)
+            _currentFunction.Access = (IR.AccessModifier)(int)node.Access;
 
             // Set async flag
             _currentFunction.IsAsync = node.IsAsync;
@@ -2719,11 +2731,19 @@ namespace BasicLang.Compiler.IR
             }
             else if (node.Callee is IdentifierExpressionNode idExpr)
             {
-                // Regular function call
-                var call = new IRCall(tempName, idExpr.Name, returnType);
-
-                // Get function symbol to check for ByRef parameters
+                // Get function symbol to check source module and ByRef parameters
                 var funcSymbol = _semanticAnalyzer.GetNodeSymbol(node.Callee);
+
+                // Determine qualified function name (add module prefix if imported)
+                var functionName = idExpr.Name;
+                if (funcSymbol != null && funcSymbol.IsImported && !string.IsNullOrEmpty(funcSymbol.SourceModule))
+                {
+                    // Prefix with source module name for imported functions
+                    functionName = $"{funcSymbol.SourceModule}.{idExpr.Name}";
+                }
+
+                // Regular function call
+                var call = new IRCall(tempName, functionName, returnType);
 
                 for (int i = 0; i < node.Arguments.Count; i++)
                 {

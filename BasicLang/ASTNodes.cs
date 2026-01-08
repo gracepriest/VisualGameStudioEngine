@@ -291,10 +291,12 @@ namespace BasicLang.Compiler.AST
     public class StructureNode : ASTNode
     {
         public string Name { get; set; }
+        public AccessModifier Access { get; set; }
         public List<VariableDeclarationNode> Members { get; set; }
 
         public StructureNode(int line, int column) : base(line, column)
         {
+            Access = AccessModifier.Private;  // Default to Private for multi-file
             Members = new List<VariableDeclarationNode>();
         }
 
@@ -322,12 +324,15 @@ namespace BasicLang.Compiler.AST
     {
         Public,
         Private,
-        Protected
+        Protected,
+        Friend,      // Internal to project (like C# internal)
+        ProtectedFriend  // Protected OR Friend
     }
     
     public class ClassNode : ASTNode
     {
         public string Name { get; set; }
+        public AccessModifier Access { get; set; }
         public List<string> GenericParameters { get; set; }
         public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints
         public string BaseClass { get; set; }
@@ -337,6 +342,7 @@ namespace BasicLang.Compiler.AST
 
         public ClassNode(int line, int column) : base(line, column)
         {
+            Access = AccessModifier.Private;  // Default to Private for multi-file
             GenericParameters = new List<string>();
             GenericTypeParams = new List<GenericTypeParameter>();
             Interfaces = new List<string>();
@@ -450,9 +456,20 @@ namespace BasicLang.Compiler.AST
     public class ImportDirectiveNode : ASTNode
     {
         public string Module { get; set; }
-        
+
+        /// <summary>
+        /// Path to an external library (e.g., "libs/GameFramework.dll")
+        /// Null if importing a project module by name
+        /// </summary>
+        public string LibraryPath { get; set; }
+
+        /// <summary>
+        /// True if this imports an external library rather than a project module
+        /// </summary>
+        public bool IsExternalLibrary => !string.IsNullOrEmpty(LibraryPath);
+
         public ImportDirectiveNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -529,13 +546,16 @@ namespace BasicLang.Compiler.AST
         // Iterator modifier
         public bool IsIterator { get; set; }
 
+        // Inline modifier (for header files)
+        public bool IsInline { get; set; }
+
         // Generic parameters for generic functions: Function Foo(Of T)(...)
         public List<string> GenericParameters { get; set; }
         public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints
 
         public FunctionNode(int line, int column) : base(line, column)
         {
-            Access = AccessModifier.Public;
+            Access = AccessModifier.Private;  // Default to Private for multi-file
             Parameters = new List<ParameterNode>();
             GenericParameters = new List<string>();
             GenericTypeParams = new List<GenericTypeParameter>();
@@ -950,10 +970,11 @@ namespace BasicLang.Compiler.AST
         public AccessModifier Access { get; set; }
         public bool IsAuto { get; set; }
         public bool IsStatic { get; set; }       // Shared
+        public bool IsExtern { get; set; }       // Extern (defined elsewhere, for headers)
 
         public VariableDeclarationNode(int line, int column) : base(line, column)
         {
-            Access = AccessModifier.Public;
+            Access = AccessModifier.Private;  // Default to Private for multi-file
         }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
@@ -987,9 +1008,13 @@ namespace BasicLang.Compiler.AST
         public string Name { get; set; }
         public TypeReference Type { get; set; }
         public ExpressionNode Value { get; set; }
-        
-        public ConstantDeclarationNode(int line, int column) : base(line, column) { }
-        
+        public AccessModifier Access { get; set; }
+
+        public ConstantDeclarationNode(int line, int column) : base(line, column)
+        {
+            Access = AccessModifier.Private;
+        }
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     

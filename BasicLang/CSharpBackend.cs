@@ -242,79 +242,120 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     }
                 }
 
-                // Generate module class for standalone functions (only in default namespace)
+                // Generate module classes for standalone functions (only in default namespace)
                 if (string.IsNullOrEmpty(ns) && (standaloneFunctions.Count > 0 || module.GlobalVariables.Count > 0))
                 {
-                    // Class
-                    WriteLine($"{_options.ClassAccessModifier} class {_options.ClassName}");
-                    WriteLine("{");
-                    Indent();
+                    // Group functions by their source module
+                    var functionsByModule = standaloneFunctions
+                        .GroupBy(f => f.ModuleName ?? _options.ClassName)
+                        .ToDictionary(g => g.Key, g => g.ToList());
 
-                    // Constants
-                    var constants = module.GlobalVariables.Values.Where(v => v.IsConst).ToList();
-                    if (constants.Count > 0)
-                    {
-                        WriteLine("// Constants");
-                        foreach (var constVar in constants)
-                        {
-                            var type = MapType(constVar.Type);
-                            var name = SanitizeName(constVar.Name);
-                            var value = constVar.InitialValue != null ? EmitExpression(constVar.InitialValue) : "default";
-                            WriteLine($"private const {type} {name} = {value};");
-                        }
-                        WriteLine();
-                    }
+                    // Group globals by their source module
+                    var globalsByModule = module.GlobalVariables.Values
+                        .GroupBy(g => g.ModuleName ?? _options.ClassName)
+                        .ToDictionary(g => g.Key, g => g.ToList());
 
-                    // Globals (non-const)
-                    var globals = module.GlobalVariables.Values.Where(v => !v.IsConst).ToList();
-                    if (globals.Count > 0)
-                    {
-                        WriteLine("// Global variables");
-                        foreach (var globalVar in globals)
-                        {
-                            var type = MapType(globalVar.Type);
-                            var name = SanitizeName(globalVar.Name);
-                            if (globalVar.InitialValue != null)
-                            {
-                                var initVal = EmitExpression(globalVar.InitialValue);
-                                WriteLine($"private static {type} {name} = {initVal};");
-                            }
-                            else
-                            {
-                                WriteLine($"private static {type} {name};");
-                            }
-                        }
-                        WriteLine();
-                    }
+                    // Get all module names
+                    var allModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var m in functionsByModule.Keys) allModules.Add(m);
+                    foreach (var m in globalsByModule.Keys) allModules.Add(m);
 
-                    // Extern declarations (P/Invoke)
-                    if (module.ExternDeclarations.Count > 0)
-                    {
-                        WriteLine("// P/Invoke declarations");
-                        foreach (var externDecl in module.ExternDeclarations.Values)
-                        {
-                            GenerateExternDeclaration(externDecl);
-                        }
-                        WriteLine();
-                    }
-
-                    // Functions
                     bool hasUserMain = false;
-                    foreach (var function in standaloneFunctions)
-                    {
-                        GenerateFunction(function);
-                        WriteLine();
 
-                        if (function.Name.Equals("Main", StringComparison.OrdinalIgnoreCase))
-                            hasUserMain = true;
+                    // Generate a static class for each module
+                    foreach (var moduleName in allModules.OrderBy(m => m))
+                    {
+                        var className = SanitizeName(moduleName);
+                        // C# doesn't allow a method with the same name as its enclosing class
+                        if (className.Equals("Main", StringComparison.OrdinalIgnoreCase))
+                        {
+                            className = "Program";
+                        }
+                        WriteLine($"{_options.ClassAccessModifier} static class {className}");
+                        WriteLine("{");
+                        Indent();
+
+                        // Constants for this module
+                        if (globalsByModule.TryGetValue(moduleName, out var moduleGlobals))
+                        {
+                            var constants = moduleGlobals.Where(v => v.IsConst).ToList();
+                            if (constants.Count > 0)
+                            {
+                                WriteLine("// Constants");
+                                foreach (var constVar in constants)
+                                {
+                                    var type = MapType(constVar.Type);
+                                    var name = SanitizeName(constVar.Name);
+                                    var accessMod = MapAccessModifier(constVar.Access);
+                                    var value = constVar.InitialValue != null ? EmitExpression(constVar.InitialValue) : "default";
+                                    WriteLine($"{accessMod} const {type} {name} = {value};");
+                                }
+                                WriteLine();
+                            }
+
+                            // Globals (non-const) for this module
+                            var globals = moduleGlobals.Where(v => !v.IsConst).ToList();
+                            if (globals.Count > 0)
+                            {
+                                WriteLine("// Global variables");
+                                foreach (var globalVar in globals)
+                                {
+                                    var type = MapType(globalVar.Type);
+                                    var name = SanitizeName(globalVar.Name);
+                                    var accessMod = MapAccessModifier(globalVar.Access);
+                                    if (globalVar.InitialValue != null)
+                                    {
+                                        var initVal = EmitExpression(globalVar.InitialValue);
+                                        WriteLine($"{accessMod} static {type} {name} = {initVal};");
+                                    }
+                                    else
+                                    {
+                                        WriteLine($"{accessMod} static {type} {name};");
+                                    }
+                                }
+                                WriteLine();
+                            }
+                        }
+
+                        // Extern declarations (P/Invoke) - put in first/main module
+                        if (moduleName == allModules.First() && module.ExternDeclarations.Count > 0)
+                        {
+                            WriteLine("// P/Invoke declarations");
+                            foreach (var externDecl in module.ExternDeclarations.Values)
+                            {
+                                GenerateExternDeclaration(externDecl);
+                            }
+                            WriteLine();
+                        }
+
+                        // Functions for this module
+                        if (functionsByModule.TryGetValue(moduleName, out var moduleFunctions))
+                        {
+                            foreach (var function in moduleFunctions)
+                            {
+                                GenerateFunction(function);
+                                WriteLine();
+
+                                if (function.Name.Equals("Main", StringComparison.OrdinalIgnoreCase))
+                                    hasUserMain = true;
+                            }
+                        }
+
+                        Unindent();
+                        WriteLine("}");
+                        WriteLine();
                     }
 
-                    // Optional default Main
+                    // Optional default Main - generate in a Program class
                     if (_options.GenerateMainMethod && !hasUserMain)
+                    {
+                        WriteLine($"{_options.ClassAccessModifier} class Program");
+                        WriteLine("{");
+                        Indent();
                         GenerateMainMethod();
-
-                    Unindent();
-                    WriteLine("}");
+                        Unindent();
+                        WriteLine("}");
+                    }
                 }
 
                 Unindent();
@@ -574,6 +615,22 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 "object" => "object",
                 "void" => "void",
                 _ => SanitizeName(typeName)
+            };
+        }
+
+        /// <summary>
+        /// Map BasicLang access modifiers to C# access modifiers
+        /// </summary>
+        private string MapAccessModifier(AST.AccessModifier access)
+        {
+            return access switch
+            {
+                AST.AccessModifier.Public => "public",
+                AST.AccessModifier.Private => "private",
+                AST.AccessModifier.Protected => "protected",
+                AST.AccessModifier.Friend => "internal",           // Friend is like C# internal
+                AST.AccessModifier.ProtectedFriend => "protected internal",
+                _ => "private"
             };
         }
 
@@ -1172,7 +1229,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Generate constraint clauses for generic type parameters
             var constraints = GenerateConstraintClauses(function.GenericTypeParams);
 
-            WriteLine($"{_options.MethodAccessModifier} static {asyncModifier}{actualReturnType} {functionName}{genericParams}({parameters}){constraints}");
+            // Use the function's access modifier if set, otherwise use the default
+            var accessMod = MapAccessModifier(function.Access);
+
+            WriteLine($"{accessMod} static {asyncModifier}{actualReturnType} {functionName}{genericParams}({parameters}){constraints}");
 
             WriteLine("{");
             Indent();

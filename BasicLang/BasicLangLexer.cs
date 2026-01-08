@@ -113,6 +113,7 @@ namespace BasicLang.Compiler
         Private,
         Public,
         Protected,
+        Friend,
         Inherits,
         Interface,
         EndInterface,
@@ -146,6 +147,7 @@ namespace BasicLang.Compiler
         Operator,        // For operator overloading
         Widening,        // For widening conversion
         Narrowing,       // For narrowing conversion
+        Inline,          // Inline function (for headers)
 
         // Keywords - Namespaces and Modules
         Namespace,
@@ -445,6 +447,7 @@ namespace BasicLang.Compiler
             { "Private", TokenType.Private },
             { "Public", TokenType.Public },
             { "Protected", TokenType.Protected },
+            { "Friend", TokenType.Friend },
             { "Inherits", TokenType.Inherits },
             { "Interface", TokenType.Interface },
             { "End Interface", TokenType.EndInterface },
@@ -478,6 +481,7 @@ namespace BasicLang.Compiler
             { "NotOverridable", TokenType.NotOverridable },
             { "Widening", TokenType.Widening },
             { "Narrowing", TokenType.Narrowing },
+            { "Inline", TokenType.Inline },
 
             // Namespaces and Modules
             { "Namespace", TokenType.Namespace },

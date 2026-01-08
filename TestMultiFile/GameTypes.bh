@@ -1,0 +1,28 @@
+' GameTypes.bh - Header file with type declarations
+' Header files contain declarations without implementations
+
+' Structure declaration
+Public Structure Vector2
+    Public X As Single
+    Public Y As Single
+End Structure
+
+' Class declaration
+Public Class Player
+    Public Name As String
+    Public Health As Integer
+    Public Position As Vector2
+End Class
+
+' Enum declaration
+Public Enum GameState
+    Menu = 0
+    Playing = 1
+    Paused = 2
+    GameOver = 3
+End Enum
+
+' Constant declarations
+Public Const MAX_PLAYERS As Integer = 4
+Public Const SCREEN_WIDTH As Integer = 800
+Public Const SCREEN_HEIGHT As Integer = 600

@@ -121,29 +121,68 @@ namespace BasicLang.Compiler
                 }
                 throw new ParseException("Expected 'Class' after 'MustInherit'", Peek());
             }
-            // Handle Async/Iterator modifiers for top-level functions/subs
-            if (Check(TokenType.Async) || Check(TokenType.Iterator))
+            // Handle visibility and other modifiers for top-level declarations
+            if (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend) ||
+                Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
+                Check(TokenType.Shared))
             {
+                var access = AccessModifier.Private;  // Default for top-level
                 bool isAsync = false;
                 bool isIterator = false;
-                while (Check(TokenType.Async) || Check(TokenType.Iterator))
+                bool isInline = false;
+                bool isStatic = false;
+
+                // Parse modifiers in any order
+                while (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend) ||
+                       Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
+                       Check(TokenType.Shared))
                 {
-                    if (Match(TokenType.Async)) isAsync = true;
-                    if (Match(TokenType.Iterator)) isIterator = true;
+                    if (Match(TokenType.Public)) access = AccessModifier.Public;
+                    else if (Match(TokenType.Private)) access = AccessModifier.Private;
+                    else if (Match(TokenType.Friend)) access = AccessModifier.Friend;
+                    else if (Match(TokenType.Async)) isAsync = true;
+                    else if (Match(TokenType.Iterator)) isIterator = true;
+                    else if (Match(TokenType.Inline)) isInline = true;
+                    else if (Match(TokenType.Shared)) isStatic = true;
                 }
+
                 if (Check(TokenType.Function))
                 {
                     var func = ParseFunction();
+                    func.Access = access;
                     func.IsAsync = isAsync;
                     func.IsIterator = isIterator;
+                    func.IsInline = isInline;
+                    func.IsStatic = isStatic;
                     return func;
                 }
                 if (Check(TokenType.Sub))
                 {
                     var sub = ParseSubroutine();
+                    sub.Access = access;
                     sub.IsAsync = isAsync;
+                    sub.IsStatic = isStatic;
                     return sub;
                 }
+                if (Check(TokenType.Dim))
+                {
+                    var statement = ParseVariableDeclaration();
+                    if (statement is VariableDeclarationNode variable)
+                    {
+                        variable.Access = access;
+                        variable.IsStatic = isStatic;
+                    }
+                    return statement;
+                }
+                if (Check(TokenType.Const))
+                {
+                    var constant = ParseConstantDeclaration();
+                    constant.Access = access;
+                    return constant;
+                }
+                throw new ParseException(
+                    $"Expected Function, Sub, Dim, or Const after modifiers, got '{Peek().Lexeme}'",
+                    Peek());
             }
             if (Check(TokenType.Function))
                 return ParseFunction();
@@ -333,9 +372,29 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Import, "Expected 'Import'");
             var node = new ImportDirectiveNode(token.Line, token.Column);
 
-            node.Module = Consume(TokenType.Identifier, "Expected module name").Lexeme;
-            ConsumeNewlines();
+            // Check for direct string path: Import "path/to/lib.dll"
+            if (Check(TokenType.StringLiteral))
+            {
+                var pathToken = Consume(TokenType.StringLiteral, "Expected library path");
+                node.LibraryPath = pathToken.Lexeme;
+                // Module name is derived from the library filename
+                node.Module = System.IO.Path.GetFileNameWithoutExtension(pathToken.Lexeme);
+            }
+            else
+            {
+                // Import ModuleName or Import ModuleName From "path"
+                node.Module = Consume(TokenType.Identifier, "Expected module name").Lexeme;
 
+                // Check for "From" clause: Import ModuleName From "path/to/lib.dll"
+                if (Check(TokenType.Identifier) && Peek().Lexeme.Equals("From", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    Advance(); // consume "From"
+                    var pathToken = Consume(TokenType.StringLiteral, "Expected library path after 'From'");
+                    node.LibraryPath = pathToken.Lexeme;
+                }
+            }
+
+            ConsumeNewlines();
             return node;
         }
 
@@ -1253,9 +1312,31 @@ namespace BasicLang.Compiler
         ///     CSharp: "implementation"
         /// End Extern
         /// </remarks>
-        private ExternDeclarationNode ParseExtern()
+        private ASTNode ParseExtern()
         {
             var token = Consume(TokenType.Extern, "Expected 'Extern'");
+
+            // Check if this is an extern variable (Extern Dim)
+            if (Match(TokenType.Dim))
+            {
+                var varNode = new VariableDeclarationNode(token.Line, token.Column);
+                varNode.IsExtern = true;
+                varNode.Name = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+
+                if (Match(TokenType.As))
+                {
+                    varNode.Type = ParseTypeReference();
+                }
+                else
+                {
+                    // Default to Object if no type specified
+                    varNode.Type = new TypeReference("Object");
+                }
+
+                ConsumeNewlines();
+                return varNode;
+            }
+
             var node = new ExternDeclarationNode(token.Line, token.Column);
 
             if (Match(TokenType.Function))
@@ -1302,7 +1383,7 @@ namespace BasicLang.Compiler
             }
             else
             {
-                throw new ParseException("Expected 'Function' or 'Sub' after 'Extern'", Peek());
+                throw new ParseException("Expected 'Function', 'Sub', or 'Dim' after 'Extern'", Peek());
             }
 
             SkipNewlines();

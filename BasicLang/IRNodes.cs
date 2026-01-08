@@ -114,6 +114,16 @@ namespace BasicLang.Compiler.IR
         public IRValue DefaultValue { get; set; }
         public IRValue InitialValue { get; set; }
 
+        /// <summary>
+        /// Source module name for multi-file compilation
+        /// </summary>
+        public string ModuleName { get; set; }
+
+        /// <summary>
+        /// Access modifier for the variable (Public, Private, Friend)
+        /// </summary>
+        public AccessModifier Access { get; set; } = AccessModifier.Private;
+
         public IRVariable(string name, TypeInfo type, int version = 0)
             : base(name, type)
         {
@@ -871,6 +881,16 @@ namespace BasicLang.Compiler.IR
         public string ExtendedType { get; set; }
         public bool IsLambda { get; set; }
         public List<(string name, TypeInfo type)> CapturedVariables { get; set; }
+
+        /// <summary>
+        /// Source module name for multi-file compilation
+        /// </summary>
+        public string ModuleName { get; set; }
+
+        /// <summary>
+        /// Access modifier for the function (Public, Private, Friend)
+        /// </summary>
+        public AccessModifier Access { get; set; } = AccessModifier.Private;
 
         private int _nextBlockId = 0;
         private int _nextTempId = 0;

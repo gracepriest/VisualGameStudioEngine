@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.AST;
+using BasicLang.Compiler;
 
 namespace BasicLang.Compiler.SemanticAnalysis
 {
@@ -211,6 +212,17 @@ public class TypeInfo
         // For imported symbols (from other modules)
         public bool IsImported { get; set; }
         public string SourceModule { get; set; }
+
+        // For external library symbols
+        public bool IsPublic { get; set; }
+        public string ExternLibrary { get; set; }
+        public string ExternAlias { get; set; }
+        public List<NetMemberInfo> NetMembers { get; set; }
+        public Type NetType { get; set; }
+
+        public Symbol(string name, SymbolKind kind) : this(name, kind, null, 0, 0)
+        {
+        }
 
         public Symbol(string name, SymbolKind kind, TypeInfo type, int line, int column)
         {
