@@ -95,9 +95,10 @@ public partial class CodeEditorDocumentView : UserControl
 
     private void OnCompletionReceived(object? sender, IEnumerable<Core.Abstractions.Services.CompletionItem> completions)
     {
+        Console.WriteLine($"[View] OnCompletionReceived called, MainEditor is null: {MainEditor == null}");
         if (MainEditor == null)
         {
-            System.Diagnostics.Debug.WriteLine("[View] OnCompletionReceived: MainEditor is null!");
+            Console.WriteLine("[View] OnCompletionReceived: MainEditor is null!");
             return;
         }
 
@@ -110,12 +111,12 @@ public partial class CodeEditorDocumentView : UserControl
             c.InsertText ?? c.Label
         )).ToList();
 
-        System.Diagnostics.Debug.WriteLine($"[View] OnCompletionReceived: {completionDataList.Count} items, posting to UI thread");
+        Console.WriteLine($"[View] OnCompletionReceived: {completionDataList.Count} items, posting to UI thread");
 
         // Ensure we're on the UI thread
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            System.Diagnostics.Debug.WriteLine($"[View] UI thread: calling ShowCompletion with {completionDataList.Count} items");
+            Console.WriteLine($"[View] UI thread: calling ShowCompletion with {completionDataList.Count} items");
             MainEditor?.ShowCompletion(completionDataList);
         });
     }

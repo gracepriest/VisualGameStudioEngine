@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler.SemanticAnalysis;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
@@ -7,43 +8,100 @@ using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 namespace BasicLang.Compiler.LSP
 {
     /// <summary>
+    /// Completion context types for context-aware completions
+    /// </summary>
+    public enum CompletionContextType
+    {
+        General,        // Default - show everything
+        Import,         // After "Import " - show module names
+        New,            // After "New " - show class types
+        AsType,         // After "As " - show types
+        MemberAccess,   // After "." - show members
+        Implements,     // After "Implements " - show interfaces
+        Inherits        // After "Inherits " - show classes
+    }
+
+    /// <summary>
+    /// Extended trigger context with more information
+    /// </summary>
+    public class TriggerContext
+    {
+        public CompletionContextType ContextType { get; set; } = CompletionContextType.General;
+        public bool IsMemberAccess => ContextType == CompletionContextType.MemberAccess;
+        public string ObjectName { get; set; }
+        public string FilterPrefix { get; set; }
+    }
+
+    /// <summary>
     /// Service that provides completion items.
     /// Queries the compiler core (SemanticAnalyzer/TypeRegistry) for IntelliSense.
     /// </summary>
     public class CompletionService
     {
+        // Available modules for Import completion (can be set externally)
+        private List<string> _availableModules = new List<string>();
+
+        /// <summary>
+        /// Set the available modules for Import statement completion
+        /// </summary>
+        public void SetAvailableModules(IEnumerable<string> modules)
+        {
+            _availableModules = modules?.ToList() ?? new List<string>();
+        }
+
         /// <summary>
         /// Get completion items based on context
         /// </summary>
         public List<CompletionItem> GetCompletions(DocumentState? state, int line, int character)
         {
             var completions = new List<CompletionItem>();
-            string filterPrefix = null;
+            TriggerContext triggerContext = null;
 
-            // Check if we're completing after a dot (member access) - only if we have a document
+            Console.Error.WriteLine($"[CompletionService] GetCompletions called: line={line}, char={character}");
+
+            // Check context - only if we have a document
             if (state != null)
             {
-                var triggerContext = GetTriggerContext(state, line, character);
-                filterPrefix = triggerContext.FilterPrefix;
+                triggerContext = GetTriggerContext(state, line, character);
+                Console.Error.WriteLine($"[CompletionService] TriggerContext: type={triggerContext.ContextType}, objectName={triggerContext.ObjectName}, filterPrefix={triggerContext.FilterPrefix}");
 
-                if (triggerContext.IsMemberAccess)
+                // Handle context-specific completions
+                switch (triggerContext.ContextType)
                 {
-                    // Get member completions for the object type, passing line info for scope resolution
-                    var memberCompletions = GetMemberCompletions(state, triggerContext.ObjectName, line, character).ToList();
+                    case CompletionContextType.MemberAccess:
+                        // Get member completions for the object type
+                        var memberCompletions = GetMemberCompletions(state, triggerContext.ObjectName, line, character).ToList();
+                        completions.AddRange(memberCompletions);
+                        return ApplyFuzzyFilter(completions, triggerContext.FilterPrefix);
 
-                    // Filter member completions if user is typing after the dot
-                    if (!string.IsNullOrEmpty(triggerContext.FilterPrefix))
-                    {
-                        memberCompletions = memberCompletions
-                            .Where(c => c.Label.StartsWith(triggerContext.FilterPrefix, StringComparison.OrdinalIgnoreCase))
-                            .ToList();
-                    }
+                    case CompletionContextType.Import:
+                        // Show available modules for import
+                        completions.AddRange(GetImportCompletions(state));
+                        return ApplyFuzzyFilter(completions, triggerContext.FilterPrefix);
 
-                    completions.AddRange(memberCompletions);
-                    return completions;
+                    case CompletionContextType.New:
+                        // Show only instantiable types (classes)
+                        completions.AddRange(GetNewCompletions(state));
+                        return ApplyFuzzyFilter(completions, triggerContext.FilterPrefix);
+
+                    case CompletionContextType.AsType:
+                        // Show all types for type annotations
+                        completions.AddRange(GetAsTypeCompletions(state));
+                        return ApplyFuzzyFilter(completions, triggerContext.FilterPrefix);
+
+                    case CompletionContextType.Implements:
+                        // Show interfaces
+                        completions.AddRange(GetInterfaceCompletions(state));
+                        return ApplyFuzzyFilter(completions, triggerContext.FilterPrefix);
+
+                    case CompletionContextType.Inherits:
+                        // Show classes for inheritance
+                        completions.AddRange(GetClassCompletions(state));
+                        return ApplyFuzzyFilter(completions, triggerContext.FilterPrefix);
                 }
             }
 
+            // General completions (default context)
             // Add keywords
             completions.AddRange(GetKeywordCompletions());
 
@@ -66,24 +124,361 @@ namespace BasicLang.Compiler.LSP
                 completions.AddRange(GetNetTypeCompletions(state));
             }
 
-            // Apply filter prefix if user is typing
-            if (!string.IsNullOrEmpty(filterPrefix))
-            {
-                completions = completions
-                    .Where(c => c.Label.StartsWith(filterPrefix, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-            }
-
-            return completions;
+            // Apply fuzzy filter
+            return ApplyFuzzyFilter(completions, triggerContext?.FilterPrefix);
         }
 
         /// <summary>
-        /// Determine if we're completing after a dot and get the object name
+        /// Apply fuzzy filtering with scoring
         /// </summary>
-        private (bool IsMemberAccess, string ObjectName, string FilterPrefix) GetTriggerContext(DocumentState state, int line, int character)
+        private List<CompletionItem> ApplyFuzzyFilter(List<CompletionItem> completions, string filterPrefix)
         {
+            if (string.IsNullOrEmpty(filterPrefix))
+                return completions;
+
+            var scored = completions
+                .Select(c => new { Item = c, Score = CalculateFuzzyScore(c.Label, filterPrefix) })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Item.Label.Length)
+                .Select(x =>
+                {
+                    // Create new item with sort text based on score (lower = better for VS Code sorting)
+                    return new CompletionItem
+                    {
+                        Label = x.Item.Label,
+                        Kind = x.Item.Kind,
+                        Detail = x.Item.Detail,
+                        Documentation = x.Item.Documentation,
+                        InsertText = x.Item.InsertText,
+                        InsertTextFormat = x.Item.InsertTextFormat,
+                        SortText = $"{(10000 - x.Score):D5}_{x.Item.Label}",
+                        FilterText = x.Item.FilterText,
+                        Data = x.Item.Data
+                    };
+                })
+                .ToList();
+
+            return scored;
+        }
+
+        /// <summary>
+        /// Calculate fuzzy match score (higher = better match)
+        /// </summary>
+        private int CalculateFuzzyScore(string label, string pattern)
+        {
+            if (string.IsNullOrEmpty(label) || string.IsNullOrEmpty(pattern))
+                return 0;
+
+            var labelLower = label.ToLowerInvariant();
+            var patternLower = pattern.ToLowerInvariant();
+
+            // Exact prefix match - highest score
+            if (labelLower.StartsWith(patternLower))
+                return 1000 + (100 - label.Length);
+
+            // Case-sensitive prefix match - very high score
+            if (label.StartsWith(pattern))
+                return 900 + (100 - label.Length);
+
+            // CamelCase match (e.g., "cra" matches "createApplication")
+            var camelScore = CalculateCamelCaseScore(label, pattern);
+            if (camelScore > 0)
+                return 500 + camelScore;
+
+            // Substring match
+            var substringIndex = labelLower.IndexOf(patternLower);
+            if (substringIndex >= 0)
+                return 300 - substringIndex;
+
+            // Fuzzy character match (all chars present in order)
+            var fuzzyScore = CalculateSequentialCharScore(labelLower, patternLower);
+            if (fuzzyScore > 0)
+                return fuzzyScore;
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Calculate CamelCase matching score
+        /// </summary>
+        private int CalculateCamelCaseScore(string label, string pattern)
+        {
+            var patternLower = pattern.ToLowerInvariant();
+            int patternIndex = 0;
+            int score = 0;
+            bool lastWasMatch = false;
+
+            for (int i = 0; i < label.Length && patternIndex < patternLower.Length; i++)
+            {
+                bool isUpperCase = char.IsUpper(label[i]);
+                bool isWordStart = i == 0 || isUpperCase || (i > 0 && !char.IsLetterOrDigit(label[i - 1]));
+
+                if (char.ToLowerInvariant(label[i]) == patternLower[patternIndex])
+                {
+                    patternIndex++;
+                    // Bonus for matching at word boundaries
+                    score += isWordStart ? 10 : (lastWasMatch ? 5 : 1);
+                    lastWasMatch = true;
+                }
+                else
+                {
+                    lastWasMatch = false;
+                }
+            }
+
+            return patternIndex == patternLower.Length ? score : 0;
+        }
+
+        /// <summary>
+        /// Calculate score for sequential character matching
+        /// </summary>
+        private int CalculateSequentialCharScore(string label, string pattern)
+        {
+            int patternIndex = 0;
+            int consecutiveBonus = 0;
+
+            for (int i = 0; i < label.Length && patternIndex < pattern.Length; i++)
+            {
+                if (label[i] == pattern[patternIndex])
+                {
+                    patternIndex++;
+                    consecutiveBonus++;
+                }
+                else
+                {
+                    consecutiveBonus = 0;
+                }
+            }
+
+            return patternIndex == pattern.Length ? 100 + consecutiveBonus * 10 : 0;
+        }
+
+        /// <summary>
+        /// Get completions for Import statements (module names)
+        /// </summary>
+        private IEnumerable<CompletionItem> GetImportCompletions(DocumentState state)
+        {
+            var modules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Add modules set externally (from project)
+            foreach (var mod in _availableModules)
+            {
+                modules.Add(mod);
+            }
+
+            // Add modules found in current file's directory (scan for .bas files)
+            var filePath = state?.Uri?.GetFileSystemPath();
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                var dir = System.IO.Path.GetDirectoryName(filePath);
+                if (System.IO.Directory.Exists(dir))
+                {
+                    foreach (var file in System.IO.Directory.GetFiles(dir, "*.bas"))
+                    {
+                        var moduleName = System.IO.Path.GetFileNameWithoutExtension(file);
+                        if (!moduleName.Equals(System.IO.Path.GetFileNameWithoutExtension(filePath), StringComparison.OrdinalIgnoreCase))
+                        {
+                            modules.Add(moduleName);
+                        }
+                    }
+                    foreach (var file in System.IO.Directory.GetFiles(dir, "*.mod"))
+                    {
+                        var moduleName = System.IO.Path.GetFileNameWithoutExtension(file);
+                        modules.Add(moduleName);
+                    }
+                }
+            }
+
+            // Add common .NET namespaces as module suggestions
+            var netModules = new[] { "System", "System.IO", "System.Collections", "System.Text", "System.Net" };
+            foreach (var mod in netModules)
+            {
+                modules.Add(mod);
+            }
+
+            return modules.Select(m => new CompletionItem
+            {
+                Label = m,
+                Kind = CompletionItemKind.Module,
+                Detail = "Module",
+                InsertText = m
+            });
+        }
+
+        /// <summary>
+        /// Get completions for "New" keyword (instantiable types)
+        /// </summary>
+        private IEnumerable<CompletionItem> GetNewCompletions(DocumentState state)
+        {
+            var types = new List<CompletionItem>();
+
+            // Built-in collection types
+            types.Add(CreateTypeCompletion("List", "List(Of T)", "Generic list collection", "List(Of ${1:Type})"));
+            types.Add(CreateTypeCompletion("Dictionary", "Dictionary(Of TKey, TValue)", "Key-value dictionary", "Dictionary(Of ${1:KeyType}, ${2:ValueType})"));
+            types.Add(CreateTypeCompletion("ArrayList", "ArrayList", "Non-generic list", "ArrayList()"));
+            types.Add(CreateTypeCompletion("Hashtable", "Hashtable", "Non-generic dictionary", "Hashtable()"));
+            types.Add(CreateTypeCompletion("StringBuilder", "StringBuilder", "Mutable string builder", "StringBuilder()"));
+            types.Add(CreateTypeCompletion("StreamReader", "StreamReader", "Text file reader", "StreamReader(${1:path})"));
+            types.Add(CreateTypeCompletion("StreamWriter", "StreamWriter", "Text file writer", "StreamWriter(${1:path})"));
+            types.Add(CreateTypeCompletion("HttpClient", "HttpClient", "HTTP client for web requests", "HttpClient()"));
+            types.Add(CreateTypeCompletion("Regex", "Regex", "Regular expression", "Regex(${1:pattern})"));
+            types.Add(CreateTypeCompletion("Timer", "Timer", "Timer for periodic events", "Timer()"));
+            types.Add(CreateTypeCompletion("Random", "Random", "Random number generator", "Random()"));
+            types.Add(CreateTypeCompletion("Stopwatch", "Stopwatch", "High-resolution timer", "Stopwatch()"));
+
+            // User-defined classes from AST
+            if (state?.AST != null)
+            {
+                foreach (var decl in state.AST.Declarations)
+                {
+                    if (decl is ClassNode cls)
+                    {
+                        types.Add(new CompletionItem
+                        {
+                            Label = cls.Name,
+                            Kind = CompletionItemKind.Class,
+                            Detail = "Class",
+                            InsertText = $"{cls.Name}()",
+                            InsertTextFormat = InsertTextFormat.PlainText
+                        });
+                    }
+                }
+            }
+
+            return types;
+        }
+
+        private CompletionItem CreateTypeCompletion(string name, string detail, string doc, string insertText)
+        {
+            return new CompletionItem
+            {
+                Label = name,
+                Kind = CompletionItemKind.Class,
+                Detail = detail,
+                Documentation = doc,
+                InsertText = insertText,
+                InsertTextFormat = InsertTextFormat.Snippet
+            };
+        }
+
+        /// <summary>
+        /// Get completions for "As" type annotations
+        /// </summary>
+        private IEnumerable<CompletionItem> GetAsTypeCompletions(DocumentState state)
+        {
+            var types = new List<CompletionItem>();
+
+            // Built-in types
+            types.AddRange(GetTypeCompletions());
+
+            // Generic types
+            types.Add(new CompletionItem { Label = "List(Of", Kind = CompletionItemKind.Class, Detail = "Generic List", InsertText = "List(Of ${1:Type})", InsertTextFormat = InsertTextFormat.Snippet });
+            types.Add(new CompletionItem { Label = "Dictionary(Of", Kind = CompletionItemKind.Class, Detail = "Generic Dictionary", InsertText = "Dictionary(Of ${1:KeyType}, ${2:ValueType})", InsertTextFormat = InsertTextFormat.Snippet });
+            types.Add(new CompletionItem { Label = "IEnumerable(Of", Kind = CompletionItemKind.Interface, Detail = "Generic IEnumerable", InsertText = "IEnumerable(Of ${1:Type})", InsertTextFormat = InsertTextFormat.Snippet });
+
+            // User-defined types from AST
+            if (state?.AST != null)
+            {
+                foreach (var decl in state.AST.Declarations)
+                {
+                    switch (decl)
+                    {
+                        case ClassNode cls:
+                            types.Add(new CompletionItem { Label = cls.Name, Kind = CompletionItemKind.Class, Detail = "Class" });
+                            break;
+                        case StructureNode str:
+                            types.Add(new CompletionItem { Label = str.Name, Kind = CompletionItemKind.Struct, Detail = "Structure" });
+                            break;
+                        case EnumNode en:
+                            types.Add(new CompletionItem { Label = en.Name, Kind = CompletionItemKind.Enum, Detail = "Enum" });
+                            break;
+                        case InterfaceNode iface:
+                            types.Add(new CompletionItem { Label = iface.Name, Kind = CompletionItemKind.Interface, Detail = "Interface" });
+                            break;
+                    }
+                }
+            }
+
+            return types;
+        }
+
+        /// <summary>
+        /// Get interface completions for "Implements"
+        /// </summary>
+        private IEnumerable<CompletionItem> GetInterfaceCompletions(DocumentState state)
+        {
+            var interfaces = new List<CompletionItem>();
+
+            // Common .NET interfaces
+            interfaces.Add(new CompletionItem { Label = "IDisposable", Kind = CompletionItemKind.Interface, Detail = "Interface", Documentation = "Provides a mechanism for releasing unmanaged resources" });
+            interfaces.Add(new CompletionItem { Label = "IComparable", Kind = CompletionItemKind.Interface, Detail = "Interface", Documentation = "Defines a comparison method" });
+            interfaces.Add(new CompletionItem { Label = "IEnumerable", Kind = CompletionItemKind.Interface, Detail = "Interface", Documentation = "Exposes an enumerator for iteration" });
+            interfaces.Add(new CompletionItem { Label = "ICloneable", Kind = CompletionItemKind.Interface, Detail = "Interface", Documentation = "Supports cloning" });
+            interfaces.Add(new CompletionItem { Label = "IEquatable", Kind = CompletionItemKind.Interface, Detail = "Interface", Documentation = "Defines equality comparison" });
+
+            // User-defined interfaces from AST
+            if (state?.AST != null)
+            {
+                foreach (var decl in state.AST.Declarations)
+                {
+                    if (decl is InterfaceNode iface)
+                    {
+                        interfaces.Add(new CompletionItem
+                        {
+                            Label = iface.Name,
+                            Kind = CompletionItemKind.Interface,
+                            Detail = "Interface"
+                        });
+                    }
+                }
+            }
+
+            return interfaces;
+        }
+
+        /// <summary>
+        /// Get class completions for "Inherits"
+        /// </summary>
+        private IEnumerable<CompletionItem> GetClassCompletions(DocumentState state)
+        {
+            var classes = new List<CompletionItem>();
+
+            // Common base classes
+            classes.Add(new CompletionItem { Label = "Object", Kind = CompletionItemKind.Class, Detail = "Base class for all types" });
+            classes.Add(new CompletionItem { Label = "Exception", Kind = CompletionItemKind.Class, Detail = "Base class for exceptions" });
+            classes.Add(new CompletionItem { Label = "EventArgs", Kind = CompletionItemKind.Class, Detail = "Base class for event data" });
+            classes.Add(new CompletionItem { Label = "Stream", Kind = CompletionItemKind.Class, Detail = "Abstract base class for streams" });
+
+            // User-defined classes from AST
+            if (state?.AST != null)
+            {
+                foreach (var decl in state.AST.Declarations)
+                {
+                    if (decl is ClassNode cls && !cls.IsAbstract)
+                    {
+                        classes.Add(new CompletionItem
+                        {
+                            Label = cls.Name,
+                            Kind = CompletionItemKind.Class,
+                            Detail = "Class"
+                        });
+                    }
+                }
+            }
+
+            return classes;
+        }
+
+        /// <summary>
+        /// Determine completion context based on cursor position
+        /// </summary>
+        private TriggerContext GetTriggerContext(DocumentState state, int line, int character)
+        {
+            var context = new TriggerContext();
+
             if (state?.SourceCode == null)
-                return (false, null, null);
+                return context;
 
             var lines = state.SourceCode.Split('\n');
 
@@ -101,42 +496,123 @@ namespace BasicLang.Compiler.LSP
 
             if (currentLine.Length == 0)
             {
-                return (false, null, null);
+                return context;
             }
 
             // Get the text before the cursor
             var beforeCursor = currentLine.Substring(0, character);
-
-            // Extract any partial identifier the user is typing (for filtering)
-            string filterPrefix = null;
             var trimmedBefore = beforeCursor.TrimEnd();
 
-            // Check if we're in the middle of typing an identifier
-            if (trimmedBefore.Length > 0 && !trimmedBefore.EndsWith("."))
+            // Extract any partial identifier the user is typing (for filtering)
+            if (trimmedBefore.Length > 0 && !trimmedBefore.EndsWith(".") && !trimmedBefore.EndsWith(" "))
             {
-                // Extract what they're typing
-                filterPrefix = ExtractLastIdentifier(trimmedBefore);
+                context.FilterPrefix = ExtractLastIdentifier(trimmedBefore);
+            }
+
+            // Check for context-specific keywords (case-insensitive)
+            var beforeLower = trimmedBefore.ToLowerInvariant();
+
+            // Check for "Import " context
+            if (IsAfterKeyword(beforeLower, "import"))
+            {
+                context.ContextType = CompletionContextType.Import;
+                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "Import");
+                return context;
+            }
+
+            // Check for "New " context
+            if (IsAfterKeyword(beforeLower, "new"))
+            {
+                context.ContextType = CompletionContextType.New;
+                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "New");
+                return context;
+            }
+
+            // Check for "As " context (type annotation)
+            if (IsAfterKeyword(beforeLower, "as"))
+            {
+                context.ContextType = CompletionContextType.AsType;
+                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "As");
+                return context;
+            }
+
+            // Check for "Implements " context
+            if (IsAfterKeyword(beforeLower, "implements"))
+            {
+                context.ContextType = CompletionContextType.Implements;
+                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "Implements");
+                return context;
+            }
+
+            // Check for "Inherits " context
+            if (IsAfterKeyword(beforeLower, "inherits"))
+            {
+                context.ContextType = CompletionContextType.Inherits;
+                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "Inherits");
+                return context;
+            }
+
+            // Check for "Of " context (generic type parameter)
+            if (IsAfterKeyword(beforeLower, "of"))
+            {
+                context.ContextType = CompletionContextType.AsType;
+                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "Of");
+                return context;
             }
 
             // Look for member access pattern: identifier followed by dot
-            // Handle cases like "obj.", "obj.mem", "obj.Method()."
             var dotIndex = trimmedBefore.LastIndexOf('.');
             if (dotIndex >= 0)
             {
-                // There's a dot - check if cursor is right after it or typing after it
                 var afterDot = trimmedBefore.Substring(dotIndex + 1).Trim();
                 var beforeDot = trimmedBefore.Substring(0, dotIndex).TrimEnd();
 
-                // Extract the object name (handles chained calls like obj.Method().Property)
                 var objectName = ExtractLastIdentifierOrCall(beforeDot);
 
                 if (!string.IsNullOrEmpty(objectName))
                 {
-                    return (true, objectName, string.IsNullOrEmpty(afterDot) ? null : afterDot);
+                    context.ContextType = CompletionContextType.MemberAccess;
+                    context.ObjectName = objectName;
+                    context.FilterPrefix = string.IsNullOrEmpty(afterDot) ? null : afterDot;
+                    return context;
                 }
             }
 
-            return (false, null, filterPrefix);
+            return context;
+        }
+
+        /// <summary>
+        /// Check if cursor is after a specific keyword
+        /// </summary>
+        private bool IsAfterKeyword(string lineLower, string keyword)
+        {
+            // Check for "keyword " at end or "keyword partial" where partial is what user is typing
+            var keywordWithSpace = keyword + " ";
+            var lastKeywordIndex = lineLower.LastIndexOf(keywordWithSpace);
+            if (lastKeywordIndex >= 0)
+            {
+                // Make sure keyword is at a word boundary (start of line or after space/operator)
+                if (lastKeywordIndex == 0 || !char.IsLetterOrDigit(lineLower[lastKeywordIndex - 1]))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Extract the text after a keyword (what user is typing)
+        /// </summary>
+        private string ExtractAfterKeyword(string line, string keyword)
+        {
+            var keywordWithSpace = keyword + " ";
+            var lastIndex = line.LastIndexOf(keywordWithSpace, StringComparison.OrdinalIgnoreCase);
+            if (lastIndex >= 0)
+            {
+                var afterKeyword = line.Substring(lastIndex + keywordWithSpace.Length).Trim();
+                return string.IsNullOrEmpty(afterKeyword) ? null : afterKeyword;
+            }
+            return null;
         }
 
         /// <summary>
@@ -1128,6 +1604,9 @@ namespace BasicLang.Compiler.LSP
         {
             var keywords = new[]
             {
+                // Import statement
+                ("Import", "Import module", "Import ${1:ModuleName}"),
+
                 ("Sub", "Subroutine declaration", "Sub ${1:Name}()\n\t$0\nEnd Sub"),
                 ("Function", "Function declaration", "Function ${1:Name}() As ${2:Integer}\n\t$0\nEnd Function"),
                 ("If", "If statement", "If ${1:condition} Then\n\t$0\nEnd If"),

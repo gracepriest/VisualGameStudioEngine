@@ -1653,10 +1653,12 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void ShowCompletion(IEnumerable<CompletionData> completionItems)
     {
+        Console.WriteLine($"[Editor] ShowCompletion called, _textEditor is null: {_textEditor == null}");
         if (_textEditor == null) return;
 
         // Materialize the list first to check count
         var itemsList = completionItems.ToList();
+        Console.WriteLine($"[Editor] ShowCompletion: {itemsList.Count} items received");
 
         // Don't do anything if no items - preserve any existing completion window
         if (itemsList.Count == 0) return;
@@ -1664,6 +1666,7 @@ public partial class CodeEditorControl : UserControl
         // Close any existing completion window
         _completionWindow?.Close();
 
+        Console.WriteLine($"[Editor] Creating CompletionWindow...");
         _completionWindow = new CompletionWindow(_textEditor.TextArea);
 
         // Calculate the start offset for text replacement
@@ -1696,7 +1699,68 @@ public partial class CodeEditorControl : UserControl
             data.Add(item);
         }
 
-        _completionWindow.Show();
+        Console.WriteLine($"[Editor] Added {data.Count} items to CompletionWindow, calling Show()...");
+        try
+        {
+            // Set minimum size to ensure visibility
+            _completionWindow.MinWidth = 200;
+            _completionWindow.MinHeight = 100;
+            _completionWindow.Width = 400;
+            _completionWindow.MaxHeight = 300;
+
+            Console.WriteLine($"[Editor] Window size set, StartOffset={_completionWindow.StartOffset}, EndOffset={_completionWindow.EndOffset}");
+
+            // Get current word prefix for filtering
+            var currentWord = GetCurrentWordPrefix() ?? "";
+            Console.WriteLine($"[Editor] Current word prefix: '{currentWord}'");
+
+            _completionWindow.Show();
+            Console.WriteLine($"[Editor] CompletionWindow.Show() completed, IsVisible={_completionWindow.IsVisible}");
+
+            // Defer selection to after the visual tree is built
+            var wordToSelect = currentWord;
+            var completionWindow = _completionWindow;
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (completionWindow == null || !completionWindow.IsVisible) return;
+
+                Console.WriteLine($"[Editor] Deferred selection running, word='{wordToSelect}'");
+
+                // Use SelectItem to filter and select best match
+                if (!string.IsNullOrEmpty(wordToSelect))
+                {
+                    completionWindow.CompletionList.SelectItem(wordToSelect);
+                    Console.WriteLine($"[Editor] Called SelectItem with '{wordToSelect}'");
+                }
+
+                // Now try to access ListBox
+                var listBox = completionWindow.CompletionList.ListBox;
+                if (listBox != null)
+                {
+                    Console.WriteLine($"[Editor] ListBox ItemCount: {listBox.ItemCount}, SelectedIndex: {listBox.SelectedIndex}");
+                    if (listBox.ItemCount > 0 && listBox.SelectedIndex < 0)
+                    {
+                        listBox.SelectedIndex = 0;
+                        Console.WriteLine($"[Editor] Forced ListBox.SelectedIndex = 0");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"[Editor] ListBox is still null after post");
+                    // Try setting SelectedItem directly on CompletionList
+                    var data = completionWindow.CompletionList.CompletionData;
+                    if (data != null && data.Count > 0)
+                    {
+                        completionWindow.CompletionList.SelectedItem = data[0];
+                        Console.WriteLine($"[Editor] Set CompletionList.SelectedItem to first item");
+                    }
+                }
+            }, Avalonia.Threading.DispatcherPriority.Loaded);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Editor] ERROR showing completion window: {ex.Message}");
+        }
         _completionWindow.Closed += (s, e) => _completionWindow = null;
     }
 
