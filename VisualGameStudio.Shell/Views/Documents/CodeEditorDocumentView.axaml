@@ -12,7 +12,7 @@
              HorizontalAlignment="Stretch"
              VerticalAlignment="Stretch">
 
-  <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch" RowDefinitions="Auto,*">
+  <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch" RowDefinitions="Auto,Auto,*">
     <!-- Find/Replace Bar -->
     <controls:FindReplaceControl x:Name="FindReplaceBar"
                                   Grid.Row="0"
@@ -24,8 +24,13 @@
                                   CloseRequested="OnCloseFindReplace"
                                   SearchTextChangedEvent="OnSearchTextChanged"/>
 
+    <!-- Breadcrumb Bar -->
+    <editor:BreadcrumbControl x:Name="BreadcrumbBar"
+                               Grid.Row="1"
+                               ItemClicked="OnBreadcrumbItemClicked"/>
+
     <!-- Editor Content -->
-    <Grid Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+    <Grid Grid.Row="2" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
     <!-- AvaloniaEdit code editor with syntax highlighting -->
     <editor:CodeEditorControl x:Name="MainEditor"
                               Text="{Binding Text, Mode=TwoWay}"

@@ -116,6 +116,11 @@ public interface ILanguageService : IDisposable
     /// Format a range of the document
     /// </summary>
     Task<IReadOnlyList<TextEditInfo>> FormatRangeAsync(string uri, int startLine, int startColumn, int endLine, int endColumn, FormattingOptionsInfo? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get code lenses for the document
+    /// </summary>
+    Task<IReadOnlyList<CodeLensInfo>> GetCodeLensAsync(string uri, CancellationToken cancellationToken = default);
 }
 
 public class DiagnosticsEventArgs : EventArgs
@@ -344,4 +349,16 @@ public class FormattingOptionsInfo
 {
     public int TabSize { get; set; } = 4;
     public bool InsertSpaces { get; set; } = true;
+}
+
+/// <summary>
+/// Code lens information
+/// </summary>
+public class CodeLensInfo
+{
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public string Title { get; set; } = "";
+    public string CommandName { get; set; } = "";
+    public List<object>? CommandArguments { get; set; }
 }

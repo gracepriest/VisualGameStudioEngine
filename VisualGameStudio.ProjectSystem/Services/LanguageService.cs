@@ -1274,6 +1274,52 @@ public class LanguageService : ILanguageService
         return edit;
     }
 
+    public async Task<IReadOnlyList<CodeLensInfo>> GetCodeLensAsync(string uri, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<CodeLensInfo>();
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/codeLens", new
+            {
+                textDocument = new { uri = PathToUri(uri) }
+            }, cancellationToken);
+
+            return ParseCodeLenses(result);
+        }
+        catch
+        {
+            return Array.Empty<CodeLensInfo>();
+        }
+    }
+
+    private static IReadOnlyList<CodeLensInfo> ParseCodeLenses(JsonElement result)
+    {
+        var lenses = new List<CodeLensInfo>();
+        if (result.ValueKind != JsonValueKind.Array) return lenses;
+
+        foreach (var item in result.EnumerateArray())
+        {
+            var lens = new CodeLensInfo();
+
+            if (item.TryGetProperty("range", out var range) && range.TryGetProperty("start", out var start))
+            {
+                lens.Line = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                lens.Column = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+            }
+
+            if (item.TryGetProperty("command", out var cmd))
+            {
+                lens.Title = cmd.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                lens.CommandName = cmd.TryGetProperty("command", out var n) ? n.GetString() ?? "" : "";
+            }
+
+            lenses.Add(lens);
+        }
+
+        return lenses;
+    }
+
     public void Dispose()
     {
         StopAsync().Wait(TimeSpan.FromSeconds(2));

@@ -68,6 +68,7 @@ public partial class CodeEditorDocumentView : UserControl
 
                 // Wire up keyboard shortcut events from editor
                 MainEditor.GoToDefinitionRequested += (s, e) => vm.RequestGoToDefinition();
+                MainEditor.PeekDefinitionRequested += (s, e) => vm.RequestPeekDefinition();
                 MainEditor.FindAllReferencesRequested += (s, e) => vm.RequestFindAllReferences();
                 MainEditor.RenameSymbolRequested += (s, e) => vm.RequestRenameSymbol();
                 MainEditor.CodeActionsRequested += (s, e) => vm.RequestCodeActions();
@@ -269,7 +270,110 @@ public partial class CodeEditorDocumentView : UserControl
         if (sender is CodeEditorControl editor && DataContext is CodeEditorDocumentViewModel vm)
         {
             vm.UpdateCaretPosition(editor.CaretLine, editor.CaretColumn);
+            UpdateBreadcrumb(editor.CaretLine);
         }
+    }
+
+    private void UpdateBreadcrumb(int line)
+    {
+        if (DataContext is not CodeEditorDocumentViewModel vm || BreadcrumbBar == null) return;
+
+        var text = vm.Text;
+        if (string.IsNullOrEmpty(text)) return;
+
+        var breadcrumbItems = new List<(string Name, int Line, string Kind)>();
+        var lines = text.Split('\n');
+
+        // Simple breadcrumb parser - track containing structures
+        string? currentModule = null;
+        int moduleStartLine = 0;
+        string? currentClass = null;
+        int classStartLine = 0;
+        string? currentMethod = null;
+        int methodStartLine = 0;
+
+        for (int i = 0; i < Math.Min(line, lines.Length); i++)
+        {
+            var lineText = lines[i].Trim();
+            var lineNum = i + 1;
+
+            if (lineText.StartsWith("Module ", StringComparison.OrdinalIgnoreCase))
+            {
+                currentModule = ExtractName(lineText, "Module ");
+                moduleStartLine = lineNum;
+                currentClass = null;
+                currentMethod = null;
+            }
+            else if (lineText.StartsWith("End Module", StringComparison.OrdinalIgnoreCase))
+            {
+                if (line <= lineNum) break;
+                currentModule = null;
+            }
+            else if (lineText.StartsWith("Class ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Class ", StringComparison.OrdinalIgnoreCase))
+            {
+                currentClass = ExtractName(lineText, "Class ");
+                classStartLine = lineNum;
+                currentMethod = null;
+            }
+            else if (lineText.StartsWith("End Class", StringComparison.OrdinalIgnoreCase))
+            {
+                if (line <= lineNum) break;
+                currentClass = null;
+            }
+            else if (lineText.StartsWith("Sub ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Sub ", StringComparison.OrdinalIgnoreCase))
+            {
+                currentMethod = ExtractMethodName(lineText, "Sub ");
+                methodStartLine = lineNum;
+            }
+            else if (lineText.StartsWith("Function ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Function ", StringComparison.OrdinalIgnoreCase))
+            {
+                currentMethod = ExtractMethodName(lineText, "Function ");
+                methodStartLine = lineNum;
+            }
+            else if (lineText.StartsWith("End Sub", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.StartsWith("End Function", StringComparison.OrdinalIgnoreCase))
+            {
+                if (line <= lineNum) break;
+                currentMethod = null;
+            }
+        }
+
+        // Build breadcrumb path
+        if (!string.IsNullOrEmpty(currentModule))
+            breadcrumbItems.Add((currentModule, moduleStartLine, "Module"));
+        if (!string.IsNullOrEmpty(currentClass))
+            breadcrumbItems.Add((currentClass, classStartLine, "Class"));
+        if (!string.IsNullOrEmpty(currentMethod))
+            breadcrumbItems.Add((currentMethod, methodStartLine, "Function"));
+
+        BreadcrumbBar.UpdateBreadcrumb(breadcrumbItems);
+    }
+
+    private static string ExtractName(string line, string keyword)
+    {
+        var idx = line.IndexOf(keyword, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return "";
+        var rest = line.Substring(idx + keyword.Length).Trim();
+        var endIdx = rest.IndexOfAny(new[] { ' ', '(', '\r', '\n', ':' });
+        return endIdx > 0 ? rest.Substring(0, endIdx) : rest;
+    }
+
+    private static string ExtractMethodName(string line, string keyword)
+    {
+        var idx = line.IndexOf(keyword, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return "";
+        var rest = line.Substring(idx + keyword.Length).Trim();
+        var endIdx = rest.IndexOf('(');
+        if (endIdx < 0) endIdx = rest.IndexOfAny(new[] { ' ', '\r', '\n' });
+        return endIdx > 0 ? rest.Substring(0, endIdx).Trim() : rest.Trim();
+    }
+
+    private void OnBreadcrumbItemClicked(object? sender, BreadcrumbItem item)
+    {
+        MainEditor?.GoToLine(item.Line);
     }
 
     private void OnCut(object? sender, RoutedEventArgs e)

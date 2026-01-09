@@ -1,0 +1,39 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="24"
+             x:Class="VisualGameStudio.Editor.Controls.BreadcrumbControl"
+             Background="#252526"
+             Height="22">
+
+  <ItemsControl x:Name="BreadcrumbItems"
+                VerticalAlignment="Center">
+    <ItemsControl.ItemsPanel>
+      <ItemsPanelTemplate>
+        <StackPanel Orientation="Horizontal" Margin="4,0"/>
+      </ItemsPanelTemplate>
+    </ItemsControl.ItemsPanel>
+    <ItemsControl.ItemTemplate>
+      <DataTemplate>
+        <StackPanel Orientation="Horizontal">
+          <Button Content="{Binding Name}"
+                  Background="Transparent"
+                  BorderThickness="0"
+                  Padding="4,2"
+                  FontSize="12"
+                  Foreground="#CCCCCC"
+                  Cursor="Hand"
+                  Command="{Binding $parent[UserControl].DataContext.NavigateCommand}"
+                  CommandParameter="{Binding}"/>
+          <TextBlock Text=">"
+                     VerticalAlignment="Center"
+                     Foreground="#808080"
+                     Margin="2,0"
+                     FontSize="10"
+                     IsVisible="{Binding ShowSeparator}"/>
+        </StackPanel>
+      </DataTemplate>
+    </ItemsControl.ItemTemplate>
+  </ItemsControl>
+</UserControl>

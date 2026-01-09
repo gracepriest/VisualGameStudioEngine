@@ -38,6 +38,7 @@ public partial class CodeEditorControl : UserControl
     private BreakpointMargin? _breakpointMargin;
     private bool _isUpdatingFoldings = false;
     private bool _isFoldingEnabled = true;
+    private MinimapControl? _minimap;
 
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
@@ -146,6 +147,7 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler<int>? BreakpointToggled;
     public event EventHandler? EditorReady;
     public event EventHandler? GoToDefinitionRequested;
+    public event EventHandler? PeekDefinitionRequested;
     public event EventHandler? FindAllReferencesRequested;
     public event EventHandler? RenameSymbolRequested;
     public event EventHandler? CodeActionsRequested;
@@ -188,6 +190,10 @@ public partial class CodeEditorControl : UserControl
         base.OnInitialized();
 
         _textEditor = this.FindControl<TextEditor>("TextEditor")!;
+
+        // Initialize minimap
+        _minimap = this.FindControl<MinimapControl>("Minimap");
+        _minimap?.AttachEditor(_textEditor);
 
         // Register syntax highlighting
         HighlightingLoader.RegisterHighlighting();
@@ -310,6 +316,23 @@ public partial class CodeEditorControl : UserControl
         try
         {
             var point = e.GetCurrentPoint(_textEditor.TextArea);
+
+            // Handle Ctrl+Click for Go to Definition
+            if (point.Properties.IsLeftButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+            {
+                var textView = _textEditor.TextArea.TextView;
+                var pos = textView.GetPositionFloor(point.Position + textView.ScrollOffset);
+                if (pos.HasValue)
+                {
+                    // Move caret to clicked position first
+                    _textEditor.TextArea.Caret.Position = pos.Value;
+                    // Trigger go to definition
+                    GoToDefinitionRequested?.Invoke(this, EventArgs.Empty);
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             if (point.Properties.IsLeftButtonPressed && !_isUpdatingFoldings && !_isFoldingInProgress)
             {
                 // The fold margin is typically the first ~12 pixels on the left
@@ -538,6 +561,14 @@ public partial class CodeEditorControl : UserControl
         if (e.Key == Key.F12 && e.KeyModifiers == KeyModifiers.None)
         {
             GoToDefinitionRequested?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Alt+F12 for peek definition
+        if (e.Key == Key.F12 && e.KeyModifiers == KeyModifiers.Alt)
+        {
+            PeekDefinitionRequested?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
             return;
         }
@@ -1934,6 +1965,18 @@ public partial class CodeEditorControl : UserControl
             _textEditor.TextArea.Caret.Line = line.Value;
             _textEditor.ScrollToLine(line.Value);
         }
+    }
+
+    /// <summary>
+    /// Navigates to a specific line in the editor
+    /// </summary>
+    public void GoToLine(int line)
+    {
+        if (_textEditor == null) return;
+        _textEditor.TextArea.Caret.Line = line;
+        _textEditor.TextArea.Caret.Column = 1;
+        _textEditor.ScrollToLine(line);
+        _textEditor.Focus();
     }
 
     #endregion
