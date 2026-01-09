@@ -66,6 +66,13 @@ public partial class CodeEditorDocumentView : UserControl
             {
                 MainEditor.CompletionRequested += OnCompletionRequested;
 
+                // Wire up keyboard shortcut events from editor
+                MainEditor.GoToDefinitionRequested += (s, e) => vm.RequestGoToDefinition();
+                MainEditor.FindAllReferencesRequested += (s, e) => vm.RequestFindAllReferences();
+                MainEditor.RenameSymbolRequested += (s, e) => vm.RequestRenameSymbol();
+                MainEditor.CodeActionsRequested += (s, e) => vm.RequestCodeActions();
+                MainEditor.FormatDocumentRequested += (s, e) => vm.RequestFormatDocument();
+
                 // Initialize breakpoints when editor is ready
                 if (MainEditor.IsReady)
                 {

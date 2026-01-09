@@ -1048,6 +1048,232 @@ public class LanguageService : ILanguageService
         };
     }
 
+    public async Task<WorkspaceEditInfo?> RenameAsync(string uri, int line, int column, string newName, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return null;
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/rename", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 },
+                newName
+            }, cancellationToken);
+
+            return ParseWorkspaceEdit(result);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<CodeActionInfo>> GetCodeActionsAsync(string uri, int startLine, int startColumn, int endLine, int endColumn, IReadOnlyList<DiagnosticItem>? diagnostics = null, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<CodeActionInfo>();
+
+        try
+        {
+            var lspDiagnostics = diagnostics?.Select(d => new
+            {
+                range = new
+                {
+                    start = new { line = d.Line - 1, character = d.Column - 1 },
+                    end = new { line = d.Line - 1, character = d.Column + 10 }
+                },
+                message = d.Message,
+                severity = d.Severity switch
+                {
+                    DiagnosticSeverity.Error => 1,
+                    DiagnosticSeverity.Warning => 2,
+                    DiagnosticSeverity.Info => 3,
+                    _ => 4
+                },
+                code = d.Id
+            }).ToArray() ?? Array.Empty<object>();
+
+            var result = await SendRequestAsync("textDocument/codeAction", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                range = new
+                {
+                    start = new { line = startLine - 1, character = startColumn - 1 },
+                    end = new { line = endLine - 1, character = endColumn - 1 }
+                },
+                context = new { diagnostics = lspDiagnostics }
+            }, cancellationToken);
+
+            return ParseCodeActions(result);
+        }
+        catch
+        {
+            return Array.Empty<CodeActionInfo>();
+        }
+    }
+
+    public async Task<IReadOnlyList<TextEditInfo>> FormatDocumentAsync(string uri, FormattingOptionsInfo? options = null, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<TextEditInfo>();
+
+        try
+        {
+            var opts = options ?? new FormattingOptionsInfo();
+            var result = await SendRequestAsync("textDocument/formatting", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                options = new
+                {
+                    tabSize = opts.TabSize,
+                    insertSpaces = opts.InsertSpaces
+                }
+            }, cancellationToken);
+
+            return ParseTextEdits(result);
+        }
+        catch
+        {
+            return Array.Empty<TextEditInfo>();
+        }
+    }
+
+    public async Task<IReadOnlyList<TextEditInfo>> FormatRangeAsync(string uri, int startLine, int startColumn, int endLine, int endColumn, FormattingOptionsInfo? options = null, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<TextEditInfo>();
+
+        try
+        {
+            var opts = options ?? new FormattingOptionsInfo();
+            var result = await SendRequestAsync("textDocument/rangeFormatting", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                range = new
+                {
+                    start = new { line = startLine - 1, character = startColumn - 1 },
+                    end = new { line = endLine - 1, character = endColumn - 1 }
+                },
+                options = new
+                {
+                    tabSize = opts.TabSize,
+                    insertSpaces = opts.InsertSpaces
+                }
+            }, cancellationToken);
+
+            return ParseTextEdits(result);
+        }
+        catch
+        {
+            return Array.Empty<TextEditInfo>();
+        }
+    }
+
+    private static WorkspaceEditInfo? ParseWorkspaceEdit(JsonElement result)
+    {
+        if (result.ValueKind == JsonValueKind.Null || result.ValueKind == JsonValueKind.Undefined)
+            return null;
+
+        var edit = new WorkspaceEditInfo();
+
+        if (result.TryGetProperty("changes", out var changes) && changes.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in changes.EnumerateObject())
+            {
+                var filePath = UriToPath(prop.Name);
+                var edits = new List<TextEditInfo>();
+
+                if (prop.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var e in prop.Value.EnumerateArray())
+                    {
+                        edits.Add(ParseTextEdit(e));
+                    }
+                }
+
+                edit.Changes[filePath] = edits;
+            }
+        }
+
+        return edit;
+    }
+
+    private static IReadOnlyList<CodeActionInfo> ParseCodeActions(JsonElement result)
+    {
+        var actions = new List<CodeActionInfo>();
+        if (result.ValueKind != JsonValueKind.Array) return actions;
+
+        foreach (var item in result.EnumerateArray())
+        {
+            var action = new CodeActionInfo
+            {
+                Title = item.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "",
+                IsPreferred = item.TryGetProperty("isPreferred", out var p) && p.GetBoolean()
+            };
+
+            if (item.TryGetProperty("kind", out var k))
+            {
+                var kindStr = k.GetString() ?? "";
+                action.Kind = kindStr switch
+                {
+                    "quickfix" => CodeActionKind.QuickFix,
+                    "refactor" => CodeActionKind.Refactor,
+                    "refactor.extract" => CodeActionKind.RefactorExtract,
+                    "refactor.inline" => CodeActionKind.RefactorInline,
+                    "refactor.rewrite" => CodeActionKind.RefactorRewrite,
+                    "source" => CodeActionKind.Source,
+                    "source.organizeImports" => CodeActionKind.SourceOrganizeImports,
+                    "source.fixAll" => CodeActionKind.SourceFixAll,
+                    _ => CodeActionKind.QuickFix
+                };
+            }
+
+            if (item.TryGetProperty("edit", out var edit))
+            {
+                action.Edit = ParseWorkspaceEdit(edit);
+            }
+
+            actions.Add(action);
+        }
+
+        return actions;
+    }
+
+    private static IReadOnlyList<TextEditInfo> ParseTextEdits(JsonElement result)
+    {
+        var edits = new List<TextEditInfo>();
+        if (result.ValueKind != JsonValueKind.Array) return edits;
+
+        foreach (var item in result.EnumerateArray())
+        {
+            edits.Add(ParseTextEdit(item));
+        }
+
+        return edits;
+    }
+
+    private static TextEditInfo ParseTextEdit(JsonElement e)
+    {
+        var edit = new TextEditInfo
+        {
+            NewText = e.TryGetProperty("newText", out var nt) ? nt.GetString() ?? "" : ""
+        };
+
+        if (e.TryGetProperty("range", out var range))
+        {
+            if (range.TryGetProperty("start", out var start))
+            {
+                edit.StartLine = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                edit.StartColumn = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+            }
+            if (range.TryGetProperty("end", out var end))
+            {
+                edit.EndLine = end.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                edit.EndColumn = end.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+            }
+        }
+
+        return edit;
+    }
+
     public void Dispose()
     {
         StopAsync().Wait(TimeSpan.FromSeconds(2));

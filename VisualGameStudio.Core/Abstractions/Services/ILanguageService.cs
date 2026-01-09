@@ -96,6 +96,26 @@ public interface ILanguageService : IDisposable
     /// Get outgoing calls (callees) for a method at the given position
     /// </summary>
     Task<IReadOnlyList<CallHierarchyItemInfo>> GetOutgoingCallsAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Rename a symbol at the given position
+    /// </summary>
+    Task<WorkspaceEditInfo?> RenameAsync(string uri, int line, int column, string newName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get code actions (quick fixes, refactorings) for a range
+    /// </summary>
+    Task<IReadOnlyList<CodeActionInfo>> GetCodeActionsAsync(string uri, int startLine, int startColumn, int endLine, int endColumn, IReadOnlyList<DiagnosticItem>? diagnostics = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Format the entire document
+    /// </summary>
+    Task<IReadOnlyList<TextEditInfo>> FormatDocumentAsync(string uri, FormattingOptionsInfo? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Format a range of the document
+    /// </summary>
+    Task<IReadOnlyList<TextEditInfo>> FormatRangeAsync(string uri, int startLine, int startColumn, int endLine, int endColumn, FormattingOptionsInfo? options = null, CancellationToken cancellationToken = default);
 }
 
 public class DiagnosticsEventArgs : EventArgs
@@ -283,4 +303,45 @@ public class CallSiteItemInfo
     public int Line { get; set; }
     public int Column { get; set; }
     public string? Preview { get; set; }
+}
+
+/// <summary>
+/// Workspace edit containing changes across multiple files
+/// </summary>
+public class WorkspaceEditInfo
+{
+    public Dictionary<string, List<TextEditInfo>> Changes { get; set; } = new();
+}
+
+/// <summary>
+/// A single text edit
+/// </summary>
+public class TextEditInfo
+{
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public int EndLine { get; set; }
+    public int EndColumn { get; set; }
+    public string NewText { get; set; } = "";
+}
+
+/// <summary>
+/// Code action (quick fix or refactoring)
+/// </summary>
+public class CodeActionInfo
+{
+    public string Title { get; set; } = "";
+    public CodeActionKind Kind { get; set; }
+    public bool IsPreferred { get; set; }
+    public WorkspaceEditInfo? Edit { get; set; }
+    public List<DiagnosticItem>? Diagnostics { get; set; }
+}
+
+/// <summary>
+/// Formatting options
+/// </summary>
+public class FormattingOptionsInfo
+{
+    public int TabSize { get; set; } = 4;
+    public bool InsertSpaces { get; set; } = true;
 }

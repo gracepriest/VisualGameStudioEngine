@@ -96,6 +96,13 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler? SurroundWithRequested;
     public event EventHandler? PeekDefinitionRequested;
     public event EventHandler<int>? BreakpointToggled;
+    public event EventHandler? FormatDocumentRequested;
+    public event EventHandler? CodeActionsRequested;
+    public event EventHandler<HoverRequestEventArgs>? HoverRequested;
+    public event EventHandler<HoverResultEventArgs>? HoverResultReceived;
+    public event EventHandler<CodeActionResultEventArgs>? CodeActionsReceived;
+    public event EventHandler<LocationResultEventArgs>? DefinitionResultReceived;
+    public event EventHandler<ReferencesResultEventArgs>? ReferencesResultReceived;
 
     /// <summary>
     /// Callback to get selection info from the view
@@ -383,6 +390,41 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         PeekDefinitionRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    public void RequestFormatDocument()
+    {
+        FormatDocumentRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestCodeActions()
+    {
+        CodeActionsRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestHover(int line, int column)
+    {
+        HoverRequested?.Invoke(this, new HoverRequestEventArgs(line, column));
+    }
+
+    public void ProvideHoverResult(HoverInfo? hover)
+    {
+        HoverResultReceived?.Invoke(this, new HoverResultEventArgs(hover));
+    }
+
+    public void ProvideCodeActions(IEnumerable<CodeActionInfo> actions)
+    {
+        CodeActionsReceived?.Invoke(this, new CodeActionResultEventArgs(actions.ToList()));
+    }
+
+    public void ProvideDefinitionResult(LocationInfo? location)
+    {
+        DefinitionResultReceived?.Invoke(this, new LocationResultEventArgs(location));
+    }
+
+    public void ProvideReferencesResult(IEnumerable<LocationInfo> locations)
+    {
+        ReferencesResultReceived?.Invoke(this, new ReferencesResultEventArgs(locations.ToList()));
+    }
+
     public void OnBreakpointToggled(int line)
     {
         BreakpointToggled?.Invoke(this, line);
@@ -559,5 +601,57 @@ public class DataTipEvaluationRequestEventArgs : EventArgs
         Expression = expression;
         ScreenX = screenX;
         ScreenY = screenY;
+    }
+}
+
+public class HoverRequestEventArgs : EventArgs
+{
+    public int Line { get; }
+    public int Column { get; }
+
+    public HoverRequestEventArgs(int line, int column)
+    {
+        Line = line;
+        Column = column;
+    }
+}
+
+public class HoverResultEventArgs : EventArgs
+{
+    public HoverInfo? Hover { get; }
+
+    public HoverResultEventArgs(HoverInfo? hover)
+    {
+        Hover = hover;
+    }
+}
+
+public class CodeActionResultEventArgs : EventArgs
+{
+    public IReadOnlyList<CodeActionInfo> Actions { get; }
+
+    public CodeActionResultEventArgs(IReadOnlyList<CodeActionInfo> actions)
+    {
+        Actions = actions;
+    }
+}
+
+public class LocationResultEventArgs : EventArgs
+{
+    public LocationInfo? Location { get; }
+
+    public LocationResultEventArgs(LocationInfo? location)
+    {
+        Location = location;
+    }
+}
+
+public class ReferencesResultEventArgs : EventArgs
+{
+    public IReadOnlyList<LocationInfo> Locations { get; }
+
+    public ReferencesResultEventArgs(IReadOnlyList<LocationInfo> locations)
+    {
+        Locations = locations;
     }
 }

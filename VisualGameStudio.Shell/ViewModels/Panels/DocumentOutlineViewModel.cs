@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
@@ -19,8 +20,103 @@ public partial class DocumentOutlineViewModel : ViewModelBase
     [ObservableProperty]
     private bool _sortAlphabetically;
 
+    [ObservableProperty]
+    private bool _isLoading;
+
     public event EventHandler<OutlineNavigationEventArgs>? NavigationRequested;
 
+    /// <summary>
+    /// Updates the outline using LSP document symbols service
+    /// </summary>
+    public async Task UpdateOutlineFromLspAsync(string filePath, ILanguageService languageService)
+    {
+        CurrentFile = Path.GetFileName(filePath);
+        IsLoading = true;
+
+        try
+        {
+            var symbols = await languageService.GetDocumentSymbolsAsync(filePath);
+            Nodes.Clear();
+
+            foreach (var symbol in symbols)
+            {
+                var node = ConvertSymbolToNode(symbol);
+                Nodes.Add(node);
+            }
+
+            if (SortAlphabetically)
+            {
+                SortNodes(Nodes);
+            }
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private OutlineNode ConvertSymbolToNode(DocumentSymbol symbol)
+    {
+        var node = new OutlineNode
+        {
+            Name = symbol.Name,
+            Line = symbol.Line,
+            NodeType = ConvertSymbolKind(symbol.Kind),
+            Icon = GetIconForKind(symbol.Kind),
+            Detail = symbol.Detail
+        };
+
+        foreach (var child in symbol.Children)
+        {
+            node.Children.Add(ConvertSymbolToNode(child));
+        }
+
+        return node;
+    }
+
+    private static OutlineNodeType ConvertSymbolKind(SymbolKind kind)
+    {
+        return kind switch
+        {
+            SymbolKind.Module => OutlineNodeType.Module,
+            SymbolKind.Class => OutlineNodeType.Class,
+            SymbolKind.Interface => OutlineNodeType.Interface,
+            SymbolKind.Method => OutlineNodeType.Function,
+            SymbolKind.Function => OutlineNodeType.Function,
+            SymbolKind.Property => OutlineNodeType.Property,
+            SymbolKind.Field => OutlineNodeType.Field,
+            SymbolKind.Enum => OutlineNodeType.Enum,
+            SymbolKind.EnumMember => OutlineNodeType.Field,
+            SymbolKind.Constructor => OutlineNodeType.Sub,
+            SymbolKind.Variable => OutlineNodeType.Field,
+            SymbolKind.Constant => OutlineNodeType.Field,
+            _ => OutlineNodeType.Function
+        };
+    }
+
+    private static string GetIconForKind(SymbolKind kind)
+    {
+        return kind switch
+        {
+            SymbolKind.Module => "M",
+            SymbolKind.Class => "C",
+            SymbolKind.Interface => "I",
+            SymbolKind.Method => "m",
+            SymbolKind.Function => "f",
+            SymbolKind.Property => "P",
+            SymbolKind.Field => "F",
+            SymbolKind.Enum => "E",
+            SymbolKind.EnumMember => "e",
+            SymbolKind.Constructor => "c",
+            SymbolKind.Variable => "v",
+            SymbolKind.Constant => "K",
+            _ => "?"
+        };
+    }
+
+    /// <summary>
+    /// Updates the outline by parsing the content directly (fallback when LSP not available)
+    /// </summary>
     public void UpdateOutline(string filePath, string content)
     {
         CurrentFile = Path.GetFileName(filePath);
@@ -266,6 +362,9 @@ public partial class OutlineNode : ObservableObject
 
     [ObservableProperty]
     private bool _isExpanded = true;
+
+    [ObservableProperty]
+    private string? _detail;
 
     [ObservableProperty]
     private ObservableCollection<OutlineNode> _children = new();

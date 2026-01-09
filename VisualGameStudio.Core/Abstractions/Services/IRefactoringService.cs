@@ -342,7 +342,8 @@ public enum CodeActionKind
     RefactorInline,
     RefactorRewrite,
     Source,
-    SourceOrganizeImports
+    SourceOrganizeImports,
+    SourceFixAll
 }
 
 public class TypeDefinitionInfo

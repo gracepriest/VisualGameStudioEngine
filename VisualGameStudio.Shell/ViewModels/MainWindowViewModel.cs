@@ -566,6 +566,14 @@ public partial class MainWindowViewModel : ViewModelBase
             document.IntroduceFieldRequested += async (s, e) => await IntroduceFieldAsync();
             document.SurroundWithRequested += async (s, e) => await SurroundWithAsync();
             document.PeekDefinitionRequested += async (s, e) => await PeekDefinitionAsync();
+            document.FormatDocumentRequested += async (s, e) => await FormatDocumentAsync();
+            document.CodeActionsRequested += async (s, e) => await ShowCodeActionsAsync();
+            document.HoverRequested += async (s, e) =>
+            {
+                if (e == null || document.FilePath == null) return;
+                var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
+                document.ProvideHoverResult(hover);
+            };
 
             // Wire up code completion requests
             document.CompletionRequested += async (s, e) =>
@@ -2860,6 +2868,168 @@ public partial class MainWindowViewModel : ViewModelBase
         else
         {
             StatusText = result.ErrorMessage ?? "Definition not found";
+        }
+    }
+
+    private async Task FormatDocumentAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null) return;
+
+        if (!_languageService.IsConnected)
+        {
+            StatusText = "Language server not connected";
+            return;
+        }
+
+        var edits = await _languageService.FormatDocumentAsync(activeDoc.FilePath);
+        if (edits.Count > 0)
+        {
+            // Apply the edits in reverse order to preserve offsets
+            var sortedEdits = edits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
+            var text = activeDoc.Text;
+            var lines = text.Split('\n');
+
+            foreach (var edit in sortedEdits)
+            {
+                // Convert to 0-based indices
+                var startLine = edit.StartLine - 1;
+                var endLine = edit.EndLine - 1;
+                var startCol = edit.StartColumn - 1;
+                var endCol = edit.EndColumn - 1;
+
+                // Simple line-based replacement for now
+                if (startLine >= 0 && startLine < lines.Length)
+                {
+                    if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
+                    {
+                        var line = lines[startLine];
+                        lines[startLine] = line.Substring(0, startCol) + edit.NewText + line.Substring(endCol);
+                    }
+                }
+            }
+
+            activeDoc.SetContent(string.Join("\n", lines));
+            StatusText = $"Applied {edits.Count} formatting changes";
+        }
+        else
+        {
+            StatusText = "Document is already formatted";
+        }
+    }
+
+    private async Task ShowCodeActionsAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null) return;
+
+        if (!_languageService.IsConnected)
+        {
+            StatusText = "Language server not connected";
+            return;
+        }
+
+        // Get selection range or use caret position
+        var selectionInfo = activeDoc.GetSelectionInfo?.Invoke();
+        int startLine, startCol, endLine, endCol;
+
+        if (selectionInfo != null && selectionInfo.SelectedText?.Length > 0)
+        {
+            startLine = selectionInfo.StartLine;
+            startCol = selectionInfo.StartColumn;
+            endLine = selectionInfo.EndLine;
+            endCol = selectionInfo.EndColumn;
+        }
+        else
+        {
+            startLine = endLine = activeDoc.CaretLine;
+            startCol = endCol = activeDoc.CaretColumn;
+        }
+
+        var actions = await _languageService.GetCodeActionsAsync(
+            activeDoc.FilePath, startLine, startCol, endLine, endCol);
+
+        if (actions.Count == 0)
+        {
+            StatusText = "No code actions available";
+            return;
+        }
+
+        // Show actions in a quick menu
+        var actionTitles = actions.Select(a => a.Title).ToList();
+        var result = await _dialogService.ShowListSelectionAsync(
+            "Code Actions",
+            "Select an action to apply:",
+            actionTitles);
+
+        if (result >= 0 && result < actions.Count)
+        {
+            var selectedAction = actions[result];
+            if (selectedAction.Edit != null)
+            {
+                await ApplyWorkspaceEditAsync(selectedAction.Edit);
+                StatusText = $"Applied: {selectedAction.Title}";
+            }
+        }
+    }
+
+    private async Task ApplyWorkspaceEditAsync(WorkspaceEditInfo edit)
+    {
+        foreach (var (filePath, fileEdits) in edit.Changes)
+        {
+            // Check if the file is open
+            if (_openDocuments.TryGetValue(filePath, out var doc))
+            {
+                // Apply edits in reverse order to preserve offsets
+                var sortedEdits = fileEdits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
+                var text = doc.Text;
+                var lines = text.Split('\n');
+
+                foreach (var e in sortedEdits)
+                {
+                    var startLine = e.StartLine - 1;
+                    var endLine = e.EndLine - 1;
+                    var startCol = e.StartColumn - 1;
+                    var endCol = e.EndColumn - 1;
+
+                    if (startLine >= 0 && startLine < lines.Length)
+                    {
+                        if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
+                        {
+                            var line = lines[startLine];
+                            lines[startLine] = line.Substring(0, startCol) + e.NewText + line.Substring(endCol);
+                        }
+                    }
+                }
+
+                doc.SetContent(string.Join("\n", lines));
+            }
+            else
+            {
+                // File not open - apply edits directly to file
+                var content = await _fileService.ReadFileAsync(filePath);
+                var lines = content.Split('\n');
+
+                var sortedEdits = fileEdits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
+                foreach (var e in sortedEdits)
+                {
+                    var startLine = e.StartLine - 1;
+                    var endLine = e.EndLine - 1;
+                    var startCol = e.StartColumn - 1;
+                    var endCol = e.EndColumn - 1;
+
+                    if (startLine >= 0 && startLine < lines.Length)
+                    {
+                        if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
+                        {
+                            var line = lines[startLine];
+                            lines[startLine] = line.Substring(0, startCol) + e.NewText + line.Substring(endCol);
+                        }
+                    }
+                }
+
+                await _fileService.WriteFileAsync(filePath, string.Join("\n", lines));
+            }
         }
     }
 

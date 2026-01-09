@@ -145,6 +145,11 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler<CompletionRequestEventArgs>? CompletionRequested;
     public event EventHandler<int>? BreakpointToggled;
     public event EventHandler? EditorReady;
+    public event EventHandler? GoToDefinitionRequested;
+    public event EventHandler? FindAllReferencesRequested;
+    public event EventHandler? RenameSymbolRequested;
+    public event EventHandler? CodeActionsRequested;
+    public event EventHandler? FormatDocumentRequested;
 
     /// <summary>
     /// Returns true if the editor is fully initialized and ready for use
@@ -525,6 +530,46 @@ public partial class CodeEditorControl : UserControl
         if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
         {
             DeleteLine();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle F12 to go to definition
+        if (e.Key == Key.F12 && e.KeyModifiers == KeyModifiers.None)
+        {
+            GoToDefinitionRequested?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Shift+F12 to find all references
+        if (e.Key == Key.F12 && e.KeyModifiers == KeyModifiers.Shift)
+        {
+            FindAllReferencesRequested?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+            return;
+        }
+
+        // Handle F2 to rename symbol
+        if (e.Key == Key.F2 && e.KeyModifiers == KeyModifiers.None)
+        {
+            RenameSymbolRequested?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+. for code actions (quick fixes)
+        if (e.Key == Key.OemPeriod && e.KeyModifiers == KeyModifiers.Control)
+        {
+            CodeActionsRequested?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+Shift+F for format document
+        if (e.Key == Key.F && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+        {
+            FormatDocumentRequested?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
             return;
         }
