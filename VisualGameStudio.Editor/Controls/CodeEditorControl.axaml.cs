@@ -42,6 +42,9 @@ public partial class CodeEditorControl : UserControl
     private MinimapControl? _minimap;
     private bool _isUpdatingTextFromEditor = false;  // Prevents binding feedback loop
     private bool _hasLoadedInitialText = false;  // After initial load, don't overwrite from binding
+    private Avalonia.Controls.Primitives.Popup? _errorTooltip;
+    private TextBlock? _errorTooltipText;
+    private int _lastHoverOffset = -1;
 
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
@@ -1781,14 +1784,26 @@ public partial class CodeEditorControl : UserControl
     {
         // Reset and restart the hover timer
         _hoverTimer?.Stop();
+        HideErrorTooltip();
 
         var point = e.GetPosition(_textEditor.TextArea.TextView);
         _lastHoverPosition = point;
 
-        // Get the word under the mouse
+        // Get the offset under the mouse
         var offset = GetOffsetFromPoint(point);
+        _lastHoverOffset = offset;
+
         if (offset >= 0)
         {
+            // Check for error markers first
+            var markers = _textMarkerService?.GetMarkersAtOffset(offset);
+            if (markers != null && markers.Any())
+            {
+                _hoverTimer?.Start();
+                return;
+            }
+
+            // Otherwise check for word hover (for data tips)
             var word = GetWordAtOffset(offset);
             if (!string.IsNullOrWhiteSpace(word) && word != _lastHoverWord)
             {
@@ -1806,12 +1821,26 @@ public partial class CodeEditorControl : UserControl
     {
         _hoverTimer?.Stop();
         _lastHoverWord = null;
+        HideErrorTooltip();
     }
 
     private void OnHoverTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
+            // Check for error markers first
+            if (_lastHoverOffset >= 0 && _textMarkerService != null)
+            {
+                var markers = _textMarkerService.GetMarkersAtOffset(_lastHoverOffset);
+                var markerWithMessage = markers.FirstOrDefault(m => !string.IsNullOrEmpty(m.Message));
+                if (markerWithMessage != null)
+                {
+                    ShowErrorTooltip(markerWithMessage.Message!, _lastHoverPosition);
+                    return;
+                }
+            }
+
+            // Otherwise show data tip for word hover
             if (!string.IsNullOrWhiteSpace(_lastHoverWord))
             {
                 // Get screen position for the tooltip
@@ -1849,6 +1878,58 @@ public partial class CodeEditorControl : UserControl
             return -1;
 
         return docOffset;
+    }
+
+    /// <summary>
+    /// Shows an error tooltip at the specified position
+    /// </summary>
+    private void ShowErrorTooltip(string message, Point position)
+    {
+        if (_textEditor == null) return;
+
+        // Create tooltip if not exists
+        if (_errorTooltip == null)
+        {
+            _errorTooltipText = new TextBlock
+            {
+                Padding = new Thickness(8, 4),
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                MaxWidth = 400
+            };
+
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.Parse("#2D2D30")),
+                BorderBrush = new SolidColorBrush(Color.Parse("#3F3F46")),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3),
+                Child = _errorTooltipText
+            };
+
+            _errorTooltip = new Avalonia.Controls.Primitives.Popup
+            {
+                Child = border,
+                PlacementTarget = _textEditor.TextArea
+            };
+        }
+
+        _errorTooltipText!.Text = message;
+        _errorTooltipText.Foreground = new SolidColorBrush(Color.Parse("#F48771")); // Error color
+
+        _errorTooltip.HorizontalOffset = position.X;
+        _errorTooltip.VerticalOffset = position.Y + 20;
+        _errorTooltip.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Hides the error tooltip
+    /// </summary>
+    private void HideErrorTooltip()
+    {
+        if (_errorTooltip != null)
+        {
+            _errorTooltip.IsOpen = false;
+        }
     }
 
     /// <summary>
