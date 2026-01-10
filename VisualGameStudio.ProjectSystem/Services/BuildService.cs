@@ -571,6 +571,17 @@ public class BuildService : IBuildService
         // Walk the AST and collect top-level declarations
         foreach (var declaration in unit.AST.Declarations)
         {
+            // Handle Module nodes by processing their members
+            // Register using the actual module name from the AST, not the filename
+            if (declaration is ModuleNode moduleNode)
+            {
+                // Create a separate module entry for the explicit Module declaration
+                var explicitModuleSymbols = new ModuleSymbols(moduleNode.Name, unit.FilePath) { IsModuleFile = isModuleFile };
+                CollectDeclarationSymbols(moduleNode.Members, explicitModuleSymbols, isModuleFile);
+                projectSymbolTable.RegisterModule(moduleNode.Name, explicitModuleSymbols);
+                continue;
+            }
+
             switch (declaration)
             {
                 case FunctionNode func:
@@ -673,6 +684,110 @@ public class BuildService : IBuildService
     }
 
     /// <summary>
+    /// Helper to collect symbols from a list of declarations (used for module members)
+    /// </summary>
+    private void CollectDeclarationSymbols(IEnumerable<ASTNode> declarations, ModuleSymbols moduleSymbols, bool isModuleFile)
+    {
+        foreach (var declaration in declarations)
+        {
+            switch (declaration)
+            {
+                case FunctionNode func:
+                    var funcAccess = isModuleFile && func.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : func.Access;
+                    if (funcAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        funcAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(func.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function, ConvertTypeReference(func.ReturnType), func.Line, func.Column);
+                        symbol.Parameters = func.Parameters?.Select(p => new Symbol(p.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Parameter, ConvertTypeReference(p.Type), p.Line, p.Column)).ToList()
+                            ?? new List<Symbol>();
+                        symbol.ReturnType = ConvertTypeReference(func.ReturnType);
+                        symbol.Access = (BasicLang.Compiler.AST.AccessModifier)(int)funcAccess;
+                        moduleSymbols.AddSymbol(symbol, funcAccess);
+                    }
+                    break;
+
+                case SubroutineNode sub:
+                    var subAccess = isModuleFile && sub.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : sub.Access;
+                    if (subAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        subAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(sub.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function, new TypeInfo("Void", TypeKind.Primitive), sub.Line, sub.Column);
+                        symbol.Parameters = sub.Parameters?.Select(p => new Symbol(p.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Parameter, ConvertTypeReference(p.Type), p.Line, p.Column)).ToList()
+                            ?? new List<Symbol>();
+                        symbol.ReturnType = new TypeInfo("Void", TypeKind.Primitive);
+                        symbol.Access = (BasicLang.Compiler.AST.AccessModifier)(int)subAccess;
+                        moduleSymbols.AddSymbol(symbol, subAccess);
+                    }
+                    break;
+
+                case VariableDeclarationNode varDecl:
+                    var varAccess = isModuleFile && varDecl.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : varDecl.Access;
+                    if (varAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        varAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(varDecl.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Variable, ConvertTypeReference(varDecl.Type), varDecl.Line, varDecl.Column);
+                        moduleSymbols.AddSymbol(symbol, varAccess);
+                    }
+                    break;
+
+                case ConstantDeclarationNode constDecl:
+                    var constAccess = isModuleFile && constDecl.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : constDecl.Access;
+                    if (constAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        constAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(constDecl.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Constant, null, constDecl.Line, constDecl.Column);
+                        moduleSymbols.AddSymbol(symbol, constAccess);
+                    }
+                    break;
+
+                case ClassNode classNode:
+                    var classAccess = isModuleFile && classNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : classNode.Access;
+                    if (classAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        classAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(classNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Class, new TypeInfo(classNode.Name, TypeKind.Class), classNode.Line, classNode.Column);
+                        moduleSymbols.AddSymbol(symbol, classAccess);
+                    }
+                    break;
+
+                case StructureNode structNode:
+                    var structAccess = isModuleFile && structNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : structNode.Access;
+                    if (structAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        structAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(structNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Structure, new TypeInfo(structNode.Name, TypeKind.Structure), structNode.Line, structNode.Column);
+                        moduleSymbols.AddSymbol(symbol, structAccess);
+                    }
+                    break;
+
+                case EnumNode enumNode:
+                    var enumAccess = isModuleFile && enumNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
+                        ? BasicLang.Compiler.AST.AccessModifier.Public
+                        : enumNode.Access;
+                    if (enumAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
+                        enumAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
+                    {
+                        var symbol = new Symbol(enumNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Type, new TypeInfo(enumNode.Name, TypeKind.Enum), enumNode.Line, enumNode.Column);
+                        moduleSymbols.AddSymbol(symbol, enumAccess);
+                    }
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
     /// Convert AST TypeReference to SemanticAnalysis TypeInfo
     /// </summary>
     private TypeInfo ConvertTypeReference(TypeReference typeRef)
@@ -717,21 +832,23 @@ public class BuildService : IBuildService
 
         foreach (var module in modules)
         {
-            // Merge functions - set ModuleName for tracking
+            // Merge functions - preserve ModuleName if already set (from explicit Module blocks)
             foreach (var func in module.Functions)
             {
-                func.ModuleName = module.Name;
+                func.ModuleName ??= module.Name;
                 merged.Functions.Add(func);
             }
 
-            // Merge global variables - set ModuleName for tracking
+            // Merge global variables - preserve ModuleName if already set (from explicit Module blocks)
             foreach (var kvp in module.GlobalVariables)
             {
                 var globalVar = kvp.Value;
-                globalVar.ModuleName = module.Name;
+                globalVar.ModuleName ??= module.Name;
+                // Use the actual module name for the key (supports explicit Module blocks)
+                var actualModuleName = globalVar.ModuleName ?? module.Name;
                 var key = kvp.Key.Contains(".")
                     ? kvp.Key
-                    : $"{module.Name}.{kvp.Key}";
+                    : $"{actualModuleName}.{kvp.Key}";
                 merged.GlobalVariables[key] = globalVar;
             }
 

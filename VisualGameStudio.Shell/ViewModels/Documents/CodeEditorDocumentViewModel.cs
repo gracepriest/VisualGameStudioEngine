@@ -1,3 +1,4 @@
+using AvaloniaEdit.Document;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dock.Model.Mvvm.Controls;
@@ -15,6 +16,13 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     private readonly IEventAggregator _eventAggregator;
     private readonly IBookmarkService? _bookmarkService;
     private string _originalText = "";
+
+    /// <summary>
+    /// The TextDocument that holds the text content and undo history.
+    /// Using this instead of Text preserves undo when switching tabs.
+    /// </summary>
+    [ObservableProperty]
+    private TextDocument _textDocument = new();
 
     [ObservableProperty]
     private string _text = "";
@@ -493,8 +501,36 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void SetContent(string content)
     {
         _originalText = content;
+        // Set the TextDocument's text - this will clear undo history (which is correct for initial load)
+        TextDocument.Text = content;
+        // Keep Text in sync for backward compatibility
         Text = content;
         IsDirty = false;
+    }
+
+    /// <summary>
+    /// Called by the view when editor text changes. Updates Text without triggering
+    /// binding feedback that would clear the undo stack.
+    /// </summary>
+    public void UpdateTextFromEditor(string newText)
+    {
+        // Update the backing field directly to avoid triggering property change
+        // that would push back to the editor and clear undo
+        _text = newText;
+
+        // Update dirty state
+        var wasDirty = IsDirty;
+        IsDirty = _text != _originalText;
+
+        if (wasDirty != IsDirty)
+        {
+            DirtyChanged?.Invoke(this, EventArgs.Empty);
+            OnPropertyChanged(nameof(Title));
+            TitleChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        // Notify that text changed (for any listeners that need the new text)
+        TextChanged?.Invoke(this, newText);
     }
 
     [RelayCommand]
