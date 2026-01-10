@@ -33,7 +33,7 @@
     <Grid Grid.Row="2" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
     <!-- AvaloniaEdit code editor with syntax highlighting -->
     <editor:CodeEditorControl x:Name="MainEditor"
-                              Text="{Binding Text, Mode=TwoWay}"
+                              Document="{Binding TextDocument}"
                               TextChanged="OnTextChanged"
                               CaretPositionChanged="OnCaretPositionChanged"
                               AddToWatchRequested="OnAddToWatchRequested"
@@ -104,7 +104,7 @@
 
       <editor:CodeEditorControl x:Name="TopEditor"
                                 Grid.Row="0"
-                                Text="{Binding Text, Mode=TwoWay}"
+                                Document="{Binding TextDocument}"
                                 TextChanged="OnTextChanged"
                                 CaretPositionChanged="OnCaretPositionChanged"/>
 
@@ -112,7 +112,7 @@
 
       <editor:CodeEditorControl x:Name="BottomEditor"
                                 Grid.Row="2"
-                                Text="{Binding Text, Mode=TwoWay}"
+                                Document="{Binding TextDocument}"
                                 TextChanged="OnTextChanged"
                                 CaretPositionChanged="OnCaretPositionChanged"/>
     </Grid>
@@ -128,7 +128,7 @@
 
       <editor:CodeEditorControl x:Name="LeftEditor"
                                 Grid.Column="0"
-                                Text="{Binding Text, Mode=TwoWay}"
+                                Document="{Binding TextDocument}"
                                 TextChanged="OnTextChanged"
                                 CaretPositionChanged="OnCaretPositionChanged"/>
 
@@ -136,7 +136,7 @@
 
       <editor:CodeEditorControl x:Name="RightEditor"
                                 Grid.Column="2"
-                                Text="{Binding Text, Mode=TwoWay}"
+                                Document="{Binding TextDocument}"
                                 TextChanged="OnTextChanged"
                                 CaretPositionChanged="OnCaretPositionChanged"/>
     </Grid>

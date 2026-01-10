@@ -262,7 +262,14 @@ public partial class CodeEditorDocumentView : UserControl
 
     private void OnTextChanged(object? sender, EventArgs e)
     {
-        // Text binding handles this
+        // Since we're using Document binding, edits go directly to vm.TextDocument
+        // We just need to sync vm.Text for dirty tracking and other features
+        if (sender is CodeEditorControl editor && DataContext is CodeEditorDocumentViewModel vm)
+        {
+            // Get text from the shared document
+            var currentText = vm.TextDocument?.Text ?? "";
+            vm.UpdateTextFromEditor(currentText);
+        }
     }
 
     private void OnCaretPositionChanged(object? sender, EventArgs e)

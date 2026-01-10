@@ -517,9 +517,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
             var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
             {
-                FilePath = filePath,
-                Text = content
+                FilePath = filePath
             };
+            document.SetContent(content);
 
             document.CaretPositionChanged += (s, e) =>
             {

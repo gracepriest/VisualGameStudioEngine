@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using AvaloniaEdit;
 using AvaloniaEdit.CodeCompletion;
+using AvaloniaEdit.Document;
 using AvaloniaEdit.Folding;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Rendering;
@@ -39,6 +40,8 @@ public partial class CodeEditorControl : UserControl
     private bool _isUpdatingFoldings = false;
     private bool _isFoldingEnabled = true;
     private MinimapControl? _minimap;
+    private bool _isUpdatingTextFromEditor = false;  // Prevents binding feedback loop
+    private bool _hasLoadedInitialText = false;  // After initial load, don't overwrite from binding
 
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
@@ -58,6 +61,19 @@ public partial class CodeEditorControl : UserControl
     public static readonly StyledProperty<string> EditorFontFamilyProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(EditorFontFamily),
             defaultValue: "Cascadia Code, Consolas, Courier New, monospace");
+
+    public static readonly StyledProperty<TextDocument?> DocumentProperty =
+        AvaloniaProperty.Register<CodeEditorControl, TextDocument?>(nameof(Document));
+
+    /// <summary>
+    /// Gets or sets the TextDocument. When set, this document (with its undo history) is used directly.
+    /// This is preferred over Text property for preserving undo across tab switches.
+    /// </summary>
+    public TextDocument? Document
+    {
+        get => GetValue(DocumentProperty);
+        set => SetValue(DocumentProperty, value);
+    }
 
     public string Text
     {
@@ -277,12 +293,25 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.PointerMoved += OnTextAreaPointerMoved;
         _textEditor.TextArea.PointerExited += OnTextAreaPointerExited;
 
-        // Mark as initialized and apply any pending text from binding
+        // Mark as initialized and apply any pending document/text from binding
         _isInitialized = true;
 
-        if (!string.IsNullOrEmpty(Text) && _textEditor.Document.Text != Text)
+        // Prefer Document property (preserves undo history across tab switches)
+        if (Document != null)
         {
-            _textEditor.Document.Text = Text;
+            ApplyDocument(Document);
+            _hasLoadedInitialText = true;
+        }
+        else if (!string.IsNullOrEmpty(Text))
+        {
+            // Only set text if it's different - this preserves undo when text matches
+            if (_textEditor.Document.Text != Text)
+            {
+                _textEditor.Document.Text = Text;
+                // Clear undo stack only for initial load
+                _textEditor.Document.UndoStack.ClearAll();
+            }
+            _hasLoadedInitialText = true;
             UpdateFoldings();
         }
 
@@ -294,18 +323,97 @@ public partial class CodeEditorControl : UserControl
     {
         base.OnAttachedToVisualTree(e);
 
-        // Apply initial text value when attached to visual tree
-        // This handles the case where Text was set via binding before the control was fully initialized
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        // When reattached (e.g., tab switch), check if we need to apply text
+        // Only set if text differs - this preserves undo stack on tab switch
+        if (_textEditor != null && !string.IsNullOrEmpty(Text))
         {
-            if (_textEditor != null && !string.IsNullOrEmpty(Text) && _textEditor.Document.Text != Text)
+            if (_textEditor.Document.Text != Text)
             {
+                // Text changed while detached - need to update (this will clear undo)
                 _textEditor.Document.Text = Text;
-                _textEditor.CaretOffset = 0;
-                _textEditor.ScrollToHome();
                 UpdateFoldings();
             }
-        }, Avalonia.Threading.DispatcherPriority.Loaded);
+            // If text matches, do nothing - undo stack is preserved
+        }
+    }
+
+    /// <summary>
+    /// Apply a new TextDocument to the editor, updating all dependent services
+    /// </summary>
+    private void ApplyDocument(TextDocument newDocument)
+    {
+        if (_textEditor == null || newDocument == null) return;
+
+        // Uninstall folding from old document
+        if (_foldingManager != null)
+        {
+            try { FoldingManager.Uninstall(_foldingManager); }
+            catch { /* Ignore */ }
+        }
+
+        // Set the new document
+        _textEditor.Document = newDocument;
+
+        // Reinstall folding on new document
+        _foldingManager = FoldingManager.Install(_textEditor.TextArea);
+
+        // Update text marker service for new document
+        if (_textMarkerService != null)
+        {
+            try
+            {
+                _textEditor.TextArea.TextView.LineTransformers.Remove(_textMarkerService);
+                _textEditor.TextArea.TextView.BackgroundRenderers.Remove(_textMarkerService);
+            }
+            catch { /* Ignore */ }
+        }
+        _textMarkerService = new TextMarkerService(_textEditor.Document);
+        _textEditor.TextArea.TextView.LineTransformers.Add(_textMarkerService);
+        _textEditor.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
+
+        // Force visual refresh to display the document content
+        _textEditor.TextArea.TextView.Redraw();
+        UpdateFoldings();
+    }
+
+    /// <summary>
+    /// Sets a shared TextDocument, preserving its undo history.
+    /// Call this after the editor is ready to enable undo across tab switches.
+    /// </summary>
+    public void SetSharedDocument(TextDocument sharedDocument)
+    {
+        if (_textEditor == null || sharedDocument == null) return;
+
+        // Apply the shared document directly to the inner TextEditor
+        _textEditor.Document = sharedDocument;
+
+        // Reinstall folding for the new document
+        if (_foldingManager != null)
+        {
+            try { FoldingManager.Uninstall(_foldingManager); }
+            catch { /* Ignore */ }
+        }
+        _foldingManager = FoldingManager.Install(_textEditor.TextArea);
+
+        // Update text marker service
+        if (_textMarkerService != null)
+        {
+            try
+            {
+                _textEditor.TextArea.TextView.LineTransformers.Remove(_textMarkerService);
+                _textEditor.TextArea.TextView.BackgroundRenderers.Remove(_textMarkerService);
+            }
+            catch { /* Ignore */ }
+        }
+        _textMarkerService = new TextMarkerService(_textEditor.Document);
+        _textEditor.TextArea.TextView.LineTransformers.Add(_textMarkerService);
+        _textEditor.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
+
+        _hasLoadedInitialText = true;
+
+        // Force visual refresh
+        _textEditor.TextArea.TextView.Redraw();
+        UpdateFoldings();
     }
 
     private void OnTextAreaPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -704,7 +812,17 @@ public partial class CodeEditorControl : UserControl
 
     private void OnEditorTextChanged(object? sender, EventArgs e)
     {
-        SetCurrentValue(TextProperty, _textEditor.Text);
+        // Update Text property but prevent feedback loop that clears undo
+        _isUpdatingTextFromEditor = true;
+        try
+        {
+            SetCurrentValue(TextProperty, _textEditor.Text);
+        }
+        finally
+        {
+            _isUpdatingTextFromEditor = false;
+        }
+
         TextChanged?.Invoke(this, EventArgs.Empty);
 
         // Restart folding update timer
@@ -904,10 +1022,23 @@ public partial class CodeEditorControl : UserControl
 
         if (change.Property == TextProperty)
         {
+            // Skip if this change came from the editor itself (prevents feedback loop)
+            if (_isUpdatingTextFromEditor) return;
+
             var newText = change.GetNewValue<string>() ?? "";
+
+            // Only update document if text actually differs - preserves undo stack
             if (_textEditor.Document.Text != newText)
             {
+                var isInitialLoad = !_hasLoadedInitialText;
                 _textEditor.Document.Text = newText;
+                _hasLoadedInitialText = true;
+
+                // Only clear undo on initial file load, not on tab switches
+                if (isInitialLoad && !string.IsNullOrEmpty(newText))
+                {
+                    _textEditor.Document.UndoStack.ClearAll();
+                }
                 UpdateFoldings();
             }
         }
@@ -930,6 +1061,15 @@ public partial class CodeEditorControl : UserControl
         else if (change.Property == EditorFontFamilyProperty)
         {
             _textEditor.FontFamily = new FontFamily(change.GetNewValue<string>() ?? "Consolas");
+        }
+        else if (change.Property == DocumentProperty)
+        {
+            var newDoc = change.GetNewValue<TextDocument?>();
+            if (newDoc != null)
+            {
+                ApplyDocument(newDoc);
+                _hasLoadedInitialText = true;  // Document has undo history, don't overwrite
+            }
         }
     }
 
