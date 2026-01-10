@@ -21,6 +21,7 @@ namespace BasicLang.Compiler.IR
         private readonly Dictionary<string, IRAlloca> _locals;
         private string _currentClassName;
         private string _currentNamespace;
+        private string _currentModuleName;  // Track current module for constants/globals
         private List<IRValue> _pendingBaseConstructorArgs;  // Temporary storage for base constructor args
 
         // For SSA construction
@@ -148,11 +149,17 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ModuleNode node)
         {
+            // Track current module name for constants/globals
+            var savedModuleName = _currentModuleName;
+            _currentModuleName = node.Name;
+
             // Modules are organizational - process members
             foreach (var member in node.Members)
             {
                 member.Accept(this);
             }
+
+            _currentModuleName = savedModuleName;
         }
 
         public void Visit(UsingDirectiveNode node)
@@ -181,7 +188,7 @@ namespace BasicLang.Compiler.IR
             _currentFunction = _module.CreateFunction(node.Name, returnType);
 
             // Set module name for multi-file compilation
-            _currentFunction.ModuleName = _module.Name;
+            _currentFunction.ModuleName = _currentModuleName ?? _module.Name;
 
             // Set access modifier (convert from AST to IR enum)
             _currentFunction.Access = (IR.AccessModifier)(int)node.Access;
@@ -260,7 +267,7 @@ namespace BasicLang.Compiler.IR
             _currentFunction = _module.CreateFunction(node.Name, voidType);
 
             // Set module name for multi-file compilation
-            _currentFunction.ModuleName = _module.Name;
+            _currentFunction.ModuleName = _currentModuleName ?? _module.Name;
 
             // Set access modifier (convert from AST to IR enum)
             _currentFunction.Access = (IR.AccessModifier)(int)node.Access;
@@ -339,6 +346,8 @@ namespace BasicLang.Compiler.IR
             {
                 // Global variable
                 var globalVar = _module.CreateGlobalVariable(node.Name, varType);
+                globalVar.ModuleName = _currentModuleName ?? _module?.Name;
+                globalVar.Access = MapAccessModifier(node.Access);
                 _globalVariables[node.Name] = globalVar;
 
                 if (node.Initializer != null)
@@ -472,7 +481,9 @@ namespace BasicLang.Compiler.IR
                 {
                     IsGlobal = true,
                     IsConst = true,
-                    InitialValue = value
+                    InitialValue = value,
+                    ModuleName = _currentModuleName ?? _module?.Name,
+                    Access = MapAccessModifier(node.Access)
                 };
 
                 // Add to module's global variables
@@ -2418,7 +2429,21 @@ namespace BasicLang.Compiler.IR
             // Store to target
             if (node.Target is IdentifierExpressionNode idExpr)
             {
-                var targetVar = GetOrCreateVariable(idExpr.Name, value.Type);
+                // Check if this identifier is an imported symbol from another module
+                var symbol = _semanticAnalyzer.GetNodeSymbol(idExpr);
+
+                IRVariable targetVar;
+                if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
+                {
+                    // This is an imported variable from another module
+                    targetVar = new IRVariable(idExpr.Name, value.Type);
+                    targetVar.IsGlobal = true;
+                    targetVar.ModuleName = symbol.SourceModule;
+                }
+                else
+                {
+                    targetVar = GetOrCreateVariable(idExpr.Name, value.Type);
+                }
 
                 // Optimization: If the value is a direct call or binary op result,
                 // rename it to the target variable instead of creating a separate assignment
@@ -2626,9 +2651,21 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(IdentifierExpressionNode node)
         {
-            // Look up variable
-            var variable = GetOrCreateVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
-            _expressionResult = variable;
+            // Check if this identifier was resolved as an imported symbol
+            var symbol = _semanticAnalyzer.GetNodeSymbol(node);
+            if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
+            {
+                // This is an imported variable from another module
+                var variable = new IRVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
+                variable.IsGlobal = true;
+                variable.ModuleName = symbol.SourceModule;
+                _expressionResult = variable;
+                return;
+            }
+
+            // Look up variable normally
+            var localVar = GetOrCreateVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
+            _expressionResult = localVar;
         }
 
         public void Visit(MemberAccessExpressionNode node)

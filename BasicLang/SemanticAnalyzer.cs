@@ -3413,7 +3413,42 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    Error($"Undefined identifier '{node.Name}'", node.Line, node.Column);
+                    // Build detailed error message for debugging
+                    var details = new System.Text.StringBuilder();
+                    details.Append($"Undefined identifier '{node.Name}'");
+
+                    // Show imported modules
+                    if (_importedModules.Count > 0)
+                    {
+                        details.Append($" [Imported: {string.Join(", ", _importedModules)}]");
+                    }
+                    else
+                    {
+                        details.Append(" [No imports]");
+                    }
+
+                    // Show available modules in project symbol table
+                    if (_projectSymbols != null)
+                    {
+                        var modules = _projectSymbols.GetModuleNames().ToList();
+                        if (modules.Count > 0)
+                        {
+                            details.Append($" [Available modules: {string.Join(", ", modules)}]");
+                        }
+                        else
+                        {
+                            details.Append(" [No modules in project]");
+                        }
+                    }
+                    else
+                    {
+                        details.Append(" [No project symbol table]");
+                    }
+
+                    // Show current module
+                    details.Append($" [Current module: {_currentModuleName ?? "none"}]");
+
+                    Error(details.ToString(), node.Line, node.Column);
                     SetNodeType(node, _typeManager.ObjectType);
                 }
             }

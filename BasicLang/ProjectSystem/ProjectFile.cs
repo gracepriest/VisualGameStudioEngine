@@ -72,8 +72,8 @@ namespace BasicLang.Compiler.ProjectSystem
             var project = new ProjectFile { FilePath = path };
 
             var root = doc.Root;
-            if (root?.Name.LocalName != "Project")
-                throw new InvalidOperationException("Invalid project file: missing Project root element");
+            if (root?.Name.LocalName != "Project" && root?.Name.LocalName != "BasicLangProject")
+                throw new InvalidOperationException("Invalid project file: root element must be <Project> or <BasicLangProject>");
 
             // Parse PropertyGroup
             var propertyGroup = root.Element("PropertyGroup");
@@ -87,7 +87,9 @@ namespace BasicLang.Compiler.ProjectSystem
                 project.Version = propertyGroup.Element("Version")?.Value ?? "1.0.0";
                 project.Authors = propertyGroup.Element("Authors")?.Value;
                 project.Description = propertyGroup.Element("Description")?.Value;
-                project.Backend = propertyGroup.Element("Backend")?.Value ?? "CSharp";
+                project.Backend = propertyGroup.Element("Backend")?.Value
+                    ?? propertyGroup.Element("TargetBackend")?.Value
+                    ?? "CSharp";
 
                 var optimize = propertyGroup.Element("Optimize")?.Value;
                 if (optimize != null) project.OptimizationsEnabled = bool.Parse(optimize);

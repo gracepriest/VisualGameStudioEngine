@@ -2233,7 +2233,30 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         // If it's a real variable, use its name; if it's a temp "register",
                         // try to inline its defining value.
                         if (_declaredIdentifiers.Contains(v.Name) || v.IsParameter || v.IsGlobal)
-                            return GetValueName(v);
+                        {
+                            var varName = GetValueName(v);
+
+                            // Check if this global is from a different module and needs qualification
+                            if (v.IsGlobal)
+                            {
+                                if (!string.IsNullOrEmpty(v.ModuleName) && _currentFunction != null)
+                                {
+                                    var currentModuleName = _currentFunction.ModuleName;
+                                    if (!string.Equals(v.ModuleName, currentModuleName, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        // Qualify with module name
+                                        // Note: "Main" module gets renamed to "Program" in C# output
+                                        var qualifyingModule = v.ModuleName;
+                                        if (qualifyingModule.Equals("Main", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            qualifyingModule = "Program";
+                                        }
+                                        return $"{qualifyingModule}.{varName}";
+                                    }
+                                }
+                            }
+                            return varName;
+                        }
 
                         if (!string.IsNullOrEmpty(v.Name) && _tempDefsByName.TryGetValue(v.Name, out var def))
                             return EmitExpression(def, stack, needsParens);
@@ -2494,7 +2517,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRAssignment assignment)
         {
             var value = EmitExpression(assignment.Value);
-            var target = GetValueName(assignment.Target);
+            // Use EmitExpression for target to handle module qualification for imported globals
+            var target = EmitExpression(assignment.Target);
             WriteLine($"{target} = {value};");
         }
 

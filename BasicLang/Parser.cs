@@ -176,9 +176,12 @@ namespace BasicLang.Compiler
                 }
                 if (Check(TokenType.Const))
                 {
-                    var constant = ParseConstantDeclaration();
-                    constant.Access = access;
-                    return constant;
+                    var statement = ParseConstantDeclaration();
+                    if (statement is ConstantDeclarationNode constant)
+                    {
+                        constant.Access = access;
+                    }
+                    return statement;
                 }
                 throw new ParseException(
                     $"Expected Function, Sub, Dim, or Const after modifiers, got '{Peek().Lexeme}'",
@@ -288,6 +291,16 @@ namespace BasicLang.Compiler
                 SkipNewlines();
             }
 
+            // Handle access modifiers (Public, Private, Friend)
+            var access = AccessModifier.Private; // Default
+            if (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend))
+            {
+                if (Match(TokenType.Public)) access = AccessModifier.Public;
+                else if (Match(TokenType.Private)) access = AccessModifier.Private;
+                else if (Match(TokenType.Friend)) access = AccessModifier.Friend;
+                SkipNewlines(); // Skip any whitespace after access modifier
+            }
+
             // Handle Async/Iterator modifiers
             if (Check(TokenType.Async) || Check(TokenType.Iterator))
             {
@@ -303,23 +316,47 @@ namespace BasicLang.Compiler
                     var func = ParseFunction();
                     func.IsAsync = isAsync;
                     func.IsIterator = isIterator;
+                    func.Access = access;
                     return func;
                 }
                 if (Check(TokenType.Sub))
                 {
                     var sub = ParseSubroutine();
                     sub.IsAsync = isAsync;
+                    sub.Access = access;
                     return sub;
                 }
             }
             if (Check(TokenType.Function))
-                return ParseFunction();
+            {
+                var func = ParseFunction();
+                func.Access = access;
+                return func;
+            }
             if (Check(TokenType.Sub))
-                return ParseSubroutine();
+            {
+                var sub = ParseSubroutine();
+                sub.Access = access;
+                return sub;
+            }
             if (Check(TokenType.Dim))
-                return ParseVariableDeclaration();
+            {
+                var statement = ParseVariableDeclaration();
+                if (statement is VariableDeclarationNode varDecl)
+                {
+                    varDecl.Access = access;
+                }
+                return statement;
+            }
             if (Check(TokenType.Const))
-                return ParseConstantDeclaration();
+            {
+                var statement = ParseConstantDeclaration();
+                if (statement is ConstantDeclarationNode constDecl)
+                {
+                    constDecl.Access = access;
+                }
+                return statement;
+            }
             if (Check(TokenType.Extension))
                 return ParseExtensionMethod();
 
