@@ -385,6 +385,54 @@ public static class ProjectTemplates
 
     #endregion
 
+    #region Library Templates
+
+    public static readonly ProjectTemplate ClassLibrary = new()
+    {
+        Id = "class-library",
+        Name = "Class Library",
+        ShortDescription = "A reusable code library",
+        Description = "A class library for creating reusable code modules. Can be referenced by other projects.",
+        Icon = "library",
+        Category = "Library",
+        Tags = new List<string> { "library", "module", "reusable", "dll" },
+        SupportedSolutionTypes = new List<string> { "dotnet", "msil", "native", "llvm" },
+        Order = 6,
+        IsBuiltIn = true,
+        CreateSolution = false
+    };
+
+    public static readonly ProjectTemplate WebApi = new()
+    {
+        Id = "web-api",
+        Name = "Web API",
+        ShortDescription = "A REST API web service",
+        Description = "A web API service using ASP.NET Core. Build RESTful services and HTTP endpoints.",
+        Icon = "webapi",
+        Category = "Web",
+        Tags = new List<string> { "web", "api", "rest", "http", "service" },
+        SupportedSolutionTypes = new List<string> { "dotnet" },
+        Order = 7,
+        IsBuiltIn = true
+    };
+
+    public static readonly ProjectTemplate UnitTest = new()
+    {
+        Id = "unit-test",
+        Name = "Unit Test Project",
+        ShortDescription = "A unit testing project",
+        Description = "A unit test project for testing your code. Includes test framework setup.",
+        Icon = "test",
+        Category = "Testing",
+        Tags = new List<string> { "test", "unit", "testing", "nunit", "xunit" },
+        SupportedSolutionTypes = new List<string> { "dotnet", "msil" },
+        Order = 8,
+        IsBuiltIn = true,
+        CreateSolution = false
+    };
+
+    #endregion
+
     /// <summary>
     /// All built-in templates.
     /// </summary>
@@ -394,7 +442,10 @@ public static class ProjectTemplates
         GameApp,
         WinFormsApp,
         WpfApp,
-        AvaloniaApp
+        AvaloniaApp,
+        ClassLibrary,
+        WebApi,
+        UnitTest
     };
 }
 
