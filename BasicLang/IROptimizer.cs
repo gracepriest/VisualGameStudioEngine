@@ -651,23 +651,37 @@ namespace BasicLang.Compiler.IR.Optimization
         private void EliminateCommonSubexpressions(BasicBlock block)
         {
             var expressions = new Dictionary<string, IRValue>();
-            
+
             for (int i = 0; i < block.Instructions.Count; i++)
             {
                 var inst = block.Instructions[i];
-                
+
                 if (inst is IRBinaryOp binaryOp)
                 {
                     var key = $"{binaryOp.Operation}_{binaryOp.Left.Name}_{binaryOp.Right.Name}";
-                    
+
                     if (expressions.ContainsKey(key))
                     {
-                        // Replace this expression with the previous one
+                        // Found a duplicate expression
                         var replacement = expressions[key];
-                        ReplaceAllUses(block, binaryOp, replacement);
-                        block.Instructions.RemoveAt(i);
-                        i--;
-                        ReportModification();
+
+                        // If the current instruction is a named destination (actual variable, not a temp),
+                        // we should NOT remove it. Instead, convert to an assignment.
+                        if (IsNamedVariable(binaryOp.Name))
+                        {
+                            // Convert to assignment: target = existingResult
+                            var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
+                            block.Instructions[i] = new IRAssignment(targetVar, replacement);
+                            ReportModification();
+                        }
+                        else
+                        {
+                            // Temp variable - safe to remove and replace uses
+                            ReplaceAllUses(block, binaryOp, replacement);
+                            block.Instructions.RemoveAt(i);
+                            i--;
+                            ReportModification();
+                        }
                     }
                     else
                     {
@@ -675,6 +689,18 @@ namespace BasicLang.Compiler.IR.Optimization
                     }
                 }
             }
+        }
+
+        // Check if a name represents a real variable (not a temp)
+        private bool IsNamedVariable(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            // Temp names typically start with _tmp, _t, or are like "t0", "t1", etc.
+            if (name.StartsWith("_tmp", StringComparison.OrdinalIgnoreCase)) return false;
+            if (name.StartsWith("_t", StringComparison.OrdinalIgnoreCase) && name.Length > 2 && char.IsDigit(name[2])) return false;
+            // Also check for temp patterns like "t0", "t1"
+            if (name.Length >= 2 && name[0] == 't' && char.IsDigit(name[1])) return false;
+            return true;
         }
         
         private void ReplaceAllUses(BasicBlock block, IRValue oldValue, IRValue newValue)
@@ -692,6 +718,16 @@ namespace BasicLang.Compiler.IR.Optimization
                 {
                     if (ReferenceEquals(unaryOp.Operand, oldValue))
                         unaryOp.Operand = newValue;
+                }
+                else if (inst is IRStore store)
+                {
+                    if (ReferenceEquals(store.Value, oldValue))
+                        store.Value = newValue;
+                }
+                else if (inst is IRAssignment assignment)
+                {
+                    if (ReferenceEquals(assignment.Value, oldValue))
+                        assignment.Value = newValue;
                 }
             }
         }
@@ -910,18 +946,10 @@ namespace BasicLang.Compiler.IR.Optimization
             }
             
             // Modulo by power of 2 Ã¢â€ â€™ bitwise AND
-            if (op.Operation == BinaryOpKind.Mod)
-            {
-                if (op.Right is IRConstant constant && constant.Value is int power)
-                {
-                    if (IsPowerOfTwo(power))
-                    {
-                        var mask = new IRConstant(power - 1, op.Right.Type);
-                        return new IRBinaryOp(op.Name, BinaryOpKind.And, op.Left, mask, op.Type);
-                    }
-                }
-            }
-            
+// NOTE: Modulo by power of 2 -> bitwise AND optimization is disabled
+            // because BinaryOpKind.And maps to logical && in C#, not bitwise &
+            // TODO: Add BinaryOpKind.BitwiseAnd to properly support this optimization
+
             return null;
         }
         

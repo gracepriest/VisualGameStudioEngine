@@ -1897,6 +1897,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 // Nested control flow in loop body (if statements or inner loop conditions)
                 HandleConditionalBranch(innerCond);
             }
+            else if (bodyTerminator is IRSwitch switchInst)
+            {
+                // Switch statement inside loop body
+                HandleSwitchStatement(switchInst);
+            }
             else if (bodyTerminator is IRBranch innerBranch)
             {
                 // Nested loop: body branches unconditionally to inner loop's condition block
@@ -1948,16 +1953,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             elseBlock = null;
             mergeBlock = null;
 
-            // Pattern: true -> if.then, false -> if.else, both merge at if.end
+            // Pattern: true -> ifN.then, false -> ifN.else, both merge at ifN.end
             if (trueBlock.Name.Contains(".then") && falseBlock.Name.Contains(".else"))
             {
                 thenBlock = trueBlock;
                 elseBlock = falseBlock;
 
-                // Find merge block
-                mergeBlock = _currentFunction.Blocks.FirstOrDefault(b =>
-                    b.Name.EndsWith(".end") &&
-                    b.Name.StartsWith(trueBlock.Name.Split('.')[0]));
+                // Extract the prefix (e.g., "if0" from "if0.then")
+                var dotIndex = trueBlock.Name.IndexOf('.');
+                if (dotIndex > 0)
+                {
+                    var prefix = trueBlock.Name.Substring(0, dotIndex);
+                    // Find merge block with matching prefix
+                    mergeBlock = _currentFunction.Blocks.FirstOrDefault(b =>
+                        b.Name == $"{prefix}.end");
+                }
 
                 return mergeBlock != null;
             }
@@ -1971,12 +1981,25 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             thenBlock = null;
             mergeBlock = null;
 
-            // Pattern: true -> if.then, false -> if.end (no else)
+            // Pattern: true -> ifN.then, false -> ifN.end (no else)
             if (trueBlock.Name.Contains(".then") && falseBlock.Name.Contains(".end"))
             {
-                thenBlock = trueBlock;
-                mergeBlock = falseBlock;
-                return true;
+                // Extract prefix from both blocks and verify they match
+                var trueDot = trueBlock.Name.IndexOf('.');
+                var falseDot = falseBlock.Name.IndexOf('.');
+                if (trueDot > 0 && falseDot > 0)
+                {
+                    var truePrefix = trueBlock.Name.Substring(0, trueDot);
+                    var falsePrefix = falseBlock.Name.Substring(0, falseDot);
+
+                    // Only match if prefixes match (same if statement)
+                    if (truePrefix == falsePrefix)
+                    {
+                        thenBlock = trueBlock;
+                        mergeBlock = falseBlock;
+                        return true;
+                    }
+                }
             }
 
             return false;
@@ -2481,8 +2504,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (!IsNamedDestination(binaryOp))
                 return;
 
-            var left = EmitExpression(binaryOp.Left);
-            var right = EmitExpression(binaryOp.Right);
+            // Use needsParens=true for sub-expressions to preserve operator precedence
+            var left = EmitExpression(binaryOp.Left, new HashSet<IRValue>(), needsParens: true);
+            var right = EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true);
             var op = MapBinaryOperator(binaryOp.Operation);
 
             var target = GetValueName(binaryOp);
@@ -2494,7 +2518,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (!IsNamedDestination(unaryOp))
                 return;
 
-            var operand = EmitExpression(unaryOp.Operand);
+            // Use needsParens=true for sub-expressions to preserve operator precedence
+            var operand = EmitExpression(unaryOp.Operand, new HashSet<IRValue>(), needsParens: true);
             var op = MapUnaryOperator(unaryOp.Operation);
 
             var target = GetValueName(unaryOp);
@@ -2506,8 +2531,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (!IsNamedDestination(compare))
                 return;
 
-            var left = EmitExpression(compare.Left);
-            var right = EmitExpression(compare.Right);
+            // Use needsParens=true for sub-expressions to preserve operator precedence
+            var left = EmitExpression(compare.Left, new HashSet<IRValue>(), needsParens: true);
+            var right = EmitExpression(compare.Right, new HashSet<IRValue>(), needsParens: true);
             var op = MapCompareOperator(compare.Comparison);
 
             var target = GetValueName(compare);

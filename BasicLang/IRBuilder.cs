@@ -27,6 +27,15 @@ namespace BasicLang.Compiler.IR
         // For SSA construction
         private int _nextVersion = 0;
 
+        // For unique block naming
+        private int _ifCounter = 0;
+        private int _switchCounter = 0;
+        private int _forCounter = 0;
+        private int _foreachCounter = 0;
+        private int _whileCounter = 0;
+        private int _doCounter = 0;
+        private int _tryCounter = 0;
+
         public IRModule Module => _module;
 
         public IRBuilder(SemanticAnalyzer semanticAnalyzer)
@@ -1784,12 +1793,13 @@ namespace BasicLang.Compiler.IR
             node.Condition.Accept(this);
             var condition = _expressionResult;
 
-            // Create blocks
-            var thenBlock = _currentFunction.CreateBlock("if.then");
+            // Create blocks with unique names to handle nested ifs
+            var ifId = _ifCounter++;
+            var thenBlock = _currentFunction.CreateBlock($"if{ifId}.then");
             var elseBlock = node.ElseBlock != null || node.ElseIfClauses.Count > 0
-                ? _currentFunction.CreateBlock("if.else")
+                ? _currentFunction.CreateBlock($"if{ifId}.else")
                 : null;
-            var mergeBlock = _currentFunction.CreateBlock("if.end");
+            var mergeBlock = _currentFunction.CreateBlock($"if{ifId}.end");
 
             // Emit conditional branch
             var branchTarget = elseBlock ?? mergeBlock;
@@ -1893,6 +1903,7 @@ namespace BasicLang.Compiler.IR
             EmitInstruction(switchInst);
 
             // Generate case bodies
+            int caseBlockIndex = 0;
             for (int i = 0; i < node.Cases.Count; i++)
             {
                 var caseClause = node.Cases[i];
@@ -1903,7 +1914,7 @@ namespace BasicLang.Compiler.IR
                 }
                 else
                 {
-                    _currentBlock = caseBlocks[i];
+                    _currentBlock = caseBlocks[caseBlockIndex++];
                 }
 
                 caseClause.Body.Accept(this);
@@ -2958,7 +2969,7 @@ namespace BasicLang.Compiler.IR
                 "*" => BinaryOpKind.Mul,
                 "/" => BinaryOpKind.Div,
                 "\\" => BinaryOpKind.IntDiv,
-                "%" => BinaryOpKind.Mod,
+                "%" or "Mod" => BinaryOpKind.Mod,
                 "&" => BinaryOpKind.Concat,
                 "And" or "&&" => BinaryOpKind.And,
                 "Or" or "||" => BinaryOpKind.Or,

@@ -20,6 +20,7 @@ public class LanguageService : ILanguageService
     private int _requestId;
     private readonly Dictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
     private readonly object _lock = new();
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly string _compilerPath;
     private readonly IOutputService _outputService;
 
@@ -528,13 +529,21 @@ public class LanguageService : ILanguageService
     {
         if (_writer == null) return;
 
-        var json = JsonSerializer.Serialize(message, JsonOptions);
-        var content = Encoding.UTF8.GetBytes(json);
+        await _writeLock.WaitAsync();
+        try
+        {
+            var json = JsonSerializer.Serialize(message, JsonOptions);
+            var content = Encoding.UTF8.GetBytes(json);
 
-        var header = $"Content-Length: {content.Length}\r\n\r\n";
-        await _writer.WriteAsync(header);
-        await _writer.WriteAsync(json);
-        await _writer.FlushAsync();
+            var header = $"Content-Length: {content.Length}\r\n\r\n";
+            await _writer.WriteAsync(header);
+            await _writer.WriteAsync(json);
+            await _writer.FlushAsync();
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     private static string PathToUri(string path)
@@ -1323,5 +1332,6 @@ public class LanguageService : ILanguageService
     public void Dispose()
     {
         StopAsync().Wait(TimeSpan.FromSeconds(2));
+        _writeLock.Dispose();
     }
 }
