@@ -1,0 +1,316 @@
+' ============================================
+' SPACE SHOOTER - Arcade Game
+' Created with Visual Game Studio
+' ============================================
+
+' Screen dimensions
+Const SCREEN_WIDTH As Integer = 800
+Const SCREEN_HEIGHT As Integer = 600
+
+' Player settings
+Const PLAYER_SIZE As Integer = 30
+Const PLAYER_SPEED As Integer = 300
+
+' Bullet settings
+Const BULLET_SIZE As Integer = 8
+Const BULLET_SPEED As Integer = 500
+
+' Enemy settings
+Const ENEMY_SIZE As Integer = 30
+Const ENEMY_SPEED As Integer = 150
+
+' Key codes
+Const KEY_W As Integer = 87
+Const KEY_S As Integer = 83
+Const KEY_A As Integer = 65
+Const KEY_D As Integer = 68
+Const KEY_UP As Integer = 265
+Const KEY_DOWN As Integer = 264
+Const KEY_LEFT As Integer = 263
+Const KEY_RIGHT As Integer = 262
+Const KEY_SPACE As Integer = 32
+Const KEY_ESC As Integer = 256
+Const KEY_ENTER As Integer = 257
+
+' Game states
+Const STATE_MENU As Integer = 0
+Const STATE_PLAYING As Integer = 1
+Const STATE_GAMEOVER As Integer = 2
+
+' Game state
+Dim gameState As Integer = STATE_MENU
+
+' Player position (scaled by 100)
+Dim playerX As Integer = 38000
+Dim playerY As Integer = 50000
+
+' Score and lives
+Dim score As Integer = 0
+Dim highScore As Integer = 0
+Dim lives As Integer = 3
+
+' Shoot cooldown
+Dim shootCooldown As Integer = 0
+
+' Bullet (-1 = inactive)
+Dim bulletX As Integer = -1
+Dim bulletY As Integer = 0
+
+' Enemy (-1 = inactive)
+Dim enemyX As Integer = -1
+Dim enemyY As Integer = 0
+
+' Spawn timer
+Dim spawnTimer As Integer = 0
+
+' Invincibility
+Dim invincibleTimer As Integer = 0
+
+' Random seed
+Dim randomSeed As Integer = 12345
+
+Sub Main()
+    GameInit(SCREEN_WIDTH, SCREEN_HEIGHT, "Space Shooter")
+
+    While Not GameShouldClose()
+        Select Case gameState
+            Case STATE_MENU
+                UpdateMenu()
+                DrawMenu()
+            Case STATE_PLAYING
+                UpdatePlaying()
+                DrawGame()
+            Case STATE_GAMEOVER
+                UpdateGameOver()
+                DrawGameOver()
+        End Select
+    Wend
+
+    GameShutdown()
+End Sub
+
+Sub UpdateMenu()
+    If IsKeyPressed(KEY_ENTER) Or IsKeyPressed(KEY_SPACE) Then
+        ResetGame()
+        gameState = STATE_PLAYING
+    End If
+    If IsKeyPressed(KEY_ESC) Then
+        GameShutdown()
+    End If
+End Sub
+
+Sub DrawMenu()
+    GameBeginFrame()
+    ClearBackground(10, 10, 30)
+
+    DrawText("SPACE SHOOTER", 250, 150, 48, 255, 255, 255, 255)
+    DrawText("Press ENTER to Start", 280, 300, 24, 200, 200, 200, 255)
+    DrawText("WASD/Arrows: Move", 300, 380, 20, 150, 150, 150, 255)
+    DrawText("SPACE: Shoot", 320, 410, 20, 150, 150, 150, 255)
+    DrawText("High Score: " & highScore, 320, 480, 24, 255, 255, 100, 255)
+
+    GameEndFrame()
+End Sub
+
+Sub ResetGame()
+    playerX = (SCREEN_WIDTH / 2) * 100
+    playerY = (SCREEN_HEIGHT - 80) * 100
+    score = 0
+    lives = 3
+    shootCooldown = 0
+    invincibleTimer = 0
+    spawnTimer = 60
+    bulletX = -1
+    enemyX = -1
+End Sub
+
+Sub UpdatePlaying()
+    If IsKeyPressed(KEY_ESC) Then
+        gameState = STATE_MENU
+        Return
+    End If
+
+    ' Player movement
+    If IsKeyDown(KEY_W) Or IsKeyDown(KEY_UP) Then
+        playerY = playerY - PLAYER_SPEED
+    End If
+    If IsKeyDown(KEY_S) Or IsKeyDown(KEY_DOWN) Then
+        playerY = playerY + PLAYER_SPEED
+    End If
+    If IsKeyDown(KEY_A) Or IsKeyDown(KEY_LEFT) Then
+        playerX = playerX - PLAYER_SPEED
+    End If
+    If IsKeyDown(KEY_D) Or IsKeyDown(KEY_RIGHT) Then
+        playerX = playerX + PLAYER_SPEED
+    End If
+
+    ' Clamp player
+    If playerX < 0 Then playerX = 0
+    If playerX > (SCREEN_WIDTH - PLAYER_SIZE) * 100 Then playerX = (SCREEN_WIDTH - PLAYER_SIZE) * 100
+    If playerY < 0 Then playerY = 0
+    If playerY > (SCREEN_HEIGHT - PLAYER_SIZE) * 100 Then playerY = (SCREEN_HEIGHT - PLAYER_SIZE) * 100
+
+    ' Shooting
+    If IsKeyDown(KEY_SPACE) And shootCooldown <= 0 And bulletX < 0 Then
+        bulletX = playerX + (PLAYER_SIZE / 2) * 100
+        bulletY = playerY
+        shootCooldown = 20
+    End If
+
+    ' Update bullet
+    If bulletX >= 0 Then
+        bulletY = bulletY - BULLET_SPEED * 100 / 60
+        If bulletY < 0 Then bulletX = -1
+    End If
+
+    ' Spawn enemy
+    spawnTimer = spawnTimer - 1
+    If spawnTimer <= 0 And enemyX < 0 Then
+        randomSeed = randomSeed * 1103515245 + 12345
+        Dim randVal As Integer
+        randVal = randomSeed
+        If randVal < 0 Then randVal = -randVal
+        Dim remainder As Integer
+        remainder = randVal Mod (SCREEN_WIDTH - ENEMY_SIZE)
+        enemyX = remainder * 100
+        enemyY = -ENEMY_SIZE * 100
+        spawnTimer = 90 - score / 10
+        If spawnTimer < 40 Then spawnTimer = 40
+    End If
+
+    ' Update enemy
+    If enemyX >= 0 Then
+        enemyY = enemyY + ENEMY_SPEED * 100 / 60
+        If enemyY > SCREEN_HEIGHT * 100 Then enemyX = -1
+    End If
+
+    ' Collisions
+    CheckCollisions()
+
+    ' Timers
+    If shootCooldown > 0 Then shootCooldown = shootCooldown - 1
+    If invincibleTimer > 0 Then invincibleTimer = invincibleTimer - 1
+End Sub
+
+Sub CheckCollisions()
+    ' Bullet-enemy collision (simple center distance)
+    If bulletX >= 0 And enemyX >= 0 Then
+        Dim bx As Integer
+        bx = bulletX / 100
+        Dim by As Integer
+        by = bulletY / 100
+        Dim ex As Integer
+        ex = enemyX / 100
+        Dim ey As Integer
+        ey = enemyY / 100
+
+        Dim dx As Integer
+        dx = bx - ex
+        If dx < 0 Then dx = -dx
+        Dim dy As Integer
+        dy = by - ey
+        If dy < 0 Then dy = -dy
+
+        If dx < ENEMY_SIZE And dy < ENEMY_SIZE Then
+            enemyX = -1
+            bulletX = -1
+            score = score + 10
+        End If
+    End If
+
+    ' Player-enemy collision
+    If invincibleTimer <= 0 And enemyX >= 0 Then
+        Dim px As Integer
+        px = playerX / 100
+        Dim py As Integer
+        py = playerY / 100
+        Dim ex As Integer
+        ex = enemyX / 100
+        Dim ey As Integer
+        ey = enemyY / 100
+
+        Dim dx As Integer
+        dx = px - ex
+        If dx < 0 Then dx = -dx
+        Dim dy As Integer
+        dy = py - ey
+        If dy < 0 Then dy = -dy
+
+        If dx < (PLAYER_SIZE + ENEMY_SIZE) / 2 And dy < (PLAYER_SIZE + ENEMY_SIZE) / 2 Then
+            enemyX = -1
+            lives = lives - 1
+            invincibleTimer = 120
+            If lives <= 0 Then
+                If score > highScore Then highScore = score
+                gameState = STATE_GAMEOVER
+            End If
+        End If
+    End If
+End Sub
+
+Sub UpdateGameOver()
+    If IsKeyPressed(KEY_ENTER) Or IsKeyPressed(KEY_SPACE) Then
+        gameState = STATE_MENU
+    End If
+End Sub
+
+Sub DrawGameOver()
+    GameBeginFrame()
+    ClearBackground(10, 10, 30)
+
+    DrawText("GAME OVER", 280, 200, 48, 255, 100, 100, 255)
+    DrawText("Score: " & score, 340, 300, 32, 255, 255, 255, 255)
+    DrawText("High Score: " & highScore, 300, 360, 24, 255, 255, 100, 255)
+    DrawText("Press ENTER", 320, 450, 24, 200, 200, 200, 255)
+
+    GameEndFrame()
+End Sub
+
+Sub DrawGame()
+    GameBeginFrame()
+    ClearBackground(10, 10, 30)
+
+    ' Stars
+    DrawRectangle(100, 50, 2, 2, 255, 255, 255, 200)
+    DrawRectangle(300, 120, 2, 2, 255, 255, 255, 150)
+    DrawRectangle(500, 80, 2, 2, 255, 255, 255, 200)
+    DrawRectangle(700, 200, 2, 2, 255, 255, 255, 180)
+    DrawRectangle(150, 300, 2, 2, 255, 255, 255, 150)
+    DrawRectangle(450, 350, 2, 2, 255, 255, 255, 200)
+
+    ' Enemy
+    If enemyX >= 0 Then
+        Dim ex As Integer
+        ex = enemyX / 100
+        Dim ey As Integer
+        ey = enemyY / 100
+        DrawRectangle(ex, ey, ENEMY_SIZE, ENEMY_SIZE, 255, 100, 100, 255)
+    End If
+
+    ' Bullet
+    If bulletX >= 0 Then
+        DrawRectangle(bulletX / 100, bulletY / 100, BULLET_SIZE, BULLET_SIZE, 255, 255, 100, 255)
+    End If
+
+    ' Player (blink when invincible)
+    Dim showPlayer As Boolean
+    showPlayer = True
+    If invincibleTimer > 0 Then
+        Dim blinkMod As Integer
+        blinkMod = invincibleTimer Mod 10
+        If blinkMod < 5 Then showPlayer = False
+    End If
+    If showPlayer Then
+        Dim px As Integer
+        px = playerX / 100
+        Dim py As Integer
+        py = playerY / 100
+        DrawRectangle(px, py, PLAYER_SIZE, PLAYER_SIZE, 100, 200, 255, 255)
+    End If
+
+    ' HUD
+    DrawText("SCORE: " & score, 20, 20, 24, 255, 255, 255, 255)
+    DrawText("LIVES: " & lives, 650, 20, 24, 255, 100, 100, 255)
+
+    GameEndFrame()
+End Sub

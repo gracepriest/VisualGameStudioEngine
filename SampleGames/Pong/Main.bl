@@ -1,0 +1,369 @@
+' ============================================
+' PONG - Classic Arcade Game
+' Created with Visual Game Studio
+' ============================================
+
+' Screen dimensions
+Const SCREEN_WIDTH As Integer = 800
+Const SCREEN_HEIGHT As Integer = 600
+
+' Paddle settings
+Const PADDLE_WIDTH As Integer = 15
+Const PADDLE_HEIGHT As Integer = 100
+Const PADDLE_SPEED As Integer = 400
+Const PADDLE_MARGIN As Integer = 30
+
+' Ball settings
+Const BALL_SIZE As Integer = 15
+Const BALL_INITIAL_SPEED As Integer = 300
+Const BALL_SPEED_INCREASE As Integer = 25
+Const BALL_MAX_SPEED As Integer = 600
+
+' Key codes
+Const KEY_W As Integer = 87
+Const KEY_S As Integer = 83
+Const KEY_UP As Integer = 265
+Const KEY_DOWN As Integer = 264
+Const KEY_SPACE As Integer = 32
+Const KEY_ESC As Integer = 256
+Const KEY_ENTER As Integer = 257
+
+' Game states
+Const STATE_MENU As Integer = 0
+Const STATE_PLAYING As Integer = 1
+Const STATE_PAUSED As Integer = 2
+Const STATE_POINT As Integer = 3
+
+' Win score
+Const WIN_SCORE As Integer = 5
+
+' Game variables
+Dim gameState As Integer = STATE_MENU
+
+' Paddle positions (scaled by 100 for integer math)
+Dim paddle1Y As Integer = 25000
+Dim paddle2Y As Integer = 25000
+
+' Ball state (scaled by 100)
+Dim ballX As Integer = 40000
+Dim ballY As Integer = 30000
+Dim ballVelX As Integer = 0
+Dim ballVelY As Integer = 0
+Dim ballSpeed As Integer = 30000
+
+' Scores
+Dim score1 As Integer = 0
+Dim score2 As Integer = 0
+
+' Point delay timer (in frames, ~90 frames = 1.5 sec at 60fps)
+Dim pointTimer As Integer = 0
+Dim lastScorer As Integer = 0
+
+' Random seed
+Dim randomSeed As Integer = 54321
+
+' ============================================
+' MAIN ENTRY POINT
+' ============================================
+Sub Main()
+    GameInit(SCREEN_WIDTH, SCREEN_HEIGHT, "Pong")
+
+    While Not GameShouldClose()
+        Select Case gameState
+            Case STATE_MENU
+                UpdateMenu()
+                DrawMenu()
+            Case STATE_PLAYING
+                UpdatePlaying()
+                DrawGame()
+            Case STATE_PAUSED
+                UpdatePaused()
+                DrawPaused()
+            Case STATE_POINT
+                UpdatePoint()
+                DrawGame()
+        End Select
+    Wend
+
+    GameShutdown()
+End Sub
+
+' ============================================
+' MENU STATE
+' ============================================
+Sub UpdateMenu()
+    If IsKeyPressed(KEY_ENTER) Or IsKeyPressed(KEY_SPACE) Then
+        ResetGame()
+        gameState = STATE_PLAYING
+    End If
+
+    If IsKeyPressed(KEY_ESC) Then
+        GameShutdown()
+    End If
+End Sub
+
+Sub DrawMenu()
+    GameBeginFrame()
+    ClearBackground(0, 0, 0)
+
+    DrawText("PONG", 320, 150, 72, 255, 255, 255, 255)
+    DrawText("Press ENTER or SPACE to Start", 240, 300, 24, 200, 200, 200, 255)
+
+    DrawText("Player 1: W/S", 100, 400, 20, 100, 200, 255, 255)
+    DrawText("Player 2: Up/Down", 550, 400, 20, 255, 200, 100, 255)
+    DrawText("First to 5 wins!", 320, 500, 20, 255, 255, 100, 255)
+
+    GameEndFrame()
+End Sub
+
+' ============================================
+' GAME LOGIC
+' ============================================
+Sub ResetGame()
+    score1 = 0
+    score2 = 0
+    paddle1Y = (SCREEN_HEIGHT / 2 - PADDLE_HEIGHT / 2) * 100
+    paddle2Y = (SCREEN_HEIGHT / 2 - PADDLE_HEIGHT / 2) * 100
+    ResetBall(0)
+End Sub
+
+Sub ResetBall(direction As Integer)
+    ballX = (SCREEN_WIDTH / 2 - BALL_SIZE / 2) * 100
+    ballY = (SCREEN_HEIGHT / 2 - BALL_SIZE / 2) * 100
+    ballSpeed = BALL_INITIAL_SPEED * 100
+
+    ' Random vertical component
+    randomSeed = randomSeed * 1103515245 + 12345
+    Dim randVal As Integer
+    randVal = randomSeed
+    If randVal < 0 Then randVal = -randVal
+    Dim remainder As Integer
+    remainder = randVal Mod 100
+    Dim angleOffset As Integer
+    angleOffset = remainder - 50
+
+    If direction = 0 Then
+        randomSeed = randomSeed * 1103515245 + 12345
+        randVal = randomSeed
+        If randVal < 0 Then randVal = -randVal
+        remainder = randVal Mod 2
+        If remainder = 0 Then
+            ballVelX = ballSpeed
+        Else
+            ballVelX = -ballSpeed
+        End If
+    ElseIf direction = 1 Then
+        ballVelX = ballSpeed
+    Else
+        ballVelX = -ballSpeed
+    End If
+
+    ballVelY = ballSpeed * angleOffset / 200
+End Sub
+
+Sub UpdatePlaying()
+    If IsKeyPressed(KEY_SPACE) Or IsKeyPressed(KEY_ESC) Then
+        gameState = STATE_PAUSED
+        Return
+    End If
+
+    UpdatePaddles()
+    UpdateBall()
+End Sub
+
+Sub UpdatePaddles()
+    ' Player 1 (W/S)
+    If IsKeyDown(KEY_W) Then
+        paddle1Y = paddle1Y - PADDLE_SPEED
+    End If
+    If IsKeyDown(KEY_S) Then
+        paddle1Y = paddle1Y + PADDLE_SPEED
+    End If
+
+    ' Player 2 (Up/Down arrows)
+    If IsKeyDown(KEY_UP) Then
+        paddle2Y = paddle2Y - PADDLE_SPEED
+    End If
+    If IsKeyDown(KEY_DOWN) Then
+        paddle2Y = paddle2Y + PADDLE_SPEED
+    End If
+
+    ' Clamp paddles to screen
+    If paddle1Y < 0 Then paddle1Y = 0
+    Dim maxY As Integer
+    maxY = (SCREEN_HEIGHT - PADDLE_HEIGHT) * 100
+    If paddle1Y > maxY Then paddle1Y = maxY
+    If paddle2Y < 0 Then paddle2Y = 0
+    If paddle2Y > maxY Then paddle2Y = maxY
+End Sub
+
+Sub UpdateBall()
+    ' Move ball (divide by 60 for ~60fps frame time)
+    ballX = ballX + ballVelX / 60
+    ballY = ballY + ballVelY / 60
+
+    ' Top/bottom wall collision
+    If ballY <= 0 Then
+        ballY = 0
+        ballVelY = -ballVelY
+    End If
+    Dim maxBallY As Integer
+    maxBallY = (SCREEN_HEIGHT - BALL_SIZE) * 100
+    If ballY >= maxBallY Then
+        ballY = maxBallY
+        ballVelY = -ballVelY
+    End If
+
+    ' Get actual pixel positions for collision
+    Dim bx As Integer
+    bx = ballX / 100
+    Dim by As Integer
+    by = ballY / 100
+    Dim p1y As Integer
+    p1y = paddle1Y / 100
+    Dim p2y As Integer
+    p2y = paddle2Y / 100
+
+    ' Left paddle collision
+    If bx <= PADDLE_MARGIN + PADDLE_WIDTH Then
+        If by + BALL_SIZE >= p1y And by <= p1y + PADDLE_HEIGHT Then
+            ballX = (PADDLE_MARGIN + PADDLE_WIDTH) * 100
+            ballVelX = -ballVelX
+
+            ' Adjust angle based on hit position
+            Dim hitPos As Integer
+            hitPos = (by + BALL_SIZE / 2 - p1y) * 100 / PADDLE_HEIGHT
+            ballVelY = ballSpeed * (hitPos - 50) / 100
+
+            IncreaseBallSpeed()
+        End If
+    End If
+
+    ' Right paddle collision
+    Dim rightPaddleX As Integer
+    rightPaddleX = SCREEN_WIDTH - PADDLE_MARGIN - PADDLE_WIDTH
+    If bx + BALL_SIZE >= rightPaddleX Then
+        If by + BALL_SIZE >= p2y And by <= p2y + PADDLE_HEIGHT Then
+            ballX = (rightPaddleX - BALL_SIZE) * 100
+            ballVelX = -ballVelX
+
+            Dim hitPos As Integer
+            hitPos = (by + BALL_SIZE / 2 - p2y) * 100 / PADDLE_HEIGHT
+            ballVelY = ballSpeed * (hitPos - 50) / 100
+
+            IncreaseBallSpeed()
+        End If
+    End If
+
+    ' Score detection
+    If bx < -BALL_SIZE Then
+        score2 = score2 + 1
+        lastScorer = 2
+        CheckWin()
+    ElseIf bx > SCREEN_WIDTH Then
+        score1 = score1 + 1
+        lastScorer = 1
+        CheckWin()
+    End If
+End Sub
+
+Sub IncreaseBallSpeed()
+    ballSpeed = ballSpeed + BALL_SPEED_INCREASE * 100
+    Dim maxSpeed As Integer
+    maxSpeed = BALL_MAX_SPEED * 100
+    If ballSpeed > maxSpeed Then
+        ballSpeed = maxSpeed
+    End If
+End Sub
+
+Sub CheckWin()
+    If score1 >= WIN_SCORE Or score2 >= WIN_SCORE Then
+        gameState = STATE_MENU
+    Else
+        pointTimer = 90
+        gameState = STATE_POINT
+    End If
+End Sub
+
+' ============================================
+' POINT STATE
+' ============================================
+Sub UpdatePoint()
+    pointTimer = pointTimer - 1
+    If pointTimer <= 0 Then
+        ResetBall(lastScorer)
+        gameState = STATE_PLAYING
+    End If
+End Sub
+
+' ============================================
+' PAUSED STATE
+' ============================================
+Sub UpdatePaused()
+    If IsKeyPressed(KEY_SPACE) Or IsKeyPressed(KEY_ENTER) Then
+        gameState = STATE_PLAYING
+    End If
+    If IsKeyPressed(KEY_ESC) Then
+        gameState = STATE_MENU
+    End If
+End Sub
+
+Sub DrawPaused()
+    GameBeginFrame()
+    ClearBackground(0, 0, 0)
+
+    DrawGameElements()
+
+    DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 150)
+    DrawText("PAUSED", 320, 250, 48, 255, 255, 255, 255)
+    DrawText("Press SPACE to Resume", 280, 320, 24, 200, 200, 200, 255)
+
+    GameEndFrame()
+End Sub
+
+' ============================================
+' DRAWING
+' ============================================
+Sub DrawGame()
+    GameBeginFrame()
+    ClearBackground(0, 0, 0)
+
+    DrawGameElements()
+
+    If gameState = STATE_POINT Then
+        If lastScorer = 1 Then
+            DrawText("Player 1 Scores!", 280, 350, 32, 100, 200, 255, 255)
+        Else
+            DrawText("Player 2 Scores!", 280, 350, 32, 255, 200, 100, 255)
+        End If
+    End If
+
+    GameEndFrame()
+End Sub
+
+Sub DrawGameElements()
+    ' Center line
+    Dim i As Integer
+    For i = 0 To SCREEN_HEIGHT Step 30
+        DrawRectangle(SCREEN_WIDTH / 2 - 2, i, 4, 15, 100, 100, 100, 255)
+    Next
+
+    ' Scores
+    DrawText("" & score1, SCREEN_WIDTH / 4 - 20, 30, 64, 100, 200, 255, 255)
+    DrawText("" & score2, SCREEN_WIDTH * 3 / 4 - 20, 30, 64, 255, 200, 100, 255)
+
+    ' Paddles (convert from scaled to actual)
+    Dim p1y As Integer
+    p1y = paddle1Y / 100
+    Dim p2y As Integer
+    p2y = paddle2Y / 100
+    DrawRectangle(PADDLE_MARGIN, p1y, PADDLE_WIDTH, PADDLE_HEIGHT, 100, 200, 255, 255)
+    DrawRectangle(SCREEN_WIDTH - PADDLE_MARGIN - PADDLE_WIDTH, p2y, PADDLE_WIDTH, PADDLE_HEIGHT, 255, 200, 100, 255)
+
+    ' Ball
+    Dim bx As Integer
+    bx = ballX / 100
+    Dim by As Integer
+    by = ballY / 100
+    DrawRectangle(bx, by, BALL_SIZE, BALL_SIZE, 255, 255, 255, 255)
+End Sub
