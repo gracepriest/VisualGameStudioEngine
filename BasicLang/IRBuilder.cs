@@ -2575,13 +2575,44 @@ namespace BasicLang.Compiler.IR
             var operand = _expressionResult;
 
             var resultType = _semanticAnalyzer.GetNodeType(node);
-            var tempName = _currentFunction.GetNextTempName();
-
             var opKind = MapUnaryOperator(node.Operator);
-            var result = new IRUnaryOp(tempName, opKind, operand, resultType);
 
-            EmitInstruction(result);
-            _expressionResult = result;
+            // For constant folding (especially useful for global variable initializers like -1)
+            if (operand is IRConstant constOp && opKind == UnaryOpKind.Neg)
+            {
+                // Fold the negation at compile time
+                object foldedValue = constOp.Value switch
+                {
+                    int i => -i,
+                    long l => -l,
+                    float f => -f,
+                    double d => -d,
+                    decimal m => -m,
+                    short s => (short)-s,
+                    byte b => -b,
+                    _ => null
+                };
+
+                if (foldedValue != null)
+                {
+                    _expressionResult = new IRConstant(foldedValue, resultType);
+                    return;
+                }
+            }
+
+            // If we're outside a function context (global initializer), create an IRUnaryOp without emitting
+            if (_currentFunction == null)
+            {
+                var result = new IRUnaryOp("global_init", opKind, operand, resultType);
+                _expressionResult = result;
+                return;
+            }
+
+            var tempName = _currentFunction.GetNextTempName();
+            var unaryResult = new IRUnaryOp(tempName, opKind, operand, resultType);
+
+            EmitInstruction(unaryResult);
+            _expressionResult = unaryResult;
         }
 
         public void Visit(LiteralExpressionNode node)
