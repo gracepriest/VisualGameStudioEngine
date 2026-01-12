@@ -824,6 +824,86 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return ErrorGrouper.GroupErrors(_errors);
         }
 
+        /// <summary>
+        /// Collect all available symbol names from current scope and parent scopes
+        /// </summary>
+        private IEnumerable<string> GetAvailableSymbolNames()
+        {
+            var symbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Collect from current scope and all parent scopes
+            var scope = _currentScope;
+            while (scope != null)
+            {
+                foreach (var name in scope.Symbols.Keys)
+                {
+                    symbols.Add(name);
+                }
+                scope = scope.Parent;
+            }
+
+            // Also include common .NET types
+            foreach (var netType in CommonNetTypes)
+            {
+                symbols.Add(netType);
+            }
+
+            return symbols;
+        }
+
+        /// <summary>
+        /// Find the most similar identifier using Levenshtein distance
+        /// </summary>
+        private string GetSimilarIdentifierSuggestion(string target, IEnumerable<string> candidates)
+        {
+            string bestMatch = null;
+            int bestDistance = int.MaxValue;
+            int maxDistance = 3; // Only suggest if edit distance is <= 3
+
+            foreach (var candidate in candidates)
+            {
+                var distance = LevenshteinDistance(target.ToLower(), candidate.ToLower());
+                if (distance < bestDistance && distance <= maxDistance)
+                {
+                    bestDistance = distance;
+                    bestMatch = candidate;
+                }
+            }
+
+            return bestMatch;
+        }
+
+        /// <summary>
+        /// Calculate Levenshtein distance between two strings
+        /// </summary>
+        private static int LevenshteinDistance(string s, string t)
+        {
+            if (string.IsNullOrEmpty(s))
+                return string.IsNullOrEmpty(t) ? 0 : t.Length;
+            if (string.IsNullOrEmpty(t))
+                return s.Length;
+
+            int[,] d = new int[s.Length + 1, t.Length + 1];
+
+            for (int i = 0; i <= s.Length; i++)
+                d[i, 0] = i;
+            for (int j = 0; j <= t.Length; j++)
+                d[0, j] = j;
+
+            for (int j = 1; j <= t.Length; j++)
+            {
+                for (int i = 1; i <= s.Length; i++)
+                {
+                    int cost = (s[i - 1] == t[j - 1]) ? 0 : 1;
+                    d[i, j] = Math.Min(
+                        Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1),
+                        d[i - 1, j - 1] + cost);
+                }
+            }
+
+            return d[s.Length, t.Length];
+        }
+
         private Scope EnterScope(string name, ScopeKind kind)
         {
             var newScope = new Scope(name, kind, _currentScope);
@@ -3145,6 +3225,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case "*":
                 case "/":
                 case "%":
+                case "Mod":
                     // Arithmetic operators
                     if (!leftType.IsNumeric() || !rightType.IsNumeric())
                     {
@@ -3413,42 +3494,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    // Build detailed error message for debugging
-                    var details = new System.Text.StringBuilder();
-                    details.Append($"Undefined identifier '{node.Name}'");
+                    // Collect available symbols for "did you mean" suggestions
+                    var availableSymbols = GetAvailableSymbolNames();
+                    var suggestion = GetSimilarIdentifierSuggestion(node.Name, availableSymbols);
 
-                    // Show imported modules
-                    if (_importedModules.Count > 0)
+                    var errorMessage = $"Undefined identifier '{node.Name}'";
+                    if (suggestion != null)
                     {
-                        details.Append($" [Imported: {string.Join(", ", _importedModules)}]");
-                    }
-                    else
-                    {
-                        details.Append(" [No imports]");
+                        errorMessage += $". Did you mean '{suggestion}'?";
                     }
 
-                    // Show available modules in project symbol table
-                    if (_projectSymbols != null)
-                    {
-                        var modules = _projectSymbols.GetModuleNames().ToList();
-                        if (modules.Count > 0)
-                        {
-                            details.Append($" [Available modules: {string.Join(", ", modules)}]");
-                        }
-                        else
-                        {
-                            details.Append(" [No modules in project]");
-                        }
-                    }
-                    else
-                    {
-                        details.Append(" [No project symbol table]");
-                    }
-
-                    // Show current module
-                    details.Append($" [Current module: {_currentModuleName ?? "none"}]");
-
-                    Error(details.ToString(), node.Line, node.Column);
+                    Error(errorMessage, node.Line, node.Column);
                     SetNodeType(node, _typeManager.ObjectType);
                 }
             }

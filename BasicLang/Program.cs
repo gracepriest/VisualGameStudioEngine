@@ -827,6 +827,18 @@ namespace BasicLang.Compiler.Driver
                 Console.WriteLine($"Compilation failed with {result.AllErrors.Count} error(s):");
                 Console.ResetColor();
 
+                // Get source code for error context
+                string sourceCode = null;
+                if (result.Units.Count > 0 && !string.IsNullOrEmpty(result.Units[0].SourceCode))
+                {
+                    sourceCode = result.Units[0].SourceCode;
+                }
+                else if (File.Exists(filePath))
+                {
+                    sourceCode = File.ReadAllText(filePath);
+                }
+                var sourceLines = sourceCode?.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
                 // Group errors for better display
                 var grouped = ErrorGrouper.GroupErrors(result.AllErrors);
                 foreach (var group in grouped)
@@ -835,6 +847,27 @@ namespace BasicLang.Compiler.Driver
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"  Error at line {group.PrimaryError.Line}: {group.PrimaryError.Message}");
                     Console.ResetColor();
+
+                    // Show source code context
+                    if (sourceLines != null && group.PrimaryError.Line > 0 && group.PrimaryError.Line <= sourceLines.Length)
+                    {
+                        var lineIndex = group.PrimaryError.Line - 1;
+                        var errorLine = sourceLines[lineIndex];
+
+                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                        Console.Write($"    {group.PrimaryError.Line,4} | ");
+                        Console.ResetColor();
+                        Console.WriteLine(errorLine);
+
+                        // Show error position marker
+                        if (group.PrimaryError.Column > 0)
+                        {
+                            var indent = new string(' ', group.PrimaryError.Column - 1);
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"         | {indent}^");
+                            Console.ResetColor();
+                        }
+                    }
 
                     if (!string.IsNullOrEmpty(group.CommonCause))
                     {
