@@ -207,6 +207,7 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  --output=FILE     Output file path");
             Console.WriteLine("  --optimize        Enable aggressive optimizations");
             Console.WriteLine("  --search-path=DIR Add module search path");
+            Console.WriteLine("  --show-generated  Show generated code (useful for debugging)");
             Console.WriteLine();
             Console.WriteLine("Examples:");
             Console.WriteLine("  basiclang new console -n MyApp         Create new console app");
@@ -507,16 +508,54 @@ namespace BasicLang.Compiler.Driver
 
                     if (buildProcess.ExitCode != 0)
                     {
-                        Console.WriteLine("  .NET compilation failed:");
-                        if (!string.IsNullOrWhiteSpace(buildOutput))
-                            Console.WriteLine(buildOutput);
-                        if (!string.IsNullOrWhiteSpace(buildErrors))
-                            Console.WriteLine(buildErrors);
+                        success = false;
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine();
+                        Console.WriteLine("  .NET compilation failed!");
+                        Console.ResetColor();
+
+                        // Parse and display C# compiler errors in a more helpful format
+                        var allOutput = buildOutput + "\n" + buildErrors;
+                        var errorLines = allOutput.Split('\n')
+                            .Where(line => line.Contains("error CS") || line.Contains("error :") || line.Contains(": error"))
+                            .ToList();
+
+                        if (errorLines.Any())
+                        {
+                            Console.WriteLine();
+                            Console.WriteLine("  C# Compiler Errors:");
+                            foreach (var errorLine in errorLines.Take(10))
+                            {
+                                // Parse error format: file(line,col): error CSxxxx: message
+                                var trimmed = errorLine.Trim();
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"    {trimmed}");
+                                Console.ResetColor();
+                            }
+                            if (errorLines.Count > 10)
+                            {
+                                Console.WriteLine($"    ... and {errorLines.Count - 10} more errors");
+                            }
+                        }
+                        else if (!string.IsNullOrWhiteSpace(allOutput))
+                        {
+                            // Fallback: show raw output if we couldn't parse errors
+                            Console.WriteLine(allOutput);
+                        }
+
+                        Console.WriteLine();
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine($"  Generated C# file: {outputPath}");
+                        Console.WriteLine("  Review the generated code to diagnose the issue.");
+                        Console.ResetColor();
                     }
                 }
 
-                Console.WriteLine();
-                Console.WriteLine($"Build succeeded. Output: {outputPath}");
+                if (success)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine($"Build succeeded. Output: {outputPath}");
+                }
             }
             else if (!success)
             {
@@ -701,6 +740,7 @@ namespace BasicLang.Compiler.Driver
             var options = new BasicLang.Compiler.CompilerOptions();
             string targetBackend = "csharp";
             string outputPath = null;
+            bool showGenerated = false;
 
             foreach (var arg in args)
             {
@@ -722,6 +762,10 @@ namespace BasicLang.Compiler.Driver
                 {
                     options.SearchPaths.Add(arg.Substring("--search-path=".Length));
                 }
+                else if (arg == "--show-generated" || arg == "--show-cs")
+                {
+                    showGenerated = true;
+                }
             }
 
             // Create compiler and compile
@@ -740,11 +784,13 @@ namespace BasicLang.Compiler.Driver
                 if (result.CombinedIR != null)
                 {
                     string outputCode = GenerateCode(result.CombinedIR, targetBackend);
+                    string actualOutputPath;
 
                     if (!string.IsNullOrEmpty(outputPath))
                     {
                         File.WriteAllText(outputPath, outputCode);
                         Console.WriteLine($"  Output written to: {outputPath}");
+                        actualOutputPath = outputPath;
                     }
                     else
                     {
@@ -754,6 +800,24 @@ namespace BasicLang.Compiler.Driver
                         var defaultOutputPath = Path.Combine(Path.GetDirectoryName(filePath) ?? ".", baseName + ext);
                         File.WriteAllText(defaultOutputPath, outputCode);
                         Console.WriteLine($"  Output written to: {defaultOutputPath}");
+                        actualOutputPath = defaultOutputPath;
+                    }
+
+                    // Show generated code if requested
+                    if (showGenerated)
+                    {
+                        Console.WriteLine();
+                        Console.WriteLine("Generated code:");
+                        Console.WriteLine(new string('-', 60));
+                        var lines = outputCode.Split('\n');
+                        for (int i = 0; i < lines.Length; i++)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.Write($"{i + 1,4} | ");
+                            Console.ResetColor();
+                            Console.WriteLine(lines[i].TrimEnd('\r'));
+                        }
+                        Console.WriteLine(new string('-', 60));
                     }
                 }
             }
