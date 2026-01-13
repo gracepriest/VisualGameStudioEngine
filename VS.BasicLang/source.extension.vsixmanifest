@@ -5,17 +5,20 @@
     <DisplayName>BasicLang Language Support</DisplayName>
     <Description xml:space="preserve">Language support for BasicLang - a modern BASIC-inspired programming language designed for game development. Provides syntax highlighting, IntelliSense, code navigation, debugging, and more.</Description>
     <MoreInfo>https://github.com/visualgamestudio/basiclang</MoreInfo>
-    <License>LICENSE.txt</License>
     <GettingStartedGuide>https://github.com/visualgamestudio/basiclang/wiki</GettingStartedGuide>
     <ReleaseNotes>Initial release of BasicLang for Visual Studio.</ReleaseNotes>
-    <Icon>Resources\icon.png</Icon>
-    <PreviewImage>Resources\preview.png</PreviewImage>
     <Tags>basiclang, basic, programming language, game development, LSP</Tags>
   </Metadata>
   <Installation>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)" />
-    <InstallationTarget Id="Microsoft.VisualStudio.Professional" Version="[17.0, 18.0)" />
-    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 18.0)" />
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Professional" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
   </Installation>
   <Dependencies>
     <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.8,)" />
@@ -24,7 +27,7 @@
     <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,18.0)" DisplayName="Visual Studio core editor" />
   </Prerequisites>
   <Assets>
-    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="File" Path="BasicLang.pkgdef" />
     <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%|" />
   </Assets>
 </PackageManifest>

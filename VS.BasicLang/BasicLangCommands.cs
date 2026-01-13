@@ -62,7 +62,7 @@ public static class BasicLangCommands
             var guidGeneral = Microsoft.VisualStudio.VSConstants.OutputWindowPaneGuid.GeneralPane_guid;
             outputWindow.CreatePane(ref guidGeneral, "BasicLang", 1, 1);
             outputWindow.GetPane(ref guidGeneral, out var pane);
-            pane?.OutputString($"Building: {projectPath}\n");
+            pane?.OutputStringThreadSafe($"Building: {projectPath}\n");
             pane?.Activate();
         }
 

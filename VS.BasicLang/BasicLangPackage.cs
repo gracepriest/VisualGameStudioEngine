@@ -14,7 +14,6 @@ namespace VS.BasicLang;
 [Guid(PackageGuidString)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
-[ProvideMenuResource("Menus.ctmenu", 1)]
 [ProvideLanguageService(typeof(BasicLangLanguageService), BasicLangConstants.LanguageName, 0,
     CodeSense = true,
     RequestStockColors = false,
