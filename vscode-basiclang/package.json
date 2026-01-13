@@ -24,7 +24,6 @@
     "type": "git",
     "url": "https://github.com/visualgamestudio/vscode-basiclang"
   },
-  "icon": "icon.png",
   "activationEvents": [
     "onLanguage:basiclang",
     "workspaceContains:**/*.bl",
@@ -38,11 +37,7 @@
         "id": "basiclang",
         "aliases": ["BasicLang", "BASIC", "basiclang"],
         "extensions": [".bl", ".bas"],
-        "configuration": "./language-configuration.json",
-        "icon": {
-          "light": "./icons/basiclang-light.svg",
-          "dark": "./icons/basiclang-dark.svg"
-        }
+        "configuration": "./language-configuration.json"
       },
       {
         "id": "basiclang-project",
