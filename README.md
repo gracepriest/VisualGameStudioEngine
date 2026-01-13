@@ -14,12 +14,14 @@ Visual Game Studio is a modern game development environment designed to make cre
 A custom programming language compiler with:
 - Full lexer and parser for a VB-like syntax
 - Semantic analysis with type checking
+- **Pattern matching** with When guards, Or patterns, Nothing patterns, range/comparison patterns
 - LINQ support for queries
 - Async/Await support
 - Class, interface, and module support
 - Template/generic support
 - Inline code blocks (C#, C++, LLVM, MSIL)
 - Preprocessor directives
+- Multiple backend targets (C#, native)
 
 ### Visual Game Studio IDE
 A full-featured Avalonia-based IDE with:
@@ -198,6 +200,77 @@ Async Function LoadDataAsync() As Task(Of String)
     Dim result = Await FetchFromServer()
     Return result
 End Function
+```
+
+### Pattern Matching
+Advanced pattern matching in Select Case statements:
+
+```vb
+' When guards - conditional pattern matching
+Dim x As Integer = 5
+Select Case x
+    Case n When n > 10
+        Console.WriteLine("Greater than 10")
+    Case n When n > 0
+        Console.WriteLine("Positive")
+    Case 0
+        Console.WriteLine("Zero")
+    Case Else
+        Console.WriteLine("Negative")
+End Select
+
+' Or patterns - match multiple alternatives
+Dim day As Integer = 6
+Select Case day
+    Case 1 Or 7
+        Console.WriteLine("Weekend")
+    Case 2 Or 3 Or 4 Or 5 Or 6
+        Console.WriteLine("Weekday")
+End Select
+
+' Nothing pattern - null checking
+Dim obj As Object = Nothing
+Select Case obj
+    Case Nothing
+        Console.WriteLine("Object is null")
+    Case Else
+        Console.WriteLine("Object has value")
+End Select
+
+' Range patterns
+Dim score As Integer = 85
+Select Case score
+    Case 90 To 100
+        Console.WriteLine("A")
+    Case 80 To 89
+        Console.WriteLine("B")
+    Case 70 To 79
+        Console.WriteLine("C")
+    Case Else
+        Console.WriteLine("F")
+End Select
+
+' Comparison patterns
+Dim value As Integer = 15
+Select Case value
+    Case Is > 10
+        Console.WriteLine("Greater than 10")
+    Case Is < 0
+        Console.WriteLine("Negative")
+    Case Else
+        Console.WriteLine("Between 0 and 10")
+End Select
+
+' Type patterns
+Dim item As Object = "Hello"
+Select Case item
+    Case s As String
+        Console.WriteLine("String: " & s)
+    Case i As Integer
+        Console.WriteLine("Integer: " & i)
+    Case Else
+        Console.WriteLine("Unknown type")
+End Select
 ```
 
 ## IDE Features
