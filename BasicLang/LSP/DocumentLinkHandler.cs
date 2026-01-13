@@ -33,7 +33,7 @@ namespace BasicLang.Compiler.LSP
             _documentManager = documentManager;
         }
 
-        public Task<DocumentLinkContainer> Handle(DocumentLinkParams request, CancellationToken cancellationToken)
+        public Task<DocumentLinkContainer?> Handle(DocumentLinkParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null || state.Lines == null)

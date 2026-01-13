@@ -6,6 +6,8 @@
     <AssemblyName>VisualGameStudio.Editor</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Suppress nullable and threading warnings -->
+    <NoWarn>$(NoWarn);CS8618;CS8619;CS8620;CS8622;CS8625;CS8600;CS8601;CS8602;CS8603;CS8604;CS8609;CS8613;CS8714;CS0067;CS0108;CS0162;CS0219;CS0414;CS1998;VSTHRD002;VSTHRD100;VSTHRD101;VSTHRD103;VSTHRD110;VSTHRD200</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

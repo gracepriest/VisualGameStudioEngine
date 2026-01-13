@@ -32,7 +32,7 @@ namespace BasicLang.Compiler.LSP
             _capability = capability;
         }
 
-        public Task<Container<TypeHierarchyItem>> Handle(TypeHierarchyPrepareParams request, CancellationToken cancellationToken)
+        public Task<Container<TypeHierarchyItem>?> Handle(TypeHierarchyPrepareParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null || state.AST == null)
@@ -184,7 +184,7 @@ namespace BasicLang.Compiler.LSP
             _capability = capability;
         }
 
-        public Task<Container<TypeHierarchyItem>> Handle(TypeHierarchySupertypesParams request, CancellationToken cancellationToken)
+        public Task<Container<TypeHierarchyItem>?> Handle(TypeHierarchySupertypesParams request, CancellationToken cancellationToken)
         {
             var supertypes = new List<TypeHierarchyItem>();
 
@@ -314,7 +314,7 @@ namespace BasicLang.Compiler.LSP
             _capability = capability;
         }
 
-        public Task<Container<TypeHierarchyItem>> Handle(TypeHierarchySubtypesParams request, CancellationToken cancellationToken)
+        public Task<Container<TypeHierarchyItem>?> Handle(TypeHierarchySubtypesParams request, CancellationToken cancellationToken)
         {
             var subtypes = new List<TypeHierarchyItem>();
             var className = request.Item.Name;

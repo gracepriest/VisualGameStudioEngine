@@ -61,7 +61,7 @@ namespace BasicLang.Compiler.LSP
             _functionParams["CBool"] = new List<string> { "value" };
         }
 
-        public Task<InlayHintContainer> Handle(InlayHintParams request, CancellationToken cancellationToken)
+        public Task<InlayHintContainer?> Handle(InlayHintParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null || state.Lines == null)

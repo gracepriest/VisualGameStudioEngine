@@ -22,7 +22,7 @@ namespace BasicLang.Compiler.LSP
             _documentManager = documentManager;
         }
 
-        public Task<CommandOrCodeActionContainer> Handle(CodeActionParams request, CancellationToken cancellationToken)
+        public Task<CommandOrCodeActionContainer?> Handle(CodeActionParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null)
@@ -982,7 +982,7 @@ namespace BasicLang.Compiler.LSP
                     return message.Substring(quoteStart + 1, quoteEnd - quoteStart - 1);
                 }
             }
-            return null;
+            return string.Empty;
         }
 
         private int FindDeclarationInsertLine(DocumentState state, int currentLine)

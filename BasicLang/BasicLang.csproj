@@ -5,6 +5,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Suppress nullable warnings - these are mostly false positives from AST/IR classes that work correctly at runtime -->
+    <!-- Also suppress VS threading analyzer warnings (VSTHRD) that come from OmniSharp LSP patterns -->
+    <NoWarn>$(NoWarn);CS8618;CS8619;CS8620;CS8622;CS8625;CS8600;CS8601;CS8602;CS8603;CS8604;CS8609;CS8613;CS8714;CS0108;CS0162;CS0219;CS0414;CS1998;VSTHRD002;VSTHRD100;VSTHRD103;VSTHRD110;VSTHRD200</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

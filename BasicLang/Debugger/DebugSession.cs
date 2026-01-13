@@ -24,8 +24,8 @@ namespace BasicLang.Debugger
         private readonly Dictionary<int, VariableInfo> _variables = new();
         private readonly List<StackFrameInfo> _stackFrames = new();
 
-        private DebuggableInterpreter _interpreter;
-        private string _currentFile;
+        private DebuggableInterpreter? _interpreter;
+        private string _currentFile = string.Empty;
         private bool _running;
         private bool _stopOnEntry;
         private int _nextVariableRef = 1;
@@ -891,10 +891,10 @@ namespace BasicLang.Debugger
         public int Seq { get; set; }
 
         [JsonPropertyName("type")]
-        public string Type { get; set; }
+        public string Type { get; set; } = string.Empty;
 
         [JsonPropertyName("command")]
-        public string Command { get; set; }
+        public string Command { get; set; } = string.Empty;
 
         [JsonPropertyName("arguments")]
         public JsonElement Arguments { get; set; }
@@ -906,7 +906,7 @@ namespace BasicLang.Debugger
         public int Seq { get; set; }
 
         [JsonPropertyName("type")]
-        public string Type { get; set; }
+        public string Type { get; set; } = "response";
 
         [JsonPropertyName("request_seq")]
         public int RequestSeq { get; set; }
@@ -915,10 +915,10 @@ namespace BasicLang.Debugger
         public bool Success { get; set; }
 
         [JsonPropertyName("command")]
-        public string Command { get; set; }
+        public string Command { get; set; } = string.Empty;
 
         [JsonPropertyName("body")]
-        public object Body { get; set; }
+        public object? Body { get; set; }
     }
 
     public class DAPEvent
@@ -927,37 +927,37 @@ namespace BasicLang.Debugger
         public int Seq { get; set; }
 
         [JsonPropertyName("type")]
-        public string Type { get; set; }
+        public string Type { get; set; } = "event";
 
         [JsonPropertyName("event")]
-        public string Event { get; set; }
+        public string Event { get; set; } = string.Empty;
 
         [JsonPropertyName("body")]
-        public object Body { get; set; }
+        public object? Body { get; set; }
     }
 
     public class VariableInfo
     {
         public int FrameId { get; set; }
-        public string Type { get; set; }
-        public object Value { get; set; }
-        public string Name { get; set; }
+        public string Type { get; set; } = string.Empty;
+        public object? Value { get; set; }
+        public string Name { get; set; } = string.Empty;
     }
 
     public class StackFrameInfo
     {
-        public string FunctionName { get; set; }
+        public string FunctionName { get; set; } = string.Empty;
         public int Line { get; set; }
     }
 
     public class DebugEventArgs : EventArgs
     {
         public int Line { get; set; }
-        public string File { get; set; }
+        public string File { get; set; } = string.Empty;
     }
 
     public class OutputEventArgs : EventArgs
     {
-        public string Text { get; set; }
+        public string Text { get; set; } = string.Empty;
     }
 }

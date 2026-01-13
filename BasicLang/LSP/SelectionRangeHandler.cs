@@ -32,7 +32,7 @@ namespace BasicLang.Compiler.LSP
             _capability = capability;
         }
 
-        public Task<Container<SelectionRange>> Handle(SelectionRangeParams request, CancellationToken cancellationToken)
+        public Task<Container<SelectionRange>?> Handle(SelectionRangeParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null || state.Lines == null)

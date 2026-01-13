@@ -22,7 +22,7 @@ namespace BasicLang.Compiler.LSP
             _symbolService = symbolService;
         }
 
-        public override Task<SymbolInformationOrDocumentSymbolContainer> Handle(
+        public override Task<SymbolInformationOrDocumentSymbolContainer?> Handle(
             DocumentSymbolParams request,
             CancellationToken cancellationToken)
         {

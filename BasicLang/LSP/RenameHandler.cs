@@ -23,7 +23,7 @@ namespace BasicLang.Compiler.LSP
             _documentManager = documentManager;
         }
 
-        public override Task<WorkspaceEdit> Handle(RenameParams request, CancellationToken cancellationToken)
+        public override Task<WorkspaceEdit?> Handle(RenameParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null)
@@ -134,7 +134,7 @@ namespace BasicLang.Compiler.LSP
             _documentManager = documentManager;
         }
 
-        public override Task<RangeOrPlaceholderRange> Handle(PrepareRenameParams request, CancellationToken cancellationToken)
+        public override Task<RangeOrPlaceholderRange?> Handle(PrepareRenameParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null)

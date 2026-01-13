@@ -163,7 +163,7 @@ namespace BasicLang.Compiler.LSP
             _documentManager = documentManager;
         }
 
-        public override Task<SignatureHelp> Handle(SignatureHelpParams request, CancellationToken cancellationToken)
+        public override Task<SignatureHelp?> Handle(SignatureHelpParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null)

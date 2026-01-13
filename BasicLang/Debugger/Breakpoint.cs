@@ -23,15 +23,15 @@ namespace BasicLang.Debugger
     {
         public int Id { get; set; }
         public BreakpointType Type { get; set; }
-        public string FilePath { get; set; }
+        public string FilePath { get; set; } = string.Empty;
         public int Line { get; set; }
         public int Column { get; set; }
         public bool Verified { get; set; }
-        public string Message { get; set; }
+        public string Message { get; set; } = string.Empty;
         public bool Enabled { get; set; } = true;
 
         // Conditional breakpoint support
-        public string Condition { get; set; }
+        public string Condition { get; set; } = string.Empty;
 
         // Hit count breakpoint support
         public int HitCount { get; set; }
@@ -39,10 +39,10 @@ namespace BasicLang.Debugger
         public HitCountCondition HitCountCondition { get; set; }
 
         // Logpoint support
-        public string LogMessage { get; set; }
+        public string LogMessage { get; set; } = string.Empty;
 
         // Function breakpoint support
-        public string FunctionName { get; set; }
+        public string FunctionName { get; set; } = string.Empty;
 
         public Breakpoint()
         {

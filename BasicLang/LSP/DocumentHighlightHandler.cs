@@ -23,7 +23,7 @@ namespace BasicLang.Compiler.LSP
             _documentManager = documentManager;
         }
 
-        public override Task<DocumentHighlightContainer> Handle(
+        public override Task<DocumentHighlightContainer?> Handle(
             DocumentHighlightParams request,
             CancellationToken cancellationToken)
         {

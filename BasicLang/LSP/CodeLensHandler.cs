@@ -36,7 +36,7 @@ namespace BasicLang.Compiler.LSP
             };
         }
 
-        public override Task<CodeLensContainer> Handle(CodeLensParams request, CancellationToken cancellationToken)
+        public override Task<CodeLensContainer?> Handle(CodeLensParams request, CancellationToken cancellationToken)
         {
             var state = _documentManager.GetDocument(request.TextDocument.Uri);
             if (state == null || state.AST == null)

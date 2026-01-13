@@ -24,7 +24,7 @@ namespace BasicLang.Compiler.LSP
             _documentManager = documentManager;
         }
 
-        public override Task<LocationOrLocationLinks> Handle(
+        public override Task<LocationOrLocationLinks?> Handle(
             ImplementationParams request,
             CancellationToken cancellationToken)
         {
