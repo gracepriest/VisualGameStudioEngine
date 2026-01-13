@@ -2489,15 +2489,10 @@ namespace BasicLang.Compiler
             {
                 do
                 {
-                    var pattern = ParseCasePattern();
+                    var pattern = ParseCasePatternOrExpression();
                     if (pattern != null)
                     {
                         node.Patterns.Add(pattern);
-                    }
-                    else
-                    {
-                        // Fallback to expression for simple values
-                        node.Values.Add(ParseExpression());
                     }
                 } while (Match(TokenType.Comma));
             }
@@ -2509,16 +2504,136 @@ namespace BasicLang.Compiler
         }
 
         /// <summary>
+        /// Parse a pattern or expression in a Case clause, handling Or patterns
+        /// </summary>
+        private PatternNode ParseCasePatternOrExpression()
+        {
+            var token = Peek();
+            var alternatives = new List<PatternNode>();
+
+            // Parse first pattern or value
+            var first = ParseSingleCasePattern();
+            if (first == null)
+            {
+                // Parse as simple expression value
+                var expr = ParsePrimaryExpression();
+                if (expr != null)
+                {
+                    first = new ConstantPatternNode(expr.Line, expr.Column) { Value = expr };
+                }
+            }
+
+            if (first == null)
+                return null;
+
+            alternatives.Add(first);
+
+            // Check for Or pattern: Case 1 Or 2 Or 3
+            while (Match(TokenType.Or))
+            {
+                var next = ParseSingleCasePattern();
+                if (next == null)
+                {
+                    // Parse as simple expression value
+                    var expr = ParsePrimaryExpression();
+                    if (expr != null)
+                    {
+                        next = new ConstantPatternNode(expr.Line, expr.Column) { Value = expr };
+                    }
+                }
+
+                if (next != null)
+                {
+                    alternatives.Add(next);
+                }
+            }
+
+            PatternNode result;
+            if (alternatives.Count == 1)
+            {
+                result = alternatives[0];
+            }
+            else
+            {
+                result = new OrPatternNode(token.Line, token.Column)
+                {
+                    Alternatives = alternatives
+                };
+            }
+
+            // Parse When guard at the end
+            return ParseWhenGuard(result);
+        }
+
+        /// <summary>
+        /// Parse a simple primary expression (stopping at Or, When, Comma, newline)
+        /// </summary>
+        private ExpressionNode ParsePrimaryExpression()
+        {
+            // Parse only the primary part, not full binary expressions
+            if (Check(TokenType.IntegerLiteral) || Check(TokenType.LongLiteral) ||
+                Check(TokenType.SingleLiteral) || Check(TokenType.DoubleLiteral) ||
+                Check(TokenType.StringLiteral) || Check(TokenType.CharLiteral) ||
+                Check(TokenType.BooleanLiteral))
+            {
+                var t = Advance();
+                return new LiteralExpressionNode(t.Line, t.Column) { Value = t.Value, LiteralType = t.Type };
+            }
+            if (Match(TokenType.Nothing))
+            {
+                var t = Previous();
+                return new LiteralExpressionNode(t.Line, t.Column) { Value = null, LiteralType = TokenType.Nothing };
+            }
+            if (Check(TokenType.Identifier))
+            {
+                var t = Advance();
+                return new IdentifierExpressionNode(t.Line, t.Column) { Name = t.Lexeme };
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Parse a single case pattern (without Or combinations)
+        /// </summary>
+        private PatternNode ParseSingleCasePattern()
+        {
+            return ParseCasePattern();
+        }
+
+        /// <summary>
         /// Parse a pattern in a Case clause
         /// Returns null if the next tokens are not a pattern (fallback to expression)
         /// </summary>
         private PatternNode ParseCasePattern()
         {
             int startPos = _current;
+            var token = Previous();
+
+            // Case Nothing - null pattern
+            if (Match(TokenType.Nothing))
+            {
+                var pattern = new NothingPatternNode(token.Line, token.Column);
+                return ParseWhenGuard(pattern);
+            }
+
+            // Case (x, y, z) - tuple/deconstruction pattern
+            if (Check(TokenType.LeftParen))
+            {
+                var tuplePattern = ParseTuplePattern();
+                if (tuplePattern != null)
+                    return ParseWhenGuard(tuplePattern);
+            }
 
             // Case Is > 10, Case Is Integer, Case Is Nothing
             if (Match(TokenType.Is))
             {
+                // Case Is Nothing
+                if (Match(TokenType.Nothing))
+                {
+                    var pattern = new NothingPatternNode(token.Line, token.Column);
+                    return ParseWhenGuard(pattern);
+                }
+
                 // Check for comparison pattern: Case Is > 10
                 if (Check(TokenType.GreaterThan) || Check(TokenType.LessThan) ||
                     Check(TokenType.GreaterThanOrEqual) || Check(TokenType.LessThanOrEqual) ||
@@ -2536,7 +2651,8 @@ namespace BasicLang.Compiler
                         _ => "="
                     };
                     var value = ParseExpression();
-                    return new ComparisonPatternNode(startPos, 0) { Operator = op, Value = value };
+                    var pattern = new ComparisonPatternNode(startPos, 0) { Operator = op, Value = value };
+                    return ParseWhenGuard(pattern);
                 }
 
                 // Check for type pattern: Case Is String, Case Is Integer
@@ -2544,7 +2660,8 @@ namespace BasicLang.Compiler
                     Check(TokenType.Boolean) || Check(TokenType.Double) || Check(TokenType.Single))
                 {
                     var typeRef = ParseTypeReference();
-                    return new TypePatternNode(startPos, 0) { MatchType = typeRef };
+                    var pattern = new TypePatternNode(startPos, 0) { MatchType = typeRef };
+                    return ParseWhenGuard(pattern);
                 }
 
                 // Rollback if not a valid pattern after Is
@@ -2558,27 +2675,120 @@ namespace BasicLang.Compiler
             if (Match(TokenType.To))
             {
                 var upperBound = ParseExpression();
-                return new RangePatternNode(startPos, 0)
+                var pattern = new RangePatternNode(startPos, 0)
                 {
                     LowerBound = expr,
                     UpperBound = upperBound
                 };
+                return ParseWhenGuard(pattern);
             }
 
             // Check for type pattern with binding: Case x As Integer
-            if (expr is IdentifierExpressionNode ident && Match(TokenType.As))
+            if (expr is IdentifierExpressionNode ident)
             {
-                var typeRef = ParseTypeReference();
-                return new TypePatternNode(startPos, 0)
+                if (Match(TokenType.As))
                 {
-                    VariableName = ident.Name,
-                    MatchType = typeRef
-                };
+                    var typeRef = ParseTypeReference();
+                    var pattern = new TypePatternNode(startPos, 0)
+                    {
+                        VariableName = ident.Name,
+                        MatchType = typeRef
+                    };
+                    return ParseWhenGuard(pattern);
+                }
+
+                // Check for binding pattern with When guard: Case n When n > 0
+                if (Check(TokenType.When))
+                {
+                    var pattern = new BindingPatternNode(ident.Line, ident.Column)
+                    {
+                        VariableName = ident.Name
+                    };
+                    return ParseWhenGuard(pattern);
+                }
             }
 
             // Not a pattern, rollback and return null
             _current = startPos;
             return null;
+        }
+
+        /// <summary>
+        /// Parse a When guard clause after a pattern: Case x When x > 0
+        /// </summary>
+        private PatternNode ParseWhenGuard(PatternNode pattern)
+        {
+            if (Match(TokenType.When))
+            {
+                pattern.WhenGuard = ParseExpression();
+            }
+            return pattern;
+        }
+
+        /// <summary>
+        /// Parse a tuple/deconstruction pattern: Case (x, y, z)
+        /// </summary>
+        private TuplePatternNode ParseTuplePattern()
+        {
+            int startPos = _current;
+            var token = Peek();
+
+            if (!Match(TokenType.LeftParen))
+                return null;
+
+            var tuplePattern = new TuplePatternNode(token.Line, token.Column);
+
+            do
+            {
+                // Each element can be:
+                // - An identifier (capture variable)
+                // - A nested pattern
+                // - An underscore/discard pattern (represented as identifier "_")
+                if (Check(TokenType.Identifier))
+                {
+                    var identToken = Advance();
+                    // Check if it's a type pattern: x As Integer
+                    if (Match(TokenType.As))
+                    {
+                        var typeRef = ParseTypeReference();
+                        tuplePattern.Elements.Add(new TypePatternNode(identToken.Line, identToken.Column)
+                        {
+                            VariableName = identToken.Lexeme,
+                            MatchType = typeRef
+                        });
+                    }
+                    else
+                    {
+                        // Simple capture variable - use ConstantPatternNode with identifier
+                        tuplePattern.Elements.Add(new ConstantPatternNode(identToken.Line, identToken.Column)
+                        {
+                            Value = new IdentifierExpressionNode(identToken.Line, identToken.Column) { Name = identToken.Lexeme }
+                        });
+                    }
+                }
+                else if (Check(TokenType.LeftParen))
+                {
+                    // Nested tuple pattern
+                    var nested = ParseTuplePattern();
+                    if (nested != null)
+                        tuplePattern.Elements.Add(nested);
+                }
+                else
+                {
+                    // Constant value
+                    var value = ParseExpression();
+                    tuplePattern.Elements.Add(new ConstantPatternNode(token.Line, token.Column) { Value = value });
+                }
+            } while (Match(TokenType.Comma));
+
+            if (!Match(TokenType.RightParen))
+            {
+                // Rollback if not a valid tuple pattern
+                _current = startPos;
+                return null;
+            }
+
+            return tuplePattern;
         }
 
         private StatementNode ParseForLoop()
@@ -3334,6 +3544,16 @@ namespace BasicLang.Compiler
                 var literal = new LiteralExpressionNode(token.Line, token.Column);
                 literal.Value = token.Value;
                 literal.LiteralType = token.Type;
+                return literal;
+            }
+
+            // Nothing literal (null)
+            if (Match(TokenType.Nothing))
+            {
+                var token = Previous();
+                var literal = new LiteralExpressionNode(token.Line, token.Column);
+                literal.Value = null;
+                literal.LiteralType = TokenType.Nothing;
                 return literal;
             }
 

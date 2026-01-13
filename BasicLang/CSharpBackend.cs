@@ -1697,8 +1697,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             Unindent();
             WriteLine("}");
 
-            // Find and process switch.end block
-            var endBlock = _currentFunction.Blocks.FirstOrDefault(b => b.Name == "switch.end");
+            // Process the switch.end block
+            var endBlock = switchInst.EndBlock;
             if (endBlock != null && !_processedBlocks.Contains(endBlock))
             {
                 GenerateStructuredBlock(endBlock);
@@ -1707,17 +1707,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void EmitPatternCase(IRPatternCase pattern)
         {
+            var whenClause = pattern.WhenGuard != null ? $" when {EmitExpression(pattern.WhenGuard)}" : "";
+
             switch (pattern)
             {
                 case IRTypePatternCase typePattern:
                     var typeName = MapTypeName(typePattern.TypeName);
                     if (!string.IsNullOrEmpty(typePattern.BindingVariable))
                     {
-                        WriteLine($"case {typeName} {typePattern.BindingVariable}:");
+                        WriteLine($"case {typeName} {typePattern.BindingVariable}{whenClause}:");
                     }
                     else
                     {
-                        WriteLine($"case {typeName}:");
+                        WriteLine($"case {typeName}{whenClause}:");
                     }
                     break;
 
@@ -1725,7 +1727,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     var lower = EmitExpression(rangePattern.LowerBound);
                     var upper = EmitExpression(rangePattern.UpperBound);
                     // C# 9+ relational pattern: >= lower and <= upper
-                    WriteLine($"case >= {lower} and <= {upper}:");
+                    WriteLine($"case >= {lower} and <= {upper}{whenClause}:");
                     break;
 
                 case IRComparisonPatternCase compPattern:
@@ -1744,18 +1746,118 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     if (op == "==" || op == "!=")
                     {
                         // For equality, use when clause
-                        WriteLine($"case var _temp when _temp {op} {compValue}:");
+                        if (string.IsNullOrEmpty(whenClause))
+                        {
+                            WriteLine($"case var _temp when _temp {op} {compValue}:");
+                        }
+                        else
+                        {
+                            WriteLine($"case var _temp when _temp {op} {compValue} && {EmitExpression(pattern.WhenGuard)}:");
+                        }
                     }
                     else
                     {
-                        WriteLine($"case {op} {compValue}:");
+                        WriteLine($"case {op} {compValue}{whenClause}:");
                     }
                     break;
 
                 case IRConstantPatternCase constPattern:
                     var constValue = EmitExpression(constPattern.Value);
-                    WriteLine($"case {constValue}:");
+                    WriteLine($"case {constValue}{whenClause}:");
                     break;
+
+                case IRNothingPatternCase:
+                    // Null pattern
+                    WriteLine($"case null{whenClause}:");
+                    break;
+
+                case IROrPatternCase orPattern:
+                    // Or pattern: case 1 or 2 or 3
+                    var alternatives = new List<string>();
+                    foreach (var alt in orPattern.Alternatives)
+                    {
+                        alternatives.Add(GetPatternExpression(alt));
+                    }
+                    WriteLine($"case {string.Join(" or ", alternatives)}{whenClause}:");
+                    break;
+
+                case IRTuplePatternCase tuplePattern:
+                    // Tuple deconstruction pattern: case (x, y, z)
+                    var elements = new List<string>();
+                    foreach (var elem in tuplePattern.Elements)
+                    {
+                        elements.Add(GetPatternExpression(elem));
+                    }
+                    WriteLine($"case ({string.Join(", ", elements)}){whenClause}:");
+                    break;
+
+                case IRBindingPatternCase bindingPattern:
+                    // Binding pattern: var x when condition
+                    // Uses var pattern to capture the value with a binding variable
+                    if (!string.IsNullOrEmpty(bindingPattern.BindingVariable))
+                    {
+                        WriteLine($"case var {bindingPattern.BindingVariable}{whenClause}:");
+                    }
+                    else
+                    {
+                        // Fallback to default case if no binding variable
+                        WriteLine($"default:");
+                    }
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Get the C# pattern expression for an IR pattern (used for or/tuple patterns)
+        /// </summary>
+        private string GetPatternExpression(IRPatternCase pattern)
+        {
+            switch (pattern)
+            {
+                case IRTypePatternCase typePattern:
+                    var typeName = MapTypeName(typePattern.TypeName);
+                    return !string.IsNullOrEmpty(typePattern.BindingVariable)
+                        ? $"{typeName} {typePattern.BindingVariable}"
+                        : typeName;
+
+                case IRRangePatternCase rangePattern:
+                    var lower = EmitExpression(rangePattern.LowerBound);
+                    var upper = EmitExpression(rangePattern.UpperBound);
+                    return $">= {lower} and <= {upper}";
+
+                case IRComparisonPatternCase compPattern:
+                    var compValue = EmitExpression(compPattern.CompareValue);
+                    var op = compPattern.Operator switch
+                    {
+                        ">" => ">",
+                        "<" => "<",
+                        ">=" => ">=",
+                        "<=" => "<=",
+                        _ => compPattern.Operator
+                    };
+                    return $"{op} {compValue}";
+
+                case IRConstantPatternCase constPattern:
+                    return EmitExpression(constPattern.Value);
+
+                case IRNothingPatternCase:
+                    return "null";
+
+                case IROrPatternCase orPattern:
+                    var alternatives = orPattern.Alternatives.Select(GetPatternExpression);
+                    return string.Join(" or ", alternatives);
+
+                case IRTuplePatternCase tuplePattern:
+                    var elements = tuplePattern.Elements.Select(GetPatternExpression);
+                    return $"({string.Join(", ", elements)})";
+
+                case IRBindingPatternCase bindingPattern:
+                    return !string.IsNullOrEmpty(bindingPattern.BindingVariable)
+                        ? $"var {bindingPattern.BindingVariable}"
+                        : "_";
+
+                default:
+                    return "_";  // Discard pattern as fallback
             }
         }
 

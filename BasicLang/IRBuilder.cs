@@ -1411,6 +1411,54 @@ namespace BasicLang.Compiler.IR
             }
         }
 
+        public void Visit(NothingPatternNode node)
+        {
+            // Nothing patterns generate: expr Is Nothing
+            // The actual code generation is handled in Select Case
+            if (node.WhenGuard != null)
+            {
+                node.WhenGuard.Accept(this);
+            }
+        }
+
+        public void Visit(OrPatternNode node)
+        {
+            // Or patterns generate: pattern1 OrElse pattern2 OrElse ...
+            foreach (var alt in node.Alternatives)
+            {
+                alt.Accept(this);
+            }
+
+            if (node.WhenGuard != null)
+            {
+                node.WhenGuard.Accept(this);
+            }
+        }
+
+        public void Visit(TuplePatternNode node)
+        {
+            // Tuple patterns generate deconstruction checks
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+            }
+
+            if (node.WhenGuard != null)
+            {
+                node.WhenGuard.Accept(this);
+            }
+        }
+
+        public void Visit(BindingPatternNode node)
+        {
+            // Binding pattern captures the value with a variable name
+            // The When guard provides the actual matching condition
+            if (node.WhenGuard != null)
+            {
+                node.WhenGuard.Accept(this);
+            }
+        }
+
         public void Visit(AwaitExpressionNode node)
         {
             IRValue taskExpr;
@@ -1861,11 +1909,15 @@ namespace BasicLang.Compiler.IR
             node.Expression.Accept(this);
             var switchValue = _expressionResult;
 
-            // Create blocks
-            var defaultBlock = _currentFunction.CreateBlock("switch.default");
-            var endBlock = _currentFunction.CreateBlock("switch.end");
+            // Use unique prefix for this switch statement
+            var switchId = _switchCounter++;
+
+            // Create blocks with unique names
+            var defaultBlock = _currentFunction.CreateBlock($"switch{switchId}.default");
+            var endBlock = _currentFunction.CreateBlock($"switch{switchId}.end");
 
             var switchInst = new IRSwitch(switchValue, defaultBlock);
+            switchInst.EndBlock = endBlock;  // Store reference to end block
 
             // Generate case blocks
             var caseBlocks = new List<BasicBlock>();
@@ -1878,7 +1930,7 @@ namespace BasicLang.Compiler.IR
                     continue;
                 }
 
-                var caseBlock = _currentFunction.CreateBlock($"switch_case_{caseIndex++}");
+                var caseBlock = _currentFunction.CreateBlock($"switch{switchId}_case_{caseIndex++}");
                 caseBlocks.Add(caseBlock);
 
                 // Add case values (simple constant matching)
@@ -1937,6 +1989,8 @@ namespace BasicLang.Compiler.IR
 
         private IRPatternCase ConvertPatternToIR(PatternNode pattern, BasicBlock target)
         {
+            IRPatternCase result = null;
+
             switch (pattern)
             {
                 case TypePatternNode typePattern:
@@ -1945,28 +1999,77 @@ namespace BasicLang.Compiler.IR
                         target
                     );
                     typeCase.BindingVariable = typePattern.VariableName;
-                    return typeCase;
+                    result = typeCase;
+                    break;
 
                 case RangePatternNode rangePattern:
                     rangePattern.LowerBound.Accept(this);
                     var lower = _expressionResult;
                     rangePattern.UpperBound.Accept(this);
                     var upper = _expressionResult;
-                    return new IRRangePatternCase(lower, upper, target);
+                    result = new IRRangePatternCase(lower, upper, target);
+                    break;
 
                 case ComparisonPatternNode compPattern:
                     compPattern.Value.Accept(this);
                     var compValue = _expressionResult;
-                    return new IRComparisonPatternCase(compPattern.Operator, compValue, target);
+                    result = new IRComparisonPatternCase(compPattern.Operator, compValue, target);
+                    break;
 
                 case ConstantPatternNode constPattern:
                     constPattern.Value.Accept(this);
                     var constValue = _expressionResult;
-                    return new IRConstantPatternCase(constValue, target);
+                    result = new IRConstantPatternCase(constValue, target);
+                    break;
+
+                case NothingPatternNode:
+                    result = new IRNothingPatternCase(target);
+                    break;
+
+                case OrPatternNode orPattern:
+                    var orCase = new IROrPatternCase(target);
+                    foreach (var alt in orPattern.Alternatives)
+                    {
+                        var altCase = ConvertPatternToIR(alt, target);
+                        if (altCase != null)
+                        {
+                            orCase.Alternatives.Add(altCase);
+                        }
+                    }
+                    result = orCase;
+                    break;
+
+                case TuplePatternNode tuplePattern:
+                    var tupleCase = new IRTuplePatternCase(target);
+                    foreach (var elem in tuplePattern.Elements)
+                    {
+                        var elemCase = ConvertPatternToIR(elem, target);
+                        if (elemCase != null)
+                        {
+                            tupleCase.Elements.Add(elemCase);
+                        }
+                    }
+                    result = tupleCase;
+                    break;
+
+                case BindingPatternNode bindingPattern:
+                    var bindingCase = new IRBindingPatternCase(target);
+                    bindingCase.BindingVariable = bindingPattern.VariableName;
+                    result = bindingCase;
+                    break;
 
                 default:
                     return null;
             }
+
+            // Handle When guard
+            if (result != null && pattern.WhenGuard != null)
+            {
+                pattern.WhenGuard.Accept(this);
+                result.WhenGuard = _expressionResult;
+            }
+
+            return result;
         }
 
         public void Visit(CaseClauseNode node)

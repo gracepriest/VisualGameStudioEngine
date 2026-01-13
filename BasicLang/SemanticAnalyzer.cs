@@ -2476,6 +2476,43 @@ namespace BasicLang.Compiler.SemanticAnalysis
             node.WhenGuard?.Accept(this);
         }
 
+        public void Visit(NothingPatternNode node)
+        {
+            // Nothing pattern matches null values
+            // Analyze When guard if present
+            node.WhenGuard?.Accept(this);
+        }
+
+        public void Visit(OrPatternNode node)
+        {
+            // Or pattern combines multiple alternative patterns
+            foreach (var alt in node.Alternatives)
+            {
+                alt.Accept(this);
+            }
+            // Analyze When guard if present
+            node.WhenGuard?.Accept(this);
+        }
+
+        public void Visit(TuplePatternNode node)
+        {
+            // Tuple pattern matches tuple values by deconstructing elements
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+            }
+            // Analyze When guard if present
+            node.WhenGuard?.Accept(this);
+        }
+
+        public void Visit(BindingPatternNode node)
+        {
+            // Binding pattern captures the matched value with a variable name
+            // The variable is used in the When guard expression
+            // Analyze When guard if present
+            node.WhenGuard?.Accept(this);
+        }
+
         public void Visit(AwaitExpressionNode node)
         {
             // Check that we're inside an async function

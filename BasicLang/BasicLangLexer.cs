@@ -198,6 +198,10 @@ namespace BasicLang.Compiler
         Yield,
         Iterator,
 
+        // Keywords - Pattern Matching
+        When,       // Guard clause: Case x When x > 0
+        Nothing,    // Null pattern: Case Nothing
+
         // Keywords - Platform Externs
         Extern,
         EndExtern,
@@ -532,6 +536,10 @@ namespace BasicLang.Compiler
             { "Yield", TokenType.Yield },
             { "Iterator", TokenType.Iterator },
 
+            // Pattern Matching
+            { "When", TokenType.When },
+            { "Nothing", TokenType.Nothing },
+
             // Platform Externs
             { "Extern", TokenType.Extern },
             { "End Extern", TokenType.EndExtern },
@@ -561,6 +569,9 @@ namespace BasicLang.Compiler
             { "Not", TokenType.Not },
             { "NotEqual", TokenType.NotEqual },
             { "IsEqual", TokenType.IsEqual },
+
+            // Arithmetic Operators (keywords)
+            { "Mod", TokenType.Modulo },
             
             // Boolean Literals
             { "True", TokenType.BooleanLiteral },

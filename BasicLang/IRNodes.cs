@@ -385,6 +385,7 @@ namespace BasicLang.Compiler.IR
     {
         public BasicBlock Target { get; set; }
         public string BindingVariable { get; set; }  // Optional variable binding
+        public IRValue WhenGuard { get; set; }  // Optional When clause condition
 
         protected IRPatternCase(BasicBlock target)
         {
@@ -449,12 +450,55 @@ namespace BasicLang.Compiler.IR
     }
 
     /// <summary>
+    /// Nothing (null) pattern case: checks if value is null
+    /// </summary>
+    public class IRNothingPatternCase : IRPatternCase
+    {
+        public IRNothingPatternCase(BasicBlock target) : base(target) { }
+    }
+
+    /// <summary>
+    /// Or pattern case: matches if any of the alternatives match
+    /// </summary>
+    public class IROrPatternCase : IRPatternCase
+    {
+        public List<IRPatternCase> Alternatives { get; set; }
+
+        public IROrPatternCase(BasicBlock target) : base(target)
+        {
+            Alternatives = new List<IRPatternCase>();
+        }
+    }
+
+    /// <summary>
+    /// Tuple/deconstruction pattern case: matches and deconstructs a tuple
+    /// </summary>
+    public class IRTuplePatternCase : IRPatternCase
+    {
+        public List<IRPatternCase> Elements { get; set; }
+
+        public IRTuplePatternCase(BasicBlock target) : base(target)
+        {
+            Elements = new List<IRPatternCase>();
+        }
+    }
+
+    /// <summary>
+    /// Binding pattern case: captures value with variable and optional guard (var pattern)
+    /// </summary>
+    public class IRBindingPatternCase : IRPatternCase
+    {
+        public IRBindingPatternCase(BasicBlock target) : base(target) { }
+    }
+
+    /// <summary>
     /// Multi-way branch: switch value, default, [case: label, ...]
     /// </summary>
     public class IRSwitch : IRInstruction
     {
         public IRValue Value { get; set; }
         public BasicBlock DefaultTarget { get; set; }
+        public BasicBlock EndBlock { get; set; }  // The block after the switch statement
         public List<(IRValue CaseValue, BasicBlock Target)> Cases { get; set; }
         public List<IRPatternCase> PatternCases { get; set; }  // Pattern-based cases
 

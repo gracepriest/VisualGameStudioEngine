@@ -91,6 +91,10 @@ namespace BasicLang.Compiler.AST
         void Visit(ConstantPatternNode node);
         void Visit(RangePatternNode node);
         void Visit(ComparisonPatternNode node);
+        void Visit(NothingPatternNode node);
+        void Visit(OrPatternNode node);
+        void Visit(TuplePatternNode node);
+        void Visit(BindingPatternNode node);
         void Visit(AwaitExpressionNode node);
         void Visit(YieldStatementNode node);
         void Visit(LinqQueryExpressionNode node);
@@ -1134,12 +1138,64 @@ namespace BasicLang.Compiler.AST
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    /// <summary>
+    /// Nothing (null) pattern: Case Nothing
+    /// </summary>
+    public class NothingPatternNode : PatternNode
+    {
+        public NothingPatternNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Or pattern: Case 1 Or 2 Or 3 (matches any of the alternatives)
+    /// </summary>
+    public class OrPatternNode : PatternNode
+    {
+        public List<PatternNode> Alternatives { get; set; }
+
+        public OrPatternNode(int line, int column) : base(line, column)
+        {
+            Alternatives = new List<PatternNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Tuple/Deconstruction pattern: Case (x, y, z)
+    /// </summary>
+    public class TuplePatternNode : PatternNode
+    {
+        public List<PatternNode> Elements { get; set; }
+
+        public TuplePatternNode(int line, int column) : base(line, column)
+        {
+            Elements = new List<PatternNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Binding pattern: Case n When n > 0 (captures value and applies guard)
+    /// </summary>
+    public class BindingPatternNode : PatternNode
+    {
+        public string VariableName { get; set; }
+
+        public BindingPatternNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     public class SelectStatementNode : StatementNode
     {
         public ExpressionNode Expression { get; set; }
         public List<CaseClauseNode> Cases { get; set; }
-        
+
         public SelectStatementNode(int line, int column) : base(line, column)
         {
             Cases = new List<CaseClauseNode>();

@@ -1010,6 +1010,74 @@ namespace BasicLang.Compiler
             }
         }
 
+        public void Visit(NothingPatternNode node)
+        {
+            WriteLine("NothingPattern (null)");
+            if (node.WhenGuard != null)
+            {
+                Indent();
+                WriteLine("When:");
+                Indent();
+                node.WhenGuard.Accept(this);
+                Unindent();
+                Unindent();
+            }
+        }
+
+        public void Visit(OrPatternNode node)
+        {
+            WriteLine("OrPattern:");
+            Indent();
+            foreach (var alt in node.Alternatives)
+            {
+                alt.Accept(this);
+            }
+            Unindent();
+            if (node.WhenGuard != null)
+            {
+                Indent();
+                WriteLine("When:");
+                Indent();
+                node.WhenGuard.Accept(this);
+                Unindent();
+                Unindent();
+            }
+        }
+
+        public void Visit(TuplePatternNode node)
+        {
+            WriteLine("TuplePattern:");
+            Indent();
+            foreach (var elem in node.Elements)
+            {
+                elem.Accept(this);
+            }
+            Unindent();
+            if (node.WhenGuard != null)
+            {
+                Indent();
+                WriteLine("When:");
+                Indent();
+                node.WhenGuard.Accept(this);
+                Unindent();
+                Unindent();
+            }
+        }
+
+        public void Visit(BindingPatternNode node)
+        {
+            WriteLine($"BindingPattern: {node.VariableName}");
+            if (node.WhenGuard != null)
+            {
+                Indent();
+                WriteLine("When:");
+                Indent();
+                node.WhenGuard.Accept(this);
+                Unindent();
+                Unindent();
+            }
+        }
+
         public void Visit(AwaitExpressionNode node)
         {
             WriteLine("Await:");
