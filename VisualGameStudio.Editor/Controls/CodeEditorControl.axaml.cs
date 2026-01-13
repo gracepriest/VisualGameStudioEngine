@@ -326,17 +326,23 @@ public partial class CodeEditorControl : UserControl
     {
         base.OnAttachedToVisualTree(e);
 
-        // When reattached (e.g., tab switch), check if we need to apply text
-        // Only set if text differs - this preserves undo stack on tab switch
+        // When using Document binding, the Document carries the undo history
+        // and is the source of truth. Don't touch it on reattach.
+        if (Document != null)
+        {
+            // Just refresh the display
+            UpdateFoldings();
+            return;
+        }
+
+        // Fallback for Text-only binding (legacy mode)
         if (_textEditor != null && !string.IsNullOrEmpty(Text))
         {
             if (_textEditor.Document.Text != Text)
             {
-                // Text changed while detached - need to update (this will clear undo)
                 _textEditor.Document.Text = Text;
                 UpdateFoldings();
             }
-            // If text matches, do nothing - undo stack is preserved
         }
     }
 
@@ -1028,16 +1034,30 @@ public partial class CodeEditorControl : UserControl
             // Skip if this change came from the editor itself (prevents feedback loop)
             if (_isUpdatingTextFromEditor) return;
 
+            // Skip if we're using Document binding - Document is the source of truth
+            // and handles its own undo stack. Setting Text would corrupt the undo history.
+            if (Document != null) return;
+
             var newText = change.GetNewValue<string>() ?? "";
 
-            // Only update document if text actually differs - preserves undo stack
+            // Only update document if text actually differs
             if (_textEditor.Document.Text != newText)
             {
                 var isInitialLoad = !_hasLoadedInitialText;
-                _textEditor.Document.Text = newText;
+
+                // Use BeginUpdate/EndUpdate to group as a single undo operation
+                _textEditor.Document.BeginUpdate();
+                try
+                {
+                    _textEditor.Document.Text = newText;
+                }
+                finally
+                {
+                    _textEditor.Document.EndUpdate();
+                }
                 _hasLoadedInitialText = true;
 
-                // Only clear undo on initial file load, not on tab switches
+                // Only clear undo on initial file load
                 if (isInitialLoad && !string.IsNullOrEmpty(newText))
                 {
                     _textEditor.Document.UndoStack.ClearAll();

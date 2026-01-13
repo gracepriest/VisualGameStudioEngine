@@ -533,16 +533,33 @@ public class BuildService : IBuildService
                     });
                 }
             }
-            catch (Exception parseEx) when (parseEx.Message.Contains("Too many parse errors"))
+            catch (BasicLang.Compiler.TooManyErrorsException tooManyEx)
             {
-                var tokenSummary = string.Join(", ", tokens.Take(10).Select(t => $"{t.Type}:{t.Value}"));
-                errors.Add(new DiagnosticItem
+                // Add the actual parse errors that were collected before hitting the limit
+                foreach (var error in tooManyEx.CollectedErrors.Take(10))
                 {
-                    Id = "BL2000",
-                    Message = $"Parse failed: {parseEx.Message}. First tokens: {tokenSummary}",
-                    FilePath = filePath,
-                    Severity = DiagnosticSeverity.Error
-                });
+                    errors.Add(new DiagnosticItem
+                    {
+                        Id = "BL2001",
+                        Message = error.Message,
+                        FilePath = filePath,
+                        Line = error.Token?.Line ?? 0,
+                        Column = error.Token?.Column ?? 0,
+                        Severity = DiagnosticSeverity.Error
+                    });
+                }
+
+                // Add a summary message if there are more errors
+                if (tooManyEx.CollectedErrors.Count > 10)
+                {
+                    errors.Add(new DiagnosticItem
+                    {
+                        Id = "BL2000",
+                        Message = $"... and {tooManyEx.CollectedErrors.Count - 10} more parse errors",
+                        FilePath = filePath,
+                        Severity = DiagnosticSeverity.Error
+                    });
+                }
             }
         }
         catch (Exception ex)
@@ -946,18 +963,34 @@ public class BuildService : IBuildService
                     });
                 }
             }
-            catch (Exception parseEx) when (parseEx.Message.Contains("Too many parse errors"))
+            catch (BasicLang.Compiler.TooManyErrorsException tooManyEx)
             {
-                // Show the first few tokens to help diagnose the issue
-                var tokenSummary = string.Join(", ", tokens.Take(10).Select(t => $"{t.Type}:{t.Value}"));
+                // Add the actual parse errors that were collected before hitting the limit
                 result.Success = false;
-                result.Diagnostics.Add(new DiagnosticItem
+                foreach (var error in tooManyEx.CollectedErrors.Take(10))
                 {
-                    Id = "BL2000",
-                    Message = $"Parse failed: {parseEx.Message}. First tokens: {tokenSummary}",
-                    FilePath = filePath,
-                    Severity = DiagnosticSeverity.Error
-                });
+                    result.Diagnostics.Add(new DiagnosticItem
+                    {
+                        Id = "BL2001",
+                        Message = error.Message,
+                        FilePath = filePath,
+                        Line = error.Token?.Line ?? 0,
+                        Column = error.Token?.Column ?? 0,
+                        Severity = DiagnosticSeverity.Error
+                    });
+                }
+
+                // Add a summary message if there are more errors
+                if (tooManyEx.CollectedErrors.Count > 10)
+                {
+                    result.Diagnostics.Add(new DiagnosticItem
+                    {
+                        Id = "BL2000",
+                        Message = $"... and {tooManyEx.CollectedErrors.Count - 10} more parse errors",
+                        FilePath = filePath,
+                        Severity = DiagnosticSeverity.Error
+                    });
+                }
                 return result;
             }
 

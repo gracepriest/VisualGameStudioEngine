@@ -3908,7 +3908,7 @@ namespace BasicLang.Compiler
         {
             if (_errors.Count >= MaxErrors)
             {
-                throw new TooManyErrorsException($"Too many parse errors (>{MaxErrors}). Aborting.");
+                throw new TooManyErrorsException($"Too many parse errors (>{MaxErrors}). Aborting.", _errors);
             }
 
             if (_panicMode)
@@ -3930,6 +3930,12 @@ namespace BasicLang.Compiler
         private void Synchronize()
         {
             _panicMode = false;
+
+            // Always advance at least one token to avoid infinite loops
+            if (!IsAtEnd())
+            {
+                Advance();
+            }
 
             // Skip tokens until we find a synchronization point
             while (!IsAtEnd())
@@ -4055,8 +4061,11 @@ namespace BasicLang.Compiler
     /// </summary>
     public class TooManyErrorsException : Exception
     {
-        public TooManyErrorsException(string message) : base(message)
+        public List<ParseError> CollectedErrors { get; }
+
+        public TooManyErrorsException(string message, List<ParseError> errors = null) : base(message)
         {
+            CollectedErrors = errors ?? new List<ParseError>();
         }
     }
 }

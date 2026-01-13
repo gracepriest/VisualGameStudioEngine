@@ -509,6 +509,40 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     }
 
     /// <summary>
+    /// Replace content while preserving undo history (VS Code-like behavior).
+    /// Use this after refactoring operations instead of SetContent.
+    /// </summary>
+    public void ReplaceContent(string newContent)
+    {
+        if (TextDocument.Text == newContent) return;
+
+        // Use Replace which creates an undoable operation
+        TextDocument.BeginUpdate();
+        try
+        {
+            TextDocument.Replace(0, TextDocument.TextLength, newContent);
+        }
+        finally
+        {
+            TextDocument.EndUpdate();
+        }
+
+        // Update backing fields
+        _text = newContent;
+
+        // Update dirty state
+        var wasDirty = IsDirty;
+        IsDirty = _text != _originalText;
+
+        if (wasDirty != IsDirty)
+        {
+            DirtyChanged?.Invoke(this, EventArgs.Empty);
+            OnPropertyChanged(nameof(Title));
+            TitleChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
     /// Called by the view when editor text changes. Updates Text without triggering
     /// binding feedback that would clear the undo stack.
     /// </summary>
