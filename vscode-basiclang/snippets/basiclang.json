@@ -1,0 +1,383 @@
+{
+  "Function": {
+    "prefix": ["func", "function"],
+    "body": [
+      "Function ${1:Name}(${2:params}) As ${3:Integer}",
+      "    ${0}",
+      "End Function"
+    ],
+    "description": "Create a new function"
+  },
+  "Sub": {
+    "prefix": ["sub", "subroutine"],
+    "body": [
+      "Sub ${1:Name}(${2:params})",
+      "    ${0}",
+      "End Sub"
+    ],
+    "description": "Create a new subroutine"
+  },
+  "If Statement": {
+    "prefix": "if",
+    "body": [
+      "If ${1:condition} Then",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "If statement"
+  },
+  "If Else Statement": {
+    "prefix": "ife",
+    "body": [
+      "If ${1:condition} Then",
+      "    ${2}",
+      "Else",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "If-Else statement"
+  },
+  "If ElseIf Statement": {
+    "prefix": "ifeif",
+    "body": [
+      "If ${1:condition} Then",
+      "    ${2}",
+      "ElseIf ${3:condition} Then",
+      "    ${4}",
+      "Else",
+      "    ${0}",
+      "End If"
+    ],
+    "description": "If-ElseIf-Else statement"
+  },
+  "For Loop": {
+    "prefix": "for",
+    "body": [
+      "For ${1:i} As Integer = ${2:0} To ${3:10}",
+      "    ${0}",
+      "Next"
+    ],
+    "description": "For loop"
+  },
+  "For Step Loop": {
+    "prefix": "fors",
+    "body": [
+      "For ${1:i} As Integer = ${2:0} To ${3:10} Step ${4:1}",
+      "    ${0}",
+      "Next"
+    ],
+    "description": "For loop with step"
+  },
+  "For Each Loop": {
+    "prefix": ["foreach", "fore"],
+    "body": [
+      "For Each ${1:item} As ${2:Type} In ${3:collection}",
+      "    ${0}",
+      "Next"
+    ],
+    "description": "For Each loop"
+  },
+  "While Loop": {
+    "prefix": "while",
+    "body": [
+      "While ${1:condition}",
+      "    ${0}",
+      "End While"
+    ],
+    "description": "While loop"
+  },
+  "Do While Loop": {
+    "prefix": "dowhile",
+    "body": [
+      "Do While ${1:condition}",
+      "    ${0}",
+      "Loop"
+    ],
+    "description": "Do While loop"
+  },
+  "Do Until Loop": {
+    "prefix": "dountil",
+    "body": [
+      "Do Until ${1:condition}",
+      "    ${0}",
+      "Loop"
+    ],
+    "description": "Do Until loop"
+  },
+  "Do Loop While": {
+    "prefix": "doloopwhile",
+    "body": [
+      "Do",
+      "    ${0}",
+      "Loop While ${1:condition}"
+    ],
+    "description": "Do Loop While"
+  },
+  "Select Case": {
+    "prefix": ["select", "switch"],
+    "body": [
+      "Select Case ${1:variable}",
+      "    Case ${2:value1}",
+      "        ${3}",
+      "    Case ${4:value2}",
+      "        ${5}",
+      "    Case Else",
+      "        ${0}",
+      "End Select"
+    ],
+    "description": "Select Case statement"
+  },
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "Class ${1:ClassName}",
+      "    ${0}",
+      "End Class"
+    ],
+    "description": "Create a new class"
+  },
+  "Class with Constructor": {
+    "prefix": "classc",
+    "body": [
+      "Class ${1:ClassName}",
+      "    Private _${2:field} As ${3:Type}",
+      "",
+      "    Sub New(${2:field} As ${3:Type})",
+      "        _${2:field} = ${2:field}",
+      "    End Sub",
+      "",
+      "    ${0}",
+      "End Class"
+    ],
+    "description": "Create a class with constructor"
+  },
+  "Module": {
+    "prefix": "module",
+    "body": [
+      "Module ${1:ModuleName}",
+      "    ${0}",
+      "End Module"
+    ],
+    "description": "Create a new module"
+  },
+  "Namespace": {
+    "prefix": "namespace",
+    "body": [
+      "Namespace ${1:NamespaceName}",
+      "    ${0}",
+      "End Namespace"
+    ],
+    "description": "Create a namespace"
+  },
+  "Property": {
+    "prefix": "prop",
+    "body": [
+      "Property ${1:Name} As ${2:Type}",
+      "    Get",
+      "        Return _${1:Name}",
+      "    End Get",
+      "    Set(value As ${2:Type})",
+      "        _${1:Name} = value",
+      "    End Set",
+      "End Property"
+    ],
+    "description": "Create a property"
+  },
+  "Auto Property": {
+    "prefix": "propa",
+    "body": [
+      "Public Property ${1:Name} As ${2:Type}"
+    ],
+    "description": "Create an auto property"
+  },
+  "ReadOnly Property": {
+    "prefix": "propr",
+    "body": [
+      "ReadOnly Property ${1:Name} As ${2:Type}",
+      "    Get",
+      "        Return ${3:value}",
+      "    End Get",
+      "End Property"
+    ],
+    "description": "Create a read-only property"
+  },
+  "Try Catch": {
+    "prefix": "try",
+    "body": [
+      "Try",
+      "    ${0}",
+      "Catch ${1:ex} As Exception",
+      "    ' Handle error",
+      "End Try"
+    ],
+    "description": "Try-Catch block"
+  },
+  "Try Catch Finally": {
+    "prefix": "tryf",
+    "body": [
+      "Try",
+      "    ${0}",
+      "Catch ${1:ex} As Exception",
+      "    ' Handle error",
+      "Finally",
+      "    ' Cleanup",
+      "End Try"
+    ],
+    "description": "Try-Catch-Finally block"
+  },
+  "Using": {
+    "prefix": "using",
+    "body": [
+      "Using ${1:resource} As ${2:IDisposable} = ${3:New Object()}",
+      "    ${0}",
+      "End Using"
+    ],
+    "description": "Using block for disposable resources"
+  },
+  "Event": {
+    "prefix": "event",
+    "body": [
+      "Public Event ${1:EventName}(sender As Object, e As ${2:EventArgs})"
+    ],
+    "description": "Declare an event"
+  },
+  "Delegate": {
+    "prefix": "delegate",
+    "body": [
+      "Public Delegate Sub ${1:DelegateName}(${2:params})"
+    ],
+    "description": "Declare a delegate"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "Enum ${1:EnumName}",
+      "    ${2:Value1}",
+      "    ${3:Value2}",
+      "    ${0}",
+      "End Enum"
+    ],
+    "description": "Create an enumeration"
+  },
+  "Interface": {
+    "prefix": "interface",
+    "body": [
+      "Interface ${1:IInterfaceName}",
+      "    ${0}",
+      "End Interface"
+    ],
+    "description": "Create an interface"
+  },
+  "Structure": {
+    "prefix": "struct",
+    "body": [
+      "Structure ${1:StructName}",
+      "    Public ${2:Field1} As ${3:Type}",
+      "    ${0}",
+      "End Structure"
+    ],
+    "description": "Create a structure"
+  },
+  "Console.WriteLine": {
+    "prefix": ["cw", "writeline"],
+    "body": [
+      "Console.WriteLine(${0})"
+    ],
+    "description": "Write to console"
+  },
+  "Console.ReadLine": {
+    "prefix": ["cr", "readline"],
+    "body": [
+      "Console.ReadLine()"
+    ],
+    "description": "Read from console"
+  },
+  "Dim Variable": {
+    "prefix": "dim",
+    "body": [
+      "Dim ${1:name} As ${2:Type}"
+    ],
+    "description": "Declare a variable"
+  },
+  "Dim With Value": {
+    "prefix": "dimv",
+    "body": [
+      "Dim ${1:name} As ${2:Type} = ${3:value}"
+    ],
+    "description": "Declare a variable with initial value"
+  },
+  "Const": {
+    "prefix": "const",
+    "body": [
+      "Const ${1:NAME} As ${2:Type} = ${3:value}"
+    ],
+    "description": "Declare a constant"
+  },
+  "Main": {
+    "prefix": "main",
+    "body": [
+      "Sub Main()",
+      "    ${0}",
+      "End Sub"
+    ],
+    "description": "Main entry point"
+  },
+  "Main with Args": {
+    "prefix": "maina",
+    "body": [
+      "Sub Main(args As String())",
+      "    ${0}",
+      "End Sub"
+    ],
+    "description": "Main entry point with arguments"
+  },
+  "Lambda": {
+    "prefix": "lambda",
+    "body": [
+      "Function(${1:x}) ${2:x * 2}"
+    ],
+    "description": "Lambda expression"
+  },
+  "Async Function": {
+    "prefix": "asyncf",
+    "body": [
+      "Async Function ${1:Name}(${2:params}) As Task(Of ${3:Result})",
+      "    ${0}",
+      "End Function"
+    ],
+    "description": "Async function"
+  },
+  "Async Sub": {
+    "prefix": "asyncs",
+    "body": [
+      "Async Sub ${1:Name}(${2:params})",
+      "    ${0}",
+      "End Sub"
+    ],
+    "description": "Async subroutine"
+  },
+  "Region": {
+    "prefix": "region",
+    "body": [
+      "#Region \"${1:RegionName}\"",
+      "${0}",
+      "#End Region"
+    ],
+    "description": "Create a code region"
+  },
+  "File Header": {
+    "prefix": "header",
+    "body": [
+      "'--------------------------------------------------",
+      "' ${1:FileName}",
+      "' ${2:Description}",
+      "'",
+      "' Created: ${CURRENT_DATE}/${CURRENT_MONTH}/${CURRENT_YEAR}",
+      "' Author: ${3:Author}",
+      "'--------------------------------------------------",
+      "",
+      "${0}"
+    ],
+    "description": "File header comment"
+  }
+}

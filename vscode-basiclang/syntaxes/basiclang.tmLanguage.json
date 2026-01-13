@@ -1,0 +1,195 @@
+{
+  "name": "BasicLang",
+  "scopeName": "source.basiclang",
+  "fileTypes": ["bl", "bas"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#numbers" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#variables" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.apostrophe.basiclang",
+          "match": "'.*$"
+        },
+        {
+          "name": "comment.block.basiclang",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            { "include": "#comments" }
+          ]
+        },
+        {
+          "name": "comment.line.rem.basiclang",
+          "match": "(?i)^\\s*REM\\b.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.basiclang",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.basiclang",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.interpolated.basiclang",
+          "begin": "\\$\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.basiclang",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.basiclang",
+              "begin": "\\{",
+              "end": "\\}",
+              "patterns": [
+                { "include": "$self" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.basiclang",
+          "match": "(?i)\\b(If|Then|Else|ElseIf|End\\s+If|Select|Case|End\\s+Select|For|To|Step|Next|Each|In|While|End\\s+While|Do|Loop|Until|Continue|Exit|Return|GoTo|On\\s+Error|Resume|Throw)\\b"
+        },
+        {
+          "name": "keyword.declaration.basiclang",
+          "match": "(?i)\\b(Dim|Const|Static|ReDim|Preserve|As|New|With|End\\s+With|Using|End\\s+Using)\\b"
+        },
+        {
+          "name": "keyword.declaration.function.basiclang",
+          "match": "(?i)\\b(Sub|Function|End\\s+Sub|End\\s+Function|ByVal|ByRef|Optional|ParamArray|Async|Await|Iterator|Yield)\\b"
+        },
+        {
+          "name": "keyword.declaration.class.basiclang",
+          "match": "(?i)\\b(Class|End\\s+Class|Module|End\\s+Module|Namespace|End\\s+Namespace|Interface|End\\s+Interface|Enum|End\\s+Enum|Structure|End\\s+Structure)\\b"
+        },
+        {
+          "name": "keyword.declaration.property.basiclang",
+          "match": "(?i)\\b(Property|Get|Set|End\\s+Property|End\\s+Get|End\\s+Set)\\b"
+        },
+        {
+          "name": "keyword.modifier.basiclang",
+          "match": "(?i)\\b(Public|Private|Protected|Friend|Internal|Shared|Static|ReadOnly|WriteOnly|Overloads|Overrides|Overridable|NotOverridable|MustOverride|MustInherit|NotInheritable|Partial|Shadows|Virtual|Abstract|Sealed|Override)\\b"
+        },
+        {
+          "name": "keyword.other.basiclang",
+          "match": "(?i)\\b(Imports|Option|Strict|Explicit|Compare|Binary|Text|Inherits|Implements|Handles|AddHandler|RemoveHandler|RaiseEvent|Event|Delegate|Operator|Widening|Narrowing|Of|TypeOf|GetType|CType|DirectCast|TryCast|CBool|CByte|CChar|CDate|CDbl|CDec|CInt|CLng|CObj|CSByte|CShort|CSng|CStr|CUInt|CULng|CUShort)\\b"
+        },
+        {
+          "name": "keyword.control.exception.basiclang",
+          "match": "(?i)\\b(Try|Catch|Finally|End\\s+Try|When)\\b"
+        },
+        {
+          "name": "constant.language.basiclang",
+          "match": "(?i)\\b(True|False|Nothing|Null|Me|MyBase|MyClass)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.basiclang",
+          "match": "(?i)\\b(And|AndAlso|Or|OrElse|Xor|Not|Is|IsNot|Like|Mod)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.basiclang",
+          "match": "(=|<>|<|>|<=|>=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.basiclang",
+          "match": "(\\+|-|\\*|/|\\\\|\\^|&)"
+        },
+        {
+          "name": "keyword.operator.assignment.basiclang",
+          "match": "(\\+=|-=|\\*=|/=|\\\\=|\\^=|&=)"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.basiclang",
+          "match": "(?i)&H[0-9A-F]+L?"
+        },
+        {
+          "name": "constant.numeric.octal.basiclang",
+          "match": "(?i)&O[0-7]+L?"
+        },
+        {
+          "name": "constant.numeric.binary.basiclang",
+          "match": "(?i)&B[01]+L?"
+        },
+        {
+          "name": "constant.numeric.float.basiclang",
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?[FDR]?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.basiclang",
+          "match": "\\b\\d+[SILFD]?\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.basiclang",
+          "match": "(?i)\\b(Boolean|Byte|SByte|Char|Date|DateTime|Decimal|Double|Single|Integer|UInteger|Long|ULong|Short|UShort|String|Object|Variant)\\b"
+        },
+        {
+          "name": "storage.type.collection.basiclang",
+          "match": "(?i)\\b(Array|List|Dictionary|HashSet|Queue|Stack|Collection|IEnumerable|ICollection|IList|IDictionary)\\b"
+        },
+        {
+          "name": "entity.name.type.basiclang",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b(?=\\s*\\.)|(?<=As\\s+)\\b[A-Z][a-zA-Z0-9_]*\\b|(?<=New\\s+)\\b[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.basiclang",
+          "match": "(?i)(?<=\\b(Sub|Function)\\s+)\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "support.function.builtin.basiclang",
+          "match": "(?i)\\b(Abs|Asc|Chr|CStr|Format|InStr|InStrRev|Join|LCase|Left|Len|LTrim|Mid|Replace|Right|RTrim|Space|Split|Str|StrComp|StrConv|StrReverse|Trim|UCase|Val|Array|IsArray|IsDate|IsEmpty|IsNull|IsNumeric|IsObject|TypeName|VarType|CBool|CByte|CDate|CDbl|CDec|CInt|CLng|CSng|CStr|Fix|Int|Sgn|Rnd|Round|Timer|Now|Date|Time|DateAdd|DateDiff|DatePart|DateSerial|DateValue|Day|Hour|Minute|Month|Second|Weekday|Year|TimeSerial|TimeValue|MsgBox|InputBox|Print|Debug\\.Print|Console\\.WriteLine|Console\\.Write|Console\\.ReadLine|Console\\.ReadKey)\\b"
+        },
+        {
+          "name": "meta.function-call.basiclang",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\s*(?=\\()"
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.basiclang",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

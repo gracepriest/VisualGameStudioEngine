@@ -1,0 +1,255 @@
+{
+  "name": "basiclang",
+  "displayName": "BasicLang",
+  "description": "Language support for BasicLang - a modern BASIC-inspired programming language",
+  "version": "1.0.0",
+  "publisher": "visualgamestudio",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Debuggers",
+    "Snippets"
+  ],
+  "keywords": [
+    "basiclang",
+    "basic",
+    "game development",
+    "visual game studio"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/visualgamestudio/vscode-basiclang"
+  },
+  "icon": "icon.png",
+  "activationEvents": [
+    "onLanguage:basiclang",
+    "workspaceContains:**/*.bl",
+    "workspaceContains:**/*.bas",
+    "workspaceContains:**/*.blproj"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "basiclang",
+        "aliases": ["BasicLang", "BASIC", "basiclang"],
+        "extensions": [".bl", ".bas"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/basiclang-light.svg",
+          "dark": "./icons/basiclang-dark.svg"
+        }
+      },
+      {
+        "id": "basiclang-project",
+        "aliases": ["BasicLang Project"],
+        "extensions": [".blproj"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "basiclang",
+        "scopeName": "source.basiclang",
+        "path": "./syntaxes/basiclang.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "basiclang",
+        "path": "./snippets/basiclang.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "BasicLang",
+      "properties": {
+        "basiclang.languageServerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to BasicLang language server executable"
+        },
+        "basiclang.enableSemanticHighlighting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable semantic syntax highlighting"
+        },
+        "basiclang.enableInlayHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inlay hints for types and parameters"
+        },
+        "basiclang.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable code lens for references and implementations"
+        },
+        "basiclang.format.tabSize": {
+          "type": "number",
+          "default": 4,
+          "description": "Number of spaces for indentation"
+        },
+        "basiclang.format.insertSpaces": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use spaces instead of tabs"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "basiclang.restartServer",
+        "title": "Restart Language Server",
+        "category": "BasicLang"
+      },
+      {
+        "command": "basiclang.showOutput",
+        "title": "Show Output Channel",
+        "category": "BasicLang"
+      },
+      {
+        "command": "basiclang.build",
+        "title": "Build Project",
+        "category": "BasicLang"
+      },
+      {
+        "command": "basiclang.run",
+        "title": "Run Project",
+        "category": "BasicLang"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "basiclang.build",
+          "when": "editorLangId == basiclang"
+        },
+        {
+          "command": "basiclang.run",
+          "when": "editorLangId == basiclang"
+        }
+      ]
+    },
+    "debuggers": [
+      {
+        "type": "basiclang",
+        "label": "BasicLang Debug",
+        "languages": ["basiclang"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the BasicLang project file or source file",
+                "default": "${workspaceFolder}/Main.bl"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop on entry point",
+                "default": false
+              },
+              "args": {
+                "type": "array",
+                "description": "Command line arguments",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory",
+                "default": "${workspaceFolder}"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "basiclang",
+            "request": "launch",
+            "name": "Launch BasicLang",
+            "program": "${workspaceFolder}/Main.bl",
+            "stopOnEntry": false
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "BasicLang: Launch",
+            "description": "Launch and debug a BasicLang program",
+            "body": {
+              "type": "basiclang",
+              "request": "launch",
+              "name": "Launch BasicLang",
+              "program": "^\"\\${workspaceFolder}/Main.bl\"",
+              "stopOnEntry": false
+            }
+          }
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "basiclang"
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "basiclang",
+        "owner": "basiclang",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^(.+)\\((\\d+),(\\d+)\\):\\s+(error|warning)\\s+([A-Z]+\\d+):\\s+(.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        }
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "basiclang",
+        "required": ["task"],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The task to run (build, run, clean)"
+          },
+          "project": {
+            "type": "string",
+            "description": "Path to project file"
+          }
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}
