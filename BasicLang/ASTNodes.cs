@@ -1207,13 +1207,14 @@ namespace BasicLang.Compiler.AST
     public class ForLoopNode : StatementNode
     {
         public string Variable { get; set; }
+        public string VariableType { get; set; }  // Optional inline type declaration (For i As Integer)
         public ExpressionNode Start { get; set; }
         public ExpressionNode End { get; set; }
         public ExpressionNode Step { get; set; }
         public BlockNode Body { get; set; }
-        
+
         public ForLoopNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     

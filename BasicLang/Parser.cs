@@ -1899,15 +1899,20 @@ namespace BasicLang.Compiler
 
             node.Name = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
 
-            // Array dimensions
-            if (Match(TokenType.LeftBracket))
+            // Array dimensions - support both [] (C#-style) and () (VB-style) syntax
+            if (Match(TokenType.LeftBracket) || Match(TokenType.LeftParen))
             {
+                var isVBStyle = Previous().Type == TokenType.LeftParen;
+                var closeToken = isVBStyle ? TokenType.RightParen : TokenType.RightBracket;
+                var closeStr = isVBStyle ? ")" : "]";
+                var reopenToken = isVBStyle ? TokenType.LeftParen : TokenType.LeftBracket;
+                
                 var arrayType = new TypeReference("Array");
                 arrayType.IsArray = true;
 
                 do
                 {
-                    if (!Check(TokenType.RightBracket))
+                    if (!Check(closeToken))
                     {
                         var sizeExpr = ParseExpression();
                         if (sizeExpr is LiteralExpressionNode literal && literal.Value is int size)
@@ -1924,8 +1929,8 @@ namespace BasicLang.Compiler
                         arrayType.ArrayDimensions.Add(-1); // No size specified
                     }
 
-                    Consume(TokenType.RightBracket, "Expected ']'");
-                } while (Match(TokenType.LeftBracket));
+                    Consume(closeToken, $"Expected '{closeStr}'");
+                } while (Match(reopenToken));
 
                 Consume(TokenType.As, "Expected 'As'");
                 var elementType = ParseTypeReference();
@@ -2851,6 +2856,13 @@ namespace BasicLang.Compiler
 
             var node = new ForLoopNode(token.Line, token.Column);
             node.Variable = Consume(TokenType.Identifier, "Expected loop variable").Lexeme;
+
+            // Support optional inline type declaration: For i As Integer = ...
+            if (Match(TokenType.As))
+            {
+                node.VariableType = ParseTypeReference().Name;
+            }
+
             Consume(TokenType.Assignment, "Expected '='");
             node.Start = ParseExpression();
             Consume(TokenType.To, "Expected 'To'");

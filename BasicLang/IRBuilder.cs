@@ -2087,6 +2087,67 @@ namespace BasicLang.Compiler.IR
             // Handled in SelectStatementNode
         }
 
+        /// <summary>
+        /// Gets TypeInfo from a type name string for built-in types
+        /// </summary>
+        private TypeInfo GetTypeInfoFromName(string typeName)
+        {
+            return typeName?.ToLower() switch
+            {
+                "integer" => new TypeInfo("Integer", TypeKind.Primitive),
+                "int" => new TypeInfo("Integer", TypeKind.Primitive),
+                "int32" => new TypeInfo("Integer", TypeKind.Primitive),
+                "long" => new TypeInfo("Long", TypeKind.Primitive),
+                "int64" => new TypeInfo("Long", TypeKind.Primitive),
+                "short" => new TypeInfo("Short", TypeKind.Primitive),
+                "int16" => new TypeInfo("Short", TypeKind.Primitive),
+                "byte" => new TypeInfo("Byte", TypeKind.Primitive),
+                "single" => new TypeInfo("Single", TypeKind.Primitive),
+                "float" => new TypeInfo("Single", TypeKind.Primitive),
+                "double" => new TypeInfo("Double", TypeKind.Primitive),
+                "decimal" => new TypeInfo("Decimal", TypeKind.Primitive),
+                "boolean" => new TypeInfo("Boolean", TypeKind.Primitive),
+                "bool" => new TypeInfo("Boolean", TypeKind.Primitive),
+                "string" => new TypeInfo("String", TypeKind.Class),
+                "object" => new TypeInfo("Object", TypeKind.Class),
+                _ => null
+            };
+        }
+
+        /// <summary>
+        /// Tries to determine if a For loop step expression is negative at compile time.
+        /// </summary>
+        private bool IsNegativeStep(ExpressionNode stepExpr)
+        {
+            if (stepExpr == null)
+                return false; // Default step is 1 (positive)
+
+            // Check for unary minus on a literal: -2, -1, etc.
+            if (stepExpr is UnaryExpressionNode unary && unary.Operator == "-")
+            {
+                // -<positive literal> is negative
+                if (unary.Operand is LiteralExpressionNode innerLit)
+                {
+                    if (innerLit.Value is int i && i > 0) return true;
+                    if (innerLit.Value is long l && l > 0) return true;
+                    if (innerLit.Value is double d && d > 0) return true;
+                    if (innerLit.Value is float f && f > 0) return true;
+                }
+                return true; // Assume negative for unary minus on unknown expression
+            }
+
+            // Check for negative literal directly (parser might create this)
+            if (stepExpr is LiteralExpressionNode lit)
+            {
+                if (lit.Value is int i && i < 0) return true;
+                if (lit.Value is long l && l < 0) return true;
+                if (lit.Value is double d && d < 0) return true;
+                if (lit.Value is float f && f < 0) return true;
+            }
+
+            return false; // Assume positive for unknown expressions
+        }
+
         public void Visit(ForLoopNode node)
         {
             // Create loop blocks
@@ -2099,7 +2160,20 @@ namespace BasicLang.Compiler.IR
             node.Start.Accept(this);
             var startValue = _expressionResult;
 
-            var loopVar = GetOrCreateVariable(node.Variable, startValue.Type);
+            // Determine loop variable type - use inline type if specified, otherwise use start value type
+            TypeInfo loopVarType = startValue.Type;
+            if (!string.IsNullOrEmpty(node.VariableType))
+            {
+                loopVarType = GetTypeInfoFromName(node.VariableType) ?? startValue.Type;
+                // Add to local variables since this is an inline declaration
+                var localVar = new IRVariable(node.Variable, loopVarType, 0);
+                if (!_currentFunction.LocalVariables.Any(v => v.Name == node.Variable))
+                {
+                    _currentFunction.LocalVariables.Add(localVar);
+                }
+            }
+
+            var loopVar = GetOrCreateVariable(node.Variable, loopVarType);
             EmitInstruction(new IRAssignment(loopVar, startValue));
 
             // Jump to condition
@@ -2111,7 +2185,8 @@ namespace BasicLang.Compiler.IR
             var endValue = _expressionResult;
 
             var tempName = _currentFunction.GetNextTempName();
-            var cond = new IRCompare(tempName, CompareKind.Le, loopVar, endValue,
+            var compareKind = IsNegativeStep(node.Step) ? CompareKind.Ge : CompareKind.Le;
+            var cond = new IRCompare(tempName, compareKind, loopVar, endValue,
                 new TypeInfo("Boolean", TypeKind.Primitive));
             EmitInstruction(cond);
 
@@ -2923,8 +2998,41 @@ namespace BasicLang.Compiler.IR
             }
             else if (node.Callee is IdentifierExpressionNode idExpr)
             {
+                // Get symbol to check if this is an array access (VB-style arr(i) syntax)
+                var symbol = _semanticAnalyzer.GetNodeSymbol(node.Callee);
+                var calleeType = _semanticAnalyzer.GetNodeType(node.Callee);
+                
+                // Check if this is actually an array access, not a function call
+                // In VB, arr(i) can be either function call or array indexing
+                if (calleeType != null && calleeType.Kind == TypeKind.Array && node.Arguments.Count > 0)
+                {
+                    // This is array access, generate array element access
+                    node.Callee.Accept(this);
+                    var array = _expressionResult;
+                    
+                    var elementType = calleeType.ElementType ?? new TypeInfo("Object", TypeKind.Class);
+                    var gepTemp = _currentFunction.GetNextTempName();
+                    var gep = new IRGetElementPtr(gepTemp, array, elementType);
+                    
+                    foreach (var index in node.Arguments)
+                    {
+                        index.Accept(this);
+                        gep.Indices.Add(_expressionResult);
+                    }
+                    
+                    EmitInstruction(gep);
+                    
+                    // Load from array element
+                    var loadTemp = _currentFunction.GetNextTempName();
+                    var load = new IRLoad(loadTemp, gep, elementType);
+                    EmitInstruction(load);
+                    
+                    _expressionResult = load;
+                    return;
+                }
+                
                 // Get function symbol to check source module and ByRef parameters
-                var funcSymbol = _semanticAnalyzer.GetNodeSymbol(node.Callee);
+                var funcSymbol = symbol;
 
                 // Determine qualified function name (add module prefix if imported)
                 // Use funcSymbol.Name for correct casing (BASIC is case-insensitive, C# is not)

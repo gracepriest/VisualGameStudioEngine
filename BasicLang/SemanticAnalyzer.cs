@@ -292,6 +292,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             try
             {
+                // Pass 1: Register all function/sub signatures (allows forward references)
+                RegisterDeclarations(program);
+
+                // Pass 2: Full analysis including function bodies
                 program.Accept(this);
                 return _errors.Count == 0;
             }
@@ -1205,6 +1209,85 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return false;
         }
 
+        /// <summary>
+        /// First pass: Register all function/sub declarations to support forward references
+        /// </summary>
+        private void RegisterDeclarations(ProgramNode program)
+        {
+            foreach (var decl in program.Declarations)
+            {
+                RegisterDeclaration(decl);
+            }
+        }
+
+        private void RegisterDeclaration(ASTNode node)
+        {
+            // DEBUG: Console.WriteLine($"RegisterDeclaration: {node?.GetType()?.Name}");
+            switch (node)
+            {
+                case FunctionNode func:
+                    // DEBUG: Console.WriteLine($"  -> Function: {func.Name} returns {func.ReturnType?.Name}");
+                    RegisterFunctionSignature(func);
+                    break;
+                case SubroutineNode sub:
+                    // DEBUG: Console.WriteLine($"  -> Subroutine: {sub.Name}");
+                    RegisterSubSignature(sub);
+                    break;
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterDeclaration(member);
+                    break;
+                case ClassNode cls:
+                    foreach (var member in cls.Members)
+                        RegisterDeclaration(member);
+                    break;
+            }
+        }
+
+        private void RegisterFunctionSignature(FunctionNode node)
+        {
+            // Get return type
+            var returnTypeName = node.ReturnType?.Name ?? "Object";
+            var returnType = _typeManager.GetType(returnTypeName) ?? _typeManager.ObjectType;
+
+            // Build parameter list
+            var parameters = new List<Symbol>();
+            foreach (var param in node.Parameters)
+            {
+                var paramType = _typeManager.GetType(param.Type?.Name ?? "Object") ?? _typeManager.ObjectType;
+                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray });
+            }
+
+            // Check if already defined
+            if (_currentScope.Resolve(node.Name) == null)
+            {
+                var symbol = new Symbol(node.Name, SymbolKind.Function, returnType, node.Line, node.Column);
+                symbol.ReturnType = returnType;
+                symbol.Parameters = parameters;
+                _currentScope.Define(symbol);
+            }
+        }
+
+        private void RegisterSubSignature(SubroutineNode node)
+        {
+            // Build parameter list
+            var parameters = new List<Symbol>();
+            foreach (var param in node.Parameters)
+            {
+                var paramType = _typeManager.GetType(param.Type?.Name ?? "Object") ?? _typeManager.ObjectType;
+                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray });
+            }
+
+            // Check if already defined
+            if (_currentScope.Resolve(node.Name) == null)
+            {
+                var symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
+                symbol.Parameters = parameters;
+                _currentScope.Define(symbol);
+            }
+        }
+
+
         // ====================================================================
         // Program Structure
         // ====================================================================
@@ -1537,11 +1620,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(FunctionNode node)
         {
-            var symbol = new Symbol(node.Name, SymbolKind.Function, null, node.Line, node.Column);
-            symbol.Access = node.Access;
-
-            // Check if there's an existing symbol (could be stdlib function)
+            // Check if there's an existing symbol (could be pre-registered or stdlib)
             var existing = _currentScope.ResolveLocal(node.Name);
+            Symbol symbol;
+            
             if (existing != null)
             {
                 // Allow overriding stdlib functions (line 0 means stdlib)
@@ -1549,15 +1631,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     // Remove the stdlib definition to allow user override
                     _currentScope.Symbols.Remove(node.Name);
+                    symbol = new Symbol(node.Name, SymbolKind.Function, null, node.Line, node.Column);
+                    _currentScope.Define(symbol);
                 }
-                else if (!_currentScope.Define(symbol))
+                else if (existing.Line == node.Line && existing.Column == node.Column)
+                {
+                    // Pre-registered by RegisterFunctionSignature - use existing symbol
+                    symbol = existing;
+                }
+                else
                 {
                     Error($"Function '{node.Name}' is already defined in this scope", node.Line, node.Column);
-                    // Continue processing even with error
+                    symbol = new Symbol(node.Name, SymbolKind.Function, null, node.Line, node.Column);
                 }
             }
-
-            _currentScope.Define(symbol);
+            else
+            {
+                symbol = new Symbol(node.Name, SymbolKind.Function, null, node.Line, node.Column);
+                _currentScope.Define(symbol);
+            }
+            
+            symbol.Access = node.Access;
 
             // Enter function scope
             var functionScope = EnterScope(node.Name, ScopeKind.Function);
@@ -1613,26 +1707,38 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(SubroutineNode node)
         {
-            var symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
-            symbol.ReturnType = _typeManager.VoidType;
-            symbol.Access = node.Access;
-
-            // Check if there's an existing symbol (could be stdlib function)
+            // Check if there's an existing symbol (could be pre-registered or stdlib)
             var existing = _currentScope.ResolveLocal(node.Name);
+            Symbol symbol;
+            
             if (existing != null)
             {
                 // Allow overriding stdlib functions (line 0 means stdlib)
                 if (existing.Line == 0 && existing.Column == 0)
                 {
                     _currentScope.Symbols.Remove(node.Name);
+                    symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
+                    _currentScope.Define(symbol);
                 }
-                else if (!_currentScope.Define(symbol))
+                else if (existing.Line == node.Line && existing.Column == node.Column)
+                {
+                    // Pre-registered by RegisterSubSignature - use existing symbol
+                    symbol = existing;
+                }
+                else
                 {
                     Error($"Subroutine '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                    symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
                 }
             }
-
-            _currentScope.Define(symbol);
+            else
+            {
+                symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
+                _currentScope.Define(symbol);
+            }
+            
+            symbol.ReturnType = _typeManager.VoidType;
+            symbol.Access = node.Access;
             SetNodeSymbol(node, symbol);
 
             // Enter subroutine scope
@@ -3085,9 +3191,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(ForLoopNode node)
         {
+            // Determine loop variable type (use specified type or default to Integer)
+            TypeInfo loopVarType = _typeManager.IntegerType;
+            if (!string.IsNullOrEmpty(node.VariableType))
+            {
+                loopVarType = _typeManager.GetType(node.VariableType) ?? _typeManager.IntegerType;
+            }
+
             // Define loop variable
             var loopVarSymbol = new Symbol(node.Variable, SymbolKind.Variable,
-                                          _typeManager.IntegerType, node.Line, node.Column);
+                                          loopVarType, node.Line, node.Column);
 
             EnterScope("ForLoop", ScopeKind.Loop);
 
@@ -3837,6 +3950,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.Callee is IdentifierExpressionNode idExpr)
             {
                 calleeSymbol = _currentScope.Resolve(idExpr.Name);
+                // DEBUG: Console.WriteLine($"DEBUG: Resolving call to '{idExpr.Name}': symbol={calleeSymbol?.Name}, kind={calleeSymbol?.Kind}, returnType={calleeSymbol?.ReturnType?.Name}");
                 // If not found in local scope, check imported modules from project symbol table
                 if (calleeSymbol == null)
                 {
@@ -3848,6 +3962,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 calleeSymbol = GetNodeSymbol(memberExpr);
             }
 
+            // Check if this is actually an array access (VB-style arr(i) syntax)
+            if (calleeType != null && calleeType.Kind == TypeKind.Array && node.Arguments.Count > 0)
+            {
+                // This is array access - validate indices and set element type
+                foreach (var index in node.Arguments)
+                {
+                    index.Accept(this);
+                    var indexType = GetNodeType(index);
+                    if (indexType != null && !indexType.IsIntegral())
+                    {
+                        Error($"Array index must be an integer type, got '{indexType}'", index.Line, index.Column);
+                    }
+                }
+                SetNodeType(node, calleeType.ElementType ?? _typeManager.ObjectType);
+                return;
+            }
+            
             if (calleeSymbol != null &&
                 (calleeSymbol.Kind == SymbolKind.Function || calleeSymbol.Kind == SymbolKind.Subroutine))
             {

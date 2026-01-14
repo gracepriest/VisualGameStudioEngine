@@ -120,3 +120,23 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 3. **Improve IntelliSense**: Edit `BasicLang/LSP/CompletionService.cs`
 4. **Add game engine features**: Edit C++ in `VisualGameStudioEngine/`, update `RaylibWrapper/`
 5. **Update IDE binaries**: Copy from build output to `IDE/` folder
+
+## Recent Bug Fixes (January 2026)
+
+### For Loop Improvements
+- **Inline type declaration**: `For i As Integer = 1 To 10` now supported (Parser.cs, ASTNodes.cs)
+- **Negative Step fix**: Descending loops (`Step -2`) now use `>=` comparison instead of `<=` (IRBuilder.cs)
+
+### VB-Style Array Support
+- **Array declaration**: `Dim arr() As Integer = {1, 2, 3}` now supported alongside C#-style `arr[]` (Parser.cs)
+- **Array indexing**: `arr(i)` correctly generates `arr[i]` in C# output (IRBuilder.cs, SemanticAnalyzer.cs)
+
+### Forward Reference Support
+- **Two-pass semantic analysis**: Functions/Subs can now be called before their definition
+- Added `RegisterDeclarations()` pass that pre-registers all function signatures (SemanticAnalyzer.cs)
+
+### Key Implementation Details
+- `IsNegativeStep()` helper in IRBuilder.cs detects negative loop steps
+- `GetTypeInfoFromName()` helper resolves type names for inline declarations
+- Array access detection in `Visit(CallExpressionNode)` distinguishes `func()` from `arr()`
+- Symbol.ReturnType must be explicitly set for pre-registered functions
