@@ -17,18 +17,22 @@ public class ParserErrorTests
     #region Parser Error Message Tests
 
     [Test]
-    public void Parse_UnexpectedTopLevelToken_ThrowsException()
+    public void Parse_UnexpectedTopLevelToken_CollectsError()
     {
         var source = @"x = 10";  // Code at top level without declaration
         var tokens = Tokenize(source);
         var parser = new Parser(tokens);
 
-        // Parser may throw ParseException, TooManyErrorsException, or other exceptions
-        Assert.Catch(() => parser.Parse());
+        // Parser is error-tolerant and collects errors instead of throwing
+        parser.Parse();
+
+        // Should have at least one error for unexpected top-level token
+        Assert.That(parser.Errors.Count, Is.GreaterThan(0), "Expected parser errors for invalid top-level code");
+        Assert.That(parser.Errors[0].Message, Does.Contain("Unexpected").IgnoreCase.Or.Contain("top level").IgnoreCase);
     }
 
     [Test]
-    public void Parse_MissingThen_ThrowsException()
+    public void Parse_MissingThen_CollectsError()
     {
         var source = @"Sub Test()
     If x = 10
@@ -38,8 +42,11 @@ End Sub";
         var tokens = Tokenize(source);
         var parser = new Parser(tokens);
 
-        // Parser may throw ParseException, TooManyErrorsException, or other exceptions
-        Assert.Catch(() => parser.Parse());
+        // Parser is error-tolerant and collects errors instead of throwing
+        parser.Parse();
+
+        // Should have at least one error for missing 'Then'
+        Assert.That(parser.Errors.Count, Is.GreaterThan(0), "Expected parser errors for missing 'Then'");
     }
 
     #endregion

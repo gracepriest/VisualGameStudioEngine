@@ -22,16 +22,6 @@ namespace GeneratedCode
     {
         public static void Main()
         {
-            int sum = 0;
-            int product = 0;
-            string greeting = "";
-
-            sum = MathUtils.Add(5, 3);
-            Console.WriteLine("Sum = " + MathUtils.Add(5, 3));
-            product = MathUtils.Multiply(4, 7);
-            Console.WriteLine("Product = " + product);
-            greeting = StringUtils.Concat("Hello ", "World");
-            StringUtils.PrintMessage(greeting);
         }
 
     }

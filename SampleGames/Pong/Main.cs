@@ -65,6 +65,27 @@ namespace GeneratedCode
             FrameworkWrapper.Framework_Initialize(SCREEN_WIDTH, SCREEN_HEIGHT, "Pong");
             while (!FrameworkWrapper.Framework_ShouldClose())
             {
+                switch (gameState)
+                {
+                    case STATE_MENU:
+                        UpdateMenu();
+                        DrawMenu();
+                        break;
+                    case STATE_PLAYING:
+                        UpdatePlaying();
+                        DrawGame();
+                        break;
+                    case STATE_PAUSED:
+                        UpdatePaused();
+                        DrawPaused();
+                        break;
+                    case STATE_POINT:
+                        UpdatePoint();
+                        DrawGame();
+                        break;
+                    default:
+                        break;
+                }
             }
             FrameworkWrapper.Framework_Shutdown();
         }
@@ -98,7 +119,8 @@ namespace GeneratedCode
         {
             score1 = 0;
             score2 = 0;
-            paddle1Y = (SCREEN_HEIGHT / 2) - (PADDLE_HEIGHT / 2) * 100;
+            paddle1Y = ((SCREEN_HEIGHT / 2) - (PADDLE_HEIGHT / 2)) * 100;
+            paddle2Y = ((SCREEN_HEIGHT / 2) - (PADDLE_HEIGHT / 2)) * 100;
             ResetBall(0);
         }
 
@@ -108,29 +130,27 @@ namespace GeneratedCode
             int remainder = 0;
             int angleOffset = 0;
 
-            ballX = (SCREEN_WIDTH / 2) - (BALL_SIZE / 2) * 100;
-            ballY = (SCREEN_HEIGHT / 2) - (BALL_SIZE / 2) * 100;
+            ballX = ((SCREEN_WIDTH / 2) - (BALL_SIZE / 2)) * 100;
+            ballY = ((SCREEN_HEIGHT / 2) - (BALL_SIZE / 2)) * 100;
             ballSpeed = BALL_INITIAL_SPEED * 100;
-            randomSeed = randomSeed * 1103515245 + 12345;
+            randomSeed = (randomSeed * 1103515245) + 12345;
             randVal = randomSeed;
             if (randomSeed < 0)
             {
                 randVal = -randVal;
             }
-            remainder = randVal;
-            Mod(100);
-            angleOffset = randVal - 50;
+            remainder = randVal % 100;
+            angleOffset = remainder - 50;
             if (direction == 0)
             {
-                randomSeed = randomSeed * 1103515245 + 12345;
+                randomSeed = (randomSeed * 1103515245) + 12345;
                 randVal = randomSeed;
                 if (randomSeed < 0)
                 {
                     randVal = -randVal;
                 }
-                remainder = randVal;
-                Mod(2);
-                if (randVal == 0)
+                remainder = randVal % 2;
+                if (remainder == 0)
                 {
                     ballVelX = ballSpeed;
                 }
@@ -150,6 +170,7 @@ namespace GeneratedCode
                     ballVelX = -ballSpeed;
                 }
             }
+            ballVelY = (ballSpeed * angleOffset) / 200;
         }
 
         public static void UpdatePlaying()
@@ -186,7 +207,7 @@ namespace GeneratedCode
             {
                 paddle1Y = 0;
             }
-            maxY = SCREEN_HEIGHT - PADDLE_HEIGHT * 100;
+            maxY = (SCREEN_HEIGHT - PADDLE_HEIGHT) * 100;
             if (paddle1Y > maxY)
             {
                 paddle1Y = maxY;
@@ -211,14 +232,14 @@ namespace GeneratedCode
             int hitPos = 0;
             int rightPaddleX = 0;
 
-            ballX = ballX + ballVelX / 60;
-            ballY = ballY + ballVelY / 60;
+            ballX = ballX + (ballVelX / 60);
+            ballY = ballY + (ballVelY / 60);
             if (ballY <= 0)
             {
                 ballY = 0;
                 ballVelY = -ballVelY;
             }
-            maxBallY = SCREEN_HEIGHT - BALL_SIZE * 100;
+            maxBallY = (SCREEN_HEIGHT - BALL_SIZE) * 100;
             if (ballY >= maxBallY)
             {
                 ballY = maxBallY;
@@ -232,22 +253,22 @@ namespace GeneratedCode
             {
                 if (((by + BALL_SIZE) >= p1y) && (by <= (p1y + PADDLE_HEIGHT)))
                 {
-                    ballX = PADDLE_MARGIN + PADDLE_WIDTH * 100;
+                    ballX = (PADDLE_MARGIN + PADDLE_WIDTH) * 100;
                     ballVelX = -ballVelX;
-                    hitPos = ((by + (BALL_SIZE / 2)) - p1y) * 100 / PADDLE_HEIGHT;
-                    ballVelY = ballSpeed * (hitPos - 50) / 100;
+                    hitPos = (((by + (BALL_SIZE / 2)) - p1y) * 100) / PADDLE_HEIGHT;
+                    ballVelY = (ballSpeed * (hitPos - 50)) / 100;
                     IncreaseBallSpeed();
                 }
             }
-            rightPaddleX = SCREEN_WIDTH - PADDLE_MARGIN - PADDLE_WIDTH;
+            rightPaddleX = (SCREEN_WIDTH - PADDLE_MARGIN) - PADDLE_WIDTH;
             if ((bx + BALL_SIZE) >= rightPaddleX)
             {
                 if (((by + BALL_SIZE) >= p2y) && (by <= (p2y + PADDLE_HEIGHT)))
                 {
-                    ballX = rightPaddleX - BALL_SIZE * 100;
+                    ballX = (rightPaddleX - BALL_SIZE) * 100;
                     ballVelX = -ballVelX;
-                    hitPos = ((by + (BALL_SIZE / 2)) - p2y) * 100 / PADDLE_HEIGHT;
-                    ballVelY = ballSpeed * (hitPos - 50) / 100;
+                    hitPos = (((by + (BALL_SIZE / 2)) - p2y) * 100) / PADDLE_HEIGHT;
+                    ballVelY = (ballSpeed * (hitPos - 50)) / 100;
                     IncreaseBallSpeed();
                 }
             }
@@ -275,7 +296,7 @@ namespace GeneratedCode
         {
             int maxSpeed = 0;
 
-            ballSpeed = ballSpeed + BALL_SPEED_INCREASE * 100;
+            ballSpeed = ballSpeed + (BALL_SPEED_INCREASE * 100);
             maxSpeed = BALL_MAX_SPEED * 100;
             if (ballSpeed > maxSpeed)
             {
@@ -344,8 +365,8 @@ namespace GeneratedCode
                 {
                     FrameworkWrapper.Framework_DrawText("Player 2 Scores!", 280, 350, 32, (byte)(255), (byte)(200), (byte)(100), (byte)(255));
                 }
-                FrameworkWrapper.Framework_EndDrawing();
             }
+            FrameworkWrapper.Framework_EndDrawing();
         }
 
         public static void DrawGameElements()

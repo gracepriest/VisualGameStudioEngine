@@ -141,7 +141,45 @@ namespace BasicLang.Debugger
             }
             catch (Exception ex)
             {
-                OnOutput($"Runtime error: {ex.Message}\n");
+                // Check for unhandled exception breakpoints
+                var exceptionBreakpoints = _breakpointManager.GetAllExceptionBreakpoints();
+                bool breakpointHandled = false;
+
+                foreach (var bp in exceptionBreakpoints)
+                {
+                    if (!bp.Enabled)
+                        continue;
+
+                    var exceptionTypeName = ex.GetType().Name;
+                    bool typeMatches = bp.ExceptionType == "*" ||
+                        string.Equals(bp.ExceptionType, exceptionTypeName, StringComparison.OrdinalIgnoreCase);
+
+                    if (typeMatches && (bp.ExceptionMode == ExceptionBreakMode.Always ||
+                                        bp.ExceptionMode == ExceptionBreakMode.Unhandled ||
+                                        bp.ExceptionMode == ExceptionBreakMode.UserUnhandled))
+                    {
+                        ExceptionBreakpointHit?.Invoke(this, new ExceptionBreakpointEventArgs
+                        {
+                            ExceptionType = exceptionTypeName,
+                            ExceptionMessage = ex.Message,
+                            StackTrace = ex.StackTrace ?? "",
+                            Line = _currentLine,
+                            File = _currentFile,
+                            IsHandled = false
+                        });
+
+                        _paused = true;
+                        _pauseEvent.Reset();
+                        _pauseEvent.Wait();
+                        breakpointHandled = true;
+                        break;
+                    }
+                }
+
+                if (!breakpointHandled)
+                {
+                    OnOutput($"Runtime error: {ex.Message}\n");
+                }
             }
         }
 
@@ -474,48 +512,214 @@ namespace BasicLang.Debugger
 
         private object ExecuteInstruction(IRInstruction instruction, CallFrame frame)
         {
-            switch (instruction)
+            try
             {
-                case IRBinaryOp binOp:
-                    var left = EvaluateValue(binOp.Left, frame);
-                    var right = EvaluateValue(binOp.Right, frame);
-                    var result = PerformBinaryOp(binOp.Operation, left, right);
-                    frame.LocalVariables[binOp.Name] = result;
-                    break;
+                switch (instruction)
+                {
+                    case IRBinaryOp binOp:
+                        var left = EvaluateValue(binOp.Left, frame);
+                        var right = EvaluateValue(binOp.Right, frame);
+                        var result = PerformBinaryOp(binOp.Operation, left, right);
+                        SetVariableWithDataBreakpointCheck(frame, binOp.Name, result);
+                        break;
 
-                case IRUnaryOp unaryOp:
-                    var operand = EvaluateValue(unaryOp.Operand, frame);
-                    var unaryResult = PerformUnaryOp(unaryOp.Operation, operand);
-                    frame.LocalVariables[unaryOp.Name] = unaryResult;
-                    break;
+                    case IRUnaryOp unaryOp:
+                        var operand = EvaluateValue(unaryOp.Operand, frame);
+                        var unaryResult = PerformUnaryOp(unaryOp.Operation, operand);
+                        SetVariableWithDataBreakpointCheck(frame, unaryOp.Name, unaryResult);
+                        break;
 
-                case IRCall call:
-                    var callResult = ExecuteCall(call, frame);
-                    if (!string.IsNullOrEmpty(call.Name))
-                        frame.LocalVariables[call.Name] = callResult;
-                    break;
+                    case IRCall call:
+                        var callResult = ExecuteCall(call, frame);
+                        if (!string.IsNullOrEmpty(call.Name))
+                            SetVariableWithDataBreakpointCheck(frame, call.Name, callResult);
+                        break;
 
-                case IRStore store:
-                    var storeValue = EvaluateValue(store.Value, frame);
-                    if (store.Address is IRVariable varRef)
-                        frame.LocalVariables[varRef.Name] = storeValue;
-                    break;
+                    case IRStore store:
+                        var storeValue = EvaluateValue(store.Value, frame);
+                        if (store.Address is IRVariable varRef)
+                            SetVariableWithDataBreakpointCheck(frame, varRef.Name, storeValue);
+                        break;
 
-                case IRAlloca alloca:
-                    frame.LocalVariables[alloca.Name] = GetDefaultValue(alloca.Type);
-                    break;
+                    case IRAlloca alloca:
+                        SetVariableWithDataBreakpointCheck(frame, alloca.Name, GetDefaultValue(alloca.Type));
+                        break;
 
-                case IRAssignment assignment:
-                    var assignValue = EvaluateValue(assignment.Value, frame);
-                    frame.LocalVariables[assignment.Target.Name] = assignValue;
-                    break;
+                    case IRAssignment assignment:
+                        var assignValue = EvaluateValue(assignment.Value, frame);
+                        SetVariableWithDataBreakpointCheck(frame, assignment.Target.Name, assignValue);
+                        break;
 
-                case IRReturn ret:
-                    var retValue = ret.Value != null ? EvaluateValue(ret.Value, frame) : null;
-                    return new ReturnValue { Value = retValue };
+                    case IRReturn ret:
+                        var retValue = ret.Value != null ? EvaluateValue(ret.Value, frame) : null;
+                        return new ReturnValue { Value = retValue };
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                // Check for exception breakpoints
+                if (CheckExceptionBreakpoint(ex, frame))
+                {
+                    _pauseEvent.Wait();
+                }
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Set a variable value and check for data breakpoints
+        /// </summary>
+        private void SetVariableWithDataBreakpointCheck(CallFrame frame, string variableName, object newValue)
+        {
+            // Get the old value if it exists
+            object oldValue = null;
+            bool hadOldValue = frame.LocalVariables.TryGetValue(variableName, out oldValue);
+            if (!hadOldValue)
+            {
+                _globalVariables.TryGetValue(variableName, out oldValue);
             }
 
-            return null;
+            // Set the new value
+            frame.LocalVariables[variableName] = newValue;
+
+            // Check for data breakpoints on this variable
+            var dataBreakpoint = _breakpointManager.GetDataBreakpoint(variableName);
+            if (dataBreakpoint != null && dataBreakpoint.Enabled)
+            {
+                bool shouldTrigger = false;
+
+                // Check if value actually changed (for Write breakpoints)
+                bool valueChanged = !Equals(oldValue, newValue);
+
+                switch (dataBreakpoint.DataAccessType)
+                {
+                    case DataBreakpointAccessType.Write:
+                        shouldTrigger = valueChanged;
+                        break;
+                    case DataBreakpointAccessType.ReadWrite:
+                        shouldTrigger = valueChanged; // Write access
+                        break;
+                }
+
+                if (shouldTrigger)
+                {
+                    // Update previous value for tracking
+                    dataBreakpoint.PreviousValue = newValue;
+
+                    // Fire the event
+                    DataBreakpointHit?.Invoke(this, new DataBreakpointEventArgs
+                    {
+                        VariableName = variableName,
+                        OldValue = oldValue,
+                        NewValue = newValue,
+                        AccessType = DataBreakpointAccessType.Write,
+                        Line = _currentLine,
+                        File = _currentFile
+                    });
+
+                    // Pause execution
+                    _paused = true;
+                    _pauseEvent.Reset();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Check for read access data breakpoints
+        /// </summary>
+        private void CheckReadDataBreakpoint(string variableName, object value)
+        {
+            var dataBreakpoint = _breakpointManager.GetDataBreakpoint(variableName);
+            if (dataBreakpoint != null && dataBreakpoint.Enabled)
+            {
+                if (dataBreakpoint.DataAccessType == DataBreakpointAccessType.Read ||
+                    dataBreakpoint.DataAccessType == DataBreakpointAccessType.ReadWrite)
+                {
+                    // Fire the event
+                    DataBreakpointHit?.Invoke(this, new DataBreakpointEventArgs
+                    {
+                        VariableName = variableName,
+                        OldValue = value,
+                        NewValue = value,
+                        AccessType = DataBreakpointAccessType.Read,
+                        Line = _currentLine,
+                        File = _currentFile
+                    });
+
+                    // Pause execution
+                    _paused = true;
+                    _pauseEvent.Reset();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Check if an exception breakpoint should trigger
+        /// </summary>
+        private bool CheckExceptionBreakpoint(Exception ex, CallFrame frame)
+        {
+            var exceptionBreakpoints = _breakpointManager.GetAllExceptionBreakpoints();
+            if (exceptionBreakpoints.Count == 0)
+                return false;
+
+            var exceptionTypeName = ex.GetType().Name;
+
+            foreach (var bp in exceptionBreakpoints)
+            {
+                if (!bp.Enabled)
+                    continue;
+
+                // Check if this breakpoint matches the exception type
+                bool typeMatches = bp.ExceptionType == "*" ||
+                    string.Equals(bp.ExceptionType, exceptionTypeName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(bp.ExceptionType, ex.GetType().FullName, StringComparison.OrdinalIgnoreCase);
+
+                if (!typeMatches)
+                    continue;
+
+                // Check exception mode
+                bool shouldBreak = bp.ExceptionMode == ExceptionBreakMode.Always;
+                // Note: Unhandled and UserUnhandled would require more context about catch blocks
+
+                if (shouldBreak)
+                {
+                    // Fire the event
+                    ExceptionBreakpointHit?.Invoke(this, new ExceptionBreakpointEventArgs
+                    {
+                        ExceptionType = exceptionTypeName,
+                        ExceptionMessage = ex.Message,
+                        StackTrace = GetCurrentStackTrace(frame),
+                        Line = _currentLine,
+                        File = _currentFile,
+                        IsHandled = false
+                    });
+
+                    // Pause execution
+                    _paused = true;
+                    _pauseEvent.Reset();
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Get the current stack trace as a string
+        /// </summary>
+        private string GetCurrentStackTrace(CallFrame currentFrame)
+        {
+            var lines = new List<string>();
+            lines.Add($"  at {currentFrame?.FunctionName ?? "unknown"} line {_currentLine}");
+
+            foreach (var frame in _callStack.Skip(1))
+            {
+                lines.Add($"  at {frame.FunctionName} line {frame.CurrentLine}");
+            }
+
+            return string.Join("\n", lines);
         }
 
         private object EvaluateValue(IRValue value, CallFrame frame)
@@ -526,11 +730,15 @@ namespace BasicLang.Debugger
                     return constant.Value;
 
                 case IRVariable variable:
+                    object varValue = null;
                     if (frame.LocalVariables.TryGetValue(variable.Name, out var localVal))
-                        return localVal;
-                    if (_globalVariables.TryGetValue(variable.Name, out var globalVal))
-                        return globalVal;
-                    return null;
+                        varValue = localVal;
+                    else if (_globalVariables.TryGetValue(variable.Name, out var globalVal))
+                        varValue = globalVal;
+
+                    // Check for read data breakpoints
+                    CheckReadDataBreakpoint(variable.Name, varValue);
+                    return varValue;
 
                 case IRLoad load:
                     return EvaluateValue(load.Address, frame);

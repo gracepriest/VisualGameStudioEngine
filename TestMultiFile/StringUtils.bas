@@ -15,3 +15,6 @@ End Sub
 Public Sub kprint(msg as String)
 Console.WriteLine(msg)
 END Sub 
+Public Sub returnSTRING()
+	Console.WriteLine(Main.arr)
+End Sub

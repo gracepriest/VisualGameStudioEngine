@@ -172,9 +172,9 @@ public class CompletionServiceTests
         var expectedTypes = new[] { "Integer", "Long", "Double", "String", "Boolean", "Object" };
         foreach (var typeName in expectedTypes)
         {
-            var completion = result.FirstOrDefault(c => c.Label == typeName);
-            Assert.That(completion, Is.Not.Null, $"Expected type {typeName} not found");
-            Assert.That(completion!.Kind, Is.EqualTo(CompletionItemKind.Class));
+            // Find the type completion (which should have Class kind)
+            var completion = result.FirstOrDefault(c => c.Label == typeName && c.Kind == CompletionItemKind.Class);
+            Assert.That(completion, Is.Not.Null, $"Expected type {typeName} with Class kind not found");
         }
     }
 

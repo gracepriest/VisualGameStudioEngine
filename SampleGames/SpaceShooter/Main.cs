@@ -172,9 +172,8 @@ namespace GeneratedCode
                 {
                     randVal = -randVal;
                 }
-                remainder = randVal;
-                Mod(SCREEN_WIDTH - ENEMY_SIZE);
-                enemyX = randVal * 100;
+                remainder = randVal % SCREEN_WIDTH - ENEMY_SIZE;
+                enemyX = remainder * 100;
                 enemyY = -ENEMY_SIZE * 100;
                 spawnTimer = 90 - score / 10;
                 if (spawnTimer < 40)
@@ -317,9 +316,8 @@ namespace GeneratedCode
             showPlayer = true;
             if (invincibleTimer > 0)
             {
-                blinkMod = invincibleTimer;
-                Mod(10);
-                if (invincibleTimer < 5)
+                blinkMod = invincibleTimer % 10;
+                if (blinkMod < 5)
                 {
                     showPlayer = false;
                 }
