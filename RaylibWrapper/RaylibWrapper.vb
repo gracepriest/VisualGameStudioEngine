@@ -1585,6 +1585,314 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Animation Controller System"
+    ' Callback delegate for state enter/exit events
+    Public Delegate Sub AnimStateCallback(instanceId As Integer, stateId As Integer, userData As IntPtr)
+
+    ' ---- Controller Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_Create(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_Destroy(controllerId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_Get(name As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_IsValid(controllerId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_Clone(controllerId As Integer, newName As String) As Integer
+    End Function
+
+    ' ---- State Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_AddState(controllerId As Integer, stateName As String, animClipId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_AddBlendState1D(controllerId As Integer, stateName As String, paramName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_AddBlendState2D(controllerId As Integer, stateName As String, paramX As String, paramY As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_RemoveState(controllerId As Integer, stateId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_GetState(controllerId As Integer, stateName As String) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetStateCount(controllerId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_SetDefaultState(controllerId As Integer, stateId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetDefaultState(controllerId As Integer) As Integer
+    End Function
+
+    ' ---- Blend State Configuration ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_AddBlendClip(controllerId As Integer, stateId As Integer, animClipId As Integer, threshold As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_AddBlendClip2D(controllerId As Integer, stateId As Integer, animClipId As Integer, x As Single, y As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetBlendClipCount(controllerId As Integer, stateId As Integer) As Integer
+    End Function
+
+    ' ---- State Properties ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_SetStateSpeed(controllerId As Integer, stateId As Integer, speed As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetStateSpeed(controllerId As Integer, stateId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_SetStateLoop(controllerId As Integer, stateId As Integer, <MarshalAs(UnmanagedType.I1)> loopState As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetStateLoop(controllerId As Integer, stateId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Transition Management ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_AddTransition(controllerId As Integer, fromState As Integer, toState As Integer, duration As Single) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_RemoveTransition(controllerId As Integer, transitionId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetTransitionCount(controllerId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_SetTransitionDuration(controllerId As Integer, transitionId As Integer, duration As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetTransitionDuration(controllerId As Integer, transitionId As Integer) As Single
+    End Function
+
+    ' ---- Any-State Transitions ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_AddAnyStateTransition(controllerId As Integer, toState As Integer, duration As Single) As Integer
+    End Function
+
+    ' ---- Transition Conditions ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_AddCondition(controllerId As Integer, transitionId As Integer, paramName As String, conditionType As Integer, threshold As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_AddBoolCondition(controllerId As Integer, transitionId As Integer, paramName As String, <MarshalAs(UnmanagedType.I1)> value As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_AddTriggerCondition(controllerId As Integer, transitionId As Integer, triggerName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_ClearConditions(controllerId As Integer, transitionId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetConditionCount(controllerId As Integer, transitionId As Integer) As Integer
+    End Function
+
+    ' ---- Exit Time ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_SetExitTime(controllerId As Integer, transitionId As Integer, <MarshalAs(UnmanagedType.I1)> hasExitTime As Boolean, exitTimeNormalized As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_HasExitTime(controllerId As Integer, transitionId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Controller Parameters ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_SetFloat(controllerId As Integer, paramName As String, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_GetFloat(controllerId As Integer, paramName As String, defaultValue As Single) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_SetInt(controllerId As Integer, paramName As String, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_GetInt(controllerId As Integer, paramName As String, defaultValue As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_SetBool(controllerId As Integer, paramName As String, <MarshalAs(UnmanagedType.I1)> value As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_GetBool(controllerId As Integer, paramName As String, <MarshalAs(UnmanagedType.I1)> defaultValue As Boolean) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_SetTrigger(controllerId As Integer, triggerName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_ResetTrigger(controllerId As Integer, triggerName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_HasParameter(controllerId As Integer, paramName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Controller Instance (bound to entity) ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_CreateInstance(controllerId As Integer, entityId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_DestroyInstance(instanceId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_IsInstanceValid(instanceId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Instance State ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_UpdateInstance(instanceId As Integer, dt As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetCurrentState(instanceId As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetCurrentStateName(instanceId As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Gets the current state name as a managed string</summary>
+    Public Function AnimCtrl_GetCurrentStateName(instanceId As Integer) As String
+        Dim ptr = Framework_AnimCtrl_GetCurrentStateName(instanceId)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_IsInTransition(instanceId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetTransitionProgress(instanceId As Integer) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetNormalizedTime(instanceId As Integer) As Single
+    End Function
+
+    ' ---- Instance Parameters (override controller defaults) ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_InstanceSetFloat(instanceId As Integer, paramName As String, value As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_InstanceGetFloat(instanceId As Integer, paramName As String, defaultValue As Single) As Single
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_InstanceSetInt(instanceId As Integer, paramName As String, value As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_InstanceGetInt(instanceId As Integer, paramName As String, defaultValue As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_InstanceSetBool(instanceId As Integer, paramName As String, <MarshalAs(UnmanagedType.I1)> value As Boolean)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_AnimCtrl_InstanceGetBool(instanceId As Integer, paramName As String, <MarshalAs(UnmanagedType.I1)> defaultValue As Boolean) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_InstanceSetTrigger(instanceId As Integer, triggerName As String)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_AnimCtrl_InstanceResetTrigger(instanceId As Integer, triggerName As String)
+    End Sub
+
+    ' ---- Force State Change ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_ForceState(instanceId As Integer, stateId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_CrossFade(instanceId As Integer, stateId As Integer, duration As Single)
+    End Sub
+
+    ' ---- Playback Control ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_Pause(instanceId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_Resume(instanceId As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_IsPaused(instanceId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_SetSpeed(instanceId As Integer, speed As Single)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetSpeed(instanceId As Integer) As Single
+    End Function
+
+    ' ---- Callbacks ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_SetOnStateEnter(controllerId As Integer, callback As AnimStateCallback, userData As IntPtr)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimCtrl_SetOnStateExit(controllerId As Integer, callback As AnimStateCallback, userData As IntPtr)
+    End Sub
+
+    ' ---- Debug ----
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetControllerCount() As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimCtrl_GetInstanceCount() As Integer
+    End Function
+#End Region
+
 #Region "Sprite Sheet Tools"
     ' Create a sprite sheet definition (grid-based layout)
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
@@ -9689,6 +9997,278 @@ Public Module FrameworkWrapper
 #Region "Cleanup"
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_ResourcesShutdown()
+    End Sub
+#End Region
+
+#Region "Entity Convenience Functions"
+    ' These provide a simpler API that wraps the ECS system
+    ' Used by BasicLang FrameworkStdLib for easier game development
+
+    ''' <summary>Creates a new entity and adds Transform2D component</summary>
+    Public Function Framework_Entity_Create() As Integer
+        Dim entity = Framework_Ecs_CreateEntity()
+        Framework_Ecs_AddTransform2D(entity, 0, 0, 0, 1, 1)
+        Return entity
+    End Function
+
+    ''' <summary>Destroys an entity</summary>
+    Public Sub Framework_Entity_Destroy(entity As Integer)
+        Framework_Ecs_DestroyEntity(entity)
+    End Sub
+
+    ''' <summary>Sets the position of an entity</summary>
+    Public Sub Framework_Entity_SetPosition(entity As Integer, x As Single, y As Single)
+        If Not Framework_Ecs_HasTransform2D(entity) Then
+            Framework_Ecs_AddTransform2D(entity, x, y, 0, 1, 1)
+        Else
+            Framework_Ecs_SetTransformPosition(entity, x, y)
+        End If
+    End Sub
+
+    ''' <summary>Gets the X position of an entity</summary>
+    Public Function Framework_Entity_GetPositionX(entity As Integer) As Single
+        If Not Framework_Ecs_HasTransform2D(entity) Then Return 0
+        Dim pos = Framework_Ecs_GetTransformPosition(entity)
+        Return pos.X
+    End Function
+
+    ''' <summary>Gets the Y position of an entity</summary>
+    Public Function Framework_Entity_GetPositionY(entity As Integer) As Single
+        If Not Framework_Ecs_HasTransform2D(entity) Then Return 0
+        Dim pos = Framework_Ecs_GetTransformPosition(entity)
+        Return pos.Y
+    End Function
+
+    ''' <summary>Sets the velocity of an entity</summary>
+    Public Sub Framework_Entity_SetVelocity(entity As Integer, vx As Single, vy As Single)
+        If Not Framework_Ecs_HasVelocity2D(entity) Then
+            Framework_Ecs_AddVelocity2D(entity, vx, vy)
+        Else
+            Framework_Ecs_SetVelocity(entity, vx, vy)
+        End If
+    End Sub
+
+    ''' <summary>Sets the sprite texture for an entity</summary>
+    Public Sub Framework_Entity_SetSprite(entity As Integer, textureHandle As Integer)
+        If Not Framework_Ecs_HasSprite2D(entity) Then
+            ' AddSprite2D params: entity, textureHandle, srcX, srcY, srcW, srcH, r, g, b, a, layer
+            ' Use 0,0,0,0 for source (meaning full texture), white tint (255,255,255,255), layer 0
+            Framework_Ecs_AddSprite2D(entity, textureHandle, 0, 0, 0, 0, 255, 255, 255, 255, 0)
+        Else
+            Framework_Ecs_SetSpriteTexture(entity, textureHandle)
+        End If
+    End Sub
+
+    ''' <summary>Sets a box collider for an entity</summary>
+    Public Sub Framework_Entity_SetColliderBox(entity As Integer, width As Single, height As Single)
+        If Not Framework_Ecs_HasBoxCollider2D(entity) Then
+            Framework_Ecs_AddBoxCollider2D(entity, 0, 0, width, height, False)
+        Else
+            Framework_Ecs_SetBoxCollider(entity, 0, 0, width, height)
+        End If
+    End Sub
+
+    ''' <summary>Checks if an entity is active/enabled</summary>
+    Public Function Framework_Entity_IsActive(entity As Integer) As Boolean
+        Return Framework_Ecs_IsEnabled(entity)
+    End Function
+
+    ''' <summary>Sets whether an entity is active/enabled</summary>
+    Public Sub Framework_Entity_SetActive(entity As Integer, active As Boolean)
+        Framework_Ecs_SetEnabled(entity, active)
+    End Sub
+#End Region
+
+#Region "Sound Convenience Functions"
+    ' These provide simpler sound functions using handles
+
+    ''' <summary>Loads a sound and returns a handle</summary>
+    Public Function Framework_LoadSound(path As String) As Integer
+        Return Framework_LoadSoundH(path)
+    End Function
+
+    ''' <summary>Plays a sound by handle</summary>
+    Public Sub Framework_PlaySound(handle As Integer)
+        Framework_PlaySoundH(handle)
+    End Sub
+
+    ''' <summary>Stops a sound by handle</summary>
+    Public Sub Framework_StopSound(handle As Integer)
+        Framework_StopSoundH(handle)
+    End Sub
+
+    ''' <summary>Sets the volume of a sound by handle</summary>
+    Public Sub Framework_SetSoundVolume(handle As Integer, volume As Single)
+        Framework_SetSoundVolumeH(handle, volume)
+    End Sub
+
+    ''' <summary>Loads music and returns a handle</summary>
+    Public Function Framework_LoadMusic(path As String) As Integer
+        Return Framework_Audio_LoadMusic(path)
+    End Function
+
+    ''' <summary>Plays music by handle</summary>
+    Public Sub Framework_PlayMusic(handle As Integer)
+        Framework_Audio_PlayMusic(handle)
+    End Sub
+
+    ''' <summary>Stops music by handle</summary>
+    Public Sub Framework_StopMusic(handle As Integer)
+        Framework_Audio_StopMusic(handle)
+    End Sub
+#End Region
+
+#Region "Camera Convenience Functions"
+    ''' <summary>Makes camera follow an entity with smoothing</summary>
+    Public Sub Framework_Camera_Follow(entity As Integer, lerp As Single)
+        Framework_Camera_FollowEntity(entity)
+        Framework_Camera_SetFollowLerp(lerp)
+    End Sub
+#End Region
+
+#Region "UI Convenience Functions"
+    ''' <summary>Checks if a UI button was clicked this frame</summary>
+    Public Function Framework_UI_IsClicked(elementId As Integer) As Boolean
+        Return Framework_UI_GetState(elementId) = 3 ' State 3 = Clicked
+    End Function
+
+    ''' <summary>Renders all UI elements (alias for Framework_UI_Draw)</summary>
+    Public Sub Framework_UI_Render()
+        Framework_UI_Draw()
+    End Sub
+#End Region
+
+#Region "Timer Convenience Functions"
+    ''' <summary>Simplified timer that fires once after delay (no callback)</summary>
+    Public Function Framework_Timer_After(delay As Single) As Integer
+        Return Framework_Timer_After(delay, Nothing, IntPtr.Zero)
+    End Function
+
+    ''' <summary>Checks if a timer has finished</summary>
+    Public Function Framework_Timer_IsFinished(timerId As Integer) As Boolean
+        If Not Framework_Timer_IsValid(timerId) Then Return True
+        Return Not Framework_Timer_IsRunning(timerId) AndAlso Not Framework_Timer_IsPaused(timerId)
+    End Function
+#End Region
+
+#Region "Tween Convenience Functions"
+    ' Framework_Tween_EntityPosition already exists at line 4267
+#End Region
+
+#Region "Math Helper Functions"
+    Private ReadOnly _random As New Random()
+
+    ''' <summary>Linearly interpolates between two values</summary>
+    Public Function Framework_Lerp(start As Single, [end] As Single, t As Single) As Single
+        Return start + ([end] - start) * t
+    End Function
+
+    ''' <summary>Clamps a value between min and max</summary>
+    Public Function Framework_Clamp(value As Single, min As Single, max As Single) As Single
+        If value < min Then Return min
+        If value > max Then Return max
+        Return value
+    End Function
+
+    ''' <summary>Returns a random integer in range [min, max]</summary>
+    Public Function Framework_RandomInt(min As Integer, max As Integer) As Integer
+        Return _random.Next(min, max + 1)
+    End Function
+
+    ''' <summary>Returns a random float in range [min, max)</summary>
+    Public Function Framework_RandomFloat(min As Single, max As Single) As Single
+        Return CSng(_random.NextDouble() * (max - min) + min)
+    End Function
+
+    ''' <summary>Calculates the distance between two points</summary>
+    Public Function Framework_DistanceBetween(x1 As Single, y1 As Single, x2 As Single, y2 As Single) As Single
+        Dim dx = x2 - x1
+        Dim dy = y2 - y1
+        Return CSng(Math.Sqrt(dx * dx + dy * dy))
+    End Function
+
+    ''' <summary>Calculates the angle between two points in degrees</summary>
+    Public Function Framework_AngleBetween(x1 As Single, y1 As Single, x2 As Single, y2 As Single) As Single
+        Dim dx = x2 - x1
+        Dim dy = y2 - y1
+        Return CSng(Math.Atan2(dy, dx) * 180 / Math.PI)
+    End Function
+
+    ''' <summary>Normalizes an angle to 0-360 degrees</summary>
+    Public Function Framework_NormalizeAngle(angle As Single) As Single
+        angle = angle Mod 360
+        If angle < 0 Then angle += 360
+        Return angle
+    End Function
+
+    ''' <summary>Smoothly damps a value towards a target</summary>
+    Public Function Framework_SmoothDamp(current As Single, target As Single, ByRef velocity As Single, smoothTime As Single, deltaTime As Single) As Single
+        ' Based on Game Programming Gems 4 smooth damp
+        Dim omega = 2.0F / smoothTime
+        Dim x = omega * deltaTime
+        Dim exp = 1.0F / (1.0F + x + 0.48F * x * x + 0.235F * x * x * x)
+        Dim change = current - target
+        Dim temp = (velocity + omega * change) * deltaTime
+        velocity = (velocity - omega * temp) * exp
+        Return target + (change + temp) * exp
+    End Function
+
+    ''' <summary>Remaps a value from one range to another</summary>
+    Public Function Framework_Remap(value As Single, fromMin As Single, fromMax As Single, toMin As Single, toMax As Single) As Single
+        Dim t = (value - fromMin) / (fromMax - fromMin)
+        Return toMin + t * (toMax - toMin)
+    End Function
+#End Region
+
+#Region "Screen/Window Functions"
+    ' Note: Screen width/height and window functions are not currently exported from the native DLL.
+    ' These would need to be added to the C++ engine to be accessible.
+    ' For now, the screen dimensions are set during Framework_Initialize().
+#End Region
+
+#Region "Collision Helper Functions"
+    ''' <summary>Checks point-rectangle collision</summary>
+    Public Function Framework_CheckCollisionPointRect(px As Single, py As Single, rx As Single, ry As Single, rw As Single, rh As Single) As Boolean
+        Return px >= rx AndAlso px <= rx + rw AndAlso py >= ry AndAlso py <= ry + rh
+    End Function
+
+    ''' <summary>Checks rectangle-rectangle collision</summary>
+    Public Function Framework_CheckCollisionRects(x1 As Single, y1 As Single, w1 As Single, h1 As Single, x2 As Single, y2 As Single, w2 As Single, h2 As Single) As Boolean
+        Return x1 < x2 + w2 AndAlso x1 + w1 > x2 AndAlso y1 < y2 + h2 AndAlso y1 + h1 > y2
+    End Function
+
+    ''' <summary>Checks circle-circle collision</summary>
+    Public Function Framework_CheckCollisionCircles(x1 As Single, y1 As Single, r1 As Single, x2 As Single, y2 As Single, r2 As Single) As Boolean
+        Dim dist = Framework_DistanceBetween(x1, y1, x2, y2)
+        Return dist <= r1 + r2
+    End Function
+
+    ''' <summary>Checks point-circle collision</summary>
+    Public Function Framework_CheckCollisionPointCircle(px As Single, py As Single, cx As Single, cy As Single, radius As Single) As Boolean
+        Dim dist = Framework_DistanceBetween(px, py, cx, cy)
+        Return dist <= radius
+    End Function
+
+    ''' <summary>Checks circle-rectangle collision</summary>
+    Public Function Framework_CheckCollisionCircleRect(cx As Single, cy As Single, radius As Single, rx As Single, ry As Single, rw As Single, rh As Single) As Boolean
+        ' Find closest point on rectangle to circle center
+        Dim closestX = Framework_Clamp(cx, rx, rx + rw)
+        Dim closestY = Framework_Clamp(cy, ry, ry + rh)
+        Return Framework_CheckCollisionPointCircle(closestX, closestY, cx, cy, radius)
+    End Function
+#End Region
+
+#Region "Physics Body Convenience Functions"
+    ''' <summary>Creates a physics body (simplified API)</summary>
+    Public Function Framework_Physics_CreateBody(entityId As Integer, bodyType As Integer) As Integer
+        Dim pos = Framework_Ecs_GetTransformPosition(entityId)
+        Return Framework_Physics_CreateBody(bodyType, pos.X, pos.Y)
+    End Function
+
+    ''' <summary>Updates physics simulation (simplified API)</summary>
+    Public Sub Framework_Physics_Update(dt As Single)
+        Framework_Physics_Step(dt)
+        Framework_Physics_SyncToEntities()
     End Sub
 #End Region
 
