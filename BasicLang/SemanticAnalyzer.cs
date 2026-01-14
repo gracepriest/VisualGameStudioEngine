@@ -2124,6 +2124,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Only import if not already defined
                 if (_currentScope.Resolve(symbol.Name) == null)
                 {
+                    // Preserve original SourceModule if this symbol was itself imported
+                    // (transitive imports should keep the original source, not the intermediate module)
+                    var sourceModule = !string.IsNullOrEmpty(symbol.SourceModule)
+                        ? symbol.SourceModule
+                        : unit.ModuleName;
+
                     // Clone the symbol for the current scope
                     var importedSymbol = new Symbol(
                         symbol.Name,
@@ -2133,7 +2139,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         column)
                     {
                         IsImported = true,
-                        SourceModule = unit.ModuleName,
+                        SourceModule = sourceModule,
                         // Copy function-related properties
                         Parameters = symbol.Parameters,
                         ReturnType = symbol.ReturnType,

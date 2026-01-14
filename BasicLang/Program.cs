@@ -472,6 +472,40 @@ namespace BasicLang.Compiler.Driver
                     // Generate a temporary .csproj
                     var csprojPath = Path.Combine(outputDir, outputFileName + ".csproj");
                     var csFileName = outputFileName + ".cs";
+
+                    // Build assembly references section
+                    var referencesSection = new System.Text.StringBuilder();
+                    if (project.AssemblyReferences.Count > 0)
+                    {
+                        referencesSection.AppendLine("  <ItemGroup>");
+                        foreach (var asmRef in project.AssemblyReferences)
+                        {
+                            if (!string.IsNullOrEmpty(asmRef.HintPath))
+                            {
+                                referencesSection.AppendLine($@"    <Reference Include=""{asmRef.Name}"">
+      <HintPath>{asmRef.HintPath}</HintPath>
+    </Reference>");
+                            }
+                            else
+                            {
+                                referencesSection.AppendLine($@"    <Reference Include=""{asmRef.Name}"" />");
+                            }
+                        }
+                        referencesSection.AppendLine("  </ItemGroup>");
+                    }
+
+                    // Build package references section
+                    var packageSection = new System.Text.StringBuilder();
+                    if (restoreResult.ResolvedAssemblies.Count > 0 || project.PackageReferences.Count > 0)
+                    {
+                        packageSection.AppendLine("  <ItemGroup>");
+                        foreach (var pkg in project.PackageReferences)
+                        {
+                            packageSection.AppendLine($@"    <PackageReference Include=""{pkg.Name}"" Version=""{pkg.Version}"" />");
+                        }
+                        packageSection.AppendLine("  </ItemGroup>");
+                    }
+
                     var csprojContent = $@"<Project Sdk=""Microsoft.NET.Sdk"">
   <PropertyGroup>
     <OutputType>{(project.OutputType == "Library" ? "Library" : "Exe")}</OutputType>
@@ -484,7 +518,7 @@ namespace BasicLang.Compiler.Driver
   <ItemGroup>
     <Compile Include=""{csFileName}"" />
   </ItemGroup>
-</Project>";
+{referencesSection}{packageSection}</Project>";
                     File.WriteAllText(csprojPath, csprojContent);
 
                     // Run dotnet build
