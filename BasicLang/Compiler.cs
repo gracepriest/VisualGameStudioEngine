@@ -456,12 +456,57 @@ namespace BasicLang.Compiler
                     }
                 }
 
+                // Add interfaces
+                foreach (var iface in unit.IR.Interfaces)
+                {
+                    if (!combined.Interfaces.ContainsKey(iface.Key))
+                    {
+                        combined.Interfaces[iface.Key] = iface.Value;
+                    }
+                }
+
+                // Add enums
+                foreach (var enumDecl in unit.IR.Enums)
+                {
+                    if (!combined.Enums.ContainsKey(enumDecl.Key))
+                    {
+                        combined.Enums[enumDecl.Key] = enumDecl.Value;
+                    }
+                }
+
+                // Add delegates
+                foreach (var del in unit.IR.Delegates)
+                {
+                    if (!combined.Delegates.ContainsKey(del.Key))
+                    {
+                        combined.Delegates[del.Key] = del.Value;
+                    }
+                }
+
+                // Add extern declarations
+                foreach (var ext in unit.IR.ExternDeclarations)
+                {
+                    if (!combined.ExternDeclarations.ContainsKey(ext.Key))
+                    {
+                        combined.ExternDeclarations[ext.Key] = ext.Value;
+                    }
+                }
+
                 // Add namespaces
                 foreach (var ns in unit.IR.Namespaces)
                 {
                     if (!combined.Namespaces.Contains(ns))
                     {
                         combined.Namespaces.Add(ns);
+                    }
+                }
+
+                // Add .NET usings
+                foreach (var netUsing in unit.IR.NetUsings)
+                {
+                    if (!combined.NetUsings.Any(u => u.Namespace == netUsing.Namespace))
+                    {
+                        combined.NetUsings.Add(netUsing);
                     }
                 }
             }
