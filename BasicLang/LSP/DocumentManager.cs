@@ -365,12 +365,10 @@ namespace BasicLang.Compiler.LSP
                     });
                 }
 
-                Console.Error.WriteLine($"[DocumentState] Semantic analysis: successful={SemanticSuccessful}, errors={SemanticAnalyzer.Errors.Count}, globalScope={SemanticAnalyzer.GlobalScope != null}");
             }
             catch (Exception ex)
             {
                 // Even on exception, try to keep partial semantic info
-                Console.Error.WriteLine($"[DocumentState] Semantic analysis exception: {ex.Message}");
                 Diagnostics.Add(new Diagnostic
                 {
                     Message = $"Semantic analysis error: {ex.Message}",

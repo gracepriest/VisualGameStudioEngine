@@ -621,9 +621,6 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void ProvideCompletions(IEnumerable<Core.Abstractions.Services.CompletionItem> completions)
     {
         var list = completions.ToList();
-        var hasSubscribers = CompletionReceived != null;
-        System.Diagnostics.Trace.WriteLine($"[ViewModel] ProvideCompletions: {list.Count} items, hasSubscribers={hasSubscribers}");
-        Console.WriteLine($"[ViewModel] ProvideCompletions: {list.Count} items, hasSubscribers={hasSubscribers}");
         CompletionReceived?.Invoke(this, list);
     }
 

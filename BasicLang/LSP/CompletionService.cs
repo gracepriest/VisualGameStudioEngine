@@ -57,13 +57,10 @@ namespace BasicLang.Compiler.LSP
             var completions = new List<CompletionItem>();
             TriggerContext triggerContext = null;
 
-            Console.Error.WriteLine($"[CompletionService] GetCompletions called: line={line}, char={character}");
-
             // Check context - only if we have a document
             if (state != null)
             {
                 triggerContext = GetTriggerContext(state, line, character);
-                Console.Error.WriteLine($"[CompletionService] TriggerContext: type={triggerContext.ContextType}, objectName={triggerContext.ObjectName}, filterPrefix={triggerContext.FilterPrefix}");
 
                 // Handle context-specific completions
                 switch (triggerContext.ContextType)
@@ -1407,7 +1404,6 @@ namespace BasicLang.Compiler.LSP
 
             // LSP uses 0-based line numbers, but AST uses 1-based line numbers
             int astLine = line + 1;
-            Console.Error.WriteLine($"[CompletionService] GetScopeAtPosition: LSP line={line}, AST line={astLine}");
 
             // Search through AST to find the containing function/sub/class
             Scope bestScope = state.SemanticAnalyzer.GlobalScope;
@@ -1417,17 +1413,9 @@ namespace BasicLang.Compiler.LSP
                 var scope = FindScopeContainingPosition(state.SemanticAnalyzer.GlobalScope, decl, astLine);
                 if (scope != null && scope != state.SemanticAnalyzer.GlobalScope)
                 {
-                    Console.Error.WriteLine($"[CompletionService] Found scope: {scope.Name} ({scope.Kind})");
                     bestScope = scope;
                     break;
                 }
-            }
-
-            // Log all symbols in the found scope
-            Console.Error.WriteLine($"[CompletionService] Scope '{bestScope.Name}' has {bestScope.Symbols.Count} symbols:");
-            foreach (var sym in bestScope.Symbols)
-            {
-                Console.Error.WriteLine($"[CompletionService]   - {sym.Key}: {sym.Value.Kind} ({sym.Value.Type?.Name ?? "?"})");
             }
 
             return bestScope;
