@@ -36,6 +36,9 @@ namespace BasicLang.Compiler.IR
         private int _doCounter = 0;
         private int _tryCounter = 0;
 
+        // Flag to suppress instruction emission (used for When guard expressions)
+        private bool _suppressEmit = false;
+
         public IRModule Module => _module;
 
         public IRBuilder(SemanticAnalyzer semanticAnalyzer)
@@ -112,6 +115,10 @@ namespace BasicLang.Compiler.IR
 
         private void EmitInstruction(IRInstruction instruction)
         {
+            // Skip emission when building When guard expressions to prevent optimization passes
+            // from modifying them (they're not part of block control flow)
+            if (_suppressEmit) return;
+
             if (_currentBlock != null)
             {
                 _currentBlock.AddInstruction(instruction);
@@ -2063,9 +2070,12 @@ namespace BasicLang.Compiler.IR
             }
 
             // Handle When guard
+            // Suppress instruction emission so optimization passes won't modify the When guard
             if (result != null && pattern.WhenGuard != null)
             {
+                _suppressEmit = true;
                 pattern.WhenGuard.Accept(this);
+                _suppressEmit = false;
                 result.WhenGuard = _expressionResult;
             }
 

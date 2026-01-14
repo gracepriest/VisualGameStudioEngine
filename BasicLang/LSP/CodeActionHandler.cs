@@ -830,6 +830,154 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // Inline variable
+            if (lineText.StartsWith("Dim ") && lineText.Contains(" = "))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(lineText, @"Dim\s+(\w+)\s+(?:As\s+\w+\s+)?=\s+(.+)");
+                if (match.Success)
+                {
+                    var varName = match.Groups[1].Value;
+                    var varValue = match.Groups[2].Value;
+
+                    // Find usages of this variable in the method
+                    var usages = new List<(int line, int col, int len)>();
+                    for (int i = startLine + 1; i < state.Lines.Length; i++)
+                    {
+                        var searchLine = state.Lines[i];
+                        if (searchLine.Trim().StartsWith("End Sub") || searchLine.Trim().StartsWith("End Function"))
+                            break;
+
+                        int pos = 0;
+                        while ((pos = searchLine.IndexOf(varName, pos, StringComparison.OrdinalIgnoreCase)) >= 0)
+                        {
+                            // Check that it's a whole word
+                            bool isWordStart = pos == 0 || !char.IsLetterOrDigit(searchLine[pos - 1]);
+                            bool isWordEnd = pos + varName.Length >= searchLine.Length ||
+                                           !char.IsLetterOrDigit(searchLine[pos + varName.Length]);
+                            if (isWordStart && isWordEnd)
+                            {
+                                usages.Add((i, pos, varName.Length));
+                            }
+                            pos++;
+                        }
+                    }
+
+                    if (usages.Count > 0 && usages.Count <= 5) // Only offer if reasonable number of usages
+                    {
+                        var edits = new List<TextEdit>();
+
+                        // Remove the declaration line
+                        edits.Add(new TextEdit
+                        {
+                            Range = new LspRange(
+                                new Position(startLine, 0),
+                                new Position(startLine + 1, 0)),
+                            NewText = ""
+                        });
+
+                        // Replace usages with the value (in reverse order to maintain positions)
+                        foreach (var usage in usages.OrderByDescending(u => u.line).ThenByDescending(u => u.col))
+                        {
+                            edits.Add(new TextEdit
+                            {
+                                Range = new LspRange(
+                                    new Position(usage.line - 1, usage.col), // -1 because we removed a line
+                                    new Position(usage.line - 1, usage.col + usage.len)),
+                                NewText = varValue
+                            });
+                        }
+
+                        var edit = new WorkspaceEdit
+                        {
+                            Changes = new Dictionary<DocumentUri, IEnumerable<TextEdit>>
+                            {
+                                [uri] = edits
+                            }
+                        };
+
+                        actions.Add(new CommandOrCodeAction(new CodeAction
+                        {
+                            Title = $"Inline variable '{varName}'",
+                            Kind = CodeActionKind.RefactorInline,
+                            Edit = edit
+                        }));
+                    }
+                }
+            }
+
+            // Generate constructor from fields
+            if (lineText.StartsWith("Class "))
+            {
+                var className = lineText.Replace("Class ", "").Trim();
+                var fields = new List<(string name, string type)>();
+
+                // Find all fields in the class
+                for (int i = startLine + 1; i < state.Lines.Length; i++)
+                {
+                    var fieldLine = state.Lines[i].Trim();
+                    if (fieldLine.StartsWith("End Class"))
+                        break;
+
+                    var fieldMatch = System.Text.RegularExpressions.Regex.Match(fieldLine, @"(?:Private|Public)\s+(_?\w+)\s+As\s+(\w+)");
+                    if (fieldMatch.Success && !fieldLine.Contains("("))
+                    {
+                        fields.Add((fieldMatch.Groups[1].Value, fieldMatch.Groups[2].Value));
+                    }
+                }
+
+                if (fields.Count > 0)
+                {
+                    var indent = originalLine.Length - originalLine.TrimStart().Length;
+                    var indentStr = new string(' ', indent + 4);
+
+                    var parameters = string.Join(", ", fields.Select(f =>
+                    {
+                        var paramName = f.name.StartsWith("_") ? f.name.Substring(1) : f.name;
+                        return $"{paramName} As {f.type}";
+                    }));
+
+                    var assignments = string.Join("\n", fields.Select(f =>
+                    {
+                        var paramName = f.name.StartsWith("_") ? f.name.Substring(1) : f.name;
+                        return $"{indentStr}    {f.name} = {paramName}";
+                    }));
+
+                    // Find where to insert constructor (after field declarations)
+                    int insertLine = startLine + 1;
+                    for (int i = startLine + 1; i < state.Lines.Length; i++)
+                    {
+                        var checkLine = state.Lines[i].Trim();
+                        if (checkLine.StartsWith("End Class") || checkLine.StartsWith("Sub ") || checkLine.StartsWith("Function "))
+                        {
+                            insertLine = i;
+                            break;
+                        }
+                    }
+
+                    var edit = new WorkspaceEdit
+                    {
+                        Changes = new Dictionary<DocumentUri, IEnumerable<TextEdit>>
+                        {
+                            [uri] = new[]
+                            {
+                                new TextEdit
+                                {
+                                    Range = new LspRange(new Position(insertLine, 0), new Position(insertLine, 0)),
+                                    NewText = $"\n{indentStr}Public Sub New({parameters})\n{assignments}\n{indentStr}End Sub\n"
+                                }
+                            }
+                        }
+                    };
+
+                    actions.Add(new CommandOrCodeAction(new CodeAction
+                    {
+                        Title = "Generate constructor",
+                        Kind = CodeActionKind.Refactor,
+                        Edit = edit
+                    }));
+                }
+            }
+
             return actions;
         }
 

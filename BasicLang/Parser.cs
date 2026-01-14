@@ -2106,6 +2106,54 @@ namespace BasicLang.Compiler
         {
             TypeReference type;
 
+            // Tuple type: (Integer, Integer) or (x As Integer, y As String)
+            if (Check(TokenType.LeftParen))
+            {
+                // Look ahead to determine if this is a tuple type or generic arguments
+                // Tuple types have the form: (Type, Type, ...) or (name As Type, name As Type, ...)
+                int startPos = _current;
+                Advance(); // consume '('
+
+                // Check if it looks like a tuple type (not (Of ...))
+                if (!Check(TokenType.Of))
+                {
+                    var tupleType = new TypeReference("Tuple");
+                    tupleType.IsTuple = true;
+
+                    do
+                    {
+                        string elementName = null;
+
+                        // Check for named element: name As Type
+                        if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.As)
+                        {
+                            elementName = Advance().Lexeme;
+                            Consume(TokenType.As, "Expected 'As'");
+                        }
+
+                        var elementType = ParseTypeReference();
+                        tupleType.TupleElementTypes.Add(elementType);
+                        tupleType.TupleElementNames.Add(elementName);
+
+                    } while (Match(TokenType.Comma));
+
+                    Consume(TokenType.RightParen, "Expected ')' after tuple type elements");
+
+                    // Nullable tuple: (Integer, String)?
+                    if (Match(TokenType.QuestionMark))
+                    {
+                        tupleType.IsNullable = true;
+                    }
+
+                    return tupleType;
+                }
+                else
+                {
+                    // Backtrack - this is not a tuple type
+                    _current = startPos;
+                }
+            }
+
             // Pointer type
             if (Match(TokenType.Pointer))
             {
@@ -3661,12 +3709,31 @@ namespace BasicLang.Compiler
                 return new IdentifierExpressionNode(token.Line, token.Column) { Name = token.Lexeme };
             }
 
-            // Parenthesized expression
+            // Parenthesized expression or tuple literal
             if (Match(TokenType.LeftParen))
             {
-                var expr = ParseExpression();
+                var token = Previous();
+                var firstExpr = ParseExpression();
+
+                // Check if this is a tuple literal: (expr, expr, ...)
+                if (Match(TokenType.Comma))
+                {
+                    var tupleNode = new TupleLiteralNode(token.Line, token.Column);
+                    tupleNode.Elements.Add(firstExpr);
+                    tupleNode.ElementNames.Add(null); // No name for positional element
+
+                    do
+                    {
+                        tupleNode.Elements.Add(ParseExpression());
+                        tupleNode.ElementNames.Add(null);
+                    } while (Match(TokenType.Comma));
+
+                    Consume(TokenType.RightParen, "Expected ')' after tuple elements");
+                    return tupleNode;
+                }
+
                 Consume(TokenType.RightParen, "Expected ')' after expression");
-                return expr;
+                return firstExpr;
             }
 
             // Collection initializer: { 1, 2, 3 }

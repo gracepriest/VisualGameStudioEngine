@@ -228,11 +228,55 @@ This enables IDEs and editors to show appropriate UI for these features.
 - Conditional evaluation only occurs when breakpoint location is hit
 - Logpoint formatting is lazy (only done when triggered)
 
+## New in Latest Version
+
+### Data Breakpoints (Implemented)
+
+Data breakpoints trigger when a variable's value changes:
+
+```csharp
+// Add a data breakpoint
+var bp = new Breakpoint
+{
+    Type = BreakpointType.Data,
+    VariableName = "counter",
+    DataAccessType = DataBreakpointAccessType.Write  // or Read, ReadWrite
+};
+```
+
+Properties:
+- `VariableName` - The variable to watch
+- `DataAccessType` - When to break: `Write`, `Read`, or `ReadWrite`
+- `PreviousValue` - Tracks the previous value for change detection
+
+### Exception Breakpoints (Implemented)
+
+Exception breakpoints trigger when exceptions occur:
+
+```csharp
+// Break on all exceptions
+var bp = new Breakpoint
+{
+    Type = BreakpointType.Exception,
+    ExceptionType = "*",  // or specific type like "DivisionByZeroException"
+    ExceptionMode = ExceptionBreakMode.Always  // or Unhandled, UserUnhandled
+};
+```
+
+Properties:
+- `ExceptionType` - The exception type to catch ("*" for all)
+- `ExceptionMode` - `Never`, `Always`, `Unhandled`, or `UserUnhandled`
+
+### New Event Args
+
+- `DataBreakpointEventArgs` - Contains `VariableName`, `OldValue`, `NewValue`, `AccessType`
+- `ExceptionBreakpointEventArgs` - Contains `ExceptionType`, `ExceptionMessage`, `StackTrace`, `IsHandled`
+
 ## Future Enhancements
 
 Potential improvements:
-1. Data breakpoints (break when variable changes)
-2. Exception breakpoints (break on throw/catch)
+1. ~~Data breakpoints (break when variable changes)~~ ✓ Implemented
+2. ~~Exception breakpoints (break on throw/catch)~~ ✓ Implemented
 3. Breakpoint groups and bulk enable/disable
 4. Breakpoint import/export
 5. Tracepoints (like logpoints but with full stack trace)

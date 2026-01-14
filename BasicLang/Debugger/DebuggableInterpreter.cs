@@ -32,6 +32,8 @@ namespace BasicLang.Debugger
         public event EventHandler<DebugEventArgs> StepComplete;
         public event EventHandler<OutputEventArgs> OutputProduced;
         public event EventHandler<LogpointEventArgs> LogpointHit;
+        public event EventHandler<DataBreakpointEventArgs> DataBreakpointHit;
+        public event EventHandler<ExceptionBreakpointEventArgs> ExceptionBreakpointHit;
 
         private enum StepMode
         {
@@ -1140,6 +1142,32 @@ namespace BasicLang.Debugger
         public int Line { get; set; }
         public string File { get; set; }
         public string Message { get; set; }
+    }
+
+    /// <summary>
+    /// Event args for data breakpoint hits (variable change)
+    /// </summary>
+    public class DataBreakpointEventArgs : EventArgs
+    {
+        public string VariableName { get; set; }
+        public object OldValue { get; set; }
+        public object NewValue { get; set; }
+        public DataBreakpointAccessType AccessType { get; set; }
+        public int Line { get; set; }
+        public string File { get; set; }
+    }
+
+    /// <summary>
+    /// Event args for exception breakpoint hits
+    /// </summary>
+    public class ExceptionBreakpointEventArgs : EventArgs
+    {
+        public string ExceptionType { get; set; }
+        public string ExceptionMessage { get; set; }
+        public string StackTrace { get; set; }
+        public int Line { get; set; }
+        public string File { get; set; }
+        public bool IsHandled { get; set; }
     }
 
     /// <summary>

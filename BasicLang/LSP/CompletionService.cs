@@ -377,6 +377,10 @@ namespace BasicLang.Compiler.LSP
             types.Add(new CompletionItem { Label = "Dictionary(Of", Kind = CompletionItemKind.Class, Detail = "Generic Dictionary", InsertText = "Dictionary(Of ${1:KeyType}, ${2:ValueType})", InsertTextFormat = InsertTextFormat.Snippet });
             types.Add(new CompletionItem { Label = "IEnumerable(Of", Kind = CompletionItemKind.Interface, Detail = "Generic IEnumerable", InsertText = "IEnumerable(Of ${1:Type})", InsertTextFormat = InsertTextFormat.Snippet });
 
+            // Tuple types
+            types.Add(new CompletionItem { Label = "(", Kind = CompletionItemKind.Struct, Detail = "Tuple type", InsertText = "(${1:Type1}, ${2:Type2})", InsertTextFormat = InsertTextFormat.Snippet });
+            types.Add(new CompletionItem { Label = "Tuple", Kind = CompletionItemKind.Struct, Detail = "Named tuple type", InsertText = "(${1:x} As ${2:Integer}, ${3:y} As ${4:Integer})", InsertTextFormat = InsertTextFormat.Snippet });
+
             // User-defined types from AST
             if (state?.AST != null)
             {
@@ -1616,8 +1620,13 @@ namespace BasicLang.Compiler.LSP
                 ("Do While", "Do While loop", "Do While ${1:condition}\n\t$0\nLoop"),
                 ("Do Until", "Do Until loop", "Do Until ${1:condition}\n\t$0\nLoop"),
                 ("Select Case", "Select Case statement", "Select Case ${1:expression}\n\tCase ${2:value}\n\t\t$0\n\tCase Else\n\t\t\nEnd Select"),
+                ("Select Case Type", "Type pattern matching", "Select Case ${1:value}\n\tCase Is ${2:Type1}\n\t\t$0\n\tCase Is ${3:Type2}\n\t\t\n\tCase Else\n\t\t\nEnd Select"),
+                ("Select Case Guard", "Pattern matching with guards", "Select Case ${1:value}\n\tCase ${2:pattern} When ${3:condition}\n\t\t$0\n\tCase Else\n\t\t\nEnd Select"),
+                ("Case Is", "Type pattern", "Case Is ${1:TypeName}"),
+                ("Case When", "Pattern with guard", "Case ${1:pattern} When ${2:condition}"),
                 ("Class", "Class declaration", "Class ${1:Name}\n\t$0\nEnd Class"),
                 ("Dim", "Variable declaration", "Dim ${1:name} As ${2:Integer}"),
+                ("Dim Tuple", "Tuple deconstruction", "Dim (${1:x}, ${2:y}) = ${3:GetPoint()}"),
                 ("Const", "Constant declaration", "Const ${1:NAME} As ${2:Integer} = ${3:0}"),
                 ("Return", "Return statement", "Return ${1:value}"),
                 ("Exit", "Exit statement", "Exit ${1|For,While,Do,Sub,Function|}"),

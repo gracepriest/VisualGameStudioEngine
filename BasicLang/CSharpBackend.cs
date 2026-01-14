@@ -1543,8 +1543,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void EmitBlockInstructions(BasicBlock block)
         {
-            foreach (var instruction in block.Instructions)
+            var instructions = block.Instructions.ToList();
+            var emittedTupleGroups = new HashSet<int>();
+
+            for (int i = 0; i < instructions.Count; i++)
             {
+                var instruction = instructions[i];
+
                 // Skip control flow - we handle it structurally
                 if (instruction is IRBranch or IRConditionalBranch or IRSwitch)
                     continue;
@@ -1552,8 +1557,55 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 if (!ShouldEmitInstruction(instruction))
                     continue;
 
+                // Skip tuple elements that were already emitted as part of a group
+                if (emittedTupleGroups.Contains(i))
+                    continue;
+
+                // Handle consecutive tuple element accesses as a single deconstruction
+                if (instruction is IRTupleElement tupleElem)
+                {
+                    // Find all consecutive IRTupleElement instructions with the same source tuple
+                    var group = new List<IRTupleElement> { tupleElem };
+                    for (int j = i + 1; j < instructions.Count; j++)
+                    {
+                        if (instructions[j] is IRTupleElement nextElem &&
+                            ReferenceEquals(nextElem.Tuple, tupleElem.Tuple))
+                        {
+                            group.Add(nextElem);
+                            emittedTupleGroups.Add(j);
+                        }
+                        else if (instructions[j] is not IRBranch and not IRConditionalBranch and not IRSwitch)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (group.Count > 1)
+                    {
+                        // Emit as C# tuple deconstruction: (x, y, z) = tuple;
+                        EmitTupleDeconstruction(group);
+                        continue;
+                    }
+                }
+
                 instruction.Accept(this);
             }
+        }
+
+        /// <summary>
+        /// Emit a group of tuple element accesses as a single C# deconstruction statement
+        /// </summary>
+        private void EmitTupleDeconstruction(List<IRTupleElement> elements)
+        {
+            // Sort by index to ensure correct order
+            elements = elements.OrderBy(e => e.Index).ToList();
+
+            var tupleExpr = EmitExpression(elements[0].Tuple);
+            var varNames = elements.Select(e => SanitizeName(e.Name)).ToList();
+
+            // Use C# tuple deconstruction syntax with assignment (variables already declared):
+            // (x, y, z) = tuple;
+            WriteLine($"({string.Join(", ", varNames)}) = {tupleExpr};");
         }
 
         private void HandleConditionalBranch(IRConditionalBranch condBranch)
@@ -2587,6 +2639,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return ops;
                 case IRPhi phi:
                     return phi.Operands.Select(i => i.Value).ToList();
+                case IRTupleElement tupleElem:
+                    return new[] { tupleElem.Tuple };
                 default:
                     return Array.Empty<IRValue>();
             }

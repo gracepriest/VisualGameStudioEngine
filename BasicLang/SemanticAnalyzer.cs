@@ -857,20 +857,54 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private string GetSimilarIdentifierSuggestion(string target, IEnumerable<string> candidates)
         {
             string bestMatch = null;
-            int bestDistance = int.MaxValue;
-            int maxDistance = 3; // Only suggest if edit distance is <= 3
+            double bestScore = double.MaxValue;
 
             foreach (var candidate in candidates)
             {
-                var distance = LevenshteinDistance(target.ToLower(), candidate.ToLower());
-                if (distance < bestDistance && distance <= maxDistance)
+                var score = CalculateSimilarityScore(target.ToLower(), candidate.ToLower());
+                if (score < bestScore && score <= 0.6) // Require at least 40% similarity
                 {
-                    bestDistance = distance;
+                    bestScore = score;
                     bestMatch = candidate;
                 }
             }
 
             return bestMatch;
+        }
+
+        /// <summary>
+        /// Calculate a similarity score (lower is better, 0 = identical)
+        /// Takes into account edit distance, length difference, and common prefix
+        /// </summary>
+        private double CalculateSimilarityScore(string target, string candidate)
+        {
+            // Don't suggest much longer/shorter words for short identifiers
+            int lengthDiff = Math.Abs(target.Length - candidate.Length);
+            if (target.Length <= 2 && lengthDiff > 1)
+                return double.MaxValue; // Don't suggest "Exp" for "x"
+
+            // Calculate Levenshtein distance
+            int editDistance = LevenshteinDistance(target, candidate);
+            int maxLen = Math.Max(target.Length, candidate.Length);
+
+            // Normalize edit distance by length
+            double normalizedDistance = (double)editDistance / maxLen;
+
+            // Bonus for common prefix (good for typos at the end)
+            int commonPrefix = 0;
+            for (int i = 0; i < Math.Min(target.Length, candidate.Length); i++)
+            {
+                if (target[i] == candidate[i])
+                    commonPrefix++;
+                else
+                    break;
+            }
+            double prefixBonus = (double)commonPrefix / maxLen * 0.3;
+
+            // Bonus for same first character (common for typos)
+            double firstCharBonus = (target.Length > 0 && candidate.Length > 0 && target[0] == candidate[0]) ? 0.1 : 0;
+
+            return normalizedDistance - prefixBonus - firstCharBonus;
         }
 
         /// <summary>
@@ -904,6 +938,99 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return d[s.Length, t.Length];
         }
 
+        /// <summary>
+        /// Get a hint for how to convert between types
+        /// </summary>
+        private string GetTypeConversionHint(TypeInfo fromType, TypeInfo toType)
+        {
+            if (fromType == null || toType == null) return null;
+
+            // Numeric to String
+            if (toType.Name == "String" && fromType.IsNumeric())
+                return $"Use {fromType.Name}.ToString() or CStr()";
+
+            // String to Numeric
+            if (fromType.Name == "String")
+            {
+                if (toType.Name == "Integer") return "Use CInt() or Integer.Parse()";
+                if (toType.Name == "Long") return "Use CLng() or Long.Parse()";
+                if (toType.Name == "Double") return "Use CDbl() or Double.Parse()";
+                if (toType.Name == "Single") return "Use CSng() or Single.Parse()";
+            }
+
+            // Narrowing numeric conversions
+            if (fromType.IsNumeric() && toType.IsNumeric())
+            {
+                if (toType.Name == "Integer") return "Use CInt() for explicit conversion";
+                if (toType.Name == "Short") return "Use CShort() for explicit conversion";
+                if (toType.Name == "Byte") return "Use CByte() for explicit conversion";
+            }
+
+            // Object to specific type
+            if (fromType.Name == "Object")
+                return $"Use CType(value, {toType.Name}) or DirectCast()";
+
+            return null;
+        }
+
+        /// <summary>
+        /// Format a function signature for error messages
+        /// </summary>
+        private string FormatFunctionSignature(Symbol functionSymbol)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append(functionSymbol.Name);
+            sb.Append("(");
+
+            for (int i = 0; i < functionSymbol.Parameters.Count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+
+                var param = functionSymbol.Parameters[i];
+                if (param.IsOptional) sb.Append("Optional ");
+                if (param.IsParamArray) sb.Append("ParamArray ");
+
+                sb.Append(param.Name);
+                sb.Append(" As ");
+                sb.Append(param.Type?.Name ?? "Object");
+            }
+
+            sb.Append(")");
+
+            if (functionSymbol.Kind == SymbolKind.Function && functionSymbol.Type != null &&
+                functionSymbol.Type.Name != "Void")
+            {
+                sb.Append(" As ");
+                sb.Append(functionSymbol.Type.Name);
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Get available members of a module for suggestions
+        /// </summary>
+        private IEnumerable<string> GetModuleMemberNames(string moduleName)
+        {
+            // Check ProjectSymbolTable
+            if (_projectSymbols != null && _projectSymbols.HasModule(moduleName))
+            {
+                return _projectSymbols.GetModule(moduleName)?.GetAllPublicSymbols()?.Select(s => s.Name) ?? Enumerable.Empty<string>();
+            }
+
+            // Check ModuleRegistry
+            if (_moduleRegistry != null)
+            {
+                var unit = FindModuleByName(moduleName);
+                if (unit != null && unit.IsComplete)
+                {
+                    return unit.ExportedSymbols.Select(s => s.Name);
+                }
+            }
+
+            return Enumerable.Empty<string>();
+        }
+
         private Scope EnterScope(string name, ScopeKind kind)
         {
             var newScope = new Scope(name, kind, _currentScope);
@@ -923,6 +1050,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             if (typeRef == null)
                 return _typeManager.VoidType;
+
+            // Handle tuple types: (Integer, String) or (x As Integer, y As String)
+            if (typeRef.IsTuple)
+            {
+                var elementTypes = typeRef.TupleElementTypes
+                    .Select(t => ResolveTypeReference(t))
+                    .ToList();
+                var typeNames = string.Join(", ", elementTypes.Select(t => t.Name));
+                var tupleType = new TypeInfo($"({typeNames})", TypeKind.Tuple);
+                tupleType.TupleElementTypes = elementTypes;
+                tupleType.TupleElementNames = typeRef.TupleElementNames?.ToList() ?? new List<string>();
+                if (typeRef.IsNullable)
+                {
+                    tupleType.IsNullable = true;
+                }
+                return tupleType;
+            }
 
             // Handle pointer types
             if (typeRef.IsPointer)
@@ -1619,8 +1763,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                 if (initType != null && !varType.IsAssignableFrom(initType))
                 {
-                    Error($"Cannot assign value of type '{initType}' to variable of type '{varType}'",
-                          node.Line, node.Column);
+                    var errorMsg = $"Cannot assign value of type '{initType.Name}' to variable of type '{varType.Name}'";
+                    var hint = GetTypeConversionHint(initType, varType);
+                    if (hint != null)
+                        errorMsg += $". {hint}";
+                    Error(errorMsg, node.Line, node.Column);
                 }
             }
         }
@@ -3215,8 +3362,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else if (!targetType.IsAssignableFrom(valueType))
                 {
-                    Error($"Cannot assign value of type '{valueType}' to '{targetType}'",
-                          node.Line, node.Column);
+                    var errorMsg = $"Cannot assign value of type '{valueType.Name}' to '{targetType.Name}'";
+                    var hint = GetTypeConversionHint(valueType, targetType);
+                    if (hint != null)
+                        errorMsg += $". {hint}";
+                    Error(errorMsg, node.Line, node.Column);
                 }
             }
             else // Compound assignment
@@ -3571,8 +3721,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     }
                     else
                     {
-                        Error($"Module '{moduleName}' does not have a public member '{node.MemberName}'",
-                              node.Line, node.Column);
+                        var memberNames = GetModuleMemberNames(moduleName).ToList();
+                        var suggestion = GetSimilarIdentifierSuggestion(node.MemberName, memberNames);
+                        var errorMsg = $"Module '{moduleName}' does not have a public member '{node.MemberName}'";
+                        if (suggestion != null)
+                            errorMsg += $". Did you mean '{suggestion}'?";
+                        else if (memberNames.Count > 0 && memberNames.Count <= 5)
+                            errorMsg += $". Available members: {string.Join(", ", memberNames)}";
+                        Error(errorMsg, node.Line, node.Column);
                         SetNodeType(node, _typeManager.ObjectType);
                         return;
                     }
@@ -3594,8 +3750,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         }
                         else
                         {
-                            Error($"Module '{moduleName}' does not have a public member '{node.MemberName}'",
-                                  node.Line, node.Column);
+                            var memberNames = unit.ExportedSymbols.Select(s => s.Name).ToList();
+                            var suggestion = GetSimilarIdentifierSuggestion(node.MemberName, memberNames);
+                            var errorMsg = $"Module '{moduleName}' does not have a public member '{node.MemberName}'";
+                            if (suggestion != null)
+                                errorMsg += $". Did you mean '{suggestion}'?";
+                            else if (memberNames.Count > 0 && memberNames.Count <= 5)
+                                errorMsg += $". Available members: {string.Join(", ", memberNames)}";
+                            Error(errorMsg, node.Line, node.Column);
                             SetNodeType(node, _typeManager.ObjectType);
                             return;
                         }
@@ -3638,8 +3800,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else
             {
-                Error($"Type '{objectType.Name}' does not have a member '{node.MemberName}'",
-                      node.Line, node.Column);
+                // Build helpful error message with suggestions
+                var errorMsg = $"Type '{objectType.Name}' does not have a member '{node.MemberName}'";
+
+                // Find similar member names
+                var memberNames = objectType.Members.Keys.ToList();
+                var suggestion = GetSimilarIdentifierSuggestion(node.MemberName, memberNames);
+                if (suggestion != null)
+                {
+                    errorMsg += $". Did you mean '{suggestion}'?";
+                }
+                else if (memberNames.Count > 0 && memberNames.Count <= 5)
+                {
+                    // Show available members if there are only a few
+                    errorMsg += $". Available members: {string.Join(", ", memberNames)}";
+                }
+
+                Error(errorMsg, node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
             }
         }
@@ -3679,19 +3856,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                 if (!validArgCount)
                 {
+                    var signature = FormatFunctionSignature(calleeSymbol);
                     if (hasParamArray)
                     {
-                        Error($"Function '{calleeSymbol.Name}' requires at least {requiredCount} arguments, got {node.Arguments.Count}",
+                        Error($"Function '{calleeSymbol.Name}' requires at least {requiredCount} argument(s), got {node.Arguments.Count}. Expected: {signature}",
                               node.Line, node.Column);
                     }
                     else if (requiredCount == totalParams)
                     {
-                        Error($"Function '{calleeSymbol.Name}' expects {totalParams} arguments, got {node.Arguments.Count}",
+                        Error($"Function '{calleeSymbol.Name}' expects {totalParams} argument(s), got {node.Arguments.Count}. Expected: {signature}",
                               node.Line, node.Column);
                     }
                     else
                     {
-                        Error($"Function '{calleeSymbol.Name}' expects {requiredCount} to {totalParams} arguments, got {node.Arguments.Count}",
+                        Error($"Function '{calleeSymbol.Name}' expects {requiredCount} to {totalParams} argument(s), got {node.Arguments.Count}. Expected: {signature}",
                               node.Line, node.Column);
                     }
                 }

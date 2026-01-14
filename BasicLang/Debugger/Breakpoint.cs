@@ -13,7 +13,30 @@ namespace BasicLang.Debugger
         Conditional,
         HitCount,
         Logpoint,
-        Function
+        Function,
+        Data,        // Break when a variable changes
+        Exception    // Break when an exception is thrown/caught
+    }
+
+    /// <summary>
+    /// Exception breakpoint mode
+    /// </summary>
+    public enum ExceptionBreakMode
+    {
+        Never,      // Don't break on exceptions
+        Always,     // Break on all exceptions
+        Unhandled,  // Break only on unhandled exceptions
+        UserUnhandled // Break on user-unhandled exceptions
+    }
+
+    /// <summary>
+    /// Data breakpoint access type
+    /// </summary>
+    public enum DataBreakpointAccessType
+    {
+        Write,      // Break when variable is written
+        Read,       // Break when variable is read
+        ReadWrite   // Break on any access
     }
 
     /// <summary>
@@ -43,6 +66,15 @@ namespace BasicLang.Debugger
 
         // Function breakpoint support
         public string FunctionName { get; set; } = string.Empty;
+
+        // Data breakpoint support
+        public string VariableName { get; set; } = string.Empty;
+        public DataBreakpointAccessType DataAccessType { get; set; } = DataBreakpointAccessType.Write;
+        public object PreviousValue { get; set; }
+
+        // Exception breakpoint support
+        public string ExceptionType { get; set; } = string.Empty; // e.g., "DivisionByZeroException" or "*" for all
+        public ExceptionBreakMode ExceptionMode { get; set; } = ExceptionBreakMode.Always;
 
         public Breakpoint()
         {
@@ -197,6 +229,8 @@ namespace BasicLang.Debugger
         private readonly Dictionary<int, Breakpoint> _breakpoints = new();
         private readonly Dictionary<string, List<Breakpoint>> _lineBreakpoints = new();
         private readonly Dictionary<string, Breakpoint> _functionBreakpoints = new();
+        private readonly Dictionary<string, Breakpoint> _dataBreakpoints = new();  // variable name -> breakpoint
+        private readonly List<Breakpoint> _exceptionBreakpoints = new();
         private int _nextId = 1;
 
         /// <summary>
@@ -207,17 +241,28 @@ namespace BasicLang.Debugger
             breakpoint.Id = _nextId++;
             _breakpoints[breakpoint.Id] = breakpoint;
 
-            if (breakpoint.Type == BreakpointType.Function)
+            switch (breakpoint.Type)
             {
-                var funcName = breakpoint.FunctionName.ToLowerInvariant();
-                _functionBreakpoints[funcName] = breakpoint;
-            }
-            else
-            {
-                var key = GetLocationKey(breakpoint.FilePath, breakpoint.Line);
-                if (!_lineBreakpoints.ContainsKey(key))
-                    _lineBreakpoints[key] = new List<Breakpoint>();
-                _lineBreakpoints[key].Add(breakpoint);
+                case BreakpointType.Function:
+                    var funcName = breakpoint.FunctionName.ToLowerInvariant();
+                    _functionBreakpoints[funcName] = breakpoint;
+                    break;
+
+                case BreakpointType.Data:
+                    var varName = breakpoint.VariableName.ToLowerInvariant();
+                    _dataBreakpoints[varName] = breakpoint;
+                    break;
+
+                case BreakpointType.Exception:
+                    _exceptionBreakpoints.Add(breakpoint);
+                    break;
+
+                default:
+                    var key = GetLocationKey(breakpoint.FilePath, breakpoint.Line);
+                    if (!_lineBreakpoints.ContainsKey(key))
+                        _lineBreakpoints[key] = new List<Breakpoint>();
+                    _lineBreakpoints[key].Add(breakpoint);
+                    break;
             }
 
             return breakpoint;
@@ -233,20 +278,31 @@ namespace BasicLang.Debugger
 
             _breakpoints.Remove(id);
 
-            if (breakpoint.Type == BreakpointType.Function)
+            switch (breakpoint.Type)
             {
-                var funcName = breakpoint.FunctionName.ToLowerInvariant();
-                _functionBreakpoints.Remove(funcName);
-            }
-            else
-            {
-                var key = GetLocationKey(breakpoint.FilePath, breakpoint.Line);
-                if (_lineBreakpoints.TryGetValue(key, out var list))
-                {
-                    list.Remove(breakpoint);
-                    if (list.Count == 0)
-                        _lineBreakpoints.Remove(key);
-                }
+                case BreakpointType.Function:
+                    var funcName = breakpoint.FunctionName.ToLowerInvariant();
+                    _functionBreakpoints.Remove(funcName);
+                    break;
+
+                case BreakpointType.Data:
+                    var varName = breakpoint.VariableName.ToLowerInvariant();
+                    _dataBreakpoints.Remove(varName);
+                    break;
+
+                case BreakpointType.Exception:
+                    _exceptionBreakpoints.Remove(breakpoint);
+                    break;
+
+                default:
+                    var key = GetLocationKey(breakpoint.FilePath, breakpoint.Line);
+                    if (_lineBreakpoints.TryGetValue(key, out var list))
+                    {
+                        list.Remove(breakpoint);
+                        if (list.Count == 0)
+                            _lineBreakpoints.Remove(key);
+                    }
+                    break;
             }
 
             return true;
@@ -273,6 +329,41 @@ namespace BasicLang.Debugger
         }
 
         /// <summary>
+        /// Get data breakpoint by variable name
+        /// </summary>
+        public Breakpoint GetDataBreakpoint(string variableName)
+        {
+            var varName = variableName.ToLowerInvariant();
+            return _dataBreakpoints.TryGetValue(varName, out var bp) ? bp : null;
+        }
+
+        /// <summary>
+        /// Get all data breakpoints
+        /// </summary>
+        public List<Breakpoint> GetAllDataBreakpoints()
+        {
+            return new List<Breakpoint>(_dataBreakpoints.Values);
+        }
+
+        /// <summary>
+        /// Get exception breakpoint by exception type
+        /// </summary>
+        public Breakpoint GetExceptionBreakpoint(string exceptionType)
+        {
+            return _exceptionBreakpoints.FirstOrDefault(bp =>
+                bp.ExceptionType == "*" ||
+                string.Equals(bp.ExceptionType, exceptionType, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Get all exception breakpoints
+        /// </summary>
+        public List<Breakpoint> GetAllExceptionBreakpoints()
+        {
+            return new List<Breakpoint>(_exceptionBreakpoints);
+        }
+
+        /// <summary>
         /// Get all breakpoints
         /// </summary>
         public List<Breakpoint> GetAllBreakpoints()
@@ -288,6 +379,8 @@ namespace BasicLang.Debugger
             _breakpoints.Clear();
             _lineBreakpoints.Clear();
             _functionBreakpoints.Clear();
+            _dataBreakpoints.Clear();
+            _exceptionBreakpoints.Clear();
         }
 
         /// <summary>

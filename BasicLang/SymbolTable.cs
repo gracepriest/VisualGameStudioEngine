@@ -575,7 +575,11 @@ public class TypeInfo
         public int Line { get; set; }
         public int Column { get; set; }
         public ErrorSeverity Severity { get; set; }
-        
+        public string ErrorCode { get; set; }
+        public string Suggestion { get; set; }
+        public string ExpectedType { get; set; }
+        public string ActualType { get; set; }
+
         public SemanticError(string message, int line, int column, ErrorSeverity severity = ErrorSeverity.Error)
         {
             Message = message;
@@ -583,13 +587,52 @@ public class TypeInfo
             Column = column;
             Severity = severity;
         }
-        
+
+        /// <summary>
+        /// Create an error with a suggestion for fixing it
+        /// </summary>
+        public static SemanticError WithSuggestion(string message, int line, int column, string suggestion)
+        {
+            return new SemanticError(message, line, column) { Suggestion = suggestion };
+        }
+
+        /// <summary>
+        /// Create a type mismatch error with expected and actual types
+        /// </summary>
+        public static SemanticError TypeMismatch(string message, int line, int column, string expectedType, string actualType)
+        {
+            return new SemanticError(message, line, column)
+            {
+                ErrorCode = "BL3001",
+                ExpectedType = expectedType,
+                ActualType = actualType
+            };
+        }
+
+        /// <summary>
+        /// Create an undefined symbol error
+        /// </summary>
+        public static SemanticError UndefinedSymbol(string symbolName, int line, int column, string suggestion = null)
+        {
+            var msg = $"Undefined identifier '{symbolName}'";
+            if (!string.IsNullOrEmpty(suggestion))
+                msg += $". Did you mean '{suggestion}'?";
+            return new SemanticError(msg, line, column)
+            {
+                ErrorCode = "BL3002",
+                Suggestion = suggestion != null ? $"Replace '{symbolName}' with '{suggestion}'" : null
+            };
+        }
+
         public override string ToString()
         {
-            return $"{Severity} at line {Line}, column {Column}: {Message}";
+            var result = $"{Severity} at line {Line}, column {Column}: {Message}";
+            if (!string.IsNullOrEmpty(Suggestion))
+                result += $"\n  Suggestion: {Suggestion}";
+            return result;
         }
     }
-    
+
     public enum ErrorSeverity
     {
         Warning,
