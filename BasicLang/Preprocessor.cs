@@ -15,6 +15,7 @@ namespace BasicLang.Compiler
         private readonly List<string> _includePaths;
         private readonly List<PreprocessorError> _errors;
         private readonly HashSet<string> _definedSymbols;
+        private readonly Stack<ConditionalState> _conditionalStack;
 
         public List<PreprocessorError> Errors => _errors;
 
@@ -24,6 +25,17 @@ namespace BasicLang.Compiler
             _includePaths = new List<string>();
             _errors = new List<PreprocessorError>();
             _definedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            _conditionalStack = new Stack<ConditionalState>();
+        }
+
+        /// <summary>
+        /// State for conditional compilation blocks
+        /// </summary>
+        private class ConditionalState
+        {
+            public bool ConditionWasTrue { get; set; }  // Was the #IfDef/#IfNDef condition true?
+            public bool InElseBranch { get; set; }       // Are we in the #Else branch?
+            public bool ParentActive { get; set; }       // Was the parent block active?
         }
 
         /// <summary>
@@ -49,6 +61,7 @@ namespace BasicLang.Compiler
         public string Process(string source, string filePath)
         {
             _errors.Clear();
+            _conditionalStack.Clear();
 
             // Track this file to prevent circular includes
             var normalizedPath = Path.GetFullPath(filePath).ToLowerInvariant();
@@ -82,19 +95,53 @@ namespace BasicLang.Compiler
                 {
                     ProcessDefine(trimmedLine, lineNumber);
                 }
-                // Check for #IfDef / #IfNDef / #EndIf (simple conditional compilation)
-                else if (trimmedLine.StartsWith("#IfDef", StringComparison.OrdinalIgnoreCase) ||
-                         trimmedLine.StartsWith("#IfNDef", StringComparison.OrdinalIgnoreCase) ||
-                         trimmedLine.StartsWith("#EndIf", StringComparison.OrdinalIgnoreCase) ||
-                         trimmedLine.StartsWith("#Else", StringComparison.OrdinalIgnoreCase))
+                // Check for #IfDef directive
+                else if (trimmedLine.StartsWith("#IfDef", StringComparison.OrdinalIgnoreCase))
                 {
-                    // TODO: Implement conditional compilation in a future phase
-                    result.AppendLine(line);
+                    ProcessIfDef(trimmedLine, lineNumber, false);
+                    result.AppendLine($"' {line}"); // Comment out the directive
+                }
+                // Check for #IfNDef directive
+                else if (trimmedLine.StartsWith("#IfNDef", StringComparison.OrdinalIgnoreCase))
+                {
+                    ProcessIfDef(trimmedLine, lineNumber, true);
+                    result.AppendLine($"' {line}"); // Comment out the directive
+                }
+                // Check for #Else directive
+                else if (trimmedLine.StartsWith("#Else", StringComparison.OrdinalIgnoreCase))
+                {
+                    ProcessElse(lineNumber);
+                    result.AppendLine($"' {line}"); // Comment out the directive
+                }
+                // Check for #EndIf directive
+                else if (trimmedLine.StartsWith("#EndIf", StringComparison.OrdinalIgnoreCase))
+                {
+                    ProcessEndIf(lineNumber);
+                    result.AppendLine($"' {line}"); // Comment out the directive
                 }
                 else
                 {
-                    result.AppendLine(line);
+                    // Only include line if we're in an active conditional block
+                    if (IsConditionalActive())
+                    {
+                        result.AppendLine(line);
+                    }
+                    else
+                    {
+                        // Comment out the line when in inactive block
+                        result.AppendLine($"' [IFDEF SKIP] {line}");
+                    }
                 }
+            }
+
+            // Check for unclosed conditional blocks
+            if (_conditionalStack.Count > 0)
+            {
+                _errors.Add(new PreprocessorError
+                {
+                    Line = lineNumber,
+                    Message = $"Unclosed conditional block: {_conditionalStack.Count} #EndIf missing"
+                });
             }
 
             return result.ToString();
@@ -236,6 +283,109 @@ namespace BasicLang.Compiler
         public bool IsDefined(string symbol)
         {
             return _definedSymbols.Contains(symbol);
+        }
+
+        /// <summary>
+        /// Process #IfDef or #IfNDef directive
+        /// </summary>
+        private void ProcessIfDef(string line, int lineNumber, bool isNegated)
+        {
+            var directiveName = isNegated ? "#IfNDef" : "#IfDef";
+            var match = Regex.Match(line, directiveName + @"\s+(\w+)", RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                _errors.Add(new PreprocessorError
+                {
+                    Line = lineNumber,
+                    Message = $"Invalid {directiveName} syntax: expected symbol name"
+                });
+                // Push a default state to keep stack balanced
+                _conditionalStack.Push(new ConditionalState
+                {
+                    ConditionWasTrue = false,
+                    InElseBranch = false,
+                    ParentActive = IsConditionalActive()
+                });
+                return;
+            }
+
+            var symbol = match.Groups[1].Value;
+            var isDefined = _definedSymbols.Contains(symbol);
+            var conditionTrue = isNegated ? !isDefined : isDefined;
+
+            _conditionalStack.Push(new ConditionalState
+            {
+                ConditionWasTrue = conditionTrue,
+                InElseBranch = false,
+                ParentActive = IsConditionalActive()
+            });
+        }
+
+        /// <summary>
+        /// Process #Else directive
+        /// </summary>
+        private void ProcessElse(int lineNumber)
+        {
+            if (_conditionalStack.Count == 0)
+            {
+                _errors.Add(new PreprocessorError
+                {
+                    Line = lineNumber,
+                    Message = "#Else without matching #IfDef or #IfNDef"
+                });
+                return;
+            }
+
+            var state = _conditionalStack.Peek();
+            if (state.InElseBranch)
+            {
+                _errors.Add(new PreprocessorError
+                {
+                    Line = lineNumber,
+                    Message = "Duplicate #Else in conditional block"
+                });
+                return;
+            }
+
+            state.InElseBranch = true;
+        }
+
+        /// <summary>
+        /// Process #EndIf directive
+        /// </summary>
+        private void ProcessEndIf(int lineNumber)
+        {
+            if (_conditionalStack.Count == 0)
+            {
+                _errors.Add(new PreprocessorError
+                {
+                    Line = lineNumber,
+                    Message = "#EndIf without matching #IfDef or #IfNDef"
+                });
+                return;
+            }
+
+            _conditionalStack.Pop();
+        }
+
+        /// <summary>
+        /// Check if the current conditional block is active (code should be included)
+        /// </summary>
+        private bool IsConditionalActive()
+        {
+            if (_conditionalStack.Count == 0)
+                return true; // No conditional block, everything is active
+
+            var state = _conditionalStack.Peek();
+
+            // If parent wasn't active, we're not active either
+            if (!state.ParentActive)
+                return false;
+
+            // In the #If branch: active if condition was true
+            // In the #Else branch: active if condition was false
+            return state.InElseBranch ? !state.ConditionWasTrue : state.ConditionWasTrue;
         }
 
         /// <summary>

@@ -146,9 +146,46 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 - Both `For Each n As Integer In arr` (explicit) and `For Each n In arr` (inferred) are supported
 - Element type is inferred from array element type or generic collection type argument
 
+### Generic Collection Indexer Fix
+- **Bracket syntax**: `dict("key")` now generates proper C# `dict["key"]` instead of invalid `dict("key")`
+- Added `IRIndexerAccess` class to IRNodes.cs for collection indexing
+- Added `IsIndexableGenericType()` helper to detect List<T>, Dictionary<K,V>, etc.
+- Updated IRBuilder.cs to emit `IRIndexerAccess` for generic collections
+- Updated CSharpBackend.cs to generate `collection[index]` syntax
+
+### For Each Native IR Generation
+- **Native foreach**: For Each loops now emit `IRForEach` instruction instead of manual index loops
+- Added `IRForEach` class to IRNodes.cs
+- CSharpBackend generates native C# `foreach` statement
+- Loop variable is declared by foreach, not separately
+
+### Constructor Argument Validation
+- **Argument count validation**: `New Person("Alice")` when constructor takes 2 args now errors
+- **Type validation**: Argument types are checked against parameter types
+- Constructor symbols registered in class type's Members dictionary as `.ctor{N}` (N = param count)
+- Helpful error messages show available constructors
+
 ### Key Implementation Details
 - `IsNegativeStep()` helper in IRBuilder.cs detects negative loop steps
 - `GetTypeInfoFromName()` helper resolves type names for inline declarations
 - Array access detection in `Visit(CallExpressionNode)` distinguishes `func()` from `arr()`
 - Symbol.ReturnType must be explicitly set for pre-registered functions
 - `ResolveNetTypeName()` maps .NET type names to BasicLang TypeInfo
+- Constructor symbols stored as `.ctor0`, `.ctor1`, `.ctor2` etc. to support overloading
+
+### Base Constructor Validation
+- **MyBase.New() validation**: Base constructor calls now validated for argument count and types
+- Error messages show available base constructors when mismatch detected
+- Validates both argument count and type compatibility
+
+### MSIL Backend Base Class Context
+- **Base class method calls**: `MyBase.Method()` now correctly uses actual base class name
+- Added `_currentClass` tracking field to MSILBackend
+- Base calls no longer hardcoded to `System.Object`
+
+### Conditional Compilation Preprocessor
+- **#IfDef / #IfNDef / #Else / #EndIf**: Full conditional compilation support
+- Preprocessor runs before lexer/parser in Compiler.cs
+- Stack-based implementation supports nested conditionals
+- Inactive code blocks are commented out in preprocessed output
+- Validates unclosed conditional blocks and duplicate #Else

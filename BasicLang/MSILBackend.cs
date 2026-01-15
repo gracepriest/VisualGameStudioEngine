@@ -27,6 +27,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private int _maxStack;
         private int _currentStack;
         private IRModule _module;
+        private IRClass _currentClass;
 
         public override string BackendName => "MSIL";
         public override TargetPlatform Target => TargetPlatform.MSIL;
@@ -256,6 +257,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         private void GenerateUserClass(IRClass irClass)
         {
+            _currentClass = irClass;
             var className = SanitizeName(irClass.Name);
 
             // Build extends and implements
@@ -319,6 +321,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             WriteLine($"}} // end of class {className}");
+            _currentClass = null;
         }
 
         private string MapAccessModifier(AccessModifier access)
@@ -1838,8 +1841,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // For base calls, we need to know the base class name from the current class context
             // Use 'call instance' instead of 'callvirt' to call base class method non-virtually
-            // The base class name should come from IRClass.BaseClass - for now use a placeholder
-            var baseClassName = "[mscorlib]System.Object"; // TODO: Get from current class context
+            var baseClassName = _currentClass != null && !string.IsNullOrEmpty(_currentClass.BaseClass)
+                ? SanitizeName(_currentClass.BaseClass)
+                : "[mscorlib]System.Object";
             WriteLine($"    call instance {returnType} {baseClassName}::{methodName}({paramTypes})");
 
             // Update stack: pop 'this' + args, push return value if any

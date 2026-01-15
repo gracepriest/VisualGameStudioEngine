@@ -2496,11 +2496,55 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Validate base constructor call if present
             if (node.BaseConstructorArgs.Count > 0)
             {
+                // Analyze arguments first to get their types
+                var argTypes = new List<TypeInfo>();
                 foreach (var arg in node.BaseConstructorArgs)
                 {
                     arg.Accept(this);
+                    var argType = GetNodeType(arg);
+                    argTypes.Add(argType ?? _typeManager.ObjectType);
                 }
-                // TODO: Validate base constructor exists and arguments match
+
+                // Validate base constructor exists and arguments match
+                if (classScope != null && classScope.ClassType?.BaseType != null)
+                {
+                    var baseType = classScope.ClassType.BaseType;
+                    var baseCtorName = $".ctor{node.BaseConstructorArgs.Count}";
+
+                    if (baseType.Members != null && baseType.Members.TryGetValue(baseCtorName, out var baseCtorSymbol))
+                    {
+                        // Validate argument types
+                        if (baseCtorSymbol.Parameters != null)
+                        {
+                            for (int i = 0; i < Math.Min(argTypes.Count, baseCtorSymbol.Parameters.Count); i++)
+                            {
+                                var expectedType = baseCtorSymbol.Parameters[i].Type;
+                                var actualType = argTypes[i];
+                                if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
+                                {
+                                    Error($"Base constructor argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{baseCtorSymbol.Parameters[i].Name}' of type '{expectedType.Name}'",
+                                        node.BaseConstructorArgs[i].Line, node.BaseConstructorArgs[i].Column);
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Check if base class has any constructors defined
+                        var hasAnyBaseCtor = baseType.Members?.Keys.Any(k => k.StartsWith(".ctor")) ?? false;
+                        if (hasAnyBaseCtor)
+                        {
+                            var availableCtors = baseType.Members.Keys
+                                .Where(k => k.StartsWith(".ctor"))
+                                .Select(k => int.TryParse(k.Substring(5), out var n) ? n : 0)
+                                .OrderBy(x => x)
+                                .ToList();
+                            var ctorList = string.Join(", ", availableCtors.Select(n => n == 0 ? "no arguments" : $"{n} argument(s)"));
+                            Error($"No constructor for base class '{baseType.Name}' takes {node.BaseConstructorArgs.Count} argument(s). Available constructors take: {ctorList}",
+                                node.Line, node.Column);
+                        }
+                    }
+                }
             }
 
             // Analyze body

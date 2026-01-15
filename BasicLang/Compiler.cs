@@ -57,6 +57,7 @@ namespace BasicLang.Compiler
         private readonly ModuleRegistry _registry;
         private readonly DependencyGraph _dependencyGraph;
         private readonly CompilerOptions _options;
+        private readonly Preprocessor _preprocessor;
 
         public ModuleResolver Resolver => _resolver;
         public ModuleRegistry Registry => _registry;
@@ -67,11 +68,13 @@ namespace BasicLang.Compiler
             _resolver = new ModuleResolver();
             _registry = new ModuleRegistry(_resolver);
             _dependencyGraph = new DependencyGraph();
+            _preprocessor = new Preprocessor();
 
             // Add configured search paths
             foreach (var path in _options.SearchPaths)
             {
                 _resolver.AddSearchPath(path);
+                _preprocessor.AddIncludePath(path);
             }
         }
 
@@ -212,8 +215,20 @@ namespace BasicLang.Compiler
 
             try
             {
+                // Preprocess the source code
+                var processedSource = _preprocessor.Process(unit.SourceCode, unit.FilePath);
+
+                // Check for preprocessor errors
+                if (_preprocessor.Errors.Count > 0)
+                {
+                    foreach (var error in _preprocessor.Errors)
+                    {
+                        result.AllErrors.Add(new SemanticError(error.Message, error.Line, error.Column));
+                    }
+                }
+
                 // Lex and parse
-                var lexer = new Lexer(unit.SourceCode);
+                var lexer = new Lexer(processedSource);
                 var tokens = lexer.Tokenize();
                 var parser = new Parser(tokens);
                 unit.AST = parser.Parse();
