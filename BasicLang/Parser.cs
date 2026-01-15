@@ -2891,8 +2891,13 @@ namespace BasicLang.Compiler
             var node = new ForEachLoopNode(startToken.Line, startToken.Column);
 
             node.Variable = Consume(TokenType.Identifier, "Expected loop variable").Lexeme;
-            Consume(TokenType.As, "Expected 'As'");
-            node.VariableType = ParseTypeReference();
+
+            // Optional type declaration: For Each n As Integer In ...
+            if (Match(TokenType.As))
+            {
+                node.VariableType = ParseTypeReference();
+            }
+
             Consume(TokenType.In, "Expected 'In'");
             node.Collection = ParseExpression();
 

@@ -141,6 +141,11 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 - Added `GetStringMethodReturnType()` with known return types for String methods
 - Added `GetCommonMethodReturnType()` for StringBuilder and collection methods
 
+### For Each Loop Improvements
+- **Optional type declaration**: `For Each n In numbers` now works (type inferred from collection)
+- Both `For Each n As Integer In arr` (explicit) and `For Each n In arr` (inferred) are supported
+- Element type is inferred from array element type or generic collection type argument
+
 ### Key Implementation Details
 - `IsNegativeStep()` helper in IRBuilder.cs detects negative loop steps
 - `GetTypeInfoFromName()` helper resolves type names for inline declarations

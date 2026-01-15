@@ -3449,11 +3449,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             node.Collection.Accept(this);
             var collectionType = GetNodeType(node.Collection);
 
-            TypeInfo elementType = ResolveTypeReference(node.VariableType);
+            // Determine element type - either from explicit type declaration or inferred from collection
+            TypeInfo elementType;
 
-            if (collectionType != null)
+            if (node.VariableType != null)
             {
-                if (collectionType.Kind == TypeKind.Array)
+                // Explicit type declaration: For Each n As Integer In ...
+                elementType = ResolveTypeReference(node.VariableType);
+
+                if (collectionType != null && collectionType.Kind == TypeKind.Array)
                 {
                     if (!elementType.IsAssignableFrom(collectionType.ElementType))
                     {
@@ -3461,13 +3465,34 @@ namespace BasicLang.Compiler.SemanticAnalysis
                               node.Line, node.Column);
                     }
                 }
+            }
+            else
+            {
+                // Infer type from collection: For Each n In ...
+                if (collectionType != null)
+                {
+                    if (collectionType.Kind == TypeKind.Array)
+                    {
+                        elementType = collectionType.ElementType ?? _typeManager.ObjectType;
+                    }
+                    else if (collectionType.GenericArguments != null && collectionType.GenericArguments.Count > 0)
+                    {
+                        // For generic collections like List<T>, use the first type argument
+                        elementType = collectionType.GenericArguments[0];
+                    }
+                    else
+                    {
+                        elementType = _typeManager.ObjectType;
+                    }
+                }
                 else
                 {
-                    // Check if type is enumerable (has appropriate members)
-                    // For now, just check if it's an array
-                    Warning($"For Each requires an array or enumerable collection", node.Line, node.Column);
+                    elementType = _typeManager.ObjectType;
                 }
             }
+
+            // Set the node type to the element type (used by IRBuilder)
+            SetNodeType(node, elementType);
 
             EnterScope("ForEachLoop", ScopeKind.Loop);
 
