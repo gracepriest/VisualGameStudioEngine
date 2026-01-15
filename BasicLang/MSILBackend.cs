@@ -2011,14 +2011,98 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRForEach forEach)
         {
-            // MSIL foreach would use GetEnumerator pattern
-            WriteLine("        // TODO: IRForEach not fully implemented in MSIL backend");
+            // MSIL foreach uses GetEnumerator pattern
+            var elemType = MapType(forEach.ElementType);
+            var varName = SanitizeName(forEach.VariableName);
+            var collectionVal = GetValueName(forEach.Collection);
+
+            var loopStart = $"foreach_start_{_labelCounter}";
+            var loopBody = $"foreach_body_{_labelCounter}";
+            var loopEnd = $"foreach_end_{_labelCounter}";
+            _labelCounter++;
+
+            WriteLine($"    // ForEach loop: {varName} in {collectionVal}");
+
+            // Get enumerator
+            EmitLoadValue(forEach.Collection);
+            WriteLine($"    callvirt instance class [mscorlib]System.Collections.IEnumerator [mscorlib]System.Collections.IEnumerable::GetEnumerator()");
+            var enumLocal = _localCounter++;
+            WriteLine($"    stloc.s {enumLocal}");
+            _currentStack--;
+
+            // Loop start - MoveNext check
+            WriteLine($"  {loopStart}:");
+            WriteLine($"    ldloc.s {enumLocal}");
+            WriteLine($"    callvirt instance bool [mscorlib]System.Collections.IEnumerator::MoveNext()");
+            WriteLine($"    brfalse.s {loopEnd}");
+            _currentStack++;
+            _currentStack--;
+
+            // Loop body - get Current
+            WriteLine($"  {loopBody}:");
+            WriteLine($"    ldloc.s {enumLocal}");
+            WriteLine($"    callvirt instance object [mscorlib]System.Collections.IEnumerator::get_Current()");
+            _currentStack++;
+
+            // Cast to element type if needed
+            if (elemType != "object")
+            {
+                WriteLine($"    unbox.any {elemType}");
+            }
+
+            // Store in loop variable
+            var varLocal = _localCounter++;
+            _localIndices[varName] = varLocal;
+            WriteLine($"    stloc.s {varLocal}");
+            _currentStack--;
+
+            // Process body block
+            if (forEach.BodyBlock != null)
+            {
+                foreach (var inst in forEach.BodyBlock.Instructions)
+                {
+                    if (inst is IRBranch or IRConditionalBranch) continue;
+                    inst.Accept(this);
+                }
+            }
+
+            // Jump back to loop start
+            WriteLine($"    br.s {loopStart}");
+
+            // Loop end
+            WriteLine($"  {loopEnd}:");
         }
 
         public override void Visit(IRIndexerAccess indexer)
         {
-            // MSIL indexer access handled in expression emission
-            WriteLine("        // TODO: IRIndexerAccess not fully implemented in MSIL backend");
+            // MSIL indexer access - load collection, index, then call get_Item
+            var resultType = MapType(indexer.Type);
+
+            // Load collection
+            EmitLoadValue(indexer.Collection);
+
+            // Load indices
+            foreach (var index in indexer.Indices)
+            {
+                EmitLoadValue(index);
+            }
+
+            // Call indexer (get_Item method)
+            var indexTypes = string.Join(", ", indexer.Indices.Select(i => MapType(i.Type)));
+            WriteLine($"    callvirt instance {resultType} class [mscorlib]System.Collections.Generic.IList`1<{resultType}>::get_Item({indexTypes})");
+
+            // Update stack
+            _currentStack -= indexer.Indices.Count; // Pop indices
+            // Collection was already on stack, now replaced with result
+
+            // Store result name
+            if (!string.IsNullOrEmpty(indexer.Name))
+            {
+                var resultLocal = _localCounter++;
+                _localIndices[indexer.Name] = resultLocal;
+                WriteLine($"    stloc.s {resultLocal}");
+                _currentStack--;
+            }
         }
 
         #endregion

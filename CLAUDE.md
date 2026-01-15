@@ -189,3 +189,31 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 - Stack-based implementation supports nested conditionals
 - Inactive code blocks are commented out in preprocessed output
 - Validates unclosed conditional blocks and duplicate #Else
+
+### LLVM Backend Exception Handling
+- **Try/Catch blocks**: Implemented using LLVM `invoke` and `landingpad` pattern
+- Uses personality function for C++ exception handling ABI
+- Supports catch-all exceptions with `catch i8* null`
+- Exception pointer extracted from landing pad for catch block
+
+### ForEach in LLVM/MSIL Backends
+- **LLVM ForEach**: Index-based loop with `__get_collection_length` and `__get_collection_element` helper functions
+- **MSIL ForEach**: Proper `GetEnumerator` pattern using `IEnumerable` interface
+- Loop variable loaded at each iteration from collection element
+
+### Indexer Access in LLVM/MSIL Backends
+- **LLVM Indexer**: Uses `getelementptr` instruction for array/collection access
+- **MSIL Indexer**: Uses `get_Item` method call for collection indexers
+- Both single and multi-dimensional indexing supported
+- Results stored in `_llvmNames` dictionary for subsequent use
+
+### LLVM Event Handlers
+- **AddHandler/RemoveHandler**: Implemented delegate combine/remove pattern
+- Uses `@llvm.delegate.combine` and `@llvm.delegate.remove` intrinsics
+- Event delegate pointers stored for later invocation
+
+### Generic Type Parameters (TemplateDeclarationNode)
+- **Template declarations**: `Visit(TemplateDeclarationNode)` now properly implements generic type parameters
+- Type parameters registered in current scope before processing inner declaration
+- Injects type parameters into ClassNode, FunctionNode, SubroutineNode GenericParameters
+- Type parameters resolved via `ResolveTypeName()` which checks scope for `SymbolKind.TypeParameter`

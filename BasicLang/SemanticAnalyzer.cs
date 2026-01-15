@@ -2166,9 +2166,56 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(TemplateDeclarationNode node)
         {
-            // TODO: Implement generic type parameters
+            // Register generic type parameters in the current scope before processing declaration
+            var registeredTypeParams = new List<TypeInfo>();
+
+            foreach (var typeParamName in node.TypeParameters)
+            {
+                // Create a type parameter type
+                var typeParamType = new TypeInfo(typeParamName, TypeKind.TypeParameter);
+                registeredTypeParams.Add(typeParamType);
+
+                // Define type parameter as a symbol in the current scope
+                var typeParamSymbol = new Symbol(typeParamName, SymbolKind.TypeParameter, typeParamType, node.Line, node.Column);
+                _currentScope.Define(typeParamSymbol);
+            }
+
+            // If the declaration is a class or function, inject the generic parameters
             if (node.Declaration != null)
             {
+                // Pass type parameters to the inner declaration if it supports them
+                if (node.Declaration is ClassNode classNode)
+                {
+                    // Add type parameters to the class if not already present
+                    foreach (var typeParam in node.TypeParameters)
+                    {
+                        if (!classNode.GenericParameters.Contains(typeParam))
+                        {
+                            classNode.GenericParameters.Add(typeParam);
+                        }
+                    }
+                }
+                else if (node.Declaration is FunctionNode funcNode)
+                {
+                    foreach (var typeParam in node.TypeParameters)
+                    {
+                        if (!funcNode.GenericParameters.Contains(typeParam))
+                        {
+                            funcNode.GenericParameters.Add(typeParam);
+                        }
+                    }
+                }
+                else if (node.Declaration is SubroutineNode subNode)
+                {
+                    foreach (var typeParam in node.TypeParameters)
+                    {
+                        if (!subNode.GenericParameters.Contains(typeParam))
+                        {
+                            subNode.GenericParameters.Add(typeParam);
+                        }
+                    }
+                }
+
                 node.Declaration.Accept(this);
             }
         }
