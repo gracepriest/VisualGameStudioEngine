@@ -1210,6 +1210,210 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// Look up a member on a .NET type and return its type info
+        /// </summary>
+        private TypeInfo LookupNetTypeMember(string typeName, string memberName)
+        {
+            // First try the TypeRegistry for loaded .NET assemblies
+            if (_typeRegistry != null)
+            {
+                var netType = _typeRegistry.GetType(typeName);
+                if (netType != null)
+                {
+                    var member = netType.Members.FirstOrDefault(m =>
+                        m.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase));
+                    if (member != null && !string.IsNullOrEmpty(member.ReturnType))
+                    {
+                        return ResolveNetTypeName(member.ReturnType);
+                    }
+                }
+            }
+
+            // Fallback: known return types for common String methods
+            if (typeName.Equals("String", StringComparison.OrdinalIgnoreCase) ||
+                typeName.Equals("System.String", StringComparison.OrdinalIgnoreCase))
+            {
+                var returnType = GetStringMethodReturnType(memberName);
+                if (returnType != null)
+                    return returnType;
+            }
+
+            // Fallback for other common types
+            var commonReturnType = GetCommonMethodReturnType(typeName, memberName);
+            if (commonReturnType != null)
+                return commonReturnType;
+
+            return null;
+        }
+
+        /// <summary>
+        /// Resolve a .NET type name string to a TypeInfo
+        /// </summary>
+        private TypeInfo ResolveNetTypeName(string netTypeName)
+        {
+            if (string.IsNullOrEmpty(netTypeName))
+                return _typeManager.ObjectType;
+
+            // Handle common type aliases
+            switch (netTypeName.ToLowerInvariant())
+            {
+                case "string":
+                case "system.string":
+                    return _typeManager.StringType;
+                case "int":
+                case "int32":
+                case "system.int32":
+                case "integer":
+                    return _typeManager.IntegerType;
+                case "long":
+                case "int64":
+                case "system.int64":
+                    return _typeManager.LongType;
+                case "bool":
+                case "boolean":
+                case "system.boolean":
+                    return _typeManager.BooleanType;
+                case "double":
+                case "system.double":
+                    return _typeManager.DoubleType;
+                case "single":
+                case "float":
+                case "system.single":
+                    return _typeManager.SingleType;
+                case "char":
+                case "system.char":
+                    return _typeManager.CharType;
+                case "void":
+                case "system.void":
+                    return _typeManager.VoidType;
+                case "object":
+                case "system.object":
+                    return _typeManager.ObjectType;
+            }
+
+            // Handle arrays
+            if (netTypeName.EndsWith("[]"))
+            {
+                var elementTypeName = netTypeName.Substring(0, netTypeName.Length - 2);
+                var elementType = ResolveNetTypeName(elementTypeName);
+                return new TypeInfo(elementType.Name, TypeKind.Array) { ElementType = elementType };
+            }
+
+            // For other types, try to get or create
+            var typeInfo = _typeManager.GetType(netTypeName);
+            if (typeInfo != null)
+                return typeInfo;
+
+            // Create a synthetic type for .NET types
+            return new TypeInfo(netTypeName, TypeKind.Class);
+        }
+
+        /// <summary>
+        /// Get return type for common String methods
+        /// </summary>
+        private TypeInfo GetStringMethodReturnType(string methodName)
+        {
+            switch (methodName.ToLowerInvariant())
+            {
+                // Methods that return String
+                case "trim":
+                case "trimstart":
+                case "trimend":
+                case "toupper":
+                case "tolower":
+                case "toupperinvariant":
+                case "tolowerinvariant":
+                case "substring":
+                case "replace":
+                case "remove":
+                case "insert":
+                case "padleft":
+                case "padright":
+                case "normalize":
+                case "tostring":
+                case "concat":
+                case "join":
+                case "format":
+                    return _typeManager.StringType;
+
+                // Methods that return Int32
+                case "length":
+                case "indexof":
+                case "lastindexof":
+                case "compareto":
+                case "gethashcode":
+                    return _typeManager.IntegerType;
+
+                // Methods that return Boolean
+                case "startswith":
+                case "endswith":
+                case "contains":
+                case "equals":
+                case "isnullorempty":
+                case "isnullorwhitespace":
+                    return _typeManager.BooleanType;
+
+                // Methods that return Char
+                case "chars":
+                    return _typeManager.CharType;
+
+                // Methods that return String[]
+                case "split":
+                    return new TypeInfo("String", TypeKind.Array) { ElementType = _typeManager.StringType };
+
+                // Methods that return Char[]
+                case "tochararray":
+                    return new TypeInfo("Char", TypeKind.Array) { ElementType = _typeManager.CharType };
+
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
+        /// Get return type for common methods on other .NET types
+        /// </summary>
+        private TypeInfo GetCommonMethodReturnType(string typeName, string methodName)
+        {
+            var lowerTypeName = typeName.ToLowerInvariant();
+            var lowerMethodName = methodName.ToLowerInvariant();
+
+            // StringBuilder methods
+            if (lowerTypeName == "stringbuilder" || lowerTypeName == "system.text.stringbuilder")
+            {
+                switch (lowerMethodName)
+                {
+                    case "append":
+                    case "appendline":
+                    case "appendformat":
+                    case "insert":
+                    case "remove":
+                    case "replace":
+                    case "clear":
+                        return new TypeInfo("StringBuilder", TypeKind.Class);
+                    case "tostring":
+                        return _typeManager.StringType;
+                    case "length":
+                    case "capacity":
+                        return _typeManager.IntegerType;
+                }
+            }
+
+            // Common collection methods
+            if (lowerMethodName == "count" || lowerMethodName == "length")
+                return _typeManager.IntegerType;
+
+            if (lowerMethodName == "tostring")
+                return _typeManager.StringType;
+
+            if (lowerMethodName == "equals" || lowerMethodName == "contains" ||
+                lowerMethodName == "any" || lowerMethodName == "all")
+                return _typeManager.BooleanType;
+
+            return null;
+        }
+
+        /// <summary>
         /// First pass: Register all function/sub declarations to support forward references
         /// </summary>
         private void RegisterDeclarations(ProgramNode program)
@@ -3913,9 +4117,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else if (IsNetType(objectType.Name))
             {
-                // For .NET types, we don't validate member access - trust the user
-                // The C# compiler will catch any errors
-                SetNodeType(node, _typeManager.ObjectType);
+                // For .NET types, try to look up the member to get its return type
+                var memberType = LookupNetTypeMember(objectType.Name, node.MemberName);
+                SetNodeType(node, memberType ?? _typeManager.ObjectType);
             }
             else
             {
@@ -4068,7 +4272,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     arg.Accept(this);
                 }
 
-                SetNodeType(node, _typeManager.ObjectType);
+                // For method calls on .NET types, use the type we computed for the member access
+                // (which is the method's return type)
+                if (node.Callee is MemberAccessExpressionNode && calleeType != null &&
+                    calleeType != _typeManager.ObjectType)
+                {
+                    SetNodeType(node, calleeType);
+                }
+                else
+                {
+                    SetNodeType(node, _typeManager.ObjectType);
+                }
             }
         }
 

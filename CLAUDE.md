@@ -135,8 +135,15 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 - **Two-pass semantic analysis**: Functions/Subs can now be called before their definition
 - Added `RegisterDeclarations()` pass that pre-registers all function signatures (SemanticAnalyzer.cs)
 
+### .NET Type Method Chaining
+- **Method chaining**: `s.Trim().ToUpper()` now correctly returns `String` instead of `Object`
+- Added `LookupNetTypeMember()` to resolve .NET method return types (SemanticAnalyzer.cs)
+- Added `GetStringMethodReturnType()` with known return types for String methods
+- Added `GetCommonMethodReturnType()` for StringBuilder and collection methods
+
 ### Key Implementation Details
 - `IsNegativeStep()` helper in IRBuilder.cs detects negative loop steps
 - `GetTypeInfoFromName()` helper resolves type names for inline declarations
 - Array access detection in `Visit(CallExpressionNode)` distinguishes `func()` from `arr()`
 - Symbol.ReturnType must be explicitly set for pre-registered functions
+- `ResolveNetTypeName()` maps .NET type names to BasicLang TypeInfo
