@@ -1376,6 +1376,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
         }
 
+        public override void Visit(IRForEach forEach)
+        {
+            // C++ range-based for loop
+            var elemType = MapType(forEach.ElementType);
+            var varName = SanitizeName(forEach.VariableName);
+            var collection = GetValueName(forEach.Collection);
+            WriteLine($"for ({elemType} {varName} : {collection})");
+            WriteLine("{");
+            Indent();
+            // Body would be processed separately by block processing
+            Unindent();
+            WriteLine("}");
+        }
+
+        public override void Visit(IRIndexerAccess indexer)
+        {
+            // C++ indexer access handled in expression emission
+        }
+
         #endregion
 
         private string MapBinaryOperator(BinaryOpKind op) => op switch

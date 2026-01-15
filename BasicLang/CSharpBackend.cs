@@ -2500,6 +2500,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         return $"{baseExpr}[{indices}]";
                     }
 
+                    case IRIndexerAccess indexer:
+                    {
+                        var collectionExpr = EmitExpression(indexer.Collection, stack, false);
+                        var indices = string.Join(", ", indexer.Indices.Select(i => EmitExpression(i, stack, false)));
+                        return $"{collectionExpr}[{indices}]";
+                    }
+
                     case IRCast cast:
                     {
                         var target = MapType(cast.Type);
@@ -3179,6 +3186,56 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 else if (endTerminator is IRBranch endBranch)
                     HandleUnconditionalBranch(endBranch);
             }
+        }
+
+        public void Visit(IRForEach forEach)
+        {
+            var elemType = MapType(forEach.ElementType);
+            var varName = SanitizeName(forEach.VariableName);
+            var collectionExpr = GetValueName(forEach.Collection);
+
+            WriteLine($"foreach ({elemType} {varName} in {collectionExpr})");
+            WriteLine("{");
+            Indent();
+
+            // Generate body block
+            _processedBlocks.Add(forEach.BodyBlock);
+            EmitBlockInstructions(forEach.BodyBlock);
+
+            // Handle body block's terminator
+            var bodyTerminator = forEach.BodyBlock.Instructions.LastOrDefault();
+            if (bodyTerminator is IRConditionalBranch bodyCond)
+            {
+                HandleConditionalBranch(bodyCond);
+            }
+            else if (bodyTerminator is IRBranch bodyBranch &&
+                     bodyBranch.Target != forEach.EndBlock &&
+                     !_processedBlocks.Contains(bodyBranch.Target))
+            {
+                HandleUnconditionalBranch(bodyBranch);
+            }
+
+            Unindent();
+            WriteLine("}");
+
+            // Continue with end block
+            if (forEach.EndBlock != null && !_processedBlocks.Contains(forEach.EndBlock))
+            {
+                _processedBlocks.Add(forEach.EndBlock);
+                EmitBlockInstructions(forEach.EndBlock);
+
+                var endTerminator = forEach.EndBlock.Instructions.LastOrDefault();
+                if (endTerminator is IRConditionalBranch endCond)
+                    HandleConditionalBranch(endCond);
+                else if (endTerminator is IRBranch endBranch)
+                    HandleUnconditionalBranch(endBranch);
+            }
+        }
+
+        public void Visit(IRIndexerAccess indexer)
+        {
+            // This is handled by GetValueName - we don't emit a separate statement
+            // The indexer access expression is generated inline where it's used
         }
 
         // ====================================================================

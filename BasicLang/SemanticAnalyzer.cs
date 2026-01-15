@@ -2468,9 +2468,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
             EnterScope("Constructor", ScopeKind.Function);
 
             // Register parameters
+            var parameterSymbols = new List<Symbol>();
             foreach (var param in node.Parameters)
             {
                 param.Accept(this);
+                // Capture parameter symbols for constructor registration
+                if (_nodeSymbols.TryGetValue(param, out var paramSymbol))
+                {
+                    parameterSymbols.Add(paramSymbol);
+                }
+            }
+
+            // Register constructor in the class type
+            var classScope = _currentScope.Parent; // Constructor's parent is class scope
+            if (classScope != null && classScope.ClassType != null)
+            {
+                // Create constructor symbol with ".ctor" name
+                var ctorSymbol = new Symbol(".ctor", SymbolKind.Function, classScope.ClassType, node.Line, node.Column);
+                ctorSymbol.Parameters = parameterSymbols;
+                ctorSymbol.ReturnType = classScope.ClassType;
+
+                // Use ".ctor" + param count to support overloading
+                var ctorName = $".ctor{node.Parameters.Count}";
+                classScope.ClassType.Members[ctorName] = ctorSymbol;
             }
 
             // Validate base constructor call if present
@@ -4207,7 +4227,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, calleeType.ElementType ?? _typeManager.ObjectType);
                 return;
             }
-            
+
+            // Check if this is a generic collection indexer (List(i), Dictionary(key))
+            if (calleeType != null && node.Arguments.Count > 0 && IsIndexableGenericType(calleeType))
+            {
+                foreach (var index in node.Arguments)
+                {
+                    index.Accept(this);
+                }
+                var elementType = GetGenericCollectionElementType(calleeType);
+                SetNodeType(node, elementType);
+                return;
+            }
+
             if (calleeSymbol != null &&
                 (calleeSymbol.Kind == SymbolKind.Function || calleeSymbol.Kind == SymbolKind.Subroutine))
             {
@@ -4408,6 +4440,63 @@ namespace BasicLang.Compiler.SemanticAnalysis
             };
         }
 
+        /// <summary>
+        /// Check if a TypeInfo represents an indexable generic collection
+        /// </summary>
+        private bool IsIndexableGenericType(TypeInfo type)
+        {
+            if (type == null)
+                return false;
+
+            // Check if it has generic arguments (indicates it's a generic type)
+            if (type.GenericArguments == null || type.GenericArguments.Count == 0)
+                return false;
+
+            // Check the base type name
+            var baseName = type.Name;
+            var tickIndex = baseName.IndexOf('`');
+            if (tickIndex > 0)
+                baseName = baseName.Substring(0, tickIndex);
+
+            return baseName switch
+            {
+                "List" => true,
+                "Dictionary" => true,
+                "SortedList" => true,
+                "SortedDictionary" => true,
+                "Collection" => true,
+                "ObservableCollection" => true,
+                "IList" => true,
+                "IDictionary" => true,
+                _ => false
+            };
+        }
+
+        /// <summary>
+        /// Get the element/value type for a generic collection indexer
+        /// </summary>
+        private TypeInfo GetGenericCollectionElementType(TypeInfo type)
+        {
+            if (type == null || type.GenericArguments == null || type.GenericArguments.Count == 0)
+                return _typeManager.ObjectType;
+
+            var baseName = type.Name;
+            var tickIndex = baseName.IndexOf('`');
+            if (tickIndex > 0)
+                baseName = baseName.Substring(0, tickIndex);
+
+            // For Dictionary<TKey, TValue>, return the value type (second generic arg)
+            if (baseName == "Dictionary" || baseName == "SortedDictionary" ||
+                baseName == "IDictionary" || baseName == "SortedList")
+            {
+                if (type.GenericArguments.Count >= 2)
+                    return type.GenericArguments[1];
+            }
+
+            // For List<T>, Collection<T>, etc., return the element type (first generic arg)
+            return type.GenericArguments[0];
+        }
+
         public void Visit(NewExpressionNode node)
         {
             var type = ResolveTypeReference(node.Type);
@@ -4418,10 +4507,53 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 Error($"Cannot create an instance of abstract class '{type.Name}'", node.Line, node.Column);
             }
 
-            // TODO: Check constructor arguments
+            // Analyze arguments first to get their types
+            var argTypes = new List<TypeInfo>();
             foreach (var arg in node.Arguments)
             {
                 arg.Accept(this);
+                var argType = GetNodeType(arg);
+                argTypes.Add(argType ?? _typeManager.ObjectType);
+            }
+
+            // Validate constructor arguments for user-defined types
+            if (type != null && type.Kind == TypeKind.Class && type.Members != null)
+            {
+                var ctorName = $".ctor{node.Arguments.Count}";
+                if (type.Members.TryGetValue(ctorName, out var ctorSymbol))
+                {
+                    // Validate argument types
+                    if (ctorSymbol.Parameters != null)
+                    {
+                        for (int i = 0; i < Math.Min(argTypes.Count, ctorSymbol.Parameters.Count); i++)
+                        {
+                            var expectedType = ctorSymbol.Parameters[i].Type;
+                            var actualType = argTypes[i];
+                            if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
+                            {
+                                Error($"Argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{ctorSymbol.Parameters[i].Name}' of type '{expectedType.Name}'",
+                                    node.Arguments[i].Line, node.Arguments[i].Column);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Check if there's any constructor defined for this class
+                    var hasAnyConstructor = type.Members.Keys.Any(k => k.StartsWith(".ctor"));
+                    if (hasAnyConstructor)
+                    {
+                        // User-defined class with constructors - validate argument count
+                        var availableCtors = type.Members.Keys
+                            .Where(k => k.StartsWith(".ctor"))
+                            .Select(k => int.TryParse(k.Substring(5), out var n) ? n : 0)
+                            .OrderBy(x => x)
+                            .ToList();
+                        var ctorList = string.Join(", ", availableCtors.Select(n => n == 0 ? "no arguments" : $"{n} argument(s)"));
+                        Error($"No constructor for '{type.Name}' takes {node.Arguments.Count} argument(s). Available constructors take: {ctorList}",
+                            node.Line, node.Column);
+                    }
+                }
             }
 
             SetNodeType(node, type);

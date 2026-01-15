@@ -62,6 +62,8 @@ namespace BasicLang.Compiler.IR
         void Visit(IRTupleElement tupleElement);
         void Visit(IRTryCatch tryCatch);
         void Visit(IRInlineCode inlineCode);
+        void Visit(IRForEach forEach);
+        void Visit(IRIndexerAccess indexer);
     }
     
     // ============================================================================
@@ -791,6 +793,58 @@ namespace BasicLang.Compiler.IR
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
 
         public override string ToString() => IsBreak ? "yield break" : $"yield return {Value}";
+    }
+
+    /// <summary>
+    /// IR Indexer access - represents collection[index] or dictionary[key]
+    /// </summary>
+    public class IRIndexerAccess : IRValue
+    {
+        public IRValue Collection { get; set; }
+        public List<IRValue> Indices { get; set; }
+
+        public IRIndexerAccess(string name, IRValue collection, TypeInfo resultType)
+            : base(name, resultType)
+        {
+            Collection = collection;
+            Indices = new List<IRValue>();
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString()
+        {
+            var indices = string.Join(", ", Indices.Select(i => i?.Name ?? "?"));
+            return $"{Name} = {Collection?.Name}[{indices}]";
+        }
+    }
+
+    /// <summary>
+    /// IR ForEach loop - represents iteration over a collection
+    /// </summary>
+    public class IRForEach : IRInstruction
+    {
+        public string VariableName { get; set; }
+        public TypeInfo ElementType { get; set; }
+        public IRValue Collection { get; set; }
+        public BasicBlock BodyBlock { get; set; }
+        public BasicBlock EndBlock { get; set; }
+
+        public IRForEach(string variableName, TypeInfo elementType, IRValue collection, BasicBlock bodyBlock, BasicBlock endBlock)
+        {
+            VariableName = variableName;
+            ElementType = elementType;
+            Collection = collection;
+            BodyBlock = bodyBlock;
+            EndBlock = endBlock;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString()
+        {
+            return $"foreach ({ElementType?.Name ?? "var"} {VariableName} in {Collection.Name}) {{ goto {BodyBlock.Name} }} end {{ goto {EndBlock.Name} }}";
+        }
     }
 
     /// <summary>

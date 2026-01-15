@@ -64,5 +64,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRTupleElement tupleElement) => _generator.Visit(tupleElement);
         public void Visit(IRTryCatch tryCatch) => _generator.Visit(tryCatch);
         public void Visit(IRInlineCode inlineCode) => _generator.Visit(inlineCode);
+        public void Visit(IRForEach forEach) => _generator.Visit(forEach);
+        public void Visit(IRIndexerAccess indexer) => _generator.Visit(indexer);
     }
 }

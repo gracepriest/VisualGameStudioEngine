@@ -285,6 +285,20 @@ namespace BasicLang.Compiler.IR
             }
             WriteLine("}");
         }
+
+        public void Visit(IRForEach forEach)
+        {
+            WriteLine($"foreach ({forEach.ElementType?.Name ?? "var"} {forEach.VariableName} in {forEach.Collection?.Name ?? "?"}) {{");
+            WriteLine($"    body -> {forEach.BodyBlock?.Name ?? "?"}");
+            WriteLine($"    end -> {forEach.EndBlock?.Name ?? "?"}");
+            WriteLine("}");
+        }
+
+        public void Visit(IRIndexerAccess indexer)
+        {
+            var indices = string.Join(", ", indexer.Indices?.Select(i => i?.Name ?? "?") ?? Array.Empty<string>());
+            WriteLine($"{indexer.Name} = {indexer.Collection?.Name ?? "?"}[{indices}]");
+        }
     }
 
     /// <summary>

@@ -154,6 +154,8 @@ namespace BasicLang.Compiler.CodeGen
         public abstract void Visit(IRTupleElement tupleElement);
         public abstract void Visit(IRTryCatch tryCatch);
         public abstract void Visit(IRInlineCode inlineCode);
+        public abstract void Visit(IRForEach forEach);
+        public abstract void Visit(IRIndexerAccess indexer);
 
         /// <summary>
         /// Map IR type to target language type

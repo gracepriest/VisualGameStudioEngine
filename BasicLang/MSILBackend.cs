@@ -2005,6 +2005,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        public override void Visit(IRForEach forEach)
+        {
+            // MSIL foreach would use GetEnumerator pattern
+            WriteLine("        // TODO: IRForEach not fully implemented in MSIL backend");
+        }
+
+        public override void Visit(IRIndexerAccess indexer)
+        {
+            // MSIL indexer access handled in expression emission
+            WriteLine("        // TODO: IRIndexerAccess not fully implemented in MSIL backend");
+        }
+
         #endregion
 
         private void WriteLine(string text = "")

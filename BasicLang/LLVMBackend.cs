@@ -2112,6 +2112,18 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             }
         }
 
+        public override void Visit(IRForEach forEach)
+        {
+            // LLVM doesn't have native foreach - would need to lower to index-based loop
+            WriteLine("; TODO: IRForEach not fully implemented in LLVM backend");
+        }
+
+        public override void Visit(IRIndexerAccess indexer)
+        {
+            // LLVM indexer access handled in expression emission
+            WriteLine("; TODO: IRIndexerAccess not fully implemented in LLVM backend");
+        }
+
         #endregion
 
         private string LoadIfNeeded(IRValue value, string llvmValue)

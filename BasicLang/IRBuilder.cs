@@ -2237,73 +2237,35 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ForEachLoopNode node)
         {
-            // Simplified for-each - assumes array iteration
+            // Evaluate collection expression
             node.Collection.Accept(this);
             var collection = _expressionResult;
 
-            // Create loop blocks
-            var condBlock = _currentFunction.CreateBlock("foreach.cond");
+            // Get element type from semantic analysis
+            var elemType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class);
+
+            // Note: Don't add loop variable to LocalVariables - the foreach statement declares it
+
+            // Create body and end blocks
             var bodyBlock = _currentFunction.CreateBlock("foreach.body");
-            var incBlock = _currentFunction.CreateBlock("foreach.inc");
             var endBlock = _currentFunction.CreateBlock("foreach.end");
 
-            // Initialize index variable
-            var indexVar = CreateVariable("__index", new TypeInfo("Integer", TypeKind.Primitive), _nextVersion++);
-            EmitInstruction(new IRAssignment(indexVar, new IRConstant(0, indexVar.Type)));
-
-            // Get array length (simplified - would need runtime support)
-            var lengthTemp = _currentFunction.GetNextTempName();
-            var length = new IRVariable(lengthTemp, new TypeInfo("Integer", TypeKind.Primitive));
-            EmitInstruction(new IRComment("Get array length"));
-
-            EmitInstruction(new IRBranch(condBlock));
-
-            // Condition block
-            _currentBlock = condBlock;
-            var condTemp = _currentFunction.GetNextTempName();
-            var cond = new IRCompare(condTemp, CompareKind.Lt, indexVar, length,
-                new TypeInfo("Boolean", TypeKind.Primitive));
-            EmitInstruction(cond);
-            EmitInstruction(new IRConditionalBranch(cond, bodyBlock, endBlock));
+            // Emit IRForEach instruction
+            var forEach = new IRForEach(node.Variable, elemType, collection, bodyBlock, endBlock);
+            EmitInstruction(forEach);
 
             // Body block
             _currentBlock = bodyBlock;
 
-            // Get element at index
-            var gepTemp = _currentFunction.GetNextTempName();
-            var elemType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class);
-            var gep = new IRGetElementPtr(gepTemp, collection, elemType);
-            gep.Indices.Add(indexVar);
-            EmitInstruction(gep);
-
-            var loadTemp = _currentFunction.GetNextTempName();
-            var element = new IRLoad(loadTemp, gep, elemType);
-            EmitInstruction(element);
-
-            // Assign to loop variable
-            var loopVar = GetOrCreateVariable(node.Variable, elemType);
-            EmitInstruction(new IRAssignment(loopVar, element));
-
-            _loopStack.Push(new LoopContext(incBlock, endBlock));
+            _loopStack.Push(new LoopContext(endBlock, endBlock));  // Continue goes to end (next iteration handled by foreach)
             node.Body.Accept(this);
             _loopStack.Pop();
 
+            // Branch back to foreach (will be handled by C# foreach semantics)
             if (!_currentBlock.IsTerminated())
             {
-                EmitInstruction(new IRBranch(incBlock));
+                EmitInstruction(new IRBranch(endBlock));
             }
-
-            // Increment block
-            _currentBlock = incBlock;
-            var incTemp = _currentFunction.GetNextTempName();
-            var inc = new IRBinaryOp(incTemp, BinaryOpKind.Add, indexVar,
-                new IRConstant(1, indexVar.Type), indexVar.Type);
-            EmitInstruction(inc);
-
-            var newIndex = CreateVariable("__index", indexVar.Type, _nextVersion++);
-            EmitInstruction(new IRAssignment(newIndex, inc));
-
-            EmitInstruction(new IRBranch(condBlock));
 
             // Continue with end block
             _currentBlock = endBlock;
@@ -3026,11 +2988,33 @@ namespace BasicLang.Compiler.IR
                     var loadTemp = _currentFunction.GetNextTempName();
                     var load = new IRLoad(loadTemp, gep, elementType);
                     EmitInstruction(load);
-                    
+
                     _expressionResult = load;
                     return;
                 }
-                
+
+                // Check if this is a generic collection indexer access (List<T>, Dictionary<K,V>, etc.)
+                if (calleeType != null && node.Arguments.Count > 0 && IsIndexableGenericType(calleeType))
+                {
+                    // This is collection indexer access, generate IRIndexerAccess
+                    node.Callee.Accept(this);
+                    var collection = _expressionResult;
+
+                    var elementType = returnType ?? new TypeInfo("Object", TypeKind.Class);
+                    var indexerTemp = _currentFunction.GetNextTempName();
+                    var indexerAccess = new IRIndexerAccess(indexerTemp, collection, elementType);
+
+                    foreach (var index in node.Arguments)
+                    {
+                        index.Accept(this);
+                        indexerAccess.Indices.Add(_expressionResult);
+                    }
+
+                    EmitInstruction(indexerAccess);
+                    _expressionResult = indexerAccess;
+                    return;
+                }
+
                 // Get function symbol to check source module and ByRef parameters
                 var funcSymbol = symbol;
 
@@ -3267,6 +3251,30 @@ namespace BasicLang.Compiler.IR
                 {
                     return true;
                 }
+            }
+
+            return false;
+        }
+
+        private bool IsIndexableGenericType(TypeInfo type)
+        {
+            if (type == null) return false;
+
+            var name = type.Name;
+            // Check for common .NET generic collection types that support indexing
+            if (name.StartsWith("List`") || name.StartsWith("List<") ||
+                name.StartsWith("Dictionary`") || name.StartsWith("Dictionary<") ||
+                name == "List" || name == "Dictionary" ||
+                name.Contains("List(Of") || name.Contains("Dictionary(Of"))
+            {
+                return true;
+            }
+
+            // Also check for IList<T>, ICollection<T>, etc.
+            if (name.StartsWith("IList`") || name.StartsWith("IList<") ||
+                name.StartsWith("IReadOnlyList`") || name.StartsWith("IReadOnlyList<"))
+            {
+                return true;
             }
 
             return false;
