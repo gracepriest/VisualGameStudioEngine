@@ -15,6 +15,19 @@ Expand-Archive -Path "$TempDir\temp.zip" -DestinationPath "$TempDir\extracted" -
 New-Item -ItemType Directory -Force -Path "$TempDir\extracted\ProjectTemplates\BasicLang" | Out-Null
 Copy-Item $TemplateZipPath "$TempDir\extracted\ProjectTemplates\BasicLang\"
 
+# Update extension.vsixmanifest to include ProjectTemplate asset
+$manifestPath = "$TempDir\extracted\extension.vsixmanifest"
+$manifest = Get-Content $manifestPath -Raw
+
+# Check if ProjectTemplate asset is missing and add it
+if ($manifest -notmatch 'Microsoft\.VisualStudio\.ProjectTemplate') {
+    Write-Host 'Adding ProjectTemplate asset to manifest...'
+    # Insert the ProjectTemplate asset before the closing </Assets> tag
+    $manifest = $manifest -replace '(</Assets>)', '    <Asset Type="Microsoft.VisualStudio.ProjectTemplate" Path="ProjectTemplates" />
+  $1'
+    Set-Content -Path $manifestPath -Value $manifest -NoNewline
+}
+
 # List what's in extracted
 Write-Host 'Contents after injection:'
 Get-ChildItem -Recurse "$TempDir\extracted" | ForEach-Object { Write-Host $_.FullName }

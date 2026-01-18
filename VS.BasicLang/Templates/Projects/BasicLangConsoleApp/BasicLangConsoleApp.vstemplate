@@ -4,7 +4,8 @@
     <Name>BasicLang Console Application</Name>
     <Description>A console application using the BasicLang programming language</Description>
     <Icon>__TemplateIcon.png</Icon>
-    <ProjectType>BasicLang</ProjectType>
+    <ProjectType>Other</ProjectType>
+    <ProjectSubType></ProjectSubType>
     <SortOrder>1000</SortOrder>
     <CreateNewFolder>true</CreateNewFolder>
     <DefaultName>BasicLangConsoleApp</DefaultName>
