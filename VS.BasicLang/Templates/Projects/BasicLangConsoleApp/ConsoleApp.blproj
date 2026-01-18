@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Name="$safeprojectname$" Version="1.0">
+  <Settings>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>$safeprojectname$</RootNamespace>
+    <StartupObject>Program</StartupObject>
+  </Settings>
+  <Files>
+    <File>Program.bas</File>
+  </Files>
+  <References>
+    <Reference>System</Reference>
+    <Reference>System.Console</Reference>
+  </References>
+</Project>

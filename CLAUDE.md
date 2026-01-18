@@ -28,7 +28,7 @@ A complete game development platform with a custom programming language (BasicLa
 
 | Project | Type | Description |
 |---------|------|-------------|
-| **VS.BasicLang** | VSIX | Visual Studio 2022 extension for BasicLang syntax highlighting |
+| **VS.BasicLang** | VSIX | Visual Studio 2022 extension with LSP support, syntax highlighting, and project templates |
 | **vscode-basiclang** | VS Code Extension | VS Code extension with syntax highlighting and snippets |
 
 ### Test/Sample Projects
@@ -242,3 +242,12 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 - Removed blocking `Task.Run(...).Wait()` pattern that caused deadlocks under high load
 - Replaced with synchronous cleanup: `_cts?.Cancel()`, `CleanupProcesses()`, state update
 - Tests now pass individually; full suite runs without hanging
+
+### VS.BasicLang Project Templates
+- **BasicLang Console Application**: New project template for VS 2022
+- Template files in `VS.BasicLang/Templates/Projects/BasicLangConsoleApp/`
+- `.vstemplate` with metadata, `.blproj` template, `Program.bas` starter code
+- Post-build injection via `inject-template.ps1` script (SDK-style VSIX workaround)
+- Build command: `dotnet build VS.BasicLang -c Release`
+- VSIX output: `VS.BasicLang/bin/Release/net48/VS.BasicLang.vsix`
+- Template appears in VS 2022 "Create a new project" dialog under "BasicLang" type

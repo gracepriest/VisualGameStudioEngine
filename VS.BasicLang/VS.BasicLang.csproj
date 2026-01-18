@@ -22,7 +22,7 @@
     <StartAction>Program</StartAction>
     <StartProgram>$(DevEnvDir)\devenv.exe</StartProgram>
     <StartArguments>/rootsuffix Exp</StartArguments>
-    <!-- Disable template generation as we don't have project templates -->
+    <!-- Project template settings -->
     <TemplateOutputDirectory>$(IntermediateOutputPath)\Templates</TemplateOutputDirectory>
     <CopyVsixManifestToOutput>true</CopyVsixManifestToOutput>
     <VsixOutputDirectory>$(OutputPath)</VsixOutputDirectory>
@@ -60,6 +60,20 @@
       <LogicalName>BasicLangGrammar.json</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
+
+  <!-- Project Templates source files (for reference) -->
+  <ItemGroup>
+    <None Include="Templates\Projects\BasicLangConsoleApp\**\*">
+      <Link>Templates\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
+  <!-- Target to inject template zip into VSIX after build -->
+  <Target Name="InjectTemplateIntoVsix" AfterTargets="Build">
+    <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\inject-template.ps1&quot;"
+          Condition="Exists('$(OutputPath)$(TargetVsixContainerName)')" />
+    <Message Text="Injected project template into VSIX" Importance="high" />
+  </Target>
 
   <!-- Import VSSDK targets -->
   <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="'$(VSToolsPath)' != '' And Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
