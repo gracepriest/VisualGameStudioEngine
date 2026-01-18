@@ -217,3 +217,28 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 - Type parameters registered in current scope before processing inner declaration
 - Injects type parameters into ClassNode, FunctionNode, SubroutineNode GenericParameters
 - Type parameters resolved via `ResolveTypeName()` which checks scope for `SymbolKind.TypeParameter`
+
+### Bitwise Operators
+- **Full bitwise support**: `BitwiseAnd (&)`, `BitwiseOr (|)`, `BitwiseNot (~)`, `Xor (^)`, `Shl (<<)`, `Shr (>>)`
+- Separated logical (short-circuit) operators from bitwise in IRNodes.cs
+- CSharpBackend generates proper `&` and `|` for bitwise operations
+- IRBuilder maps both VB-style (`And`, `Or`, `Xor`, `Shl`, `Shr`) and C-style (`&&`, `||`, `^`, `<<`, `>>`) syntax
+
+### Compound Assignment Operators
+- **All compound assignments**: `+=`, `-=`, `*=`, `/=`, `\=`, `%=`, `&=`, `And=`, `Or=`, `Xor=`, `<<=`, `>>=`
+- Integer division assignment (`\=`) and modulo assignment (`%=` / `Mod=`)
+- String concatenation assignment (`&=`)
+- Bitwise compound assignments (`And=`, `Or=`, `Xor=`)
+- Shift compound assignments (`<<=`, `>>=`)
+
+### Multi-Dimensional Array Support
+- **UBound/LBound overloads**: Added overloads accepting `Array` type for multi-dimensional arrays
+- VB uses 1-based dimension indexing, mapped to .NET 0-based internally
+- Single-dimensional arrays throw if dimension != 1
+- Multi-dimensional arrays validate dimension range (1 to array.Rank)
+
+### IDE Test Infrastructure Fix
+- **DebugService.Dispose() deadlock**: Fixed thread pool starvation when running 1000+ tests in parallel
+- Removed blocking `Task.Run(...).Wait()` pattern that caused deadlocks under high load
+- Replaced with synchronous cleanup: `_cts?.Cancel()`, `CleanupProcesses()`, state update
+- Tests now pass individually; full suite runs without hanging
