@@ -3406,6 +3406,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             BinaryOpKind.IntDiv => "/",
             BinaryOpKind.And => "&&",
             BinaryOpKind.Or => "||",
+            BinaryOpKind.BitwiseAnd => "&",
+            BinaryOpKind.BitwiseOr => "|",
             BinaryOpKind.Xor => "^",
             BinaryOpKind.Shl => "<<",
             BinaryOpKind.Shr => ">>",

@@ -175,13 +175,16 @@ namespace BasicLang.Compiler.IR
     {
         // Arithmetic
         Add, Sub, Mul, Div, Mod, IntDiv,
-        
+
+        // Logical (short-circuit)
+        And, Or,
+
         // Bitwise
-        And, Or, Xor, Shl, Shr,
-        
+        BitwiseAnd, BitwiseOr, Xor, Shl, Shr,
+
         // Comparison (returns boolean)
         Eq, Ne, Lt, Le, Gt, Ge,
-        
+
         // String
         Concat
     }

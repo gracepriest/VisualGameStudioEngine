@@ -882,18 +882,10 @@ public class DebugService : IDebugService
             return;
         }
 
-        try
-        {
-            // Use Task.Run to avoid deadlocks when called from sync context
-            Task.Run(async () => await StopDebuggingAsync()).Wait(TimeSpan.FromSeconds(2));
-        }
-        catch (AggregateException)
-        {
-            // Ignore exceptions during dispose
-        }
-        catch (TimeoutException)
-        {
-            // Timeout is acceptable during dispose
-        }
+        // Use synchronous cleanup to avoid thread pool starvation deadlocks
+        // when many tests run in parallel
+        _cts?.Cancel();
+        CleanupProcesses();
+        State = DebugState.Stopped;
     }
 }

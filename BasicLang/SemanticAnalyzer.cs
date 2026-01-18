@@ -3787,7 +3787,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error($"Exit {node.Kind} outside of {node.Kind.ToString().ToLower()}", node.Line, node.Column);
                 }
             }
-            // Exit For/Do/While should be inside a loop - we'll validate at IR generation or let C# handle it
+            // Exit For/Do/While should be inside a loop
+            else if (node.Kind == ExitKind.For || node.Kind == ExitKind.Do || node.Kind == ExitKind.While)
+            {
+                var loopScope = _currentScope.GetLoopScope();
+                if (loopScope == null)
+                {
+                    Error($"Exit {node.Kind} must be inside a loop", node.Line, node.Column);
+                }
+            }
         }
 
         public void Visit(AssignmentStatementNode node)

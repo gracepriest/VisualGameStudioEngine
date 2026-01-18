@@ -93,30 +93,65 @@ namespace BasicLang.Runtime
         // ====================================================================
         
         /// <summary>
-        /// VB-style UBound function - returns upper bound of array
+        /// VB-style UBound function - returns upper bound of array (single-dimensional)
         /// </summary>
         public static int UBound<T>(T[] array, int dimension = 1)
         {
             if (array == null)
                 throw new ArgumentNullException(nameof(array));
-            
+
             if (dimension == 1)
             {
                 return array.Length - 1;
             }
-            
-            throw new ArgumentException("Multi-dimensional arrays not yet supported");
+
+            throw new ArgumentException($"Single-dimensional array has no dimension {dimension}");
         }
-        
+
         /// <summary>
-        /// VB-style LBound function - returns lower bound of array
+        /// VB-style UBound function - returns upper bound of array (multi-dimensional)
+        /// </summary>
+        public static int UBound(Array array, int dimension = 1)
+        {
+            if (array == null)
+                throw new ArgumentNullException(nameof(array));
+
+            if (dimension < 1 || dimension > array.Rank)
+                throw new ArgumentOutOfRangeException(nameof(dimension),
+                    $"Dimension must be between 1 and {array.Rank}");
+
+            // VB uses 1-based dimension indexing, .NET uses 0-based
+            return array.GetUpperBound(dimension - 1);
+        }
+
+        /// <summary>
+        /// VB-style LBound function - returns lower bound of array (single-dimensional)
         /// </summary>
         public static int LBound<T>(T[] array, int dimension = 1)
         {
             if (array == null)
                 throw new ArgumentNullException(nameof(array));
-            
+
+            if (dimension != 1)
+                throw new ArgumentException($"Single-dimensional array has no dimension {dimension}");
+
             return 0; // C# arrays are always 0-based
+        }
+
+        /// <summary>
+        /// VB-style LBound function - returns lower bound of array (multi-dimensional)
+        /// </summary>
+        public static int LBound(Array array, int dimension = 1)
+        {
+            if (array == null)
+                throw new ArgumentNullException(nameof(array));
+
+            if (dimension < 1 || dimension > array.Rank)
+                throw new ArgumentOutOfRangeException(nameof(dimension),
+                    $"Dimension must be between 1 and {array.Rank}");
+
+            // VB uses 1-based dimension indexing, .NET uses 0-based
+            return array.GetLowerBound(dimension - 1);
         }
         
         // ====================================================================

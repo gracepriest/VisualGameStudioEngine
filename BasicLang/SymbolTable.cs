@@ -363,13 +363,24 @@ public class TypeInfo
         {
             if (Kind == ScopeKind.Class)
                 return this;
-                
+
             if (Parent != null)
                 return Parent.GetClassScope();
-                
+
             return null;
         }
-        
+
+        public Scope GetLoopScope()
+        {
+            if (Kind == ScopeKind.Loop)
+                return this;
+
+            if (Parent != null)
+                return Parent.GetLoopScope();
+
+            return null;
+        }
+
         public override string ToString()
         {
             return $"{Kind} Scope: {Name} ({Symbols.Count} symbols)";

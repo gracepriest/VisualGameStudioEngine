@@ -200,6 +200,8 @@ namespace BasicLang.Compiler.IR.Optimization
                     BinaryOpKind.Mod => FoldMod(left.Value, right.Value),
                     BinaryOpKind.And => FoldAnd(left.Value, right.Value),
                     BinaryOpKind.Or => FoldOr(left.Value, right.Value),
+                    BinaryOpKind.BitwiseAnd => FoldBitwiseAnd(left.Value, right.Value),
+                    BinaryOpKind.BitwiseOr => FoldBitwiseOr(left.Value, right.Value),
                     BinaryOpKind.Xor => FoldXor(left.Value, right.Value),
                     BinaryOpKind.Shl => FoldShl(left.Value, right.Value),
                     BinaryOpKind.Shr => FoldShr(left.Value, right.Value),
@@ -211,19 +213,27 @@ namespace BasicLang.Compiler.IR.Optimization
                     return new IRConstant(result, op.Type);
                 }
             }
-            catch
+            catch (DivideByZeroException)
             {
-                // Division by zero, overflow, etc.
+                // Division by zero cannot be folded at compile time - let runtime handle it
             }
-            
+            catch (OverflowException)
+            {
+                // Arithmetic overflow cannot be folded - let runtime handle it
+            }
+            catch (InvalidCastException)
+            {
+                // Type conversion failed - cannot fold
+            }
+
             return null;
         }
-        
+
         private IRConstant TryFoldUnary(IRUnaryOp op)
         {
             if (!(op.Operand is IRConstant operand))
                 return null;
-            
+
             try
             {
                 object result = op.Operation switch
@@ -234,13 +244,20 @@ namespace BasicLang.Compiler.IR.Optimization
                     UnaryOpKind.Dec => FoldDec(operand.Value),
                     _ => null
                 };
-                
+
                 if (result != null)
                 {
                     return new IRConstant(result, op.Type);
                 }
             }
-            catch { }
+            catch (OverflowException)
+            {
+                // Arithmetic overflow cannot be folded - let runtime handle it
+            }
+            catch (InvalidCastException)
+            {
+                // Type conversion failed - cannot fold
+            }
             
             return null;
         }
@@ -324,17 +341,35 @@ namespace BasicLang.Compiler.IR.Optimization
         
         private object FoldAnd(object a, object b)
         {
-            if (a is int ia && b is int ib) return ia & ib;
-            if (a is long la && b is long lb) return la & lb;
+            // Logical AND (short-circuit)
             if (a is bool ba && b is bool bb) return ba && bb;
             return null;
         }
-        
+
         private object FoldOr(object a, object b)
         {
+            // Logical OR (short-circuit)
+            if (a is bool ba && b is bool bb) return ba || bb;
+            return null;
+        }
+
+        private object FoldBitwiseAnd(object a, object b)
+        {
+            // Bitwise AND
+            if (a is int ia && b is int ib) return ia & ib;
+            if (a is long la && b is long lb) return la & lb;
+            if (a is byte ba && b is byte bb) return (byte)(ba & bb);
+            if (a is short sa && b is short sb) return (short)(sa & sb);
+            return null;
+        }
+
+        private object FoldBitwiseOr(object a, object b)
+        {
+            // Bitwise OR
             if (a is int ia && b is int ib) return ia | ib;
             if (a is long la && b is long lb) return la | lb;
-            if (a is bool ba && b is bool bb) return ba || bb;
+            if (a is byte ba && b is byte bb) return (byte)(ba | bb);
+            if (a is short sa && b is short sb) return (short)(sa | sb);
             return null;
         }
         

@@ -2578,6 +2578,14 @@ namespace BasicLang.Compiler.IR
                     "-=" or "=-" => BinaryOpKind.Sub,
                     "*=" => BinaryOpKind.Mul,
                     "/=" => BinaryOpKind.Div,
+                    "\\=" => BinaryOpKind.IntDiv,        // Integer division assignment
+                    "%=" or "Mod=" => BinaryOpKind.Mod,  // Modulo assignment
+                    "&=" => BinaryOpKind.Concat,         // String concatenation assignment
+                    "And=" => BinaryOpKind.And,          // Bitwise AND assignment
+                    "Or=" => BinaryOpKind.Or,            // Bitwise OR assignment
+                    "Xor=" => BinaryOpKind.Xor,          // Bitwise XOR assignment
+                    "<<=" => BinaryOpKind.Shl,           // Left shift assignment
+                    ">>=" => BinaryOpKind.Shr,           // Right shift assignment
                     _ => throw new Exception($"Unknown assignment operator: {node.Operator}")
                 };
 
@@ -3178,6 +3186,9 @@ namespace BasicLang.Compiler.IR
                 "&" => BinaryOpKind.Concat,
                 "And" or "&&" => BinaryOpKind.And,
                 "Or" or "||" => BinaryOpKind.Or,
+                "Xor" or "^" => BinaryOpKind.Xor,
+                "<<" or "Shl" => BinaryOpKind.Shl,
+                ">>" or "Shr" => BinaryOpKind.Shr,
                 _ => throw new Exception($"Unknown binary operator: {op}")
             };
         }
@@ -3188,6 +3199,7 @@ namespace BasicLang.Compiler.IR
             {
                 "-" => UnaryOpKind.Neg,
                 "Not" or "!" => UnaryOpKind.Not,
+                "~" => UnaryOpKind.BitwiseNot,
                 "++" => UnaryOpKind.Inc,
                 "--" => UnaryOpKind.Dec,
                 "AddressOf" => UnaryOpKind.AddressOf,
