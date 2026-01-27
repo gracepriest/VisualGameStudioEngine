@@ -28,7 +28,8 @@ A complete game development platform with a custom programming language (BasicLa
 
 | Project | Type | Description |
 |---------|------|-------------|
-| **VS.BasicLang** | VSIX | Visual Studio 2022 extension with LSP support, syntax highlighting, and project templates |
+| **BasicLang.VisualStudio** | VSIX | **NEW** CPS-based VS 2022 extension with full project system, LSP, templates |
+| **VS.BasicLang** | VSIX | Legacy VS 2022 extension (MEF-based, SDK-style project workaround) |
 | **vscode-basiclang** | VS Code Extension | VS Code extension with syntax highlighting and snippets |
 
 ### Test/Sample Projects
@@ -243,11 +244,146 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 - Replaced with synchronous cleanup: `_cts?.Cancel()`, `CleanupProcesses()`, state update
 - Tests now pass individually; full suite runs without hanging
 
-### VS.BasicLang Project Templates
-- **BasicLang Console Application**: New project template for VS 2022
-- Template files in `VS.BasicLang/Templates/Projects/BasicLangConsoleApp/`
-- `.vstemplate` with metadata, `.blproj` template, `Program.bas` starter code
-- Post-build injection via `inject-template.ps1` script (SDK-style VSIX workaround)
+### VS.BasicLang Project Templates (Revised Approach)
+- **SDK-style project**: Template uses `.csproj` with `Microsoft.NET.Sdk` for VS 2022 native handling
+- Template creates BasicLang projects that VS can manage natively (no custom project factory needed)
+- Template files in `VS.BasicLang/Templates/Projects/BasicLangConsoleApp/`:
+  - `BasicLangConsoleApp.csproj` - SDK-style project with BasicLang markers
+  - `BasicLangConsoleApp.vstemplate` - Template metadata with `<ProjectType>CSharp</ProjectType>`
+  - `Program.bas` - BasicLang source file
+  - `__TemplateIcon.png` - Template icon
+- Build creates VSIX manually using `ZipDirectory` (VSSDK tools not available from dotnet CLI)
 - Build command: `dotnet build VS.BasicLang -c Release`
-- VSIX output: `VS.BasicLang/bin/Release/net48/VS.BasicLang.vsix`
-- Template appears in VS 2022 "Create a new project" dialog under "BasicLang" type
+- VSIX output: `VS.BasicLang/VS.BasicLang.vsix`
+- Template appears in VS 2022 under C# project templates (VS 2022 limitation for custom languages)
+- **Version 1.3.0**: Current extension version
+
+### VS.BasicLang Build Process
+The build uses custom MSBuild targets since VSSDK tools aren't available from `dotnet build`:
+1. `CreateTemplateZip` target - Zips template source files to `ProjectTemplates/BasicLang/BasicLangConsoleApp.zip`
+2. `CreateVsixManual` target - Creates VSIX by:
+   - Copying DLL, pkgdef, template zip to build directory
+   - Creating `[Content_Types].xml` for VSIX package
+   - Zipping to `VS.BasicLang.vsix`
+
+### VS 2022 Custom Language Limitations
+- VS 2022 only recognizes built-in languages for New Project dialog filters: `csharp`, `visualbasic`, `fsharp`, `cpp`, etc.
+- Custom language names like "BasicLang" won't appear in the language dropdown
+- Solution: Use `<ProjectType>CSharp</ProjectType>` to make template appear under C# (practical workaround)
+- Full custom language support would require implementing a complete CPS (Common Project System) extension
+
+### VS.BasicLang Key Files Modified (January 2026)
+- **VS.BasicLang.csproj**: Added `VSToolsPath` property, `CreateTemplateZip` and `CreateVsixManual` MSBuild targets
+- **BasicLangPackage.cs**: Removed `[ProvideProjectFactory]` attribute and factory registration (not needed for SDK-style projects)
+- **BasicLang.pkgdef**: Simplified - removed project factory registrations, kept language service registrations
+- **source.extension.vsixmanifest**: Version 1.3.0, updated description
+- **Templates/Projects/BasicLangConsoleApp/BasicLangConsoleApp.vstemplate**: Uses `<ProjectType>CSharp</ProjectType>`, `<LanguageTag>csharp</LanguageTag>`
+- **Templates/Projects/BasicLangConsoleApp/BasicLangConsoleApp.csproj**: New SDK-style project file with `<IsBasicLangProject>true</IsBasicLangProject>` marker
+- Removed old `ConsoleApp.blproj` template file
+
+### BasicLang.VisualStudio - CPS Extension (January 2026)
+
+A complete CPS (Common Project System) based Visual Studio 2022 extension for BasicLang, following the RemObjects Elements model.
+
+#### Original Implementation Plan Prompt
+
+The following detailed plan was provided to implement the extension:
+
+```
+Create a complete CPS (Common Project System) based Visual Studio 2022 extension for BasicLang,
+following the RemObjects Elements model. The extension will provide proper project system integration,
+LSP-based IntelliSense, debugging support, and MSBuild integration.
+
+Architecture:
+BasicLang.VisualStudio/
+├── src/
+│   ├── BasicLang.VisualStudio/     # Main VSIX (CPS-based)
+│   └── BasicLang.SDK/              # MSBuild SDK NuGet package
+└── tests/
+
+Implementation Phases:
+1. Solution Setup - Create project structure with VSIX and SDK projects
+2. CPS Project System - Guids, ProjectCapability, UnconfiguredProject, ConfiguredProject, TreeProvider
+3. MSBuild SDK - Sdk.props/Sdk.targets for BasicLang compilation
+4. LSP Client - ILanguageClient connecting to BasicLang.exe --lsp
+5. Templates - Console, Library, WinForms, WPF project templates + Class/Module/Interface items
+6. Commands & Options - Build, Run, Change Backend, Restart Server + Options pages
+
+Key NuGet Packages:
+- Microsoft.VisualStudio.SDK 17.9.37000
+- Microsoft.VisualStudio.ProjectSystem 17.9.380
+- Microsoft.VisualStudio.LanguageServer.Client 17.10.124
+```
+
+#### What Was Implemented
+
+**Completed:**
+- ✅ Solution structure with `BasicLang.VisualStudio.sln`
+- ✅ CPS project system files (simplified for public NuGet APIs):
+  - `Package/Guids.cs` - All GUIDs for package, commands, project type
+  - `Package/BasicLangPackage.cs` - VS Package with auto-load
+  - `ProjectSystem/BasicLangProjectCapability.cs` - CPS capability export
+  - `ProjectSystem/BasicLangUnconfiguredProject.cs` - Project registration
+  - `ProjectSystem/BasicLangConfiguredProject.cs` - Configuration services
+  - `ProjectSystem/BasicLangProjectTreeProvider.cs` - Solution Explorer icons
+  - `ProjectSystem/BasicLangProjectFactory.cs` - Flavored project factory
+- ✅ LSP Client (`LanguageService/BasicLangLanguageClient.cs`):
+  - Implements `ILanguageClient`, `ILanguageClientCustomMessage2`
+  - Server discovery in extension dir → PATH → common install paths
+  - Launches `BasicLang.exe --lsp` on stdin/stdout
+  - `RestartServerAsync()` for manual restart
+- ✅ TextMate grammar (`LanguageService/BasicLangGrammar.json`) - copied from vscode-basiclang
+- ✅ Content type definitions (`LanguageService/BasicLangContentType.cs`)
+- ✅ Commands (`Commands/BasicLangCommands.vsct`, `Commands/CommandHandlers.cs`):
+  - Build Project, Run, Change Backend, Restart Server, Go To Definition, Find References
+- ✅ Options pages:
+  - `Options/GeneralOptionsPage.cs` - LSP path, auto-start, semantic highlighting
+  - `Options/CompilerOptionsPage.cs` - Backend, framework, warnings, optimizations
+- ✅ Project templates (created but not yet wired into VSIX):
+  - ConsoleApp, ClassLibrary, WinFormsApp, WpfApp
+- ✅ Item templates:
+  - Class, Module, Interface
+- ✅ MSBuild SDK (`BasicLang.SDK`):
+  - `Sdk/Sdk.props` - Properties for BasicLang projects
+  - `Sdk/Sdk.targets` - Build targets invoking BasicLang.exe
+  - NuGet package: `BasicLang.SDK.1.0.0.nupkg`
+- ✅ VSIX builds successfully with MSBuild
+- ✅ Manual pkgdef file created (auto-generation failed with SDK-style project)
+
+**Not Yet Implemented:**
+- ❌ Templates not wired into VSIX (disabled due to SDK-style project complexities)
+- ❌ Debug launch provider (CPS debug APIs not publicly available)
+- ❌ BasicLang.exe not bundled in SDK tools/ folder
+
+#### Build Commands
+
+```bash
+# Build VSIX (requires VS 2022 MSBuild)
+cd BasicLang.VisualStudio/src/BasicLang.VisualStudio
+"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" BasicLang.VisualStudio.csproj -p:Configuration=Release
+
+# Build SDK NuGet package
+cd BasicLang.VisualStudio/src/BasicLang.SDK
+dotnet pack -c Release
+```
+
+#### Output Files
+- **VSIX**: `BasicLang.VisualStudio/src/BasicLang.VisualStudio/BasicLang.VisualStudio.vsix`
+- **SDK NuGet**: `BasicLang.VisualStudio/src/BasicLang.SDK/bin/Release/BasicLang.SDK.1.0.0.nupkg`
+
+#### Key Technical Challenges Solved
+
+1. **SDK-style project + VSSDK**: Added explicit import of `Microsoft.VsSDK.targets` and custom `_CreateVsixAfterBuild` target
+2. **Template manifest generation**: Overrode `GenerateTemplatesManifest` and `CreateTemplateManifests` targets to prevent errors
+3. **Pkgdef generation**: Created manual `BasicLang.VisualStudio.pkgdef` since auto-generation failed
+4. **VSIX manifest placeholders**: Changed `|%CurrentProject%;PkgdefProjectOutputGroup|` to explicit paths
+5. **ProductArchitecture**: Added required `<ProductArchitecture>amd64</ProductArchitecture>` to installation targets
+6. **NuGet package versions**: Resolved version conflicts (StreamJsonRpc 2.18.37→2.18.44, etc.)
+
+#### Extension Features When Installed
+
+- **Syntax Highlighting**: TextMate grammar for `.bas`, `.bl`, `.blproj` files
+- **IntelliSense**: LSP-based completions, hover, diagnostics via `BasicLang.exe --lsp`
+- **Commands**: BasicLang menu with Build, Run, Change Backend, Restart Server
+- **Options**: Tools → Options → BasicLang (General, Compiler settings)
+- **File Icons**: VB-style icons for BasicLang files in Solution Explorer

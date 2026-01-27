@@ -26,11 +26,25 @@ Full Visual Studio 2022 support for the BasicLang programming language with CPS 
 - **Debugging**: F5 debugging with Debug Adapter Protocol
 - **Multiple Backends**: CSharp, MSIL, LLVM, C++
 
+## Current Status (January 2026)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| CPS Project System | ✅ Implemented | Simplified for public NuGet APIs |
+| LSP Client | ✅ Implemented | Connects to `BasicLang.exe --lsp` |
+| Syntax Highlighting | ✅ Implemented | TextMate grammar from vscode-basiclang |
+| Menu Commands | ✅ Implemented | Build, Run, Change Backend, Restart Server |
+| Options Pages | ✅ Implemented | General and Compiler settings |
+| Project Templates | ⚠️ Created | Not yet wired into VSIX |
+| Item Templates | ⚠️ Created | Not yet wired into VSIX |
+| Debug Launch Provider | ❌ Not implemented | CPS debug APIs not publicly available |
+| Bundled Compiler | ❌ Not included | SDK tools/ folder is empty |
+
 ## Requirements
 
 - Visual Studio 2022 (17.0 or later)
 - .NET 8.0 SDK
-- BasicLang compiler (BasicLang.exe)
+- BasicLang compiler (BasicLang.exe) - must be in PATH or configured in options
 
 ## Installation
 
@@ -50,18 +64,22 @@ Full Visual Studio 2022 support for the BasicLang programming language with CPS 
 ### Build Steps
 
 ```powershell
-# Clone the repository
-git clone https://github.com/visualgamestudio/basiclang.git
-cd basiclang/BasicLang.VisualStudio
+# Navigate to the extension directory
+cd BasicLang.VisualStudio
 
-# Build the SDK
+# Build the SDK NuGet package
 dotnet pack src/BasicLang.SDK -c Release
 
-# Build the VSIX
-dotnet build src/BasicLang.VisualStudio -c Release
+# Build the VSIX (requires VS 2022 MSBuild)
+& "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" `
+    src/BasicLang.VisualStudio/BasicLang.VisualStudio.csproj -p:Configuration=Release
 ```
 
-The VSIX will be output to `src/BasicLang.VisualStudio/bin/Release/BasicLang.VisualStudio.vsix`.
+**Output files:**
+- VSIX: `src/BasicLang.VisualStudio/BasicLang.VisualStudio.vsix`
+- SDK NuGet: `src/BasicLang.SDK/bin/Release/BasicLang.SDK.1.0.0.nupkg`
+
+> **Note:** The VSIX must be built with Visual Studio's MSBuild (not `dotnet build`) because it requires VSSDK targets for VSIX packaging.
 
 ## Project Structure
 
