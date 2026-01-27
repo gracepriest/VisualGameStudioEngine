@@ -1,0 +1,35 @@
+; BasicLang Language Support Package Registration
+
+[$RootKey$\Packages\{95a8f3e1-1234-4567-8901-abcdef123456}]
+@="BasicLang.VisualStudio.BasicLangPackage"
+"InprocServer32"="$WinDir$\SYSTEM32\MSCOREE.DLL"
+"Class"="BasicLang.VisualStudio.BasicLangPackage"
+"CodeBase"="$PackageFolder$\BasicLang.VisualStudio.dll"
+
+; Content type definitions
+[$RootKey$\ContentTypes]
+
+; BasicLang file extensions
+[$RootKey$\ContentTypes\.bas]
+@="BasicLang"
+
+[$RootKey$\ContentTypes\.bl]
+@="BasicLang"
+
+[$RootKey$\ContentTypes\.blproj]
+@="BasicLang"
+
+; Language service
+[$RootKey$\Languages\Language Services\BasicLang]
+@="{95a8f3e1-1234-4567-8901-abcdef123456}"
+"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+
+; File extensions
+[$RootKey$\Languages\File Extensions\.bas]
+@="{95a8f3e1-1234-4567-8901-abcdef123456}"
+
+[$RootKey$\Languages\File Extensions\.bl]
+@="{95a8f3e1-1234-4567-8901-abcdef123456}"
+
+[$RootKey$\Languages\File Extensions\.blproj]
+@="{95a8f3e1-1234-4567-8901-abcdef123456}"

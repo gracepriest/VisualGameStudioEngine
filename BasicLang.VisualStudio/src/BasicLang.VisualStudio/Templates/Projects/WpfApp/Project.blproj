@@ -1,0 +1,12 @@
+<Project Sdk="BasicLang.SDK/1.0.0">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Backend>CSharp</Backend>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>$safeprojectname$</RootNamespace>
+    <AssemblyName>$safeprojectname$</AssemblyName>
+  </PropertyGroup>
+
+</Project>

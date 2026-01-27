@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>BasicLang Class</Name>
+    <Description>An empty class for the BasicLang programming language.</Description>
+    <Icon>__TemplateIcon.png</Icon>
+    <ProjectType>CSharp</ProjectType>
+    <DefaultName>Class</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <TemplateID>BasicLang.Class</TemplateID>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.bas">Class.bas</ProjectItem>
+  </TemplateContent>
+</VSTemplate>

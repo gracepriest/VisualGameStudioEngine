@@ -1,0 +1,32 @@
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
+  <Metadata>
+    <Identity Id="BasicLang.VisualStudio.95a8f3e1-1234-4567-8901-abcdef123456" Version="2.0.0" Language="en-US" Publisher="Visual Game Studio" />
+    <DisplayName>BasicLang Language Support</DisplayName>
+    <Description xml:space="preserve">Full Visual Studio 2022 support for BasicLang programming language with CPS project system integration, LSP-based IntelliSense, debugging, and MSBuild integration.</Description>
+    <MoreInfo>https://github.com/visualgamestudio/basiclang</MoreInfo>
+    <License>LICENSE.txt</License>
+    <Tags>BasicLang, VB, Visual Basic, Game Development, Programming Language, LSP</Tags>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Pro" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" Version="[4.8,)" />
+    <Dependency Id="Microsoft.VisualStudio.Component.CoreEditor" DisplayName="Visual Studio Core Editor" Version="[17.0,18.0)" />
+  </Dependencies>
+  <Prerequisites>
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,18.0)" DisplayName="Visual Studio Core Editor" />
+  </Prerequisites>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.VsPackage" Path="BasicLang.VisualStudio.pkgdef" />
+    <Asset Type="Microsoft.VisualStudio.MefComponent" Path="BasicLang.VisualStudio.dll" />
+  </Assets>
+</PackageManifest>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Project" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>BasicLang WPF Application</Name>
+    <Description>A WPF desktop application for the BasicLang programming language.</Description>
+    <Icon>__TemplateIcon.png</Icon>
+    <ProjectType>CSharp</ProjectType>
+    <ProjectSubType>BasicLang</ProjectSubType>
+    <LanguageTag>BasicLang</LanguageTag>
+    <PlatformTag>Windows</PlatformTag>
+    <ProjectTypeTag>Desktop</ProjectTypeTag>
+    <ProjectTypeTag>WPF</ProjectTypeTag>
+    <SortOrder>1003</SortOrder>
+    <TemplateID>BasicLang.WpfApp</TemplateID>
+    <CreateNewFolder>true</CreateNewFolder>
+    <DefaultName>BasicLangWpfApp</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <Hidden>false</Hidden>
+  </TemplateData>
+  <TemplateContent>
+    <Project File="Project.blproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true" TargetFileName="App.bas">App.bas</ProjectItem>
+      <ProjectItem ReplaceParameters="true" TargetFileName="MainWindow.bas">MainWindow.bas</ProjectItem>
+      <ProjectItem ReplaceParameters="false" TargetFileName="MainWindow.xaml">MainWindow.xaml</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>

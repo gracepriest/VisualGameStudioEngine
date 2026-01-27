@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Project" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>BasicLang Class Library</Name>
+    <Description>A class library project for the BasicLang programming language.</Description>
+    <Icon>__TemplateIcon.png</Icon>
+    <ProjectType>CSharp</ProjectType>
+    <ProjectSubType>BasicLang</ProjectSubType>
+    <LanguageTag>BasicLang</LanguageTag>
+    <PlatformTag>Windows</PlatformTag>
+    <PlatformTag>Linux</PlatformTag>
+    <PlatformTag>macOS</PlatformTag>
+    <ProjectTypeTag>Library</ProjectTypeTag>
+    <SortOrder>1001</SortOrder>
+    <TemplateID>BasicLang.ClassLibrary</TemplateID>
+    <CreateNewFolder>true</CreateNewFolder>
+    <DefaultName>BasicLangLibrary</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <Hidden>false</Hidden>
+  </TemplateData>
+  <TemplateContent>
+    <Project File="Project.blproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true" TargetFileName="Class1.bas">Class1.bas</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>

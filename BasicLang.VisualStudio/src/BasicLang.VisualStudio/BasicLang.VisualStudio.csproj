@@ -1,0 +1,124 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Import VSSDK targets for VSIX creation -->
+  <PropertyGroup>
+    <VsSDKInstall>$(NuGetPackageRoot)microsoft.vssdk.buildtools\17.9.3184\</VsSDKInstall>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>BasicLang.VisualStudio</RootNamespace>
+    <AssemblyName>BasicLang.VisualStudio</AssemblyName>
+
+    <!-- VSIX settings -->
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <GeneratePkgDefFile>false</GeneratePkgDefFile>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
+    <DeployExtension>false</DeployExtension>
+    <UseCodebase>true</UseCodebase>
+    <StartAction>Program</StartAction>
+    <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
+    <StartArguments>/rootsuffix Exp</StartArguments>
+
+    <!-- VSIX output location -->
+    <TargetVsixContainer>$(OutputPath)$(AssemblyName).vsix</TargetVsixContainer>
+
+    <!-- Disable template processing for now -->
+    <DeployVSTemplates>false</DeployVSTemplates>
+    <TemplateOutputDirectory>$(IntermediateOutputPath)</TemplateOutputDirectory>
+  </PropertyGroup>
+
+  <!-- VS SDK -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.9.37000" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.9.3184" />
+    <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Client" Version="17.10.124" />
+    <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Protocol" Version="17.2.8" />
+    <PackageReference Include="StreamJsonRpc" Version="2.18.37" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- CPS Project System -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.ProjectSystem" Version="17.9.380" />
+  </ItemGroup>
+
+  <!-- Reference assemblies for .NET Framework 4.8 -->
+  <ItemGroup>
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Design" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+  </ItemGroup>
+
+  <!-- VSIX manifest - use SourceVsixManifest for proper VSIX creation -->
+  <ItemGroup>
+    <SourceVsixManifest Include="source.extension.vsixmanifest">
+      <SubType>Designer</SubType>
+    </SourceVsixManifest>
+    <Content Include="LICENSE.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <!-- Manual pkgdef file -->
+    <Content Include="BasicLang.VisualStudio.pkgdef">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
+  <!-- TextMate Grammar -->
+  <ItemGroup>
+    <Content Include="LanguageService\BasicLangGrammar.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
+  <!-- Templates disabled for now - to re-enable, add VSTemplate items properly -->
+  <!--
+  <ItemGroup>
+    <VSTemplate Include="Templates\Projects\**\*.vstemplate" />
+    <VSTemplate Include="Templates\Items\**\*.vstemplate" />
+  </ItemGroup>
+  -->
+
+  <!-- Commands - VSCT compilation requires MSBuild -->
+  <ItemGroup>
+    <VSCTCompile Include="Commands\BasicLangCommands.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+      <SubType>Designer</SubType>
+    </VSCTCompile>
+  </ItemGroup>
+
+  <!-- EmbeddedResource for VSCT -->
+  <ItemGroup>
+    <EmbeddedResource Include="Commands\BasicLangCommands.vsct" Condition="false" />
+  </ItemGroup>
+
+  <!-- Import VSSDK targets for VSIX packaging -->
+  <Import Project="$(VsSDKInstall)tools\VSSDK\Microsoft.VsSDK.targets" Condition="Exists('$(VsSDKInstall)tools\VSSDK\Microsoft.VsSDK.targets')" />
+
+  <!-- Skip template manifest generation that causes issues with SDK-style projects -->
+  <Target Name="GenerateTemplatesManifest" />
+  <Target Name="CreateTemplateManifests" />
+
+  <!-- Ensure VSIX is created after build - hook into PrepareForRun chain -->
+  <PropertyGroup>
+    <PrepareForRunDependsOn>$(PrepareForRunDependsOn);CreateVsixContainer</PrepareForRunDependsOn>
+    <BuildDependsOn>$(BuildDependsOn);_CreateVsixAfterBuild</BuildDependsOn>
+  </PropertyGroup>
+
+  <Target Name="_CreateVsixAfterBuild" AfterTargets="Build" DependsOnTargets="CreateVsixContainer">
+    <Message Importance="High" Text="VSIX created: $(TargetVsixContainer)" Condition="Exists('$(TargetVsixContainer)')" />
+  </Target>
+
+</Project>

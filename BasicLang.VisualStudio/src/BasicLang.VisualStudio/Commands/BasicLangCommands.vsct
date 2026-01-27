@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+  <!--  Include the shared command definitions -->
+  <Extern href="stdidcmd.h"/>
+  <Extern href="vsshlids.h"/>
+
+  <Commands package="guidBasicLangPackage">
+
+    <!-- Menu groups -->
+    <Groups>
+      <Group guid="guidBasicLangCommandSet" id="BasicLangMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS"/>
+      </Group>
+      <Group guid="guidBasicLangCommandSet" id="BasicLangEditorContextGroup" priority="0x0100">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN"/>
+      </Group>
+    </Groups>
+
+    <!-- Menus -->
+    <Menus>
+      <Menu guid="guidBasicLangCommandSet" id="BasicLangMenu" priority="0x0100" type="Menu">
+        <Parent guid="guidBasicLangCommandSet" id="BasicLangMenuGroup"/>
+        <Strings>
+          <ButtonText>BasicLang</ButtonText>
+          <CommandName>BasicLang</CommandName>
+        </Strings>
+      </Menu>
+    </Menus>
+
+    <!-- Button commands -->
+    <Buttons>
+      <!-- Build command -->
+      <Button guid="guidBasicLangCommandSet" id="cmdidBuild" priority="0x0100" type="Button">
+        <Parent guid="guidBasicLangCommandSet" id="BasicLangSubmenuGroup"/>
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings>
+          <ButtonText>Build Project</ButtonText>
+          <MenuText>Build BasicLang Project</MenuText>
+          <ToolTipText>Build the current BasicLang project</ToolTipText>
+        </Strings>
+      </Button>
+
+      <!-- Run command -->
+      <Button guid="guidBasicLangCommandSet" id="cmdidRun" priority="0x0101" type="Button">
+        <Parent guid="guidBasicLangCommandSet" id="BasicLangSubmenuGroup"/>
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings>
+          <ButtonText>Run</ButtonText>
+          <MenuText>Run BasicLang Project</MenuText>
+          <ToolTipText>Run the current BasicLang project</ToolTipText>
+        </Strings>
+      </Button>
+
+      <!-- Change Backend command -->
+      <Button guid="guidBasicLangCommandSet" id="cmdidChangeBackend" priority="0x0102" type="Button">
+        <Parent guid="guidBasicLangCommandSet" id="BasicLangSubmenuGroup"/>
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings>
+          <ButtonText>Change Backend...</ButtonText>
+          <MenuText>Change Compiler Backend</MenuText>
+          <ToolTipText>Change the compiler backend (CSharp, MSIL, LLVM, C++)</ToolTipText>
+        </Strings>
+      </Button>
+
+      <!-- Restart Language Server command -->
+      <Button guid="guidBasicLangCommandSet" id="cmdidRestartServer" priority="0x0103" type="Button">
+        <Parent guid="guidBasicLangCommandSet" id="BasicLangSubmenuGroup"/>
+        <Strings>
+          <ButtonText>Restart Language Server</ButtonText>
+          <MenuText>Restart BasicLang Language Server</MenuText>
+          <ToolTipText>Restart the BasicLang language server</ToolTipText>
+        </Strings>
+      </Button>
+
+      <!-- Go to Definition (context menu) -->
+      <Button guid="guidBasicLangCommandSet" id="cmdidGoToDefinition" priority="0x0100" type="Button">
+        <Parent guid="guidBasicLangCommandSet" id="BasicLangEditorContextGroup"/>
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Go to Definition</ButtonText>
+          <ToolTipText>Navigate to the definition of the selected symbol</ToolTipText>
+        </Strings>
+      </Button>
+
+      <!-- Find All References (context menu) -->
+      <Button guid="guidBasicLangCommandSet" id="cmdidFindReferences" priority="0x0101" type="Button">
+        <Parent guid="guidBasicLangCommandSet" id="BasicLangEditorContextGroup"/>
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Find All References</ButtonText>
+          <ToolTipText>Find all references to the selected symbol</ToolTipText>
+        </Strings>
+      </Button>
+    </Buttons>
+
+    <!-- Subgroups within the BasicLang menu -->
+    <Groups>
+      <Group guid="guidBasicLangCommandSet" id="BasicLangSubmenuGroup" priority="0x0000">
+        <Parent guid="guidBasicLangCommandSet" id="BasicLangMenu"/>
+      </Group>
+    </Groups>
+
+  </Commands>
+
+  <!-- Key bindings -->
+  <KeyBindings>
+    <!-- Ctrl+Shift+B for Build -->
+    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidBuild" editor="guidVSStd97" key1="B" mod1="Control Shift"/>
+    <!-- F5 for Run (when in BasicLang context) -->
+    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidRun" editor="GUID_TextEditorFactory" key1="VK_F5"/>
+    <!-- F12 for Go to Definition -->
+    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidGoToDefinition" editor="GUID_TextEditorFactory" key1="VK_F12"/>
+    <!-- Shift+F12 for Find All References -->
+    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidFindReferences" editor="GUID_TextEditorFactory" key1="VK_F12" mod1="Shift"/>
+  </KeyBindings>
+
+  <Symbols>
+    <!-- Package GUID -->
+    <GuidSymbol name="guidBasicLangPackage" value="{95a8f3e1-1234-4567-8901-abcdef123456}" />
+
+    <!-- Command set GUID -->
+    <GuidSymbol name="guidBasicLangCommandSet" value="{95a8f3e1-1234-4567-8902-abcdef123456}">
+      <!-- Groups -->
+      <IDSymbol name="BasicLangMenuGroup" value="0x1020" />
+      <IDSymbol name="BasicLangSubmenuGroup" value="0x1021" />
+      <IDSymbol name="BasicLangEditorContextGroup" value="0x1022" />
+
+      <!-- Menus -->
+      <IDSymbol name="BasicLangMenu" value="0x1100" />
+
+      <!-- Commands -->
+      <IDSymbol name="cmdidBuild" value="0x0100" />
+      <IDSymbol name="cmdidRun" value="0x0101" />
+      <IDSymbol name="cmdidChangeBackend" value="0x0102" />
+      <IDSymbol name="cmdidRestartServer" value="0x0103" />
+      <IDSymbol name="cmdidGoToDefinition" value="0x0104" />
+      <IDSymbol name="cmdidFindReferences" value="0x0105" />
+    </GuidSymbol>
+
+  </Symbols>
+
+</CommandTable>

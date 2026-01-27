@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <PackageId>BasicLang.SDK</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Visual Game Studio</Authors>
+    <Company>Visual Game Studio</Company>
+    <Product>BasicLang SDK</Product>
+    <Description>MSBuild SDK for BasicLang projects. Provides build targets and props for compiling BasicLang source files.</Description>
+    <PackageTags>BasicLang;VB;Visual Basic;Game Development;MSBuild;SDK</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/visualgamestudio/basiclang</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/visualgamestudio/basiclang</RepositoryUrl>
+
+    <!-- This makes it an MSBuild SDK package -->
+    <IsSdkPackage>true</IsSdkPackage>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+
+    <!-- No assemblies needed - this is just MSBuild files -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+  </PropertyGroup>
+
+  <!-- Include SDK files in the package -->
+  <ItemGroup>
+    <None Include="Sdk\Sdk.props" Pack="true" PackagePath="Sdk\" />
+    <None Include="Sdk\Sdk.targets" Pack="true" PackagePath="Sdk\" />
+  </ItemGroup>
+
+  <!-- Include tools (BasicLang compiler would go here in production) -->
+  <ItemGroup>
+    <None Include="tools\**\*" Pack="true" PackagePath="tools\" Condition="Exists('tools')" />
+  </ItemGroup>
+
+</Project>

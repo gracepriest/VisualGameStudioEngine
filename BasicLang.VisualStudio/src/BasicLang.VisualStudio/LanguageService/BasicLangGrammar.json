@@ -1,0 +1,394 @@
+{
+  "name": "BasicLang",
+  "scopeName": "source.basiclang",
+  "fileTypes": ["bl", "bas"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#preprocessor" },
+    { "include": "#attributes" },
+    { "include": "#strings" },
+    { "include": "#tuples" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#numbers" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#variables" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.basiclang",
+          "match": "'''.*$",
+          "captures": {
+            "0": { "name": "comment.block.documentation.basiclang" }
+          }
+        },
+        {
+          "name": "comment.line.apostrophe.basiclang",
+          "match": "'.*$"
+        },
+        {
+          "name": "comment.block.basiclang",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            { "include": "#comments" }
+          ]
+        },
+        {
+          "name": "comment.line.rem.basiclang",
+          "match": "(?i)^\\s*REM\\b.*$"
+        }
+      ]
+    },
+    "preprocessor": {
+      "patterns": [
+        {
+          "name": "keyword.preprocessor.basiclang",
+          "match": "(?i)^\\s*#(If|ElseIf|Else|End\\s+If|Const|Region|End\\s+Region|ExternalSource|End\\s+ExternalSource|Enable|Disable|IfDef|IfNDef|EndIf)\\b.*$"
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.basiclang",
+          "begin": "<(?=[A-Za-z])",
+          "end": ">",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.attribute.begin.basiclang" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.attribute.end.basiclang" }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.attribute.basiclang",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+            },
+            { "include": "#strings" },
+            { "include": "#numbers" }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.basiclang",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.basiclang",
+              "match": "\\\\."
+            },
+            {
+              "name": "constant.character.escape.double-quote.basiclang",
+              "match": "\"\""
+            }
+          ]
+        },
+        {
+          "name": "string.interpolated.basiclang",
+          "begin": "\\$\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.basiclang",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.basiclang",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.definition.interpolation.begin.basiclang" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.definition.interpolation.end.basiclang" }
+              },
+              "patterns": [
+                { "include": "$self" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.triple.basiclang",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.basiclang",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "tuples": {
+      "patterns": [
+        {
+          "comment": "Tuple type annotation like (Integer, Integer) or (x As Integer, y As Integer)",
+          "name": "meta.tuple-type.basiclang",
+          "begin": "(?<=As\\s*)\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.tuple.begin.basiclang" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.tuple.end.basiclang" }
+          },
+          "patterns": [
+            {
+              "name": "variable.parameter.tuple.basiclang",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\s+As)"
+            },
+            { "include": "#types" },
+            { "include": "#keywords" }
+          ]
+        },
+        {
+          "comment": "Tuple deconstruction Dim (x, y) = ...",
+          "name": "meta.tuple-deconstruction.basiclang",
+          "begin": "(?<=Dim\\s*)\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.tuple.begin.basiclang" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.tuple.end.basiclang" }
+          },
+          "patterns": [
+            {
+              "name": "variable.other.tuple-element.basiclang",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            }
+          ]
+        },
+        {
+          "comment": "Tuple literal like (10, 20)",
+          "name": "meta.tuple-literal.basiclang",
+          "begin": "(?<=[=,\\(\\[]\\s*)\\((?=.*,)",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.tuple.begin.basiclang" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.tuple.end.basiclang" }
+          },
+          "patterns": [
+            { "include": "$self" }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.basiclang",
+          "match": "(?i)\\b(If|Then|Else|ElseIf|End\\s+If|Select|Case|End\\s+Select|For|To|Step|Next|Each|In|While|Wend|End\\s+While|Do|Loop|Until|Continue|Exit|Return|GoTo|On\\s+Error|Resume|Throw)\\b"
+        },
+        {
+          "name": "keyword.control.pattern.basiclang",
+          "match": "(?i)\\b(When|Match|Where)\\b"
+        },
+        {
+          "name": "keyword.declaration.basiclang",
+          "match": "(?i)\\b(Dim|Const|Static|ReDim|Preserve|As|New|With|End\\s+With|Using|End\\s+Using|Let)\\b"
+        },
+        {
+          "name": "keyword.declaration.function.basiclang",
+          "match": "(?i)\\b(Sub|Function|End\\s+Sub|End\\s+Function|ByVal|ByRef|Optional|ParamArray|Async|Await|Iterator|Yield|Lambda)\\b"
+        },
+        {
+          "name": "keyword.declaration.class.basiclang",
+          "match": "(?i)\\b(Class|End\\s+Class|Module|End\\s+Module|Namespace|End\\s+Namespace|Interface|End\\s+Interface|Enum|End\\s+Enum|Structure|End\\s+Structure|Record)\\b"
+        },
+        {
+          "name": "keyword.declaration.property.basiclang",
+          "match": "(?i)\\b(Property|Get|Set|End\\s+Property|End\\s+Get|End\\s+Set|Auto)\\b"
+        },
+        {
+          "name": "keyword.modifier.basiclang",
+          "match": "(?i)\\b(Public|Private|Protected|Friend|Internal|Shared|Static|ReadOnly|WriteOnly|Overloads|Overrides|Overridable|NotOverridable|MustOverride|MustInherit|NotInheritable|Partial|Shadows|Virtual|Abstract|Sealed|Override|Default)\\b"
+        },
+        {
+          "name": "keyword.other.basiclang",
+          "match": "(?i)\\b(Imports|Option|Strict|Explicit|Compare|Binary|Text|Inherits|Implements|Handles|AddHandler|RemoveHandler|RaiseEvent|Event|Delegate|Operator|Widening|Narrowing|Of|TypeOf|GetType|NameOf|CType|DirectCast|TryCast|CBool|CByte|CChar|CDate|CDbl|CDec|CInt|CLng|CObj|CSByte|CShort|CSng|CStr|CUInt|CULng|CUShort)\\b"
+        },
+        {
+          "name": "keyword.control.exception.basiclang",
+          "match": "(?i)\\b(Try|Catch|Finally|End\\s+Try|When)\\b"
+        },
+        {
+          "name": "constant.language.basiclang",
+          "match": "(?i)\\b(True|False|Nothing|Null|Me|MyBase|MyClass|Self)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.basiclang",
+          "match": "(?i)\\b(And|AndAlso|Or|OrElse|Xor|Not|Is|IsNot|Like|Mod)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.basiclang",
+          "match": "(===|!==|==|!=|=|<>|<|>|<=|>=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.basiclang",
+          "match": "(\\+|-|\\*|/|\\\\|\\^|&|\\?\\?)"
+        },
+        {
+          "name": "keyword.operator.assignment.basiclang",
+          "match": "(\\+=|-=|\\*=|/=|\\\\=|\\^=|&=|\\?\\?=|:=)"
+        },
+        {
+          "name": "keyword.operator.bitwise.basiclang",
+          "match": "(<<|>>|~)"
+        },
+        {
+          "name": "keyword.operator.range.basiclang",
+          "match": "\\.\\."
+        },
+        {
+          "name": "keyword.operator.null-conditional.basiclang",
+          "match": "\\?\\."
+        },
+        {
+          "name": "keyword.operator.arrow.basiclang",
+          "match": "=>|->|->"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.basiclang",
+          "match": "(?i)&H[0-9A-F]+[SILUL]?"
+        },
+        {
+          "name": "constant.numeric.hex.prefix.basiclang",
+          "match": "(?i)0x[0-9A-F]+[SILUL]?"
+        },
+        {
+          "name": "constant.numeric.octal.basiclang",
+          "match": "(?i)&O[0-7]+[SILUL]?"
+        },
+        {
+          "name": "constant.numeric.binary.basiclang",
+          "match": "(?i)&B[01]+[SILUL]?"
+        },
+        {
+          "name": "constant.numeric.binary.prefix.basiclang",
+          "match": "(?i)0b[01]+[SILUL]?"
+        },
+        {
+          "name": "constant.numeric.float.basiclang",
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?[FDR]?\\b"
+        },
+        {
+          "name": "constant.numeric.float.scientific.basiclang",
+          "match": "\\b\\d+[eE][+-]?\\d+[FDR]?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.basiclang",
+          "match": "\\b\\d+[SILULFD]?\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.basiclang",
+          "match": "(?i)\\b(Boolean|Byte|SByte|Char|Date|DateTime|Decimal|Double|Single|Integer|UInteger|Long|ULong|Short|UShort|String|Object|Variant|Void)\\b"
+        },
+        {
+          "name": "storage.type.nullable.basiclang",
+          "match": "(?i)\\b(Boolean|Byte|SByte|Char|Date|DateTime|Decimal|Double|Single|Integer|UInteger|Long|ULong|Short|UShort)\\?\\b"
+        },
+        {
+          "name": "storage.type.collection.basiclang",
+          "match": "(?i)\\b(Array|List|Dictionary|HashSet|Queue|Stack|Collection|IEnumerable|ICollection|IList|IDictionary|Set|Map|Tuple|ValueTuple)\\b"
+        },
+        {
+          "name": "support.type.raylib.basiclang",
+          "match": "(?i)\\b(Vector2|Vector3|Vector4|Color|Rectangle|Texture2D|Font|Camera2D|Camera3D|Image|Sound|Music|RenderTexture2D|Shader|Ray|BoundingBox|Model|Mesh|Material|Transform)\\b"
+        },
+        {
+          "name": "entity.name.type.basiclang",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b(?=\\s*\\.)|(?<=As\\s+)\\b[A-Z][a-zA-Z0-9_]*\\b|(?<=New\\s+)\\b[A-Z][a-zA-Z0-9_]*\\b|(?<=Of\\s+)\\b[A-Z][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "entity.name.type.generic.basiclang",
+          "match": "(?<=\\bOf\\s*)\\b[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.definition.basiclang",
+          "match": "(?i)(?<=\\b(Sub|Function)\\s+)\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "entity.name.function.constructor.basiclang",
+          "match": "(?i)(?<=\\bSub\\s+)New\\b"
+        },
+        {
+          "name": "support.function.builtin.basiclang",
+          "match": "(?i)\\b(Abs|Asc|Chr|CStr|Format|InStr|InStrRev|Join|LCase|Left|Len|LTrim|Mid|Replace|Right|RTrim|Space|Split|Str|StrComp|StrConv|StrReverse|Trim|UCase|Val|Array|IsArray|IsDate|IsEmpty|IsNull|IsNumeric|IsObject|TypeName|VarType|CBool|CByte|CDate|CDbl|CDec|CInt|CLng|CSng|CStr|Fix|Int|Sgn|Rnd|Round|Timer|Now|Date|Time|DateAdd|DateDiff|DatePart|DateSerial|DateValue|Day|Hour|Minute|Month|Second|Weekday|Year|TimeSerial|TimeValue|MsgBox|InputBox|Print|Debug\\.Print|Console\\.WriteLine|Console\\.Write|Console\\.ReadLine|Console\\.ReadKey|PrintLine|ReadLine|Input|UBound|LBound)\\b"
+        },
+        {
+          "name": "support.function.raylib.basiclang",
+          "match": "(?i)\\b(InitWindow|CloseWindow|WindowShouldClose|IsWindowReady|IsWindowFullscreen|IsWindowHidden|IsWindowMinimized|IsWindowMaximized|IsWindowFocused|IsWindowResized|BeginDrawing|EndDrawing|ClearBackground|BeginMode2D|EndMode2D|BeginMode3D|EndMode3D|DrawPixel|DrawLine|DrawCircle|DrawRectangle|DrawTriangle|DrawText|DrawTexture|DrawTextureRec|DrawTexturePro|LoadTexture|LoadTextureFromImage|LoadSound|LoadMusicStream|PlaySound|PlayMusicStream|StopSound|StopMusicStream|UpdateMusicStream|SetMusicVolume|SetSoundVolume|IsKeyPressed|IsKeyDown|IsKeyReleased|IsKeyUp|IsMouseButtonPressed|IsMouseButtonDown|IsMouseButtonReleased|GetMouseX|GetMouseY|GetMousePosition|GetMouseDelta|GetMouseWheelMove|SetTargetFPS|GetFPS|GetFrameTime|GetTime|GetRandomValue|Fade|ColorAlpha|ColorToInt|ColorNormalize|ColorFromHSV|MeasureText|GetScreenWidth|GetScreenHeight|SetWindowSize|SetWindowTitle|SetWindowPosition|ToggleFullscreen)\\b"
+        },
+        {
+          "name": "constant.language.color.raylib.basiclang",
+          "match": "(?i)\\b(LIGHTGRAY|GRAY|DARKGRAY|YELLOW|GOLD|ORANGE|PINK|RED|MAROON|GREEN|LIME|DARKGREEN|SKYBLUE|BLUE|DARKBLUE|PURPLE|VIOLET|DARKPURPLE|BEIGE|BROWN|DARKBROWN|WHITE|BLACK|BLANK|MAGENTA|RAYWHITE)\\b"
+        },
+        {
+          "name": "support.function.framework.basiclang",
+          "match": "(?i)\\b(GameInit|GameShutdown|GameBeginFrame|GameEndFrame|GameShouldClose|GameGetDeltaTime|GameGetFPS|CreateEntity|DestroyEntity|EntitySetPosition|EntityGetX|EntityGetY|EntitySetVelocity|EntitySetSprite|EntitySetCollider|EntityIsActive|EntitySetActive|CameraSetPosition|CameraSetZoom|CameraFollow|CameraShake|CameraBeginMode|CameraEndMode|CameraReset|CameraPanTo|CameraZoomTo|TweenFloat|TweenEntityPosition|TweenUpdate|TimerAfter|TimerIsFinished|TimerCancel|TimerUpdate|PhysicsSetGravity|PhysicsUpdate|CreatePhysicsBody|PhysicsBodyApplyForce|UICreateLabel|UICreateButton|UIIsButtonClicked|UISetText|UIUpdate|UIRender|ParticlesUpdate|ParticlesDraw|TilemapsDraw)\\b"
+        },
+        {
+          "name": "support.function.animctrl.basiclang",
+          "match": "(?i)\\b(AnimCtrlCreate|AnimCtrlDestroy|AnimCtrlGet|AnimCtrlIsValid|AnimCtrlAddState|AnimCtrlAddBlendState1D|AnimCtrlAddBlendState2D|AnimCtrlGetState|AnimCtrlSetDefaultState|AnimCtrlSetStateSpeed|AnimCtrlSetStateLoop|AnimCtrlAddBlendClip|AnimCtrlAddTransition|AnimCtrlAddAnyStateTransition|AnimCtrlAddCondition|AnimCtrlAddBoolCondition|AnimCtrlAddTriggerCondition|AnimCtrlSetExitTime|AnimCtrlSetFloat|AnimCtrlGetFloat|AnimCtrlSetInt|AnimCtrlGetInt|AnimCtrlSetBool|AnimCtrlGetBool|AnimCtrlSetTrigger|AnimCtrlResetTrigger|AnimCtrlCreateInstance|AnimCtrlDestroyInstance|AnimCtrlUpdateInstance|AnimCtrlGetCurrentState|AnimCtrlIsInTransition|AnimCtrlInstanceSetFloat|AnimCtrlInstanceSetInt|AnimCtrlInstanceSetBool|AnimCtrlInstanceSetTrigger|AnimCtrlForceState|AnimCtrlCrossFade|AnimCtrlPause|AnimCtrlResume|AnimCtrlSetSpeed)\\b"
+        },
+        {
+          "name": "support.function.math.basiclang",
+          "match": "(?i)\\b(Sin|Cos|Tan|Asin|Acos|Atan|Atan2|Sinh|Cosh|Tanh|Sqrt|Pow|Exp|Log|Log10|Log2|Floor|Ceiling|Truncate|Min|Max|Clamp|Lerp|Sign|PI|E)\\b"
+        },
+        {
+          "name": "meta.function-call.basiclang",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\s*(?=\\()"
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.parameter.basiclang",
+          "match": "(?<=\\()\\s*\\b[a-zA-Z_][a-zA-Z0-9_]*\\b(?=\\s+As)"
+        },
+        {
+          "name": "variable.other.constant.basiclang",
+          "match": "(?i)(?<=\\bConst\\s+)\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.local.basiclang",
+          "match": "(?i)(?<=\\bDim\\s+)\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.basiclang",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

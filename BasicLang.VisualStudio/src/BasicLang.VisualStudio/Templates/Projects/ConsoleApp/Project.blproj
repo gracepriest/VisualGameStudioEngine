@@ -1,0 +1,11 @@
+<Project Sdk="BasicLang.SDK/1.0.0">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Backend>CSharp</Backend>
+    <RootNamespace>$safeprojectname$</RootNamespace>
+    <AssemblyName>$safeprojectname$</AssemblyName>
+  </PropertyGroup>
+
+</Project>

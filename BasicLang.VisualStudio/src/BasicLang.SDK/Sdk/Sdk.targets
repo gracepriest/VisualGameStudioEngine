@@ -1,0 +1,118 @@
+<!--
+  BasicLang SDK - Build Targets
+
+  This file is imported at the end of the project file.
+  It defines the build targets for compiling BasicLang source files.
+-->
+<Project>
+
+  <!-- Find BasicLang compiler -->
+  <Target Name="ResolveBasicLangCompiler" BeforeTargets="BasicLangCompile">
+    <PropertyGroup>
+      <!-- Try common installation paths -->
+      <_BasicLangPath1>$(LocalAppData)\BasicLang\BasicLang.exe</_BasicLangPath1>
+      <_BasicLangPath2>$(ProgramFiles)\BasicLang\BasicLang.exe</_BasicLangPath2>
+      <_BasicLangPath3>$(MSBuildThisFileDirectory)..\tools\BasicLang.exe</_BasicLangPath3>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(BasicLangCompilerPath)' == 'BasicLang.exe'">
+      <BasicLangCompilerPath Condition="Exists('$(_BasicLangPath1)')">$(_BasicLangPath1)</BasicLangCompilerPath>
+      <BasicLangCompilerPath Condition="Exists('$(_BasicLangPath2)') And '$(BasicLangCompilerPath)' == 'BasicLang.exe'">$(_BasicLangPath2)</BasicLangCompilerPath>
+      <BasicLangCompilerPath Condition="Exists('$(_BasicLangPath3)') And '$(BasicLangCompilerPath)' == 'BasicLang.exe'">$(_BasicLangPath3)</BasicLangCompilerPath>
+    </PropertyGroup>
+
+    <Message Text="Using BasicLang compiler: $(BasicLangCompilerPath)" Importance="normal" />
+  </Target>
+
+  <!-- Main compilation target -->
+  <Target Name="BasicLangCompile"
+          BeforeTargets="Build;CoreCompile"
+          DependsOnTargets="ResolveBasicLangCompiler"
+          Inputs="@(BasicLangCompile)"
+          Outputs="$(IntermediateOutputPath)$(AssemblyName).dll"
+          Condition="'@(BasicLangCompile)' != ''">
+
+    <PropertyGroup>
+      <!-- Build compiler arguments -->
+      <_BasicLangArgs>build</_BasicLangArgs>
+      <_BasicLangArgs>$(_BasicLangArgs) --backend $(Backend)</_BasicLangArgs>
+      <_BasicLangArgs>$(_BasicLangArgs) --output "$(OutputPath)$(AssemblyName)"</_BasicLangArgs>
+      <_BasicLangArgs Condition="'$(OutputType)' == 'Library'">$(_BasicLangArgs) --library</_BasicLangArgs>
+      <_BasicLangArgs Condition="'$(BasicLangOptimize)' == 'true'">$(_BasicLangArgs) --optimize</_BasicLangArgs>
+      <_BasicLangArgs Condition="'$(BasicLangDebugSymbols)' == 'true'">$(_BasicLangArgs) --debug</_BasicLangArgs>
+      <_BasicLangArgs Condition="'$(TreatWarningsAsErrors)' == 'true'">$(_BasicLangArgs) --warnaserror</_BasicLangArgs>
+      <_BasicLangArgs Condition="'$(TargetFramework)' != ''">$(_BasicLangArgs) --framework $(TargetFramework)</_BasicLangArgs>
+    </PropertyGroup>
+
+    <!-- Ensure output directory exists -->
+    <MakeDir Directories="$(OutputPath)" Condition="!Exists('$(OutputPath)')" />
+    <MakeDir Directories="$(IntermediateOutputPath)" Condition="!Exists('$(IntermediateOutputPath)')" />
+
+    <!-- Build list of source files -->
+    <ItemGroup>
+      <_SourceFiles Include="@(BasicLangCompile)" />
+    </ItemGroup>
+
+    <!-- Execute BasicLang compiler -->
+    <Exec Command="&quot;$(BasicLangCompilerPath)&quot; $(_BasicLangArgs) @(_SourceFiles->'&quot;%(FullPath)&quot;', ' ')"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="normal"
+          StandardErrorImportance="high">
+      <Output TaskParameter="ExitCode" PropertyName="_BasicLangExitCode" />
+    </Exec>
+
+    <Error Text="BasicLang compilation failed with exit code $(_BasicLangExitCode)"
+           Condition="'$(_BasicLangExitCode)' != '0'" />
+
+    <Message Text="BasicLang compilation successful" Importance="high" Condition="'$(_BasicLangExitCode)' == '0'" />
+  </Target>
+
+  <!-- Clean target -->
+  <Target Name="BasicLangClean" BeforeTargets="Clean">
+    <RemoveDir Directories="$(OutputPath)" Condition="Exists('$(OutputPath)')" />
+    <RemoveDir Directories="$(IntermediateOutputPath)" Condition="Exists('$(IntermediateOutputPath)')" />
+  </Target>
+
+  <!-- Rebuild target -->
+  <Target Name="BasicLangRebuild" DependsOnTargets="BasicLangClean;BasicLangCompile" />
+
+  <!-- Run target for executable projects -->
+  <Target Name="Run" DependsOnTargets="Build" Condition="'$(OutputType)' == 'Exe'">
+    <PropertyGroup>
+      <_ExecutablePath>$(OutputPath)$(AssemblyName).exe</_ExecutablePath>
+      <_ExecutablePath Condition="'$(Backend)' == 'CSharp'">$(OutputPath)$(AssemblyName).dll</_ExecutablePath>
+    </PropertyGroup>
+
+    <Exec Command="dotnet &quot;$(_ExecutablePath)&quot;"
+          Condition="'$(Backend)' == 'CSharp' And Exists('$(_ExecutablePath)')"
+          WorkingDirectory="$(OutputPath)" />
+
+    <Exec Command="&quot;$(_ExecutablePath)&quot;"
+          Condition="'$(Backend)' != 'CSharp' And Exists('$(_ExecutablePath)')"
+          WorkingDirectory="$(OutputPath)" />
+  </Target>
+
+  <!-- IntelliSense support - export compilation info for LSP -->
+  <Target Name="BasicLangExportCompilationInfo" AfterTargets="BasicLangCompile">
+    <PropertyGroup>
+      <_CompilationInfoPath>$(IntermediateOutputPath)basiclang.compilation.json</_CompilationInfoPath>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_CompilationInfoLines Include="{" />
+      <_CompilationInfoLines Include="  &quot;projectPath&quot;: &quot;$(MSBuildProjectFullPath)&quot;," />
+      <_CompilationInfoLines Include="  &quot;backend&quot;: &quot;$(Backend)&quot;," />
+      <_CompilationInfoLines Include="  &quot;targetFramework&quot;: &quot;$(TargetFramework)&quot;," />
+      <_CompilationInfoLines Include="  &quot;outputPath&quot;: &quot;$(OutputPath)&quot;," />
+      <_CompilationInfoLines Include="  &quot;sourceFiles&quot;: [@(BasicLangCompile->'&quot;%(FullPath)&quot;', ', ')]" />
+      <_CompilationInfoLines Include="}" />
+    </ItemGroup>
+
+    <WriteLinesToFile File="$(_CompilationInfoPath)"
+                      Lines="@(_CompilationInfoLines)"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
+  </Target>
+
+</Project>

@@ -1,0 +1,63 @@
+<!--
+  BasicLang SDK - Properties
+
+  This file is imported at the beginning of the project file.
+  It sets up default properties for BasicLang projects.
+-->
+<Project>
+
+  <PropertyGroup>
+    <!-- Mark this as a BasicLang project -->
+    <IsBasicLangProject>true</IsBasicLangProject>
+
+    <!-- Default to CSharp backend -->
+    <Backend Condition="'$(Backend)' == ''">CSharp</Backend>
+
+    <!-- Default output type -->
+    <OutputType Condition="'$(OutputType)' == ''">Exe</OutputType>
+
+    <!-- Default target framework -->
+    <TargetFramework Condition="'$(TargetFramework)' == ''">net8.0</TargetFramework>
+
+    <!-- Use implicit usings by default -->
+    <ImplicitUsings Condition="'$(ImplicitUsings)' == ''">enable</ImplicitUsings>
+
+    <!-- Nullable reference types -->
+    <Nullable Condition="'$(Nullable)' == ''">enable</Nullable>
+
+    <!-- Disable default compile items - we use BasicLangCompile -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultItems>true</EnableDefaultItems>
+
+    <!-- BasicLang compiler settings -->
+    <BasicLangOptimize Condition="'$(BasicLangOptimize)' == '' And '$(Configuration)' == 'Release'">true</BasicLangOptimize>
+    <BasicLangOptimize Condition="'$(BasicLangOptimize)' == ''">false</BasicLangOptimize>
+    <BasicLangDebugSymbols Condition="'$(BasicLangDebugSymbols)' == '' And '$(Configuration)' == 'Debug'">true</BasicLangDebugSymbols>
+    <BasicLangDebugSymbols Condition="'$(BasicLangDebugSymbols)' == ''">false</BasicLangDebugSymbols>
+    <TreatWarningsAsErrors Condition="'$(TreatWarningsAsErrors)' == ''">false</TreatWarningsAsErrors>
+
+    <!-- Output paths -->
+    <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">obj\</BaseIntermediateOutputPath>
+    <OutputPath Condition="'$(OutputPath)' == ''">$(BaseOutputPath)$(Configuration)\</OutputPath>
+    <IntermediateOutputPath Condition="'$(IntermediateOutputPath)' == ''">$(BaseIntermediateOutputPath)$(Configuration)\</IntermediateOutputPath>
+
+    <!-- BasicLang compiler path - can be overridden -->
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == ''">BasicLang.exe</BasicLangCompilerPath>
+  </PropertyGroup>
+
+  <!-- Default item includes for BasicLang source files -->
+  <ItemGroup>
+    <BasicLangCompile Include="**\*.bas" Exclude="$(BaseOutputPath)**;$(BaseIntermediateOutputPath)**" />
+    <BasicLangCompile Include="**\*.bl" Exclude="$(BaseOutputPath)**;$(BaseIntermediateOutputPath)**" />
+  </ItemGroup>
+
+  <!-- Define available backends -->
+  <ItemGroup>
+    <AvailableBackends Include="CSharp" />
+    <AvailableBackends Include="MSIL" />
+    <AvailableBackends Include="LLVM" />
+    <AvailableBackends Include="CPlusPlus" />
+  </ItemGroup>
+
+</Project>

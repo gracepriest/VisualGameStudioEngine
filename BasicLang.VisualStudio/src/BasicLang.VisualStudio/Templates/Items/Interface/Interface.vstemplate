@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>BasicLang Interface</Name>
+    <Description>An interface for the BasicLang programming language.</Description>
+    <Icon>__TemplateIcon.png</Icon>
+    <ProjectType>CSharp</ProjectType>
+    <DefaultName>IInterface</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <TemplateID>BasicLang.Interface</TemplateID>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.bas">Interface.bas</ProjectItem>
+  </TemplateContent>
+</VSTemplate>

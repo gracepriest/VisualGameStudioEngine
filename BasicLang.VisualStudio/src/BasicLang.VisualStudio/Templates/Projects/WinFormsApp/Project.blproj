@@ -1,0 +1,16 @@
+<Project Sdk="BasicLang.SDK/1.0.0">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Backend>CSharp</Backend>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>$safeprojectname$</RootNamespace>
+    <AssemblyName>$safeprojectname$</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Windows.Forms" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

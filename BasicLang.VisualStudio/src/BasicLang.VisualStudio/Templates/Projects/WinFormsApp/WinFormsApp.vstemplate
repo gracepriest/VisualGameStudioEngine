@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Project" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>BasicLang Windows Forms App</Name>
+    <Description>A Windows Forms desktop application for the BasicLang programming language.</Description>
+    <Icon>__TemplateIcon.png</Icon>
+    <ProjectType>CSharp</ProjectType>
+    <ProjectSubType>BasicLang</ProjectSubType>
+    <LanguageTag>BasicLang</LanguageTag>
+    <PlatformTag>Windows</PlatformTag>
+    <ProjectTypeTag>Desktop</ProjectTypeTag>
+    <ProjectTypeTag>WinForms</ProjectTypeTag>
+    <SortOrder>1002</SortOrder>
+    <TemplateID>BasicLang.WinFormsApp</TemplateID>
+    <CreateNewFolder>true</CreateNewFolder>
+    <DefaultName>BasicLangWinFormsApp</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <Hidden>false</Hidden>
+  </TemplateData>
+  <TemplateContent>
+    <Project File="Project.blproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true" TargetFileName="Program.bas">Program.bas</ProjectItem>
+      <ProjectItem ReplaceParameters="true" TargetFileName="MainForm.bas">MainForm.bas</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>
