@@ -3,8 +3,7 @@
   <TemplateData>
     <Name>BasicLang Class</Name>
     <Description>An empty class for the BasicLang programming language.</Description>
-    <Icon>__TemplateIcon.png</Icon>
-    <ProjectType>CSharp</ProjectType>
+    <ProjectType>BasicLang</ProjectType>
     <DefaultName>Class</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <TemplateID>BasicLang.Class</TemplateID>

@@ -30,9 +30,8 @@
     <!-- VSIX output location -->
     <TargetVsixContainer>$(OutputPath)$(AssemblyName).vsix</TargetVsixContainer>
 
-    <!-- Disable template processing for now -->
+    <!-- Disable VSSDK template processing - we do it manually -->
     <DeployVSTemplates>false</DeployVSTemplates>
-    <TemplateOutputDirectory>$(IntermediateOutputPath)</TemplateOutputDirectory>
   </PropertyGroup>
 
   <!-- VS SDK -->
@@ -83,13 +82,32 @@
     </Content>
   </ItemGroup>
 
-  <!-- Templates disabled for now - to re-enable, add VSTemplate items properly -->
-  <!--
+  <!-- MSBuild Targets -->
   <ItemGroup>
-    <VSTemplate Include="Templates\Projects\**\*.vstemplate" />
-    <VSTemplate Include="Templates\Items\**\*.vstemplate" />
+    <Content Include="BuildSystem\BasicLang.targets">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
   </ItemGroup>
-  -->
+
+  <!-- Template source files (not directly in VSIX, used by CreateTemplateZips target) -->
+  <ItemGroup>
+    <None Include="Templates\**\*" Exclude="Templates\*.vstman" />
+  </ItemGroup>
+
+  <!-- Template manifest files (required for VS 2017+ template discovery) -->
+  <ItemGroup>
+    <Content Include="Templates\BasicLang.ProjectTemplates.vstman">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>ProjectTemplates</VSIXSubPath>
+    </Content>
+    <Content Include="Templates\BasicLang.ItemTemplates.vstman">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>ItemTemplates</VSIXSubPath>
+    </Content>
+  </ItemGroup>
 
   <!-- Commands - VSCT compilation requires MSBuild -->
   <ItemGroup>
@@ -107,11 +125,51 @@
   <!-- Import VSSDK targets for VSIX packaging -->
   <Import Project="$(VsSDKInstall)tools\VSSDK\Microsoft.VsSDK.targets" Condition="Exists('$(VsSDKInstall)tools\VSSDK\Microsoft.VsSDK.targets')" />
 
-  <!-- Skip template manifest generation that causes issues with SDK-style projects -->
+  <!-- Skip VSSDK template processing -->
   <Target Name="GenerateTemplatesManifest" />
   <Target Name="CreateTemplateManifests" />
+  <Target Name="GetZipFilesFromVSTemplates" />
 
-  <!-- Ensure VSIX is created after build - hook into PrepareForRun chain -->
+  <!-- Create template zips manually before VSIX creation -->
+  <Target Name="CreateTemplateZips" BeforeTargets="CreateVsixContainer">
+    <Message Importance="High" Text="Creating template zip files..." />
+
+    <!-- Create output directories -->
+    <MakeDir Directories="$(OutputPath)ProjectTemplates\BasicLang" />
+    <MakeDir Directories="$(OutputPath)ItemTemplates\BasicLang" />
+
+    <!-- Create Project Template zips using PowerShell -->
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Projects\ConsoleApp\*' -DestinationPath '$(OutputPath)ProjectTemplates\BasicLang\ConsoleApp.zip' -Force&quot;" />
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Projects\ClassLibrary\*' -DestinationPath '$(OutputPath)ProjectTemplates\BasicLang\ClassLibrary.zip' -Force&quot;" />
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Projects\WinFormsApp\*' -DestinationPath '$(OutputPath)ProjectTemplates\BasicLang\WinFormsApp.zip' -Force&quot;" />
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Projects\WpfApp\*' -DestinationPath '$(OutputPath)ProjectTemplates\BasicLang\WpfApp.zip' -Force&quot;" />
+
+    <!-- Create Item Template zips -->
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Items\Class\*' -DestinationPath '$(OutputPath)ItemTemplates\BasicLang\Class.zip' -Force&quot;" />
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Items\Module\*' -DestinationPath '$(OutputPath)ItemTemplates\BasicLang\Module.zip' -Force&quot;" />
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Items\Interface\*' -DestinationPath '$(OutputPath)ItemTemplates\BasicLang\Interface.zip' -Force&quot;" />
+
+    <Message Importance="High" Text="Template zips created in $(OutputPath)" />
+  </Target>
+
+  <!-- Include template zips in VSIX (dynamically added after CreateTemplateZips) -->
+  <Target Name="AddTemplateZipsToVsix" BeforeTargets="CreateVsixContainer" DependsOnTargets="CreateTemplateZips">
+    <ItemGroup>
+      <_ProjectTemplateZip Include="$(OutputPath)ProjectTemplates\BasicLang\*.zip" />
+      <_ItemTemplateZip Include="$(OutputPath)ItemTemplates\BasicLang\*.zip" />
+    </ItemGroup>
+    <ItemGroup>
+      <VSIXSourceItem Include="@(_ProjectTemplateZip)">
+        <VSIXSubPath>ProjectTemplates\BasicLang</VSIXSubPath>
+      </VSIXSourceItem>
+      <VSIXSourceItem Include="@(_ItemTemplateZip)">
+        <VSIXSubPath>ItemTemplates\BasicLang</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
+    <Message Importance="High" Text="Added template zips to VSIX: @(_ProjectTemplateZip);@(_ItemTemplateZip)" />
+  </Target>
+
+  <!-- Ensure VSIX is created after build -->
   <PropertyGroup>
     <PrepareForRunDependsOn>$(PrepareForRunDependsOn);CreateVsixContainer</PrepareForRunDependsOn>
     <BuildDependsOn>$(BuildDependsOn);_CreateVsixAfterBuild</BuildDependsOn>
@@ -119,6 +177,14 @@
 
   <Target Name="_CreateVsixAfterBuild" AfterTargets="Build" DependsOnTargets="CreateVsixContainer">
     <Message Importance="High" Text="VSIX created: $(TargetVsixContainer)" Condition="Exists('$(TargetVsixContainer)')" />
+  </Target>
+
+  <!-- Add template zips to VSIX after creation (vstman files are added via Content items above) -->
+  <Target Name="AddTemplatesToVsix" AfterTargets="_CreateVsixAfterBuild" DependsOnTargets="CreateTemplateZips">
+    <Message Importance="High" Text="Adding template zips to VSIX..." />
+    <!-- Add template zips only - vstman files are already included via Content items with IncludeInVSIX=true -->
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;Add-Type -AssemblyName System.IO.Compression.FileSystem; $vsix = [System.IO.Compression.ZipFile]::Open('$(TargetVsixContainer)', 'Update'); Get-ChildItem -Path '$(OutputPath)ProjectTemplates\BasicLang\*.zip' | ForEach-Object { [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($vsix, $_.FullName, ('ProjectTemplates/BasicLang/' + $_.Name)) }; Get-ChildItem -Path '$(OutputPath)ItemTemplates\BasicLang\*.zip' | ForEach-Object { [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($vsix, $_.FullName, ('ItemTemplates/BasicLang/' + $_.Name)) }; $vsix.Dispose()&quot;" />
+    <Message Importance="High" Text="Template zips added to VSIX successfully." />
   </Target>
 
 </Project>

@@ -3,8 +3,7 @@
   <TemplateData>
     <Name>BasicLang Interface</Name>
     <Description>An interface for the BasicLang programming language.</Description>
-    <Icon>__TemplateIcon.png</Icon>
-    <ProjectType>CSharp</ProjectType>
+    <ProjectType>BasicLang</ProjectType>
     <DefaultName>IInterface</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <TemplateID>BasicLang.Interface</TemplateID>

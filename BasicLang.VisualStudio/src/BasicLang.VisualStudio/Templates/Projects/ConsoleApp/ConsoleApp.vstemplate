@@ -3,9 +3,7 @@
   <TemplateData>
     <Name>BasicLang Console Application</Name>
     <Description>A console application project for the BasicLang programming language.</Description>
-    <Icon>__TemplateIcon.png</Icon>
-    <ProjectType>CSharp</ProjectType>
-    <ProjectSubType>BasicLang</ProjectSubType>
+    <ProjectType>BasicLang</ProjectType>
     <LanguageTag>BasicLang</LanguageTag>
     <PlatformTag>Windows</PlatformTag>
     <PlatformTag>Linux</PlatformTag>

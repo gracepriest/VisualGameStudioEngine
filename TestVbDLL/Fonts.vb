@@ -21,6 +21,7 @@ Public Module Fonts
 
     Public Sub UnloadFonts()
         If RETRO_FONT IsNot Nothing Then
+
             RETRO_FONT.Dispose()
             RETRO_FONT = Nothing
         End If

@@ -1,5 +1,5 @@
 #pragma once
-#include "framework.h"
+#include "../VisualGameStudioEngine/framework.h"
 #include <cassert>
 
 //base class for scenes

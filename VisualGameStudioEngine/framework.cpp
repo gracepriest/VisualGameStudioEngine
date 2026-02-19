@@ -738,7 +738,6 @@ namespace {
 
         for (auto& it : items) {
             Sprite2D* sp = it.sprite;
-
             const Texture2D* tex = GetTextureH_Internal(sp->textureHandle);
             if (!tex) continue;
 
@@ -746,15 +745,21 @@ namespace {
             float worldRot = GetWorldRotationInternal(it.entity);
             Vector2 worldScale = GetWorldScaleInternal(it.entity);
 
+            Rectangle src = sp->source;
+
             Rectangle dst;
             dst.x = worldPos.x;
             dst.y = worldPos.y;
-            dst.width = sp->source.width * worldScale.x;
-            dst.height = sp->source.height * worldScale.y;
+            dst.width = fabsf(sp->source.width) * fabsf(worldScale.x);
+            dst.height = fabsf(sp->source.height) * fabsf(worldScale.y);
+
+            // Flip via source rect when scale is negative
+            if (worldScale.x < 0) src.width = -fabsf(src.width);
+            if (worldScale.y < 0) src.height = -fabsf(src.height);
 
             Vector2 origin{ dst.width * 0.5f, dst.height * 0.5f };
 
-            DrawTexturePro(*tex, sp->source, dst, origin, worldRot, sp->tint);
+            DrawTexturePro(*tex, src, dst, origin, worldRot, sp->tint);
         }
     }
 }

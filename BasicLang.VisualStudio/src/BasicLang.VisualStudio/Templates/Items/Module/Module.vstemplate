@@ -3,8 +3,7 @@
   <TemplateData>
     <Name>BasicLang Module</Name>
     <Description>A module for the BasicLang programming language. Modules contain shared members.</Description>
-    <Icon>__TemplateIcon.png</Icon>
-    <ProjectType>CSharp</ProjectType>
+    <ProjectType>BasicLang</ProjectType>
     <DefaultName>Module</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <TemplateID>BasicLang.Module</TemplateID>

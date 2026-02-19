@@ -1,4 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- Set VSToolsPath for SDK-style projects -->
+  <PropertyGroup>
+    <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(NuGetPackageRoot)microsoft.vssdk.buildtools\17.9.3168\tools</VSToolsPath>
+  </PropertyGroup>
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
     <RootNamespace>VS.BasicLang</RootNamespace>
@@ -68,13 +72,55 @@
     </None>
   </ItemGroup>
 
-  <!-- Target to inject template zip into VSIX after build -->
-  <Target Name="InjectTemplateIntoVsix" AfterTargets="Build">
-    <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\inject-template.ps1&quot;"
-          Condition="Exists('$(OutputPath)$(TargetVsixContainerName)')" />
-    <Message Text="Injected project template into VSIX" Importance="high" />
+  <!-- Target to create template zip -->
+  <Target Name="CreateTemplateZip" BeforeTargets="Build">
+    <PropertyGroup>
+      <TemplateSourceDir>$(MSBuildProjectDirectory)\Templates\Projects\BasicLangConsoleApp</TemplateSourceDir>
+      <TemplateZipDir>$(MSBuildProjectDirectory)\ProjectTemplates\BasicLang</TemplateZipDir>
+      <TemplateZipPath>$(TemplateZipDir)\BasicLangConsoleApp.zip</TemplateZipPath>
+    </PropertyGroup>
+    <MakeDir Directories="$(TemplateZipDir)" Condition="!Exists('$(TemplateZipDir)')" />
+    <Delete Files="$(TemplateZipPath)" Condition="Exists('$(TemplateZipPath)')" />
+    <ZipDirectory SourceDirectory="$(TemplateSourceDir)" DestinationFile="$(TemplateZipPath)" />
+    <Message Text="Created template zip: $(TemplateZipPath)" Importance="high" />
   </Target>
 
-  <!-- Import VSSDK targets -->
-  <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="'$(VSToolsPath)' != '' And Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
+  <!-- Include the template zip in VSIX -->
+  <ItemGroup>
+    <Content Include="ProjectTemplates\BasicLang\BasicLangConsoleApp.zip" Condition="Exists('ProjectTemplates\BasicLang\BasicLangConsoleApp.zip')">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>ProjectTemplates\BasicLang</VSIXSubPath>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- Create VSIX manually since VSSDK tools aren't available from command line -->
+  <Target Name="CreateVsixManual" AfterTargets="Build">
+    <PropertyGroup>
+      <VsixBuildDir>$(MSBuildProjectDirectory)\bin\vsix_build</VsixBuildDir>
+      <VsixOutputPath>$(MSBuildProjectDirectory)\VS.BasicLang.vsix</VsixOutputPath>
+    </PropertyGroup>
+
+    <!-- Clean and create build directory -->
+    <RemoveDir Directories="$(VsixBuildDir)" />
+    <MakeDir Directories="$(VsixBuildDir)" />
+
+    <!-- Copy main assembly only -->
+    <Copy SourceFiles="$(OutputPath)VS.BasicLang.dll" DestinationFolder="$(VsixBuildDir)" />
+
+    <!-- Copy clean extension.vsixmanifest -->
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\extension.vsixmanifest"
+          DestinationFiles="$(VsixBuildDir)\extension.vsixmanifest" />
+
+    <!-- Delete old VSIX -->
+    <Delete Files="$(VsixOutputPath)" Condition="Exists('$(VsixOutputPath)')" />
+
+    <!-- Create VSIX using PowerShell for proper OPC format -->
+    <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\create-vsix.ps1&quot; -BuildDir &quot;$(VsixBuildDir)&quot; -OutputPath &quot;$(VsixOutputPath)&quot;" />
+
+    <!-- Cleanup -->
+    <RemoveDir Directories="$(VsixBuildDir)" />
+
+    <Message Text="Created VSIX: $(VsixOutputPath)" Importance="high" />
+  </Target>
 </Project>

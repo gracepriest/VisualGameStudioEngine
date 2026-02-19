@@ -2,11 +2,11 @@
 //
 
 #include <iostream>
-#include "Framework.h"
+#include "../VisualGameStudioEngine/framework.h"
 #include "TitleScene.h"
 
-// Link to your DLL's import library
-#pragma comment(lib, "VisualGameStudioEngine.lib")  // Change this to your actual DLL name
+// Link to import library
+#pragma comment(lib, "VisualGameStudioEngine.lib")  
 
 
 

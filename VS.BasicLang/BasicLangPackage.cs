@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
 using Task = System.Threading.Tasks.Task;
 
 namespace VS.BasicLang;
@@ -14,24 +13,9 @@ namespace VS.BasicLang;
 [Guid(PackageGuidString)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
-[ProvideLanguageService(typeof(BasicLangLanguageService), BasicLangConstants.LanguageName, 0,
-    CodeSense = true,
-    RequestStockColors = false,
-    EnableCommenting = true,
-    EnableFormatSelection = true,
-    EnableLineNumbers = true,
-    DefaultToInsertSpaces = true,
-    ShowCompletion = true,
-    ShowSmartIndent = true,
-    ShowDropDownOptions = true)]
-[ProvideLanguageExtension(typeof(BasicLangLanguageService), ".bl")]
-[ProvideLanguageExtension(typeof(BasicLangLanguageService), ".bas")]
-[ProvideLanguageExtension(typeof(BasicLangLanguageService), ".blproj")]
 public sealed class BasicLangPackage : AsyncPackage
 {
     public const string PackageGuidString = "95a8f3e1-1234-4567-8901-abcdef123456";
-
-    private BasicLangLanguageService? _languageService;
 
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
@@ -40,20 +24,8 @@ public sealed class BasicLangPackage : AsyncPackage
         // Switch to main thread for UI operations
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
-        // Initialize the language service
-        _languageService = new BasicLangLanguageService();
-
         // Register commands
         await BasicLangCommands.InitializeAsync(this);
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _languageService?.Dispose();
-        }
-        base.Dispose(disposing);
     }
 }
 

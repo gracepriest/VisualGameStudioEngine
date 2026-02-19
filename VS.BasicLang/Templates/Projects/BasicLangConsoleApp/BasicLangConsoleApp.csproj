@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>$safeprojectname$</RootNamespace>
+    <AssemblyName>$safeprojectname$</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <!-- BasicLang project marker -->
+    <IsBasicLangProject>true</IsBasicLangProject>
+    <!-- Disable C# compilation - we use BasicLang -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BasicLang source files -->
+    <None Include="**\*.bas" />
+    <None Include="**\*.bl" />
+  </ItemGroup>
+
+  <!-- BasicLang build target -->
+  <Target Name="BasicLangBuild" BeforeTargets="Build">
+    <Message Text="BasicLang project - use BasicLang.exe to compile .bas files" Importance="high" />
+  </Target>
+</Project>

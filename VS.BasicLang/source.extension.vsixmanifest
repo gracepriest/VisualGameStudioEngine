@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="VS.BasicLang.95a8f3e1-1234-4567-8901-abcdef123456" Version="1.0.0" Language="en-US" Publisher="Visual Game Studio" />
+    <Identity Id="VS.BasicLang.95a8f3e1-1234-4567-8901-abcdef123456" Version="1.3.0" Language="en-US" Publisher="Visual Game Studio" />
     <DisplayName>BasicLang Language Support</DisplayName>
-    <Description xml:space="preserve">Language support for BasicLang - a modern BASIC-inspired programming language designed for game development. Provides syntax highlighting, IntelliSense, code navigation, debugging, and more.</Description>
+    <Description xml:space="preserve">Language support for BasicLang - a modern BASIC-inspired programming language for game development. Includes syntax highlighting, IntelliSense, and project templates.</Description>
     <MoreInfo>https://github.com/visualgamestudio/basiclang</MoreInfo>
     <GettingStartedGuide>https://github.com/visualgamestudio/basiclang/wiki</GettingStartedGuide>
     <ReleaseNotes>Initial release of BasicLang for Visual Studio.</ReleaseNotes>
@@ -27,8 +27,8 @@
     <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,18.0)" DisplayName="Visual Studio core editor" />
   </Prerequisites>
   <Assets>
-    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="File" Path="BasicLang.pkgdef" />
-    <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%|" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="File" Path="VS.BasicLang.dll" />
+    <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="File" Path="VS.BasicLang.dll" />
     <Asset Type="Microsoft.VisualStudio.ProjectTemplate" d:Source="File" Path="ProjectTemplates" />
   </Assets>
 </PackageManifest>

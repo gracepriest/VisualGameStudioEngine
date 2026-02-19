@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  BasicLang.targets - MSBuild targets for BasicLang projects
+  This file provides the BasicLang capability for CPS and integrates with the build system.
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <!-- Declare BasicLang capability for CPS -->
+  <ItemGroup>
+    <ProjectCapability Include="BasicLang" />
+    <ProjectCapability Include="DependenciesTree" />
+    <ProjectCapability Include="PackageReferences" />
+    <ProjectCapability Include="AssemblyReferences" />
+  </ItemGroup>
+
+  <!-- Default properties for BasicLang projects -->
+  <PropertyGroup>
+    <IsBasicLangProject Condition="'$(IsBasicLangProject)' == ''">true</IsBasicLangProject>
+    <BasicLangBackend Condition="'$(BasicLangBackend)' == ''">CSharp</BasicLangBackend>
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == ''">BasicLang.exe</BasicLangCompilerPath>
+    <Language>BasicLang</Language>
+    <LanguageTargets>$(MSBuildThisFileDirectory)BasicLang.targets</LanguageTargets>
+  </PropertyGroup>
+
+  <!-- BasicLang file item types -->
+  <ItemGroup>
+    <AvailableItemName Include="BasicLangCompile" />
+  </ItemGroup>
+
+  <!-- Compile BasicLang files before CoreCompile -->
+  <Target Name="BasicLangCompile" BeforeTargets="CoreCompile" Condition="'@(BasicLangCompile)' != ''">
+    <Message Text="Compiling BasicLang files: @(BasicLangCompile)" Importance="high" />
+
+    <!-- Generate C# from BasicLang -->
+    <Exec Command="&quot;$(BasicLangCompilerPath)&quot; compile &quot;%(BasicLangCompile.Identity)&quot; --target=$(BasicLangBackend) --output=&quot;$(IntermediateOutputPath)%(BasicLangCompile.Filename).cs&quot;"
+          Condition="'$(BasicLangBackend)' == 'CSharp'"
+          ContinueOnError="false" />
+
+    <!-- Add generated C# to compile items -->
+    <ItemGroup Condition="'$(BasicLangBackend)' == 'CSharp'">
+      <Compile Include="$(IntermediateOutputPath)%(BasicLangCompile.Filename).cs" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Clean BasicLang output -->
+  <Target Name="BasicLangClean" BeforeTargets="CoreClean">
+    <Delete Files="$(IntermediateOutputPath)*.cs" Condition="'$(BasicLangBackend)' == 'CSharp'" />
+  </Target>
+
+</Project>

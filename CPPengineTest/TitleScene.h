@@ -3,7 +3,7 @@
 
 // title scene example
 #include "SceneBase.h"
-#include "framework.h"
+#include "../VisualGameStudioEngine/framework.h"
 #include <iostream>
 #include <string>
 

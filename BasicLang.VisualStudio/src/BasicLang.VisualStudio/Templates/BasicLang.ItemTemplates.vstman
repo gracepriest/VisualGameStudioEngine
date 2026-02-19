@@ -1,0 +1,50 @@
+<VSTemplateManifest Version="1.0" Locale="1033" xmlns="http://schemas.microsoft.com/developer/vstemplatemanifest/2015">
+  <VSTemplateContainer TemplateType="Item">
+    <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
+    <TemplateFileName>Class.zip</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>BasicLang Class</Name>
+        <Description>An empty class for the BasicLang programming language.</Description>
+        <ProjectType>BasicLang</ProjectType>
+        <LanguageTag>BasicLang</LanguageTag>
+        <SortOrder>1000</SortOrder>
+        <TemplateID>BasicLang.Class</TemplateID>
+        <DefaultName>Class</DefaultName>
+        <ProvideDefaultName>true</ProvideDefaultName>
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
+  <VSTemplateContainer TemplateType="Item">
+    <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
+    <TemplateFileName>Module.zip</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>BasicLang Module</Name>
+        <Description>A module for the BasicLang programming language.</Description>
+        <ProjectType>BasicLang</ProjectType>
+        <LanguageTag>BasicLang</LanguageTag>
+        <SortOrder>1001</SortOrder>
+        <TemplateID>BasicLang.Module</TemplateID>
+        <DefaultName>Module</DefaultName>
+        <ProvideDefaultName>true</ProvideDefaultName>
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
+  <VSTemplateContainer TemplateType="Item">
+    <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
+    <TemplateFileName>Interface.zip</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>BasicLang Interface</Name>
+        <Description>An interface for the BasicLang programming language.</Description>
+        <ProjectType>BasicLang</ProjectType>
+        <LanguageTag>BasicLang</LanguageTag>
+        <SortOrder>1002</SortOrder>
+        <TemplateID>BasicLang.Interface</TemplateID>
+        <DefaultName>IInterface</DefaultName>
+        <ProvideDefaultName>true</ProvideDefaultName>
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
+</VSTemplateManifest>

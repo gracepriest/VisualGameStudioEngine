@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Project" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>BasicLang Console Application</Name>
+    <Description>A console application using the BasicLang programming language</Description>
+    <Icon>__TemplateIcon.png</Icon>
+    <ProjectType>BasicLang</ProjectType>
+    <ProjectSubType></ProjectSubType>
+    <TemplateID>BasicLangConsoleApp</TemplateID>
+    <TemplateGroupID>BasicLang</TemplateGroupID>
+    <SortOrder>1000</SortOrder>
+    <CreateNewFolder>true</CreateNewFolder>
+    <DefaultName>BasicLangConsoleApp</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <LocationField>Enabled</LocationField>
+    <EnableLocationBrowseButton>true</EnableLocationBrowseButton>
+    <LanguageTag>BasicLang</LanguageTag>
+    <PlatformTag>Windows</PlatformTag>
+    <ProjectTypeTag>Console</ProjectTypeTag>
+    <Hidden>false</Hidden>
+  </TemplateData>
+  <TemplateContent>
+    <Project File="ConsoleApp.blproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true" TargetFileName="Program.bas">Program.bas</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>

@@ -1,0 +1,78 @@
+<VSTemplateManifest Version="1.0" Locale="1033" xmlns="http://schemas.microsoft.com/developer/vstemplatemanifest/2015">
+  <VSTemplateContainer TemplateType="Project">
+    <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
+    <TemplateFileName>ConsoleApp.zip</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>BasicLang Console Application</Name>
+        <Description>A console application project for the BasicLang programming language.</Description>
+        <ProjectType>BasicLang</ProjectType>
+        <LanguageTag>BasicLang</LanguageTag>
+        <PlatformTag>Windows</PlatformTag>
+        <ProjectTypeTag>Console</ProjectTypeTag>
+        <SortOrder>1000</SortOrder>
+        <TemplateID>BasicLang.ConsoleApp</TemplateID>
+        <CreateNewFolder>true</CreateNewFolder>
+        <DefaultName>BasicLangConsoleApp</DefaultName>
+        <ProvideDefaultName>true</ProvideDefaultName>
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
+  <VSTemplateContainer TemplateType="Project">
+    <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
+    <TemplateFileName>ClassLibrary.zip</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>BasicLang Class Library</Name>
+        <Description>A class library project for the BasicLang programming language.</Description>
+        <ProjectType>BasicLang</ProjectType>
+        <LanguageTag>BasicLang</LanguageTag>
+        <PlatformTag>Windows</PlatformTag>
+        <ProjectTypeTag>Library</ProjectTypeTag>
+        <SortOrder>1001</SortOrder>
+        <TemplateID>BasicLang.ClassLibrary</TemplateID>
+        <CreateNewFolder>true</CreateNewFolder>
+        <DefaultName>BasicLangLibrary</DefaultName>
+        <ProvideDefaultName>true</ProvideDefaultName>
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
+  <VSTemplateContainer TemplateType="Project">
+    <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
+    <TemplateFileName>WinFormsApp.zip</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>BasicLang Windows Forms App</Name>
+        <Description>A Windows Forms desktop application for the BasicLang programming language.</Description>
+        <ProjectType>BasicLang</ProjectType>
+        <LanguageTag>BasicLang</LanguageTag>
+        <PlatformTag>Windows</PlatformTag>
+        <ProjectTypeTag>Desktop</ProjectTypeTag>
+        <SortOrder>1002</SortOrder>
+        <TemplateID>BasicLang.WinFormsApp</TemplateID>
+        <CreateNewFolder>true</CreateNewFolder>
+        <DefaultName>BasicLangWinFormsApp</DefaultName>
+        <ProvideDefaultName>true</ProvideDefaultName>
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
+  <VSTemplateContainer TemplateType="Project">
+    <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
+    <TemplateFileName>WpfApp.zip</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>BasicLang WPF Application</Name>
+        <Description>A WPF desktop application for the BasicLang programming language.</Description>
+        <ProjectType>BasicLang</ProjectType>
+        <LanguageTag>BasicLang</LanguageTag>
+        <PlatformTag>Windows</PlatformTag>
+        <ProjectTypeTag>Desktop</ProjectTypeTag>
+        <SortOrder>1003</SortOrder>
+        <TemplateID>BasicLang.WpfApp</TemplateID>
+        <CreateNewFolder>true</CreateNewFolder>
+        <DefaultName>BasicLangWpfApp</DefaultName>
+        <ProvideDefaultName>true</ProvideDefaultName>
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
+</VSTemplateManifest>

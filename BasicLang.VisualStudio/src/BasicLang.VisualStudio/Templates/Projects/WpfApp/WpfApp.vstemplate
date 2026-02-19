@@ -3,9 +3,7 @@
   <TemplateData>
     <Name>BasicLang WPF Application</Name>
     <Description>A WPF desktop application for the BasicLang programming language.</Description>
-    <Icon>__TemplateIcon.png</Icon>
-    <ProjectType>CSharp</ProjectType>
-    <ProjectSubType>BasicLang</ProjectSubType>
+    <ProjectType>BasicLang</ProjectType>
     <LanguageTag>BasicLang</LanguageTag>
     <PlatformTag>Windows</PlatformTag>
     <ProjectTypeTag>Desktop</ProjectTypeTag>

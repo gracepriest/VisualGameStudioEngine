@@ -339,8 +339,9 @@ Key NuGet Packages:
 - ✅ Options pages:
   - `Options/GeneralOptionsPage.cs` - LSP path, auto-start, semantic highlighting
   - `Options/CompilerOptionsPage.cs` - Backend, framework, warnings, optimizations
-- ✅ Project templates (created but not yet wired into VSIX):
+- ✅ Project templates (wired into VSIX v2.2.0):
   - ConsoleApp, ClassLibrary, WinFormsApp, WpfApp
+  - Use `Microsoft.NET.Sdk` with `ProjectTypeGuids` for CPS integration
 - ✅ Item templates:
   - Class, Module, Interface
 - ✅ MSBuild SDK (`BasicLang.SDK`):
@@ -351,7 +352,6 @@ Key NuGet Packages:
 - ✅ Manual pkgdef file created (auto-generation failed with SDK-style project)
 
 **Not Yet Implemented:**
-- ❌ Templates not wired into VSIX (disabled due to SDK-style project complexities)
 - ❌ Debug launch provider (CPS debug APIs not publicly available)
 - ❌ BasicLang.exe not bundled in SDK tools/ folder
 
@@ -387,3 +387,197 @@ dotnet pack -c Release
 - **Commands**: BasicLang menu with Build, Run, Change Backend, Restart Server
 - **Options**: Tools → Options → BasicLang (General, Compiler settings)
 - **File Icons**: VB-style icons for BasicLang files in Solution Explorer
+
+#### VSIX Manifest Prerequisites Fix (January 2026)
+
+**Problem**: VSIX installation failed with `MissingReferencesException` for `Microsoft.VisualStudio.Component.CoreEditor`.
+
+**Root Cause**: The manifest had `CoreEditor` in BOTH `Dependencies` AND `Prerequisites` sections:
+```xml
+<Dependencies>
+  <Dependency Id="Microsoft.VisualStudio.Component.CoreEditor" ... />  <!-- WRONG -->
+</Dependencies>
+<Prerequisites>
+  <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" ... />
+</Prerequisites>
+```
+
+The VSIX installer incorrectly treated the `Dependency` element as a reference to another VSIX extension (not a VS Setup component), causing installation to fail.
+
+**Solution**:
+- Remove `CoreEditor` from `Dependencies` section (keep only .NET Framework)
+- Keep `CoreEditor` only in `Prerequisites` section with open-ended version range
+
+**Correct manifest format** (`source.extension.vsixmanifest`):
+```xml
+<Dependencies>
+  <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.8,)" />
+</Dependencies>
+<Prerequisites>
+  <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,)" DisplayName="Visual Studio core editor" />
+</Prerequisites>
+```
+
+**Key insight**:
+- `Dependencies` = Other VSIX extensions or .NET Framework requirements
+- `Prerequisites` = VS Setup components (like CoreEditor, Roslyn, etc.)
+- Never put VS Setup component IDs in `Dependencies` - only in `Prerequisites`
+
+#### Project Templates Fix (January 2026)
+
+**Problem**: Templates were created but not appearing in VS 2022 "New Project" dialog.
+
+**Root Causes**:
+1. Templates used non-existent `BasicLang.SDK/1.0.0` SDK reference
+2. VSSDK template processing (`VSTemplate` items) doesn't work with SDK-style projects
+3. pkgdef was missing project factory registration
+4. Templates weren't being included in VSIX
+
+**Solution - Version 2.2.0**:
+
+1. **Manual template zip creation** - Custom MSBuild targets in csproj:
+   ```xml
+   <Target Name="CreateTemplateZips" BeforeTargets="CreateVsixContainer">
+     <Exec Command="powershell Compress-Archive -Path 'Templates\Projects\ConsoleApp\*' -DestinationPath 'ProjectTemplates\BasicLang\ConsoleApp.zip'" />
+   </Target>
+   <Target Name="AddTemplatesToVsix" AfterTargets="_CreateVsixAfterBuild">
+     <!-- PowerShell adds template zips to VSIX after creation -->
+   </Target>
+   ```
+
+2. **Templates use standard SDK** with BasicLang project type GUID:
+   ```xml
+   <Project Sdk="Microsoft.NET.Sdk">
+     <PropertyGroup>
+       <ProjectTypeGuids>{95a8f3e1-1234-4567-8903-abcdef123456}</ProjectTypeGuids>
+       <IsBasicLangProject>true</IsBasicLangProject>
+       <BasicLangBackend>CSharp</BasicLangBackend>
+     </PropertyGroup>
+     <ItemGroup>
+       <BasicLangCompile Include="**\*.bas" />
+     </ItemGroup>
+   </Project>
+   ```
+
+3. **pkgdef project factory registration**:
+   ```
+   [$RootKey$\Projects\{95a8f3e1-1234-4567-8903-abcdef123456}]
+   @="BasicLang"
+   "DisplayName"="BasicLang"
+   "Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+   "ProjectTemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
+   "Language(VsTemplate)"="BasicLang"
+
+   [$RootKey$\NewProjectTemplates\TemplateDirs\{95a8f3e1-1234-4567-8901-abcdef123456}\/1]
+   @="BasicLang"
+   "TemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
+   ```
+
+4. **vstemplate uses BasicLang project type**:
+   ```xml
+   <ProjectType>BasicLang</ProjectType>
+   <LanguageTag>BasicLang</LanguageTag>
+   ```
+
+5. **Removed icon references** from vstemplates (icons didn't exist)
+
+**Key Files Modified**:
+- `BasicLang.VisualStudio.csproj` - Added `CreateTemplateZips` and `AddTemplatesToVsix` targets
+- `BasicLang.VisualStudio.pkgdef` - Added project factory and template directory registration
+- `Templates/Projects/*/Project.blproj` - Changed from `BasicLang.SDK` to `Microsoft.NET.Sdk` with `ProjectTypeGuids`
+- `Templates/Projects/*/*.vstemplate` - Changed `<ProjectType>` from `CSharp` to `BasicLang`
+- `source.extension.vsixmanifest` - Version 2.2.0, added template assets
+
+**VSIX Contents** (after build):
+```
+ProjectTemplates/BasicLang/ConsoleApp.zip
+ProjectTemplates/BasicLang/ClassLibrary.zip
+ProjectTemplates/BasicLang/WinFormsApp.zip
+ProjectTemplates/BasicLang/WpfApp.zip
+ItemTemplates/BasicLang/Class.zip
+ItemTemplates/BasicLang/Module.zip
+ItemTemplates/BasicLang/Interface.zip
+```
+
+**To find templates in VS 2022**:
+1. File → New → Project
+2. Search "BasicLang"
+3. If not appearing, run `devenv.exe /updateConfiguration`
+
+#### Menu Not Appearing Fix (January 2026)
+
+**Problem**: Extension installed but BasicLang menu didn't appear in VS 2022.
+
+**Root Cause**: Manual pkgdef was missing the Menu resource registration. The `[ProvideMenuResource]` attribute generates a pkgdef entry, but since we use `GeneratePkgDefFile=false`, it wasn't included.
+
+**Solution**: Add menu registration to manual pkgdef:
+```
+[$RootKey$\Menus]
+"{95a8f3e1-1234-4567-8901-abcdef123456}"=", Menus.ctmenu, 1"
+```
+
+**Key insight**: When using manual pkgdef (`GeneratePkgDefFile=false`), you must manually add entries for ALL package attributes:
+- `[ProvideMenuResource]` → `[$RootKey$\Menus]` entry
+- `[ProvideAutoLoad]` → `[$RootKey$\AutoLoadPackages\{context-guid}]` entries
+- `[ProvideProjectFactory]` → `[$RootKey$\Projects\{guid}]` entries
+- `[ProvideOptionPage]` → Would need option page registration (auto-handled by VS)
+
+#### Template Manifest Files (VS 2017+ Requirement)
+
+**Problem**: Templates with custom `<ProjectType>BasicLang</ProjectType>` weren't appearing in New Project dialog.
+
+**Root Cause**: Starting in VS 2017, template scanning is no longer automatic. Extensions must provide `.vstman` (Visual Studio Template Manifest) files.
+
+**Solution**: Created template manifest files:
+- `Templates/BasicLang.ProjectTemplates.vstman` - Describes all project templates
+- `Templates/BasicLang.ItemTemplates.vstman` - Describes all item templates
+
+**vstman format**:
+```xml
+<VSTemplateManifest Version="1.0" Locale="1033" xmlns="http://schemas.microsoft.com/developer/vstemplatemanifest/2015">
+  <VSTemplateContainer TemplateType="Project">
+    <RelativePathOnDisk>BasicLang\ConsoleApp</RelativePathOnDisk>
+    <TemplateFileName>ConsoleApp.vstemplate</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>BasicLang Console Application</Name>
+        <ProjectType>BasicLang</ProjectType>
+        <!-- ... other metadata ... -->
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
+</VSTemplateManifest>
+```
+
+**Also added TemplateEngine registration to pkgdef**:
+```
+[$RootKey$\TemplateEngine\Templates\BasicLang.VisualStudio\2.3.0]
+"InstalledPath"="$PackageFolder$\ProjectTemplates"
+
+[$RootKey$\TemplateEngine\Templates\BasicLang.VisualStudio.Items\2.3.0]
+"InstalledPath"="$PackageFolder$\ItemTemplates"
+```
+
+#### Current VSIX Version: 2.3.0
+
+**VSIX Contents**:
+```
+BasicLang.VisualStudio.dll
+BasicLang.VisualStudio.pkgdef
+BuildSystem/BasicLang.targets
+LanguageService/BasicLangGrammar.json
+ProjectTemplates/BasicLang/*.zip (4 templates)
+ProjectTemplates/BasicLang.ProjectTemplates.vstman
+ItemTemplates/BasicLang/*.zip (3 templates)
+ItemTemplates/BasicLang.ItemTemplates.vstman
+```
+
+**Installation Steps**:
+1. Close all VS instances
+2. Delete old extension from `%LOCALAPPDATA%\Microsoft\VisualStudio\17.0_*\Extensions\`
+3. Clear ComponentModelCache: `rd /s /q "%LOCALAPPDATA%\Microsoft\VisualStudio\17.0_*\ComponentModelCache"`
+4. Install VSIX
+5. Run `devenv.exe /updateConfiguration`
+6. Start VS 2022
+
+**Debugging**: If issues persist, run `devenv.exe /log` and check `%APPDATA%\Microsoft\VisualStudio\17.0_*\ActivityLog.xml`

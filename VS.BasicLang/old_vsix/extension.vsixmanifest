@@ -1,0 +1,32 @@
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
+  <Metadata>
+    <Identity Id="VS.BasicLang.95a8f3e1-1234-4567-8901-abcdef123456" Version="1.0.0" Language="en-US" Publisher="Visual Game Studio" />
+    <DisplayName>BasicLang Language Support</DisplayName>
+    <Description xml:space="preserve">Language support for BasicLang - a modern BASIC-inspired programming language designed for game development. Provides syntax highlighting, IntelliSense, code navigation, debugging, and more.</Description>
+    <MoreInfo>https://github.com/visualgamestudio/basiclang</MoreInfo>
+    <GettingStartedGuide>https://github.com/visualgamestudio/basiclang/wiki</GettingStartedGuide>
+    <ReleaseNotes>Initial release of BasicLang for Visual Studio.</ReleaseNotes>
+    <Tags>basiclang, basic, programming language, game development, LSP</Tags>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Professional" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 18.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" Version="[4.8,)" />
+  </Dependencies>
+  <Prerequisites>
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,18.0)" DisplayName="Visual Studio core editor" />
+  </Prerequisites>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.VsPackage" Path="BasicLang.pkgdef" />
+    <Asset Type="Microsoft.VisualStudio.MefComponent" Path="VS.BasicLang.dll" />
+  </Assets>
+</PackageManifest>

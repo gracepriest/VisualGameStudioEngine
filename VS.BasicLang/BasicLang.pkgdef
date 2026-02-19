@@ -1,55 +1,10 @@
-; BasicLang Language Registration
+; BasicLang Package Registration
+; Note: Language service is provided via MEF-exported ILanguageClient (LSP)
+; File extension associations are handled by ContentType MEF exports
 
-; Register the language
-[$RootKey$\Languages\Language Services\BasicLang]
-"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
-"LangResID"=dword:00000000
-"RequestStockColors"=dword:00000000
-"DefaultToInsertSpaces"=dword:00000001
-"ShowCompletion"=dword:00000001
-"ShowSmartIndent"=dword:00000001
-"EnableLineNumbers"=dword:00000001
-"EnableCommenting"=dword:00000001
-"CodeSense"=dword:00000001
-
-; File extensions
-[$RootKey$\Languages\File Extensions\.bl]
-@="BasicLang"
-
-[$RootKey$\Languages\File Extensions\.bas]
-@="BasicLang"
-
-[$RootKey$\Languages\File Extensions\.blproj]
-@="BasicLang"
-
-; Editor settings
-[$RootKey$\Languages\Language Services\BasicLang\EditorToolsOptions]
-"ShowSmartIndent"=dword:00000001
-"IndentSize"=dword:00000004
-"TabSize"=dword:00000004
-"InsertTabs"=dword:00000000
-
-; Colorization - Keywords
-[$RootKey$\Languages\Language Services\BasicLang\Colorizer]
-@="BasicLangColorizer"
-
-; Debug adapter
-[$RootKey$\AD7Metrics\Engine\{95a8f3e1-1234-4567-8903-abcdef123456}]
-"CLSID"="{95a8f3e1-1234-4567-8903-abcdef123456}"
-"ProgramProvider"="{95a8f3e1-1234-4567-8904-abcdef123456}"
-"Attach"=dword:00000001
-"AddressBreakpointSupport"=dword:00000000
-"AutoSelectPriority"=dword:00000004
-"CallStackSupport"=dword:00000001
-"ConditionalBreakpointSupport"=dword:00000001
-"DataBreakpointSupport"=dword:00000000
-"Disassembly"=dword:00000000
-"Exceptions"=dword:00000001
-"FunctionBreakpointSupport"=dword:00000001
-"HitCountBreakpointSupport"=dword:00000001
-"Name"="BasicLang"
-"PortSupplier"="{00000000-0000-0000-0000-000000000000}"
-"SetNextStatement"=dword:00000001
-
-[$RootKey$\AD7Metrics\Engine\{95a8f3e1-1234-4567-8903-abcdef123456}\LanguageMapping]
-"BasicLang"="{95a8f3e1-1234-4567-8905-abcdef123456}"
+; Package registration
+[$RootKey$\Packages\{95a8f3e1-1234-4567-8901-abcdef123456}]
+@="BasicLang Language Support"
+"InprocServer32"="$WinDir$\SYSTEM32\MSCOREE.DLL"
+"Class"="VS.BasicLang.BasicLangPackage"
+"CodeBase"="$PackageFolder$\VS.BasicLang.dll"

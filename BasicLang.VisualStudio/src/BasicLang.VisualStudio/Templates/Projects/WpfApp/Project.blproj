@@ -1,12 +1,28 @@
-<Project Sdk="BasicLang.SDK/1.0.0">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- BasicLang Project Type -->
+    <ProjectTypeGuids>{95a8f3e1-1234-4567-8903-abcdef123456}</ProjectTypeGuids>
+    <IsBasicLangProject>true</IsBasicLangProject>
+
+    <!-- Output settings -->
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <Backend>CSharp</Backend>
     <UseWPF>true</UseWPF>
+
+    <!-- BasicLang compiler settings -->
+    <BasicLangBackend>CSharp</BasicLangBackend>
     <RootNamespace>$safeprojectname$</RootNamespace>
     <AssemblyName>$safeprojectname$</AssemblyName>
   </PropertyGroup>
+
+  <!-- Import BasicLang build targets -->
+  <Import Project="$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets" Condition="Exists('$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets')" />
+
+  <!-- BasicLang source files -->
+  <ItemGroup>
+    <BasicLangCompile Include="**\*.bas" />
+    <BasicLangCompile Include="**\*.bl" />
+  </ItemGroup>
 
 </Project>

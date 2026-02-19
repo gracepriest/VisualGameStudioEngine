@@ -1,35 +1,150 @@
-; BasicLang Language Support Package Registration
+; BasicLang Visual Studio Extension - Registry Entries
+; Version 2.3.0
 
+; ============================================
+; Package Registration
+; ============================================
 [$RootKey$\Packages\{95a8f3e1-1234-4567-8901-abcdef123456}]
-@="BasicLang.VisualStudio.BasicLangPackage"
+@="BasicLangPackage"
 "InprocServer32"="$WinDir$\SYSTEM32\MSCOREE.DLL"
 "Class"="BasicLang.VisualStudio.BasicLangPackage"
 "CodeBase"="$PackageFolder$\BasicLang.VisualStudio.dll"
+"AllowsBackgroundLoad"=dword:00000001
 
-; Content type definitions
-[$RootKey$\ContentTypes]
+; Menu resources (ProvideMenuResource registration)
+[$RootKey$\Menus]
+"{95a8f3e1-1234-4567-8901-abcdef123456}"=", Menus.ctmenu, 1"
 
-; BasicLang file extensions
-[$RootKey$\ContentTypes\.bas]
+; ============================================
+; Project Factory Registration
+; ============================================
+[$RootKey$\Projects\{95a8f3e1-1234-4567-8903-abcdef123456}]
+@="BasicLangProjectFactory"
+"DisplayName"="BasicLang"
+"DisplayProjectFileExtensions"="BasicLang Project Files (*.blproj);*.blproj"
+"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+"DefaultProjectExtension"="blproj"
+"PossibleProjectExtensions"="blproj"
+"ProjectTemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
+"ItemTemplatesDir"="$PackageFolder$\ItemTemplates\BasicLang"
+"Language(VsTemplate)"="BasicLang"
+"EditorFactoryNotify"=dword:00000000
+
+; Project file extension registration
+[$RootKey$\Projects\{95a8f3e1-1234-4567-8903-abcdef123456}\FileExtensions\.blproj]
+"DefaultBuildAction"="None"
+
+; Additional extensions
+[$RootKey$\Projects\{95a8f3e1-1234-4567-8903-abcdef123456}\FileExtensions\.bas]
+"DefaultBuildAction"="BasicLangCompile"
+
+[$RootKey$\Projects\{95a8f3e1-1234-4567-8903-abcdef123456}\FileExtensions\.bl]
+"DefaultBuildAction"="BasicLangCompile"
+
+; ============================================
+; NewProjectTemplates - Template Directory Registration
+; ============================================
+; Register under project factory GUID
+[$RootKey$\NewProjectTemplates\TemplateDirs\{95a8f3e1-1234-4567-8903-abcdef123456}\/1]
 @="BasicLang"
+"SortPriority"=dword:00000028
+"TemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
+
+; ============================================
+; Content Type Registration
+; ============================================
+[$RootKey$\ContentTypes\.bas]
+@="basiclang"
 
 [$RootKey$\ContentTypes\.bl]
-@="BasicLang"
+@="basiclang"
 
 [$RootKey$\ContentTypes\.blproj]
-@="BasicLang"
+@="basiclang"
 
-; Language service
+; ============================================
+; Language Service Registration
+; ============================================
 [$RootKey$\Languages\Language Services\BasicLang]
-@="{95a8f3e1-1234-4567-8901-abcdef123456}"
+@="{95a8f3e1-1234-4567-8906-abcdef123456}"
 "Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+"LangResID"=dword:00000000
+"ShowCompletion"=dword:00000001
+"ShowSmartIndent"=dword:00000001
+"ShowMatchingBrace"=dword:00000001
+"RequestStockColors"=dword:00000000
+"CodeSense"=dword:00000001
+"QuickInfo"=dword:00000001
 
-; File extensions
+; File extension to language mapping
 [$RootKey$\Languages\File Extensions\.bas]
-@="{95a8f3e1-1234-4567-8901-abcdef123456}"
+@="{95a8f3e1-1234-4567-8906-abcdef123456}"
 
 [$RootKey$\Languages\File Extensions\.bl]
-@="{95a8f3e1-1234-4567-8901-abcdef123456}"
+@="{95a8f3e1-1234-4567-8906-abcdef123456}"
 
 [$RootKey$\Languages\File Extensions\.blproj]
-@="{95a8f3e1-1234-4567-8901-abcdef123456}"
+@="{95a8f3e1-1234-4567-8906-abcdef123456}"
+
+; ============================================
+; Auto Load Package Contexts
+; ============================================
+; Load when solution exists
+[$RootKey$\AutoLoadPackages\{f1536ef8-92ec-443c-9ed6-f36fb6c5b103}]
+"{95a8f3e1-1234-4567-8901-abcdef123456}"=dword:00000002
+
+; Load when no solution
+[$RootKey$\AutoLoadPackages\{adfc4e64-0397-11d1-9f4e-00a0c911004f}]
+"{95a8f3e1-1234-4567-8901-abcdef123456}"=dword:00000002
+
+; Load when solution has multiple projects
+[$RootKey$\AutoLoadPackages\{8fe2df1d-e0da-4ebe-9d5c-415d40e487b5}]
+"{95a8f3e1-1234-4567-8901-abcdef123456}"=dword:00000002
+
+; Load when solution has single project
+[$RootKey$\AutoLoadPackages\{fbaee8ff-3495-4fa1-b251-0cc13b1f1e0b}]
+"{95a8f3e1-1234-4567-8901-abcdef123456}"=dword:00000002
+
+; ============================================
+; Solution/Project Persistence
+; ============================================
+[$RootKey$\SolutionPersistence\{95a8f3e1-1234-4567-8903-abcdef123456}]
+@="BasicLang"
+
+; ============================================
+; MSBuild Extension Registration
+; ============================================
+; This tells VS where to find BasicLang.targets
+[$RootKey$\MSBuild\SafeImports]
+"BasicLang"="$PackageFolder$\BuildSystem\BasicLang.targets"
+
+; ============================================
+; TemplateEngine Registration (Required for VS 2017+)
+; This tells VS where to find templates - scanning is no longer automatic
+; ============================================
+[$RootKey$\TemplateEngine\Templates\BasicLang.VisualStudio\2.4.0]
+"InstalledPath"="$PackageFolder$\ProjectTemplates"
+
+[$RootKey$\TemplateEngine\Templates\BasicLang.VisualStudio.Items\2.4.0]
+"InstalledPath"="$PackageFolder$\ItemTemplates"
+
+; ============================================
+; Language Templates Registration
+; This adds "BasicLang" to the New Project dialog language filter
+; ============================================
+[$RootKey$\NewProjectTemplates\LanguageTemplates\BasicLang]
+@="BasicLang"
+"DisplayName"="BasicLang"
+"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+"SortPriority"=dword:00000064
+
+; Register BasicLang as a template language
+[$RootKey$\Languages\Language Services\BasicLang\Templates]
+"ProjectTemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
+"ItemTemplatesDir"="$PackageFolder$\ItemTemplates\BasicLang"
+
+; ============================================
+; Template Hosting
+; ============================================
+[$RootKey$\TemplateHostingAssemblies]
+"{95a8f3e1-1234-4567-8901-abcdef123456}"="$PackageFolder$\BasicLang.VisualStudio.dll"
