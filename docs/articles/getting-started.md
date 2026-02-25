@@ -58,7 +58,7 @@ End Sub
 
 ```
 MyProject/
-├── MyProject.bgproj      # Project file
+├── MyProject.blproj      # Project file
 ├── Main.bas              # Entry point
 ├── Modules/              # Additional modules
 └── Assets/               # Game assets
