@@ -497,6 +497,8 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<BreakpointInfo>> SetBreakpointsAsync(string filePath, IEnumerable<SourceBreakpoint> breakpoints)
     {
+        if (_writer == null) return Array.Empty<BreakpointInfo>();
+
         var bpList = breakpoints.ToList();
 
         try
@@ -541,6 +543,8 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<FunctionBreakpointInfo>> SetFunctionBreakpointsAsync(IEnumerable<FunctionBreakpoint> breakpoints)
     {
+        if (_writer == null) return Array.Empty<FunctionBreakpointInfo>();
+
         var bpList = breakpoints.ToList();
 
         try
@@ -579,6 +583,8 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<StackFrameInfo>> GetStackTraceAsync(int threadId = 1)
     {
+        if (_writer == null) return Array.Empty<StackFrameInfo>();
+
         try
         {
             var result = await SendRequestAsync("stackTrace", new { threadId, startFrame = 0, levels = 100 });
@@ -615,6 +621,8 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<ScopeInfo>> GetScopesAsync(int frameId)
     {
+        if (_writer == null) return Array.Empty<ScopeInfo>();
+
         try
         {
             var result = await SendRequestAsync("scopes", new { frameId });
@@ -643,6 +651,8 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<VariableInfo>> GetVariablesAsync(int variablesReference)
     {
+        if (_writer == null) return Array.Empty<VariableInfo>();
+
         try
         {
             var result = await SendRequestAsync("variables", new { variablesReference });
@@ -672,6 +682,8 @@ public class DebugService : IDebugService
 
     public async Task<EvaluateResult> EvaluateAsync(string expression, int? frameId = null)
     {
+        if (_writer == null) return new EvaluateResult { Result = "Error: Not debugging" };
+
         try
         {
             var args = new Dictionary<string, object> { ["expression"] = expression, ["context"] = "watch" };

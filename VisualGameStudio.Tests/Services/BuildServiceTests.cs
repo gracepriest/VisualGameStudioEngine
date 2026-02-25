@@ -295,10 +295,10 @@ public class DiagnosticItemTests
         Assert.That(item.Severity, Is.EqualTo(DiagnosticSeverity.Error));
     }
 
-    [TestCase(DiagnosticSeverity.Error, 0)]
-    [TestCase(DiagnosticSeverity.Warning, 1)]
-    [TestCase(DiagnosticSeverity.Info, 2)]
-    [TestCase(DiagnosticSeverity.Hidden, 3)]
+    [TestCase(DiagnosticSeverity.Hidden, 0)]
+    [TestCase(DiagnosticSeverity.Info, 1)]
+    [TestCase(DiagnosticSeverity.Warning, 2)]
+    [TestCase(DiagnosticSeverity.Error, 3)]
     public void DiagnosticSeverity_HasCorrectValue(DiagnosticSeverity severity, int expectedValue)
     {
         Assert.That((int)severity, Is.EqualTo(expectedValue));
