@@ -87,7 +87,7 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
             var startInfo = new ProcessStartInfo
             {
                 FileName = serverPath,
-                Arguments = "lsp",
+                Arguments = "--lsp",
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
