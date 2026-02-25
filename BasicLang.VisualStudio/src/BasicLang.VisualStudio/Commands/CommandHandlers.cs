@@ -116,8 +116,12 @@ public static class CommandHandlers
     {
         var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
         var guidPane = Microsoft.VisualStudio.VSConstants.OutputWindowPaneGuid.BuildOutputPane_guid;
-        outputWindow?.CreatePane(ref guidPane, "Build", 1, 1);
-        outputWindow?.GetPane(ref guidPane, out var pane);
+        IVsOutputWindowPane? pane = null;
+        if (outputWindow != null)
+        {
+            outputWindow.CreatePane(ref guidPane, "Build", 1, 1);
+            outputWindow.GetPane(ref guidPane, out pane);
+        }
         pane?.Activate();
 
         var projectFiles = Directory.GetFiles(projectDir, "*.blproj");
