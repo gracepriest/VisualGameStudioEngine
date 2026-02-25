@@ -6,7 +6,8 @@ A step-by-step guide to creating your first game with the VisualGameStudioEngine
 
 - **Visual Studio 2022** (or later) with C++ and VB.NET workloads
 - **.NET 8.0 SDK**
-- **Windows 10/11** (the framework uses Windows-specific APIs for controller rumble and networking)
+- **Windows 10/11** (64-bit)
+- **OpenGL 3.3+** compatible GPU
 
 ## Project Setup
 
@@ -30,28 +31,23 @@ The easiest way to start is by modifying the existing `TestVbDLL` project:
 
 ### Step 1: Basic Window
 
-Create a new VB file with a minimal game loop:
-
 ```vb
 Imports RaylibWrapper.FrameworkWrapper
 
 Module MyFirstGame
     Sub Main()
-        ' Create a 800x600 window
+        ' Create an 800x600 window
         Framework_Initialize(800, 600, "My First Game")
         Framework_SetTargetFPS(60)
 
         ' Game loop
         While Not Framework_ShouldClose()
-            Framework_BeginFrame()
+            Framework_Update()          ' Process input and systems
 
-            ' Clear to dark blue background
+            Framework_BeginDrawing()
             Framework_ClearBackground(30, 30, 50, 255)
-
-            ' Draw centered text
             Framework_DrawText("My First Game!", 320, 280, 32, 255, 255, 255, 255)
-
-            Framework_EndFrame()
+            Framework_EndDrawing()
         End While
 
         Framework_Shutdown()
@@ -59,30 +55,33 @@ Module MyFirstGame
 End Module
 ```
 
-### Step 2: Add a Player
+### Step 2: Add a Player Entity
 
-Expand your game with an entity-based player:
+Expand your game with an entity-based player using the ECS:
 
 ```vb
 Imports RaylibWrapper.FrameworkWrapper
-Imports RaylibWrapper.Utiliy
 
 Module MyFirstGame
     Private player As Integer
-    Private playerTexture As Integer
+    Private playerTex As Integer
 
     Sub Main()
         Framework_Initialize(800, 600, "My First Game")
         Framework_SetTargetFPS(60)
 
-        ' Create player entity
+        ' Load texture and create player entity
+        playerTex = Framework_AcquireTextureH("assets/player.png")
+
         player = Framework_Ecs_CreateEntity()
         Framework_Ecs_SetName(player, "Player")
-        Framework_Ecs_SetPosition(player, 400, 300)
-
-        ' Load player texture (or use a colored rectangle if no texture)
-        ' playerTexture = Framework_LoadTextureH("player.png")
-        ' Framework_Ecs_AddSprite(player, playerTexture)
+        Framework_Ecs_SetTag(player, "player")
+        Framework_Ecs_AddTransform2D(player, 400, 300, 0, 1, 1)
+        Framework_Ecs_AddVelocity2D(player, 0, 0)
+        Framework_Ecs_AddBoxCollider2D(player, -16, -16, 32, 32)
+        Framework_Ecs_AddSprite2D(player)
+        Framework_Ecs_SetSpriteTexture(player, playerTex)
+        Framework_Ecs_SetEnabled(player, True)
 
         While Not Framework_ShouldClose()
             Update()
@@ -93,149 +92,134 @@ Module MyFirstGame
     End Sub
 
     Private Sub Update()
-        Framework_BeginFrame()
+        Framework_Update()
 
-        ' Get delta time for smooth movement
         Dim dt As Single = Framework_GetDeltaTime()
         Dim speed As Single = 200.0F * dt
 
-        ' WASD movement
-        Dim moveX As Single = 0
-        Dim moveY As Single = 0
+        ' WASD / Arrow key movement
+        Dim vx As Single = 0
+        Dim vy As Single = 0
+        If Framework_IsKeyDown(Keys.W) OrElse Framework_IsKeyDown(Keys.Up)    Then vy = -speed
+        If Framework_IsKeyDown(Keys.S) OrElse Framework_IsKeyDown(Keys.Down)  Then vy =  speed
+        If Framework_IsKeyDown(Keys.A) OrElse Framework_IsKeyDown(Keys.Left)  Then vx = -speed
+        If Framework_IsKeyDown(Keys.D) OrElse Framework_IsKeyDown(Keys.Right) Then vx =  speed
 
-        If Framework_IsKeyDown(Keys.W) OrElse Framework_IsKeyDown(Keys.Up) Then moveY = -speed
-        If Framework_IsKeyDown(Keys.S) OrElse Framework_IsKeyDown(Keys.Down) Then moveY = speed
-        If Framework_IsKeyDown(Keys.A) OrElse Framework_IsKeyDown(Keys.Left) Then moveX = -speed
-        If Framework_IsKeyDown(Keys.D) OrElse Framework_IsKeyDown(Keys.Right) Then moveX = speed
-
-        Framework_Ecs_Translate(player, moveX, moveY)
+        Framework_Ecs_SetVelocity(player, vx, vy)
+        Framework_Ecs_UpdateVelocities()  ' Apply velocity to transform
     End Sub
 
     Private Sub Draw()
+        Framework_BeginDrawing()
         Framework_ClearBackground(30, 30, 50, 255)
 
-        ' Get player position
-        Dim px, py As Single
-        Framework_Ecs_GetPosition(player, px, py)
-
-        ' Draw player as a rectangle (if no sprite)
-        Framework_DrawRectangle(px - 16, py - 16, 32, 32, 100, 200, 255, 255)
-
-        ' Draw player using ECS (if sprite is set)
-        ' Framework_Ecs_DrawAll()
+        Framework_Ecs_DrawSprites()   ' Render all Sprite2D components
 
         ' Show position
+        Dim px, py As Single
+        Framework_Ecs_GetTransformPosition(player, px, py)
         Framework_DrawText($"Position: ({px:F0}, {py:F0})", 10, 10, 20, 255, 255, 255, 255)
-        Framework_DrawText("Use WASD or Arrow Keys to move", 10, 40, 16, 180, 180, 180, 255)
+        Framework_DrawText("Use WASD or Arrow Keys to move", 10, 36, 16, 180, 180, 180, 255)
 
-        Framework_EndFrame()
+        Framework_EndDrawing()
     End Sub
 
     Private Sub Cleanup()
         Framework_Ecs_DestroyEntity(player)
-        If playerTexture > 0 Then Framework_ReleaseTextureH(playerTexture)
+        Framework_ReleaseTextureH(playerTex)
         Framework_Shutdown()
     End Sub
 End Module
 ```
 
-### Step 3: Add Physics
+### Step 3: Collision Detection
 
-Make your player respond to gravity and collisions:
+Use `BoxCollider2D` components and overlap queries for collision:
 
 ```vb
-Imports RaylibWrapper.FrameworkWrapper
-Imports RaylibWrapper.Utiliy
+' Setup entities with colliders
+Dim player As Integer = Framework_Ecs_CreateEntity()
+Framework_Ecs_AddTransform2D(player, 100, 300, 0, 1, 1)
+Framework_Ecs_AddBoxCollider2D(player, -16, -16, 32, 32)
+Framework_Ecs_SetTag(player, "player")
 
-Module PhysicsGame
-    Private player As Integer
-    Private playerBody As Integer
-    Private ground As Integer
-    Private groundBody As Integer
+Dim coin As Integer = Framework_Ecs_CreateEntity()
+Framework_Ecs_AddTransform2D(coin, 400, 300, 0, 1, 1)
+Framework_Ecs_AddBoxCollider2D(coin, -12, -12, 24, 24)
+Framework_Ecs_SetTag(coin, "coin")
 
-    Sub Main()
-        Framework_Initialize(800, 600, "Physics Demo")
-        Framework_SetTargetFPS(60)
+' In your update loop — check what overlaps the player's area
+Dim px, py As Single
+Framework_Ecs_GetTransformPosition(player, px, py)
 
-        ' Initialize physics with gravity
-        Framework_Physics_Initialize()
-        Framework_Physics_SetGravity(0, 500)
+Dim hits(31) As Integer
+Dim count As Integer = Framework_Physics_OverlapBox(px - 16, py - 16, 32, 32, hits, 32)
 
-        ' Create player with physics body
-        player = Framework_Ecs_CreateEntity()
-        Framework_Ecs_SetName(player, "Player")
-        playerBody = Framework_Physics_CreateBody(player, 0) ' 0 = Dynamic
-        Framework_Physics_AddCircleShape(playerBody, 20, 0, 0)
-        Framework_Physics_SetBodyPosition(playerBody, 400, 100)
-        Framework_Physics_SetBodyRestitution(playerBody, 0.3F)
-
-        ' Create ground
-        ground = Framework_Ecs_CreateEntity()
-        groundBody = Framework_Physics_CreateBody(ground, 1) ' 1 = Static
-        Framework_Physics_AddBoxShape(groundBody, 700, 20, 0, 0)
-        Framework_Physics_SetBodyPosition(groundBody, 400, 550)
-
-        While Not Framework_ShouldClose()
-            Dim dt = Framework_GetDeltaTime()
-            Framework_BeginFrame()
-
-            ' Apply horizontal force with A/D
-            If Framework_IsKeyDown(Keys.A) Then
-                Framework_Physics_ApplyForce(playerBody, -500, 0)
-            End If
-            If Framework_IsKeyDown(Keys.D) Then
-                Framework_Physics_ApplyForce(playerBody, 500, 0)
-            End If
-
-            ' Jump with Space
-            If Framework_IsKeyPressed(Keys.Space) Then
-                Framework_Physics_SetBodyVelocity(playerBody, 0, -400)
-            End If
-
-            ' Update physics
-            Framework_Physics_Update(dt)
-
-            ' Sync entity positions from physics
-            Framework_Physics_SyncToEntities()
-
-            ' Draw
-            Framework_ClearBackground(30, 30, 50, 255)
-
-            ' Draw player (circle)
-            Dim px, py As Single
-            Framework_Ecs_GetPosition(player, px, py)
-            Framework_DrawCircle(px, py, 20, 100, 200, 255, 255)
-
-            ' Draw ground
-            Framework_DrawRectangle(50, 540, 700, 20, 100, 100, 100, 255)
-
-            Framework_DrawText("A/D: Move | Space: Jump", 10, 10, 20, 255, 255, 255, 255)
-
-            Framework_EndFrame()
-        End While
-
-        Framework_Physics_Shutdown()
-        Framework_Shutdown()
-    End Sub
-End Module
+For i As Integer = 0 To count - 1
+    If hits(i) <> player AndAlso Framework_Ecs_GetTag(hits(i)) = "coin" Then
+        Framework_Ecs_DestroyEntity(hits(i))
+        score += 1
+    End If
+Next
 ```
 
-## Understanding the Architecture
-
-### Framework Initialization Order
+### Step 4: Camera Follow
 
 ```vb
-' 1. Core framework (required)
-Framework_Initialize(width, height, title)
+' Point camera at player with smooth follow
+Framework_Camera_SetFollowTarget(player)
+Framework_Camera_SetFollowLerp(0.08F)      ' 0 = no smoothing, 1 = instant snap
+Framework_Camera_SetFollowEnabled(True)
+Framework_Camera_SetBounds(0, 0, 3200, 2400)  ' Clamp to level size
 
-' 2. Audio (if needed)
+' In your update loop
+Framework_Camera_Update()
+
+' Wrap world drawing in camera mode
+Framework_BeginDrawing()
+Framework_ClearBackground(30, 30, 50, 255)
+
+Framework_Camera_BeginMode()
+    Framework_Ecs_DrawSprites()
+Framework_Camera_EndMode()
+
+' Draw HUD outside camera (not scrolled)
+Framework_DrawText($"Score: {score}", 10, 10, 24, 255, 255, 0, 255)
+
+Framework_EndDrawing()
+```
+
+### Step 5: Audio
+
+```vb
 Framework_InitAudio()
 
-' 3. Physics (if needed)
-Framework_Physics_Initialize()
+' Load sounds
+Dim jumpSfx As Integer = Framework_LoadSoundH("assets/jump.wav")
+Dim bgMusic As Integer = Framework_AcquireMusicH("assets/theme.ogg")
 
-' 4. Other systems are initialized on-demand
+' Play music (call UpdateAllMusic each frame)
+Framework_PlayMusicH(bgMusic)
+Framework_SetMusicVolumeH(bgMusic, 0.6F)
+
+' In your game loop
+Framework_Update()
+Framework_UpdateAllMusic()   ' Must be called each frame for streaming music
+
+' Play a sound on jump
+If Framework_IsKeyPressed(Keys.Space) Then
+    Framework_PlaySoundH(jumpSfx)
+End If
+
+' Cleanup
+Framework_UnloadSoundH(jumpSfx)
+Framework_ReleaseMusicH(bgMusic)
+Framework_CloseAudio()
 ```
+
+---
+
+## Understanding the Architecture
 
 ### The Game Loop
 
@@ -243,383 +227,268 @@ Every game follows this pattern:
 
 ```vb
 While Not Framework_ShouldClose()
-    Framework_BeginFrame()    ' Start frame, get delta time
+    Framework_Update()      ' Process input, advance time
 
-    UpdateGame()               ' Game logic
-    DrawGame()                 ' Rendering
+    Framework_BeginDrawing()
+    Framework_ClearBackground(r, g, b, a)
 
-    Framework_EndFrame()       ' Finish frame, swap buffers
+    ' --- draw world ---
+    Framework_Camera_BeginMode()
+        Framework_Ecs_DrawSprites()
+    Framework_Camera_EndMode()
+
+    ' --- draw HUD (not scrolled) ---
+    Framework_DrawText("Score: 0", 10, 10, 20, 255, 255, 255, 255)
+
+    Framework_EndDrawing()
 End While
 ```
 
+> **Note:** `Framework_Update()` must be called before reading input or delta time each frame.
+
 ### Entity Component System (ECS)
 
-The ECS is the heart of game object management:
+Entities are plain integers. Components are added individually:
 
 ```vb
-' Create an entity (just an ID)
-Dim entity = Framework_Ecs_CreateEntity()
+' Create entity and add components
+Dim enemy As Integer = Framework_Ecs_CreateEntity()
+Framework_Ecs_SetName(enemy, "Grunt")
+Framework_Ecs_SetTag(enemy, "enemy")
+Framework_Ecs_AddTransform2D(enemy, 200, 100, 0, 1, 1)
+Framework_Ecs_AddVelocity2D(enemy, -80, 0)
+Framework_Ecs_AddBoxCollider2D(enemy, -16, -16, 32, 32)
+Framework_Ecs_AddSprite2D(enemy)
+Framework_Ecs_SetSpriteTexture(enemy, enemyTex)
+Framework_Ecs_SetSpriteLayer(enemy, 1)    ' Higher = drawn on top
+Framework_Ecs_SetEnabled(enemy, True)
 
-' Add components
-Framework_Ecs_SetName(entity, "Enemy")
-Framework_Ecs_SetPosition(entity, 100, 200)
-Framework_Ecs_AddSprite(entity, textureHandle)
-Framework_Ecs_SetCollider(entity, 0, 0, 32, 32) ' AABB collider
-
-' Query entities
-If Framework_Ecs_IsEntityValid(entity) Then
-    Dim x, y As Single
-    Framework_Ecs_GetPosition(entity, x, y)
+' Query position
+If Framework_Ecs_IsAlive(enemy) Then
+    Dim ex, ey As Single
+    Framework_Ecs_GetTransformPosition(enemy, ex, ey)
+    Framework_Ecs_SetVelocity(enemy, -80, 0)
 End If
 
 ' Destroy when done
-Framework_Ecs_DestroyEntity(entity)
+Framework_Ecs_DestroyEntity(enemy)
 ```
+
+### Initialization Order
+
+```vb
+' 1. Core framework (always first)
+Framework_Initialize(width, height, title)
+Framework_SetTargetFPS(60)
+
+' 2. Audio (if needed)
+Framework_InitAudio()
+
+' 3. Asset root (optional — prepends to all load paths)
+Framework_SetAssetRoot("assets/")
+
+' 4. Camera setup (optional)
+Framework_Camera_SetFollowEnabled(False)
+
+' 5. Start game loop
+While Not Framework_ShouldClose()
+    ' ...
+End While
+
+' 6. Cleanup in reverse order
+Framework_CloseAudio()
+Framework_Shutdown()
+```
+
+---
 
 ## Common Patterns
 
-### Scene Management
-
-Organize your game into scenes:
-
-```vb
-' In your Scene class
-Public Class MenuScene
-    Inherits Scene
-
-    Public Overrides Sub OnEnter()
-        ' Called when scene starts
-    End Sub
-
-    Public Overrides Sub OnUpdateFrame(dt As Single)
-        ' Called every frame
-        If Framework_IsKeyPressed(Keys.Enter) Then
-            Framework_SwitchScene("GameScene")
-        End If
-    End Sub
-
-    Public Overrides Sub OnDraw()
-        ' Render the scene
-        Framework_DrawText("Press ENTER to Start", 300, 300, 24, 255, 255, 255, 255)
-    End Sub
-
-    Public Overrides Sub OnExit()
-        ' Called when scene ends
-    End Sub
-End Class
-```
-
 ### Resource Management
 
-Load resources once, reuse handles:
+Load resources once, reuse handles throughout the game:
 
 ```vb
-' Load at game start or scene enter
-Private playerTex As Integer = Framework_LoadTextureH("player.png")
-Private jumpSfx As Integer = Framework_LoadSoundH("jump.wav")
-Private bgMusic As Integer = Framework_LoadMusicH("music.ogg")
+' Load at startup or scene enter
+Dim playerTex As Integer = Framework_AcquireTextureH("player.png")
+Dim jumpSfx   As Integer = Framework_LoadSoundH("jump.wav")
+Dim bgMusic   As Integer = Framework_AcquireMusicH("music.ogg")
 
 ' Use throughout the game
-Framework_Ecs_AddSprite(player, playerTex)
+Framework_Ecs_SetSpriteTexture(player, playerTex)
 Framework_PlaySoundH(jumpSfx)
 Framework_PlayMusicH(bgMusic)
 
-' Release when done (scene exit or game end)
+' Release at shutdown or scene exit
 Framework_ReleaseTextureH(playerTex)
-Framework_ReleaseSoundH(jumpSfx)
+Framework_UnloadSoundH(jumpSfx)
 Framework_ReleaseMusicH(bgMusic)
 ```
 
-### Input Handling
-
-Use the Input Manager for rebindable controls:
+Or use the disposable VB.NET helper classes:
 
 ```vb
-' Create actions
-Dim jumpAction = Framework_Input_CreateAction("Jump")
-Dim moveXAction = Framework_Input_CreateAction("MoveX")
-
-' Bind keys
-Framework_Input_BindKey(jumpAction, Keys.Space)
-Framework_Input_BindKey(jumpAction, Keys.W)
-Framework_Input_BindGamepadButton(jumpAction, 0, 0) ' A button
-
-' Use in game loop
-If Framework_Input_IsActionPressed(jumpAction) Then
-    ' Jump!
-End If
-Dim moveValue = Framework_Input_GetActionValue(moveXAction)
+Using tex As New TextureHandle("player.png")
+Using font As New FontHandle("ui.ttf", 24)
+    ' tex and font auto-release when Using block exits
+    tex.Draw(100, 100, Color.White)
+    font.DrawText("Hello!", New Vector2(10, 10), 24, 1, Color.White)
+End Using
+End Using
 ```
 
-### Particle Effects
-
-Add visual flair with particles:
+### Sprite Sheet Animation (Manual)
 
 ```vb
-' Create a fire-like particle emitter
-Dim emitter = Framework_Particle_CreateEmitter()
-Framework_Particle_SetPosition(emitter, 400, 300)
-Framework_Particle_SetEmissionRate(emitter, 50)        ' 50 particles/second
-Framework_Particle_SetLifetime(emitter, 1.0F, 2.0F)    ' 1-2 second lifespan
-Framework_Particle_SetVelocity(emitter, 0, -100, 30)   ' Upward with spread
-Framework_Particle_SetStartColor(emitter, 255, 200, 50, 255)  ' Yellow
-Framework_Particle_SetEndColor(emitter, 255, 50, 0, 0)        ' Fading red
-Framework_Particle_SetStartSize(emitter, 10, 15)
-Framework_Particle_SetEndSize(emitter, 2, 5)
-Framework_Particle_Start(emitter)
+' 4-frame walk cycle, each frame 32x32, on a 128x32 sprite sheet
+Dim walkFrame As Integer = 0
+Dim frameTimer As Single = 0
+Const FRAME_DURATION As Single = 0.1F
 
-' In game loop:
-Framework_Particle_Update(dt)  ' Update all emitters
-Framework_Particle_Draw()      ' Draw all particles
-
-' Cleanup
-Framework_Particle_DestroyEmitter(emitter)
-```
-
-### Tweening and Animations
-
-Smooth value transitions:
-
-```vb
-' Tween an entity's position over 1 second with ease-out
-Dim tween = Framework_Tween_Float(startValue, endValue, 1.0F, EaseType.QuadOut)
-
-' Tween entity position
-Dim posX As Single = 100
-Framework_Tween_CreateFloat(posX, 500, 0.5F, EaseType.ElasticOut)
-
-' Move entity along path
-Framework_Tween_EntityPosition(entity, 200, 300, 1.0F, EaseType.CubicInOut)
-
-' Create a sequence of tweens
-Dim seq = Framework_Tween_CreateSequence()
-Framework_Tween_SequenceAppend(seq, tween1)
-Framework_Tween_SequenceAppend(seq, tween2)
-Framework_Tween_SequencePlay(seq)
-
-' Update in game loop
-Framework_Tween_Update(dt)
-```
-
-### UI System
-
-Create interactive user interfaces:
-
-```vb
-' Create UI elements
-Dim panel = Framework_UI_CreatePanel(10, 10, 200, 150)
-Framework_UI_SetColor(panel, 40, 45, 60, 220)
-
-Dim label = Framework_UI_CreateLabel("Score: 0", 20, 20)
-Framework_UI_SetParent(label, panel)  ' Attach to panel
-
-Dim button = Framework_UI_CreateButton("Start Game", 20, 60, 160, 40)
-Framework_UI_SetParent(button, panel)
-
-Dim slider = Framework_UI_CreateSlider(20, 110, 160, 20)
-Framework_UI_SetSliderRange(slider, 0, 100)
-Framework_UI_SetSliderValue(slider, 50)
-Framework_UI_SetParent(slider, panel)
-
-' In game loop:
-Framework_UI_Update()  ' Handle input
-Framework_UI_Draw()    ' Render UI
-
-' Check button clicks
-If Framework_UI_WasClicked(button) Then
-    ' Start game
+' In update
+frameTimer += Framework_GetDeltaTime()
+If frameTimer >= FRAME_DURATION Then
+    frameTimer = 0
+    walkFrame = (walkFrame + 1) Mod 4
 End If
 
-' Get slider value
-Dim volume = Framework_UI_GetSliderValue(slider)
+' Set sprite source rect to current frame
+Dim src As Rectangle = Framework_SpriteFrame(32, 32, walkFrame)
+Framework_Ecs_SetSpriteSource(player, src.x, src.y, src.width, src.height)
+```
+
+### Scene Management
+
+```vb
+' Create scenes at startup
+Dim menuScene As Integer = Framework_CreateScriptScene()
+Dim gameScene  As Integer = Framework_CreateScriptScene()
+
+' Immediate switch
+Framework_SceneChange(gameScene)
+
+' Switch with a fade transition (type=1=Fade, 0.5s, easing=3=EaseInOut)
+Framework_Scene_SetTransitionColor(0, 0, 0, 255)
+Framework_Scene_ChangeWithTransitionEx(gameScene, 1, 0.5F, 3)
+
+' Push/pop for pause menus
+Framework_Scene_PushWithTransition(pauseScene)   ' Overlay pause menu
+Framework_Scene_PopWithTransition()              ' Return to game
 ```
 
 ### Camera Effects
 
-Dynamic camera for engaging gameplay:
-
 ```vb
-' Setup camera to follow player
-Framework_Camera_SetTarget(player)
-Framework_Camera_SetFollowSmoothing(0.1F)  ' Smooth follow
-Framework_Camera_SetDeadzone(50, 30)        ' Movement deadzone
-
-' Add zoom
-Framework_Camera_SetZoom(1.5F)
-Framework_Camera_ZoomTo(2.0F, 0.5F)  ' Zoom to 2x over 0.5 seconds
-
-' Screen shake on impact
-Framework_Camera_Shake(10.0F, 0.3F)  ' Intensity 10, duration 0.3s
-
-' Constrain camera to level bounds
+' Smooth follow with deadzone
+Framework_Camera_SetFollowTarget(player)
+Framework_Camera_SetFollowLerp(0.1F)
+Framework_Camera_SetDeadzone(40, 30)
+Framework_Camera_SetDeadzoneEnabled(True)
 Framework_Camera_SetBounds(0, 0, levelWidth, levelHeight)
 
-' In draw:
-Framework_Camera_BeginMode()  ' Apply camera transform
-    ' Draw world objects here
-Framework_Camera_EndMode()
-' Draw UI after (unaffected by camera)
+' Zoom
+Framework_Camera_SetZoom(1.5F)
+Framework_Camera_ZoomTo(2.0F, 0.5F)  ' Smooth zoom to 2x over 0.5s
+
+' Impact effects
+Framework_Camera_Shake(10.0F, 0.3F)                  ' Simple shake
+Framework_Camera_ShakeEx(15.0F, 5.0F, 0.4F, 1.5F)   ' Directional shake
+Framework_Camera_Flash(255, 255, 255, 200, 0.15F)     ' White flash
+
+' Camera must be updated each frame when using follow/shake/zoom
+Framework_Camera_Update()
+```
+
+### Entity Hierarchy
+
+```vb
+' Attach a weapon to the player — weapon moves with player
+Dim weapon As Integer = Framework_Ecs_CreateEntity()
+Framework_Ecs_AddTransform2D(weapon, 20, 0, 0, 1, 1)  ' 20px offset from player
+Framework_Ecs_SetParent(weapon, player)
+
+' World position is computed through the chain
+Dim wx, wy As Single
+Framework_Ecs_GetWorldPosition(weapon, wx, wy)
+
+' Detach (returns to world root)
+Framework_Ecs_DetachFromParent(weapon)
+
+' Traverse children
+Dim child As Integer = Framework_Ecs_GetFirstChild(player)
+While child <> -1
+    ' process child...
+    child = Framework_Ecs_GetNextSibling(child)
+End While
+```
+
+### Audio Groups and Spatial Sound
+
+```vb
+Framework_InitAudio()
+
+' Groups: 0=SFX, 1=Music, 2=Ambient (your own convention)
+Dim explosionSfx As Integer = Framework_Audio_LoadSound("explosion.wav", 0)
+Dim bgMusic      As Integer = Framework_Audio_LoadMusic("theme.ogg")
+
+' Group volume (e.g. from settings menu)
+Framework_Audio_SetGroupVolume(0, 0.8F)  ' SFX at 80%
+Framework_Audio_SetGroupVolume(1, 0.5F)  ' Music at 50%
+
+' Spatial sound — falls off with distance
+Framework_Audio_SetSpatialEnabled(True)
+Framework_Audio_SetSpatialFalloff(100, 600)  ' Full volume within 100px, silent at 600px
+
+' Move listener to camera/player each frame
+Dim px, py As Single
+Framework_Ecs_GetTransformPosition(player, px, py)
+Framework_Audio_SetListenerPosition(px, py)
+
+' Play sound at world position (auto-attenuated by distance)
+Framework_Audio_PlaySoundAt(explosionSfx, 500, 200)
+
+' Stream music with fade-in
+Framework_Audio_PlayMusic(bgMusic)
+Framework_Audio_FadeInMusic(bgMusic, 2.0F)
+
+' Each frame
+Framework_Audio_Update()
 ```
 
 ### GLSL Shaders
 
-Apply visual effects:
-
 ```vb
-' Load built-in shaders
-Dim grayscale = Framework_Shader_LoadGrayscale()
-Dim blur = Framework_Shader_LoadBlur()
-Dim crt = Framework_Shader_LoadCRT()
-Dim vignette = Framework_Shader_LoadVignette()
+' Load vertex + fragment shader from files (pass Nothing to use default)
+Dim vignette As Shader = Framework_LoadShaderF(Nothing, "assets/shaders/vignette.fs")
+Dim intensityLoc As Integer = Framework_GetShaderLocation(vignette, "intensity")
 
-' Set shader uniforms
-Framework_Shader_SetFloatByName(vignette, "vignetteRadius", 0.5F)
-Framework_Shader_SetFloatByName(vignette, "vignetteIntensity", 0.8F)
+' Update uniform each frame (e.g. pulse effect)
+Dim pulse As Single = 0.5F + 0.1F * CSng(Math.Sin(Framework_GetTime() * 2))
+Framework_SetShaderValue1f(vignette, intensityLoc, pulse)
 
-' In draw:
-Framework_Shader_Begin(vignette)
-    ' Draw affected content
-    Framework_DrawRectangle(100, 100, 200, 200, 255, 100, 50, 255)
-Framework_Shader_End()
+' Apply to world draw (render to texture, then post-process)
+Framework_BeginShaderMode(vignette)
+    Framework_DrawTexturePro(rt.texture, src, dst, origin, 0, tint)
+Framework_EndShaderMode()
 
 ' Cleanup
-Framework_Shader_Unload(vignette)
+Framework_UnloadShader(vignette)
 ```
 
-### Save/Load System
-
-Persist game progress:
+### Debug Overlay
 
 ```vb
-' Save game data
-Framework_Save_BeginSave(1)  ' Slot 1
-Framework_Save_WriteInt("level", currentLevel)
-Framework_Save_WriteFloat("health", playerHealth)
-Framework_Save_WriteBool("hasKey", hasKey)
-Framework_Save_WriteString("playerName", playerName)
-Framework_Save_EndSave()
+' Enable during development
+Framework_Debug_SetEnabled(True)
+Framework_Debug_DrawEntityBounds(True)  ' Show collider boxes
+Framework_Debug_DrawHierarchy(True)     ' Show parent-child lines
+Framework_Debug_DrawStats(True)         ' Show entity counts
 
-' Load game data
-If Framework_Save_SlotExists(1) Then
-    Framework_Save_BeginLoad(1)
-    currentLevel = Framework_Save_ReadInt("level", 1)      ' Default: 1
-    playerHealth = Framework_Save_ReadFloat("health", 100) ' Default: 100
-    hasKey = Framework_Save_ReadBool("hasKey", False)
-    playerName = Framework_Save_ReadString("playerName", "Player")
-    Framework_Save_EndLoad()
-End If
-
-' Delete save
-Framework_Save_DeleteSlot(1)
-
-' Auto-save with interval
-Framework_Save_SetAutoSaveInterval(60.0F)  ' Every 60 seconds
-Framework_Save_EnableAutoSave(True)
+' In your draw loop (after EndDrawing)
+Framework_Debug_Render()
 ```
 
-### A* Pathfinding
-
-AI navigation with pathfinding:
-
-```vb
-' Create navigation grid
-Dim grid = Framework_NavGrid_Create(50, 50, 32)  ' 50x50 tiles, 32px each
-
-' Mark obstacles as unwalkable
-Framework_NavGrid_SetWalkable(grid, 10, 10, False)
-Framework_NavGrid_Fill(grid, 5, 5, 10, 3, False)  ' Wall region
-
-' Find path
-Dim pathId = Framework_AI_FindPath(grid, startX, startY, endX, endY)
-If pathId >= 0 Then
-    Dim pathLength = Framework_AI_GetPathLength(pathId)
-    For i As Integer = 0 To pathLength - 1
-        Dim wx, wy As Single
-        Framework_AI_GetPathPoint(pathId, i, wx, wy)
-        ' Move toward each waypoint
-    Next
-End If
-
-' Create steering agent
-Dim agent = Framework_AI_CreateAgent(entity)
-Framework_AI_SetMaxSpeed(agent, 150)
-Framework_AI_SetArriveRadius(agent, 20)
-
-' Behaviors
-Framework_AI_Seek(agent, targetX, targetY)
-Framework_AI_Flee(agent, threatX, threatY)
-Framework_AI_Wander(agent)
-```
-
-### Timers and Events
-
-Schedule delayed actions:
-
-```vb
-' One-shot timer (fires once after delay)
-Dim timerId = Framework_Timer_After(2.0F, AddressOf OnTimerComplete)
-
-' Repeating timer
-Dim repeatId = Framework_Timer_Every(0.5F, AddressOf OnTick)
-
-' Cancel timer
-Framework_Timer_Cancel(timerId)
-
-' Event system
-Dim eventId = Framework_Event_Register("PlayerDied")
-Framework_Event_Subscribe(eventId, AddressOf OnPlayerDied)
-
-' Publish event from anywhere
-Framework_Event_Publish(eventId)
-
-' Publish with data
-Framework_Event_PublishInt(eventId, score)
-Framework_Event_PublishString(eventId, "Game Over!")
-
-' Update in game loop
-Framework_Timer_Update(dt)
-Framework_Event_ProcessQueue()
-```
-
-### Dialogue System
-
-Create conversations:
-
-```vb
-' Create dialogue
-Dim dlg = Framework_Dialogue_Create("intro")
-
-' Add nodes
-Dim node1 = Framework_Dialogue_AddNode(dlg, "Hello, traveler!")
-Framework_Dialogue_SetNodeSpeaker(dlg, node1, "Merchant")
-
-Dim node2 = Framework_Dialogue_AddNode(dlg, "What brings you here?")
-Framework_Dialogue_SetNodeSpeaker(dlg, node2, "Merchant")
-
-' Add choices
-Framework_Dialogue_AddChoice(dlg, node1, "Looking for supplies", node2)
-Framework_Dialogue_AddChoice(dlg, node1, "Just passing through", -1)  ' End
-
-' Start dialogue
-Framework_Dialogue_Start(dlg)
-Framework_Dialogue_SetTypewriterSpeed(0.05F)
-
-' In game loop
-If Framework_Dialogue_IsActive(dlg) Then
-    Framework_Dialogue_Update(dt)
-
-    ' Get current text for display
-    Dim speaker = Framework_Dialogue_GetCurrentSpeaker(dlg)
-    Dim text = Framework_Dialogue_GetCurrentText(dlg)
-End If
-```
-
-## Next Steps
-
-1. **Explore the Demo Scenes** in `TestVbDLL/GameScenes.vb`
-2. **Read the API Reference** for detailed function documentation
-3. **Try the different systems**: Physics, Particles, UI, Tweening
-4. **Build something!** Start small and expand
+---
 
 ## Troubleshooting
 
@@ -627,27 +496,36 @@ End If
 
 **"DLL not found" error**
 - Ensure `VisualGameStudioEngine.dll` is in the same directory as your executable
-- Check that all Raylib dependencies are present
+- Check that all Raylib dependency DLLs are present
+- Confirm you are building for x64
 
 **"Entry point not found" error**
-- Rebuild the C++ project first, then the VB.NET projects
-- Make sure you're using the correct platform (x64)
+- Rebuild the C++ engine project first, then the VB.NET projects
+- Ensure the C++ project is set to Release/x64
 
 **Black screen / Nothing rendering**
-- Check that `Framework_BeginFrame()` and `Framework_EndFrame()` are called
-- Verify `Framework_ClearBackground()` is called each frame
-- Ensure entities have sprites set before calling `Framework_Ecs_DrawAll()`
+- Confirm `Framework_BeginDrawing()` and `Framework_EndDrawing()` bracket all draw calls
+- Call `Framework_ClearBackground()` at the start of each draw
+- For sprites: ensure `Framework_Ecs_AddSprite2D`, `Framework_Ecs_SetSpriteTexture`, and `Framework_Ecs_SetEnabled` were all called, and `Framework_Ecs_DrawSprites()` is in the draw loop
 
-**Physics not working**
-- Call `Framework_Physics_Initialize()` before creating bodies
-- Call `Framework_Physics_Update(deltaTime)` each frame
-- Check that gravity is set: `Framework_Physics_SetGravity(0, 500)`
+**Entities not moving**
+- Call `Framework_Ecs_UpdateVelocities()` each frame after setting velocity
+- Check that `Framework_Ecs_AddTransform2D` and `Framework_Ecs_AddVelocity2D` were both called on the entity
+
+**Music stops immediately**
+- Call `Framework_UpdateAllMusic()` every frame — music is streamed and needs continuous feeding
+
+**Camera not following**
+- Call `Framework_Camera_Update()` each frame
+- Ensure `Framework_Camera_SetFollowEnabled(True)` was called
 
 ### Getting Help
 
-- Check the API Reference for function signatures
-- Look at existing demo scenes for working examples
-- The unit tests in `FrameworkTests.vb` show correct API usage
+- See `docs/API_REFERENCE.md` for complete function signatures
+- Look at `TestVbDLL/` for working game examples
+- Run `VisualGameStudio.Tests` to see correct API usage patterns
+
+---
 
 ## System Requirements
 
@@ -657,7 +535,7 @@ End If
 | .NET | .NET 8.0 Runtime |
 | IDE | Visual Studio 2022+ |
 | GPU | OpenGL 3.3+ compatible |
-| RAM | 4GB+ recommended |
+| RAM | 4 GB+ recommended |
 
 ---
 
