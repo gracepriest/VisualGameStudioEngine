@@ -173,15 +173,37 @@ public static class BasicLangCommands
 
     private static void ExecuteRestartServer(object sender, EventArgs e)
     {
-        ThreadHelper.ThrowIfNotOnUIThread();
+        ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        VsShellUtilities.ShowMessageBox(
-            _package!,
-            "Language server restart requested. Please close and reopen your BasicLang files.",
-            "BasicLang",
-            OLEMSGICON.OLEMSGICON_INFO,
-            OLEMSGBUTTON.OLEMSGBUTTON_OK,
-            OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+            var componentModel = Package.GetGlobalService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+                as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
+
+            if (componentModel == null)
+            {
+                ShowMessage("Error", "Could not access MEF component model.");
+                return;
+            }
+
+            try
+            {
+                var languageService = componentModel.GetService<BasicLangLanguageService>();
+                if (languageService != null)
+                {
+                    await languageService.RestartServerAsync();
+                    ShowMessage("Language Server", "BasicLang language server restarted.");
+                }
+                else
+                {
+                    ShowMessage("Language Server", "Language server not found. It will start automatically when you open a BasicLang file.");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage("Error", $"Failed to restart language server: {ex.Message}");
+            }
+        });
     }
 
     private static void ShowMessage(string title, string message)

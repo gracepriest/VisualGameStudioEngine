@@ -170,22 +170,45 @@ public class BasicLangLanguageService : ILanguageClient, IDisposable
         });
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Stops the current server process and starts a new one.
+    /// </summary>
+    public async Task RestartServerAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
+        Debug.WriteLine("Restarting BasicLang language server...");
 
+        if (StopAsync != null)
+            await StopAsync.InvokeAsync(this, EventArgs.Empty);
+
+        StopServerProcess();
+
+        await Task.Delay(500);
+
+        if (StartAsync != null)
+            await StartAsync.InvokeAsync(this, EventArgs.Empty);
+
+        Debug.WriteLine("BasicLang language server restarted.");
+    }
+
+    private void StopServerProcess()
+    {
         try
         {
             if (_serverProcess != null && !_serverProcess.HasExited)
-            {
                 _serverProcess.Kill();
-            }
             _serverProcess?.Dispose();
+            _serverProcess = null;
         }
         catch
         {
             // Ignore cleanup errors
         }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        StopServerProcess();
     }
 }
