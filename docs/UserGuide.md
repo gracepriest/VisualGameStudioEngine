@@ -80,9 +80,9 @@ Press `Ctrl+Space` to trigger code completion:
 ```
 MyProject/
 ├── MyProject.blproj    # Project file
-├── Program.bl          # Main entry point
+├── Program.bas         # Main entry point
 ├── Modules/
-│   └── Utils.bl        # Module files
+│   └── Utils.bas       # Module files
 └── Assets/
     └── data.json       # Resource files
 ```
@@ -338,10 +338,10 @@ The IDE integrates with Git for version control:
 2. Disable real-time analysis for large projects
 3. Use `Build > Clean` to clear caches
 
-### Plugin Issues
-1. Disable suspect plugins in `Tools > Extensions`
-2. Check plugin compatibility
-3. Reinstall problematic plugins
+### IntelliSense Not Working
+1. Ensure the project has been built at least once (LSP uses build output)
+2. Restart the language server via `Tools > Restart Language Server`
+3. Check the Output panel for LSP error messages
 
 ---
 
