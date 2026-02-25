@@ -2,49 +2,48 @@
 
 A comprehensive 2D game engine framework built on Raylib with VB.NET P/Invoke bindings.
 
+All functions are exported from `VisualGameStudioEngine.dll` and declared in `RaylibWrapper/RaylibWrapper.vb` via P/Invoke.
+
 ## Table of Contents
 
 1. [Core Framework](#core-framework)
-2. [Entity Component System (ECS)](#entity-component-system)
-3. [Resource Management](#resource-management)
-4. [Scene Management](#scene-management)
-5. [Tilemap System](#tilemap-system)
-6. [Animation System](#animation-system)
-7. [Particle System](#particle-system)
-8. [UI System](#ui-system)
-9. [Physics System](#physics-system)
-10. [Audio Manager](#audio-manager)
-11. [Camera System](#camera-system)
-12. [Input Manager](#input-manager)
-13. [Save/Load System](#saveload-system)
-14. [Tweening System](#tweening-system)
-15. [Event System](#event-system)
-16. [Timer System](#timer-system)
-17. [Object Pooling](#object-pooling)
-18. [State Machine](#state-machine)
-19. [AI & Pathfinding](#ai--pathfinding)
-20. [Dialogue System](#dialogue-system)
-21. [Inventory System](#inventory-system)
-22. [Quest System](#quest-system)
-23. [2D Lighting](#2d-lighting)
-24. [Screen Effects](#screen-effects)
-25. [Localization](#localization)
-26. [Achievement System](#achievement-system)
-27. [Cutscene System](#cutscene-system)
-28. [Leaderboard System](#leaderboard-system)
-29. [Sprite Batching](#sprite-batching)
-30. [Texture Atlas](#texture-atlas)
-31. [Level Editor](#level-editor)
-32. [Networking](#networking)
-33. [Shader System](#shader-system)
-34. [Skeletal Animation](#skeletal-animation)
-35. [Command Console](#command-console)
+2. [Timing & Time Control](#timing--time-control)
+3. [Drawing](#drawing)
+4. [Input — Keyboard](#input--keyboard)
+5. [Input — Mouse](#input--mouse)
+6. [Collision Checks](#collision-checks)
+7. [Textures & Images](#textures--images)
+8. [Handle-Based Texture API](#handle-based-texture-api)
+9. [Render Textures & Off-Screen Rendering](#render-textures--off-screen-rendering)
+10. [Camera 2D — Basic](#camera-2d--basic)
+11. [Camera 2D — Enhanced](#camera-2d--enhanced)
+12. [Fonts & Text](#fonts--text)
+13. [Audio — Basic](#audio--basic)
+14. [Audio Manager — Advanced](#audio-manager--advanced)
+15. [Audio Effects & Filters](#audio-effects--filters)
+16. [Shaders](#shaders)
+17. [Scene System — Basic](#scene-system--basic)
+18. [Scene Manager — Transitions & Loading](#scene-manager--transitions--loading)
+19. [ECS — Entity Management](#ecs--entity-management)
+20. [ECS — Name Component](#ecs--name-component)
+21. [ECS — Tag Component](#ecs--tag-component)
+22. [ECS — Enabled Component](#ecs--enabled-component)
+23. [ECS — Hierarchy Component](#ecs--hierarchy-component)
+24. [ECS — Transform2D Component](#ecs--transform2d-component)
+25. [ECS — Velocity2D Component](#ecs--velocity2d-component)
+26. [ECS — BoxCollider2D Component](#ecs--boxcollider2d-component)
+27. [ECS — Sprite2D Component](#ecs--sprite2d-component)
+28. [ECS — Built-in Systems](#ecs--built-in-systems)
+29. [Physics Overlap Queries](#physics-overlap-queries)
+30. [Component Introspection](#component-introspection)
+31. [Debug Overlay](#debug-overlay)
+32. [Asset Cache](#asset-cache)
+33. [Constants & Enums](#constants--enums)
+34. [VB.NET Helper Classes](#vbnet-helper-classes)
 
 ---
 
 ## Quick Start Examples
-
-This section provides practical code examples to help you get started quickly.
 
 ### Example 1: Basic Game Loop
 
@@ -53,21 +52,19 @@ Imports RaylibWrapper.FrameworkWrapper
 
 Module MyGame
     Sub Main()
-        ' Initialize the framework
         Framework_Initialize(800, 600, "My First Game")
         Framework_SetTargetFPS(60)
+        Framework_InitAudio()
 
-        ' Main game loop
         While Not Framework_ShouldClose()
-            Framework_BeginFrame()
+            Framework_Update()
+            Framework_BeginDrawing()
             Framework_ClearBackground(30, 30, 50, 255)
-
-            ' Draw text
             Framework_DrawText("Hello, World!", 350, 280, 24, 255, 255, 255, 255)
-
-            Framework_EndFrame()
+            Framework_EndDrawing()
         End While
 
+        Framework_CloseAudio()
         Framework_Shutdown()
     End Sub
 End Module
@@ -76,2445 +73,1016 @@ End Module
 ### Example 2: Creating and Moving an Entity
 
 ```vb
-' Create a player entity with a sprite
+' Create a player entity
 Dim player As Integer = Framework_Ecs_CreateEntity()
 Framework_Ecs_SetName(player, "Player")
+Framework_Ecs_AddTransform2D(player, 400, 300, 0, 1, 1)
+Framework_Ecs_AddVelocity2D(player, 0, 0)
+Framework_Ecs_AddSprite2D(player)
+Framework_Ecs_SetEnabled(player, True)
 
-' Load a texture and add sprite
-Dim texture As Integer = Framework_LoadTextureH("player.png")
-Framework_Ecs_AddSprite(player, texture)
-Framework_Ecs_SetPosition(player, 400, 300)
-
-' In your update loop - simple WASD movement
-Dim speed As Single = 200.0F * deltaTime
-If Framework_IsKeyDown(Keys.W) Then Framework_Ecs_Translate(player, 0, -speed)
-If Framework_IsKeyDown(Keys.S) Then Framework_Ecs_Translate(player, 0, speed)
-If Framework_IsKeyDown(Keys.A) Then Framework_Ecs_Translate(player, -speed, 0)
-If Framework_IsKeyDown(Keys.D) Then Framework_Ecs_Translate(player, speed, 0)
-
-' Draw all entities
-Framework_Ecs_DrawAll()
-```
-
-### Example 3: Physics Bodies and Collision
-
-```vb
-' Initialize physics
-Framework_Physics_Initialize()
-Framework_Physics_SetGravity(0, 500)
-
-' Create a dynamic player body
-Dim player As Integer = Framework_Ecs_CreateEntity()
-Dim playerBody As Integer = Framework_Physics_CreateBody(player, 0) ' 0 = Dynamic
-Framework_Physics_AddCircleShape(playerBody, 16, 0, 0)
-Framework_Physics_SetBodyPosition(playerBody, 100, 100)
-
-' Create a static ground
-Dim ground As Integer = Framework_Ecs_CreateEntity()
-Dim groundBody As Integer = Framework_Physics_CreateBody(ground, 1) ' 1 = Static
-Framework_Physics_AddBoxShape(groundBody, 800, 32, 0, 0)
-Framework_Physics_SetBodyPosition(groundBody, 400, 550)
-
-' Update physics each frame
-Framework_Physics_Update(deltaTime)
-```
-
-### Example 4: UI Button with Click Handler
-
-```vb
-' Create a button
-Dim button As Integer = Framework_UI_Create(1) ' 1 = Button type
-Framework_UI_SetPosition(button, 300, 200)
-Framework_UI_SetSize(button, 200, 50)
-Framework_UI_SetText(button, "Click Me!")
-
-' Set button colors
-Framework_UI_SetColor(button, 0, 60, 120, 180, 255)  ' Normal
-Framework_UI_SetColor(button, 1, 80, 150, 220, 255)  ' Hovered
-Framework_UI_SetColor(button, 2, 40, 90, 140, 255)   ' Pressed
+' Load texture and assign to sprite
+Dim tex As Integer = Framework_AcquireTextureH("player.png")
+Framework_Ecs_SetSpriteTexture(player, tex)
 
 ' In your update loop
-Framework_UI_Update(deltaTime)
-If Framework_UI_WasClicked(button) Then
-    Console.WriteLine("Button clicked!")
+Dim dt As Single = Framework_GetDeltaTime()
+Dim speed As Single = 200.0F * dt
+If Framework_IsKeyDown(Keys.W) Then
+    Dim vx, vy As Single
+    Framework_Ecs_GetVelocity(player, vx, vy)
+    Framework_Ecs_SetVelocity(player, vx, -speed)
 End If
 
-' In your draw loop
-Framework_UI_Draw()
+' Update systems
+Framework_Ecs_UpdateVelocities()
+
+' Draw
+Framework_Ecs_DrawSprites()
 ```
 
-### Example 5: Audio with Spatial Sound
+### Example 3: Camera Follow with Shake
 
 ```vb
-' Initialize audio
-Framework_InitAudio()
+' Set up camera to follow player
+Framework_Camera_SetFollowTarget(player)
+Framework_Camera_SetFollowLerp(0.1F)
+Framework_Camera_SetFollowEnabled(True)
+Framework_Camera_SetBounds(0, 0, 3200, 2400)
 
-' Load sounds
-Dim music As Integer = Framework_LoadMusicH("background.ogg")
-Dim sfx As Integer = Framework_LoadSoundH("explosion.wav")
-
-' Play background music with fade-in
-Framework_PlayMusicH(music)
-Framework_Audio_FadeIn(music, 2.0F)
-
-' Set listener position (usually at player)
-Framework_Audio_SetListenerPosition(playerX, playerY)
-
-' Play spatial sound effect at explosion location
-Framework_Audio_PlaySpatial(sfx, explosionX, explosionY, 500) ' 500 = max distance
-```
-
-### Example 6: Tweening for Smooth Animations
-
-```vb
-' Create a tween to move entity from x=100 to x=500 over 2 seconds
-Dim tweenId As Integer = Framework_Tween_CreateForEntity(player, 0) ' 0 = PositionX
-Framework_Tween_SetTarget(tweenId, 500)
-Framework_Tween_SetDuration(tweenId, 2.0F)
-Framework_Tween_SetEasing(tweenId, 8) ' 8 = EaseOutBounce
-Framework_Tween_Play(tweenId)
-
-' Create a color fade tween
-Dim alphaTween As Integer = Framework_Tween_CreateForEntity(player, 6) ' 6 = Alpha
-Framework_Tween_SetTarget(alphaTween, 0) ' Fade to invisible
-Framework_Tween_SetDuration(alphaTween, 1.5F)
-Framework_Tween_SetDelay(alphaTween, 3.0F) ' Wait 3 seconds before starting
-Framework_Tween_Play(alphaTween)
-
-' Update tweens each frame
-Framework_Tween_Update(deltaTime)
-```
-
-### Example 7: Simple A* Pathfinding
-
-```vb
-' Create navigation grid (20x15 tiles, 32px each)
-Dim navGrid As Integer = Framework_AI_CreateNavGrid(20, 15, 32)
-
-' Mark obstacles as unwalkable
-Framework_AI_SetWalkable(navGrid, 5, 5, False)
-Framework_AI_SetWalkable(navGrid, 5, 6, False)
-Framework_AI_SetWalkable(navGrid, 5, 7, False)
-
-' Find path from (2,2) to (18,12)
-Dim pathId As Integer = Framework_AI_FindPath(navGrid, 2, 2, 18, 12)
-Dim pathLength As Integer = Framework_AI_GetPathLength(pathId)
-
-' Get path waypoints
-For i As Integer = 0 To pathLength - 1
-    Dim wx, wy As Single
-    Framework_AI_GetPathPoint(pathId, i, wx, wy)
-    Console.WriteLine($"Waypoint {i}: ({wx}, {wy})")
-Next
-
-' Clean up
-Framework_AI_DestroyPath(pathId)
-```
-
-### Example 8: Screen Shake Effect
-
-```vb
-' Trigger a screen shake (great for impacts/explosions)
-Framework_Camera_SetPosition(400, 300)
-Framework_Camera_Shake(
-    intensity:=15.0F,    ' Maximum offset in pixels
-    duration:=0.5F,      ' Duration in seconds
-    frequency:=30.0F,    ' Shakes per second
-    decay:=True          ' Gradually reduce intensity
-)
-
-' Update camera each frame
-Framework_Camera_Update(deltaTime)
-
-' In draw loop, use camera transform
+' In game loop
+Framework_Camera_Update()
 Framework_Camera_BeginMode()
-    ' Draw game world here (affected by shake)
-    Framework_Ecs_DrawAll()
+    Framework_Ecs_DrawSprites()
 Framework_Camera_EndMode()
 
-' Draw HUD outside camera (not affected by shake)
-Framework_DrawText("Score: 1000", 10, 10, 24, 255, 255, 255, 255)
+' On player hit - trigger shake
+Framework_Camera_Shake(12.0F, 0.4F)
 ```
 
-### Example 9: Controller Rumble/Vibration
+### Example 4: Audio with Groups and Fades
 
 ```vb
-' Check if gamepad is connected
-If Framework_IsGamepadAvailable(0) Then
-    ' Impact rumble - quick strong pulse for hits/explosions
-    Framework_Input_ImpactRumble(0, 1.0F)
+Framework_InitAudio()
 
-    ' Engine rumble - asymmetric for engine/car effects
-    Framework_Input_EngineRumble(0, 0.5F)
+' Load sounds into groups (0=SFX, 1=Music, 2=UI)
+Dim jumpSfx As Integer = Framework_Audio_LoadSound("jump.wav", 0)
+Dim bgMusic As Integer = Framework_Audio_LoadMusic("theme.ogg")
 
-    ' Custom pulse pattern
-    Framework_Input_PulseGamepad(0, 0.8F, 0.3F) ' intensity, duration
+Framework_Audio_PlayMusic(bgMusic)
+Framework_Audio_FadeInMusic(bgMusic, 2.0F)
 
-    ' Full control over both motors
-    Framework_Input_SetGamepadVibration(0, 0.3F, 0.8F, 1.0F) ' left, right, duration
+' Set spatial audio listener at player
+Framework_Audio_SetSpatialEnabled(True)
+Framework_Audio_SetSpatialFalloff(100, 800)
 
-    ' Check if still vibrating
-    If Framework_Input_IsGamepadVibrating(0) Then
-        Dim remaining = Framework_Input_GetVibrationTimeRemaining(0)
-        Console.WriteLine($"Vibration time remaining: {remaining:F2}s")
-    End If
-End If
+' Play jump sound at player world position
+Dim px, py As Single
+Framework_Ecs_GetTransformPosition(player, px, py)
+Framework_Audio_SetListenerPosition(px, py)
+Framework_Audio_PlaySoundAt(jumpSfx, px, py)
+
+' Each frame
+Framework_Audio_Update()
 ```
 
-### Example 10: Custom Shader Effects
+### Example 5: Scene Transitions
 
 ```vb
-' Load a built-in shader effect
-Dim grayscaleShader As Integer = Framework_Shader_LoadGrayscale()
-Dim outlineShader As Integer = Framework_Shader_LoadOutline()
+Dim menuScene As Integer = Framework_CreateScriptScene()
+Dim gameScene As Integer = Framework_CreateScriptScene()
 
-' Configure the outline shader
-Framework_Shader_SetVec4ByName(outlineShader, "outlineColor", 1.0F, 0.0F, 0.0F, 1.0F)
-Framework_Shader_SetFloatByName(outlineShader, "outlineThickness", 2.0F)
+' Change scene with a fade transition
+Framework_Scene_SetTransitionColor(0, 0, 0, 255)
+Framework_Scene_ChangeWithTransitionEx(gameScene, 1, 0.5F, 0)  ' Fade, 0.5s, Linear
+```
 
-' Apply shader while drawing
-Framework_Shader_BeginMode(outlineShader)
-    Framework_Ecs_DrawAll() ' All entities drawn with outline
-Framework_Shader_EndMode()
+### Example 6: Screen Shake
 
-' Draw UI without shader
-Framework_UI_Draw()
+```vb
+' Simple shake on player hit
+Framework_Camera_Shake(15.0F, 0.5F)
 
-' Clean up shaders when done
-Framework_Shader_Unload(grayscaleShader)
-Framework_Shader_Unload(outlineShader)
+' Directional shake (x-heavy for horizontal impact)
+Framework_Camera_ShakeEx(20.0F, 5.0F, 0.3F, 1.5F)
+
+' Screen flash effect
+Framework_Camera_Flash(255, 255, 255, 200, 0.15F)
 ```
 
 ---
 
 ## Core Framework
 
-### Window & Application
-
 ```vb
-' Initialize the framework
-Framework_Init(width As Integer, height As Integer, title As String)
-
-' Main loop control
+Framework_Initialize(width As Integer, height As Integer, title As String)
+Framework_Update()
 Framework_ShouldClose() As Boolean
-Framework_BeginFrame()
-Framework_EndFrame()
 Framework_Shutdown()
-
-' Window properties
-Framework_SetTargetFPS(fps As Integer)
-Framework_GetScreenWidth() As Integer
-Framework_GetScreenHeight() As Integer
-Framework_SetFullscreen(fullscreen As Boolean)
-Framework_ToggleFullscreen()
+Framework_Pause()
+Framework_Resume()
+Framework_IsPaused() As Boolean
+Framework_Quit()
+Framework_GetState() As Integer  ' Returns EngineState enum value
 ```
 
-### Drawing Primitives
+---
+
+## Timing & Time Control
 
 ```vb
-' Clear and background
+Framework_SetTargetFPS(fps As Integer)
+Framework_GetFPS() As Integer
+Framework_GetFrameTime() As Single
+Framework_GetDeltaTime() As Single          ' Alias for GetFrameTime
+Framework_GetTime() As Double              ' Total elapsed time in seconds
+Framework_GetFrameCount() As Long
+Framework_SetTimeScale(scale As Single)    ' 0.5 = half speed, 2.0 = double
+Framework_GetTimeScale() As Single
+Framework_SetFixedStep(dt As Double)       ' e.g., 1.0 / 60.0
+Framework_GetFixedStep() As Double
+Framework_StepFixed()                      ' Advance one fixed timestep manually
+```
+
+---
+
+## Drawing
+
+```vb
+' Frame control
+Framework_BeginDrawing()
+Framework_EndDrawing()
 Framework_ClearBackground(r As Byte, g As Byte, b As Byte, a As Byte)
 
-' Shapes
-Framework_DrawRectangle(x As Single, y As Single, w As Single, h As Single, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_DrawRectangleLines(x As Single, y As Single, w As Single, h As Single, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_DrawCircle(x As Single, y As Single, radius As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+' Primitives
+Framework_DrawPixel(x As Integer, y As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
 Framework_DrawLine(x1 As Single, y1 As Single, x2 As Single, y2 As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawRectangle(x As Single, y As Single, w As Single, h As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawCircle(cx As Single, cy As Single, radius As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawCircleLines(cx As Single, cy As Single, radius As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTriangle(x1 As Single, y1 As Single, x2 As Single, y2 As Single, x3 As Single, y3 As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTriangleLines(x1 As Single, y1 As Single, x2 As Single, y2 As Single, x3 As Single, y3 As Single, r As Byte, g As Byte, b As Byte, a As Byte)
 
-' Text
-Framework_DrawText(text As String, x As Single, y As Single, fontSize As Single, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_DrawTextEx(fontHandle As Integer, text As String, x As Single, y As Single, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+' Text & HUD
+Framework_DrawText(text As String, x As Single, y As Single, size As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawFPS(x As Integer, y As Integer)
+Framework_DrawGrid(slices As Integer, spacing As Single)
 ```
 
-### Input (Direct)
+---
+
+## Input — Keyboard
 
 ```vb
-' Keyboard
-Framework_IsKeyPressed(key As Integer) As Boolean
-Framework_IsKeyDown(key As Integer) As Boolean
-Framework_IsKeyReleased(key As Integer) As Boolean
+Framework_IsKeyPressed(key As Integer) As Boolean       ' True once per press
+Framework_IsKeyPressedRepeat(key As Integer) As Boolean ' True with OS key repeat
+Framework_IsKeyDown(key As Integer) As Boolean          ' True while held
+Framework_IsKeyReleased(key As Integer) As Boolean      ' True once on release
+Framework_IsKeyUp(key As Integer) As Boolean            ' True while not held
+Framework_GetKeyPressed() As Integer                    ' Key code of last pressed key
+Framework_GetCharPressed() As Integer                   ' Char code of last pressed char
+Framework_SetExitKey(key As Integer)                    ' Which key closes window
+```
 
-' Mouse
-Framework_IsMouseButtonPressed(button As Integer) As Boolean
-Framework_IsMouseButtonDown(button As Integer) As Boolean
+---
+
+## Input — Mouse
+
+```vb
 Framework_GetMouseX() As Single
 Framework_GetMouseY() As Single
+Framework_GetMousePosition() As Vector2
+Framework_GetMouseDelta() As Vector2
+Framework_SetMousePosition(x As Integer, y As Integer)
+Framework_SetMouseOffset(offsetX As Integer, offsetY As Integer)
+Framework_SetMouseScale(scaleX As Single, scaleY As Single)
 Framework_GetMouseWheelMove() As Single
+Framework_GetMouseWheelMoveV() As Vector2
+Framework_SetMouseCursor(cursor As Integer)
+Framework_IsMouseButtonPressed(button As Integer) As Boolean
+Framework_IsMouseButtonDown(button As Integer) As Boolean
+Framework_IsMouseButtonReleased(button As Integer) As Boolean
+Framework_IsMouseButtonUp(button As Integer) As Boolean
+Framework_ShowCursor()
+Framework_HideCursor()
+Framework_IsCursorHidden() As Boolean
+Framework_EnableCursor()
+Framework_DisableCursor()
+Framework_IsCursorOnScreen() As Boolean
 ```
 
 ---
 
-## Entity Component System
+## Collision Checks
 
-### Entity Management
-
-```vb
-' Create/Destroy
-Framework_Ecs_CreateEntity() As Integer
-Framework_Ecs_DestroyEntity(entity As Integer)
-Framework_Ecs_IsEntityValid(entity As Integer) As Boolean
-Framework_Ecs_GetEntityCount() As Integer
-Framework_Ecs_DestroyAllEntities()
-
-' Enable/Disable
-Framework_Ecs_SetEnabled(entity As Integer, enabled As Boolean)
-Framework_Ecs_IsEnabled(entity As Integer) As Boolean
-```
-
-### Transform Component
+These are pure math checks — no ECS involvement. For entity collider queries see [Physics Overlap Queries](#physics-overlap-queries).
 
 ```vb
-' Position
-Framework_Ecs_SetPosition(entity As Integer, x As Single, y As Single)
-Framework_Ecs_GetPosition(entity As Integer, ByRef x As Single, ByRef y As Single)
-Framework_Ecs_SetPositionX(entity As Integer, x As Single)
-Framework_Ecs_SetPositionY(entity As Integer, y As Single)
-
-' Rotation & Scale
-Framework_Ecs_SetRotation(entity As Integer, rotation As Single)
-Framework_Ecs_GetRotation(entity As Integer) As Single
-Framework_Ecs_SetScale(entity As Integer, scaleX As Single, scaleY As Single)
-Framework_Ecs_GetScale(entity As Integer, ByRef scaleX As Single, ByRef scaleY As Single)
-
-' Origin (pivot point)
-Framework_Ecs_SetOrigin(entity As Integer, originX As Single, originY As Single)
-```
-
-### Sprite Component
-
-```vb
-' Add/Remove
-Framework_Ecs_AddSprite(entity As Integer, textureHandle As Integer)
-Framework_Ecs_HasSprite(entity As Integer) As Boolean
-Framework_Ecs_RemoveSprite(entity As Integer)
-
-' Properties
-Framework_Ecs_SetSpriteTexture(entity As Integer, textureHandle As Integer)
-Framework_Ecs_SetSpriteSourceRect(entity As Integer, x As Single, y As Single, w As Single, h As Single)
-Framework_Ecs_SetSpriteTint(entity As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_Ecs_SetSpriteFlipX(entity As Integer, flip As Boolean)
-Framework_Ecs_SetSpriteFlipY(entity As Integer, flip As Boolean)
-Framework_Ecs_SetSpriteLayer(entity As Integer, layer As Integer)
-```
-
-### Parent-Child Hierarchy
-
-```vb
-Framework_Ecs_SetParent(entity As Integer, parentEntity As Integer)
-Framework_Ecs_GetParent(entity As Integer) As Integer
-Framework_Ecs_GetChildCount(entity As Integer) As Integer
-Framework_Ecs_GetChildAt(entity As Integer, index As Integer) As Integer
-Framework_Ecs_DetachFromParent(entity As Integer)
-```
-
-### Rendering
-
-```vb
-Framework_Ecs_DrawAll()  ' Draw all entities sorted by layer
-Framework_Ecs_DrawEntity(entity As Integer)  ' Draw specific entity
+Framework_CheckCollisionRecs(rec1 As Rectangle, rec2 As Rectangle) As Boolean
+Framework_CheckCollisionCircles(center1 As Vector2, radius1 As Single, center2 As Vector2, radius2 As Single) As Boolean
+Framework_CheckCollisionCircleRec(center As Vector2, radius As Single, rec As Rectangle) As Boolean
+Framework_CheckCollisionCircleLine(center As Vector2, radius As Single, p1 As Vector2, p2 As Vector2) As Boolean
+Framework_CheckCollisionPointRec(point As Vector2, rec As Rectangle) As Boolean
+Framework_CheckCollisionPointCircle(point As Vector2, center As Vector2, radius As Single) As Boolean
+Framework_CheckCollisionPointTriangle(point As Vector2, p1 As Vector2, p2 As Vector2, p3 As Vector2) As Boolean
+Framework_CheckCollisionPointLine(point As Vector2, p1 As Vector2, p2 As Vector2, threshold As Integer) As Boolean
+Framework_CheckCollisionPointPoly(point As Vector2, points As IntPtr, pointCount As Integer) As Boolean
+Framework_CheckCollisionLines(startPos1 As Vector2, endPos1 As Vector2, startPos2 As Vector2, endPos2 As Vector2, ByRef collisionPoint As Vector2) As Boolean
+Framework_GetCollisionRec(rec1 As Rectangle, rec2 As Rectangle) As Rectangle
 ```
 
 ---
 
-## Resource Management
-
-### Textures
+## Textures & Images
 
 ```vb
-Framework_LoadTextureH(path As String) As Integer
-Framework_AcquireTextureH(handle As Integer)
-Framework_ReleaseTextureH(handle As Integer)
+' Direct texture structs (lower-level)
+Framework_LoadTexture(fileName As String) As Texture2D
+Framework_UnloadTexture(texture As Texture2D)
+Framework_IsTextureValid(texture As Texture2D) As Boolean
+Framework_UpdateTexture(texture As Texture2D, pixels As IntPtr)
+Framework_UpdateTextureRec(texture As Texture2D, rec As Rectangle, pixels As IntPtr)
+Framework_GenTextureMipmaps(ByRef texture As Texture2D)
+Framework_SetTextureFilter(texture As Texture2D, filter As Integer)
+Framework_SetTextureWrap(texture As Texture2D, wrap As Integer)
+
+' Drawing
+Framework_DrawTexture(texture As Texture2D, posX As Integer, posY As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTextureV(texture As Texture2D, position As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTextureEx(texture As Texture2D, position As Vector2, rotation As Single, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTextureRec(texture As Texture2D, source As Rectangle, position As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTexturePro(texture As Texture2D, source As Rectangle, dest As Rectangle, origin As Vector2, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTextureNPatch(texture As Texture2D, nPatchInfo As NPatchInfo, dest As Rectangle, origin As Vector2, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+
+' CPU images
+Framework_LoadImage(fileName As String) As Image
+Framework_UnloadImage(image As Image)
+Framework_ImageColorInvert(ByRef image As Image)
+Framework_ImageResize(ByRef image As Image, newWidth As Integer, newHeight As Integer)
+Framework_ImageFlipVertical(ByRef image As Image)
+
+' Sprite sheets
+Framework_SpriteFrame(frameWidth As Integer, frameHeight As Integer, frameIndex As Integer) As Rectangle
+```
+
+---
+
+## Handle-Based Texture API
+
+A ref-counted handle system that caches textures by filename and automatically unloads when all handles are released. Prefer this over raw Texture2D for most use cases.
+
+```vb
+Framework_AcquireTextureH(fileName As String) As Integer  ' Returns handle; increments ref count
+Framework_ReleaseTextureH(handle As Integer)              ' Decrements ref count; unloads at 0
+Framework_IsTextureValidH(handle As Integer) As Boolean
 Framework_GetTextureWidth(handle As Integer) As Integer
 Framework_GetTextureHeight(handle As Integer) As Integer
+
+' Drawing by handle
+Framework_DrawTextureH(handle As Integer, x As Integer, y As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTextureVH(handle As Integer, position As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_DrawTextureExH(handle As Integer, position As Vector2, rotation As Single, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
 ```
 
-### Fonts
+**Example:**
+```vb
+' Load once — multiple callers can AcquireTextureH the same file, ref-counted
+Dim tex As Integer = Framework_AcquireTextureH("assets/player.png")
+Framework_DrawTextureH(tex, 100, 100, 255, 255, 255, 255)
+
+' Release when done
+Framework_ReleaseTextureH(tex)
+```
+
+---
+
+## Render Textures & Off-Screen Rendering
 
 ```vb
-Framework_LoadFontH(path As String, fontSize As Integer) As Integer
-Framework_AcquireFontH(handle As Integer)
+Framework_LoadRenderTexture(width As Integer, height As Integer) As RenderTexture2D
+Framework_UnloadRenderTexture(target As RenderTexture2D)
+Framework_IsRenderTextureValid(target As RenderTexture2D) As Boolean
+Framework_BeginTextureMode(target As RenderTexture2D)  ' Redirect all draws to texture
+Framework_EndTextureMode()                              ' Resume drawing to screen
+Framework_BeginMode2D(camera As Camera2D)              ' Apply camera transform
+Framework_EndMode2D()
+```
+
+**Example:**
+```vb
+Dim rt As RenderTexture2D = Framework_LoadRenderTexture(800, 600)
+
+' Render scene to texture
+Framework_BeginTextureMode(rt)
+    Framework_ClearBackground(0, 0, 0, 255)
+    Framework_Ecs_DrawSprites()
+Framework_EndTextureMode()
+
+' Draw texture to screen (flipped vertically — OpenGL convention)
+Framework_DrawTextureRec(rt.texture,
+    New Rectangle(0, 0, 800, -600),
+    New Vector2(0, 0),
+    New Color(255, 255, 255, 255))
+```
+
+---
+
+## Camera 2D — Basic
+
+The engine maintains a single global Camera2D.
+
+```vb
+Framework_Camera_SetPosition(x As Single, y As Single)
+Framework_Camera_SetTarget(x As Single, y As Single)
+Framework_Camera_SetRotation(rotation As Single)       ' Degrees
+Framework_Camera_SetZoom(zoom As Single)               ' 1.0 = normal
+Framework_Camera_SetOffset(x As Single, y As Single)  ' Screen-space offset
+Framework_Camera_GetPosition() As Vector2
+Framework_Camera_GetZoom() As Single
+Framework_Camera_GetRotation() As Single
+Framework_Camera_BeginMode()
+Framework_Camera_EndMode()
+Framework_Camera_ScreenToWorld(x As Single, y As Single) As Vector2
+Framework_Camera_WorldToScreen(x As Single, y As Single) As Vector2
+Framework_Camera_Reset()
+```
+
+---
+
+## Camera 2D — Enhanced
+
+```vb
+' Smooth entity follow
+Framework_Camera_SetFollowTarget(entityId As Integer)
+Framework_Camera_SetFollowLerp(lerp As Single)          ' 0.0 = no smoothing, 1.0 = instant
+Framework_Camera_SetFollowEnabled(enabled As Boolean)
+Framework_Camera_IsFollowEnabled() As Boolean
+
+' Deadzone — camera only moves when target leaves this rect
+Framework_Camera_SetDeadzone(width As Single, height As Single)
+Framework_Camera_SetDeadzoneEnabled(enabled As Boolean)
+
+' Look-ahead — shift camera in direction of travel
+Framework_Camera_SetLookahead(distance As Single)
+Framework_Camera_SetLookaheadVelocity(vx As Single, vy As Single)
+
+' Screen shake
+Framework_Camera_Shake(intensity As Single, duration As Single)
+Framework_Camera_ShakeEx(intensityX As Single, intensityY As Single, duration As Single, falloff As Single)
+Framework_Camera_StopShake()
+Framework_Camera_IsShaking() As Boolean
+
+' World bounds — camera won't show outside these limits
+Framework_Camera_SetBounds(x As Single, y As Single, width As Single, height As Single)
+Framework_Camera_GetBounds() As Rectangle
+Framework_Camera_SetZoomLimits(minZoom As Single, maxZoom As Single)
+
+' Smooth transitions
+Framework_Camera_ZoomTo(zoom As Single, duration As Single)
+Framework_Camera_ZoomAt(zoom As Single, worldX As Single, worldY As Single, duration As Single)
+Framework_Camera_RotateTo(rotation As Single, duration As Single)
+Framework_Camera_PanTo(x As Single, y As Single, duration As Single)
+Framework_Camera_PanBy(dx As Single, dy As Single, duration As Single)
+
+' Screen flash overlay
+Framework_Camera_Flash(r As Byte, g As Byte, b As Byte, a As Byte, duration As Single)
+
+' Must be called each frame when using follow/shake/zoom transitions
+Framework_Camera_Update()
+```
+
+---
+
+## Fonts & Text
+
+```vb
+' Direct font structs
+Framework_LoadFontEx(fileName As String, fontSize As Integer, codepoints As IntPtr, codepointCount As Integer) As Font
+Framework_UnloadFont(font As Font)
+Framework_DrawTextEx(font As Font, text As String, position As Vector2, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+
+' Handle-based (ref-counted, cached by filename+size)
+Framework_AcquireFontH(fileName As String, fontSize As Integer) As Integer
 Framework_ReleaseFontH(handle As Integer)
+Framework_IsFontValidH(handle As Integer) As Boolean
+Framework_DrawTextExH(handle As Integer, text As String, position As Vector2, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
 ```
 
-### Sounds
+---
+
+## Audio — Basic
+
+The basic API uses handle integers. For pooling, groups, and effects see [Audio Manager — Advanced](#audio-manager--advanced).
 
 ```vb
-Framework_LoadSoundH(path As String) As Integer
+' Init / Shutdown
+Framework_InitAudio()
+Framework_CloseAudio()
+Framework_SetMasterVolume(volume As Single)   ' 0.0 – 1.0
+Framework_GetMasterVolume() As Single
+Framework_PauseAllAudio()
+Framework_ResumeAllAudio()
+
+' Sounds
+Framework_LoadSoundH(fileName As String) As Integer
+Framework_UnloadSoundH(handle As Integer)
 Framework_PlaySoundH(handle As Integer)
 Framework_StopSoundH(handle As Integer)
+Framework_PauseSoundH(handle As Integer)
+Framework_ResumeSoundH(handle As Integer)
 Framework_SetSoundVolumeH(handle As Integer, volume As Single)
-```
+Framework_SetSoundPitchH(handle As Integer, pitch As Single)   ' 1.0 = normal
+Framework_SetSoundPanH(handle As Integer, pan As Single)       ' -1.0 left … 1.0 right
 
-### Music
-
-```vb
-Framework_LoadMusicH(path As String) As Integer
+' Music streams
+Framework_AcquireMusicH(fileName As String) As Integer
+Framework_ReleaseMusicH(handle As Integer)
+Framework_IsMusicValidH(handle As Integer) As Boolean
 Framework_PlayMusicH(handle As Integer)
 Framework_StopMusicH(handle As Integer)
 Framework_PauseMusicH(handle As Integer)
 Framework_ResumeMusicH(handle As Integer)
 Framework_SetMusicVolumeH(handle As Integer, volume As Single)
-Framework_UpdateMusicH(handle As Integer)
-Framework_IsMusicPlayingH(handle As Integer) As Boolean
+Framework_SetMusicPitchH(handle As Integer, pitch As Single)
+Framework_UpdateMusicH(handle As Integer)     ' Call each frame for active stream
+Framework_UpdateAllMusic()                    ' Call each frame — updates all active streams
 ```
 
 ---
 
-## Scene Management
+## Audio Manager — Advanced
 
-### Scene Callbacks
-
-```vb
-' Define scene callbacks structure
-Structure SceneCallbacks
-    OnEnter As SceneVoidFn
-    OnExit As SceneVoidFn
-    OnPause As SceneVoidFn
-    OnResume As SceneVoidFn
-    OnUpdateFixed As SceneUpdateFixedFn
-    OnUpdateFrame As SceneUpdateFrameFn
-    OnDraw As SceneVoidFn
-End Structure
-```
-
-### Scene Functions
+Managed audio system with groups, spatial audio, pooling, playlists, and crossfading.
 
 ```vb
-Framework_RegisterScene(name As String, callbacks As SceneCallbacks)
-Framework_UnregisterScene(name As String)
-Framework_PushScene(name As String)
-Framework_PopScene()
-Framework_SwitchScene(name As String)
-Framework_GetCurrentScene() As String
-Framework_GetSceneStackSize() As Integer
-```
-
-### Transition Types
-
-| Value | Type | Description |
-|-------|------|-------------|
-| 0 | None | Instant switch |
-| 1 | Fade | Fade to black |
-| 2 | SlideLeft | Slide left |
-| 3 | SlideRight | Slide right |
-| 4 | SlideUp | Slide up |
-| 5 | SlideDown | Slide down |
-| 6 | WipeLeft | Wipe left |
-| 7 | WipeRight | Wipe right |
-| 8 | CircleIrisIn | Circle iris close |
-| 9 | CircleIrisOut | Circle iris open |
-| 10 | Pixelate | Pixelate transition |
-| 11 | Dissolve | Dissolve effect |
-
-```vb
-Framework_Scene_SetTransition(transitionType As Integer, duration As Single, easing As Integer)
-Framework_Scene_IsTransitioning() As Boolean
-```
-
----
-
-## Tilemap System
-
-### Tileset
-
-```vb
-Framework_Tileset_Create(textureHandle As Integer, tileWidth As Integer, tileHeight As Integer) As Integer
-Framework_Tileset_Destroy(tilesetHandle As Integer)
-Framework_Tileset_SetTileCollision(tilesetHandle As Integer, tileId As Integer, solid As Boolean)
-Framework_Tileset_GetTileCollision(tilesetHandle As Integer, tileId As Integer) As Boolean
-```
-
-### Tilemap
-
-```vb
-Framework_Tilemap_Create(tilesetHandle As Integer, width As Integer, height As Integer, layer As Integer) As Integer
-Framework_Tilemap_Destroy(tilemapHandle As Integer)
-Framework_Tilemap_SetTile(tilemapHandle As Integer, x As Integer, y As Integer, tileId As Integer)
-Framework_Tilemap_GetTile(tilemapHandle As Integer, x As Integer, y As Integer) As Integer
-Framework_Tilemap_Fill(tilemapHandle As Integer, tileId As Integer)
-Framework_Tilemap_SetPosition(tilemapHandle As Integer, x As Single, y As Single)
-Framework_Tilemap_Draw(tilemapHandle As Integer)
-Framework_Tilemap_CheckCollision(tilemapHandle As Integer, x As Single, y As Single, w As Single, h As Single) As Boolean
-```
-
----
-
-## Animation System
-
-### Animation Clips
-
-```vb
-Framework_AnimClip_Create(name As String, textureHandle As Integer, frameCount As Integer) As Integer
-Framework_AnimClip_Destroy(clipHandle As Integer)
-Framework_AnimClip_SetFrame(clipHandle As Integer, frameIndex As Integer, srcX As Single, srcY As Single, srcW As Single, srcH As Single, duration As Single)
-Framework_AnimClip_SetLoopMode(clipHandle As Integer, loopMode As Integer)
-```
-
-### Loop Modes
-
-| Value | Mode | Description |
-|-------|------|-------------|
-| 0 | None | Play once and stop |
-| 1 | Repeat | Loop forever |
-| 2 | PingPong | Play forward then backward |
-
-### Animator Component
-
-```vb
-Framework_Ecs_AddAnimator(entity As Integer)
-Framework_Ecs_HasAnimator(entity As Integer) As Boolean
-Framework_Ecs_SetAnimatorClip(entity As Integer, clipHandle As Integer)
-Framework_Ecs_AnimatorPlay(entity As Integer)
-Framework_Ecs_AnimatorPause(entity As Integer)
-Framework_Ecs_AnimatorStop(entity As Integer)
-Framework_Ecs_AnimatorSetSpeed(entity As Integer, speed As Single)
-Framework_Ecs_AnimatorIsPlaying(entity As Integer) As Boolean
-Framework_Animators_Update(dt As Single)
-```
-
----
-
-## Sprite Sheet System
-
-Grid-based sprite sheet tools for easy frame extraction and animation creation.
-
-### Sheet Creation
-
-```vb
-' Create sprite sheet from texture with uniform grid
-Framework_SpriteSheet_Create(textureHandle As Integer, frameWidth As Integer, frameHeight As Integer, columns As Integer, rows As Integer, paddingX As Integer, paddingY As Integer) As Integer
-Framework_SpriteSheet_Destroy(sheetId As Integer)
-Framework_SpriteSheet_DestroyAll()
-Framework_SpriteSheet_IsValid(sheetId As Integer) As Boolean
-Framework_SpriteSheet_GetCount() As Integer
-```
-
-### Frame Access
-
-```vb
-' Get frame info
-Framework_SpriteSheet_GetTextureHandle(sheetId As Integer) As Integer
-Framework_SpriteSheet_GetFrameCount(sheetId As Integer) As Integer
-Framework_SpriteSheet_GetColumns(sheetId As Integer) As Integer
-Framework_SpriteSheet_GetRows(sheetId As Integer) As Integer
-Framework_SpriteSheet_GetFrameSize(sheetId As Integer, ByRef width As Integer, ByRef height As Integer)
-
-' Get frame rectangle by index (left-to-right, top-to-bottom)
-Framework_SpriteSheet_GetFrameRect(sheetId As Integer, frameIndex As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
-
-' Get frame rectangle by row/column
-Framework_SpriteSheet_GetFrameRectRC(sheetId As Integer, row As Integer, col As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
-```
-
-### Animation Integration
-
-```vb
-' Create animation clip from sprite sheet
-Framework_AnimClip_CreateFromSheet(name As String, sheetId As Integer, startFrame As Integer, frameCount As Integer, frameDuration As Single, loopMode As Integer) As Integer
-
-' Create animation from a specific row
-Framework_AnimClip_CreateFromSheetRow(name As String, sheetId As Integer, row As Integer, startCol As Integer, frameCount As Integer, frameDuration As Single, loopMode As Integer) As Integer
-```
-
-### Quick Draw
-
-```vb
-' Draw a frame directly without entity
-Framework_SpriteSheet_DrawFrame(sheetId As Integer, frameIndex As Integer, x As Single, y As Single, r As Byte, g As Byte, b As Byte, a As Byte)
-```
-
-### Example Usage
-
-```vb
-' Load a 4x4 sprite sheet (16 frames, 32x32 each)
-Dim texture = Framework_LoadTextureH("player_walk.png")
-Dim sheet = Framework_SpriteSheet_Create(texture, 32, 32, 4, 4, 0, 0)
-
-' Create walk animation from first row (frames 0-3)
-Dim walkClip = Framework_AnimClip_CreateFromSheet("walk", sheet, 0, 4, 0.1F, 1)
-
-' Or from a specific row
-Dim runClip = Framework_AnimClip_CreateFromSheetRow("run", sheet, 1, 0, 4, 0.08F, 1)
-
-' Attach to entity
-Framework_Ecs_AddAnimator(player)
-Framework_Ecs_SetAnimatorClip(player, walkClip)
-Framework_Ecs_AnimatorPlay(player)
-```
-
----
-
-## Particle System
-
-### Emitter Component
-
-```vb
-Framework_Ecs_AddParticleEmitter(entity As Integer, textureHandle As Integer)
-Framework_Ecs_HasParticleEmitter(entity As Integer) As Boolean
-Framework_Ecs_RemoveParticleEmitter(entity As Integer)
-```
-
-### Configuration
-
-```vb
-Framework_Ecs_SetEmitterRate(entity As Integer, particlesPerSecond As Single)
-Framework_Ecs_SetEmitterLifetime(entity As Integer, minLife As Single, maxLife As Single)
-Framework_Ecs_SetEmitterVelocity(entity As Integer, minVx As Single, minVy As Single, maxVx As Single, maxVy As Single)
-Framework_Ecs_SetEmitterColorStart(entity As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_Ecs_SetEmitterColorEnd(entity As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_Ecs_SetEmitterSize(entity As Integer, startSize As Single, endSize As Single)
-Framework_Ecs_SetEmitterGravity(entity As Integer, gx As Single, gy As Single)
-Framework_Ecs_SetEmitterSpread(entity As Integer, angleDegrees As Single)
-Framework_Ecs_SetEmitterDirection(entity As Integer, dirX As Single, dirY As Single)
-Framework_Ecs_SetEmitterMaxParticles(entity As Integer, maxParticles As Integer)
-```
-
-### Control
-
-```vb
-Framework_Ecs_EmitterStart(entity As Integer)
-Framework_Ecs_EmitterStop(entity As Integer)
-Framework_Ecs_EmitterBurst(entity As Integer, count As Integer)
-Framework_Ecs_EmitterIsActive(entity As Integer) As Boolean
-Framework_Ecs_EmitterGetParticleCount(entity As Integer) As Integer
-
-' Update and draw all particles
-Framework_Particles_Update(dt As Single)
-Framework_Particles_Draw()
-```
-
----
-
-## UI System
-
-### Element Types
-
-| Type | Description |
-|------|-------------|
-| Label | Text display |
-| Button | Clickable button |
-| Panel | Container |
-| Slider | Value slider |
-| Checkbox | Toggle |
-| TextInput | Text entry |
-| ProgressBar | Progress display |
-| Image | Texture display |
-
-### Creating Elements
-
-```vb
-Framework_UI_CreateLabel(text As String, x As Single, y As Single) As Integer
-Framework_UI_CreateButton(text As String, x As Single, y As Single, width As Single, height As Single) As Integer
-Framework_UI_CreatePanel(x As Single, y As Single, width As Single, height As Single) As Integer
-Framework_UI_CreateSlider(x As Single, y As Single, width As Single, minVal As Single, maxVal As Single, initialVal As Single) As Integer
-Framework_UI_CreateCheckbox(text As String, x As Single, y As Single, initialState As Boolean) As Integer
-Framework_UI_CreateTextInput(x As Single, y As Single, width As Single, height As Single, placeholder As String) As Integer
-Framework_UI_CreateProgressBar(x As Single, y As Single, width As Single, height As Single, initialValue As Single) As Integer
-Framework_UI_CreateImage(textureHandle As Integer, x As Single, y As Single, width As Single, height As Single) As Integer
-Framework_UI_Destroy(elementId As Integer)
-```
-
-### Anchor Points
-
-| Value | Anchor |
-|-------|--------|
-| 0 | TopLeft |
-| 1 | TopCenter |
-| 2 | TopRight |
-| 3 | MiddleLeft |
-| 4 | MiddleCenter |
-| 5 | MiddleRight |
-| 6 | BottomLeft |
-| 7 | BottomCenter |
-| 8 | BottomRight |
-
-### Properties
-
-```vb
-Framework_UI_SetPosition(elementId As Integer, x As Single, y As Single)
-Framework_UI_SetSize(elementId As Integer, width As Single, height As Single)
-Framework_UI_SetAnchor(elementId As Integer, anchor As Integer)
-Framework_UI_SetVisible(elementId As Integer, visible As Boolean)
-Framework_UI_SetEnabled(elementId As Integer, enabled As Boolean)
-Framework_UI_SetParent(elementId As Integer, parentId As Integer)
-Framework_UI_SetLayer(elementId As Integer, layer As Integer)
-Framework_UI_SetText(elementId As Integer, text As String)
-Framework_UI_SetValue(elementId As Integer, value As Single)
-Framework_UI_GetValue(elementId As Integer) As Single
-Framework_UI_SetChecked(elementId As Integer, checked As Boolean)
-Framework_UI_IsChecked(elementId As Integer) As Boolean
-```
-
-### Styling
-
-```vb
-Framework_UI_SetBackgroundColor(elementId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_UI_SetTextColor(elementId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_UI_SetBorderColor(elementId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_UI_SetHoverColor(elementId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_UI_SetPressedColor(elementId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_UI_SetBorderWidth(elementId As Integer, width As Single)
-Framework_UI_SetCornerRadius(elementId As Integer, radius As Single)
-Framework_UI_SetPadding(elementId As Integer, left As Single, top As Single, right As Single, bottom As Single)
-```
-
-### Update/Draw
-
-```vb
-Framework_UI_Update()
-Framework_UI_Draw()
-Framework_UI_GetHovered() As Integer
-Framework_UI_GetFocused() As Integer
-```
-
----
-
-## Physics System
-
-### Body Types
-
-| Value | Type | Description |
-|-------|------|-------------|
-| 0 | Static | Immovable |
-| 1 | Dynamic | Fully simulated |
-| 2 | Kinematic | Controlled movement |
-
-### World Settings
-
-```vb
-Framework_Physics_SetGravity(gx As Single, gy As Single)
-Framework_Physics_GetGravity(ByRef gx As Single, ByRef gy As Single)
-Framework_Physics_SetEnabled(enabled As Boolean)
-Framework_Physics_IsEnabled() As Boolean
-```
-
-### Body Management
-
-```vb
-Framework_Physics_CreateBody(bodyType As Integer, x As Single, y As Single) As Integer
-Framework_Physics_DestroyBody(bodyHandle As Integer)
-Framework_Physics_IsBodyValid(bodyHandle As Integer) As Boolean
-Framework_Physics_DestroyAllBodies()
-```
-
-### Body Properties
-
-```vb
-Framework_Physics_SetBodyPosition(bodyHandle As Integer, x As Single, y As Single)
-Framework_Physics_GetBodyPosition(bodyHandle As Integer, ByRef x As Single, ByRef y As Single)
-Framework_Physics_SetBodyVelocity(bodyHandle As Integer, vx As Single, vy As Single)
-Framework_Physics_GetBodyVelocity(bodyHandle As Integer, ByRef vx As Single, ByRef vy As Single)
-Framework_Physics_ApplyForce(bodyHandle As Integer, fx As Single, fy As Single)
-Framework_Physics_ApplyImpulse(bodyHandle As Integer, ix As Single, iy As Single)
-Framework_Physics_SetBodyMass(bodyHandle As Integer, mass As Single)
-Framework_Physics_SetBodyRestitution(bodyHandle As Integer, restitution As Single)
-Framework_Physics_SetBodyFriction(bodyHandle As Integer, friction As Single)
-Framework_Physics_SetBodyGravityScale(bodyHandle As Integer, scale As Single)
-```
-
-### Collision Shapes
-
-```vb
-Framework_Physics_SetBodyCircle(bodyHandle As Integer, radius As Single)
-Framework_Physics_SetBodyBox(bodyHandle As Integer, width As Single, height As Single)
-Framework_Physics_SetBodyTrigger(bodyHandle As Integer, isTrigger As Boolean)
-```
-
-### Entity Binding
-
-```vb
-Framework_Physics_BindToEntity(bodyHandle As Integer, entityId As Integer)
-Framework_Physics_GetBoundEntity(bodyHandle As Integer) As Integer
-Framework_Physics_GetEntityBody(entityId As Integer) As Integer
-```
-
-### Simulation
-
-```vb
-Framework_Physics_Step(dt As Single)
-Framework_Physics_SyncToEntities()
-Framework_Physics_SetDebugDraw(enabled As Boolean)
-Framework_Physics_DrawDebug()
-```
-
-### Queries
-
-```vb
-Framework_Physics_RaycastFirst(startX As Single, startY As Single, dirX As Single, dirY As Single, maxDist As Single, ByRef hitX As Single, ByRef hitY As Single, ByRef hitNormalX As Single, ByRef hitNormalY As Single) As Integer
-Framework_Physics_QueryCircle(x As Single, y As Single, radius As Single, bodyBuffer() As Integer, bufferSize As Integer) As Integer
-Framework_Physics_QueryBox(x As Single, y As Single, width As Single, height As Single, bodyBuffer() As Integer, bufferSize As Integer) As Integer
-```
-
----
-
-## Audio Manager
-
-### Audio Groups
-
-| Value | Group |
-|-------|-------|
-| 0 | Master |
-| 1 | Music |
-| 2 | SFX |
-| 3 | Voice |
-| 4 | Ambient |
-
-### Volume Control
-
-```vb
+' Volume groups
 Framework_Audio_SetGroupVolume(group As Integer, volume As Single)
 Framework_Audio_GetGroupVolume(group As Integer) As Single
 Framework_Audio_SetGroupMuted(group As Integer, muted As Boolean)
 Framework_Audio_IsGroupMuted(group As Integer) As Boolean
-Framework_Audio_SetMasterVolume(volume As Single)
-Framework_Audio_GetMasterVolume() As Single
-```
+Framework_Audio_FadeGroupVolume(group As Integer, targetVolume As Single, duration As Single)
 
-### Spatial Audio
+' Managed sounds (tracked by the audio manager)
+Framework_Audio_LoadSound(fileName As String, group As Integer) As Integer  ' Returns soundId
+Framework_Audio_UnloadSound(soundId As Integer)
+Framework_Audio_PlaySound(soundId As Integer)
+Framework_Audio_PlaySoundEx(soundId As Integer, volume As Single, pitch As Single, pan As Single)
+Framework_Audio_StopSound(soundId As Integer)
+Framework_Audio_SetSoundGroup(soundId As Integer, group As Integer)
+Framework_Audio_GetSoundGroup(soundId As Integer) As Integer
 
-```vb
+' Spatial audio
 Framework_Audio_SetListenerPosition(x As Single, y As Single)
-Framework_Audio_PlaySoundAt(soundHandle As Integer, x As Single, y As Single) As Integer
-Framework_Audio_SetSoundPosition(playId As Integer, x As Single, y As Single)
-Framework_Audio_SetMaxDistance(distance As Single)
-Framework_Audio_SetRolloffFactor(factor As Single)
-```
+Framework_Audio_PlaySoundAt(soundId As Integer, x As Single, y As Single)
+Framework_Audio_PlaySoundAtEx(soundId As Integer, x As Single, y As Single, volume As Single, pitch As Single)
+Framework_Audio_SetSpatialFalloff(minDistance As Single, maxDistance As Single)
+Framework_Audio_SetSpatialEnabled(enabled As Boolean)
 
-### Music Streaming
+' Sound pooling — pre-allocate N instances for frequently played sounds
+Framework_Audio_CreatePool(soundId As Integer, count As Integer) As Integer  ' Returns poolId
+Framework_Audio_DestroyPool(poolId As Integer)
+Framework_Audio_PlayFromPool(poolId As Integer)
+Framework_Audio_PlayFromPoolEx(poolId As Integer, volume As Single, pitch As Single, pan As Single)
 
-```vb
-Framework_Audio_PlayMusic(musicHandle As Integer)
-Framework_Audio_StopMusic()
-Framework_Audio_PauseMusic()
-Framework_Audio_ResumeMusic()
-Framework_Audio_CrossfadeTo(musicHandle As Integer, duration As Single)
-Framework_Audio_FadeIn(duration As Single)
-Framework_Audio_FadeOut(duration As Single)
-```
+' Managed music
+Framework_Audio_LoadMusic(fileName As String) As Integer  ' Returns musicId
+Framework_Audio_UnloadMusic(musicId As Integer)
+Framework_Audio_PlayMusic(musicId As Integer)
+Framework_Audio_StopMusic(musicId As Integer)
+Framework_Audio_PauseMusic(musicId As Integer)
+Framework_Audio_ResumeMusic(musicId As Integer)
+Framework_Audio_SetMusicVolume(musicId As Integer, volume As Single)
+Framework_Audio_SetMusicPitch(musicId As Integer, pitch As Single)
+Framework_Audio_SetMusicLooping(musicId As Integer, loop As Boolean)
+Framework_Audio_IsMusicPlaying(musicId As Integer) As Boolean
+Framework_Audio_GetMusicLength(musicId As Integer) As Single    ' Duration in seconds
+Framework_Audio_GetMusicPosition(musicId As Integer) As Single  ' Playback position in seconds
+Framework_Audio_SeekMusic(musicId As Integer, position As Single)
 
----
+' Transitions
+Framework_Audio_CrossfadeTo(fromMusicId As Integer, toMusicId As Integer, duration As Single)
+Framework_Audio_FadeOutMusic(musicId As Integer, duration As Single)
+Framework_Audio_FadeInMusic(musicId As Integer, duration As Single)
 
-## Camera System
+' Playlists
+Framework_Audio_CreatePlaylist() As Integer   ' Returns playlistId
+Framework_Audio_DestroyPlaylist(playlistId As Integer)
+Framework_Audio_PlaylistAdd(playlistId As Integer, musicId As Integer)
+Framework_Audio_PlaylistRemove(playlistId As Integer, index As Integer)
+Framework_Audio_PlaylistPlay(playlistId As Integer)
+Framework_Audio_PlaylistNext(playlistId As Integer)
+Framework_Audio_PlaylistPrev(playlistId As Integer)
+Framework_Audio_PlaylistSetShuffle(playlistId As Integer, shuffle As Boolean)
+Framework_Audio_PlaylistSetRepeat(playlistId As Integer, repeat As Boolean)
 
-### Basic Camera
-
-```vb
-Framework_Camera_SetPosition(x As Single, y As Single)
-Framework_Camera_GetPosition(ByRef x As Single, ByRef y As Single)
-Framework_Camera_SetZoom(zoom As Single)
-Framework_Camera_GetZoom() As Single
-Framework_Camera_SetRotation(rotation As Single)
-Framework_Camera_GetRotation() As Single
-```
-
-### Camera Rendering
-
-```vb
-Framework_Camera_BeginMode()  ' Apply camera transform
-Framework_Camera_EndMode()    ' Restore normal rendering
-```
-
-### Smooth Follow
-
-```vb
-Framework_Camera_SetTarget(entity As Integer)
-Framework_Camera_SetFollowSpeed(speed As Single)
-Framework_Camera_SetDeadzone(width As Single, height As Single)
-Framework_Camera_SetLookahead(enabled As Boolean, amount As Single)
-```
-
-### Effects
-
-```vb
-Framework_Camera_Shake(intensity As Single, duration As Single)
-Framework_Camera_ShakeWithFrequency(intensity As Single, duration As Single, frequency As Single)
-Framework_Camera_SetShakeDecay(decay As Single)
-Framework_Camera_StopShake()
-Framework_Camera_IsShaking() As Boolean
-Framework_Camera_Flash(r As Byte, g As Byte, b As Byte, duration As Single)
-```
-
-### Bounds & Zoom
-
-```vb
-Framework_Camera_SetBounds(minX As Single, minY As Single, maxX As Single, maxY As Single)
-Framework_Camera_ClearBounds()
-Framework_Camera_SetZoomLimits(minZoom As Single, maxZoom As Single)
-Framework_Camera_ZoomTo(targetZoom As Single, duration As Single, easing As Integer)
-Framework_Camera_ZoomAtPoint(targetZoom As Single, worldX As Single, worldY As Single, duration As Single)
-```
-
-### Update
-
-```vb
-Framework_Camera_Update(dt As Single)
+' Must be called each frame
+Framework_Audio_Update()
 ```
 
 ---
 
-## Input Manager
-
-### Actions
+## Audio Effects & Filters
 
 ```vb
-Framework_Input_CreateAction(name As String) As Integer
-Framework_Input_DestroyAction(actionHandle As Integer)
-Framework_Input_GetAction(name As String) As Integer
-```
+' Filters (low-pass, high-pass, band-pass)
+Framework_Audio_CreateFilter(filterType As Integer) As Integer  ' Returns filterId
+Framework_Audio_DestroyFilter(filterId As Integer)
+Framework_Audio_SetFilterCutoff(filterId As Integer, frequency As Single)
+Framework_Audio_SetFilterResonance(filterId As Integer, resonance As Single)
+Framework_Audio_SetFilterGain(filterId As Integer, gain As Single)
+Framework_Audio_ApplyFilterToSound(filterId As Integer, soundId As Integer)
+Framework_Audio_ApplyFilterToGroup(filterId As Integer, group As Integer)
+Framework_Audio_RemoveFilterFromSound(filterId As Integer, soundId As Integer)
+Framework_Audio_RemoveFilterFromGroup(filterId As Integer, group As Integer)
+Framework_Audio_SetFilterEnabled(filterId As Integer, enabled As Boolean)
+Framework_Audio_IsFilterEnabled(filterId As Integer) As Boolean
 
-### Bindings
+' Reverb
+Framework_Audio_CreateReverb() As Integer  ' Returns reverbId
+Framework_Audio_DestroyReverb(reverbId As Integer)
+Framework_Audio_SetReverbDecay(reverbId As Integer, time As Single)
+Framework_Audio_SetReverbDensity(reverbId As Integer, density As Single)
+Framework_Audio_SetReverbDiffusion(reverbId As Integer, diffusion As Single)
+Framework_Audio_SetReverbRoomSize(reverbId As Integer, size As Single)
+Framework_Audio_SetReverbWetDry(reverbId As Integer, wet As Single)  ' 0.0 dry … 1.0 wet
+Framework_Audio_SetReverbPreDelay(reverbId As Integer, delay As Single)
+Framework_Audio_ApplyReverbToSound(reverbId As Integer, soundId As Integer)
+Framework_Audio_ApplyReverbToGroup(reverbId As Integer, group As Integer)
+Framework_Audio_RemoveReverbFromSound(reverbId As Integer, soundId As Integer)
+Framework_Audio_RemoveReverbFromGroup(reverbId As Integer, group As Integer)
+Framework_Audio_SetReverbPreset(reverbId As Integer, preset As Integer)
 
-```vb
-Framework_Input_BindKey(actionHandle As Integer, keyCode As Integer)
-Framework_Input_UnbindKey(actionHandle As Integer, keyCode As Integer)
-Framework_Input_BindMouseButton(actionHandle As Integer, button As Integer)
-Framework_Input_BindGamepadButton(actionHandle As Integer, button As Integer)
-Framework_Input_BindGamepadAxis(actionHandle As Integer, axis As Integer, scale As Single)
-```
+' Echo
+Framework_Audio_CreateEcho(delay As Single, feedback As Single) As Integer
+Framework_Audio_DestroyEcho(echoId As Integer)
 
-### Queries
+' Distortion
+Framework_Audio_CreateDistortion(drive As Single, mix As Single) As Integer
+Framework_Audio_DestroyDistortion(distortionId As Integer)
 
-```vb
-Framework_Input_IsActionPressed(actionHandle As Integer) As Boolean
-Framework_Input_IsActionDown(actionHandle As Integer) As Boolean
-Framework_Input_IsActionReleased(actionHandle As Integer) As Boolean
-Framework_Input_GetActionValue(actionHandle As Integer) As Single
-```
-
-### Configuration
-
-```vb
-Framework_Input_SetActionDeadzone(actionHandle As Integer, deadzone As Single)
-Framework_Input_SetActionSensitivity(actionHandle As Integer, sensitivity As Single)
-```
-
-### Gamepad
-
-```vb
-Framework_Input_IsGamepadAvailable(gamepadId As Integer) As Boolean
-Framework_Input_GetGamepadName(gamepadId As Integer) As String
-```
-
-### Rumble/Vibration (XInput-based for Windows)
-
-```vb
-' Core vibration control
-Framework_Input_SetGamepadVibration(gamepadId As Integer, leftMotor As Single, rightMotor As Single, duration As Single)
-Framework_Input_StopGamepadVibration(gamepadId As Integer)
-
-' Convenience patterns (NEW)
-Framework_Input_PulseGamepad(gamepadId As Integer, intensity As Single, duration As Single)
-  ' Quick pulse on both motors - good for pickups, small hits
-Framework_Input_ImpactRumble(gamepadId As Integer, intensity As Single)
-  ' Heavy left motor rumble for explosions, big hits (0.15s duration)
-Framework_Input_EngineRumble(gamepadId As Integer, intensity As Single)
-  ' Continuous right motor for engines, ongoing effects (no timeout)
-
-' State queries
-Framework_Input_IsGamepadVibrating(gamepadId As Integer) As Boolean
-Framework_Input_GetVibrationTimeRemaining(gamepadId As Integer) As Single
-```
-
-### Rebinding
-
-```vb
-Framework_Input_StartListening(actionHandle As Integer)
-Framework_Input_IsListening() As Boolean
-Framework_Input_StopListening()
-Framework_Input_WasBindingCaptured() As Boolean
-```
-
-### Persistence
-
-```vb
-Framework_Input_SaveBindings(filename As String) As Boolean
-Framework_Input_LoadBindings(filename As String) As Boolean
+' Compressor
+Framework_Audio_CreateCompressor(threshold As Single, ratio As Single) As Integer
+Framework_Audio_DestroyCompressor(compressorId As Integer)
 ```
 
 ---
 
-## Save/Load System
-
-### Save Slots
+## Shaders
 
 ```vb
-Framework_Save_SetDirectory(directory As String)
-Framework_Save_SlotExists(slot As Integer) As Boolean
-Framework_Save_DeleteSlot(slot As Integer) As Boolean
+Framework_LoadShaderF(vsFileName As String, fsFileName As String) As Shader
+Framework_UnloadShader(shader As Shader)
+Framework_BeginShaderMode(shader As Shader)
+Framework_EndShaderMode()
+Framework_GetShaderLocation(shader As Shader, uniformName As String) As Integer
+
+' Set uniforms
+Framework_SetShaderValue1f(shader As Shader, locIndex As Integer, value As Single)
+Framework_SetShaderValue2f(shader As Shader, locIndex As Integer, x As Single, y As Single)
+Framework_SetShaderValue3f(shader As Shader, locIndex As Integer, x As Single, y As Single, z As Single)
+Framework_SetShaderValue4f(shader As Shader, locIndex As Integer, x As Single, y As Single, z As Single, w As Single)
+Framework_SetShaderValue1i(shader As Shader, locIndex As Integer, value As Integer)
 ```
 
-### Saving Data
-
+**Example:**
 ```vb
-Framework_Save_BeginSave(slot As Integer) As Boolean
-Framework_Save_WriteInt(key As String, value As Integer)
-Framework_Save_WriteFloat(key As String, value As Single)
-Framework_Save_WriteBool(key As String, value As Boolean)
-Framework_Save_WriteString(key As String, value As String)
-Framework_Save_WriteVector2(key As String, x As Single, y As Single)
-Framework_Save_EndSave() As Boolean
-```
+Dim vignette As Shader = Framework_LoadShaderF(Nothing, "assets/shaders/vignette.fs")
+Dim intensityLoc As Integer = Framework_GetShaderLocation(vignette, "intensity")
+Framework_SetShaderValue1f(vignette, intensityLoc, 0.6F)
 
-### Loading Data
-
-```vb
-Framework_Save_BeginLoad(slot As Integer) As Boolean
-Framework_Save_ReadInt(key As String, defaultValue As Integer) As Integer
-Framework_Save_ReadFloat(key As String, defaultValue As Single) As Single
-Framework_Save_ReadBool(key As String, defaultValue As Boolean) As Boolean
-Framework_Save_ReadString(key As String, defaultValue As String) As String
-Framework_Save_EndLoad() As Boolean
-```
-
-### Auto-Save
-
-```vb
-Framework_Save_SetAutoSaveEnabled(enabled As Boolean)
-Framework_Save_SetAutoSaveInterval(seconds As Single)
-Framework_Save_SetAutoSaveSlot(slot As Integer)
-Framework_Save_TriggerAutoSave()
-Framework_Save_Update(dt As Single)
-```
-
-### Settings (Persistent)
-
-```vb
-Framework_Settings_SetInt(key As String, value As Integer)
-Framework_Settings_GetInt(key As String, defaultValue As Integer) As Integer
-Framework_Settings_SetFloat(key As String, value As Single)
-Framework_Settings_GetFloat(key As String, defaultValue As Single) As Single
-Framework_Settings_SetBool(key As String, value As Boolean)
-Framework_Settings_GetBool(key As String, defaultValue As Boolean) As Boolean
-Framework_Settings_Save() As Boolean
-Framework_Settings_Load() As Boolean
+' Apply to full-screen render texture
+Framework_BeginShaderMode(vignette)
+    Framework_DrawTexturePro(rt.texture, ...)
+Framework_EndShaderMode()
 ```
 
 ---
 
-## Tweening System
+## Scene System — Basic
 
-### Easing Types
-
-| Value | Easing | Description |
-|-------|--------|-------------|
-| 0 | Linear | Constant speed |
-| 1 | QuadIn | Accelerate |
-| 2 | QuadOut | Decelerate |
-| 3 | QuadInOut | Accel then decel |
-| 4-6 | Cubic* | Cubic easing |
-| 7-9 | Quart* | Quartic easing |
-| 10-12 | Quint* | Quintic easing |
-| 13-15 | Sine* | Sinusoidal |
-| 16-18 | Expo* | Exponential |
-| 19-21 | Circ* | Circular |
-| 22-24 | Back* | Overshoot |
-| 25-27 | Elastic* | Elastic spring |
-| 28-30 | Bounce* | Bouncing |
-
-### Creating Tweens
+A scene holds its own entity set, callbacks, and lifecycle. Scenes can be stacked.
 
 ```vb
-Framework_Tween_Float(from As Single, to As Single, duration As Single, easing As Integer) As Integer
-Framework_Tween_FloatTo(ByRef target As Single, to As Single, duration As Single, easing As Integer) As Integer
-Framework_Tween_Vector2(fromX As Single, fromY As Single, toX As Single, toY As Single, duration As Single, easing As Integer) As Integer
-Framework_Tween_Color(fromR As Byte, fromG As Byte, fromB As Byte, fromA As Byte, toR As Byte, toG As Byte, toB As Byte, toA As Byte, duration As Single, easing As Integer) As Integer
-```
-
-### Tween Control
-
-```vb
-Framework_Tween_Play(tweenId As Integer)
-Framework_Tween_Pause(tweenId As Integer)
-Framework_Tween_Resume(tweenId As Integer)
-Framework_Tween_Stop(tweenId As Integer)
-Framework_Tween_Restart(tweenId As Integer)
-Framework_Tween_Kill(tweenId As Integer)
-Framework_Tween_Complete(tweenId As Integer)
-```
-
-### Configuration
-
-```vb
-Framework_Tween_SetDelay(tweenId As Integer, delay As Single)
-Framework_Tween_SetLoopMode(tweenId As Integer, loopMode As Integer)  ' 0=None, 1=Restart, 2=Yoyo
-Framework_Tween_SetLoopCount(tweenId As Integer, count As Integer)   ' -1=infinite
-Framework_Tween_SetTimeScale(tweenId As Integer, scale As Single)
-Framework_Tween_SetAutoKill(tweenId As Integer, autoKill As Boolean)
-```
-
-### Value Getters
-
-```vb
-Framework_Tween_GetFloat(tweenId As Integer) As Single
-Framework_Tween_GetVector2(tweenId As Integer, ByRef x As Single, ByRef y As Single)
-Framework_Tween_GetProgress(tweenId As Integer) As Single
-Framework_Tween_IsPlaying(tweenId As Integer) As Boolean
-Framework_Tween_IsCompleted(tweenId As Integer) As Boolean
-```
-
-### Sequences
-
-```vb
-Framework_Tween_CreateSequence() As Integer
-Framework_Tween_SequenceAppend(seqId As Integer, tweenId As Integer)
-Framework_Tween_SequenceJoin(seqId As Integer, tweenId As Integer)
-Framework_Tween_SequenceAppendDelay(seqId As Integer, delay As Single)
-Framework_Tween_PlaySequence(seqId As Integer)
-```
-
-### Entity Convenience
-
-```vb
-Framework_Tween_EntityPosition(entity As Integer, toX As Single, toY As Single, duration As Single, easing As Integer) As Integer
-Framework_Tween_EntityRotation(entity As Integer, toRotation As Single, duration As Single, easing As Integer) As Integer
-Framework_Tween_EntityScale(entity As Integer, toScaleX As Single, toScaleY As Single, duration As Single, easing As Integer) As Integer
-Framework_Tween_EntityAlpha(entity As Integer, toAlpha As Byte, duration As Single, easing As Integer) As Integer
-```
-
-### Global
-
-```vb
-Framework_Tween_Update(dt As Single)
-Framework_Tween_PauseAll()
-Framework_Tween_ResumeAll()
-Framework_Tween_KillAll()
-Framework_Tween_SetGlobalTimeScale(scale As Single)
+Framework_CreateScriptScene() As Integer   ' Returns sceneId
+Framework_DestroyScene(sceneId As Integer)
+Framework_SceneChange(sceneId As Integer)  ' Immediate switch, no transition
+Framework_ScenePush(sceneId As Integer)    ' Push onto stack
+Framework_ScenePop()                       ' Pop top scene
+Framework_SceneHas(sceneId As Integer) As Boolean
+Framework_SceneTick(sceneId As Integer)    ' Update given scene
+Framework_SceneGetCurrent() As Integer     ' Returns current scene id
 ```
 
 ---
 
-## Event System
-
-### Event Registration
+## Scene Manager — Transitions & Loading
 
 ```vb
-Framework_Event_Register(eventName As String) As Integer
-Framework_Event_GetId(eventName As String) As Integer
-Framework_Event_Exists(eventName As String) As Boolean
+' Default transition settings
+Framework_Scene_SetTransition(transitionType As Integer, duration As Single)
+Framework_Scene_SetTransitionEx(transitionType As Integer, duration As Single, easing As Integer)
+Framework_Scene_SetTransitionColor(r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_Scene_GetTransitionType() As Integer
+Framework_Scene_GetTransitionDuration() As Single
+Framework_Scene_GetTransitionEasing() As Integer
+
+' Transitioning scene changes
+Framework_Scene_ChangeWithTransition(sceneId As Integer)
+Framework_Scene_ChangeWithTransitionEx(sceneId As Integer, transitionType As Integer, duration As Single, easing As Integer)
+Framework_Scene_PushWithTransition(sceneId As Integer)
+Framework_Scene_PopWithTransition()
+
+' Transition state
+Framework_Scene_IsTransitioning() As Boolean
+Framework_Scene_GetTransitionState() As Integer
+Framework_Scene_GetTransitionProgress() As Single    ' 0.0 – 1.0
+Framework_Scene_SkipTransition()
+
+' Loading screen
+Framework_Scene_SetLoadingEnabled(enabled As Boolean)
+Framework_Scene_IsLoadingEnabled() As Boolean
+Framework_Scene_SetLoadingMinDuration(seconds As Single)
+Framework_Scene_SetLoadingCallback(callback As IntPtr)
+Framework_Scene_SetLoadingDrawCallback(callback As IntPtr)
+
+' Scene stack info
+Framework_Scene_GetStackSize() As Integer
+Framework_Scene_GetSceneAt(index As Integer) As Integer
 ```
 
-### Subscribing
+**Transition types:**
+
+| Value | Name | Description |
+|-------|------|-------------|
+| 0 | None | Instant switch |
+| 1 | Fade | Fade to color |
+| 2 | SlideLeft | Slide outgoing left |
+| 3 | SlideRight | Slide outgoing right |
+| 4 | SlideUp | Slide outgoing up |
+| 5 | SlideDown | Slide outgoing down |
+| 6 | Wipe | Wipe across |
+| 7 | Pixelate | Pixelate/dissolve |
+| 8 | Dissolve | Random pixel dissolve |
+| 9 | Iris | Circle iris |
+| 10 | Swipe | Full swipe |
+| 11 | Zoom | Zoom out/in |
+| 12 | Rotate | Rotate out/in |
+| 13 | Checkerboard | Checkerboard reveal |
+| 14 | Random | Random transition each time |
+
+**Easing types:** 0=Linear, 1=EaseIn, 2=EaseOut, 3=EaseInOut, 4=Bounce, 5=Elastic, 6=Back, 7=Spring (21 total variants)
+
+---
+
+## ECS — Entity Management
+
+Entity IDs are plain integers. `-1` is the null/invalid entity.
 
 ```vb
-Framework_Event_Subscribe(eventId As Integer, callback As EventCallback, userData As IntPtr) As Integer
-Framework_Event_SubscribeInt(eventId As Integer, callback As EventCallbackInt, userData As IntPtr) As Integer
-Framework_Event_SubscribeOnce(eventId As Integer, callback As EventCallback, userData As IntPtr) As Integer
-Framework_Event_Unsubscribe(subscriptionId As Integer)
-```
-
-### Publishing
-
-```vb
-Framework_Event_Publish(eventId As Integer)
-Framework_Event_PublishInt(eventId As Integer, value As Integer)
-Framework_Event_PublishFloat(eventId As Integer, value As Single)
-Framework_Event_PublishString(eventId As Integer, value As String)
-Framework_Event_PublishEntity(eventId As Integer, entity As Integer)
-```
-
-### Queued Events
-
-```vb
-Framework_Event_Queue(eventId As Integer)
-Framework_Event_QueueDelayed(eventId As Integer, delay As Single)
-Framework_Event_ProcessQueue(dt As Single)
-Framework_Event_ClearQueue()
+Framework_Ecs_CreateEntity() As Integer
+Framework_Ecs_DestroyEntity(id As Integer)
+Framework_Ecs_IsAlive(id As Integer) As Boolean
+Framework_Ecs_ClearAll()
+Framework_Ecs_GetEntityCount() As Integer
 ```
 
 ---
 
-## Timer System
+## ECS — Name Component
 
-### One-Shot Timers
-
-```vb
-Framework_Timer_After(delay As Single, callback As TimerCallback, userData As IntPtr) As Integer
-Framework_Timer_AfterInt(delay As Single, callback As TimerCallbackInt, value As Integer, userData As IntPtr) As Integer
-```
-
-### Repeating Timers
+Names are limited to 64 characters (`FW_NAME_MAX`).
 
 ```vb
-Framework_Timer_Every(interval As Single, callback As TimerCallback, userData As IntPtr) As Integer
-Framework_Timer_EveryLimit(interval As Single, repeatCount As Integer, callback As TimerCallback, userData As IntPtr) As Integer
-Framework_Timer_AfterThenEvery(delay As Single, interval As Single, callback As TimerCallback, userData As IntPtr) As Integer
-```
-
-### Control
-
-```vb
-Framework_Timer_Cancel(timerId As Integer)
-Framework_Timer_Pause(timerId As Integer)
-Framework_Timer_Resume(timerId As Integer)
-Framework_Timer_Reset(timerId As Integer)
-```
-
-### Queries
-
-```vb
-Framework_Timer_IsValid(timerId As Integer) As Boolean
-Framework_Timer_IsRunning(timerId As Integer) As Boolean
-Framework_Timer_GetElapsed(timerId As Integer) As Single
-Framework_Timer_GetRemaining(timerId As Integer) As Single
-```
-
-### Timer Sequences
-
-```vb
-Framework_Timer_CreateSequence() As Integer
-Framework_Timer_SequenceAppend(seqId As Integer, delay As Single, callback As TimerCallback, userData As IntPtr)
-Framework_Timer_SequenceStart(seqId As Integer)
-Framework_Timer_SequenceSetLoop(seqId As Integer, loop As Boolean)
-```
-
-### Frame-Based
-
-```vb
-Framework_Timer_AfterFrames(frames As Integer, callback As TimerCallback, userData As IntPtr) As Integer
-Framework_Timer_EveryFrames(frames As Integer, callback As TimerCallback, userData As IntPtr) As Integer
+Framework_Ecs_SetName(id As Integer, name As String)
+Framework_Ecs_GetName(id As Integer) As String
+Framework_Ecs_HasName(id As Integer) As Boolean
+Framework_Ecs_FindByName(name As String) As Integer   ' Returns -1 if not found
 ```
 
 ---
 
-## Object Pooling
+## ECS — Tag Component
 
-### Pool Creation
-
-```vb
-Framework_Pool_Create(poolName As String, initialCapacity As Integer, maxCapacity As Integer) As Integer
-Framework_Pool_GetByName(poolName As String) As Integer
-Framework_Pool_Destroy(poolId As Integer)
-```
-
-### Configuration
+Tags are limited to 32 characters (`FW_TAG_MAX`). Used for group queries.
 
 ```vb
-Framework_Pool_SetAutoGrow(poolId As Integer, autoGrow As Boolean)
-Framework_Pool_SetGrowAmount(poolId As Integer, amount As Integer)
-```
-
-### Acquire/Release
-
-```vb
-Framework_Pool_Acquire(poolId As Integer) As Integer
-Framework_Pool_Release(poolId As Integer, objectIndex As Integer)
-Framework_Pool_ReleaseAll(poolId As Integer)
-```
-
-### Queries
-
-```vb
-Framework_Pool_GetCapacity(poolId As Integer) As Integer
-Framework_Pool_GetActiveCount(poolId As Integer) As Integer
-Framework_Pool_GetAvailableCount(poolId As Integer) As Integer
-Framework_Pool_IsEmpty(poolId As Integer) As Boolean
-Framework_Pool_IsFull(poolId As Integer) As Boolean
-```
-
-### Entity Pools
-
-```vb
-Framework_Pool_CreateEntityPool(poolName As String, prefabId As Integer, initialCapacity As Integer, maxCapacity As Integer) As Integer
-Framework_Pool_AcquireEntity(poolId As Integer) As Integer
-Framework_Pool_ReleaseEntity(poolId As Integer, entity As Integer)
+Framework_Ecs_SetTag(id As Integer, tag As String)
+Framework_Ecs_GetTag(id As Integer) As String
+Framework_Ecs_HasTag(id As Integer) As Boolean
+Framework_Ecs_FindAllByTag(tag As String, ids As Integer(), maxCount As Integer) As Integer  ' Returns actual count found
 ```
 
 ---
 
-## State Machine
+## ECS — Enabled Component
 
-### FSM Creation
-
-```vb
-Framework_FSM_Create(name As String) As Integer
-Framework_FSM_CreateForEntity(name As String, entity As Integer) As Integer
-Framework_FSM_Destroy(fsmId As Integer)
-```
-
-### States
+Entities can be locally enabled/disabled. `IsActiveInHierarchy` accounts for parent enabled state.
 
 ```vb
-Framework_FSM_AddState(fsmId As Integer, stateName As String) As Integer
-Framework_FSM_GetState(fsmId As Integer, stateName As String) As Integer
-Framework_FSM_RemoveState(fsmId As Integer, stateId As Integer)
-```
-
-### Transitions
-
-```vb
-Framework_FSM_AddTransition(fsmId As Integer, fromState As Integer, toState As Integer) As Integer
-Framework_FSM_AddAnyTransition(fsmId As Integer, toState As Integer) As Integer
-Framework_FSM_TransitionTo(fsmId As Integer, stateId As Integer) As Boolean
-Framework_FSM_TryTransition(fsmId As Integer, toState As Integer) As Boolean
-```
-
-### Control
-
-```vb
-Framework_FSM_SetInitialState(fsmId As Integer, stateId As Integer)
-Framework_FSM_Start(fsmId As Integer)
-Framework_FSM_Stop(fsmId As Integer)
-Framework_FSM_Pause(fsmId As Integer)
-Framework_FSM_Resume(fsmId As Integer)
-```
-
-### Queries
-
-```vb
-Framework_FSM_GetCurrentState(fsmId As Integer) As Integer
-Framework_FSM_GetPreviousState(fsmId As Integer) As Integer
-Framework_FSM_GetTimeInState(fsmId As Integer) As Single
-Framework_FSM_IsRunning(fsmId As Integer) As Boolean
-```
-
-### Triggers
-
-```vb
-Framework_FSM_AddTrigger(fsmId As Integer, triggerName As String, fromState As Integer, toState As Integer) As Integer
-Framework_FSM_FireTrigger(fsmId As Integer, triggerName As String)
-```
-
-### Update
-
-```vb
-Framework_FSM_Update(fsmId As Integer, deltaTime As Single)
-Framework_FSM_UpdateAll(deltaTime As Single)
+Framework_Ecs_SetEnabled(id As Integer, enabled As Boolean)
+Framework_Ecs_IsEnabled(id As Integer) As Boolean
+Framework_Ecs_IsActiveInHierarchy(id As Integer) As Boolean
 ```
 
 ---
 
-## AI & Pathfinding
+## ECS — Hierarchy Component
 
-### Navigation Grid
+Entities form a tree. World transforms propagate through the hierarchy.
 
 ```vb
-Framework_NavGrid_Create(width As Integer, height As Integer, cellSize As Single) As Integer
-Framework_NavGrid_Destroy(gridId As Integer)
-Framework_NavGrid_SetOrigin(gridId As Integer, x As Single, y As Single)
-Framework_NavGrid_SetWalkable(gridId As Integer, cellX As Integer, cellY As Integer, walkable As Boolean)
-Framework_NavGrid_SetCost(gridId As Integer, cellX As Integer, cellY As Integer, cost As Single)
-Framework_NavGrid_SetRect(gridId As Integer, x As Integer, y As Integer, w As Integer, h As Integer, walkable As Boolean)
+Framework_Ecs_SetParent(childId As Integer, parentId As Integer)  ' parentId = -1 for root
+Framework_Ecs_GetParent(id As Integer) As Integer
+Framework_Ecs_GetFirstChild(id As Integer) As Integer
+Framework_Ecs_GetNextSibling(id As Integer) As Integer
+Framework_Ecs_GetChildCount(id As Integer) As Integer
+Framework_Ecs_GetChildren(id As Integer, ids As Integer(), maxCount As Integer) As Integer
+Framework_Ecs_DetachFromParent(id As Integer)
 ```
 
-### A* Pathfinding
-
+**Traversal example:**
 ```vb
-Framework_Path_Find(gridId As Integer, startX As Single, startY As Single, endX As Single, endY As Single) As Integer
-Framework_Path_Destroy(pathId As Integer)
-Framework_Path_GetLength(pathId As Integer) As Integer
-Framework_Path_GetWaypoint(pathId As Integer, index As Integer, ByRef x As Single, ByRef y As Single)
-Framework_Path_Smooth(pathId As Integer)
-Framework_Path_SetHeuristic(gridId As Integer, heuristic As Integer)  ' 0=Manhattan, 1=Euclidean, 2=Chebyshev
-```
-
-### Steering Behaviors
-
-| Value | Behavior |
-|-------|----------|
-| 1 | Seek |
-| 2 | Flee |
-| 3 | Arrive |
-| 4 | Pursue |
-| 5 | Evade |
-| 6 | Wander |
-| 7 | PathFollow |
-| 8 | ObstacleAvoid |
-| 9 | Separation |
-| 10 | Alignment |
-| 11 | Cohesion |
-
-```vb
-Framework_Steer_CreateAgent(entity As Integer) As Integer
-Framework_Steer_DestroyAgent(agentId As Integer)
-Framework_Steer_SetMaxSpeed(agentId As Integer, maxSpeed As Single)
-Framework_Steer_SetMaxForce(agentId As Integer, maxForce As Single)
-Framework_Steer_EnableBehavior(agentId As Integer, behavior As Integer, enabled As Boolean)
-Framework_Steer_SetBehaviorWeight(agentId As Integer, behavior As Integer, weight As Single)
-Framework_Steer_SetTargetPosition(agentId As Integer, x As Single, y As Single)
-Framework_Steer_SetTargetEntity(agentId As Integer, targetEntity As Integer)
-Framework_Steer_SetPath(agentId As Integer, pathId As Integer)
-Framework_Steer_Update(agentId As Integer, deltaTime As Single)
-Framework_Steer_UpdateAll(deltaTime As Single)
-```
-
-### Debug
-
-```vb
-Framework_NavGrid_DrawDebug(gridId As Integer)
-Framework_Path_DrawDebug(pathId As Integer, r As Byte, g As Byte, b As Byte)
-Framework_Steer_DrawDebug(agentId As Integer)
+' Iterate children
+Dim child As Integer = Framework_Ecs_GetFirstChild(parent)
+While child <> -1
+    ' process child
+    child = Framework_Ecs_GetNextSibling(child)
+End While
 ```
 
 ---
 
-## Dialogue System
+## ECS — Transform2D Component
 
-### Creating Dialogues
-
-```vb
-Framework_Dialogue_Create(name As String) As Integer
-Framework_Dialogue_Destroy(dialogueId As Integer)
-Framework_Dialogue_AddNode(dialogueId As Integer, nodeTag As String) As Integer
-Framework_Dialogue_SetNodeSpeaker(dialogueId As Integer, nodeId As Integer, speaker As String)
-Framework_Dialogue_SetNodeText(dialogueId As Integer, nodeId As Integer, text As String)
-Framework_Dialogue_SetNodePortrait(dialogueId As Integer, nodeId As Integer, textureHandle As Integer)
-Framework_Dialogue_SetNextNode(dialogueId As Integer, nodeId As Integer, nextNodeId As Integer)
-Framework_Dialogue_SetStartNode(dialogueId As Integer, nodeId As Integer)
-```
-
-### Choices
+Local position/rotation/scale. World values are computed from the hierarchy chain.
 
 ```vb
-Framework_Dialogue_AddChoice(dialogueId As Integer, nodeId As Integer, choiceText As String, targetNodeId As Integer) As Integer
-Framework_Dialogue_GetChoiceCount(dialogueId As Integer, nodeId As Integer) As Integer
-Framework_Dialogue_SetChoiceCondition(dialogueId As Integer, nodeId As Integer, choiceIndex As Integer, condition As String)
-```
+Framework_Ecs_AddTransform2D(id As Integer, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
+Framework_Ecs_HasTransform2D(id As Integer) As Boolean
 
-### Variables
+' Local space
+Framework_Ecs_SetTransformPosition(id As Integer, x As Single, y As Single)
+Framework_Ecs_GetTransformPosition(id As Integer, ByRef x As Single, ByRef y As Single)
+Framework_Ecs_SetTransformRotation(id As Integer, rotation As Single)  ' Degrees
+Framework_Ecs_GetTransformRotation(id As Integer) As Single
+Framework_Ecs_SetTransformScale(id As Integer, scaleX As Single, scaleY As Single)
+Framework_Ecs_GetTransformScale(id As Integer, ByRef scaleX As Single, ByRef scaleY As Single)
 
-```vb
-Framework_Dialogue_SetVarInt(varName As String, value As Integer)
-Framework_Dialogue_GetVarInt(varName As String) As Integer
-Framework_Dialogue_SetVarBool(varName As String, value As Boolean)
-Framework_Dialogue_GetVarBool(varName As String) As Boolean
-Framework_Dialogue_SetVarString(varName As String, value As String)
-```
-
-### Playback
-
-```vb
-Framework_Dialogue_Start(dialogueId As Integer)
-Framework_Dialogue_Stop()
-Framework_Dialogue_IsActive() As Boolean
-Framework_Dialogue_Continue() As Boolean
-Framework_Dialogue_SelectChoice(choiceIndex As Integer) As Boolean
-```
-
-### Current Node
-
-```vb
-Framework_Dialogue_GetCurrentSpeaker() As String
-Framework_Dialogue_GetCurrentText() As String
-Framework_Dialogue_GetCurrentPortrait() As Integer
-Framework_Dialogue_GetCurrentChoiceCount() As Integer
-Framework_Dialogue_GetCurrentChoiceText(choiceIndex As Integer) As String
-```
-
-### Typewriter Effect
-
-```vb
-Framework_Dialogue_SetTypewriterEnabled(enabled As Boolean)
-Framework_Dialogue_SetTypewriterSpeed(charsPerSecond As Single)
-Framework_Dialogue_SkipTypewriter()
-Framework_Dialogue_IsTypewriterComplete() As Boolean
-Framework_Dialogue_GetVisibleText() As String
-Framework_Dialogue_Update(dt As Single)
+' World space (hierarchy applied)
+Framework_Ecs_GetWorldPosition(id As Integer, ByRef x As Single, ByRef y As Single)
+Framework_Ecs_GetWorldRotation(id As Integer) As Single
+Framework_Ecs_GetWorldScale(id As Integer, ByRef scaleX As Single, ByRef scaleY As Single)
 ```
 
 ---
 
-## Inventory System
+## ECS — Velocity2D Component
 
-### Item Definition
-
-```vb
-Framework_Item_Define(itemName As String) As Integer
-Framework_Item_SetDisplayName(itemDefId As Integer, displayName As String)
-Framework_Item_SetDescription(itemDefId As Integer, description As String)
-Framework_Item_SetIcon(itemDefId As Integer, textureHandle As Integer)
-Framework_Item_SetStackable(itemDefId As Integer, stackable As Boolean)
-Framework_Item_SetMaxStack(itemDefId As Integer, maxStack As Integer)
-Framework_Item_SetCategory(itemDefId As Integer, category As String)
-Framework_Item_SetRarity(itemDefId As Integer, rarity As Integer)  ' 0-4: Common to Legendary
-Framework_Item_SetEquipSlot(itemDefId As Integer, equipSlot As Integer)
-Framework_Item_SetUsable(itemDefId As Integer, usable As Boolean)
-Framework_Item_SetConsumable(itemDefId As Integer, consumable As Boolean)
-Framework_Item_SetValue(itemDefId As Integer, value As Integer)
-Framework_Item_SetWeight(itemDefId As Integer, weight As Single)
-```
-
-### Inventory Container
+Velocity is applied to Transform2D position each frame by `Framework_Ecs_UpdateVelocities()`.
 
 ```vb
-Framework_Inventory_Create(name As String, slotCount As Integer) As Integer
-Framework_Inventory_Destroy(inventoryId As Integer)
-Framework_Inventory_AddItem(inventoryId As Integer, itemDefId As Integer, quantity As Integer) As Boolean
-Framework_Inventory_RemoveItem(inventoryId As Integer, itemDefId As Integer, quantity As Integer) As Boolean
-Framework_Inventory_ClearSlot(inventoryId As Integer, slotIndex As Integer)
-Framework_Inventory_GetItemAt(inventoryId As Integer, slotIndex As Integer) As Integer
-Framework_Inventory_GetQuantityAt(inventoryId As Integer, slotIndex As Integer) As Integer
-Framework_Inventory_HasItem(inventoryId As Integer, itemDefId As Integer) As Boolean
-Framework_Inventory_CountItem(inventoryId As Integer, itemDefId As Integer) As Integer
-Framework_Inventory_MoveItem(inventoryId As Integer, fromSlot As Integer, toSlot As Integer) As Boolean
-Framework_Inventory_Sort(inventoryId As Integer)
-```
-
-### Equipment
-
-```vb
-Framework_Equipment_Create(name As String) As Integer
-Framework_Equipment_Equip(equipId As Integer, itemDefId As Integer, slot As Integer) As Boolean
-Framework_Equipment_Unequip(equipId As Integer, slot As Integer) As Integer
-Framework_Equipment_GetItemAt(equipId As Integer, slot As Integer) As Integer
-Framework_Equipment_GetTotalStatInt(equipId As Integer, statName As String) As Integer
-```
-
-### Loot Tables
-
-```vb
-Framework_LootTable_Create(name As String) As Integer
-Framework_LootTable_AddEntry(tableId As Integer, itemDefId As Integer, weight As Single, minQty As Integer, maxQty As Integer)
-Framework_LootTable_Roll(tableId As Integer, ByRef outQuantity As Integer) As Integer
+Framework_Ecs_AddVelocity2D(id As Integer, vx As Single, vy As Single)
+Framework_Ecs_HasVelocity2D(id As Integer) As Boolean
+Framework_Ecs_SetVelocity(id As Integer, vx As Single, vy As Single)
+Framework_Ecs_GetVelocity(id As Integer, ByRef vx As Single, ByRef vy As Single)
+Framework_Ecs_RemoveVelocity2D(id As Integer)
 ```
 
 ---
 
-## Quest System
+## ECS — BoxCollider2D Component
 
-### Quest Definition
-
-```vb
-Framework_Quest_Define(questId As String) As Integer
-Framework_Quest_SetName(questHandle As Integer, name As String)
-Framework_Quest_SetDescription(questHandle As Integer, description As String)
-Framework_Quest_SetCategory(questHandle As Integer, category As String)
-Framework_Quest_SetLevel(questHandle As Integer, level As Integer)
-Framework_Quest_SetTimeLimit(questHandle As Integer, seconds As Single)
-```
-
-### Objectives
-
-| Type | Description |
-|------|-------------|
-| 0 | Custom |
-| 1 | Kill |
-| 2 | Collect |
-| 3 | Talk |
-| 4 | Reach |
-| 5 | Interact |
-| 6 | Escort |
-| 7 | Defend |
-| 8 | Explore |
+Axis-aligned bounding box (AABB) relative to the entity's transform origin.
 
 ```vb
-Framework_Quest_AddObjective(questHandle As Integer, objectiveType As Integer, description As String, requiredCount As Integer) As Integer
-Framework_Quest_SetObjectiveTarget(questHandle As Integer, objectiveIndex As Integer, targetId As String)
-Framework_Quest_SetObjectiveProgress(questHandle As Integer, objectiveIndex As Integer, progress As Integer)
-```
-
-### Rewards
-
-```vb
-Framework_Quest_AddRewardItem(questHandle As Integer, itemDefId As Integer, quantity As Integer)
-Framework_Quest_SetRewardExperience(questHandle As Integer, experience As Integer)
-Framework_Quest_SetRewardCurrency(questHandle As Integer, currencyType As Integer, amount As Integer)
-```
-
-### State Management
-
-```vb
-Framework_Quest_Start(questHandle As Integer) As Boolean
-Framework_Quest_Complete(questHandle As Integer) As Boolean
-Framework_Quest_Fail(questHandle As Integer) As Boolean
-Framework_Quest_GetState(questHandle As Integer) As Integer  ' 0=NotStarted, 1=InProgress, 2=Completed, 3=Failed
-Framework_Quest_IsActive(questHandle As Integer) As Boolean
-```
-
-### Auto-Progress Reporting
-
-```vb
-Framework_Quest_ReportKill(targetType As String, count As Integer)
-Framework_Quest_ReportCollect(itemDefId As Integer, count As Integer)
-Framework_Quest_ReportTalk(npcId As String)
-Framework_Quest_ReportLocation(x As Single, y As Single)
-```
-
-### Tracking
-
-```vb
-Framework_Quest_SetTracked(questHandle As Integer, tracked As Boolean)
-Framework_Quest_IsTracked(questHandle As Integer) As Boolean
-Framework_Quest_GetTrackedCount() As Integer
+Framework_Ecs_AddBoxCollider2D(id As Integer, offsetX As Single, offsetY As Single, width As Single, height As Single)
+Framework_Ecs_HasBoxCollider2D(id As Integer) As Boolean
+Framework_Ecs_SetBoxCollider(id As Integer, offsetX As Single, offsetY As Single, width As Single, height As Single)
+Framework_Ecs_SetBoxColliderTrigger(id As Integer, isTrigger As Boolean)  ' Trigger = no physics response
+Framework_Ecs_GetBoxColliderWorldBounds(id As Integer) As Rectangle       ' World-space AABB
+Framework_Ecs_RemoveBoxCollider2D(id As Integer)
 ```
 
 ---
 
-## 2D Lighting
+## ECS — Sprite2D Component
 
-### System Control
-
-```vb
-Framework_Lighting_Initialize(width As Integer, height As Integer)
-Framework_Lighting_Shutdown()
-Framework_Lighting_SetEnabled(enabled As Boolean)
-Framework_Lighting_SetAmbientColor(r As Byte, g As Byte, b As Byte)
-Framework_Lighting_SetAmbientIntensity(intensity As Single)
-```
-
-### Point Lights
+Renders a textured rectangle at the entity's world transform.
 
 ```vb
-Framework_Light_CreatePoint(x As Single, y As Single, radius As Single) As Integer
-Framework_Light_Destroy(lightId As Integer)
-Framework_Light_SetPosition(lightId As Integer, x As Single, y As Single)
-Framework_Light_SetColor(lightId As Integer, r As Byte, g As Byte, b As Byte)
-Framework_Light_SetIntensity(lightId As Integer, intensity As Single)
-Framework_Light_SetRadius(lightId As Integer, radius As Single)
-Framework_Light_SetEnabled(lightId As Integer, enabled As Boolean)
-Framework_Light_SetFlicker(lightId As Integer, amount As Single, speed As Single)
-Framework_Light_SetPulse(lightId As Integer, minIntensity As Single, maxIntensity As Single, speed As Single)
-Framework_Light_AttachToEntity(lightId As Integer, entityId As Integer, offsetX As Single, offsetY As Single)
-```
-
-### Spot Lights
-
-```vb
-Framework_Light_CreateSpot(x As Single, y As Single, radius As Single, angle As Single, coneAngle As Single) As Integer
-Framework_Light_SetDirection(lightId As Integer, angle As Single)
-Framework_Light_SetConeAngle(lightId As Integer, angle As Single)
-```
-
-### Shadow Occluders
-
-```vb
-Framework_Shadow_CreateBox(x As Single, y As Single, width As Single, height As Single) As Integer
-Framework_Shadow_CreateCircle(x As Single, y As Single, radius As Single) As Integer
-Framework_Shadow_Destroy(occluderId As Integer)
-Framework_Shadow_SetPosition(occluderId As Integer, x As Single, y As Single)
-Framework_Shadow_AttachToEntity(occluderId As Integer, entityId As Integer, offsetX As Single, offsetY As Single)
-Framework_Lighting_SetShadowQuality(quality As Integer)  ' 0=None, 1=Hard, 2=Soft
-```
-
-### Day/Night Cycle
-
-```vb
-Framework_Lighting_SetTimeOfDay(time As Single)  ' 0-24 hours
-Framework_Lighting_GetTimeOfDay() As Single
-Framework_Lighting_SetDayNightSpeed(speed As Single)
-Framework_Lighting_SetDayNightEnabled(enabled As Boolean)
-Framework_Lighting_SetSunriseTime(hour As Single)
-Framework_Lighting_SetSunsetTime(hour As Single)
-```
-
-### Rendering
-
-```vb
-Framework_Lighting_BeginLightPass()
-' Draw your lit objects here
-Framework_Lighting_EndLightPass()
-Framework_Lighting_RenderToScreen()
-Framework_Lighting_Update(deltaTime As Single)
+Framework_Ecs_AddSprite2D(id As Integer)
+Framework_Ecs_HasSprite2D(id As Integer) As Boolean
+Framework_Ecs_SetSpriteTexture(id As Integer, textureHandle As Integer)
+Framework_Ecs_SetSpriteTint(id As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+Framework_Ecs_SetSpriteVisible(id As Integer, visible As Boolean)
+Framework_Ecs_SetSpriteLayer(id As Integer, layer As Integer)       ' Higher = drawn on top
+Framework_Ecs_SetSpriteSource(id As Integer, x As Single, y As Single, width As Single, height As Single)  ' Source rect for sprite sheets
+Framework_Ecs_RemoveSprite2D(id As Integer)
 ```
 
 ---
 
-## Screen Effects
+## ECS — Built-in Systems
 
-### System Control
-
-```vb
-Framework_Effects_Initialize(width As Integer, height As Integer)
-Framework_Effects_Shutdown()
-Framework_Effects_SetEnabled(enabled As Boolean)
-```
-
-### Vignette
+Call these each frame in your update/draw loop.
 
 ```vb
-Framework_Effects_SetVignetteEnabled(enabled As Boolean)
-Framework_Effects_SetVignetteIntensity(intensity As Single)
-Framework_Effects_SetVignetteRadius(radius As Single)
-Framework_Effects_SetVignetteSoftness(softness As Single)
-Framework_Effects_SetVignetteColor(r As Byte, g As Byte, b As Byte)
-```
-
-### Blur
-
-```vb
-Framework_Effects_SetBlurEnabled(enabled As Boolean)
-Framework_Effects_SetBlurAmount(amount As Single)
-Framework_Effects_SetBlurIterations(iterations As Integer)
-```
-
-### Chromatic Aberration
-
-```vb
-Framework_Effects_SetChromaticEnabled(enabled As Boolean)
-Framework_Effects_SetChromaticOffset(offset As Single)
-```
-
-### Color Effects
-
-```vb
-Framework_Effects_SetGrayscaleEnabled(enabled As Boolean)
-Framework_Effects_SetGrayscaleAmount(amount As Single)
-Framework_Effects_SetSepiaEnabled(enabled As Boolean)
-Framework_Effects_SetSepiaAmount(amount As Single)
-Framework_Effects_SetInvertEnabled(enabled As Boolean)
-Framework_Effects_SetBrightness(brightness As Single)
-Framework_Effects_SetContrast(contrast As Single)
-Framework_Effects_SetSaturation(saturation As Single)
-```
-
-### Flash/Fade/Shake
-
-```vb
-Framework_Effects_Flash(r As Byte, g As Byte, b As Byte, duration As Single)
-Framework_Effects_FlashWhite(duration As Single)
-Framework_Effects_FlashDamage(duration As Single)
-Framework_Effects_FadeIn(duration As Single)
-Framework_Effects_FadeOut(duration As Single)
-Framework_Effects_FadeToColor(r As Byte, g As Byte, b As Byte, duration As Single)
-Framework_Effects_Shake(intensity As Single, duration As Single)
-Framework_Effects_ShakeDecay(intensity As Single, duration As Single, decay As Single)
-```
-
-### Rendering
-
-```vb
-Framework_Effects_BeginCapture()
-' Draw your scene here
-Framework_Effects_EndCapture()
-Framework_Effects_Apply()
-
-' Or use simple overlay mode
-Framework_Effects_DrawOverlays(screenWidth As Integer, screenHeight As Integer)
-Framework_Effects_Update(deltaTime As Single)
-```
-
-### Presets
-
-```vb
-Framework_Effects_ApplyPresetRetro()
-Framework_Effects_ApplyPresetDream()
-Framework_Effects_ApplyPresetHorror()
-Framework_Effects_ApplyPresetNoir()
-Framework_Effects_ResetAll()
+Framework_Ecs_UpdateVelocities()  ' Apply Velocity2D to Transform2D positions (dt-scaled)
+Framework_Ecs_DrawSprites()       ' Render all Sprite2D components sorted by layer
 ```
 
 ---
 
-## Localization
+## Physics Overlap Queries
 
-### System Control
+Broad-phase queries against BoxCollider2D components.
 
 ```vb
-Framework_Locale_Initialize()
-Framework_Locale_LoadLanguage(languageCode As String, filePath As String) As Boolean
-Framework_Locale_SetLanguage(languageCode As String) As Boolean
-Framework_Locale_GetCurrentLanguage() As String
-Framework_Locale_GetLanguageCount() As Integer
+Framework_Physics_OverlapBox(x As Single, y As Single, width As Single, height As Single, ids As Integer(), maxCount As Integer) As Integer
+Framework_Physics_OverlapCircle(cx As Single, cy As Single, radius As Single, ids As Integer(), maxCount As Integer) As Integer
+Framework_Physics_CheckEntityOverlap(idA As Integer, idB As Integer) As Boolean
+Framework_Physics_GetOverlappingEntities(id As Integer, ids As Integer(), maxCount As Integer) As Integer
 ```
 
-### String Retrieval
-
+**Example:**
 ```vb
-Framework_Locale_GetString(key As String) As String
-Framework_Locale_GetStringDefault(key As String, defaultValue As String) As String
-Framework_Locale_Format(key As String, arg1 As String) As String
-Framework_Locale_Format2(key As String, arg1 As String, arg2 As String) As String
-Framework_Locale_HasString(key As String) As Boolean
-```
-
----
-
-## Achievement System
-
-### Creating Achievements
-
-```vb
-Framework_Achievement_Create(id As String, name As String, description As String) As Integer
-Framework_Achievement_SetIcon(achievementId As Integer, textureHandle As Integer)
-Framework_Achievement_SetHidden(achievementId As Integer, hidden As Boolean)
-Framework_Achievement_SetPoints(achievementId As Integer, points As Integer)
-```
-
-### Progress Achievements
-
-```vb
-Framework_Achievement_SetProgressTarget(achievementId As Integer, target As Integer)
-Framework_Achievement_SetProgress(achievementId As Integer, progress As Integer)
-Framework_Achievement_AddProgress(achievementId As Integer, amount As Integer)
-Framework_Achievement_GetProgress(achievementId As Integer) As Integer
-Framework_Achievement_GetProgressPercent(achievementId As Integer) As Single
-```
-
-### Unlock/Lock
-
-```vb
-Framework_Achievement_Unlock(achievementId As Integer)
-Framework_Achievement_Lock(achievementId As Integer)
-Framework_Achievement_IsUnlocked(achievementId As Integer) As Boolean
-```
-
-### Notifications
-
-```vb
-Framework_Achievement_SetNotificationsEnabled(enabled As Boolean)
-Framework_Achievement_SetNotificationDuration(seconds As Single)
-Framework_Achievement_Update(deltaTime As Single)
-Framework_Achievement_DrawNotifications()
-```
-
-### Persistence
-
-```vb
-Framework_Achievement_Save(filePath As String) As Boolean
-Framework_Achievement_Load(filePath As String) As Boolean
-Framework_Achievement_ResetAll()
+Dim results(31) As Integer
+Dim count As Integer = Framework_Physics_OverlapBox(px - 50, py - 50, 100, 100, results, 32)
+For i As Integer = 0 To count - 1
+    If Framework_Ecs_GetTag(results(i)) = "enemy" Then
+        ' process hit
+    End If
+Next
 ```
 
 ---
 
-## Cutscene System
+## Component Introspection
 
-### Creating Cutscenes
-
-```vb
-Framework_Cutscene_Create(name As String) As Integer
-Framework_Cutscene_Destroy(cutsceneId As Integer)
-```
-
-### Commands
+Runtime reflection over any entity's components and their fields. Useful for editors, save systems, and debug tools.
 
 ```vb
-Framework_Cutscene_AddWait(cutsceneId As Integer, duration As Single)
-Framework_Cutscene_AddDialogue(cutsceneId As Integer, speaker As String, text As String, duration As Single)
-Framework_Cutscene_AddMoveActor(cutsceneId As Integer, entityId As Integer, targetX As Single, targetY As Single, duration As Single)
-Framework_Cutscene_AddFadeIn(cutsceneId As Integer, duration As Single)
-Framework_Cutscene_AddFadeOut(cutsceneId As Integer, duration As Single)
-Framework_Cutscene_AddPlaySound(cutsceneId As Integer, soundHandle As Integer)
-Framework_Cutscene_AddPlayMusic(cutsceneId As Integer, musicPath As String)
-Framework_Cutscene_AddCameraPan(cutsceneId As Integer, targetX As Single, targetY As Single, duration As Single)
-Framework_Cutscene_AddCameraZoom(cutsceneId As Integer, targetZoom As Single, duration As Single)
-Framework_Cutscene_AddShake(cutsceneId As Integer, intensity As Single, duration As Single)
-Framework_Cutscene_AddSetVisible(cutsceneId As Integer, entityId As Integer, visible As Boolean)
-```
+' Entity-level
+Framework_Entity_GetComponentCount(id As Integer) As Integer
+Framework_Entity_GetComponentTypeAt(id As Integer, index As Integer) As Integer  ' Returns ComponentType enum
+Framework_Entity_HasComponent(id As Integer, componentType As Integer) As Boolean
 
-### Playback
+' Field discovery
+Framework_Component_GetFieldCount(id As Integer, componentType As Integer) As Integer
+Framework_Component_GetFieldName(id As Integer, componentType As Integer, index As Integer) As String
+Framework_Component_GetFieldType(id As Integer, componentType As Integer, index As Integer) As String
 
-```vb
-Framework_Cutscene_Play(cutsceneId As Integer)
-Framework_Cutscene_Pause(cutsceneId As Integer)
-Framework_Cutscene_Resume(cutsceneId As Integer)
-Framework_Cutscene_Stop(cutsceneId As Integer)
-Framework_Cutscene_Skip(cutsceneId As Integer)
-Framework_Cutscene_SetSkippable(cutsceneId As Integer, skippable As Boolean)
-```
+' Field read
+Framework_Component_GetFieldFloat(id As Integer, componentType As Integer, fieldName As String) As Single
+Framework_Component_GetFieldInt(id As Integer, componentType As Integer, fieldName As String) As Integer
+Framework_Component_GetFieldBool(id As Integer, componentType As Integer, fieldName As String) As Boolean
+Framework_Component_GetFieldString(id As Integer, componentType As Integer, fieldName As String) As String
 
-### Queries
-
-```vb
-Framework_Cutscene_IsPlaying(cutsceneId As Integer) As Boolean
-Framework_Cutscene_IsFinished(cutsceneId As Integer) As Boolean
-Framework_Cutscene_GetProgress(cutsceneId As Integer) As Single
-```
-
-### Update & Draw
-
-```vb
-Framework_Cutscene_Update(deltaTime As Single)
-Framework_Cutscene_DrawDialogue()
+' Field write
+Framework_Component_SetFieldFloat(id As Integer, componentType As Integer, fieldName As String, value As Single)
+Framework_Component_SetFieldInt(id As Integer, componentType As Integer, fieldName As String, value As Integer)
+Framework_Component_SetFieldBool(id As Integer, componentType As Integer, fieldName As String, value As Boolean)
+Framework_Component_SetFieldString(id As Integer, componentType As Integer, fieldName As String, value As String)
 ```
 
 ---
 
-## Leaderboard System
+## Debug Overlay
 
-### Creating Leaderboards
-
-```vb
-Framework_Leaderboard_Create(name As String, sortOrder As Integer, maxEntries As Integer) As Integer
-Framework_Leaderboard_Destroy(leaderboardId As Integer)
-Framework_Leaderboard_Clear(leaderboardId As Integer)
-```
-
-### Score Submission
+Renders bounds, hierarchy lines, and stats on top of the game. Disabled by default.
 
 ```vb
-Framework_Leaderboard_SubmitScore(leaderboardId As Integer, playerName As String, score As Integer) As Integer
-Framework_Leaderboard_SubmitScoreEx(leaderboardId As Integer, playerName As String, score As Integer, metadata As String) As Integer
-Framework_Leaderboard_IsHighScore(leaderboardId As Integer, score As Integer) As Boolean
-Framework_Leaderboard_GetRankForScore(leaderboardId As Integer, score As Integer) As Integer
-```
-
-### Queries
-
-```vb
-Framework_Leaderboard_GetEntryCount(leaderboardId As Integer) As Integer
-Framework_Leaderboard_GetEntryName(leaderboardId As Integer, rank As Integer) As String
-Framework_Leaderboard_GetEntryScore(leaderboardId As Integer, rank As Integer) As Integer
-Framework_Leaderboard_GetEntryDate(leaderboardId As Integer, rank As Integer) As String
-Framework_Leaderboard_GetPlayerRank(leaderboardId As Integer, playerName As String) As Integer
-Framework_Leaderboard_GetPlayerBestScore(leaderboardId As Integer, playerName As String) As Integer
-Framework_Leaderboard_GetTopScore(leaderboardId As Integer) As Integer
-Framework_Leaderboard_GetTopPlayer(leaderboardId As Integer) As String
-```
-
-### Persistence
-
-```vb
-Framework_Leaderboard_Save(leaderboardId As Integer, filePath As String) As Boolean
-Framework_Leaderboard_Load(leaderboardId As Integer, filePath As String) As Boolean
+Framework_Debug_SetEnabled(enabled As Boolean)
+Framework_Debug_IsEnabled() As Boolean
+Framework_Debug_DrawEntityBounds(enabled As Boolean)  ' Draw collider AABBs
+Framework_Debug_DrawHierarchy(enabled As Boolean)     ' Draw parent→child lines
+Framework_Debug_DrawStats(enabled As Boolean)         ' Draw entity/component counts
+Framework_Debug_Render()                              ' Call after EndDrawing each frame
 ```
 
 ---
 
-## Sprite Batching
-
-Reduce draw calls by grouping sprites with same texture into batched renders.
-
-### Batch Creation
+## Asset Cache
 
 ```vb
-Framework_Batch_Create(maxSprites As Integer) As Integer
-Framework_Batch_Destroy(batchId As Integer)
-Framework_Batch_Clear(batchId As Integer)
-```
-
-### Adding Sprites
-
-```vb
-Framework_Batch_AddSprite(batchId As Integer, textureHandle As Integer, x As Single, y As Single, width As Single, height As Single, srcX As Single, srcY As Single, srcW As Single, srcH As Single, rotation As Single, originX As Single, originY As Single, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_Batch_AddSpriteSimple(batchId As Integer, textureHandle As Integer, x As Single, y As Single, r As Byte, g As Byte, b As Byte, a As Byte)
-```
-
-### Rendering
-
-```vb
-Framework_Batch_Draw(batchId As Integer)
-Framework_Batch_DrawSorted(batchId As Integer)  ' Sort by texture then draw
-```
-
-### Statistics
-
-```vb
-Framework_Batch_GetSpriteCount(batchId As Integer) As Integer
-Framework_Batch_GetDrawCallCount(batchId As Integer) As Integer
-Framework_Batch_SetAutoCull(batchId As Integer, enabled As Boolean)
+Framework_SetAssetRoot(path As String)  ' Base directory prepended to all asset paths
+Framework_GetAssetRoot() As String
 ```
 
 ---
 
-## Texture Atlas
+## Constants & Enums
 
-Pack multiple sprites into single textures to reduce texture swaps.
-
-### Atlas Creation
+### Engine State
 
 ```vb
-Framework_Atlas_Create(width As Integer, height As Integer) As Integer
-Framework_Atlas_Destroy(atlasId As Integer)
-Framework_Atlas_IsValid(atlasId As Integer) As Boolean
+Const ENGINE_STOPPED  As Integer = 0
+Const ENGINE_RUNNING  As Integer = 1
+Const ENGINE_PAUSED   As Integer = 2
+Const ENGINE_QUITTING As Integer = 3
 ```
 
-### Adding Sprites
+### Component Types
 
 ```vb
-Framework_Atlas_AddImage(atlasId As Integer, imagePath As String) As Integer
-Framework_Atlas_AddRegion(atlasId As Integer, textureHandle As Integer, srcX As Integer, srcY As Integer, srcW As Integer, srcH As Integer) As Integer
-Framework_Atlas_Pack(atlasId As Integer) As Boolean
+Const COMP_TRANSFORM2D   As Integer = 0
+Const COMP_SPRITE2D      As Integer = 1
+Const COMP_NAME          As Integer = 2
+Const COMP_TAG           As Integer = 3
+Const COMP_HIERARCHY     As Integer = 4
+Const COMP_VELOCITY2D    As Integer = 5
+Const COMP_BOXCOLLIDER2D As Integer = 6
+Const COMP_ENABLED       As Integer = 7
 ```
 
-### Querying
+### String Limits
 
 ```vb
-Framework_Atlas_GetSpriteRect(atlasId As Integer, spriteIndex As Integer, ByRef x As Single, ByRef y As Single, ByRef w As Single, ByRef h As Single)
-Framework_Atlas_GetSpriteCount(atlasId As Integer) As Integer
-Framework_Atlas_GetTextureHandle(atlasId As Integer) As Integer
+Const FW_NAME_MAX As Integer = 64   ' Max entity name length
+Const FW_TAG_MAX  As Integer = 32   ' Max entity tag length
+Const FW_PATH_MAX As Integer = 128  ' Max file path length
 ```
 
-### Drawing
+### Mouse Buttons
 
 ```vb
-Framework_Atlas_DrawSprite(atlasId As Integer, spriteIndex As Integer, x As Single, y As Single, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_Atlas_DrawSpriteEx(atlasId As Integer, spriteIndex As Integer, x As Single, y As Single, rotation As Single, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_Atlas_DrawSpritePro(atlasId As Integer, spriteIndex As Integer, destX As Single, destY As Single, destW As Single, destH As Single, originX As Single, originY As Single, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+Const MOUSE_BUTTON_LEFT   As Integer = 0
+Const MOUSE_BUTTON_RIGHT  As Integer = 1
+Const MOUSE_BUTTON_MIDDLE As Integer = 2
 ```
 
-### Persistence
+### Texture Filter
 
 ```vb
-Framework_Atlas_SaveToFile(atlasId As Integer, jsonPath As String, imagePath As String) As Boolean
-Framework_Atlas_LoadFromFile(jsonPath As String, imagePath As String) As Integer
+Const TEXTURE_FILTER_POINT           As Integer = 0
+Const TEXTURE_FILTER_BILINEAR        As Integer = 1
+Const TEXTURE_FILTER_TRILINEAR       As Integer = 2
+Const TEXTURE_FILTER_ANISOTROPIC_4X  As Integer = 3
+Const TEXTURE_FILTER_ANISOTROPIC_8X  As Integer = 4
+Const TEXTURE_FILTER_ANISOTROPIC_16X As Integer = 5
 ```
 
----
-
-## Level Editor
-
-Load/save levels at runtime in JSON format for easy editing.
-
-### Level Management
+### Texture Wrap
 
 ```vb
-Framework_Level_Create(name As String) As Integer
-Framework_Level_Destroy(levelId As Integer)
-Framework_Level_IsValid(levelId As Integer) As Boolean
-```
-
-### Level Properties
-
-```vb
-Framework_Level_SetSize(levelId As Integer, width As Integer, height As Integer)
-Framework_Level_GetSize(levelId As Integer, ByRef width As Integer, ByRef height As Integer)
-Framework_Level_SetTileSize(levelId As Integer, tileWidth As Integer, tileHeight As Integer)
-Framework_Level_SetBackground(levelId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
-```
-
-### Tile Layers
-
-```vb
-Framework_Level_AddLayer(levelId As Integer, layerName As String) As Integer
-Framework_Level_RemoveLayer(levelId As Integer, layerIndex As Integer)
-Framework_Level_GetLayerCount(levelId As Integer) As Integer
-Framework_Level_SetTile(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, tileId As Integer)
-Framework_Level_GetTile(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer) As Integer
-Framework_Level_FillTiles(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, w As Integer, h As Integer, tileId As Integer)
-Framework_Level_ClearLayer(levelId As Integer, layerIndex As Integer)
-```
-
-### Objects
-
-```vb
-Framework_Level_AddObject(levelId As Integer, objectType As String, x As Single, y As Single) As Integer
-Framework_Level_RemoveObject(levelId As Integer, objectId As Integer)
-Framework_Level_SetObjectPosition(levelId As Integer, objectId As Integer, x As Single, y As Single)
-Framework_Level_SetObjectProperty(levelId As Integer, objectId As Integer, key As String, value As String)
-Framework_Level_GetObjectProperty(levelId As Integer, objectId As Integer, key As String) As String
-```
-
-### Collision Shapes
-
-```vb
-Framework_Level_AddCollisionRect(levelId As Integer, x As Single, y As Single, w As Single, h As Single)
-Framework_Level_AddCollisionCircle(levelId As Integer, x As Single, y As Single, radius As Single)
-Framework_Level_ClearCollisions(levelId As Integer)
-```
-
-### Persistence
-
-```vb
-Framework_Level_SaveToFile(levelId As Integer, filePath As String) As Boolean
-Framework_Level_LoadFromFile(filePath As String) As Integer
-```
-
-### Rendering
-
-```vb
-Framework_Level_Draw(levelId As Integer, tilesetHandle As Integer)
-Framework_Level_DrawLayer(levelId As Integer, layerIndex As Integer, tilesetHandle As Integer)
-```
-
-### Coordinate Conversion
-
-```vb
-' Convert world coordinates to tile coordinates
-Framework_Level_WorldToTile(levelId As Integer, worldX As Single, worldY As Single, ByRef tileX As Integer, ByRef tileY As Integer)
-
-' Convert tile coordinates to world coordinates (top-left corner)
-Framework_Level_TileToWorld(levelId As Integer, tileX As Integer, tileY As Integer, ByRef worldX As Single, ByRef worldY As Single)
-
-' Convert tile coordinates to world coordinates (center)
-Framework_Level_TileToWorldCenter(levelId As Integer, tileX As Integer, tileY As Integer, ByRef worldX As Single, ByRef worldY As Single)
-```
-
-### Editing Tools
-
-```vb
-' Flood fill area with tile
-Framework_Level_FloodFill(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer, newTileId As Integer) As Integer
-
-' Undo/Redo system
-Framework_Level_BeginEdit(levelId As Integer)      ' Start edit batch
-Framework_Level_EndEdit(levelId As Integer)        ' End edit batch
-Framework_Level_Undo(levelId As Integer)
-Framework_Level_Redo(levelId As Integer)
-Framework_Level_CanUndo(levelId As Integer) As Boolean
-Framework_Level_CanRedo(levelId As Integer) As Boolean
-Framework_Level_ClearHistory(levelId As Integer)
-
-' Selection and copy/paste
-Framework_Level_SetSelection(levelId As Integer, x As Integer, y As Integer, w As Integer, h As Integer)
-Framework_Level_ClearSelection(levelId As Integer)
-Framework_Level_GetSelectionSize(levelId As Integer, ByRef w As Integer, ByRef h As Integer)
-Framework_Level_CopySelection(levelId As Integer, layerIndex As Integer)
-Framework_Level_PasteSelection(levelId As Integer, layerIndex As Integer, x As Integer, y As Integer)
-```
-
-### Tile Properties
-
-```vb
-' Tile collision flags
-Framework_Level_SetTileCollision(levelId As Integer, tileX As Integer, tileY As Integer, isSolid As Boolean)
-Framework_Level_GetTileCollision(levelId As Integer, tileX As Integer, tileY As Integer) As Boolean
-Framework_Level_IsTileSolid(levelId As Integer, tileX As Integer, tileY As Integer) As Boolean
-
-' Raycast for collision
-Framework_Level_RaycastTiles(levelId As Integer, startX As Single, startY As Single, dirX As Single, dirY As Single, maxDist As Single, ByRef hitX As Single, ByRef hitY As Single) As Boolean
-```
-
-### Auto-Tiling
-
-```vb
-' Set auto-tile rules (16 tiles for 4-bit neighbor rules)
-Framework_Level_SetAutoTileRules(levelId As Integer, baseTileId As Integer, tileMapping() As Integer)
-Framework_Level_ClearAutoTileRules(levelId As Integer, baseTileId As Integer)
-Framework_Level_ApplyAutoTiling(levelId As Integer, layerIndex As Integer)
+Const TEXTURE_WRAP_REPEAT        As Integer = 0
+Const TEXTURE_WRAP_CLAMP         As Integer = 1
+Const TEXTURE_WRAP_MIRROR_REPEAT As Integer = 2
+Const TEXTURE_WRAP_MIRROR_CLAMP  As Integer = 3
 ```
 
 ---
 
-## Networking
+## VB.NET Helper Classes
 
-TCP client-server networking for multiplayer games.
+`RaylibWrapper` provides disposable wrapper classes for common resource types.
 
-### Server
-
-```vb
-Framework_Net_CreateServer(port As Integer, maxClients As Integer) As Integer
-Framework_Net_DestroyServer(serverId As Integer)
-Framework_Net_ServerIsRunning(serverId As Integer) As Boolean
-Framework_Net_GetClientCount(serverId As Integer) As Integer
-Framework_Net_DisconnectClient(serverId As Integer, clientId As Integer)
-Framework_Net_UpdateServer(serverId As Integer)
-```
-
-### Client
+### TextureHandle
 
 ```vb
-Framework_Net_CreateClient() As Integer
-Framework_Net_DestroyClient(clientId As Integer)
-Framework_Net_Connect(clientId As Integer, host As String, port As Integer) As Boolean
-Framework_Net_Disconnect(clientId As Integer)
-Framework_Net_IsConnected(clientId As Integer) As Boolean
-Framework_Net_UpdateClient(clientId As Integer)
+Dim tex As New TextureHandle("assets/player.png")
+
+' Draw methods
+tex.Draw(x, y, tint)
+tex.DrawV(position, tint)
+tex.DrawEx(position, rotation, scale, tint)
+tex.DrawRec(source, position, tint)
+tex.DrawPro(source, dest, origin, rotation, tint)
+
+' Properties
+Dim w As Integer = tex.Width
+Dim h As Integer = tex.Height
+Dim valid As Boolean = tex.IsValid
+
+' Dispose when done (releases the handle)
+tex.Dispose()
+' Or: Using tex As New TextureHandle("player.png") ... End Using
 ```
 
-### Messaging
+### FontHandle
 
 ```vb
-Framework_Net_BroadcastMessage(serverId As Integer, channel As String, data As IntPtr, dataSize As Integer, reliable As Boolean)
-Framework_Net_SendToClient(serverId As Integer, clientId As Integer, channel As String, data As IntPtr, dataSize As Integer, reliable As Boolean)
-Framework_Net_SendMessage(clientId As Integer, channel As String, data As IntPtr, dataSize As Integer, reliable As Boolean)
+Dim font As New FontHandle("assets/fonts/roboto.ttf", 24)
+
+font.DrawText("Hello!", position, fontSize, spacing, tint)
+Dim valid As Boolean = font.IsValid
+
+font.Dispose()
 ```
 
-### Callbacks
+### MusicHandle
 
 ```vb
-' Server callbacks
-Delegate Sub NetConnectCallback(connectionId As Integer, userData As IntPtr)
-Delegate Sub NetDisconnectCallback(connectionId As Integer, userData As IntPtr)
-Delegate Sub NetMessageCallback(connectionId As Integer, channel As String, data As IntPtr, dataSize As Integer, userData As IntPtr)
+Dim music As New MusicHandle("assets/audio/theme.ogg")
 
-Framework_Net_SetOnClientConnected(serverId As Integer, callback As NetConnectCallback, userData As IntPtr)
-Framework_Net_SetOnClientDisconnected(serverId As Integer, callback As NetDisconnectCallback, userData As IntPtr)
-Framework_Net_SetOnServerMessage(serverId As Integer, callback As NetMessageCallback, userData As IntPtr)
+music.Play()
+music.Pause()
+music.Stop()
+music.SetVolume(0.8F)
+music.SetPitch(1.0F)
 
-' Client callbacks
-Framework_Net_SetOnConnected(clientId As Integer, callback As NetConnectCallback, userData As IntPtr)
-Framework_Net_SetOnDisconnected(clientId As Integer, callback As NetDisconnectCallback, userData As IntPtr)
-Framework_Net_SetOnMessage(clientId As Integer, callback As NetMessageCallback, userData As IntPtr)
+Dim duration As Single = music.GetDuration()
+Dim position As Single = music.GetPosition()
+
+music.Dispose()
 ```
-
-### Statistics
-
-```vb
-Framework_Net_GetPing(clientId As Integer) As Integer
-Framework_Net_GetBytesSent(connectionId As Integer) As Integer
-Framework_Net_GetBytesReceived(connectionId As Integer) As Integer
-```
-
----
-
-## Shader System
-
-Custom shader loading and GPU uniform management.
-
-### Loading Shaders
-
-```vb
-Framework_Shader_Load(vsPath As String, fsPath As String) As Integer
-Framework_Shader_LoadFromMemory(vsCode As String, fsCode As String) As Integer
-Framework_Shader_Unload(shaderId As Integer)
-Framework_Shader_IsValid(shaderId As Integer) As Boolean
-```
-
-### Using Shaders
-
-```vb
-Framework_Shader_Begin(shaderId As Integer)
-Framework_Shader_End()
-```
-
-### Uniform Locations
-
-```vb
-Framework_Shader_GetLocation(shaderId As Integer, uniformName As String) As Integer
-```
-
-### Setting Uniforms (by location)
-
-```vb
-Framework_Shader_SetInt(shaderId As Integer, loc As Integer, value As Integer)
-Framework_Shader_SetFloat(shaderId As Integer, loc As Integer, value As Single)
-Framework_Shader_SetVec2(shaderId As Integer, loc As Integer, x As Single, y As Single)
-Framework_Shader_SetVec3(shaderId As Integer, loc As Integer, x As Single, y As Single, z As Single)
-Framework_Shader_SetVec4(shaderId As Integer, loc As Integer, x As Single, y As Single, z As Single, w As Single)
-Framework_Shader_SetMat4(shaderId As Integer, loc As Integer, mat As IntPtr)
-```
-
-### Setting Uniforms (by name)
-
-```vb
-Framework_Shader_SetIntByName(shaderId As Integer, name As String, value As Integer)
-Framework_Shader_SetFloatByName(shaderId As Integer, name As String, value As Single)
-Framework_Shader_SetVec2ByName(shaderId As Integer, name As String, x As Single, y As Single)
-Framework_Shader_SetVec3ByName(shaderId As Integer, name As String, x As Single, y As Single, z As Single)
-Framework_Shader_SetVec4ByName(shaderId As Integer, name As String, x As Single, y As Single, z As Single, w As Single)
-```
-
-### Built-in Shaders
-
-```vb
-' Basic effects
-Framework_Shader_LoadGrayscale() As Integer    ' Converts to grayscale
-Framework_Shader_LoadBlur() As Integer          ' 5x5 box blur
-Framework_Shader_LoadCRT() As Integer           ' CRT monitor effect with scanlines
-
-' Advanced effects (NEW)
-Framework_Shader_LoadOutline() As Integer       ' Edge detection outline
-  ' Uniforms: outlineColor (vec4), outlineThickness (float)
-Framework_Shader_LoadGlow() As Integer          ' Soft glow effect
-  ' Uniforms: glowIntensity (float), glowRadius (float)
-Framework_Shader_LoadDistortion() As Integer    ' Wavy distortion
-  ' Uniforms: time (float), distortionStrength (float), waveFrequency (float)
-Framework_Shader_LoadChromatic() As Integer     ' RGB channel separation
-  ' Uniforms: aberrationAmount (float)
-Framework_Shader_LoadPixelate() As Integer      ' Retro pixelation
-  ' Uniforms: pixelSize (float)
-
-' Post-processing effects (NEW)
-Framework_Shader_LoadVignette() As Integer      ' Darken screen edges
-  ' Uniforms: vignetteRadius (float), vignetteSoftness (float), vignetteIntensity (float)
-Framework_Shader_LoadBloom() As Integer         ' Bright area glow
-  ' Uniforms: bloomThreshold (float), bloomIntensity (float), bloomSpread (float)
-Framework_Shader_LoadWave() As Integer          ' Wavy distortion effect
-  ' Uniforms: waveAmplitude (float), waveFrequency (float), waveSpeed (float), time (float)
-Framework_Shader_LoadSharpen() As Integer       ' Edge enhancement
-  ' Uniforms: sharpenAmount (float)
-Framework_Shader_LoadFilmGrain() As Integer     ' Noise/grain effect
-  ' Uniforms: grainIntensity (float), grainSize (float), time (float)
-Framework_Shader_LoadColorAdjust() As Integer   ' Color grading
-  ' Uniforms: brightness (float), contrast (float), saturation (float)
-```
-
----
-
-## Skeletal Animation
-
-Bone-based character animation with sprite attachments.
-
-### Skeleton Creation
-
-```vb
-Framework_Skeleton_Create(name As String) As Integer
-Framework_Skeleton_Destroy(skeletonId As Integer)
-Framework_Skeleton_IsValid(skeletonId As Integer) As Boolean
-```
-
-### Bones
-
-```vb
-' Returns boneId (0 = root, -1 = error)
-Framework_Skeleton_AddBone(skeletonId As Integer, boneName As String, parentBoneId As Integer, x As Single, y As Single, rotation As Single, length As Single) As Integer
-Framework_Skeleton_GetBoneCount(skeletonId As Integer) As Integer
-Framework_Skeleton_GetBoneId(skeletonId As Integer, boneName As String) As Integer
-```
-
-### Bone Transforms
-
-```vb
-Framework_Skeleton_SetBoneLocalTransform(skeletonId As Integer, boneId As Integer, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
-Framework_Skeleton_GetBoneWorldPosition(skeletonId As Integer, boneId As Integer, ByRef x As Single, ByRef y As Single)
-Framework_Skeleton_GetBoneWorldRotation(skeletonId As Integer, boneId As Integer) As Single
-Framework_Skeleton_ComputeWorldTransforms(skeletonId As Integer)
-```
-
-### Sprite Attachments
-
-```vb
-Framework_Skeleton_AttachSprite(skeletonId As Integer, boneId As Integer, textureHandle As Integer, offsetX As Single, offsetY As Single, originX As Single, originY As Single, width As Single, height As Single)
-Framework_Skeleton_DetachSprite(skeletonId As Integer, boneId As Integer)
-Framework_Skeleton_SetSpriteSourceRect(skeletonId As Integer, boneId As Integer, srcX As Single, srcY As Single, srcW As Single, srcH As Single)
-```
-
-### Animation Creation
-
-```vb
-Framework_Skeleton_CreateAnimation(skeletonId As Integer, animName As String, duration As Single) As Integer
-Framework_Skeleton_DestroyAnimation(skeletonId As Integer, animId As Integer)
-Framework_Skeleton_GetAnimationId(skeletonId As Integer, animName As String) As Integer
-```
-
-### Keyframes
-
-```vb
-Framework_Skeleton_AddKeyframe(skeletonId As Integer, animId As Integer, boneId As Integer, time As Single, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
-```
-
-### Playback
-
-```vb
-Framework_Skeleton_PlayAnimation(skeletonId As Integer, animId As Integer, loop As Boolean)
-Framework_Skeleton_StopAnimation(skeletonId As Integer)
-Framework_Skeleton_PauseAnimation(skeletonId As Integer)
-Framework_Skeleton_ResumeAnimation(skeletonId As Integer)
-Framework_Skeleton_SetAnimationSpeed(skeletonId As Integer, speed As Single)
-Framework_Skeleton_GetAnimationTime(skeletonId As Integer) As Single
-Framework_Skeleton_SetAnimationTime(skeletonId As Integer, time As Single)
-Framework_Skeleton_IsAnimationPlaying(skeletonId As Integer) As Boolean
-```
-
-### Blending
-
-```vb
-Framework_Skeleton_CrossfadeTo(skeletonId As Integer, animId As Integer, duration As Single, loop As Boolean)
-Framework_Skeleton_SetBlendWeight(skeletonId As Integer, animIdA As Integer, animIdB As Integer, weight As Single)
-```
-
-### Pose
-
-```vb
-Framework_Skeleton_SetPose(skeletonId As Integer, boneId As Integer, x As Single, y As Single, rotation As Single, scaleX As Single, scaleY As Single)
-Framework_Skeleton_ResetPose(skeletonId As Integer)
-```
-
-### Update & Draw
-
-```vb
-Framework_Skeleton_Update(skeletonId As Integer, dt As Single)
-Framework_Skeleton_UpdateAll(dt As Single)
-Framework_Skeleton_Draw(skeletonId As Integer, x As Single, y As Single, scaleX As Single, scaleY As Single, rotation As Single)
-Framework_Skeleton_DrawDebug(skeletonId As Integer, x As Single, y As Single, scale As Single)
-```
-
----
-
-## Command Console
-
-Runtime command console with variables and callbacks.
-
-### Initialization
-
-```vb
-Framework_Cmd_Init()
-Framework_Cmd_Shutdown()
-```
-
-### Registering Commands
-
-```vb
-Delegate Sub CmdConsoleCallback(args As String, userData As IntPtr)
-
-Framework_Cmd_RegisterCommand(cmdName As String, description As String, callback As CmdConsoleCallback, userData As IntPtr)
-Framework_Cmd_UnregisterCommand(cmdName As String)
-```
-
-### Executing Commands
-
-```vb
-Framework_Cmd_Execute(commandLine As String)
-Framework_Cmd_ExecuteFile(filePath As String) As Boolean
-```
-
-### Console Variables (CVars)
-
-```vb
-' Registration
-Framework_Cmd_RegisterCvarInt(name As String, defaultValue As Integer, description As String)
-Framework_Cmd_RegisterCvarFloat(name As String, defaultValue As Single, description As String)
-Framework_Cmd_RegisterCvarBool(name As String, defaultValue As Boolean, description As String)
-Framework_Cmd_RegisterCvarString(name As String, defaultValue As String, description As String)
-
-' Getters/Setters
-Framework_Cmd_GetCvarInt(name As String) As Integer
-Framework_Cmd_GetCvarFloat(name As String) As Single
-Framework_Cmd_GetCvarBool(name As String) As Boolean
-Framework_Cmd_GetCvarString(name As String) As String
-Framework_Cmd_SetCvarInt(name As String, value As Integer)
-Framework_Cmd_SetCvarFloat(name As String, value As Single)
-Framework_Cmd_SetCvarBool(name As String, value As Boolean)
-Framework_Cmd_SetCvarString(name As String, value As String)
-```
-
-### Command History
-
-```vb
-Framework_Cmd_GetHistoryCount() As Integer
-Framework_Cmd_GetHistoryEntry(index As Integer) As String
-Framework_Cmd_ClearHistory()
-```
-
-### Logging
-
-| Level | Value |
-|-------|-------|
-| TRACE | 0 |
-| DEBUG | 1 |
-| INFO | 2 |
-| WARN | 3 |
-| ERROR | 4 |
-| FATAL | 5 |
-
-```vb
-Framework_Cmd_Log(level As Integer, message As String)
-Framework_Cmd_LogInfo(message As String)
-Framework_Cmd_LogWarning(message As String)
-Framework_Cmd_LogError(message As String)
-Framework_Cmd_LogDebug(message As String)
-Framework_Cmd_SetLogLevel(level As Integer)
-Framework_Cmd_SetLogToFile(enabled As Boolean, filePath As String)
-```
-
-### Visual Console
-
-```vb
-Framework_Cmd_SetToggleKey(keyCode As Integer)  ' Default: KEY_GRAVE (`)
-Framework_Cmd_Toggle()
-Framework_Cmd_Show()
-Framework_Cmd_Hide()
-Framework_Cmd_IsVisible() As Boolean
-```
-
-### Appearance
-
-```vb
-Framework_Cmd_SetBackgroundColor(r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_Cmd_SetTextColor(r As Byte, g As Byte, b As Byte, a As Byte)
-Framework_Cmd_SetFontSize(fontSize As Integer)
-Framework_Cmd_SetMaxLines(maxLines As Integer)
-```
-
-### Update & Draw
-
-```vb
-Framework_Cmd_Update(dt As Single)
-Framework_Cmd_Draw()
-```
-
----
-
-## Cleanup
-
-```vb
-Framework_ResourcesShutdown()  ' Clean up all resources
-```
-
----
-
-## Version
-
-**VisualGameStudioEngine v1.0**
-
-Built on Raylib 5.5
