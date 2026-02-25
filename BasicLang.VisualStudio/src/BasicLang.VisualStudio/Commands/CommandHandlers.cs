@@ -104,70 +104,70 @@ public static class CommandHandlers
             return;
         }
 
-        var projectPath = activeDocument.FullName;
+        var projectDir = Path.GetDirectoryName(activeDocument.FullName);
+        await BuildProjectAsync(projectDir!);
+    }
 
-        // Get output window
+    /// <summary>
+    /// Runs the BasicLang compiler on the project in <paramref name="projectDir"/> and returns
+    /// true if the build succeeded (exit code 0).
+    /// </summary>
+    private static async Task<bool> BuildProjectAsync(string projectDir)
+    {
         var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
-        if (outputWindow != null)
+        var guidPane = Microsoft.VisualStudio.VSConstants.OutputWindowPaneGuid.BuildOutputPane_guid;
+        outputWindow?.CreatePane(ref guidPane, "Build", 1, 1);
+        outputWindow?.GetPane(ref guidPane, out var pane);
+        pane?.Activate();
+
+        var projectFiles = Directory.GetFiles(projectDir, "*.blproj");
+        if (projectFiles.Length == 0)
         {
-            var guidPane = Microsoft.VisualStudio.VSConstants.OutputWindowPaneGuid.BuildOutputPane_guid;
-            outputWindow.CreatePane(ref guidPane, "Build", 1, 1);
-            outputWindow.GetPane(ref guidPane, out var pane);
-            pane?.Activate();
-            pane?.OutputStringThreadSafe($"Building BasicLang project: {projectPath}\n");
-
-            // Find project file
-            var projectDir = Path.GetDirectoryName(projectPath);
-            var projectFiles = Directory.GetFiles(projectDir!, "*.blproj");
-
-            if (projectFiles.Length > 0)
-            {
-                var blprojPath = projectFiles[0];
-                pane?.OutputStringThreadSafe($"Found project file: {blprojPath}\n");
-
-                // Execute build
-                var basicLangPath = FindBasicLangCompiler();
-                if (!string.IsNullOrEmpty(basicLangPath))
-                {
-                    pane?.OutputStringThreadSafe($"Using compiler: {basicLangPath}\n");
-
-                    var startInfo = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = basicLangPath,
-                        Arguments = $"build \"{blprojPath}\"",
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true,
-                        WorkingDirectory = projectDir
-                    };
-
-                    var process = System.Diagnostics.Process.Start(startInfo);
-                    if (process != null)
-                    {
-                        var output = await process.StandardOutput.ReadToEndAsync();
-                        var errors = await process.StandardError.ReadToEndAsync();
-                        process.WaitForExit();
-
-                        pane?.OutputStringThreadSafe(output);
-                        if (!string.IsNullOrEmpty(errors))
-                        {
-                            pane?.OutputStringThreadSafe($"Errors:\n{errors}\n");
-                        }
-
-                        pane?.OutputStringThreadSafe($"\nBuild completed with exit code: {process.ExitCode}\n");
-                    }
-                }
-                else
-                {
-                    pane?.OutputStringThreadSafe("Error: BasicLang compiler not found.\n");
-                }
-            }
-            else
-            {
-                pane?.OutputStringThreadSafe("No .blproj file found in the current directory.\n");
-            }
+            pane?.OutputStringThreadSafe("No .blproj file found in the current directory.\n");
+            return false;
         }
+
+        var blprojPath = projectFiles[0];
+        pane?.OutputStringThreadSafe($"Building: {blprojPath}\n");
+
+        var basicLangPath = FindBasicLangCompiler();
+        if (string.IsNullOrEmpty(basicLangPath))
+        {
+            pane?.OutputStringThreadSafe("Error: BasicLang compiler not found.\n");
+            return false;
+        }
+
+        pane?.OutputStringThreadSafe($"Using compiler: {basicLangPath}\n");
+
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = basicLangPath,
+            Arguments = $"build \"{blprojPath}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = projectDir
+        };
+
+        var process = System.Diagnostics.Process.Start(startInfo);
+        if (process == null)
+        {
+            pane?.OutputStringThreadSafe("Error: Failed to start compiler process.\n");
+            return false;
+        }
+
+        var output = await process.StandardOutput.ReadToEndAsync();
+        var errors = await process.StandardError.ReadToEndAsync();
+        await Task.Run(() => process.WaitForExit());
+
+        if (!string.IsNullOrEmpty(output))
+            pane?.OutputStringThreadSafe(output);
+        if (!string.IsNullOrEmpty(errors))
+            pane?.OutputStringThreadSafe($"Errors:\n{errors}\n");
+
+        pane?.OutputStringThreadSafe($"\nBuild {(process.ExitCode == 0 ? "succeeded" : "FAILED")} (exit code {process.ExitCode})\n");
+        return process.ExitCode == 0;
     }
 
     /// <summary>
@@ -186,12 +186,17 @@ public static class CommandHandlers
             return;
         }
 
-        // Build first, then run
-        ExecuteBuildAsync(sender, e);
+        var projectDir = Path.GetDirectoryName(activeDocument.FullName)!;
 
-        // After build, try to run
-        var projectDir = Path.GetDirectoryName(activeDocument.FullName);
-        var outputDir = Path.Combine(projectDir!, "bin", "Debug");
+        // Build first and wait for it to finish before launching
+        bool buildSucceeded = await BuildProjectAsync(projectDir);
+        if (!buildSucceeded)
+        {
+            ShowMessage("Run Failed", "Build failed. See the Build output window for details.");
+            return;
+        }
+
+        var outputDir = Path.Combine(projectDir, "bin", "Debug");
 
         var exeFiles = Directory.Exists(outputDir)
             ? Directory.GetFiles(outputDir, "*.exe")
@@ -208,7 +213,7 @@ public static class CommandHandlers
         }
         else
         {
-            ShowMessage("Run Failed", "No executable found. Please build the project first.");
+            ShowMessage("Run Failed", "No executable found in bin\\Debug after build.");
         }
     }
 
