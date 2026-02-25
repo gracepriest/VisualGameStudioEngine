@@ -77,7 +77,7 @@ public class BasicLangLanguageService : ILanguageClient, IDisposable
         var startInfo = new ProcessStartInfo
         {
             FileName = serverPath,
-            Arguments = "lsp",
+            Arguments = "--lsp",
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
