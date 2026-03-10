@@ -86,7 +86,7 @@ public class MultiCursorRenderer : IBackgroundRenderer
                 drawingContext.FillRectangle(_selectionBrush, rect);
             }
         }
-        catch
+        catch (Exception)
         {
             // Ignore rendering errors for out-of-view content
         }
@@ -115,7 +115,7 @@ public class MultiCursorRenderer : IBackgroundRenderer
 
             drawingContext.FillRectangle(_cursorBrush, rect);
         }
-        catch
+        catch (Exception)
         {
             // Ignore rendering errors for out-of-view content
         }

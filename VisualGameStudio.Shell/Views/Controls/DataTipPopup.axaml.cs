@@ -59,6 +59,6 @@ public partial class DataTipPopup : UserControl
                 await clipboard.SetTextAsync(Value);
             }
         }
-        catch { }
+        catch (Exception) { }
     }
 }

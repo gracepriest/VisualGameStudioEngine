@@ -49,8 +49,9 @@ public class RecentProjectsService
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"Failed to load recent projects: {ex.Message}");
             _recentProjects = new List<RecentProject>();
         }
     }
@@ -63,9 +64,9 @@ public class RecentProjectsService
             var json = JsonSerializer.Serialize(data, JsonOptions);
             await File.WriteAllTextAsync(_recentFilePath, json);
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore save errors
+            System.Diagnostics.Debug.WriteLine($"Failed to save recent projects: {ex.Message}");
         }
     }
 

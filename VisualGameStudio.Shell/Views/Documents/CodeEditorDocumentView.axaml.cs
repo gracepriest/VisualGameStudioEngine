@@ -74,6 +74,9 @@ public partial class CodeEditorDocumentView : UserControl
                 MainEditor.CodeActionsRequested += (s, e) => vm.RequestCodeActions();
                 MainEditor.FormatDocumentRequested += (s, e) => vm.RequestFormatDocument();
 
+                // Wire up hover/data tip events
+                MainEditor.DataTipRequested += OnDataTipRequested;
+
                 // Initialize breakpoints when editor is ready
                 if (MainEditor.IsReady)
                 {
@@ -85,6 +88,9 @@ public partial class CodeEditorDocumentView : UserControl
                 }
             }
             vm.CompletionReceived += OnCompletionReceived;
+
+            // Wire up hover result display
+            vm.HoverResultReceived += OnHoverResultReceived;
         }
     }
 
@@ -242,8 +248,25 @@ public partial class CodeEditorDocumentView : UserControl
     {
         if (DataContext is CodeEditorDocumentViewModel vm)
         {
+            // Request debug data tip evaluation (works when debugging and paused)
             vm.RequestDataTipEvaluation(e.Expression, e.ScreenX, e.ScreenY);
+
+            // Also request LSP hover info (works when LSP is connected)
+            if (e.Line > 0 && e.Column > 0)
+            {
+                vm.RequestHover(e.Line, e.Column);
+            }
         }
+    }
+
+    private void OnHoverResultReceived(object? sender, HoverResultEventArgs e)
+    {
+        if (e.Hover == null || string.IsNullOrWhiteSpace(e.Hover.Contents)) return;
+
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            MainEditor?.ShowHoverTooltip(e.Hover.Contents);
+        });
     }
 
     private void OnNavigationRequested(object? sender, NavigationRequestedEventArgs e)

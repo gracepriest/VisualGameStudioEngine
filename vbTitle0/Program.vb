@@ -1,7 +1,7 @@
 Imports System
 Imports RaylibWrapper
 Module Program
-    Sub Main(args As String())
-        Console.WriteLine("Hello World!")
+    Sub InitGame()
+
     End Sub
 End Module

@@ -6,7 +6,7 @@ using VisualGameStudio.Core.Abstractions.ViewModels;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
-public partial class TerminalViewModel : ViewModelBase
+public partial class TerminalViewModel : ViewModelBase, IDisposable
 {
     private Process? _shellProcess;
     private StreamWriter? _shellInput;
@@ -99,10 +99,16 @@ public partial class TerminalViewModel : ViewModelBase
         try
         {
             _shellInput?.Close();
-            _shellProcess?.Kill();
-            _shellProcess?.Dispose();
+            if (_shellProcess != null)
+            {
+                _shellProcess.OutputDataReceived -= OnOutputDataReceived;
+                _shellProcess.ErrorDataReceived -= OnErrorDataReceived;
+                _shellProcess.Exited -= OnProcessExited;
+                _shellProcess.Kill();
+                _shellProcess.Dispose();
+            }
         }
-        catch
+        catch (Exception)
         {
         }
         finally
@@ -192,5 +198,13 @@ public partial class TerminalViewModel : ViewModelBase
                 OutputText = _outputBuffer.ToString();
             }
         });
+    }
+
+    public void Dispose()
+    {
+        if (IsRunning)
+        {
+            Stop();
+        }
     }
 }

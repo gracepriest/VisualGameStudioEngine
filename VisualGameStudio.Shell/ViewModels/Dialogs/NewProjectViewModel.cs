@@ -84,31 +84,31 @@ public partial class NewProjectViewModel : ViewModelBase
                     Dim running As Boolean
 
                     Sub Main()
+                        GameInit(800, 600, "My Game")
+                        SetTargetFPS(60)
                         running = True
-                        Initialize()
 
-                        While running
+                        While running And Not GameShouldClose()
                             Update()
                             Render()
                         Wend
 
-                        Cleanup()
-                    End Sub
-
-                    Sub Initialize()
-                        PrintLine("Game initialized")
+                        GameShutdown()
                     End Sub
 
                     Sub Update()
-                        ' Update game logic
+                        ' Handle escape key to exit (ESC = 256)
+                        If IsKeyPressed(256) Then
+                            running = False
+                        End If
                     End Sub
 
                     Sub Render()
-                        ' Render game graphics
-                    End Sub
-
-                    Sub Cleanup()
-                        PrintLine("Game ended")
+                        GameBeginFrame()
+                        ClearBackground(20, 40, 80)
+                        DrawText("Hello, Game!", 300, 280, 32, 255, 255, 255, 255)
+                        DrawText("Press ESC to exit", 310, 320, 20, 200, 200, 200, 255)
+                        GameEndFrame()
                     End Sub
                 End Module
                 """
@@ -184,28 +184,34 @@ public partial class NewProjectViewModel : ViewModelBase
             var projectPath = Path.Combine(projectDir, $"{ProjectName}.blproj");
             var outputType = SelectedTemplate.TemplateType == SimpleProjectTemplateType.Library ? "Library" : "Exe";
 
-            var projectContent = $"""
-                <?xml version="1.0" encoding="utf-8"?>
-                <BasicLangProject Version="1.0">
-                  <PropertyGroup>
-                    <ProjectName>{ProjectName}</ProjectName>
-                    <OutputType>{outputType}</OutputType>
-                    <RootNamespace>{ProjectName}</RootNamespace>
-                    <TargetBackend>Interpreter</TargetBackend>
-                  </PropertyGroup>
-                  <ItemGroup>
-                    {(SelectedTemplate.TemplateType != SimpleProjectTemplateType.Empty ? "<Compile Include=\"Program.bas\" />" : "")}
-                  </ItemGroup>
-                  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
-                    <OutputPath>bin\Debug\</OutputPath>
-                    <DebugSymbols>true</DebugSymbols>
-                  </PropertyGroup>
-                  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-                    <OutputPath>bin\Release\</OutputPath>
-                    <Optimize>true</Optimize>
-                  </PropertyGroup>
-                </BasicLangProject>
-                """;
+            var compileItem = SelectedTemplate.TemplateType != SimpleProjectTemplateType.Empty
+                ? "\n    <Compile Include=\"Program.bas\" />"
+                : "";
+
+            var projectContent =
+$"""
+<?xml version="1.0" encoding="utf-8"?>
+<BasicLangProject Version="1.0">
+  <PropertyGroup>
+    <ProjectName>{ProjectName}</ProjectName>
+    <OutputType>{outputType}</OutputType>
+    <RootNamespace>{ProjectName}</RootNamespace>
+    <TargetBackend>CSharp</TargetBackend>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <OutputPath>bin\Release</OutputPath>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>{compileItem}
+  </ItemGroup>
+</BasicLangProject>
+""";
 
             await File.WriteAllTextAsync(projectPath, projectContent);
 

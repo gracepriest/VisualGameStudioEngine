@@ -1,13 +1,9 @@
-<?xml version="1.0" encoding="utf-8"?>
 <BasicLangProject Version="1.0">
   <PropertyGroup>
     <ProjectName>Pong</ProjectName>
     <OutputType>WinExe</OutputType>
     <RootNamespace>Pong</RootNamespace>
     <TargetBackend>CSharp</TargetBackend>
-    <Description>Classic two-player Pong game demonstrating simple game mechanics in BasicLang</Description>
-    <Author>Visual Game Studio</Author>
-    <Version>1.0.0</Version>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <OutputPath>bin\Debug</OutputPath>
@@ -20,6 +16,6 @@
     <Optimize>true</Optimize>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Main.bl" />
+    <Compile Include="Main.bas" />
   </ItemGroup>
 </BasicLangProject>

@@ -18,6 +18,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private readonly HashSet<IRValue> _allTemporaries;
         private readonly List<string> _headerIncludes;
         private readonly HashSet<string> _declaredIdentifiers;
+        private bool _usesFramework;
+        private readonly HashSet<string> _frameworkFunctionsUsed;
         private IRModule _module;
 
         public override string BackendName => "C++";
@@ -30,6 +32,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _allTemporaries = new HashSet<IRValue>();
             _headerIncludes = new List<string> { "iostream", "vector", "string", "memory" };
             _declaredIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            _frameworkFunctionsUsed = new HashSet<string>();
             _typeMapper = new CppTypeMapper();
         }
         
@@ -39,6 +42,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _output.Clear();
             _valueNames.Clear();
             _allTemporaries.Clear();
+            _usesFramework = false;
+            _frameworkFunctionsUsed.Clear();
             _tempCounter = 0;
 
             // Generate header
@@ -166,7 +171,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 GenerateMainFunction(module);
             }
 
-            return _output.ToString();
+            var result = _output.ToString();
+
+            // Insert framework extern declarations if game framework functions were used
+            if (_usesFramework)
+            {
+                var marker = "using namespace std;";
+                var insertIdx = result.IndexOf(marker);
+                if (insertIdx >= 0)
+                {
+                    // Find the end of the line containing "using namespace std;"
+                    var lineEnd = result.IndexOf('\n', insertIdx);
+                    if (lineEnd < 0) lineEnd = result.Length;
+                    else lineEnd++; // include the \n
+                    result = result.Insert(lineEnd, "\n" + GenerateFrameworkExternDeclarations() + "\n");
+                }
+            }
+
+            return result;
         }
 
         private bool IsClassMethod(IRFunction function, IRModule module)
@@ -1071,8 +1093,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
         }
 
+        private string GetArg(List<string> args, int index) => index < args.Count ? args[index] : "0";
+
         private string EmitStdLibCall(string functionName, List<string> args)
         {
+            // Check game framework functions first (case-insensitive match)
+            var frameworkCall = EmitFrameworkCall(functionName, args);
+            if (frameworkCall != null) return frameworkCall;
+
             return functionName.ToLower() switch
             {
                 "print" => $"cout << {args[0]}",
@@ -1113,7 +1141,272 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _ => null
             };
         }
-        
+
+        /// <summary>
+        /// Emit calls to the VisualGameStudioEngine C DLL functions.
+        /// These map directly to Framework_* exports from framework.h.
+        /// </summary>
+        private string EmitFrameworkCall(string functionName, List<string> args)
+        {
+            var allArgs = string.Join(", ", args);
+
+            string result = functionName switch
+            {
+                // Core
+                "GameInit" => $"Framework_Initialize({allArgs})",
+                "GameShutdown" => "Framework_Shutdown()",
+                "GameBeginFrame" => "Framework_BeginDrawing()",
+                "GameEndFrame" => "Framework_EndDrawing()",
+                "GameShouldClose" => "Framework_ShouldClose()",
+                "GameGetDeltaTime" => "Framework_GetDeltaTime()",
+                "GameGetFPS" => "Framework_GetFPS()",
+
+                // Input
+                "IsKeyPressed" => $"Framework_IsKeyPressed({allArgs})",
+                "IsKeyDown" => $"Framework_IsKeyDown({allArgs})",
+                "IsKeyReleased" => $"Framework_IsKeyReleased({allArgs})",
+                "IsMouseButtonPressed" => $"Framework_IsMouseButtonPressed({allArgs})",
+                "IsMouseButtonDown" => $"Framework_IsMouseButtonDown({allArgs})",
+                "GetMouseX" => "Framework_GetMouseX()",
+                "GetMouseY" => "Framework_GetMouseY()",
+
+                // Drawing
+                "ClearBackground" => $"Framework_ClearBackground((uint8_t)({GetArg(args, 0)}), (uint8_t)({GetArg(args, 1)}), (uint8_t)({GetArg(args, 2)}), 255)",
+                "DrawRectangle" => $"Framework_DrawRectangle({GetArg(args, 0)}, {GetArg(args, 1)}, {GetArg(args, 2)}, {GetArg(args, 3)}, (uint8_t)({GetArg(args, 4)}), (uint8_t)({GetArg(args, 5)}), (uint8_t)({GetArg(args, 6)}), (uint8_t)({GetArg(args, 7)}))",
+                "DrawCircle" => $"Framework_DrawCircle({GetArg(args, 0)}, {GetArg(args, 1)}, {GetArg(args, 2)}, (uint8_t)({GetArg(args, 3)}), (uint8_t)({GetArg(args, 4)}), (uint8_t)({GetArg(args, 5)}), (uint8_t)({GetArg(args, 6)}))",
+                "DrawLine" => $"Framework_DrawLine({GetArg(args, 0)}, {GetArg(args, 1)}, {GetArg(args, 2)}, {GetArg(args, 3)}, (uint8_t)({GetArg(args, 4)}), (uint8_t)({GetArg(args, 5)}), (uint8_t)({GetArg(args, 6)}), (uint8_t)({GetArg(args, 7)}))",
+                "DrawText" => $"Framework_DrawText({GetArg(args, 0)}, {GetArg(args, 1)}, {GetArg(args, 2)}, {GetArg(args, 3)}, (uint8_t)({GetArg(args, 4)}), (uint8_t)({GetArg(args, 5)}), (uint8_t)({GetArg(args, 6)}), (uint8_t)({GetArg(args, 7)}))",
+                "DrawRectangleLines" => $"Framework_DrawRectangleLines({GetArg(args, 0)}, {GetArg(args, 1)}, {GetArg(args, 2)}, {GetArg(args, 3)}, (uint8_t)({GetArg(args, 4)}), (uint8_t)({GetArg(args, 5)}), (uint8_t)({GetArg(args, 6)}), (uint8_t)({GetArg(args, 7)}))",
+                "DrawCircleLines" => $"Framework_DrawCircleLines({GetArg(args, 0)}, {GetArg(args, 1)}, {GetArg(args, 2)}, (uint8_t)({GetArg(args, 3)}), (uint8_t)({GetArg(args, 4)}), (uint8_t)({GetArg(args, 5)}), (uint8_t)({GetArg(args, 6)}))",
+                "DrawTriangle" => $"Framework_DrawTriangle({allArgs})",
+                "DrawTriangleLines" => $"Framework_DrawTriangleLines({allArgs})",
+                "DrawFPS" => $"Framework_DrawFPS({allArgs})",
+
+                // Textures
+                "LoadTexture" => $"Framework_LoadTexture({allArgs})",
+                "UnloadTexture" => $"Framework_UnloadTexture({allArgs})",
+                "DrawTexture" => $"Framework_DrawTextureSimple({GetArg(args, 0)}, {GetArg(args, 1)}, {GetArg(args, 2)}, (uint8_t)({GetArg(args, 3)}), (uint8_t)({GetArg(args, 4)}), (uint8_t)({GetArg(args, 5)}), (uint8_t)({GetArg(args, 6)}))",
+                "DrawTextureEx" => $"Framework_DrawTextureEx({allArgs})",
+
+                // Entities
+                "CreateEntity" => "Framework_Entity_Create()",
+                "DestroyEntity" => $"Framework_Entity_Destroy({allArgs})",
+                "EntitySetPosition" => $"Framework_Entity_SetPosition({allArgs})",
+                "EntityGetX" => $"Framework_Entity_GetPositionX({allArgs})",
+                "EntityGetY" => $"Framework_Entity_GetPositionY({allArgs})",
+                "EntitySetVelocity" => $"Framework_Entity_SetVelocity({allArgs})",
+                "EntitySetSprite" => $"Framework_Entity_SetSprite({allArgs})",
+                "EntitySetCollider" => $"Framework_Entity_SetColliderBox({allArgs})",
+                "EntityIsActive" => $"Framework_Entity_IsActive({allArgs})",
+                "EntitySetActive" => $"Framework_Entity_SetActive({allArgs})",
+
+                // Audio
+                "LoadSound" => $"Framework_LoadSound({allArgs})",
+                "PlaySound" => $"Framework_PlaySound({allArgs})",
+                "StopSound" => $"Framework_StopSound({allArgs})",
+                "SetSoundVolume" => $"Framework_SetSoundVolume({allArgs})",
+                "LoadMusic" => $"Framework_LoadMusic({allArgs})",
+                "PlayMusic" => $"Framework_PlayMusic({allArgs})",
+                "StopMusic" => $"Framework_StopMusic({allArgs})",
+
+                // Audio Init
+                "InitAudio" => "Framework_InitAudio()",
+                "CloseAudio" => "Framework_CloseAudio()",
+                "SetMasterVolume" => $"Framework_SetMasterVolume({allArgs})",
+
+                // Time
+                "SetTargetFPS" => $"Framework_SetTargetFPS({allArgs})",
+                "GetFrameTime" => "Framework_GetFrameTime()",
+                "GetTime" => "Framework_GetTime()",
+                "SetTimeScale" => $"Framework_SetTimeScale({allArgs})",
+                "GetTimeScale" => "Framework_GetTimeScale()",
+
+                // Camera
+                "CameraSetPosition" => $"Framework_Camera_SetPosition({allArgs})",
+                "CameraSetZoom" => $"Framework_Camera_SetZoom({allArgs})",
+                "CameraFollow" => $"Framework_Camera_FollowEntity({allArgs})",
+                "CameraBeginMode" => "Framework_Camera_BeginMode()",
+                "CameraEndMode" => "Framework_Camera_EndMode()",
+                "CameraUpdate" => $"Framework_Camera_Update({allArgs})",
+                "CameraReset" => "Framework_Camera_Reset()",
+                "CameraSetTarget" => $"Framework_Camera_SetTarget({allArgs})",
+                "CameraSetOffset" => $"Framework_Camera_SetOffset({allArgs})",
+                "CameraSetRotation" => $"Framework_Camera_SetRotation({allArgs})",
+                "CameraGetZoom" => "Framework_Camera_GetZoom()",
+                "CameraGetRotation" => "Framework_Camera_GetRotation()",
+                "CameraPanTo" => $"Framework_Camera_PanTo({allArgs})",
+                "CameraZoomTo" => $"Framework_Camera_ZoomTo({allArgs})",
+                "CameraSetBounds" => $"Framework_Camera_SetBounds({allArgs})",
+                "CameraSetBoundsEnabled" => $"Framework_Camera_SetBoundsEnabled({allArgs})",
+                "CameraSetFollowLerp" => $"Framework_Camera_SetFollowLerp({allArgs})",
+                "CameraShake" => $"Framework_Camera_Shake({allArgs})",
+
+                // Cursor
+                "ShowCursor" => "Framework_ShowCursor()",
+                "HideCursor" => "Framework_HideCursor()",
+                "IsCursorHidden" => "Framework_IsCursorHidden()",
+                "SetMousePosition" => $"Framework_SetMousePosition({allArgs})",
+                "GetMouseWheelMove" => "Framework_GetMouseWheelMove()",
+
+                // Update
+                "GameUpdate" => "Framework_Update()",
+
+                _ => null
+            };
+
+            if (result != null)
+            {
+                _usesFramework = true;
+                // Extract the C function name from the result (everything before the first '(')
+                var parenIdx = result.IndexOf('(');
+                if (parenIdx > 0)
+                    _frameworkFunctionsUsed.Add(result.Substring(0, parenIdx));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Generate extern "C" declarations for Framework_* functions used in the code.
+        /// These match the signatures in VisualGameStudioEngine/framework.h.
+        /// </summary>
+        private string GenerateFrameworkExternDeclarations()
+        {
+            // Map of Framework_* function name to its C declaration (without __declspec)
+            var signatures = new Dictionary<string, string>
+            {
+                // Core
+                ["Framework_Initialize"] = "bool Framework_Initialize(int width, int height, const char* title)",
+                ["Framework_Update"] = "void Framework_Update()",
+                ["Framework_ShouldClose"] = "bool Framework_ShouldClose()",
+                ["Framework_Shutdown"] = "void Framework_Shutdown()",
+                ["Framework_BeginDrawing"] = "void Framework_BeginDrawing()",
+                ["Framework_EndDrawing"] = "void Framework_EndDrawing()",
+                ["Framework_ClearBackground"] = "void Framework_ClearBackground(unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+
+                // Timing
+                ["Framework_SetTargetFPS"] = "void Framework_SetTargetFPS(int fps)",
+                ["Framework_GetFrameTime"] = "float Framework_GetFrameTime()",
+                ["Framework_GetDeltaTime"] = "float Framework_GetDeltaTime()",
+                ["Framework_GetTime"] = "double Framework_GetTime()",
+                ["Framework_GetFPS"] = "int Framework_GetFPS()",
+
+                // Input - Keyboard
+                ["Framework_IsKeyPressed"] = "bool Framework_IsKeyPressed(int key)",
+                ["Framework_IsKeyDown"] = "bool Framework_IsKeyDown(int key)",
+                ["Framework_IsKeyReleased"] = "bool Framework_IsKeyReleased(int key)",
+
+                // Input - Mouse
+                ["Framework_IsMouseButtonPressed"] = "bool Framework_IsMouseButtonPressed(int button)",
+                ["Framework_IsMouseButtonDown"] = "bool Framework_IsMouseButtonDown(int button)",
+                ["Framework_GetMouseX"] = "int Framework_GetMouseX()",
+                ["Framework_GetMouseY"] = "int Framework_GetMouseY()",
+                ["Framework_GetMouseWheelMove"] = "float Framework_GetMouseWheelMove()",
+
+                // Cursor
+                ["Framework_ShowCursor"] = "void Framework_ShowCursor()",
+                ["Framework_HideCursor"] = "void Framework_HideCursor()",
+
+                // Drawing - Shapes
+                ["Framework_DrawText"] = "void Framework_DrawText(const char* text, int x, int y, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawRectangle"] = "void Framework_DrawRectangle(int x, int y, int width, int height, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawRectangleLines"] = "void Framework_DrawRectangleLines(int x, int y, int width, int height, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawCircle"] = "void Framework_DrawCircle(int centerX, int centerY, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawCircleLines"] = "void Framework_DrawCircleLines(int centerX, int centerY, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawLine"] = "void Framework_DrawLine(int startX, int startY, int endX, int endY, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawTriangle"] = "void Framework_DrawTriangle(int x1, int y1, int x2, int y2, int x3, int y3, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawTriangleLines"] = "void Framework_DrawTriangleLines(int x1, int y1, int x2, int y2, int x3, int y3, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawFPS"] = "void Framework_DrawFPS(int x, int y)",
+
+                // Textures
+                ["Framework_LoadTexture"] = "int Framework_LoadTexture(const char* fileName)",
+                ["Framework_UnloadTexture"] = "void Framework_UnloadTexture(int texture)",
+                ["Framework_DrawTextureSimple"] = "void Framework_DrawTextureSimple(int texture, int posX, int posY, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+                ["Framework_DrawTextureEx"] = "void Framework_DrawTextureEx(int texture, float posX, float posY, float rotation, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a)",
+
+                // Entities
+                ["Framework_Entity_Create"] = "int Framework_Entity_Create()",
+                ["Framework_Entity_Destroy"] = "void Framework_Entity_Destroy(int id)",
+                ["Framework_Entity_SetPosition"] = "void Framework_Entity_SetPosition(int id, float x, float y)",
+                ["Framework_Entity_GetPositionX"] = "float Framework_Entity_GetPositionX(int id)",
+                ["Framework_Entity_GetPositionY"] = "float Framework_Entity_GetPositionY(int id)",
+                ["Framework_Entity_SetVelocity"] = "void Framework_Entity_SetVelocity(int id, float vx, float vy)",
+                ["Framework_Entity_SetSprite"] = "void Framework_Entity_SetSprite(int id, int texture)",
+                ["Framework_Entity_SetColliderBox"] = "void Framework_Entity_SetColliderBox(int id, float w, float h)",
+                ["Framework_Entity_IsActive"] = "bool Framework_Entity_IsActive(int id)",
+                ["Framework_Entity_SetActive"] = "void Framework_Entity_SetActive(int id, bool active)",
+
+                // Audio
+                ["Framework_InitAudio"] = "bool Framework_InitAudio()",
+                ["Framework_LoadSound"] = "int Framework_LoadSound(const char* file)",
+                ["Framework_PlaySound"] = "void Framework_PlaySound(int handle)",
+                ["Framework_StopSound"] = "void Framework_StopSound(int handle)",
+                ["Framework_SetSoundVolume"] = "void Framework_SetSoundVolume(int handle, float volume)",
+                ["Framework_LoadMusic"] = "int Framework_LoadMusic(const char* file)",
+                ["Framework_PlayMusic"] = "void Framework_PlayMusic(int handle)",
+                ["Framework_StopMusic"] = "void Framework_StopMusic(int handle)",
+
+                // Audio extras
+                ["Framework_CloseAudio"] = "void Framework_CloseAudio()",
+                ["Framework_SetMasterVolume"] = "void Framework_SetMasterVolume(float volume)",
+
+                // Camera
+                ["Framework_Camera_SetPosition"] = "void Framework_Camera_SetPosition(float x, float y)",
+                ["Framework_Camera_SetTarget"] = "void Framework_Camera_SetTarget(float x, float y)",
+                ["Framework_Camera_SetRotation"] = "void Framework_Camera_SetRotation(float rotation)",
+                ["Framework_Camera_SetZoom"] = "void Framework_Camera_SetZoom(float zoom)",
+                ["Framework_Camera_SetOffset"] = "void Framework_Camera_SetOffset(float x, float y)",
+                ["Framework_Camera_GetZoom"] = "float Framework_Camera_GetZoom()",
+                ["Framework_Camera_GetRotation"] = "float Framework_Camera_GetRotation()",
+                ["Framework_Camera_FollowEntity"] = "void Framework_Camera_FollowEntity(int entity)",
+                ["Framework_Camera_BeginMode"] = "void Framework_Camera_BeginMode()",
+                ["Framework_Camera_EndMode"] = "void Framework_Camera_EndMode()",
+                ["Framework_Camera_Update"] = "void Framework_Camera_Update(float dt)",
+                ["Framework_Camera_Reset"] = "void Framework_Camera_Reset()",
+                ["Framework_Camera_PanTo"] = "void Framework_Camera_PanTo(float worldX, float worldY, float duration)",
+                ["Framework_Camera_ZoomTo"] = "void Framework_Camera_ZoomTo(float targetZoom, float duration)",
+                ["Framework_Camera_SetBounds"] = "void Framework_Camera_SetBounds(float minX, float minY, float maxX, float maxY)",
+                ["Framework_Camera_SetBoundsEnabled"] = "void Framework_Camera_SetBoundsEnabled(bool enabled)",
+                ["Framework_Camera_SetFollowLerp"] = "void Framework_Camera_SetFollowLerp(float lerpSpeed)",
+                ["Framework_Camera_Shake"] = "void Framework_Camera_Shake(float intensity, float duration)",
+
+                // Timing extras
+                ["Framework_SetTimeScale"] = "void Framework_SetTimeScale(float scale)",
+                ["Framework_GetTimeScale"] = "float Framework_GetTimeScale()",
+
+                // Cursor extras
+                ["Framework_IsCursorHidden"] = "bool Framework_IsCursorHidden()",
+                ["Framework_SetMousePosition"] = "void Framework_SetMousePosition(int x, int y)",
+            };
+
+            var sb = new StringBuilder();
+            sb.AppendLine("// VisualGameStudioEngine framework function declarations");
+            sb.AppendLine("// Link with VisualGameStudioEngine.dll");
+            sb.AppendLine("#ifdef _WIN32");
+            sb.AppendLine("#define FRAMEWORK_API __declspec(dllimport)");
+            sb.AppendLine("#else");
+            sb.AppendLine("#define FRAMEWORK_API");
+            sb.AppendLine("#endif");
+            sb.AppendLine();
+            sb.AppendLine("extern \"C\" {");
+
+            foreach (var funcName in _frameworkFunctionsUsed.OrderBy(f => f))
+            {
+                if (signatures.TryGetValue(funcName, out var sig))
+                {
+                    sb.AppendLine($"    FRAMEWORK_API {sig};");
+                }
+                else
+                {
+                    // Unknown function — emit a comment so user knows
+                    sb.AppendLine($"    // TODO: {funcName} — declaration not found, check framework.h");
+                }
+            }
+
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
         public override void Visit(IRReturn ret)
         {
             if (ret.Value != null)

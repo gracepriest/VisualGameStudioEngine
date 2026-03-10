@@ -150,7 +150,7 @@ public partial class WatchViewModel : ViewModelBase
                     await clipboard.SetTextAsync(SelectedItem.Value);
                 }
             }
-            catch { }
+            catch (Exception) { }
         }
     }
 
@@ -170,7 +170,7 @@ public partial class WatchViewModel : ViewModelBase
                     await clipboard.SetTextAsync(SelectedItem.Expression);
                 }
             }
-            catch { }
+            catch (Exception) { }
         }
     }
 

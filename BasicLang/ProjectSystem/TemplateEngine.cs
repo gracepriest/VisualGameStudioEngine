@@ -49,20 +49,35 @@ namespace BasicLang.Compiler.ProjectSystem
                 DefaultProjectName = "ConsoleApp",
                 Files = new Dictionary<string, string>
                 {
-                    ["{{ProjectName}}.blproj"] = @"<Project Sdk=""BasicLang.Sdk"">
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
   <PropertyGroup>
+    <ProjectName>{{ProjectName}}</ProjectName>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>{{ProjectName}}</RootNamespace>
-    <AssemblyName>{{ProjectName}}</AssemblyName>
+    <TargetBackend>CSharp</TargetBackend>
   </PropertyGroup>
-</Project>",
+  <PropertyGroup Condition=""'$(Configuration)' == 'Debug'"">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition=""'$(Configuration)' == 'Release'"">
+    <OutputPath>bin\Release</OutputPath>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""Program.bas"" />
+  </ItemGroup>
+</BasicLangProject>",
                     ["Program.bas"] = @"' {{ProjectName}} - Console Application
 ' Created: {{Date}}
 
-Sub Main()
-    PrintLine ""Hello, World!""
-End Sub
+Module Program
+    Sub Main()
+        PrintLine(""Hello, World!"")
+    End Sub
+End Module
 ",
                     [".gitignore"] = @"# Build results
 bin/
@@ -88,14 +103,27 @@ packages/
                 DefaultProjectName = "ClassLibrary",
                 Files = new Dictionary<string, string>
                 {
-                    ["{{ProjectName}}.blproj"] = @"<Project Sdk=""BasicLang.Sdk"">
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
   <PropertyGroup>
+    <ProjectName>{{ProjectName}}</ProjectName>
     <OutputType>Library</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>{{ProjectName}}</RootNamespace>
-    <AssemblyName>{{ProjectName}}</AssemblyName>
+    <TargetBackend>CSharp</TargetBackend>
   </PropertyGroup>
-</Project>",
+  <PropertyGroup Condition=""'$(Configuration)' == 'Debug'"">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition=""'$(Configuration)' == 'Release'"">
+    <OutputPath>bin\Release</OutputPath>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""Class1.bas"" />
+  </ItemGroup>
+</BasicLangProject>",
                     ["Class1.bas"] = @"' {{ProjectName}} - Class Library
 ' Created: {{Date}}
 
@@ -110,6 +138,86 @@ End Namespace
                 }
             };
 
+            // Game project template
+            _templates["game"] = new ProjectTemplate
+            {
+                Name = "game",
+                DisplayName = "Game Project",
+                Description = "A game project using the BasicLang game framework",
+                ShortName = "game",
+                DefaultProjectName = "GameProject",
+                Files = new Dictionary<string, string>
+                {
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
+  <PropertyGroup>
+    <ProjectName>{{ProjectName}}</ProjectName>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>{{ProjectName}}</RootNamespace>
+    <TargetBackend>CSharp</TargetBackend>
+  </PropertyGroup>
+  <PropertyGroup Condition=""'$(Configuration)' == 'Debug'"">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition=""'$(Configuration)' == 'Release'"">
+    <OutputPath>bin\Release</OutputPath>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""Program.bas"" />
+  </ItemGroup>
+</BasicLangProject>",
+                    ["Program.bas"] = @"' {{ProjectName}} - Game Project
+' Created: {{Date}}
+
+Module Game
+    Dim running As Boolean
+
+    Sub Main()
+        GameInit(800, 600, ""{{ProjectName}}"")
+        SetTargetFPS(60)
+        running = True
+
+        While running And Not GameShouldClose()
+            Update()
+            Render()
+        Wend
+
+        GameShutdown()
+    End Sub
+
+    Sub Update()
+        ' Handle escape key to exit (ESC = 256)
+        If IsKeyPressed(256) Then
+            running = False
+        End If
+    End Sub
+
+    Sub Render()
+        GameBeginFrame()
+        ClearBackground(20, 40, 80)
+        DrawText(""Hello, {{ProjectName}}!"", 300, 280, 32, 255, 255, 255, 255)
+        DrawText(""Press ESC to exit"", 310, 320, 20, 200, 200, 200, 255)
+        GameEndFrame()
+    End Sub
+End Module
+",
+                    [".gitignore"] = @"# Build results
+bin/
+obj/
+
+# IDE files
+.vs/
+*.user
+
+# Assets (uncomment to track)
+# Assets/
+"
+                }
+            };
+
             // Empty project template
             _templates["empty"] = new ProjectTemplate
             {
@@ -120,14 +228,24 @@ End Namespace
                 DefaultProjectName = "EmptyProject",
                 Files = new Dictionary<string, string>
                 {
-                    ["{{ProjectName}}.blproj"] = @"<Project Sdk=""BasicLang.Sdk"">
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
   <PropertyGroup>
+    <ProjectName>{{ProjectName}}</ProjectName>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>{{ProjectName}}</RootNamespace>
-    <AssemblyName>{{ProjectName}}</AssemblyName>
+    <TargetBackend>CSharp</TargetBackend>
   </PropertyGroup>
-</Project>"
+  <PropertyGroup Condition=""'$(Configuration)' == 'Debug'"">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition=""'$(Configuration)' == 'Release'"">
+    <OutputPath>bin\Release</OutputPath>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+</BasicLangProject>"
                 }
             };
 
@@ -141,18 +259,27 @@ End Namespace
                 DefaultProjectName = "WebApi",
                 Files = new Dictionary<string, string>
                 {
-                    ["{{ProjectName}}.blproj"] = @"<Project Sdk=""BasicLang.Sdk"">
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
   <PropertyGroup>
+    <ProjectName>{{ProjectName}}</ProjectName>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>{{ProjectName}}</RootNamespace>
-    <AssemblyName>{{ProjectName}}</AssemblyName>
+    <TargetBackend>CSharp</TargetBackend>
   </PropertyGroup>
-
+  <PropertyGroup Condition=""'$(Configuration)' == 'Debug'"">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition=""'$(Configuration)' == 'Release'"">
+    <OutputPath>bin\Release</OutputPath>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include=""Microsoft.AspNetCore.App"" Version=""8.0.0"" />
+    <Compile Include=""Program.bas"" />
   </ItemGroup>
-</Project>",
+</BasicLangProject>",
                     ["Program.bas"] = @"' {{ProjectName}} - Web API
 ' Created: {{Date}}
 
@@ -202,20 +329,27 @@ End Sub
                 DefaultProjectName = "TestProject",
                 Files = new Dictionary<string, string>
                 {
-                    ["{{ProjectName}}.blproj"] = @"<Project Sdk=""BasicLang.Sdk"">
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
   <PropertyGroup>
-    <OutputType>Library</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <ProjectName>{{ProjectName}}</ProjectName>
+    <OutputType>Exe</OutputType>
     <RootNamespace>{{ProjectName}}</RootNamespace>
-    <AssemblyName>{{ProjectName}}</AssemblyName>
-    <IsTestProject>true</IsTestProject>
+    <TargetBackend>CSharp</TargetBackend>
   </PropertyGroup>
-
+  <PropertyGroup Condition=""'$(Configuration)' == 'Debug'"">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition=""'$(Configuration)' == 'Release'"">
+    <OutputPath>bin\Release</OutputPath>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include=""xunit"" Version=""2.6.0"" />
-    <PackageReference Include=""xunit.runner.visualstudio"" Version=""2.5.0"" />
+    <Compile Include=""UnitTest1.bas"" />
   </ItemGroup>
-</Project>",
+</BasicLangProject>",
                     ["UnitTest1.bas"] = @"' {{ProjectName}} - Unit Tests
 ' Created: {{Date}}
 

@@ -1993,7 +1993,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     var content = await _fileService.ReadFileAsync(filePath);
                     _openDocuments[filePath].SetContent(content);
                 }
-                catch { /* Ignore errors for files that may not exist */ }
+                catch (Exception) { /* Ignore errors for files that may not exist */ }
             }
 
             var selectedMemberCount = viewModel.Members.Count(m => m.IsSelected);

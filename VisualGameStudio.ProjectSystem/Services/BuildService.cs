@@ -69,7 +69,8 @@ public class BuildService : IBuildService
     {
         if (IsBuilding && _buildCts != null)
         {
-            _buildCts.Cancel();
+            try { _buildCts.Cancel(); }
+            catch (ObjectDisposedException) { }
             BuildCancelled?.Invoke(this, EventArgs.Empty);
         }
         return Task.CompletedTask;
@@ -1186,6 +1187,8 @@ public class BuildService : IBuildService
         var ideDir = AppDomain.CurrentDomain.BaseDirectory;
 
         // Possible locations for RaylibWrapper.dll
+        // ideDir is typically: <repo>/VisualGameStudio.Shell/bin/<config>/net8.0/ (4 levels deep)
+        // or <repo>/IDE/ (1 level deep)
         var possibleRaylibPaths = new[]
         {
             Path.Combine(ideDir, "RaylibWrapper.dll"),
@@ -1193,6 +1196,10 @@ public class BuildService : IBuildService
             Path.Combine(ideDir, "..", "RaylibWrapper", "bin", "Debug", "net8.0", "RaylibWrapper.dll"),
             Path.Combine(ideDir, "..", "..", "..", "RaylibWrapper", "bin", "Release", "net8.0", "RaylibWrapper.dll"),
             Path.Combine(ideDir, "..", "..", "..", "RaylibWrapper", "bin", "Debug", "net8.0", "RaylibWrapper.dll"),
+            // From Shell/bin/<config>/net8.0/ → repo root is 4 levels up
+            Path.Combine(ideDir, "..", "..", "..", "..", "RaylibWrapper", "bin", "Release", "net8.0", "RaylibWrapper.dll"),
+            Path.Combine(ideDir, "..", "..", "..", "..", "RaylibWrapper", "bin", "Debug", "net8.0", "RaylibWrapper.dll"),
+            Path.Combine(ideDir, "..", "..", "..", "..", "IDE", "RaylibWrapper.dll"),
         };
 
         // Possible locations for VisualGameStudioEngine.dll (native)
@@ -1203,6 +1210,10 @@ public class BuildService : IBuildService
             Path.Combine(ideDir, "..", "x64", "Debug", "VisualGameStudioEngine.dll"),
             Path.Combine(ideDir, "..", "..", "..", "x64", "Release", "VisualGameStudioEngine.dll"),
             Path.Combine(ideDir, "..", "..", "..", "x64", "Debug", "VisualGameStudioEngine.dll"),
+            // From Shell/bin/<config>/net8.0/ → repo root is 4 levels up
+            Path.Combine(ideDir, "..", "..", "..", "..", "x64", "Release", "VisualGameStudioEngine.dll"),
+            Path.Combine(ideDir, "..", "..", "..", "..", "x64", "Debug", "VisualGameStudioEngine.dll"),
+            Path.Combine(ideDir, "..", "..", "..", "..", "IDE", "VisualGameStudioEngine.dll"),
         };
 
         // Copy RaylibWrapper.dll

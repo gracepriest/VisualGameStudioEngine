@@ -1,3 +1,6 @@
+' Main.bas
+' Created: 2026-03-10
+
 ' ============================================
 ' PONG - Classic Arcade Game
 ' Created with Visual Game Studio

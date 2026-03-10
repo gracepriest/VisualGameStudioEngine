@@ -1869,6 +1869,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 functionScope.Define(typeParamSymbol);
                 genericTypeParams.Add(typeParamType);
             }
+            symbol.GenericParameters.Clear();
             symbol.GenericParameters.AddRange(genericTypeParams);
 
             // Now resolve return type (type parameters are in scope)
@@ -1880,7 +1881,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             SetNodeSymbol(node, symbol);
             SetNodeType(node, returnType);
 
-            // Process parameters
+            // Process parameters (clear first — may have been pre-populated by RegisterFunctionSignature)
+            symbol.Parameters.Clear();
             foreach (var param in node.Parameters)
             {
                 param.Accept(this);
@@ -1958,9 +1960,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 subScope.Define(typeParamSymbol);
                 genericTypeParams.Add(typeParamType);
             }
+            symbol.GenericParameters.Clear();
             symbol.GenericParameters.AddRange(genericTypeParams);
 
-            // Process parameters
+            // Process parameters (clear first — may have been pre-populated by RegisterSubSignature)
+            symbol.Parameters.Clear();
             foreach (var param in node.Parameters)
             {
                 param.Accept(this);

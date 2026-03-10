@@ -13,9 +13,9 @@ public class ProjectSerializer
         var doc = XDocument.Parse(content);
         var root = doc.Root;
 
-        if (root == null || root.Name != "BasicLangProject")
+        if (root == null || (root.Name.LocalName != "BasicLangProject" && root.Name.LocalName != "Project"))
         {
-            throw new InvalidOperationException("Invalid project file format");
+            throw new InvalidOperationException("Invalid project file format: root element must be <BasicLangProject> or <Project>");
         }
 
         var project = new BasicLangProject

@@ -27,7 +27,6 @@
       },
       "Avalonia/11.1.0": {
         "dependencies": {
-          "Avalonia.BuildServices": "0.0.29",
           "Avalonia.Remote.Protocol": "11.1.0",
           "MicroCom.Runtime": "0.11.0"
         },
@@ -108,7 +107,6 @@
           }
         }
       },
-      "Avalonia.BuildServices/0.0.29": {},
       "Avalonia.Controls.DataGrid/11.1.0": {
         "dependencies": {
           "Avalonia": "11.1.0",
@@ -190,10 +188,8 @@
           "Avalonia": "11.1.0",
           "HarfBuzzSharp": "7.3.0.2",
           "HarfBuzzSharp.NativeAssets.Linux": "7.3.0.2",
-          "HarfBuzzSharp.NativeAssets.WebAssembly": "7.3.0.2",
           "SkiaSharp": "2.88.8",
-          "SkiaSharp.NativeAssets.Linux": "2.88.8",
-          "SkiaSharp.NativeAssets.WebAssembly": "2.88.8"
+          "SkiaSharp.NativeAssets.Linux": "2.88.8"
         },
         "runtime": {
           "lib/net8.0/Avalonia.Skia.dll": {
@@ -216,8 +212,7 @@
       "Avalonia.Win32/11.1.0": {
         "dependencies": {
           "Avalonia": "11.1.0",
-          "Avalonia.Angle.Windows.Natives": "2.1.22045.20230930",
-          "System.Numerics.Vectors": "4.5.0"
+          "Avalonia.Angle.Windows.Natives": "2.1.22045.20230930"
         },
         "runtime": {
           "lib/net8.0/Avalonia.Win32.dll": {
@@ -340,7 +335,6 @@
           }
         }
       },
-      "HarfBuzzSharp.NativeAssets.WebAssembly/7.3.0.2": {},
       "HarfBuzzSharp.NativeAssets.Win32/7.3.0.2": {
         "runtimeTargets": {
           "runtimes/win-arm64/native/libHarfBuzzSharp.dll": {
@@ -485,8 +479,7 @@
           "Microsoft.Extensions.Logging": "8.0.0",
           "Microsoft.Extensions.Logging.Abstractions": "8.0.0",
           "Microsoft.Extensions.Logging.Configuration": "8.0.0",
-          "Microsoft.Extensions.Options": "8.0.0",
-          "System.Text.Json": "8.0.5"
+          "Microsoft.Extensions.Options": "8.0.0"
         },
         "runtime": {
           "lib/net8.0/Microsoft.Extensions.Logging.Console.dll": {
@@ -530,14 +523,10 @@
           }
         }
       },
-      "Microsoft.NETCore.Platforms/5.0.0": {},
       "Microsoft.VisualStudio.Threading/17.6.40": {
         "dependencies": {
           "Microsoft.Bcl.AsyncInterfaces": "7.0.0",
-          "Microsoft.VisualStudio.Threading.Analyzers": "17.6.40",
-          "Microsoft.VisualStudio.Validation": "17.6.11",
-          "Microsoft.Win32.Registry": "5.0.0",
-          "System.Threading.Tasks.Extensions": "4.5.4"
+          "Microsoft.VisualStudio.Validation": "17.6.11"
         },
         "runtime": {
           "lib/net6.0/Microsoft.VisualStudio.Threading.dll": {
@@ -587,7 +576,6 @@
           }
         }
       },
-      "Microsoft.VisualStudio.Threading.Analyzers/17.6.40": {},
       "Microsoft.VisualStudio.Validation/17.6.11": {
         "runtime": {
           "lib/net6.0/Microsoft.VisualStudio.Validation.dll": {
@@ -637,19 +625,12 @@
           }
         }
       },
-      "Microsoft.Win32.Registry/5.0.0": {
-        "dependencies": {
-          "System.Security.AccessControl": "5.0.0",
-          "System.Security.Principal.Windows": "5.0.0"
-        }
-      },
       "Nerdbank.Streams/2.10.69": {
         "dependencies": {
           "Microsoft.Bcl.AsyncInterfaces": "7.0.0",
           "Microsoft.VisualStudio.Threading": "17.6.40",
           "Microsoft.VisualStudio.Validation": "17.6.11",
-          "System.IO.Pipelines": "7.0.0",
-          "System.Runtime.CompilerServices.Unsafe": "6.0.0"
+          "System.IO.Pipelines": "7.0.0"
         },
         "runtime": {
           "lib/netstandard2.1/Nerdbank.Streams.dll": {
@@ -673,10 +654,7 @@
           "Microsoft.Extensions.Logging": "8.0.0",
           "Nerdbank.Streams": "2.10.69",
           "Newtonsoft.Json": "13.0.3",
-          "OmniSharp.Extensions.JsonRpc.Generators": "0.19.9",
-          "System.Collections.Immutable": "5.0.0",
-          "System.Reactive": "6.0.0",
-          "System.Threading.Channels": "6.0.0"
+          "System.Reactive": "6.0.0"
         },
         "runtime": {
           "lib/net6.0/OmniSharp.Extensions.JsonRpc.dll": {
@@ -685,14 +663,12 @@
           }
         }
       },
-      "OmniSharp.Extensions.JsonRpc.Generators/0.19.9": {},
       "OmniSharp.Extensions.LanguageProtocol/0.19.9": {
         "dependencies": {
           "Microsoft.Extensions.Configuration": "8.0.0",
           "Microsoft.Extensions.Configuration.Binder": "8.0.0",
           "Microsoft.Extensions.Options.ConfigurationExtensions": "8.0.0",
-          "OmniSharp.Extensions.JsonRpc": "0.19.9",
-          "OmniSharp.Extensions.JsonRpc.Generators": "0.19.9"
+          "OmniSharp.Extensions.JsonRpc": "0.19.9"
         },
         "runtime": {
           "lib/net6.0/OmniSharp.Extensions.LanguageProtocol.dll": {
@@ -774,7 +750,6 @@
           }
         }
       },
-      "SkiaSharp.NativeAssets.WebAssembly/2.88.8": {},
       "SkiaSharp.NativeAssets.Win32/2.88.8": {
         "runtimeTargets": {
           "runtimes/win-arm64/native/libSkiaSharp.dll": {
@@ -794,7 +769,6 @@
           }
         }
       },
-      "System.Collections.Immutable/5.0.0": {},
       "System.IO.Pipelines/7.0.0": {
         "runtime": {
           "lib/net7.0/System.IO.Pipelines.dll": {
@@ -803,7 +777,6 @@
           }
         }
       },
-      "System.Numerics.Vectors/4.5.0": {},
       "System.Reactive/6.0.0": {
         "runtime": {
           "lib/net6.0/System.Reactive.dll": {
@@ -812,17 +785,6 @@
           }
         }
       },
-      "System.Runtime.CompilerServices.Unsafe/6.0.0": {},
-      "System.Security.AccessControl/5.0.0": {
-        "dependencies": {
-          "Microsoft.NETCore.Platforms": "5.0.0",
-          "System.Security.Principal.Windows": "5.0.0"
-        }
-      },
-      "System.Security.Principal.Windows/5.0.0": {},
-      "System.Text.Json/8.0.5": {},
-      "System.Threading.Channels/6.0.0": {},
-      "System.Threading.Tasks.Extensions/4.5.4": {},
       "Tmds.DBus.Protocol/0.16.0": {
         "dependencies": {
           "System.IO.Pipelines": "7.0.0"
@@ -874,7 +836,6 @@
       "VisualGameStudio.ProjectSystem/1.0.0": {
         "dependencies": {
           "BasicLang": "1.0.0",
-          "System.Text.Json": "8.0.5",
           "VisualGameStudio.Core": "1.0.0"
         },
         "runtime": {
@@ -912,13 +873,6 @@
       "sha512": "sha512-2s0bkZIviwb++fyD2S6GkX1dTsv2e3yJX5GvJKG4+R5KDcJpRtwOkH4GX1dvOL+eX35tPgmrDmrhBKCk/ezOBw==",
       "path": "avalonia.avaloniaedit/11.1.0",
       "hashPath": "avalonia.avaloniaedit.11.1.0.nupkg.sha512"
-    },
-    "Avalonia.BuildServices/0.0.29": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-U4eJLQdoDNHXtEba7MZUCwrBErBTxFp6sUewXBOdAhU0Kwzwaa/EKFcYm8kpcysjzKtfB4S0S9n0uxKZFz/ikw==",
-      "path": "avalonia.buildservices/0.0.29",
-      "hashPath": "avalonia.buildservices.0.0.29.nupkg.sha512"
     },
     "Avalonia.Controls.DataGrid/11.1.0": {
       "type": "package",
@@ -1046,13 +1000,6 @@
       "path": "harfbuzzsharp.nativeassets.macos/7.3.0.2",
       "hashPath": "harfbuzzsharp.nativeassets.macos.7.3.0.2.nupkg.sha512"
     },
-    "HarfBuzzSharp.NativeAssets.WebAssembly/7.3.0.2": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-pR6H16NOAjIhfXomYsgN5anGbOHSfIA8z0RoWEVx8vgLySxz9Jie4DnQ/paWTh5MTtBC8XKkTUI7uKMXcq/Pxw==",
-      "path": "harfbuzzsharp.nativeassets.webassembly/7.3.0.2",
-      "hashPath": "harfbuzzsharp.nativeassets.webassembly.7.3.0.2.nupkg.sha512"
-    },
     "HarfBuzzSharp.NativeAssets.Win32/7.3.0.2": {
       "type": "package",
       "serviceable": true,
@@ -1165,13 +1112,6 @@
       "path": "microsoft.extensions.primitives/8.0.0",
       "hashPath": "microsoft.extensions.primitives.8.0.0.nupkg.sha512"
     },
-    "Microsoft.NETCore.Platforms/5.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-VyPlqzH2wavqquTcYpkIIAQ6WdenuKoFN0BdYBbCWsclXacSOHNQn66Gt4z5NBqEYW0FAPm5rlvki9ZiCij5xQ==",
-      "path": "microsoft.netcore.platforms/5.0.0",
-      "hashPath": "microsoft.netcore.platforms.5.0.0.nupkg.sha512"
-    },
     "Microsoft.VisualStudio.Threading/17.6.40": {
       "type": "package",
       "serviceable": true,
@@ -1179,26 +1119,12 @@
       "path": "microsoft.visualstudio.threading/17.6.40",
       "hashPath": "microsoft.visualstudio.threading.17.6.40.nupkg.sha512"
     },
-    "Microsoft.VisualStudio.Threading.Analyzers/17.6.40": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-uU8vYr/Nx3ldEWcsbiHiyAX1G7od3eFK1+Aga6ZvgCvU+nQkcXYVkIMcSEkIDWkFaldx1dkoVvX3KRNQD0R7dw==",
-      "path": "microsoft.visualstudio.threading.analyzers/17.6.40",
-      "hashPath": "microsoft.visualstudio.threading.analyzers.17.6.40.nupkg.sha512"
-    },
     "Microsoft.VisualStudio.Validation/17.6.11": {
       "type": "package",
       "serviceable": true,
       "sha512": "sha512-J+9L/iac6c8cwcgVSCMuoIYOlD1Jw4mbZ8XMe1IZVj8p8+3dJ46LnnkIkTRMjK7xs9UtU9MoUp1JGhWoN6fAEw==",
       "path": "microsoft.visualstudio.validation/17.6.11",
       "hashPath": "microsoft.visualstudio.validation.17.6.11.nupkg.sha512"
-    },
-    "Microsoft.Win32.Registry/5.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-dDoKi0PnDz31yAyETfRntsLArTlVAVzUzCIvvEDsDsucrl33Dl8pIJG06ePTJTI3tGpeyHS9Cq7Foc/s4EeKcg==",
-      "path": "microsoft.win32.registry/5.0.0",
-      "hashPath": "microsoft.win32.registry.5.0.0.nupkg.sha512"
     },
     "Nerdbank.Streams/2.10.69": {
       "type": "package",
@@ -1220,13 +1146,6 @@
       "sha512": "sha512-utFvrx9OYXhCS5rnfWAVeedJCrucuDLAOrKXjohf/NOjG9FFVbcp+hLqj9Ng+AxoADRD+rSJYHfBOeqGl5zW0A==",
       "path": "omnisharp.extensions.jsonrpc/0.19.9",
       "hashPath": "omnisharp.extensions.jsonrpc.0.19.9.nupkg.sha512"
-    },
-    "OmniSharp.Extensions.JsonRpc.Generators/0.19.9": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-hiWC0yGcKM+K00fgiL7KBmlvULmkKNhm40ZSzxqT+jNV21r+YZgKzEREhQe40ufb4tjcIxdYkif++IzGl/3H/Q==",
-      "path": "omnisharp.extensions.jsonrpc.generators/0.19.9",
-      "hashPath": "omnisharp.extensions.jsonrpc.generators.0.19.9.nupkg.sha512"
     },
     "OmniSharp.Extensions.LanguageProtocol/0.19.9": {
       "type": "package",
@@ -1270,26 +1189,12 @@
       "path": "skiasharp.nativeassets.macos/2.88.8",
       "hashPath": "skiasharp.nativeassets.macos.2.88.8.nupkg.sha512"
     },
-    "SkiaSharp.NativeAssets.WebAssembly/2.88.8": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-S3qRo8c+gVYOyfrdf6FYnjx/ft+gPkb4dNY2IPv5Oy5yNBhDhXhKqHFr9h4+ne6ZU+7D4dbuRQqsIqCo8u1/DA==",
-      "path": "skiasharp.nativeassets.webassembly/2.88.8",
-      "hashPath": "skiasharp.nativeassets.webassembly.2.88.8.nupkg.sha512"
-    },
     "SkiaSharp.NativeAssets.Win32/2.88.8": {
       "type": "package",
       "serviceable": true,
       "sha512": "sha512-O9QXoWEXA+6cweR4h3BOnwMz+pO9vL9mXdjLrpDd0w1QzCgWmLQBxa1VgySDITiH7nQndrDG1h6937zm9pLj1Q==",
       "path": "skiasharp.nativeassets.win32/2.88.8",
       "hashPath": "skiasharp.nativeassets.win32.2.88.8.nupkg.sha512"
-    },
-    "System.Collections.Immutable/5.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-FXkLXiK0sVVewcso0imKQoOxjoPAj42R8HtjjbSjVPAzwDfzoyoznWxgA3c38LDbN9SJux1xXoXYAhz98j7r2g==",
-      "path": "system.collections.immutable/5.0.0",
-      "hashPath": "system.collections.immutable.5.0.0.nupkg.sha512"
     },
     "System.IO.Pipelines/7.0.0": {
       "type": "package",
@@ -1298,61 +1203,12 @@
       "path": "system.io.pipelines/7.0.0",
       "hashPath": "system.io.pipelines.7.0.0.nupkg.sha512"
     },
-    "System.Numerics.Vectors/4.5.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-QQTlPTl06J/iiDbJCiepZ4H//BVraReU4O4EoRw1U02H5TLUIT7xn3GnDp9AXPSlJUDyFs4uWjWafNX6WrAojQ==",
-      "path": "system.numerics.vectors/4.5.0",
-      "hashPath": "system.numerics.vectors.4.5.0.nupkg.sha512"
-    },
     "System.Reactive/6.0.0": {
       "type": "package",
       "serviceable": true,
       "sha512": "sha512-31kfaW4ZupZzPsI5PVe77VhnvFF55qgma7KZr/E0iFTs6fmdhhG8j0mgEx620iLTey1EynOkEfnyTjtNEpJzGw==",
       "path": "system.reactive/6.0.0",
       "hashPath": "system.reactive.6.0.0.nupkg.sha512"
-    },
-    "System.Runtime.CompilerServices.Unsafe/6.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-/iUeP3tq1S0XdNNoMz5C9twLSrM/TH+qElHkXWaPvuNOt+99G75NrV0OS2EqHx5wMN7popYjpc8oTjC1y16DLg==",
-      "path": "system.runtime.compilerservices.unsafe/6.0.0",
-      "hashPath": "system.runtime.compilerservices.unsafe.6.0.0.nupkg.sha512"
-    },
-    "System.Security.AccessControl/5.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-dagJ1mHZO3Ani8GH0PHpPEe/oYO+rVdbQjvjJkBRNQkX4t0r1iaeGn8+/ybkSLEan3/slM0t59SVdHzuHf2jmw==",
-      "path": "system.security.accesscontrol/5.0.0",
-      "hashPath": "system.security.accesscontrol.5.0.0.nupkg.sha512"
-    },
-    "System.Security.Principal.Windows/5.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-t0MGLukB5WAVU9bO3MGzvlGnyJPgUlcwerXn1kzBRjwLKixT96XV0Uza41W49gVd8zEMFu9vQEFlv0IOrytICA==",
-      "path": "system.security.principal.windows/5.0.0",
-      "hashPath": "system.security.principal.windows.5.0.0.nupkg.sha512"
-    },
-    "System.Text.Json/8.0.5": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-0f1B50Ss7rqxXiaBJyzUu9bWFOO2/zSlifZ/UNMdiIpDYe4cY4LQQicP4nirK1OS31I43rn062UIJ1Q9bpmHpg==",
-      "path": "system.text.json/8.0.5",
-      "hashPath": "system.text.json.8.0.5.nupkg.sha512"
-    },
-    "System.Threading.Channels/6.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-TY8/9+tI0mNaUMgntOxxaq2ndTkdXqLSxvPmas7XEqOlv9lQtB7wLjYGd756lOaO7Dvb5r/WXhluM+0Xe87v5Q==",
-      "path": "system.threading.channels/6.0.0",
-      "hashPath": "system.threading.channels.6.0.0.nupkg.sha512"
-    },
-    "System.Threading.Tasks.Extensions/4.5.4": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-zteT+G8xuGu6mS+mzDzYXbzS7rd3K6Fjb9RiZlYlJPam2/hU7JCBZBVEcywNuR+oZ1ncTvc/cq0faRr3P01OVg==",
-      "path": "system.threading.tasks.extensions/4.5.4",
-      "hashPath": "system.threading.tasks.extensions.4.5.4.nupkg.sha512"
     },
     "Tmds.DBus.Protocol/0.16.0": {
       "type": "package",

@@ -70,6 +70,22 @@ public class LspClientManager : ILspClientManager
 
     private void RegisterBuiltInServers()
     {
+        // BasicLang
+        RegisterServer(new LanguageServerConfig
+        {
+            Id = "basiclang",
+            Name = "BasicLang Language Server",
+            Description = "BasicLang language support via BasicLang.exe --lsp",
+            LanguageIds = new List<string> { "basiclang" },
+            FileExtensions = new List<string> { ".bas", ".blproj" },
+            StartInfo = new ServerStartInfo
+            {
+                Command = "dotnet",
+                Arguments = new List<string> { "BasicLang.dll", "--lsp" },
+                Transport = TransportType.Stdio
+            }
+        });
+
         // Python - pylsp
         RegisterServer(new LanguageServerConfig
         {
@@ -329,7 +345,7 @@ public class LspClientManager : ILspClientManager
         var languageId = "unknown";
         if (sender is LspClient client)
         {
-            foreach (var kvp in _activeClients)
+            foreach (var kvp in _activeClients.ToArray())
             {
                 if (kvp.Value == client)
                 {

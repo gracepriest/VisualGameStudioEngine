@@ -263,7 +263,7 @@ public class ProjectTemplateService : IProjectTemplateService
         sb.AppendLine("<BasicLangProject Version=\"1.0\">");
         sb.AppendLine("  <PropertyGroup>");
         sb.AppendLine($"    <ProjectName>{options.Name}</ProjectName>");
-        sb.AppendLine($"    <OutputType>{(outputType == "exe" ? "Exe" : "WinExe")}</OutputType>");
+        sb.AppendLine($"    <OutputType>{outputType switch { "exe" => "Exe", "library" => "Library", _ => "WinExe" }}</OutputType>");
         sb.AppendLine($"    <RootNamespace>{options.Namespace ?? options.Name}</RootNamespace>");
         sb.AppendLine($"    <TargetBackend>{targetBackend}</TargetBackend>");
         sb.AppendLine("  </PropertyGroup>");

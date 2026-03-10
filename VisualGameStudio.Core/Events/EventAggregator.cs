@@ -43,9 +43,9 @@ public class EventAggregator : IEventAggregator
             {
                 handler(eventToPublish);
             }
-            catch
+            catch (Exception ex)
             {
-                // Swallow exceptions from handlers to prevent one handler from breaking others
+                System.Diagnostics.Debug.WriteLine($"Event handler threw: {ex}");
             }
         }
     }

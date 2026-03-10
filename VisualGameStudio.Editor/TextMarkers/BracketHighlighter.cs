@@ -72,7 +72,9 @@ public class BracketHighlighter : DocumentColorizingTransformer
         var depth = 1;
 
         var pos = offset + direction;
-        while (pos >= 0 && pos < document.TextLength)
+        const int maxScanDistance = 10000;
+        var scanned = 0;
+        while (pos >= 0 && pos < document.TextLength && scanned < maxScanDistance)
         {
             var c = document.GetCharAt(pos);
 
@@ -82,12 +84,14 @@ public class BracketHighlighter : DocumentColorizingTransformer
                 // Skip to end of string/comment
                 var quote = c;
                 pos += direction;
-                while (pos >= 0 && pos < document.TextLength)
+                scanned++;
+                while (pos >= 0 && pos < document.TextLength && scanned < maxScanDistance)
                 {
                     c = document.GetCharAt(pos);
                     if (c == quote)
                         break;
                     pos += direction;
+                    scanned++;
                 }
             }
             else if (c == bracket)
@@ -102,6 +106,7 @@ public class BracketHighlighter : DocumentColorizingTransformer
             }
 
             pos += direction;
+            scanned++;
         }
 
         return -1;

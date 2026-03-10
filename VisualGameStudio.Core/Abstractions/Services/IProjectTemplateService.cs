@@ -115,7 +115,7 @@ public static class SolutionTypes
         Icon = "dotnet",
         ProjectExtension = ".blproj",
         SolutionExtension = ".blsln",
-        SourceExtension = ".bl"
+        SourceExtension = ".bas"
     };
 
     /// <summary>
@@ -129,7 +129,7 @@ public static class SolutionTypes
         Icon = "msil",
         ProjectExtension = ".blproj",
         SolutionExtension = ".blsln",
-        SourceExtension = ".bl"
+        SourceExtension = ".bas"
     };
 
     /// <summary>
@@ -143,7 +143,7 @@ public static class SolutionTypes
         Icon = "cpp",
         ProjectExtension = ".blproj",
         SolutionExtension = ".blsln",
-        SourceExtension = ".bl"
+        SourceExtension = ".bas"
     };
 
     /// <summary>
@@ -157,7 +157,7 @@ public static class SolutionTypes
         Icon = "llvm",
         ProjectExtension = ".blproj",
         SolutionExtension = ".blsln",
-        SourceExtension = ".bl"
+        SourceExtension = ".bas"
     };
 
     /// <summary>

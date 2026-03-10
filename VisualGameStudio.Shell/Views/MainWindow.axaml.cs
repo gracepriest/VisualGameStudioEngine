@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     private Popup? _dataTipPopup;
     private DataTipPopup? _dataTipContent;
     private DispatcherTimer? _hideTimer;
+    private MainWindowViewModel? _subscribedVm;
 
     public MainWindow()
     {
@@ -31,9 +32,17 @@ public partial class MainWindow : Window
 
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
+        // Unsubscribe from old VM to prevent event handler leak
+        if (_subscribedVm != null)
+        {
+            _subscribedVm.DataTipResult -= OnDataTipResult;
+            _subscribedVm = null;
+        }
+
         if (DataContext is MainWindowViewModel vm)
         {
             vm.DataTipResult += OnDataTipResult;
+            _subscribedVm = vm;
         }
     }
 

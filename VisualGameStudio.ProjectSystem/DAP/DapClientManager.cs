@@ -288,26 +288,28 @@ public class DapClientManager : IDapClientManager
 
     public async Task StopAllAsync()
     {
-        var disconnectTasks = new List<Task>();
-
+        // Drain all clients into a local list first to avoid losing items on exception
+        var clientsToStop = new List<IDapClient>();
         while (_activeClients.TryTake(out var client))
         {
-            disconnectTasks.Add(Task.Run(async () =>
-            {
-                try
-                {
-                    await client.DisconnectAsync();
-                }
-                catch
-                {
-                    // Ignore disconnect errors
-                }
-                finally
-                {
-                    client.Dispose();
-                }
-            }));
+            clientsToStop.Add(client);
         }
+
+        var disconnectTasks = clientsToStop.Select(client => Task.Run(async () =>
+        {
+            try
+            {
+                await client.DisconnectAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error disconnecting DAP client: {ex.Message}");
+            }
+            finally
+            {
+                client.Dispose();
+            }
+        })).ToList();
 
         await Task.WhenAll(disconnectTasks);
     }

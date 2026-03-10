@@ -540,7 +540,8 @@ public class DapClientService : IDapClientService
                         {
                             if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
                             {
-                                contentLength = int.Parse(line.Substring(15).Trim());
+                                if (!int.TryParse(line.Substring(15).Trim(), out contentLength))
+                                    contentLength = 0;
                             }
                         }
                         break;

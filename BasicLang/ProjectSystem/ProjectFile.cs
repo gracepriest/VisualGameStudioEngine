@@ -205,22 +205,19 @@ namespace BasicLang.Compiler.ProjectSystem
                 throw new InvalidOperationException("No path specified for saving project file");
 
             var doc = new XDocument(
-                new XElement("Project",
-                    new XAttribute("Sdk", "BasicLang.Sdk"),
+                new XDeclaration("1.0", "utf-8", null),
+                new XElement("BasicLangProject",
+                    new XAttribute("Version", "1.0"),
 
                     // Main PropertyGroup
                     new XElement("PropertyGroup",
-                        new XElement("OutputType", OutputType),
-                        new XElement("TargetFramework", TargetFramework),
                         string.IsNullOrEmpty(ProjectName) ? null : new XElement("ProjectName", ProjectName),
+                        new XElement("OutputType", OutputType),
                         string.IsNullOrEmpty(RootNamespace) ? null : new XElement("RootNamespace", RootNamespace),
-                        string.IsNullOrEmpty(AssemblyName) ? null : new XElement("AssemblyName", AssemblyName),
-                        new XElement("Version", Version),
-                        string.IsNullOrEmpty(Authors) ? null : new XElement("Authors", Authors),
+                        new XElement("TargetBackend", Backend),
                         string.IsNullOrEmpty(Description) ? null : new XElement("Description", Description),
-                        new XElement("Backend", Backend),
-                        new XElement("Optimize", OptimizationsEnabled),
-                        new XElement("DebugSymbols", DebugSymbols)
+                        string.IsNullOrEmpty(Authors) ? null : new XElement("Authors", Authors),
+                        new XElement("Version", Version)
                     )
                 )
             );

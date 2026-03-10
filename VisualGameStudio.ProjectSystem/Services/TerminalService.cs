@@ -91,8 +91,18 @@ public class TerminalService : ITerminalService
             };
             process.Exited += (s, e) =>
             {
-                session.IsRunning = false;
-                session.LastExitCode = process.ExitCode;
+                try
+                {
+                    session.LastExitCode = process.ExitCode;
+                }
+                catch (ObjectDisposedException)
+                {
+                    session.LastExitCode = -1;
+                }
+                finally
+                {
+                    session.IsRunning = false;
+                }
             };
             process.EnableRaisingEvents = true;
 

@@ -60,7 +60,10 @@ public partial class App : Application
                                 mainViewModel.Breakpoints.AddBreakpoint(programBasPath, 31); // After function call
                             }
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Failed to auto-load project: {ex.Message}");
+                        }
                     }
                 }, DispatcherPriority.Background);
             };

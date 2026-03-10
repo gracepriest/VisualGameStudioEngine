@@ -234,6 +234,7 @@ public partial class CodeEditorControl : UserControl
             {
                 if (margin is FoldingMargin foldingMargin)
                 {
+                    foldingMargin.PointerPressed -= OnFoldingMarginPointerPressed;
                     foldingMargin.PointerPressed += OnFoldingMarginPointerPressed;
                 }
             }
@@ -357,7 +358,7 @@ public partial class CodeEditorControl : UserControl
         if (_foldingManager != null)
         {
             try { FoldingManager.Uninstall(_foldingManager); }
-            catch { /* Ignore */ }
+            catch (Exception) { /* Ignore */ }
         }
 
         // Set the new document
@@ -374,7 +375,7 @@ public partial class CodeEditorControl : UserControl
                 _textEditor.TextArea.TextView.LineTransformers.Remove(_textMarkerService);
                 _textEditor.TextArea.TextView.BackgroundRenderers.Remove(_textMarkerService);
             }
-            catch { /* Ignore */ }
+            catch (Exception) { /* Ignore */ }
         }
         _textMarkerService = new TextMarkerService(_textEditor.Document);
         _textEditor.TextArea.TextView.LineTransformers.Add(_textMarkerService);
@@ -400,7 +401,7 @@ public partial class CodeEditorControl : UserControl
         if (_foldingManager != null)
         {
             try { FoldingManager.Uninstall(_foldingManager); }
-            catch { /* Ignore */ }
+            catch (Exception) { /* Ignore */ }
         }
         _foldingManager = FoldingManager.Install(_textEditor.TextArea);
 
@@ -412,7 +413,7 @@ public partial class CodeEditorControl : UserControl
                 _textEditor.TextArea.TextView.LineTransformers.Remove(_textMarkerService);
                 _textEditor.TextArea.TextView.BackgroundRenderers.Remove(_textMarkerService);
             }
-            catch { /* Ignore */ }
+            catch (Exception) { /* Ignore */ }
         }
         _textMarkerService = new TextMarkerService(_textEditor.Document);
         _textEditor.TextArea.TextView.LineTransformers.Add(_textMarkerService);
@@ -480,7 +481,7 @@ public partial class CodeEditorControl : UserControl
                                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                                 {
                                     try { textView?.Redraw(); }
-                                    catch { /* Ignore */ }
+                                    catch (Exception) { /* Ignore */ }
                                 });
                                 e.Handled = true;
                                 return;
@@ -541,7 +542,7 @@ public partial class CodeEditorControl : UserControl
                             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                             {
                                 try { textView?.Redraw(); }
-                                catch { /* Ignore */ }
+                                catch (Exception) { /* Ignore */ }
                             });
                             e.Handled = true;
                         }
@@ -600,7 +601,7 @@ public partial class CodeEditorControl : UserControl
                     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     {
                         try { textView?.Redraw(); }
-                        catch { /* Ignore redraw errors */ }
+                        catch (Exception) { /* Ignore redraw errors */ }
                     });
                     e.Handled = true;
                 }
@@ -874,18 +875,18 @@ public partial class CodeEditorControl : UserControl
                                 Math.Min(folding.StartOffset, _textEditor.Document.TextLength));
                             foldedLines.Add(line.LineNumber);
                         }
-                        catch { /* Offset invalid, skip */ }
+                        catch (Exception) { /* Offset invalid, skip */ }
                     }
                 }
             }
-            catch { /* Collection may have been modified, skip preservation */ }
+            catch (Exception) { /* Collection may have been modified, skip preservation */ }
 
             // Completely reinstall folding manager to avoid stale state
             try
             {
                 FoldingManager.Uninstall(_foldingManager);
             }
-            catch { /* May already be invalid */ }
+            catch (Exception) { /* May already be invalid */ }
 
             _foldingManager = FoldingManager.Install(_textEditor.TextArea);
 
@@ -917,7 +918,7 @@ public partial class CodeEditorControl : UserControl
                             folding.IsFolded = true;
                         }
                     }
-                    catch { /* Ignore invalid folding */ }
+                    catch (Exception) { /* Ignore invalid folding */ }
                 }
             }
         }
@@ -930,11 +931,11 @@ public partial class CodeEditorControl : UserControl
                 if (_foldingManager != null)
                 {
                     try { FoldingManager.Uninstall(_foldingManager); }
-                    catch { /* Already uninstalled or invalid */ }
+                    catch (Exception) { /* Already uninstalled or invalid */ }
                 }
                 _foldingManager = FoldingManager.Install(_textEditor!.TextArea);
             }
-            catch { /* Give up on folding for now */ }
+            catch (Exception) { /* Give up on folding for now */ }
         }
         finally
         {
@@ -962,7 +963,7 @@ public partial class CodeEditorControl : UserControl
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                 {
                     try { _textEditor?.TextArea?.TextView?.Redraw(); }
-                    catch { /* Ignore redraw errors */ }
+                    catch (Exception) { /* Ignore redraw errors */ }
                 });
             }
         }
@@ -983,12 +984,12 @@ public partial class CodeEditorControl : UserControl
             foreach (var folding in _foldingManager.AllFoldings.ToList())
             {
                 try { folding.IsFolded = true; }
-                catch { /* Ignore invalid folding */ }
+                catch (Exception) { /* Ignore invalid folding */ }
             }
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 try { _textEditor?.TextArea?.TextView?.Redraw(); }
-                catch { /* Ignore redraw errors */ }
+                catch (Exception) { /* Ignore redraw errors */ }
             });
         }
         catch (Exception ex)
@@ -1008,12 +1009,12 @@ public partial class CodeEditorControl : UserControl
             foreach (var folding in _foldingManager.AllFoldings.ToList())
             {
                 try { folding.IsFolded = false; }
-                catch { /* Ignore invalid folding */ }
+                catch (Exception) { /* Ignore invalid folding */ }
             }
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 try { _textEditor?.TextArea?.TextView?.Redraw(); }
-                catch { /* Ignore redraw errors */ }
+                catch (Exception) { /* Ignore redraw errors */ }
             });
         }
         catch (Exception ex)
@@ -1861,16 +1862,27 @@ public partial class CodeEditorControl : UserControl
             }
 
             // Otherwise show data tip for word hover
-            if (!string.IsNullOrWhiteSpace(_lastHoverWord))
+            if (!string.IsNullOrWhiteSpace(_lastHoverWord) && _textEditor?.TextArea?.TextView != null)
             {
                 // Get screen position for the tooltip
                 var textView = _textEditor.TextArea.TextView;
                 var screenPoint = textView.PointToScreen(_lastHoverPosition);
 
+                // Get line/column from hover offset for LSP hover requests
+                int hoverLine = 0, hoverColumn = 0;
+                if (_lastHoverOffset >= 0 && _lastHoverOffset <= _textEditor.Document.TextLength)
+                {
+                    var location = _textEditor.Document.GetLocation(_lastHoverOffset);
+                    hoverLine = location.Line;
+                    hoverColumn = location.Column;
+                }
+
                 DataTipRequested?.Invoke(this, new DataTipRequestEventArgs(
                     _lastHoverWord,
                     screenPoint.X,
-                    screenPoint.Y + 20 // Offset below cursor
+                    screenPoint.Y + 20, // Offset below cursor
+                    hoverLine,
+                    hoverColumn
                 ));
             }
         });
@@ -1938,6 +1950,47 @@ public partial class CodeEditorControl : UserControl
 
         _errorTooltip.HorizontalOffset = position.X;
         _errorTooltip.VerticalOffset = position.Y + 20;
+        _errorTooltip.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Shows a hover tooltip with LSP hover info at the current hover position
+    /// </summary>
+    public void ShowHoverTooltip(string contents)
+    {
+        if (_textEditor == null || string.IsNullOrWhiteSpace(contents)) return;
+
+        // Reuse the error tooltip infrastructure but with different styling
+        if (_errorTooltip == null)
+        {
+            _errorTooltipText = new TextBlock
+            {
+                Padding = new Thickness(8, 4),
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                MaxWidth = 400
+            };
+
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.Parse("#2D2D30")),
+                BorderBrush = new SolidColorBrush(Color.Parse("#3F3F46")),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3),
+                Child = _errorTooltipText
+            };
+
+            _errorTooltip = new Avalonia.Controls.Primitives.Popup
+            {
+                Child = border,
+                PlacementTarget = _textEditor.TextArea
+            };
+        }
+
+        _errorTooltipText!.Text = contents;
+        _errorTooltipText.Foreground = new SolidColorBrush(Color.Parse("#D4D4D4")); // Normal text color
+
+        _errorTooltip.HorizontalOffset = _lastHoverPosition.X;
+        _errorTooltip.VerticalOffset = _lastHoverPosition.Y + 20;
         _errorTooltip.IsOpen = true;
     }
 
@@ -2206,6 +2259,19 @@ public partial class CodeEditorControl : UserControl
     }
 
     #endregion
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+
+        _foldingUpdateTimer?.Stop();
+        _foldingUpdateTimer?.Dispose();
+        _foldingUpdateTimer = null;
+
+        _hoverTimer?.Stop();
+        _hoverTimer?.Dispose();
+        _hoverTimer = null;
+    }
 }
 
 /// <summary>
@@ -2233,12 +2299,16 @@ public class DataTipRequestEventArgs : EventArgs
     public string Expression { get; }
     public double ScreenX { get; }
     public double ScreenY { get; }
+    public int Line { get; }
+    public int Column { get; }
 
-    public DataTipRequestEventArgs(string expression, double screenX, double screenY)
+    public DataTipRequestEventArgs(string expression, double screenX, double screenY, int line = 0, int column = 0)
     {
         Expression = expression;
         ScreenX = screenX;
         ScreenY = screenY;
+        Line = line;
+        Column = column;
     }
 }
 
