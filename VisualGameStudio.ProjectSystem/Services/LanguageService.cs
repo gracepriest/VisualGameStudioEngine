@@ -1558,6 +1558,51 @@ public class LanguageService : ILanguageService
         }
     }
 
+    public async Task<IReadOnlyList<DocumentLinkInfo>> GetDocumentLinksAsync(string uri, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<DocumentLinkInfo>();
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/documentLink", new
+            {
+                textDocument = new { uri = PathToUri(uri) }
+            }, cancellationToken);
+
+            if (result.ValueKind != JsonValueKind.Array) return Array.Empty<DocumentLinkInfo>();
+
+            var links = new List<DocumentLinkInfo>();
+            foreach (var item in result.EnumerateArray())
+            {
+                var link = new DocumentLinkInfo();
+                if (item.TryGetProperty("range", out var range))
+                {
+                    if (range.TryGetProperty("start", out var start))
+                    {
+                        link.StartLine = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                        link.StartColumn = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+                    }
+                    if (range.TryGetProperty("end", out var end))
+                    {
+                        link.EndLine = end.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                        link.EndColumn = end.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+                    }
+                }
+                if (item.TryGetProperty("target", out var target))
+                    link.Target = target.GetString() ?? "";
+                if (item.TryGetProperty("tooltip", out var tooltip))
+                    link.Tooltip = tooltip.GetString();
+
+                links.Add(link);
+            }
+            return links;
+        }
+        catch
+        {
+            return Array.Empty<DocumentLinkInfo>();
+        }
+    }
+
     public void Dispose()
     {
         StopAsync().Wait(TimeSpan.FromSeconds(2));

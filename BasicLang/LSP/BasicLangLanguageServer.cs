@@ -59,6 +59,7 @@ namespace BasicLang.Compiler.LSP
                         .WithHandler<ExecuteCommandHandler>()
                         .WithHandler<ImplementationHandler>()
                         .WithHandler<DocumentHighlightHandler>()
+                        .WithHandler<OnTypeFormattingHandler>()
                         .OnInitialize(OnInitializeAsync)
                         .OnInitialized(OnInitializedAsync);
                 }).ConfigureAwait(false);

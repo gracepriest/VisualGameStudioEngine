@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using BasicLang.Compiler;
@@ -354,7 +355,7 @@ namespace BasicLang.Compiler.LSP
                 // Collect semantic errors
                 foreach (var error in SemanticAnalyzer.Errors)
                 {
-                    Diagnostics.Add(new Diagnostic
+                    var diag = new Diagnostic
                     {
                         Message = error.Message,
                         Severity = error.Severity == BasicLang.Compiler.SemanticAnalysis.ErrorSeverity.Warning
@@ -362,8 +363,27 @@ namespace BasicLang.Compiler.LSP
                             : DiagnosticSeverity.Error,
                         Line = error.Line,
                         Column = error.Column
-                    });
+                    };
+
+                    // Tag warnings about unused/unreferenced symbols as Unnecessary
+                    if (error.Severity == BasicLang.Compiler.SemanticAnalysis.ErrorSeverity.Warning)
+                    {
+                        var msgLower = error.Message.ToLowerInvariant();
+                        if (msgLower.Contains("unused") || msgLower.Contains("not used") || msgLower.Contains("never used") || msgLower.Contains("unreferenced"))
+                        {
+                            diag.Tags.Add(DiagnosticTag.Unnecessary);
+                        }
+                        if (msgLower.Contains("deprecated") || msgLower.Contains("obsolete"))
+                        {
+                            diag.Tags.Add(DiagnosticTag.Deprecated);
+                        }
+                    }
+
+                    Diagnostics.Add(diag);
                 }
+
+                // Detect unused local variables by scanning symbol table scopes
+                DetectUnusedSymbols();
 
             }
             catch (Exception ex)
@@ -434,6 +454,131 @@ namespace BasicLang.Compiler.LSP
         {
             return char.IsLetterOrDigit(c) || c == '_';
         }
+
+        /// <summary>
+        /// Detect unused local variables and imports by scanning symbol scopes
+        /// and checking if names appear in source beyond their declaration.
+        /// </summary>
+        private void DetectUnusedSymbols()
+        {
+            if (SemanticAnalyzer?.GlobalScope == null || Content == null)
+                return;
+
+            try
+            {
+                // Collect local variables from all scopes (skip global-level functions, classes, etc.)
+                var localVariables = new List<Symbol>();
+                CollectLocalVariables(SemanticAnalyzer.GlobalScope, localVariables);
+
+                foreach (var variable in localVariables)
+                {
+                    if (string.IsNullOrEmpty(variable.Name) || variable.Line <= 0)
+                        continue;
+
+                    // Skip loop variables, parameters, and compiler-generated symbols
+                    if (variable.Kind == SymbolKind.Parameter)
+                        continue;
+                    if (variable.Name.StartsWith("_") && variable.Name.Length == 1)
+                        continue;
+
+                    // Count how many times the identifier appears in tokens (excluding the declaration itself)
+                    int referenceCount = 0;
+                    foreach (var token in Tokens)
+                    {
+                        if (token.Lexeme == variable.Name &&
+                            token.Type == TokenType.Identifier &&
+                            !(token.Line == variable.Line && token.Column == variable.Column))
+                        {
+                            referenceCount++;
+                        }
+                    }
+
+                    if (referenceCount == 0)
+                    {
+                        // Check if we already have a diagnostic for this variable at the same location
+                        bool alreadyReported = Diagnostics.Any(d =>
+                            d.Line == variable.Line &&
+                            d.Column == variable.Column &&
+                            d.Tags.Contains(DiagnosticTag.Unnecessary));
+
+                        if (!alreadyReported)
+                        {
+                            Diagnostics.Add(new Diagnostic
+                            {
+                                Message = $"Variable '{variable.Name}' is declared but never used",
+                                Severity = DiagnosticSeverity.Hint,
+                                Line = variable.Line,
+                                Column = variable.Column,
+                                EndLine = variable.Line,
+                                EndColumn = variable.Column + variable.Name.Length,
+                                Tags = new List<DiagnosticTag> { DiagnosticTag.Unnecessary }
+                            });
+                        }
+                    }
+                }
+
+                // Detect unused imports by checking Using/Import declarations in the AST
+                if (AST?.Declarations != null)
+                {
+                    foreach (var decl in AST.Declarations)
+                    {
+                        if (decl is UsingDirectiveNode usingDir && !string.IsNullOrEmpty(usingDir.Namespace))
+                        {
+                            // Check if any part of the namespace is referenced in the source
+                            var nsParts = usingDir.Namespace.Split('.');
+                            var lastPart = nsParts.Last();
+
+                            // Check if the imported namespace/type name appears elsewhere in tokens
+                            bool isUsed = Tokens.Any(t =>
+                                t.Type == TokenType.Identifier &&
+                                t.Lexeme == lastPart &&
+                                t.Line != usingDir.Line);
+
+                            if (!isUsed)
+                            {
+                                Diagnostics.Add(new Diagnostic
+                                {
+                                    Message = $"Import '{usingDir.Namespace}' is not used",
+                                    Severity = DiagnosticSeverity.Hint,
+                                    Line = usingDir.Line > 0 ? usingDir.Line : 1,
+                                    Column = 1,
+                                    Tags = new List<DiagnosticTag> { DiagnosticTag.Unnecessary }
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Don't let unused detection failures break the diagnostics pipeline
+            }
+        }
+
+        /// <summary>
+        /// Recursively collect local variable symbols from scopes
+        /// </summary>
+        private void CollectLocalVariables(Scope scope, List<Symbol> variables)
+        {
+            if (scope == null)
+                return;
+
+            foreach (var symbol in scope.Symbols.Values)
+            {
+                if (symbol.Kind == SymbolKind.Variable && !symbol.IsImported)
+                {
+                    variables.Add(symbol);
+                }
+            }
+
+            if (scope.Children != null)
+            {
+                foreach (var child in scope.Children)
+                {
+                    CollectLocalVariables(child, variables);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -447,6 +592,7 @@ namespace BasicLang.Compiler.LSP
         public int Column { get; set; }
         public int EndLine { get; set; }
         public int EndColumn { get; set; }
+        public List<DiagnosticTag> Tags { get; set; } = new List<DiagnosticTag>();
     }
 
     public enum DiagnosticSeverity
@@ -455,5 +601,11 @@ namespace BasicLang.Compiler.LSP
         Warning = 2,
         Information = 3,
         Hint = 4
+    }
+
+    public enum DiagnosticTag
+    {
+        Unnecessary = 1,
+        Deprecated = 2
     }
 }

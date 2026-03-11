@@ -679,6 +679,38 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     }
 
     #endregion
+
+    #region Inline Debug Values
+
+    public event EventHandler<IEnumerable<InlineDebugValueInfo>>? InlineDebugValuesUpdated;
+
+    /// <summary>
+    /// Shows inline debug variable values next to code lines.
+    /// </summary>
+    public void ShowInlineDebugValues(IEnumerable<InlineDebugValueInfo> values)
+    {
+        InlineDebugValuesUpdated?.Invoke(this, values);
+    }
+
+    /// <summary>
+    /// Clears all inline debug values.
+    /// </summary>
+    public void ClearInlineDebugValues()
+    {
+        InlineDebugValuesUpdated?.Invoke(this, Enumerable.Empty<InlineDebugValueInfo>());
+    }
+
+    #endregion
+}
+
+/// <summary>
+/// Represents a variable value to display inline during debugging.
+/// </summary>
+public class InlineDebugValueInfo
+{
+    public int Line { get; set; }
+    public string Name { get; set; } = "";
+    public string Value { get; set; } = "";
 }
 
 public class CompletionRequestedEventArgs : EventArgs

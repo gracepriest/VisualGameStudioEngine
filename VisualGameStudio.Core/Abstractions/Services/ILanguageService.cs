@@ -146,6 +146,11 @@ public interface ILanguageService : IDisposable
     /// Get document highlights (occurrences of symbol under cursor)
     /// </summary>
     Task<IReadOnlyList<DocumentHighlightResult>> GetDocumentHighlightsAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get document links (clickable imports, file paths, URLs)
+    /// </summary>
+    Task<IReadOnlyList<DocumentLinkInfo>> GetDocumentLinksAsync(string uri, CancellationToken cancellationToken = default);
 }
 
 public class DiagnosticsEventArgs : EventArgs
@@ -448,4 +453,17 @@ public enum DocumentHighlightKind
     Text = 1,
     Read = 2,
     Write = 3
+}
+
+/// <summary>
+/// Document link information (clickable imports, file paths, URLs)
+/// </summary>
+public class DocumentLinkInfo
+{
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public int EndLine { get; set; }
+    public int EndColumn { get; set; }
+    public string Target { get; set; } = "";
+    public string? Tooltip { get; set; }
 }

@@ -820,6 +820,12 @@ public partial class MainWindowViewModel : ViewModelBase
         if (e.NewState == DebugState.Stopped)
         {
             StatusText = "Debug session ended";
+            ClearAllInlineDebugValues();
+        }
+        else if (e.NewState == DebugState.Running)
+        {
+            // Clear inline values when resuming execution
+            ClearAllInlineDebugValues();
         }
     }
 
@@ -844,8 +850,128 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 await OpenFileAsync(firstFrame.FilePath);
                 // Could set caret position here
+
+                // Show inline debug values for variables in scope
+                await ShowInlineDebugValuesAsync(firstFrame);
             }
         });
+    }
+
+    /// <summary>
+    /// Fetches variables from the debugger and displays them inline in the editor.
+    /// </summary>
+    private async Task ShowInlineDebugValuesAsync(StackFrameInfo frame)
+    {
+        try
+        {
+            if (frame.FilePath == null) return;
+
+            // Get scopes for the top frame
+            var scopes = await _debugService.GetScopesAsync(frame.Id);
+            if (scopes.Count == 0) return;
+
+            var allVariables = new List<VariableInfo>();
+            foreach (var scope in scopes)
+            {
+                // Skip expensive scopes (e.g., globals) to avoid slow lookups
+                if (scope.Expensive) continue;
+
+                var variables = await _debugService.GetVariablesAsync(scope.VariablesReference);
+                allVariables.AddRange(variables);
+            }
+
+            if (allVariables.Count == 0) return;
+
+            // Get the document text to find where variables are referenced
+            if (!_openDocuments.TryGetValue(frame.FilePath, out var doc)) return;
+
+            var text = doc.Text;
+            if (string.IsNullOrEmpty(text)) return;
+
+            var lines = text.Split('\n');
+            var inlineValues = new List<Documents.InlineDebugValueInfo>();
+
+            // For each variable, find the lines near the stopped line where it appears
+            var stoppedLine = frame.Line;
+            // Search a window around the stopped line (up to 50 lines above)
+            var searchStart = Math.Max(0, stoppedLine - 50);
+            var searchEnd = Math.Min(lines.Length, stoppedLine);
+
+            foreach (var variable in allVariables)
+            {
+                if (string.IsNullOrEmpty(variable.Name)) continue;
+
+                // Truncate long values for display
+                var displayValue = variable.Value;
+                if (displayValue.Length > 80)
+                {
+                    displayValue = displayValue.Substring(0, 77) + "...";
+                }
+
+                // Find the last line before/at the stopped line that references this variable
+                int lastReferenceLine = -1;
+                for (int i = searchEnd - 1; i >= searchStart; i--)
+                {
+                    var line = lines[i];
+                    // Check if the variable name appears as a whole word on this line
+                    var idx = line.IndexOf(variable.Name, StringComparison.Ordinal);
+                    while (idx >= 0)
+                    {
+                        // Verify it's a whole word match (not part of a larger identifier)
+                        var before = idx > 0 ? line[idx - 1] : ' ';
+                        var after = idx + variable.Name.Length < line.Length
+                            ? line[idx + variable.Name.Length]
+                            : ' ';
+
+                        if (!char.IsLetterOrDigit(before) && before != '_' &&
+                            !char.IsLetterOrDigit(after) && after != '_')
+                        {
+                            lastReferenceLine = i + 1; // Convert to 1-based
+                            break;
+                        }
+
+                        idx = line.IndexOf(variable.Name, idx + 1, StringComparison.Ordinal);
+                    }
+
+                    if (lastReferenceLine > 0) break;
+                }
+
+                // If we found a reference line, show the value there;
+                // otherwise show it on the stopped line itself
+                var targetLine = lastReferenceLine > 0 ? lastReferenceLine : stoppedLine;
+
+                // Avoid duplicating a variable on the same line
+                if (!inlineValues.Any(v => v.Line == targetLine && v.Name == variable.Name))
+                {
+                    inlineValues.Add(new Documents.InlineDebugValueInfo
+                    {
+                        Line = targetLine,
+                        Name = variable.Name,
+                        Value = displayValue
+                    });
+                }
+            }
+
+            if (inlineValues.Count > 0)
+            {
+                doc.ShowInlineDebugValues(inlineValues);
+            }
+        }
+        catch
+        {
+            // Don't let inline value display errors break the debug experience
+        }
+    }
+
+    /// <summary>
+    /// Clears inline debug values from all open documents.
+    /// </summary>
+    private void ClearAllInlineDebugValues()
+    {
+        foreach (var doc in _openDocuments.Values)
+        {
+            doc.ClearInlineDebugValues();
+        }
     }
 
     private void OnDebugOutput(object? sender, DebugOutputEventArgs e)

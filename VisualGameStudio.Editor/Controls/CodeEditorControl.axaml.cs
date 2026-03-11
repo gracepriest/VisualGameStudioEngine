@@ -45,6 +45,7 @@ public partial class CodeEditorControl : UserControl
     private Avalonia.Controls.Primitives.Popup? _errorTooltip;
     private TextBlock? _errorTooltipText;
     private int _lastHoverOffset = -1;
+    private IReadOnlyList<DocumentLinkInfo>? _documentLinks;
 
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
@@ -173,6 +174,7 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler? FormatDocumentRequested;
     public event EventHandler<SignatureHelpRequestEventArgs>? SignatureHelpRequested;
     public event EventHandler<DocumentHighlightRequestEventArgs>? DocumentHighlightRequested;
+    public event EventHandler<DocumentLinkClickedEventArgs>? DocumentLinkClicked;
 
     /// <summary>
     /// Returns true if the editor is fully initialized and ready for use
@@ -437,13 +439,22 @@ public partial class CodeEditorControl : UserControl
         {
             var point = e.GetCurrentPoint(_textEditor.TextArea);
 
-            // Handle Ctrl+Click for Go to Definition
+            // Handle Ctrl+Click for document links and Go to Definition
             if (point.Properties.IsLeftButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Control))
             {
                 var textView = _textEditor.TextArea.TextView;
                 var pos = textView.GetPositionFloor(point.Position + textView.ScrollOffset);
                 if (pos.HasValue)
                 {
+                    // Check if click is on a document link first
+                    var link = GetDocumentLinkAt(pos.Value.Line, pos.Value.Column);
+                    if (link != null)
+                    {
+                        DocumentLinkClicked?.Invoke(this, new DocumentLinkClickedEventArgs(link.Target, link.Tooltip));
+                        e.Handled = true;
+                        return;
+                    }
+
                     // Move caret to clicked position first
                     _textEditor.TextArea.Caret.Position = pos.Value;
                     // Trigger go to definition
@@ -2394,6 +2405,74 @@ public partial class CodeEditorControl : UserControl
 
     #endregion
 
+    #region Inline Debug Values
+
+    private TextMarkers.InlineDebugValueRenderer? _inlineDebugValueRenderer;
+
+    /// <summary>
+    /// Shows inline debug variable values next to code lines during debugging.
+    /// </summary>
+    public void ShowInlineDebugValues(IEnumerable<TextMarkers.InlineDebugValue> values)
+    {
+        if (_textEditor == null) return;
+
+        if (_inlineDebugValueRenderer == null)
+        {
+            _inlineDebugValueRenderer = new TextMarkers.InlineDebugValueRenderer(_textEditor);
+            _textEditor.TextArea.TextView.BackgroundRenderers.Add(_inlineDebugValueRenderer);
+        }
+
+        _inlineDebugValueRenderer.SetValues(values);
+    }
+
+    /// <summary>
+    /// Clears all inline debug values.
+    /// </summary>
+    public void ClearInlineDebugValues()
+    {
+        _inlineDebugValueRenderer?.Clear();
+    }
+
+    #endregion
+
+    #region Document Links
+
+    /// <summary>
+    /// Store document links returned by the LSP server.
+    /// Links are rendered as underlined text and can be Ctrl+Clicked to navigate.
+    /// </summary>
+    public void ShowDocumentLinks(IReadOnlyList<DocumentLinkInfo> links)
+    {
+        _documentLinks = links;
+    }
+
+    /// <summary>
+    /// Clear stored document links.
+    /// </summary>
+    public void ClearDocumentLinks()
+    {
+        _documentLinks = null;
+    }
+
+    /// <summary>
+    /// Find a document link at the given 1-based line and column.
+    /// </summary>
+    private DocumentLinkInfo? GetDocumentLinkAt(int line, int column)
+    {
+        if (_documentLinks == null) return null;
+
+        foreach (var link in _documentLinks)
+        {
+            if (line < link.StartLine || line > link.EndLine) continue;
+            if (line == link.StartLine && column < link.StartColumn) continue;
+            if (line == link.EndLine && column > link.EndColumn) continue;
+            return link;
+        }
+        return null;
+    }
+
+    #endregion
+
     #region Diagnostics / Error Markers
 
     /// <summary>
@@ -2608,5 +2687,17 @@ public class DocumentHighlightRequestEventArgs : EventArgs
     {
         Line = line;
         Column = column;
+    }
+}
+
+public class DocumentLinkClickedEventArgs : EventArgs
+{
+    public string Target { get; }
+    public string? Tooltip { get; }
+
+    public DocumentLinkClickedEventArgs(string target, string? tooltip)
+    {
+        Target = target;
+        Tooltip = tooltip;
     }
 }

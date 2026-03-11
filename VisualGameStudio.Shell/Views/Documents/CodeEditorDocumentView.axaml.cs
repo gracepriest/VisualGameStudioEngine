@@ -61,6 +61,9 @@ public partial class CodeEditorDocumentView : UserControl
             // Wire up diagnostics (error highlighting)
             vm.DiagnosticsUpdated += OnDiagnosticsUpdated;
 
+            // Wire up inline debug values
+            vm.InlineDebugValuesUpdated += OnInlineDebugValuesUpdated;
+
             // Wire up code completion
             if (MainEditor != null)
             {
@@ -166,6 +169,28 @@ public partial class CodeEditorDocumentView : UserControl
     private void OnDiagnosticsUpdated(object? sender, IEnumerable<DiagnosticItem> diagnostics)
     {
         MainEditor?.UpdateDiagnostics(diagnostics);
+    }
+
+    private void OnInlineDebugValuesUpdated(object? sender, IEnumerable<InlineDebugValueInfo> values)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var valueList = values.ToList();
+            if (valueList.Count == 0)
+            {
+                MainEditor?.ClearInlineDebugValues();
+            }
+            else
+            {
+                MainEditor?.ShowInlineDebugValues(
+                    valueList.Select(v => new VisualGameStudio.Editor.TextMarkers.InlineDebugValue
+                    {
+                        Line = v.Line,
+                        Name = v.Name,
+                        Value = v.Value
+                    }));
+            }
+        });
     }
 
     private void OnCompletionRequested(object? sender, CompletionRequestEventArgs e)
