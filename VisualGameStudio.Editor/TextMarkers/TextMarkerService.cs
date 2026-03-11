@@ -89,18 +89,27 @@ public class TextMarkerService : DocumentColorizingTransformer, IBackgroundRende
         {
             foreach (var rect in GetRects(textView, marker))
             {
-                var color = marker.Type switch
+                if (marker.Type == TextMarkerType.Highlight && marker.BackgroundColor.HasValue)
                 {
-                    TextMarkerType.Error => Color.Parse("#E51400"),
-                    TextMarkerType.Warning => Color.Parse("#CCA700"),
-                    TextMarkerType.Info => Color.Parse("#3794FF"),
-                    _ => Color.Parse("#808080")
-                };
+                    // Draw background highlight (for document highlights)
+                    var highlightRect = new Rect(rect.X, rect.Y - rect.Height * 4, rect.Width, rect.Height * 5);
+                    drawingContext.FillRectangle(new SolidColorBrush(marker.BackgroundColor.Value), highlightRect);
+                }
+                else
+                {
+                    var color = marker.Type switch
+                    {
+                        TextMarkerType.Error => Color.Parse("#E51400"),
+                        TextMarkerType.Warning => Color.Parse("#CCA700"),
+                        TextMarkerType.Info => Color.Parse("#3794FF"),
+                        _ => Color.Parse("#808080")
+                    };
 
-                var pen = new Pen(new SolidColorBrush(color), 1);
+                    var pen = new Pen(new SolidColorBrush(color), 1);
 
-                // Draw squiggly underline
-                DrawSquigglyLine(drawingContext, pen, rect);
+                    // Draw squiggly underline
+                    DrawSquigglyLine(drawingContext, pen, rect);
+                }
             }
         }
     }
@@ -169,6 +178,7 @@ public class TextMarker
     public int EndOffset => StartOffset + Length;
     public TextMarkerType Type { get; }
     public string? Message { get; }
+    public Avalonia.Media.Color? BackgroundColor { get; set; }
 
     public TextMarker(int startOffset, int length, TextMarkerType type, string? message = null)
     {
@@ -184,5 +194,6 @@ public enum TextMarkerType
     Error,
     Warning,
     Info,
-    Hint
+    Hint,
+    Highlight
 }

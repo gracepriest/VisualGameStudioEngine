@@ -111,6 +111,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler<CodeActionResultEventArgs>? CodeActionsReceived;
     public event EventHandler<LocationResultEventArgs>? DefinitionResultReceived;
     public event EventHandler<ReferencesResultEventArgs>? ReferencesResultReceived;
+    public event EventHandler<SignatureHelpRequestEventArgs>? SignatureHelpRequested;
+    public event EventHandler<SignatureHelpResultEventArgs>? SignatureHelpResultReceived;
+    public event EventHandler<DocumentHighlightRequestEventArgs>? DocumentHighlightRequested;
+    public event EventHandler<DocumentHighlightResultEventArgs>? DocumentHighlightResultReceived;
+    public event EventHandler<RenameResultEventArgs>? RenameResultReceived;
+    public event EventHandler<DocumentSymbolsResultEventArgs>? DocumentSymbolsReceived;
+    public event EventHandler? ExpandSelectionRequested;
+    public event EventHandler? ShrinkSelectionRequested;
+    public event EventHandler<SelectionRangeResultEventArgs>? SelectionRangeReceived;
 
     /// <summary>
     /// Callback to get selection info from the view
@@ -433,6 +442,51 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         ReferencesResultReceived?.Invoke(this, new ReferencesResultEventArgs(locations.ToList()));
     }
 
+    public void RequestSignatureHelp(int line, int column)
+    {
+        SignatureHelpRequested?.Invoke(this, new SignatureHelpRequestEventArgs(line, column));
+    }
+
+    public void ProvideSignatureHelp(SignatureHelp? help)
+    {
+        SignatureHelpResultReceived?.Invoke(this, new SignatureHelpResultEventArgs(help));
+    }
+
+    public void RequestDocumentHighlight(int line, int column)
+    {
+        DocumentHighlightRequested?.Invoke(this, new DocumentHighlightRequestEventArgs(line, column));
+    }
+
+    public void ProvideDocumentHighlights(IEnumerable<DocumentHighlightInfo> highlights)
+    {
+        DocumentHighlightResultReceived?.Invoke(this, new DocumentHighlightResultEventArgs(highlights.ToList()));
+    }
+
+    public void ProvideRenameResult(WorkspaceEditInfo? edit, string? errorMessage = null)
+    {
+        RenameResultReceived?.Invoke(this, new RenameResultEventArgs(edit, errorMessage));
+    }
+
+    public void ProvideDocumentSymbols(IEnumerable<DocumentSymbol> symbols)
+    {
+        DocumentSymbolsReceived?.Invoke(this, new DocumentSymbolsResultEventArgs(symbols.ToList()));
+    }
+
+    public void RequestExpandSelection()
+    {
+        ExpandSelectionRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestShrinkSelection()
+    {
+        ShrinkSelectionRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ProvideSelectionRange(SelectionRangeInfo? range)
+    {
+        SelectionRangeReceived?.Invoke(this, new SelectionRangeResultEventArgs(range));
+    }
+
     public void OnBreakpointToggled(int line)
     {
         BreakpointToggled?.Invoke(this, line);
@@ -720,5 +774,91 @@ public class ReferencesResultEventArgs : EventArgs
     public ReferencesResultEventArgs(IReadOnlyList<LocationInfo> locations)
     {
         Locations = locations;
+    }
+}
+
+public class SignatureHelpRequestEventArgs : EventArgs
+{
+    public int Line { get; }
+    public int Column { get; }
+
+    public SignatureHelpRequestEventArgs(int line, int column)
+    {
+        Line = line;
+        Column = column;
+    }
+}
+
+public class SignatureHelpResultEventArgs : EventArgs
+{
+    public SignatureHelp? Help { get; }
+
+    public SignatureHelpResultEventArgs(SignatureHelp? help)
+    {
+        Help = help;
+    }
+}
+
+public class DocumentHighlightRequestEventArgs : EventArgs
+{
+    public int Line { get; }
+    public int Column { get; }
+
+    public DocumentHighlightRequestEventArgs(int line, int column)
+    {
+        Line = line;
+        Column = column;
+    }
+}
+
+public class DocumentHighlightResultEventArgs : EventArgs
+{
+    public IReadOnlyList<DocumentHighlightInfo> Highlights { get; }
+
+    public DocumentHighlightResultEventArgs(IReadOnlyList<DocumentHighlightInfo> highlights)
+    {
+        Highlights = highlights;
+    }
+}
+
+public class DocumentHighlightInfo
+{
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public int EndLine { get; set; }
+    public int EndColumn { get; set; }
+    public bool IsWrite { get; set; }
+}
+
+public class RenameResultEventArgs : EventArgs
+{
+    public WorkspaceEditInfo? Edit { get; }
+    public string? ErrorMessage { get; }
+    public bool Success => Edit != null && ErrorMessage == null;
+
+    public RenameResultEventArgs(WorkspaceEditInfo? edit, string? errorMessage = null)
+    {
+        Edit = edit;
+        ErrorMessage = errorMessage;
+    }
+}
+
+public class DocumentSymbolsResultEventArgs : EventArgs
+{
+    public IReadOnlyList<DocumentSymbol> Symbols { get; }
+
+    public DocumentSymbolsResultEventArgs(IReadOnlyList<DocumentSymbol> symbols)
+    {
+        Symbols = symbols;
+    }
+}
+
+public class SelectionRangeResultEventArgs : EventArgs
+{
+    public SelectionRangeInfo? Range { get; }
+
+    public SelectionRangeResultEventArgs(SelectionRangeInfo? range)
+    {
+        Range = range;
     }
 }

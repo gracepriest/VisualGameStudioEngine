@@ -104,6 +104,8 @@ public partial class MainWindowViewModel : ViewModelBase
     public ImmediateWindowViewModel ImmediateWindow { get; }
     public DocumentOutlineViewModel DocumentOutline { get; }
     public BookmarksViewModel Bookmarks { get; }
+    public CallHierarchyViewModel CallHierarchy { get; }
+    public TypeHierarchyViewModel TypeHierarchy { get; }
 
     private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new();
 
@@ -134,7 +136,9 @@ public partial class MainWindowViewModel : ViewModelBase
         WatchViewModel watch,
         ImmediateWindowViewModel immediateWindow,
         DocumentOutlineViewModel documentOutline,
-        BookmarksViewModel bookmarks)
+        BookmarksViewModel bookmarks,
+        CallHierarchyViewModel callHierarchy,
+        TypeHierarchyViewModel typeHierarchy)
     {
         _projectService = projectService;
         _buildService = buildService;
@@ -164,6 +168,8 @@ public partial class MainWindowViewModel : ViewModelBase
         ImmediateWindow = immediateWindow;
         DocumentOutline = documentOutline;
         Bookmarks = bookmarks;
+        CallHierarchy = callHierarchy;
+        TypeHierarchy = typeHierarchy;
 
         // Setup dock layout
         _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks);
@@ -568,11 +574,51 @@ public partial class MainWindowViewModel : ViewModelBase
             document.PeekDefinitionRequested += async (s, e) => await PeekDefinitionAsync();
             document.FormatDocumentRequested += async (s, e) => await FormatDocumentAsync();
             document.CodeActionsRequested += async (s, e) => await ShowCodeActionsAsync();
+            document.ExpandSelectionRequested += async (s, e) => await ExpandSelectionAsync();
+            document.ShrinkSelectionRequested += (s, e) => ShrinkSelection();
             document.HoverRequested += async (s, e) =>
             {
                 if (e == null || document.FilePath == null) return;
                 var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
                 document.ProvideHoverResult(hover);
+            };
+
+            // Wire up signature help
+            document.SignatureHelpRequested += async (s, e) =>
+            {
+                if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
+                var help = await _languageService.GetSignatureHelpAsync(document.FilePath, e.Line, e.Column);
+                document.ProvideSignatureHelp(help);
+            };
+
+            // Wire up document highlight on caret position change
+            document.DocumentHighlightRequested += async (s, e) =>
+            {
+                if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
+                try
+                {
+                    var result = await _languageService.GetDocumentHighlightsAsync(document.FilePath, e.Line, e.Column);
+                    if (result.Count > 0)
+                    {
+                        var highlights = result.Select(r => new DocumentHighlightInfo
+                        {
+                            StartLine = r.StartLine,
+                            StartColumn = r.StartColumn,
+                            EndLine = r.EndLine,
+                            EndColumn = r.EndColumn,
+                            IsWrite = r.Kind == DocumentHighlightKind.Write
+                        }).ToList();
+                        document.ProvideDocumentHighlights(highlights);
+                    }
+                    else
+                    {
+                        document.ProvideDocumentHighlights(Array.Empty<DocumentHighlightInfo>());
+                    }
+                }
+                catch
+                {
+                    document.ProvideDocumentHighlights(Array.Empty<DocumentHighlightInfo>());
+                }
             };
 
             // Wire up code completion requests
@@ -619,7 +665,8 @@ public partial class MainWindowViewModel : ViewModelBase
             document.TextChanged += async (s, newText) =>
             {
                 if (_languageService.IsConnected && document.FilePath != null &&
-                    document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase))
+                    (document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
+                     document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
                 {
                     documentVersion++;
                     await _languageService.ChangeDocumentAsync(document.FilePath, newText, documentVersion);
@@ -637,6 +684,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
             _openDocuments[filePath] = document;
             _dockFactory.AddDocument(document);
+
+            // Update document outline
+            await UpdateDocumentOutlineAsync(filePath, content);
         }
         catch (Exception ex)
         {
@@ -1144,10 +1194,115 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc == null) return;
 
+        // Try LSP document symbols first for current document
+        if (_languageService.IsConnected && activeDoc.FilePath != null)
+        {
+            try
+            {
+                var symbols = await _languageService.GetDocumentSymbolsAsync(activeDoc.FilePath);
+                if (symbols.Count > 0)
+                {
+                    var symbolNames = FlattenSymbols(symbols).Select(s => $"{s.Name} ({s.Kind})").ToList();
+                    var flatSymbols = FlattenSymbols(symbols).ToList();
+
+                    var selected = await _dialogService.ShowListSelectionAsync(
+                        "Go to Symbol",
+                        "Select a symbol to navigate to:",
+                        symbolNames);
+
+                    if (selected >= 0 && selected < flatSymbols.Count)
+                    {
+                        activeDoc.NavigateTo(flatSymbols[selected].Line, flatSymbols[selected].Column);
+                    }
+                    return;
+                }
+            }
+            catch { }
+        }
+
+        // Fallback to text-based parsing
         var result = await _dialogService.ShowGoToSymbolDialogAsync(activeDoc.Text, activeDoc.FilePath);
         if (result != null)
         {
             activeDoc.NavigateTo(result.Line, result.Column);
+        }
+    }
+
+    private static IEnumerable<DocumentSymbol> FlattenSymbols(IEnumerable<DocumentSymbol> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            yield return symbol;
+            foreach (var child in FlattenSymbols(symbol.Children))
+            {
+                yield return child;
+            }
+        }
+    }
+
+    [RelayCommand]
+    private async Task GoToWorkspaceSymbolAsync()
+    {
+        if (!_languageService.IsConnected)
+        {
+            StatusText = "Language server not connected";
+            return;
+        }
+
+        var query = await _dialogService.ShowInputDialogAsync(
+            "Go to Workspace Symbol",
+            "Enter symbol name to search:",
+            "");
+
+        if (string.IsNullOrEmpty(query)) return;
+
+        try
+        {
+            // Search all open documents using LSP document symbols
+            var allSymbols = new List<(string Name, string File, int Line, int Column)>();
+            foreach (var (path, doc) in _openDocuments)
+            {
+                if (_languageService.IsConnected)
+                {
+                    var symbols = await _languageService.GetDocumentSymbolsAsync(path);
+                    foreach (var sym in FlattenSymbols(symbols))
+                    {
+                        if (sym.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+                        {
+                            allSymbols.Add((sym.Name, Path.GetFileName(path), sym.Line, sym.Column));
+                        }
+                    }
+                }
+            }
+
+            if (allSymbols.Count == 0)
+            {
+                StatusText = $"No symbols matching '{query}' found";
+                return;
+            }
+
+            var symbolNames = allSymbols.Select(s => $"{s.Name} - {s.File}:{s.Line}").ToList();
+            var selected = await _dialogService.ShowListSelectionAsync(
+                "Workspace Symbols",
+                $"Found {allSymbols.Count} symbol(s) matching '{query}':",
+                symbolNames);
+
+            if (selected >= 0 && selected < allSymbols.Count)
+            {
+                var (_, file, line, column) = allSymbols[selected];
+                // Find the full path for the file
+                var fullPath = _openDocuments.Keys.FirstOrDefault(p => Path.GetFileName(p) == file);
+                if (fullPath != null)
+                {
+                    await OpenFileAsync(fullPath);
+                    var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+                    activeDoc?.NavigateTo(line, column);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Symbol search failed: {ex.Message}";
         }
     }
 
@@ -1252,6 +1407,27 @@ public partial class MainWindowViewModel : ViewModelBase
     #endregion
 
     #region Go to Definition
+
+    [RelayCommand]
+    private async Task GoToTypeDefinitionAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
+
+        var location = await _languageService.GetTypeDefinitionAsync(
+            activeDoc.FilePath,
+            activeDoc.CaretLine,
+            activeDoc.CaretColumn);
+
+        if (location != null)
+        {
+            await NavigateToLocationAsync(location);
+        }
+        else
+        {
+            StatusText = "No type definition found";
+        }
+    }
 
     [RelayCommand]
     private async Task GoToDefinitionAsync()
@@ -1633,7 +1809,28 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Create and show the rename dialog
+        // Try LSP rename first (supports cross-file rename via WorkspaceEdit)
+        if (_languageService.IsConnected)
+        {
+            var newName = await _dialogService.ShowInputDialogAsync(
+                "Rename Symbol",
+                $"Rename '{word}' to:",
+                word);
+
+            if (string.IsNullOrEmpty(newName) || newName == word) return;
+
+            var lspEdit = await _languageService.RenameAsync(
+                activeDoc.FilePath, activeDoc.CaretLine, activeDoc.CaretColumn, newName);
+
+            if (lspEdit != null)
+            {
+                await ApplyWorkspaceEditAsync(lspEdit);
+                StatusText = $"Renamed '{word}' to '{newName}' via LSP";
+                return;
+            }
+        }
+
+        // Fall back to refactoring service rename
         var viewModel = new RenameDialogViewModel(_refactoringService, _fileService);
         await viewModel.InitializeAsync(activeDoc.FilePath, activeDoc.CaretLine, activeDoc.CaretColumn, word);
 
@@ -2871,6 +3068,118 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    [RelayCommand]
+    private async Task ShowCallHierarchyAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
+
+        var word = GetWordAtCaret(activeDoc);
+        await CallHierarchy.ShowHierarchyAsync(new CallHierarchyRequest
+        {
+            FilePath = activeDoc.FilePath,
+            Line = activeDoc.CaretLine,
+            Column = activeDoc.CaretColumn,
+            MethodName = word
+        });
+
+        // Wire navigation
+        CallHierarchy.NavigationRequested -= OnCallHierarchyNavigation;
+        CallHierarchy.NavigationRequested += OnCallHierarchyNavigation;
+    }
+
+    private async void OnCallHierarchyNavigation(object? sender, CallHierarchyNavigationEventArgs e)
+    {
+        await OpenFileAsync(e.FilePath);
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        activeDoc?.NavigateTo(e.Line, 1);
+    }
+
+    [RelayCommand]
+    private async Task ShowTypeHierarchyAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
+
+        var word = GetWordAtCaret(activeDoc);
+        await TypeHierarchy.ShowHierarchyAsync(new TypeHierarchyRequest
+        {
+            FilePath = activeDoc.FilePath,
+            Line = activeDoc.CaretLine,
+            Column = activeDoc.CaretColumn,
+            TypeName = word
+        });
+
+        // Wire navigation
+        TypeHierarchy.NavigationRequested -= OnTypeHierarchyNavigation;
+        TypeHierarchy.NavigationRequested += OnTypeHierarchyNavigation;
+    }
+
+    private async void OnTypeHierarchyNavigation(object? sender, TypeHierarchyNavigationEventArgs e)
+    {
+        await OpenFileAsync(e.FilePath);
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        activeDoc?.NavigateTo(e.Line, 1);
+    }
+
+    private SelectionRangeInfo? _currentSelectionRange;
+
+    [RelayCommand]
+    private async Task ExpandSelectionAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
+
+        if (_currentSelectionRange == null)
+        {
+            // Get fresh selection ranges from LSP
+            var positions = new List<(int line, int column)> { (activeDoc.CaretLine, activeDoc.CaretColumn) };
+            var ranges = await _languageService.GetSelectionRangesAsync(activeDoc.FilePath, positions);
+            if (ranges.Count > 0)
+            {
+                _currentSelectionRange = ranges[0];
+            }
+        }
+        else if (_currentSelectionRange.Parent != null)
+        {
+            _currentSelectionRange = _currentSelectionRange.Parent;
+        }
+
+        if (_currentSelectionRange != null)
+        {
+            activeDoc.ProvideSelectionRange(_currentSelectionRange);
+        }
+    }
+
+    [RelayCommand]
+    private void ShrinkSelection()
+    {
+        // To shrink, we'd need to track the history. Reset for now.
+        _currentSelectionRange = null;
+    }
+
+    private async Task UpdateDocumentOutlineAsync(string filePath, string content)
+    {
+        try
+        {
+            if (_languageService.IsConnected &&
+                (filePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
+                 filePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+            {
+                await DocumentOutline.UpdateOutlineFromLspAsync(filePath, _languageService);
+            }
+            else
+            {
+                DocumentOutline.UpdateOutline(filePath, content);
+            }
+        }
+        catch
+        {
+            // Fallback to text-based parsing
+            DocumentOutline.UpdateOutline(filePath, content);
+        }
+    }
+
     private async Task FormatDocumentAsync()
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
@@ -2909,7 +3218,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
             }
 
-            activeDoc.SetContent(string.Join("\n", lines));
+            activeDoc.ReplaceContent(string.Join("\n", lines));
             StatusText = $"Applied {edits.Count} formatting changes";
         }
         else

@@ -91,7 +91,76 @@ public partial class CodeEditorDocumentView : UserControl
 
             // Wire up hover result display
             vm.HoverResultReceived += OnHoverResultReceived;
+
+            // Wire up signature help
+            if (MainEditor != null)
+            {
+                MainEditor.SignatureHelpRequested += (s, e) => vm.RequestSignatureHelp(e.Line, e.Column);
+                MainEditor.DocumentHighlightRequested += (s, e) => vm.RequestDocumentHighlight(e.Line, e.Column);
+            }
+            vm.SignatureHelpResultReceived += OnSignatureHelpResultReceived;
+            vm.DocumentHighlightResultReceived += OnDocumentHighlightResultReceived;
+            vm.RenameResultReceived += OnRenameResultReceived;
+            vm.SelectionRangeReceived += OnSelectionRangeReceived;
         }
+    }
+
+    private void OnSignatureHelpResultReceived(object? sender, SignatureHelpResultEventArgs e)
+    {
+        if (e.Help == null || e.Help.Signatures.Count == 0)
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => MainEditor?.DismissSignatureHelp());
+            return;
+        }
+
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var sig = e.Help.Signatures[Math.Min(e.Help.ActiveSignature, e.Help.Signatures.Count - 1)];
+            var activeParam = e.Help.ActiveParameter;
+            var paramName = activeParam >= 0 && activeParam < sig.Parameters.Count
+                ? sig.Parameters[activeParam].Label
+                : null;
+            var paramDoc = activeParam >= 0 && activeParam < sig.Parameters.Count
+                ? sig.Parameters[activeParam].Documentation
+                : null;
+
+            MainEditor?.ShowSignatureHelp(
+                sig.Label,
+                paramName,
+                paramDoc ?? sig.Documentation,
+                activeParam,
+                e.Help.Signatures.Count);
+        });
+    }
+
+    private void OnDocumentHighlightResultReceived(object? sender, DocumentHighlightResultEventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (e.Highlights.Count == 0)
+            {
+                MainEditor?.ClearDocumentHighlights();
+                return;
+            }
+
+            MainEditor?.ShowDocumentHighlights(
+                e.Highlights.Select(h => (h.StartLine, h.StartColumn, h.EndLine, h.EndColumn, h.IsWrite)));
+        });
+    }
+
+    private void OnRenameResultReceived(object? sender, RenameResultEventArgs e)
+    {
+        // Rename results are handled by MainWindowViewModel which applies workspace edits
+    }
+
+    private void OnSelectionRangeReceived(object? sender, SelectionRangeResultEventArgs e)
+    {
+        if (e.Range == null) return;
+
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            MainEditor?.SetSelection(e.Range.StartLine, e.Range.StartColumn, e.Range.EndLine, e.Range.EndColumn);
+        });
     }
 
     private void OnDiagnosticsUpdated(object? sender, IEnumerable<DiagnosticItem> diagnostics)
@@ -287,12 +356,28 @@ public partial class CodeEditorDocumentView : UserControl
         }
     }
 
+    private System.Timers.Timer? _highlightDebounceTimer;
+
     private void OnCaretPositionChanged(object? sender, EventArgs e)
     {
         if (sender is CodeEditorControl editor && DataContext is CodeEditorDocumentViewModel vm)
         {
             vm.UpdateCaretPosition(editor.CaretLine, editor.CaretColumn);
             UpdateBreadcrumb(editor.CaretLine);
+
+            // Debounce document highlight requests (250ms delay like VS Code)
+            _highlightDebounceTimer?.Stop();
+            _highlightDebounceTimer?.Dispose();
+            _highlightDebounceTimer = new System.Timers.Timer(250);
+            _highlightDebounceTimer.AutoReset = false;
+            _highlightDebounceTimer.Elapsed += (_, _) =>
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    vm.RequestDocumentHighlight(editor.CaretLine, editor.CaretColumn);
+                });
+            };
+            _highlightDebounceTimer.Start();
         }
     }
 

@@ -499,7 +499,26 @@ public class LspClientService : ILspClientService
                         codeAction = new { dynamicRegistration = false },
                         formatting = new { dynamicRegistration = false },
                         rangeFormatting = new { dynamicRegistration = false },
-                        rename = new { dynamicRegistration = false }
+                        rename = new { dynamicRegistration = false },
+                        documentHighlight = new { dynamicRegistration = false },
+                        typeDefinition = new { dynamicRegistration = false },
+                        implementation = new { dynamicRegistration = false },
+                        selectionRange = new { dynamicRegistration = false },
+                        foldingRange = new { dynamicRegistration = false },
+                        callHierarchy = new { dynamicRegistration = false },
+                        typeHierarchy = new { dynamicRegistration = false },
+                        inlayHint = new { dynamicRegistration = false },
+                        semanticTokens = new
+                        {
+                            dynamicRegistration = false,
+                            requests = new { full = true },
+                            tokenTypes = new[] { "namespace", "type", "class", "enum", "interface", "struct",
+                                "typeParameter", "parameter", "variable", "property", "enumMember", "event",
+                                "function", "method", "macro", "keyword", "modifier", "comment", "string" },
+                            tokenModifiers = new[] { "declaration", "definition", "readonly", "static", "deprecated",
+                                "abstract", "async", "modification", "documentation", "defaultLibrary" },
+                            formats = new[] { "relative" }
+                        }
                     },
                     workspace = new
                     {

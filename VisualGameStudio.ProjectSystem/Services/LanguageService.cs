@@ -1329,6 +1329,235 @@ public class LanguageService : ILanguageService
         return lenses;
     }
 
+    public async Task<LocationInfo?> GetTypeDefinitionAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return null;
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/typeDefinition", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 }
+            }, cancellationToken);
+
+            if (result.ValueKind == JsonValueKind.Null || result.ValueKind == JsonValueKind.Undefined)
+                return null;
+
+            // Can return Location, Location[], or null
+            JsonElement locationElement;
+            if (result.ValueKind == JsonValueKind.Array)
+            {
+                var arr = result.EnumerateArray().ToList();
+                if (arr.Count == 0) return null;
+                locationElement = arr[0];
+            }
+            else
+            {
+                locationElement = result;
+            }
+
+            if (locationElement.TryGetProperty("uri", out var uriProp) &&
+                locationElement.TryGetProperty("range", out var range) &&
+                range.TryGetProperty("start", out var start))
+            {
+                return new LocationInfo
+                {
+                    Uri = UriToPath(uriProp.GetString() ?? ""),
+                    Line = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0,
+                    Column = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0
+                };
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<SemanticTokensResult?> GetSemanticTokensAsync(string uri, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return null;
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/semanticTokens/full", new
+            {
+                textDocument = new { uri = PathToUri(uri) }
+            }, cancellationToken);
+
+            if (result.ValueKind == JsonValueKind.Null || result.ValueKind == JsonValueKind.Undefined)
+                return null;
+
+            var tokens = new SemanticTokensResult();
+            if (result.TryGetProperty("resultId", out var rid))
+                tokens.ResultId = rid.GetString();
+            if (result.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+                tokens.Data = data.EnumerateArray().Select(e => e.GetInt32()).ToArray();
+
+            return tokens;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<InlayHintInfo>> GetInlayHintsAsync(string uri, int startLine, int startColumn, int endLine, int endColumn, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<InlayHintInfo>();
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/inlayHint", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                range = new
+                {
+                    start = new { line = startLine - 1, character = startColumn - 1 },
+                    end = new { line = endLine - 1, character = endColumn - 1 }
+                }
+            }, cancellationToken);
+
+            if (result.ValueKind != JsonValueKind.Array) return Array.Empty<InlayHintInfo>();
+
+            var hints = new List<InlayHintInfo>();
+            foreach (var item in result.EnumerateArray())
+            {
+                var hint = new InlayHintInfo();
+
+                if (item.TryGetProperty("position", out var pos))
+                {
+                    hint.Line = pos.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                    hint.Column = pos.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+                }
+
+                if (item.TryGetProperty("label", out var label))
+                {
+                    hint.Label = label.ValueKind == JsonValueKind.String
+                        ? label.GetString() ?? ""
+                        : label.ValueKind == JsonValueKind.Array
+                            ? string.Join("", label.EnumerateArray().Select(l =>
+                                l.TryGetProperty("value", out var v) ? v.GetString() ?? "" : ""))
+                            : "";
+                }
+
+                if (item.TryGetProperty("kind", out var kind))
+                    hint.Kind = (InlayHintKind)kind.GetInt32();
+                if (item.TryGetProperty("paddingLeft", out var pl))
+                    hint.PaddingLeft = pl.GetBoolean();
+                if (item.TryGetProperty("paddingRight", out var pr))
+                    hint.PaddingRight = pr.GetBoolean();
+
+                hints.Add(hint);
+            }
+
+            return hints;
+        }
+        catch
+        {
+            return Array.Empty<InlayHintInfo>();
+        }
+    }
+
+    public async Task<IReadOnlyList<SelectionRangeInfo>> GetSelectionRangesAsync(string uri, IReadOnlyList<(int line, int column)> positions, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<SelectionRangeInfo>();
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/selectionRange", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                positions = positions.Select(p => new { line = p.line - 1, character = p.column - 1 })
+            }, cancellationToken);
+
+            if (result.ValueKind != JsonValueKind.Array) return Array.Empty<SelectionRangeInfo>();
+
+            var ranges = new List<SelectionRangeInfo>();
+            foreach (var item in result.EnumerateArray())
+            {
+                ranges.Add(ParseSelectionRange(item));
+            }
+            return ranges;
+        }
+        catch
+        {
+            return Array.Empty<SelectionRangeInfo>();
+        }
+    }
+
+    private static SelectionRangeInfo ParseSelectionRange(JsonElement element)
+    {
+        var info = new SelectionRangeInfo();
+        if (element.TryGetProperty("range", out var range))
+        {
+            if (range.TryGetProperty("start", out var start))
+            {
+                info.StartLine = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                info.StartColumn = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+            }
+            if (range.TryGetProperty("end", out var end))
+            {
+                info.EndLine = end.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                info.EndColumn = end.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+            }
+        }
+        if (element.TryGetProperty("parent", out var parent) && parent.ValueKind == JsonValueKind.Object)
+        {
+            info.Parent = ParseSelectionRange(parent);
+        }
+        return info;
+    }
+
+    public async Task<IReadOnlyList<DocumentHighlightResult>> GetDocumentHighlightsAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<DocumentHighlightResult>();
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/documentHighlight", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 }
+            }, cancellationToken);
+
+            if (result.ValueKind != JsonValueKind.Array) return Array.Empty<DocumentHighlightResult>();
+
+            var highlights = new List<DocumentHighlightResult>();
+            foreach (var item in result.EnumerateArray())
+            {
+                var hl = new DocumentHighlightResult();
+                if (item.TryGetProperty("range", out var range))
+                {
+                    if (range.TryGetProperty("start", out var start))
+                    {
+                        hl.StartLine = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                        hl.StartColumn = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+                    }
+                    if (range.TryGetProperty("end", out var end))
+                    {
+                        hl.EndLine = end.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                        hl.EndColumn = end.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+                    }
+                }
+                if (item.TryGetProperty("kind", out var kind))
+                    hl.Kind = (DocumentHighlightKind)kind.GetInt32();
+                else
+                    hl.Kind = DocumentHighlightKind.Text;
+
+                highlights.Add(hl);
+            }
+            return highlights;
+        }
+        catch
+        {
+            return Array.Empty<DocumentHighlightResult>();
+        }
+    }
+
     public void Dispose()
     {
         StopAsync().Wait(TimeSpan.FromSeconds(2));

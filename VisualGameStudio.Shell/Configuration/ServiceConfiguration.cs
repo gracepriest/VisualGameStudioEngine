@@ -57,6 +57,8 @@ public static class ServiceConfiguration
         services.AddSingleton<ImmediateWindowViewModel>();
         services.AddSingleton<DocumentOutlineViewModel>();
         services.AddSingleton<BookmarksViewModel>();
+        services.AddSingleton<CallHierarchyViewModel>();
+        services.AddSingleton<TypeHierarchyViewModel>();
 
         // ViewModels (Transient for documents and dialogs)
         services.AddTransient<CodeEditorDocumentViewModel>();

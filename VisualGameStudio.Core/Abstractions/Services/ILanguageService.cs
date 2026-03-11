@@ -121,6 +121,31 @@ public interface ILanguageService : IDisposable
     /// Get code lenses for the document
     /// </summary>
     Task<IReadOnlyList<CodeLensInfo>> GetCodeLensAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get type definition location (go to the type of a variable/parameter)
+    /// </summary>
+    Task<LocationInfo?> GetTypeDefinitionAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get semantic tokens for the full document
+    /// </summary>
+    Task<SemanticTokensResult?> GetSemanticTokensAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get inlay hints for a range
+    /// </summary>
+    Task<IReadOnlyList<InlayHintInfo>> GetInlayHintsAsync(string uri, int startLine, int startColumn, int endLine, int endColumn, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get selection ranges at positions (smart expand/shrink selection)
+    /// </summary>
+    Task<IReadOnlyList<SelectionRangeInfo>> GetSelectionRangesAsync(string uri, IReadOnlyList<(int line, int column)> positions, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get document highlights (occurrences of symbol under cursor)
+    /// </summary>
+    Task<IReadOnlyList<DocumentHighlightResult>> GetDocumentHighlightsAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
 }
 
 public class DiagnosticsEventArgs : EventArgs
@@ -361,4 +386,66 @@ public class CodeLensInfo
     public string Title { get; set; } = "";
     public string CommandName { get; set; } = "";
     public List<object>? CommandArguments { get; set; }
+}
+
+/// <summary>
+/// Semantic tokens result from LSP
+/// </summary>
+public class SemanticTokensResult
+{
+    /// <summary>
+    /// Encoded token data: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers] * N
+    /// </summary>
+    public int[] Data { get; set; } = Array.Empty<int>();
+    public string? ResultId { get; set; }
+}
+
+/// <summary>
+/// Inlay hint information
+/// </summary>
+public class InlayHintInfo
+{
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public string Label { get; set; } = "";
+    public InlayHintKind Kind { get; set; }
+    public bool PaddingLeft { get; set; }
+    public bool PaddingRight { get; set; }
+}
+
+public enum InlayHintKind
+{
+    Type = 1,
+    Parameter = 2
+}
+
+/// <summary>
+/// Selection range info (nested ranges for smart expand/shrink)
+/// </summary>
+public class SelectionRangeInfo
+{
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public int EndLine { get; set; }
+    public int EndColumn { get; set; }
+    public SelectionRangeInfo? Parent { get; set; }
+}
+
+/// <summary>
+/// Document highlight result (symbol occurrences)
+/// </summary>
+public class DocumentHighlightResult
+{
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public int EndLine { get; set; }
+    public int EndColumn { get; set; }
+    public DocumentHighlightKind Kind { get; set; }
+}
+
+public enum DocumentHighlightKind
+{
+    Text = 1,
+    Read = 2,
+    Write = 3
 }

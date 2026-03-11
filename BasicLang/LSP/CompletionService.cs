@@ -1649,7 +1649,8 @@ namespace BasicLang.Compiler.LSP
                     Kind = CompletionItemKind.Keyword,
                     Detail = detail,
                     InsertTextFormat = InsertTextFormat.Snippet,
-                    InsertText = snippet
+                    InsertText = snippet,
+                    SortText = $"3_{label}"
                 };
             }
 
@@ -1674,7 +1675,8 @@ namespace BasicLang.Compiler.LSP
                 {
                     Label = keyword,
                     Kind = CompletionItemKind.Keyword,
-                    InsertText = keyword
+                    InsertText = keyword,
+                    SortText = $"3_{keyword}"
                 };
             }
         }
@@ -2051,7 +2053,8 @@ namespace BasicLang.Compiler.LSP
                     Kind = CompletionItemKind.Function,
                     Detail = $"{detail} -> {returnType}",
                     InsertTextFormat = InsertTextFormat.Snippet,
-                    InsertText = snippet
+                    InsertText = snippet,
+                    SortText = $"1_{name}"
                 };
             }
         }
@@ -2079,7 +2082,8 @@ namespace BasicLang.Compiler.LSP
                     Label = name,
                     Kind = CompletionItemKind.Class,
                     Detail = detail,
-                    InsertText = name
+                    InsertText = name,
+                    SortText = $"2_{name}"
                 };
             }
         }
@@ -2131,7 +2135,8 @@ namespace BasicLang.Compiler.LSP
                                 Label = func.Name,
                                 Kind = CompletionItemKind.Function,
                                 Detail = $"Function {func.Name}() As {func.ReturnType?.Name ?? "Void"}",
-                                InsertText = func.Name
+                                InsertText = func.Name,
+                                SortText = $"1_{func.Name}"
                             };
                         }
 
@@ -2151,7 +2156,9 @@ namespace BasicLang.Compiler.LSP
                                             Label = param.Name,
                                             Kind = CompletionItemKind.Variable,
                                             Detail = $"Parameter {param.Name} As {param.Type?.Name ?? "Variant"}",
-                                            InsertText = param.Name
+                                            InsertText = param.Name,
+                                            SortText = $"0_{param.Name}",
+                                            Preselect = true
                                         };
                                     }
                                 }
@@ -2174,7 +2181,8 @@ namespace BasicLang.Compiler.LSP
                                 Label = sub.Name,
                                 Kind = CompletionItemKind.Function,
                                 Detail = $"Sub {sub.Name}()",
-                                InsertText = sub.Name
+                                InsertText = sub.Name,
+                                SortText = $"1_{sub.Name}"
                             };
                         }
 
@@ -2194,7 +2202,9 @@ namespace BasicLang.Compiler.LSP
                                             Label = param.Name,
                                             Kind = CompletionItemKind.Variable,
                                             Detail = $"Parameter {param.Name} As {param.Type?.Name ?? "Variant"}",
-                                            InsertText = param.Name
+                                            InsertText = param.Name,
+                                            SortText = $"0_{param.Name}",
+                                            Preselect = true
                                         };
                                     }
                                 }
@@ -2371,12 +2381,34 @@ namespace BasicLang.Compiler.LSP
                 _ => symbol.Name
             };
 
+            // Sort order: variables/params (0) > functions/subs (1) > types (2)
+            var sortPrefix = symbol.Kind switch
+            {
+                SemanticAnalysis.SymbolKind.Variable => "0",
+                SemanticAnalysis.SymbolKind.Parameter => "0",
+                SemanticAnalysis.SymbolKind.Constant => "0",
+                SemanticAnalysis.SymbolKind.Property => "0",
+                SemanticAnalysis.SymbolKind.Function => "1",
+                SemanticAnalysis.SymbolKind.Subroutine => "1",
+                SemanticAnalysis.SymbolKind.Event => "1",
+                SemanticAnalysis.SymbolKind.Class => "2",
+                SemanticAnalysis.SymbolKind.Interface => "2",
+                SemanticAnalysis.SymbolKind.Structure => "2",
+                _ => "2"
+            };
+
+            // Preselect variables and parameters as they are most commonly needed
+            var preselect = symbol.Kind == SemanticAnalysis.SymbolKind.Variable
+                         || symbol.Kind == SemanticAnalysis.SymbolKind.Parameter;
+
             return new CompletionItem
             {
                 Label = symbol.Name,
                 Kind = kind,
                 Detail = detail,
-                InsertText = symbol.Name
+                InsertText = symbol.Name,
+                SortText = $"{sortPrefix}_{symbol.Name}",
+                Preselect = preselect
             };
         }
     }

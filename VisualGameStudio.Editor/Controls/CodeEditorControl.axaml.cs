@@ -171,6 +171,8 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler? RenameSymbolRequested;
     public event EventHandler? CodeActionsRequested;
     public event EventHandler? FormatDocumentRequested;
+    public event EventHandler<SignatureHelpRequestEventArgs>? SignatureHelpRequested;
+    public event EventHandler<DocumentHighlightRequestEventArgs>? DocumentHighlightRequested;
 
     /// <summary>
     /// Returns true if the editor is fully initialized and ready for use
@@ -739,6 +741,19 @@ public partial class CodeEditorControl : UserControl
                 TriggerCompletion();
             }, Avalonia.Threading.DispatcherPriority.Background);
         }
+        // Auto-trigger signature help when typing ( or ,
+        else if (e.Text == "(" || e.Text == ",")
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                TriggerSignatureHelp();
+            }, Avalonia.Threading.DispatcherPriority.Background);
+        }
+        // Dismiss signature help when typing )
+        else if (e.Text == ")")
+        {
+            DismissSignatureHelp();
+        }
         // Auto-trigger completion after typing 2+ identifier characters
         else if (!string.IsNullOrEmpty(e.Text) && e.Text.Length == 1 && char.IsLetterOrDigit(e.Text[0]))
         {
@@ -1115,6 +1130,24 @@ public partial class CodeEditorControl : UserControl
     public void SelectAll()
     {
         _textEditor?.SelectAll();
+    }
+
+    /// <summary>
+    /// Sets the selection to a specific range (1-based line/column)
+    /// </summary>
+    public void SetSelection(int startLine, int startColumn, int endLine, int endColumn)
+    {
+        if (_textEditor?.Document == null) return;
+
+        var doc = _textEditor.Document;
+        var start = doc.GetLineByNumber(Math.Clamp(startLine, 1, doc.LineCount));
+        var end = doc.GetLineByNumber(Math.Clamp(endLine, 1, doc.LineCount));
+
+        var startOffset = start.Offset + Math.Min(startColumn - 1, start.Length);
+        var endOffset = end.Offset + Math.Min(endColumn - 1, end.Length);
+
+        _textEditor.Select(startOffset, endOffset - startOffset);
+        _textEditor.ScrollToLine(startLine);
     }
 
     public void Copy()
@@ -2142,6 +2175,225 @@ public partial class CodeEditorControl : UserControl
 
     #endregion
 
+    #region Signature Help
+
+    private Avalonia.Controls.Primitives.Popup? _signatureHelpPopup;
+    private StackPanel? _signatureHelpPanel;
+    private TextBlock? _signatureLabel;
+    private TextBlock? _parameterLabel;
+    private TextBlock? _signatureDocLabel;
+    private int _signatureHelpActiveParam;
+
+    /// <summary>
+    /// Triggers signature help request at the current caret position
+    /// </summary>
+    public void TriggerSignatureHelp()
+    {
+        if (_textEditor == null) return;
+
+        SignatureHelpRequested?.Invoke(this, new SignatureHelpRequestEventArgs(CaretLine, CaretColumn));
+    }
+
+    /// <summary>
+    /// Shows signature help popup near the cursor
+    /// </summary>
+    public void ShowSignatureHelp(string signature, string? activeParameterName, string? documentation, int activeParameter, int signatureCount)
+    {
+        if (_textEditor == null) return;
+
+        EnsureSignatureHelpPopup();
+
+        if (_signatureLabel != null)
+            _signatureLabel.Text = signature;
+        if (_parameterLabel != null)
+            _parameterLabel.Text = !string.IsNullOrEmpty(activeParameterName)
+                ? $"Parameter: {activeParameterName}"
+                : "";
+        if (_signatureDocLabel != null)
+        {
+            _signatureDocLabel.Text = documentation ?? "";
+            _signatureDocLabel.IsVisible = !string.IsNullOrEmpty(documentation);
+        }
+
+        _signatureHelpActiveParam = activeParameter;
+
+        if (_signatureHelpPopup != null)
+        {
+            // Position above the caret using the caret rectangle
+            var caretRect = _textEditor.TextArea.Caret.CalculateCaretRectangle();
+            var screenPos = _textEditor.TextArea.TranslatePoint(
+                new Point(caretRect.X, caretRect.Y), this);
+
+            if (screenPos.HasValue)
+            {
+                _signatureHelpPopup.HorizontalOffset = screenPos.Value.X;
+                _signatureHelpPopup.VerticalOffset = screenPos.Value.Y - 60;
+            }
+
+            _signatureHelpPopup.IsOpen = true;
+        }
+    }
+
+    /// <summary>
+    /// Dismisses the signature help popup
+    /// </summary>
+    public void DismissSignatureHelp()
+    {
+        if (_signatureHelpPopup != null)
+            _signatureHelpPopup.IsOpen = false;
+    }
+
+    private void EnsureSignatureHelpPopup()
+    {
+        if (_signatureHelpPopup != null) return;
+
+        _signatureLabel = new TextBlock
+        {
+            FontFamily = new FontFamily("Cascadia Code, Consolas, monospace"),
+            FontSize = 12,
+            Foreground = Brushes.White,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            MaxWidth = 500
+        };
+
+        _parameterLabel = new TextBlock
+        {
+            FontFamily = new FontFamily("Cascadia Code, Consolas, monospace"),
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(86, 156, 214)),
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+
+        _signatureDocLabel = new TextBlock
+        {
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(180, 180, 180)),
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            MaxWidth = 500,
+            Margin = new Thickness(0, 4, 0, 0),
+            IsVisible = false
+        };
+
+        _signatureHelpPanel = new StackPanel
+        {
+            Background = new SolidColorBrush(Color.FromRgb(37, 37, 38)),
+            Children = { _signatureLabel, _parameterLabel, _signatureDocLabel },
+            Margin = new Thickness(8, 4, 8, 4)
+        };
+
+        var border = new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromRgb(69, 69, 69)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(3),
+            Child = _signatureHelpPanel
+        };
+
+        _signatureHelpPopup = new Avalonia.Controls.Primitives.Popup
+        {
+            PlacementTarget = _textEditor.TextArea,
+            Child = border,
+            IsLightDismissEnabled = true
+        };
+
+        // Add to visual tree
+        if (this.Parent is Panel panel)
+        {
+            // Popup must be in the visual tree
+        }
+    }
+
+    #endregion
+
+    #region Document Highlight
+
+    private List<TextMarkers.TextMarker>? _highlightMarkers;
+
+    /// <summary>
+    /// Shows document highlights (matching symbol occurrences)
+    /// </summary>
+    public void ShowDocumentHighlights(IEnumerable<(int startLine, int startCol, int endLine, int endCol, bool isWrite)> highlights)
+    {
+        ClearDocumentHighlights();
+        if (_textMarkerService == null || _textEditor == null) return;
+
+        _highlightMarkers = new List<TextMarkers.TextMarker>();
+
+        foreach (var (startLine, startCol, endLine, endCol, isWrite) in highlights)
+        {
+            try
+            {
+                var line = _textEditor.Document.GetLineByNumber(
+                    Math.Clamp(startLine, 1, _textEditor.Document.LineCount));
+                var startOffset = line.Offset + Math.Min(startCol - 1, line.Length);
+
+                var eLine = _textEditor.Document.GetLineByNumber(
+                    Math.Clamp(endLine, 1, _textEditor.Document.LineCount));
+                var endOffset = eLine.Offset + Math.Min(endCol - 1, eLine.Length);
+
+                var length = Math.Max(1, endOffset - startOffset);
+
+                var color = isWrite
+                    ? Color.FromArgb(60, 255, 200, 100)  // Write: yellowish
+                    : Color.FromArgb(40, 87, 166, 230);   // Read: bluish
+
+                var marker = _textMarkerService.Create(startOffset, length, TextMarkers.TextMarkerType.Highlight);
+                marker.BackgroundColor = color;
+                _highlightMarkers.Add(marker);
+            }
+            catch { }
+        }
+
+        _textEditor.TextArea.TextView.InvalidateLayer(AvaloniaEdit.Rendering.KnownLayer.Selection);
+    }
+
+    /// <summary>
+    /// Clears document highlight markers
+    /// </summary>
+    public void ClearDocumentHighlights()
+    {
+        if (_highlightMarkers != null && _textMarkerService != null)
+        {
+            foreach (var marker in _highlightMarkers)
+            {
+                _textMarkerService.Remove(marker);
+            }
+            _highlightMarkers.Clear();
+        }
+    }
+
+    #endregion
+
+    #region Inlay Hints
+
+    private TextMarkers.InlayHintRenderer? _inlayHintRenderer;
+
+    /// <summary>
+    /// Shows inlay hints in the editor
+    /// </summary>
+    public void ShowInlayHints(IEnumerable<TextMarkers.InlayHintItem> hints)
+    {
+        if (_textEditor == null) return;
+
+        if (_inlayHintRenderer == null)
+        {
+            _inlayHintRenderer = new TextMarkers.InlayHintRenderer(_textEditor);
+            _textEditor.TextArea.TextView.BackgroundRenderers.Add(_inlayHintRenderer);
+        }
+
+        _inlayHintRenderer.SetHints(hints);
+    }
+
+    /// <summary>
+    /// Clears all inlay hints
+    /// </summary>
+    public void ClearInlayHints()
+    {
+        _inlayHintRenderer?.Clear();
+    }
+
+    #endregion
+
     #region Diagnostics / Error Markers
 
     /// <summary>
@@ -2327,4 +2579,34 @@ public class SelectionInfo
     /// Gets whether the selection spans multiple lines
     /// </summary>
     public bool IsMultiLine => StartLine != EndLine;
+}
+
+/// <summary>
+/// Event args for signature help requests
+/// </summary>
+public class SignatureHelpRequestEventArgs : EventArgs
+{
+    public int Line { get; }
+    public int Column { get; }
+
+    public SignatureHelpRequestEventArgs(int line, int column)
+    {
+        Line = line;
+        Column = column;
+    }
+}
+
+/// <summary>
+/// Event args for document highlight requests
+/// </summary>
+public class DocumentHighlightRequestEventArgs : EventArgs
+{
+    public int Line { get; }
+    public int Column { get; }
+
+    public DocumentHighlightRequestEventArgs(int line, int column)
+    {
+        Line = line;
+        Column = column;
+    }
 }
