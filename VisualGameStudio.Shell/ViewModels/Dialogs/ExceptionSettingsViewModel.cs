@@ -16,6 +16,9 @@ public partial class ExceptionSettingsViewModel : ViewModelBase
     [ObservableProperty]
     private ExceptionCategoryViewModel? _selectedCategory;
 
+    [ObservableProperty]
+    private string _customExceptionName = "";
+
     public bool DialogResult { get; private set; }
     public List<ExceptionSetting> ResultSettings { get; private set; } = new();
 
@@ -178,6 +181,55 @@ public partial class ExceptionSettingsViewModel : ViewModelBase
         foreach (var category in ExceptionCategories)
         {
             ResetCategory(category);
+        }
+    }
+
+    [RelayCommand]
+    private void AddCustomException()
+    {
+        if (string.IsNullOrWhiteSpace(CustomExceptionName)) return;
+
+        var exceptionName = CustomExceptionName.Trim();
+
+        // Find the "User Exceptions" category
+        var userCategory = ExceptionCategories.FirstOrDefault(c => c.Name == "User Exceptions");
+        if (userCategory == null) return;
+
+        // Initialize children if null
+        userCategory.Children ??= new ObservableCollection<ExceptionCategoryViewModel>();
+
+        // Check if already exists
+        if (userCategory.Children.Any(c => c.Name.Equals(exceptionName, StringComparison.OrdinalIgnoreCase)))
+        {
+            CustomExceptionName = "";
+            return;
+        }
+
+        var newException = new ExceptionCategoryViewModel(exceptionName)
+        {
+            Description = $"User-defined: {exceptionName}",
+            BreakWhenThrown = true,
+            BreakWhenUserUnhandled = true
+        };
+
+        userCategory.Children.Add(newException);
+        userCategory.IsExpanded = true;
+        CustomExceptionName = "";
+    }
+
+    [RelayCommand]
+    private void RemoveCustomException()
+    {
+        if (SelectedCategory == null) return;
+
+        // Only allow removing from "User Exceptions" category
+        var userCategory = ExceptionCategories.FirstOrDefault(c => c.Name == "User Exceptions");
+        if (userCategory?.Children == null) return;
+
+        if (userCategory.Children.Contains(SelectedCategory))
+        {
+            userCategory.Children.Remove(SelectedCategory);
+            SelectedCategory = null;
         }
     }
 

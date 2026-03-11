@@ -137,6 +137,20 @@ public interface IDebugService : IDisposable
     /// Evaluate an expression in the current context
     /// </summary>
     Task<EvaluateResult> EvaluateAsync(string expression, int? frameId = null);
+
+    /// <summary>
+    /// Set data breakpoints (break on variable access)
+    /// </summary>
+    Task<IReadOnlyList<DataBreakpointInfo>> SetDataBreakpointsAsync(
+        IReadOnlyList<DataBreakpoint> breakpoints,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Check if a variable supports data breakpoints
+    /// </summary>
+    Task<DataBreakpointAccessInfo?> GetDataBreakpointInfoAsync(
+        int variablesReference, string name,
+        CancellationToken cancellationToken = default);
 }
 
 public enum DebugState
@@ -268,4 +282,27 @@ public class ExceptionFilterOption
 {
     public string FilterId { get; set; } = "";
     public string? Condition { get; set; }
+}
+
+public class DataBreakpoint
+{
+    public string DataId { get; set; } = "";
+    public string? AccessType { get; set; } // "write", "read", "readWrite"
+    public string? Condition { get; set; }
+    public string? HitCondition { get; set; }
+}
+
+public class DataBreakpointInfo
+{
+    public int Id { get; set; }
+    public bool Verified { get; set; }
+    public string? Message { get; set; }
+}
+
+public class DataBreakpointAccessInfo
+{
+    public string DataId { get; set; } = "";
+    public string Description { get; set; } = "";
+    public List<string> AccessTypes { get; set; } = new();
+    public bool CanPersist { get; set; }
 }

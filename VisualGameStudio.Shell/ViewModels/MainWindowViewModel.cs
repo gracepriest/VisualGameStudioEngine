@@ -239,10 +239,14 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private void OnProjectOpened(object? sender, ProjectEventArgs e)
+    private async void OnProjectOpened(object? sender, ProjectEventArgs e)
     {
         Title = $"{e.Project.Name} - Visual Game Studio";
         StatusText = $"Project loaded: {e.Project.Name}";
+
+        // Load persisted breakpoints
+        Breakpoints.SetProjectDirectory(e.Project.ProjectDirectory);
+        await Breakpoints.LoadBreakpointsAsync();
     }
 
     private void OnDocumentClosed(object? sender, string filePath)
@@ -1228,6 +1232,66 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private async Task AddDataBreakpointAsync()
+    {
+        // Get the selected variable from the Variables panel
+        var selectedVar = Variables.SelectedVariable;
+
+        if (selectedVar == null || selectedVar.IsScope)
+        {
+            await _dialogService.ShowMessageAsync("Data Breakpoint",
+                "Select a variable in the Variables panel first.",
+                DialogButtons.Ok, DialogIcon.Information);
+            return;
+        }
+
+        var variableName = selectedVar.Name;
+        var variablesReference = selectedVar.VariablesReference;
+
+        // Query the debug adapter for data breakpoint support
+        var accessInfo = await _debugService.GetDataBreakpointInfoAsync(variablesReference, variableName);
+        if (accessInfo == null || string.IsNullOrEmpty(accessInfo.DataId))
+        {
+            await _dialogService.ShowMessageAsync("Data Breakpoint",
+                $"The variable '{variableName}' does not support data breakpoints.",
+                DialogButtons.Ok, DialogIcon.Warning);
+            return;
+        }
+
+        // Determine access type: prefer "write" if available, otherwise use the first available
+        var accessType = accessInfo.AccessTypes.Contains("write") ? "write" :
+                         accessInfo.AccessTypes.FirstOrDefault() ?? "write";
+
+        // If multiple access types are supported, let the user choose
+        if (accessInfo.AccessTypes.Count > 1)
+        {
+            var choice = await _dialogService.ShowListSelectionAsync(
+                "Data Breakpoint Access Type",
+                $"Break when '{variableName}' is:",
+                accessInfo.AccessTypes.Select(at => at switch
+                {
+                    "write" => "Written to",
+                    "read" => "Read from",
+                    "readWrite" => "Read from or written to",
+                    _ => at
+                }));
+
+            if (choice >= 0 && choice < accessInfo.AccessTypes.Count)
+            {
+                accessType = accessInfo.AccessTypes[choice];
+            }
+            else
+            {
+                return; // User cancelled
+            }
+        }
+
+        await Breakpoints.AddDataBreakpointAsync(accessInfo.DataId, variableName, accessType);
+        _dockFactory.ActivateTool("Breakpoints");
+        StatusText = $"Data breakpoint set on '{variableName}' ({accessType})";
+    }
+
+    [RelayCommand]
     private async Task ShowExceptionSettingsAsync()
     {
         var result = await _dialogService.ShowExceptionSettingsDialogAsync(_currentExceptionSettings);
@@ -1237,21 +1301,60 @@ public partial class MainWindowViewModel : ViewModelBase
 
             // Apply exception breakpoints to debug service
             var filters = new List<string>();
+            var filterOptions = new List<ExceptionFilterOption>();
+
             foreach (var setting in result.Where(s => s.BreakWhenThrown))
             {
                 if (setting.ExceptionType == "All Exceptions")
                 {
                     filters.Add("all");
                 }
-                else if (setting.BreakWhenUserUnhandled)
+                else if (setting.ExceptionType == "Runtime Exceptions" ||
+                         setting.ExceptionType == "IO Exceptions" ||
+                         setting.ExceptionType == "User Exceptions")
                 {
-                    filters.Add("uncaught");
+                    // Category-level filter: add "uncaught" if user-unhandled is also set
+                    if (setting.BreakWhenUserUnhandled && !filters.Contains("uncaught"))
+                    {
+                        filters.Add("uncaught");
+                    }
+                }
+                else
+                {
+                    // Individual exception type: send as a filter option with condition
+                    if (!filters.Contains("thrown"))
+                    {
+                        filters.Add("thrown");
+                    }
+                    filterOptions.Add(new ExceptionFilterOption
+                    {
+                        FilterId = "thrown",
+                        Condition = setting.ExceptionType
+                    });
+                }
+            }
+
+            // Also add user-unhandled filter for settings that only have BreakWhenUserUnhandled
+            foreach (var setting in result.Where(s => !s.BreakWhenThrown && s.BreakWhenUserUnhandled))
+            {
+                if (setting.ExceptionType != "All Exceptions" &&
+                    setting.ExceptionType != "Runtime Exceptions" &&
+                    setting.ExceptionType != "IO Exceptions" &&
+                    setting.ExceptionType != "User Exceptions")
+                {
+                    filterOptions.Add(new ExceptionFilterOption
+                    {
+                        FilterId = "uncaught",
+                        Condition = setting.ExceptionType
+                    });
                 }
             }
 
             if (IsDebugging)
             {
-                await _debugService.SetExceptionBreakpointsAsync(filters);
+                await _debugService.SetExceptionBreakpointsAsync(
+                    filters,
+                    filterOptions.Count > 0 ? filterOptions : null);
             }
         }
     }

@@ -2598,6 +2598,15 @@ public partial class CodeEditorControl : UserControl
     }
 
     /// <summary>
+    /// Updates breakpoints with full visual info (kind, enabled state).
+    /// </summary>
+    public void UpdateBreakpoints(Dictionary<int, BreakpointVisualInfo> breakpoints)
+    {
+        _breakpointMargin?.UpdateBreakpoints(breakpoints);
+        _textEditor?.TextArea.TextView.Redraw();
+    }
+
+    /// <summary>
     /// Highlights the current execution line (during debugging)
     /// </summary>
     public void SetCurrentExecutionLine(int? line)

@@ -704,6 +704,88 @@ public class DebugService : IDebugService
         }
     }
 
+    public async Task<IReadOnlyList<DataBreakpointInfo>> SetDataBreakpointsAsync(
+        IReadOnlyList<DataBreakpoint> breakpoints,
+        CancellationToken cancellationToken = default)
+    {
+        if (_writer == null) return Array.Empty<DataBreakpointInfo>();
+
+        try
+        {
+            var result = await SendRequestAsync("setDataBreakpoints", new
+            {
+                breakpoints = breakpoints.Select(bp => new
+                {
+                    dataId = bp.DataId,
+                    accessType = bp.AccessType,
+                    condition = bp.Condition,
+                    hitCondition = bp.HitCondition
+                }).ToArray()
+            }, cancellationToken);
+
+            var verified = new List<DataBreakpointInfo>();
+            if (result.TryGetProperty("breakpoints", out var bps) && bps.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var bp in bps.EnumerateArray())
+                {
+                    verified.Add(new DataBreakpointInfo
+                    {
+                        Id = bp.TryGetProperty("id", out var id) ? id.GetInt32() : 0,
+                        Verified = bp.TryGetProperty("verified", out var v) && v.GetBoolean(),
+                        Message = bp.TryGetProperty("message", out var m) ? m.GetString() : null
+                    });
+                }
+            }
+
+            return verified;
+        }
+        catch
+        {
+            return Array.Empty<DataBreakpointInfo>();
+        }
+    }
+
+    public async Task<DataBreakpointAccessInfo?> GetDataBreakpointInfoAsync(
+        int variablesReference, string name,
+        CancellationToken cancellationToken = default)
+    {
+        if (_writer == null) return null;
+
+        try
+        {
+            var result = await SendRequestAsync("dataBreakpointInfo", new
+            {
+                variablesReference,
+                name
+            }, cancellationToken);
+
+            var dataId = result.TryGetProperty("dataId", out var did) ? did.GetString() : null;
+            if (dataId == null) return null;
+
+            var accessTypes = new List<string>();
+            if (result.TryGetProperty("accessTypes", out var at) && at.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in at.EnumerateArray())
+                {
+                    var val = item.GetString();
+                    if (val != null) accessTypes.Add(val);
+                }
+            }
+
+            return new DataBreakpointAccessInfo
+            {
+                DataId = dataId,
+                Description = result.TryGetProperty("description", out var desc) ? desc.GetString() ?? "" : "",
+                AccessTypes = accessTypes,
+                CanPersist = result.TryGetProperty("canPersist", out var cp) && cp.GetBoolean()
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private void SetState(DebugState newState)
     {
         var oldState = State;
