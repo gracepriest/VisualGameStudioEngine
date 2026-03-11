@@ -61,6 +61,9 @@ public partial class CodeEditorDocumentView : UserControl
             // Wire up diagnostics (error highlighting)
             vm.DiagnosticsUpdated += OnDiagnosticsUpdated;
 
+            // Wire up code lens
+            vm.CodeLensUpdated += OnCodeLensUpdated;
+
             // Wire up inline debug values
             vm.InlineDebugValuesUpdated += OnInlineDebugValuesUpdated;
 
@@ -76,6 +79,13 @@ public partial class CodeEditorDocumentView : UserControl
                 MainEditor.RenameSymbolRequested += (s, e) => vm.RequestRenameSymbol();
                 MainEditor.CodeActionsRequested += (s, e) => vm.RequestCodeActions();
                 MainEditor.FormatDocumentRequested += (s, e) => vm.RequestFormatDocument();
+                MainEditor.CodeLensClicked += (s, e) => vm.OnCodeLensClicked(new CodeLensClickedInfo
+                {
+                    Title = e.Title,
+                    CommandName = e.CommandName,
+                    CommandArguments = e.CommandArguments,
+                    Line = e.Line
+                });
 
                 // Wire up hover/data tip events
                 MainEditor.DataTipRequested += OnDataTipRequested;
@@ -169,6 +179,29 @@ public partial class CodeEditorDocumentView : UserControl
     private void OnDiagnosticsUpdated(object? sender, IEnumerable<DiagnosticItem> diagnostics)
     {
         MainEditor?.UpdateDiagnostics(diagnostics);
+    }
+
+    private void OnCodeLensUpdated(object? sender, IEnumerable<CodeLensItemInfo> lenses)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var lensList = lenses.ToList();
+            if (lensList.Count == 0)
+            {
+                MainEditor?.ClearCodeLenses();
+            }
+            else
+            {
+                MainEditor?.ShowCodeLenses(
+                    lensList.Select(l => new VisualGameStudio.Editor.TextMarkers.CodeLensItem
+                    {
+                        Line = l.Line,
+                        Title = l.Title,
+                        CommandName = l.CommandName,
+                        CommandArguments = l.CommandArguments
+                    }));
+            }
+        });
     }
 
     private void OnInlineDebugValuesUpdated(object? sender, IEnumerable<InlineDebugValueInfo> values)

@@ -2435,6 +2435,42 @@ public partial class CodeEditorControl : UserControl
 
     #endregion
 
+    #region Code Lens
+
+    private TextMarkers.CodeLensRenderer? _codeLensRenderer;
+
+    /// <summary>
+    /// Fired when a code lens item is clicked.
+    /// </summary>
+    public event EventHandler<TextMarkers.CodeLensClickedEventArgs>? CodeLensClicked;
+
+    /// <summary>
+    /// Shows code lens annotations above function/class lines.
+    /// </summary>
+    public void ShowCodeLenses(IEnumerable<TextMarkers.CodeLensItem> lenses)
+    {
+        if (_textEditor == null) return;
+
+        if (_codeLensRenderer == null)
+        {
+            _codeLensRenderer = new TextMarkers.CodeLensRenderer(_textEditor);
+            _textEditor.TextArea.TextView.BackgroundRenderers.Add(_codeLensRenderer);
+            _codeLensRenderer.CodeLensClicked += (s, e) => CodeLensClicked?.Invoke(this, e);
+        }
+
+        _codeLensRenderer.SetLenses(lenses);
+    }
+
+    /// <summary>
+    /// Clears all code lens annotations.
+    /// </summary>
+    public void ClearCodeLenses()
+    {
+        _codeLensRenderer?.Clear();
+    }
+
+    #endregion
+
     #region Document Links
 
     /// <summary>

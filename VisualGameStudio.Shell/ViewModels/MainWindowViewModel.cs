@@ -682,11 +682,26 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
             };
 
+            // Wire up code lens commands
+            document.CodeLensCommandRequested += async (s, e) =>
+            {
+                await HandleCodeLensCommandAsync(document, e);
+            };
+
+            // Fetch code lenses after text changes (debounced via existing LSP change notification)
+            document.TextChanged += async (s, newText) =>
+            {
+                await RefreshCodeLensesAsync(document);
+            };
+
             _openDocuments[filePath] = document;
             _dockFactory.AddDocument(document);
 
             // Update document outline
             await UpdateDocumentOutlineAsync(filePath, content);
+
+            // Fetch initial code lenses
+            await RefreshCodeLensesAsync(document);
         }
         catch (Exception ex)
         {
@@ -3303,6 +3318,106 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             // Fallback to text-based parsing
             DocumentOutline.UpdateOutline(filePath, content);
+        }
+    }
+
+    /// <summary>
+    /// Fetches code lenses from the LSP server and displays them in the editor.
+    /// </summary>
+    private async Task RefreshCodeLensesAsync(CodeEditorDocumentViewModel document)
+    {
+        try
+        {
+            if (!_languageService.IsConnected || document.FilePath == null) return;
+            if (!document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) &&
+                !document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)) return;
+
+            var lenses = await _languageService.GetCodeLensAsync(document.FilePath);
+            if (lenses.Count > 0)
+            {
+                document.ShowCodeLenses(lenses.Select(l => new CodeLensItemInfo
+                {
+                    Line = l.Line,
+                    Title = l.Title,
+                    CommandName = l.CommandName,
+                    CommandArguments = l.CommandArguments
+                }));
+            }
+            else
+            {
+                document.ClearCodeLenses();
+            }
+        }
+        catch
+        {
+            // Silently fail — code lenses are non-critical
+        }
+    }
+
+    /// <summary>
+    /// Handles code lens command execution (show references, run, debug).
+    /// </summary>
+    private async Task HandleCodeLensCommandAsync(CodeEditorDocumentViewModel document, CodeLensClickedInfo info)
+    {
+        try
+        {
+            switch (info.CommandName)
+            {
+                case "basiclang.showReferences":
+                    // Find references for the symbol on this line
+                    if (document.FilePath != null)
+                    {
+                        var refs = await _languageService.FindReferencesAsync(
+                            document.FilePath, info.Line, 1);
+                        if (refs.Count > 0)
+                        {
+                            // Navigate to find results or show in output
+                            StatusText = $"Found {refs.Count} reference(s)";
+                            // Navigate to first reference if it's in a different location
+                            var firstRef = refs.FirstOrDefault(r =>
+                                r.Line != info.Line || !string.Equals(r.Uri, document.FilePath, StringComparison.OrdinalIgnoreCase));
+                            if (firstRef != null)
+                            {
+                                var refPath = firstRef.Uri;
+                                if (refPath.StartsWith("file:///", StringComparison.OrdinalIgnoreCase))
+                                    refPath = Uri.UnescapeDataString(refPath.Substring(8));
+                                await OpenFileAsync(refPath);
+                                var refDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+                                refDoc?.NavigateTo(firstRef.Line);
+                            }
+                        }
+                    }
+                    break;
+
+                case "basiclang.run":
+                    await StartWithoutDebuggingAsync();
+                    break;
+
+                case "basiclang.debug":
+                    await StartDebuggingAsync();
+                    break;
+
+                case "basiclang.goToDefinition":
+                    if (document.FilePath != null)
+                    {
+                        var def = await _languageService.GetDefinitionAsync(
+                            document.FilePath, info.Line, 1);
+                        if (def != null)
+                        {
+                            var defPath = def.Uri;
+                            if (defPath.StartsWith("file:///", StringComparison.OrdinalIgnoreCase))
+                                defPath = Uri.UnescapeDataString(defPath.Substring(8));
+                            await OpenFileAsync(defPath);
+                            var defDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+                            defDoc?.NavigateTo(def.Line);
+                        }
+                    }
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Code lens command failed: {ex.Message}";
         }
     }
 

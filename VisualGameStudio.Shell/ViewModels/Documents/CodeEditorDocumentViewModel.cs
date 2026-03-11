@@ -680,6 +680,37 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
     #endregion
 
+    #region Code Lens
+
+    public event EventHandler<IEnumerable<CodeLensItemInfo>>? CodeLensUpdated;
+    public event EventHandler<CodeLensClickedInfo>? CodeLensCommandRequested;
+
+    /// <summary>
+    /// Shows code lens annotations above function/class lines.
+    /// </summary>
+    public void ShowCodeLenses(IEnumerable<CodeLensItemInfo> lenses)
+    {
+        CodeLensUpdated?.Invoke(this, lenses);
+    }
+
+    /// <summary>
+    /// Clears all code lens annotations.
+    /// </summary>
+    public void ClearCodeLenses()
+    {
+        CodeLensUpdated?.Invoke(this, Enumerable.Empty<CodeLensItemInfo>());
+    }
+
+    /// <summary>
+    /// Called when user clicks a code lens item.
+    /// </summary>
+    public void OnCodeLensClicked(CodeLensClickedInfo info)
+    {
+        CodeLensCommandRequested?.Invoke(this, info);
+    }
+
+    #endregion
+
     #region Inline Debug Values
 
     public event EventHandler<IEnumerable<InlineDebugValueInfo>>? InlineDebugValuesUpdated;
@@ -701,6 +732,28 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     }
 
     #endregion
+}
+
+/// <summary>
+/// Represents a code lens item to display above a line.
+/// </summary>
+public class CodeLensItemInfo
+{
+    public int Line { get; set; }
+    public string Title { get; set; } = "";
+    public string CommandName { get; set; } = "";
+    public List<object>? CommandArguments { get; set; }
+}
+
+/// <summary>
+/// Info about a clicked code lens command.
+/// </summary>
+public class CodeLensClickedInfo
+{
+    public string Title { get; set; } = "";
+    public string CommandName { get; set; } = "";
+    public List<object>? CommandArguments { get; set; }
+    public int Line { get; set; }
 }
 
 /// <summary>
