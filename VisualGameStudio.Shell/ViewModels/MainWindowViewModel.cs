@@ -1035,21 +1035,42 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Run the compiled executable with output capture
-        StatusText = "Starting program...";
-        OutputPanel.SelectedCategory = OutputCategory.General;  // Switch to General output to see program output
-        OutputPanel.AppendOutput($"\n========== Running: {Path.GetFileName(buildResult.ExecutablePath)} ==========\n");
+        // Start debugging with the DAP debug adapter
+        // The debug adapter interprets the source file directly (not the compiled exe)
+        var mainSourceFile = (_projectService.CurrentProject as BasicLangProject)?.GetMainFile();
+        if (string.IsNullOrEmpty(mainSourceFile) || !File.Exists(mainSourceFile))
+        {
+            // Fallback: find the first .bas file in the project directory
+            mainSourceFile = Directory.GetFiles(
+                _projectService.CurrentProject.ProjectDirectory, "*.bas", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault();
+        }
+
+        if (string.IsNullOrEmpty(mainSourceFile))
+        {
+            await _dialogService.ShowMessageAsync("Debug", "No source file found for debugging.",
+                DialogButtons.Ok, DialogIcon.Error);
+            return;
+        }
+
+        StatusText = "Starting debugger...";
+        OutputPanel.SelectedCategory = OutputCategory.Debug;
+        OutputPanel.AppendOutput($"\n========== Debugging: {Path.GetFileName(mainSourceFile)} ==========\n");
 
         var config = new DebugConfiguration
         {
-            Program = buildResult.ExecutablePath,  // Run the compiled executable
+            Program = mainSourceFile,
             WorkingDirectory = _projectService.CurrentProject.ProjectDirectory
         };
 
-        var success = await _debugService.StartWithoutDebuggingAsync(config);
+        // Collect all breakpoints to send to the debug adapter
+        var breakpoints = Breakpoints.GetAllBreakpoints();
+
+        var success = await _debugService.StartDebuggingAsync(config, breakpoints);
         if (!success)
         {
-            OutputPanel.AppendOutput("Failed to start program.\n");
+            OutputPanel.AppendOutput("Failed to start debugger.\n");
+            StatusText = "Debug failed";
         }
     }
 
