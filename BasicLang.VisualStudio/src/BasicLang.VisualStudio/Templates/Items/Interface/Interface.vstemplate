@@ -3,7 +3,7 @@
   <TemplateData>
     <Name>BasicLang Interface</Name>
     <Description>An interface for the BasicLang programming language.</Description>
-    <ProjectType>BasicLang</ProjectType>
+    <ProjectType>VisualBasic</ProjectType>
     <DefaultName>IInterface</DefaultName>
     <ProvideDefaultName>true</ProvideDefaultName>
     <TemplateID>BasicLang.Interface</TemplateID>

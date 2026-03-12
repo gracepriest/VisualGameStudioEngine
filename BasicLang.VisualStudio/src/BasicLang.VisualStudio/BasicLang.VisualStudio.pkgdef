@@ -27,7 +27,7 @@
 "PossibleProjectExtensions"="blproj"
 "ProjectTemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
 "ItemTemplatesDir"="$PackageFolder$\ItemTemplates\BasicLang"
-"Language(VsTemplate)"="BasicLang"
+"Language(VsTemplate)"="VisualBasic"
 "EditorFactoryNotify"=dword:00000000
 
 ; Project file extension registration

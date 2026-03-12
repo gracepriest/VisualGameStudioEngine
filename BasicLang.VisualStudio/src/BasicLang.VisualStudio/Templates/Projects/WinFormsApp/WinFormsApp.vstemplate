@@ -3,8 +3,8 @@
   <TemplateData>
     <Name>BasicLang Windows Forms App</Name>
     <Description>A Windows Forms desktop application for the BasicLang programming language.</Description>
-    <ProjectType>BasicLang</ProjectType>
-    <LanguageTag>BasicLang</LanguageTag>
+    <ProjectType>VisualBasic</ProjectType>
+    <LanguageTag>visualbasic</LanguageTag>
     <PlatformTag>Windows</PlatformTag>
     <ProjectTypeTag>Desktop</ProjectTypeTag>
     <ProjectTypeTag>WinForms</ProjectTypeTag>
