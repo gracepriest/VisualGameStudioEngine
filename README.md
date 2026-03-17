@@ -9,7 +9,9 @@ Visual Game Studio is a modern game development environment designed to make cre
 ### Game Engine (C++ DLL)
 - **Framework v1.0**: Direct Raylib wrapper for immediate-mode 2D game development (~2,300+ exported functions)
 - **Engine v0.5**: Unity-like runtime with ECS, scene management, prefabs, and serialization
-- **New 2D Features**: Bezier curves & splines, gradient drawing, parallax scrolling, trail renderer
+- **2D Features**: Bezier curves & splines, gradient drawing, parallax scrolling, trail renderer, tilemap collisions, nine-slice sprites, sprite animation player
+- **Input**: Keyboard, mouse, gamepad/controller, multi-touch & gestures
+- **Utilities**: Random number generator (MT19937), color HSV/lerp, text measurement, screenshot/recording, window management
 
 ### BasicLang Compiler
 A custom programming language compiler with:
@@ -25,7 +27,21 @@ A custom programming language compiler with:
 - **4 backend targets**: C#, LLVM, MSIL, C++
 - Bitwise operators (`And`, `Or`, `Xor`, `Shl`, `Shr`) and compound assignments (`+=`, `-=`, `*=`, `/=`, `&=`, etc.)
 - Constructor validation, base class support, .NET interop
-- **1,636 passing tests**
+- Number literal prefixes: Hex (`&H`), Octal (`&O`), Binary (`&B`), Char (`"A"c`)
+- Line continuation with underscore (`_`)
+- Protected/Protected Friend access modifiers
+- `Rem` keyword comments
+- Number parsing overflow protection (TryParse + InvariantCulture)
+- 8 additional type mappings across all 4 backends (Byte, Short, SByte, UByte, UShort, UInteger, ULong, Decimal)
+- Exception handling narrowed in IROptimizer
+- Async/Await warnings in non-C# backends via `#warning` directives
+- Modulo power-of-2 optimization (`x%N` to `x&(N-1)`)
+- Conditional namespace imports in C# backend
+- C++ ForEach body generation and indexer access fixes
+- Framework TODO replaced with `#error` for unknown functions
+- Multi-root workspace support in LSP
+- 43 error codes (BL1xxx-BL5xxx) with ErrorCodeMapper
+- **1,651 passing tests** (15 new compilation tests)
 
 ### Visual Game Studio IDE
 A full-featured Avalonia-based IDE (~93% VS Code feature parity) with:
@@ -93,7 +109,7 @@ VisualGameStudioEngine/
 ├── VisualGameStudio.Editor/       # Editor components (Avalonia)
 ├── VisualGameStudio.ProjectSystem/ # Project and solution management
 ├── VisualGameStudio.Shell/        # Main IDE application shell
-├── VisualGameStudio.Tests/        # Unit test suite (1,636 tests)
+├── VisualGameStudio.Tests/        # Unit test suite (1,651 tests)
 ├── VisualGameStudioEngine/        # C++ game engine DLL (Raylib-based)
 ├── RaylibWrapper/                 # VB.NET P/Invoke bindings
 ├── BasicLang.VisualStudio/        # VS 2022 VSIX extension (CPS + LSP)
@@ -347,7 +363,7 @@ Real-time error checking with:
 
 ## Testing
 
-The project includes a comprehensive test suite with 1,636 unit tests covering:
+The project includes a comprehensive test suite with 1,651 unit tests covering:
 
 - **Core Models**: Project, solution, build configuration
 - **Editor Features**: Folding, bracket highlighting, completion, multi-cursor
@@ -367,7 +383,7 @@ The `docs/` folder contains detailed documentation:
 
 | File | Contents |
 |------|----------|
-| `docs/API_REFERENCE.md` | Full game engine API with code examples (35+ systems, ~450 functions) |
+| `docs/API_REFERENCE.md` | Full game engine API with code examples (35+ systems, ~548 functions) |
 | `docs/GETTING_STARTED.md` | Quick-start guide with step-by-step examples |
 | `docs/articles/engine-guide.md` | Engine architecture overview |
 | `docs/articles/basiclang-guide.md` | BasicLang language reference |
@@ -924,6 +940,161 @@ A ref-counted handle system for safe, disposable texture management.
 | `Framework_Trail_AddPoint(trailId, x, y)` | Manually add trail point |
 | `Framework_Trail_DrawAll()` | Draw all active trails |
 
+### Random Number Generator
+
+| Function | Description |
+|----------|-------------|
+| `Framework_Random_Seed(seed)` | Seed the MT19937 random engine |
+| `Framework_Random_SeedAuto()` | Auto-seed from system clock |
+| `Framework_Random_Int(min, max)` | Random integer in [min, max] |
+| `Framework_Random_Float(min, max)` | Random float in [min, max] |
+| `Framework_Random_Bool()` | Random true/false (50/50) |
+| `Framework_Random_Chance(probability)` | True with given probability (0.0-1.0) |
+| `Framework_Random_Direction(outX, outY)` | Random unit vector direction |
+| `Framework_Random_PointInCircle(cx, cy, radius, outX, outY)` | Random point inside circle |
+| `Framework_Random_PointInRect(x, y, w, h, outX, outY)` | Random point inside rectangle |
+| `Framework_Random_Weighted(weights, count)` | Weighted random index selection |
+| `Framework_Random_Dice(sides)` | Roll a die (1 to sides) |
+| `Framework_Random_Shuffle(array, count)` | Fisher-Yates shuffle |
+
+### Additional Shape Drawing
+
+| Function | Description |
+|----------|-------------|
+| `Framework_DrawEllipse(cx, cy, radiusH, radiusV, r,g,b,a)` | Draw filled ellipse |
+| `Framework_DrawEllipseLines(cx, cy, radiusH, radiusV, r,g,b,a)` | Draw ellipse outline |
+| `Framework_DrawRing(cx, cy, innerRadius, outerRadius, startAngle, endAngle, segments, r,g,b,a)` | Draw ring (annulus) |
+| `Framework_DrawRingLines(cx, cy, innerRadius, outerRadius, startAngle, endAngle, segments, r,g,b,a)` | Draw ring outline |
+| `Framework_DrawRectangleRounded(x, y, w, h, roundness, segments, r,g,b,a)` | Draw rounded rectangle |
+| `Framework_DrawRectangleRoundedLines(x, y, w, h, roundness, segments, thick, r,g,b,a)` | Draw rounded rect outline |
+| `Framework_DrawPoly(cx, cy, sides, radius, rotation, r,g,b,a)` | Draw filled regular polygon |
+| `Framework_DrawPolyLines(cx, cy, sides, radius, rotation, r,g,b,a)` | Draw polygon outline |
+| `Framework_DrawCircleSector(cx, cy, radius, startAngle, endAngle, segments, r,g,b,a)` | Draw filled circle sector |
+| `Framework_DrawCircleSectorLines(cx, cy, radius, startAngle, endAngle, segments, r,g,b,a)` | Draw circle sector outline |
+
+### Text Measurement
+
+| Function | Description |
+|----------|-------------|
+| `Framework_MeasureText(text, fontSize)` | Measure text width in pixels |
+| `Framework_MeasureTextEx(font, text, fontSize, spacing, outW, outH)` | Measure text with custom font |
+| `Framework_DrawTextCentered(text, x, y, fontSize, r,g,b,a)` | Draw text centered at position |
+| `Framework_DrawTextRight(text, x, y, fontSize, r,g,b,a)` | Draw text right-aligned at position |
+
+### Gamepad/Controller Input
+
+| Function | Description |
+|----------|-------------|
+| `Framework_IsGamepadAvailable(gamepad)` | True if gamepad is connected |
+| `Framework_GetGamepadName(gamepad)` | Get gamepad name string |
+| `Framework_IsGamepadButtonPressed(gamepad, button)` | True if button pressed this frame |
+| `Framework_IsGamepadButtonDown(gamepad, button)` | True if button is held |
+| `Framework_IsGamepadButtonReleased(gamepad, button)` | True if button released this frame |
+| `Framework_IsGamepadButtonUp(gamepad, button)` | True if button is not held |
+| `Framework_GetGamepadAxisCount(gamepad)` | Get number of axes |
+| `Framework_GetGamepadAxisMovement(gamepad, axis)` | Get axis value (-1.0 to 1.0) |
+| `Framework_SetGamepadMappings(mappings)` | Set gamepad mappings string |
+| `Framework_GetGamepadButtonPressed()` | Get last pressed gamepad button |
+
+### Color Utilities
+
+| Function | Description |
+|----------|-------------|
+| `Framework_ColorFromHSV(hue, saturation, value)` | Create color from HSV values |
+| `Framework_ColorToHSV(r, g, b, outH, outS, outV)` | Convert RGB to HSV |
+| `Framework_ColorLerp(r1,g1,b1,a1, r2,g2,b2,a2, t, outR,outG,outB,outA)` | Interpolate between colors |
+| `Framework_ColorAlphaMultiply(r, g, b, a, alpha)` | Multiply alpha channel |
+| `Framework_ColorBrighten(r, g, b, factor)` | Brighten/darken color by factor |
+| `Framework_ColorInvert(r, g, b)` | Invert color channels |
+
+### Window/Display Utilities
+
+| Function | Description |
+|----------|-------------|
+| `Framework_ToggleFullscreen()` | Toggle fullscreen mode |
+| `Framework_ToggleBorderlessWindowed()` | Toggle borderless windowed mode |
+| `Framework_SetWindowSize(width, height)` | Resize window |
+| `Framework_SetWindowTitle(title)` | Change window title |
+| `Framework_GetScreenWidth()` | Get current screen width |
+| `Framework_GetScreenHeight()` | Get current screen height |
+| `Framework_GetRenderWidth()` | Get render width (may differ from screen) |
+| `Framework_GetRenderHeight()` | Get render height |
+| `Framework_GetMonitorCount()` | Get number of monitors |
+| `Framework_GetMonitorWidth(monitor)` | Get monitor width |
+| `Framework_GetMonitorHeight(monitor)` | Get monitor height |
+| `Framework_GetMonitorRefreshRate(monitor)` | Get monitor refresh rate |
+
+### Standalone Sprite Animation Player
+
+| Function | Description |
+|----------|-------------|
+| `Framework_AnimPlayer_Create()` | Create animation player, returns playerId |
+| `Framework_AnimPlayer_Destroy(playerId)` | Destroy animation player |
+| `Framework_AnimPlayer_AddAnimation(playerId, name, startFrame, endFrame, fps)` | Add named animation |
+| `Framework_AnimPlayer_Play(playerId, name)` | Play animation by name |
+| `Framework_AnimPlayer_Stop(playerId)` | Stop animation |
+| `Framework_AnimPlayer_Pause(playerId)` | Pause animation |
+| `Framework_AnimPlayer_Resume(playerId)` | Resume animation |
+| `Framework_AnimPlayer_SetLooping(playerId, loop)` | Enable/disable looping |
+| `Framework_AnimPlayer_SetSpeed(playerId, speed)` | Set playback speed multiplier |
+| `Framework_AnimPlayer_GetCurrentFrame(playerId)` | Get current frame index |
+| `Framework_AnimPlayer_IsPlaying(playerId)` | True if animation is playing |
+| `Framework_AnimPlayer_GetCurrentAnimation(playerId)` | Get current animation name |
+| `Framework_AnimPlayer_Update(playerId, deltaTime)` | Update animation state |
+| `Framework_AnimPlayer_Draw(playerId, texture, x, y, frameW, frameH, r,g,b,a)` | Draw current frame |
+
+### Tilemap Collision Integration
+
+| Function | Description |
+|----------|-------------|
+| `Framework_Tilemap_Create(width, height, tileW, tileH)` | Create tilemap, returns tilemapId |
+| `Framework_Tilemap_Destroy(tilemapId)` | Destroy tilemap |
+| `Framework_Tilemap_SetTile(tilemapId, x, y, tileId)` | Set tile at grid position |
+| `Framework_Tilemap_GetTile(tilemapId, x, y)` | Get tile at grid position |
+| `Framework_Tilemap_SetCollision(tilemapId, tileId, solid)` | Set tile collision flag |
+| `Framework_Tilemap_CheckCollision(tilemapId, x, y, w, h)` | Check AABB against solid tiles |
+| `Framework_Tilemap_WorldToTile(tilemapId, worldX, worldY, outTileX, outTileY)` | Convert world to tile coords |
+| `Framework_Tilemap_TileToWorld(tilemapId, tileX, tileY, outWorldX, outWorldY)` | Convert tile to world coords |
+| `Framework_Tilemap_Draw(tilemapId, texture, tilesPerRow)` | Draw tilemap with texture atlas |
+| `Framework_Tilemap_DrawLayer(tilemapId, texture, tilesPerRow, layer)` | Draw specific layer |
+| `Framework_Tilemap_SetTileLayer(tilemapId, x, y, layer, tileId)` | Set tile on specific layer |
+| `Framework_Tilemap_GetTileLayer(tilemapId, x, y, layer)` | Get tile from specific layer |
+
+### Nine-Slice Drawing
+
+| Function | Description |
+|----------|-------------|
+| `Framework_NineSlice_Create(texture, left, right, top, bottom)` | Create nine-slice config, returns id |
+| `Framework_NineSlice_Destroy(id)` | Destroy nine-slice config |
+| `Framework_NineSlice_Draw(id, x, y, w, h, r,g,b,a)` | Draw nine-slice sprite |
+| `Framework_NineSlice_DrawTinted(id, x, y, w, h, r,g,b,a)` | Draw with tint color |
+| `Framework_NineSlice_SetBorders(id, left, right, top, bottom)` | Update border sizes |
+| `Framework_NineSlice_GetBorders(id, outLeft, outRight, outTop, outBottom)` | Get border sizes |
+
+### Touch Input
+
+| Function | Description |
+|----------|-------------|
+| `Framework_GetTouchPointCount()` | Get number of active touch points |
+| `Framework_GetTouchPointId(index)` | Get touch point ID at index |
+| `Framework_GetTouchX()` | Get primary touch X position |
+| `Framework_GetTouchY()` | Get primary touch Y position |
+| `Framework_GetTouchPosition(index)` | Get touch position at index |
+| `Framework_SetGesturesEnabled(flags)` | Enable gesture detection flags |
+| `Framework_IsGestureDetected(gesture)` | True if gesture detected this frame |
+| `Framework_GetGestureDetected()` | Get detected gesture type |
+| `Framework_GetGestureDragVector()` | Get drag gesture vector |
+| `Framework_GetGesturePinchAngle()` | Get pinch gesture angle |
+
+### Screenshot/Recording
+
+| Function | Description |
+|----------|-------------|
+| `Framework_TakeScreenshot(fileName)` | Save screenshot to file |
+| `Framework_BeginRecording(fileName)` | Begin recording frames |
+| `Framework_EndRecording()` | End recording |
+| `Framework_IsRecording()` | True if recording is active |
+
 ### Physics Overlap Queries
 
 | Function | Description |
@@ -1053,12 +1224,12 @@ End Enum
 ## Highlights
 
 - **Raylib Powered**: Built on one of the most beginner-friendly and performance-focused game libraries available.
-- **2,300+ API Functions**: Comprehensive 2D game engine with ECS, audio, camera, scenes, and more.
+- **2,300+ API Functions**: Comprehensive 2D game engine with ~548 framework functions, ECS, audio, camera, scenes, tilemaps, and more.
 - **Multi-Language Support**: Call the same framework from Visual Basic, C++, or C#, giving you freedom of choice.
 - **Full IDE**: Complete Avalonia-based development environment with ~93% VS Code feature parity.
 - **VS 2022 Extension**: CPS-based VSIX with LSP, templates, and full project system integration.
 - **4 Backend Targets**: Compile BasicLang to C#, LLVM, MSIL, or C++.
-- **Comprehensive Testing**: 1,636 unit tests ensuring code quality and reliability.
+- **Comprehensive Testing**: 1,651 unit tests (including 15 compilation tests) ensuring code quality and reliability.
 - **LSP Integration**: Modern editor features through Language Server Protocol.
 - **AI Agent Maintenance**: 4 Claude Agent SDK applications for automated compiler, IDE, engine, and extension maintenance.
 

@@ -20,6 +20,7 @@ namespace BasicLang.Compiler.LSP
         private readonly object _lock = new object();
         private string _workspaceRoot;
         private SolutionFile _solution;
+        private readonly List<string> _workspaceFolders;
 
         public event EventHandler<ProjectChangedEventArgs> ProjectChanged;
         public event EventHandler<WorkspaceChangedEventArgs> WorkspaceChanged;
@@ -29,6 +30,7 @@ namespace BasicLang.Compiler.LSP
             _projects = new Dictionary<string, ProjectContext>(StringComparer.OrdinalIgnoreCase);
             _fileToProject = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _typeRegistry = new TypeRegistry();
+            _workspaceFolders = new List<string>();
 
             // Initialize type registry with .NET reference assemblies
             InitializeTypeRegistry();
@@ -37,6 +39,7 @@ namespace BasicLang.Compiler.LSP
         public string WorkspaceRoot => _workspaceRoot;
         public TypeRegistry TypeRegistry => _typeRegistry;
         public IReadOnlyDictionary<string, ProjectContext> Projects => _projects;
+        public IReadOnlyList<string> WorkspaceFolders => _workspaceFolders;
 
         /// <summary>
         /// Initialize the workspace from a root folder
@@ -44,6 +47,11 @@ namespace BasicLang.Compiler.LSP
         public async Task InitializeAsync(string rootPath)
         {
             _workspaceRoot = rootPath;
+
+            // Track this as a workspace folder
+            var fullRootPath = Path.GetFullPath(rootPath);
+            if (!_workspaceFolders.Contains(fullRootPath))
+                _workspaceFolders.Add(fullRootPath);
 
             // Look for solution file first
             var slnFiles = Directory.GetFiles(rootPath, "*.sln", SearchOption.TopDirectoryOnly);
@@ -360,6 +368,71 @@ namespace BasicLang.Compiler.LSP
                 Context = project,
                 ChangedFile = filePath
             });
+        }
+
+        /// <summary>
+        /// Handle workspace/didChangeWorkspaceFolders notification.
+        /// Adds new workspace folders and removes old ones.
+        /// </summary>
+        public async Task DidChangeWorkspaceFoldersAsync(IEnumerable<string> added, IEnumerable<string> removed)
+        {
+            // Remove workspace folders and their projects
+            foreach (var folder in removed)
+            {
+                var fullPath = Path.GetFullPath(folder);
+                lock (_lock)
+                {
+                    _workspaceFolders.Remove(fullPath);
+
+                    // Remove projects that belong to this folder
+                    var projectsToRemove = _projects.Keys
+                        .Where(p => p.StartsWith(fullPath, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (var projPath in projectsToRemove)
+                    {
+                        var project = _projects[projPath];
+                        foreach (var file in project.SourceFiles.Keys.ToList())
+                        {
+                            _fileToProject.Remove(file);
+                        }
+                        _projects.Remove(projPath);
+
+                        ProjectChanged?.Invoke(this, new ProjectChangedEventArgs
+                        {
+                            ChangeType = ProjectChangeType.Removed,
+                            ProjectPath = projPath,
+                            Context = project
+                        });
+                    }
+                }
+
+                WorkspaceChanged?.Invoke(this, new WorkspaceChangedEventArgs
+                {
+                    ChangeType = WorkspaceChangeType.ProjectRemoved,
+                    WorkspaceRoot = fullPath
+                });
+            }
+
+            // Add new workspace folders
+            foreach (var folder in added)
+            {
+                var fullPath = Path.GetFullPath(folder);
+                lock (_lock)
+                {
+                    if (!_workspaceFolders.Contains(fullPath))
+                        _workspaceFolders.Add(fullPath);
+                }
+
+                // Initialize the new folder (discover projects/source files)
+                await InitializeAsync(fullPath);
+
+                WorkspaceChanged?.Invoke(this, new WorkspaceChangedEventArgs
+                {
+                    ChangeType = WorkspaceChangeType.ProjectAdded,
+                    WorkspaceRoot = fullPath
+                });
+            }
         }
 
         private ProjectContext CreateImplicitProject(string rootPath, List<string> sourceFiles)

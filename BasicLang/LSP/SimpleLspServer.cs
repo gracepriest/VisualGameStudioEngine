@@ -17,6 +17,7 @@ namespace BasicLang.Compiler.LSP
         private readonly Stream _output;
         private readonly DocumentManager _documentManager;
         private readonly CompletionService _completionService;
+        private readonly WorkspaceManager _workspaceManager;
         private bool _initialized;
         private bool _shutdown;
 
@@ -26,6 +27,7 @@ namespace BasicLang.Compiler.LSP
             _output = output;
             _documentManager = new DocumentManager();
             _completionService = new CompletionService();
+            _workspaceManager = new WorkspaceManager();
         }
 
         public async Task RunAsync()
@@ -154,6 +156,9 @@ namespace BasicLang.Compiler.LSP
                     case "textDocument/didClose":
                         HandleDidClose(parms);
                         break;
+                    case "workspace/didChangeWorkspaceFolders":
+                        await HandleDidChangeWorkspaceFoldersAsync(parms);
+                        break;
                     case "textDocument/completion":
                         await HandleCompletionAsync(id, parms);
                         break;
@@ -201,7 +206,15 @@ namespace BasicLang.Compiler.LSP
                         ["triggerCharacters"] = new JsonArray(".", "(", " "),
                         ["resolveProvider"] = false
                     },
-                    ["hoverProvider"] = true
+                    ["hoverProvider"] = true,
+                    ["workspace"] = new JsonObject
+                    {
+                        ["workspaceFolders"] = new JsonObject
+                        {
+                            ["supported"] = true,
+                            ["changeNotifications"] = true
+                        }
+                    }
                 },
                 ["serverInfo"] = new JsonObject
                 {
@@ -352,6 +365,50 @@ namespace BasicLang.Compiler.LSP
             }
 
             await SendResponseAsync(id, result);
+        }
+
+        private async Task HandleDidChangeWorkspaceFoldersAsync(JsonNode? parms)
+        {
+            var eventNode = parms?["event"];
+            if (eventNode == null) return;
+
+            var added = new List<string>();
+            var removed = new List<string>();
+
+            var addedArray = eventNode["added"]?.AsArray();
+            if (addedArray != null)
+            {
+                foreach (var folder in addedArray)
+                {
+                    var uri = folder?["uri"]?.GetValue<string>();
+                    if (uri != null)
+                    {
+                        // Convert URI to file path
+                        var path = Uri.UnescapeDataString(new Uri(uri).LocalPath);
+                        added.Add(path);
+                    }
+                }
+            }
+
+            var removedArray = eventNode["removed"]?.AsArray();
+            if (removedArray != null)
+            {
+                foreach (var folder in removedArray)
+                {
+                    var uri = folder?["uri"]?.GetValue<string>();
+                    if (uri != null)
+                    {
+                        var path = Uri.UnescapeDataString(new Uri(uri).LocalPath);
+                        removed.Add(path);
+                    }
+                }
+            }
+
+            if (added.Count > 0 || removed.Count > 0)
+            {
+                Console.Error.WriteLine($"[LSP] Workspace folders changed: +{added.Count} -{removed.Count}");
+                await _workspaceManager.DidChangeWorkspaceFoldersAsync(added, removed);
+            }
         }
     }
 }

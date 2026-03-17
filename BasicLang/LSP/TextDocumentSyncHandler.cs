@@ -94,6 +94,13 @@ namespace BasicLang.Compiler.LSP
             TextSynchronizationCapability capability,
             ClientCapabilities clientCapabilities)
         {
+            // TODO: Change to TextDocumentSyncKind.Incremental for better performance.
+            // Full sync resends the entire file on every keystroke, which is wasteful for large files.
+            // Incremental sync requires:
+            //   1. DocumentManager.UpdateDocument to accept range-based changes (start/end position + text)
+            //   2. Maintaining a line/column-indexed document buffer for efficient partial updates
+            //   3. Handling ContentChangeEvent.Range to apply edits at specific positions
+            // Full sync is used currently because DocumentManager.UpdateDocument only accepts full text.
             return new TextDocumentSyncRegistrationOptions
             {
                 DocumentSelector = TextDocumentSelector.ForLanguage("basiclang"),

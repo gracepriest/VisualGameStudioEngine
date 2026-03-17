@@ -4235,6 +4235,150 @@ extern "C" {
     __declspec(dllexport) void  Framework_Trail_DestroyAll();
 
     // ========================================================================
+    // RANDOM NUMBER GENERATOR
+    // ========================================================================
+    __declspec(dllexport) void  Framework_Random_Seed(int seed);
+    __declspec(dllexport) int   Framework_Random_Int();
+    __declspec(dllexport) int   Framework_Random_IntRange(int min, int max);
+    __declspec(dllexport) float Framework_Random_Float();
+    __declspec(dllexport) float Framework_Random_FloatRange(float min, float max);
+    __declspec(dllexport) bool  Framework_Random_Bool();
+    __declspec(dllexport) bool  Framework_Random_Chance(int percent);
+    __declspec(dllexport) void  Framework_Random_Direction(float* outX, float* outY);
+    __declspec(dllexport) float Framework_Random_PointInCircle(float cx, float cy, float radius, float* outX, float* outY);
+    __declspec(dllexport) void  Framework_Random_PointInRect(float x, float y, float w, float h, float* outX, float* outY);
+    __declspec(dllexport) int   Framework_Random_WeightedIndex(float* weights, int count);
+    __declspec(dllexport) int   Framework_Random_DiceRoll(int sides);
+
+    // ========================================================================
+    // ADDITIONAL SHAPE DRAWING
+    // ========================================================================
+    __declspec(dllexport) void  Framework_DrawEllipse(int cx, int cy, float radiusH, float radiusV, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawEllipseLines(int cx, int cy, float radiusH, float radiusV, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRing(float cx, float cy, float innerRadius, float outerRadius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRingLines(float cx, float cy, float innerRadius, float outerRadius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRectangleRounded(float x, float y, float w, float h, float roundness, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRectangleRoundedLines(float x, float y, float w, float h, float roundness, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawPoly(float cx, float cy, int sides, float radius, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawPolyLines(float cx, float cy, int sides, float radius, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawCircleSector(float cx, float cy, float radius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawCircleSectorLines(float cx, float cy, float radius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // ========================================================================
+    // TEXT MEASUREMENT
+    // ========================================================================
+    __declspec(dllexport) int   Framework_MeasureText(const char* text, int fontSize);
+    __declspec(dllexport) void  Framework_MeasureTextEx(int fontHandle, const char* text, float fontSize, float spacing, float* outWidth, float* outHeight);
+    __declspec(dllexport) void  Framework_DrawTextCentered(const char* text, int centerX, int centerY, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawTextRight(const char* text, int rightX, int y, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // ========================================================================
+    // GAMEPAD INPUT
+    // ========================================================================
+    __declspec(dllexport) bool  Framework_IsGamepadAvailable(int gamepad);
+    __declspec(dllexport) const char* Framework_GetGamepadName(int gamepad);
+    __declspec(dllexport) bool  Framework_IsGamepadButtonPressed(int gamepad, int button);
+    __declspec(dllexport) bool  Framework_IsGamepadButtonDown(int gamepad, int button);
+    __declspec(dllexport) bool  Framework_IsGamepadButtonReleased(int gamepad, int button);
+    __declspec(dllexport) bool  Framework_IsGamepadButtonUp(int gamepad, int button);
+    __declspec(dllexport) int   Framework_GetGamepadButtonPressed();
+    __declspec(dllexport) int   Framework_GetGamepadAxisCount(int gamepad);
+    __declspec(dllexport) float Framework_GetGamepadAxisMovement(int gamepad, int axis);
+    __declspec(dllexport) int   Framework_SetGamepadMappings(const char* mappings);
+
+    // ========================================================================
+    // COLOR UTILITIES
+    // ========================================================================
+    __declspec(dllexport) void  Framework_Color_FromHSV(float h, float s, float v, unsigned char* outR, unsigned char* outG, unsigned char* outB);
+    __declspec(dllexport) void  Framework_Color_ToHSV(unsigned char r, unsigned char g, unsigned char b, float* outH, float* outS, float* outV);
+    __declspec(dllexport) void  Framework_Color_Lerp(unsigned char r1, unsigned char g1, unsigned char b1, unsigned char r2, unsigned char g2, unsigned char b2, float t, unsigned char* outR, unsigned char* outG, unsigned char* outB);
+    __declspec(dllexport) unsigned char Framework_Color_Alpha(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float alpha);
+    __declspec(dllexport) void  Framework_Color_Brighten(unsigned char r, unsigned char g, unsigned char b, float factor, unsigned char* outR, unsigned char* outG, unsigned char* outB);
+    __declspec(dllexport) void  Framework_Color_Invert(unsigned char r, unsigned char g, unsigned char b, unsigned char* outR, unsigned char* outG, unsigned char* outB);
+
+    // ========================================================================
+    // WINDOW/DISPLAY UTILITIES
+    // ========================================================================
+    __declspec(dllexport) void  Framework_ToggleFullscreen();
+    __declspec(dllexport) void  Framework_ToggleBorderlessWindowed();
+    __declspec(dllexport) void  Framework_SetWindowSize(int width, int height);
+    __declspec(dllexport) void  Framework_SetWindowMinSize(int width, int height);
+    __declspec(dllexport) void  Framework_SetWindowTitle(const char* title);
+    __declspec(dllexport) int   Framework_GetScreenWidth();
+    __declspec(dllexport) int   Framework_GetScreenHeight();
+    __declspec(dllexport) int   Framework_GetMonitorWidth(int monitor);
+    __declspec(dllexport) int   Framework_GetMonitorHeight(int monitor);
+    __declspec(dllexport) int   Framework_GetMonitorCount();
+    __declspec(dllexport) int   Framework_GetMonitorRefreshRate(int monitor);
+    __declspec(dllexport) int   Framework_GetCurrentMonitor();
+
+    // ========================================================================
+    // STANDALONE SPRITE ANIMATION PLAYER
+    // ========================================================================
+    __declspec(dllexport) int   Framework_CreateAnimationPlayer();
+    __declspec(dllexport) void  Framework_DestroyAnimationPlayer(int handle);
+    __declspec(dllexport) void  Framework_AnimPlayerAddAnimation(int handle, const char* name, int startFrame, int endFrame, float fps);
+    __declspec(dllexport) void  Framework_AnimPlayerPlay(int handle, const char* animName, bool loop);
+    __declspec(dllexport) void  Framework_AnimPlayerStop(int handle);
+    __declspec(dllexport) void  Framework_AnimPlayerPause(int handle);
+    __declspec(dllexport) void  Framework_AnimPlayerResume(int handle);
+    __declspec(dllexport) void  Framework_AnimPlayerUpdate(int handle, float deltaTime);
+    __declspec(dllexport) int   Framework_AnimPlayerGetCurrentFrame(int handle);
+    __declspec(dllexport) bool  Framework_AnimPlayerIsPlaying(int handle);
+    __declspec(dllexport) void  Framework_AnimPlayerSetSpeed(int handle, float speed);
+    __declspec(dllexport) const char* Framework_AnimPlayerGetAnimation(int handle);
+    __declspec(dllexport) void  Framework_AnimPlayerSetTexture(int handle, int textureHandle);
+    __declspec(dllexport) void  Framework_AnimPlayerDraw(int handle, float x, float y, float width, float height);
+
+    // ========================================================================
+    // TILEMAP COLLISION INTEGRATION
+    // ========================================================================
+    __declspec(dllexport) int   Framework_CreateTilemap(int width, int height, int tileWidth, int tileHeight);
+    __declspec(dllexport) void  Framework_DestroyTilemap(int handle);
+    __declspec(dllexport) void  Framework_TilemapSetTile(int handle, int x, int y, int tileId);
+    __declspec(dllexport) int   Framework_TilemapGetTile(int handle, int x, int y);
+    __declspec(dllexport) void  Framework_TilemapSetCollision(int handle, int tileId, bool solid);
+    __declspec(dllexport) bool  Framework_TilemapCheckCollision(int handle, float x, float y, float w, float h);
+    __declspec(dllexport) int   Framework_TilemapGetCollisionTiles(int handle, float x, float y, float w, float h, int* outTiles, int maxCount);
+    __declspec(dllexport) void  Framework_TilemapWorldToTile(int handle, float worldX, float worldY, int* tileX, int* tileY);
+    __declspec(dllexport) void  Framework_TilemapTileToWorld(int handle, int tileX, int tileY, float* worldX, float* worldY);
+    __declspec(dllexport) void  Framework_TilemapDraw(int handle, int textureHandle, float offsetX, float offsetY);
+    __declspec(dllexport) void  Framework_TilemapSetLayerVisible(int handle, bool visible);
+    __declspec(dllexport) void  Framework_TilemapGetSize(int handle, int* width, int* height);
+
+    // ========================================================================
+    // NINE-SLICE DRAWING
+    // ========================================================================
+    __declspec(dllexport) void  Framework_DrawNineSlice(int textureHandle, float x, float y, float w, float h, int left, int top, int right, int bottom);
+    __declspec(dllexport) void  Framework_DrawNineSliceTinted(int textureHandle, float x, float y, float w, float h, int left, int top, int right, int bottom, int r, int g, int b, int a);
+    __declspec(dllexport) void  Framework_SetNineSliceBorders(int* handle, int left, int top, int right, int bottom);
+    __declspec(dllexport) void  Framework_DrawNineSliceEx(int textureHandle, int nineSliceHandle, float x, float y, float w, float h);
+    __declspec(dllexport) int   Framework_CreateNineSliceConfig(int left, int top, int right, int bottom);
+    __declspec(dllexport) void  Framework_DestroyNineSliceConfig(int handle);
+
+    // ========================================================================
+    // TOUCH INPUT
+    // ========================================================================
+    __declspec(dllexport) int   Framework_GetTouchPointCount();
+    __declspec(dllexport) int   Framework_GetTouchPointId(int index);
+    __declspec(dllexport) float Framework_GetTouchX(int index);
+    __declspec(dllexport) float Framework_GetTouchY(int index);
+    __declspec(dllexport) bool  Framework_IsTouchDown(int index);
+    __declspec(dllexport) bool  Framework_IsTouchPressed(int index);
+    __declspec(dllexport) bool  Framework_IsTouchReleased(int index);
+    __declspec(dllexport) float Framework_GetTouchDeltaX(int index);
+    __declspec(dllexport) float Framework_GetTouchDeltaY(int index);
+    __declspec(dllexport) int   Framework_GetGesture();
+
+    // ========================================================================
+    // SCREENSHOT / RECORDING
+    // ========================================================================
+    __declspec(dllexport) void  Framework_TakeScreenshot(const char* filename);
+    __declspec(dllexport) void  Framework_BeginRecording(const char* filename, int fps);
+    __declspec(dllexport) void  Framework_EndRecording();
+    __declspec(dllexport) bool  Framework_IsRecording();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

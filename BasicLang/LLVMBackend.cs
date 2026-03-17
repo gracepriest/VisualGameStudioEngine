@@ -62,6 +62,10 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _typeMap["Short"] = "i16";
             _typeMap["UInteger"] = "i32";
             _typeMap["ULong"] = "i64";
+            _typeMap["SByte"] = "i8";
+            _typeMap["UByte"] = "i8";
+            _typeMap["UShort"] = "i16";
+            _typeMap["Decimal"] = "i128";
         }
 
         /// <summary>
@@ -1806,17 +1810,17 @@ namespace BasicLang.Compiler.CodeGen.LLVM
 
         public override void Visit(IRAwait awaitInst)
         {
-            // LLVM doesn't have native async/await, generate a comment
-            WriteLine($"  ; await - LLVM async not supported");
+            // LLVM doesn't have native async/await - emit warning
+            WriteLine($"  ; WARNING: await is not supported in LLVM backend - expression will be evaluated synchronously");
         }
 
         public override void Visit(IRYield yieldInst)
         {
-            // LLVM doesn't have native yield, generate a comment
+            // LLVM doesn't have native yield - emit warning
             if (yieldInst.IsBreak)
-                WriteLine("  ; yield break - LLVM iterators not supported");
+                WriteLine("  ; WARNING: yield break is not supported in LLVM backend - iterator will not function correctly");
             else
-                WriteLine($"  ; yield return - LLVM iterators not supported");
+                WriteLine($"  ; WARNING: yield return is not supported in LLVM backend - iterator will not function correctly");
         }
 
         public override void Visit(IRNewObject newObj)

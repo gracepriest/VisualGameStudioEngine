@@ -282,7 +282,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 
                 return new IRConstant(result, cmp.Type);
             }
-            catch { }
+            catch (Exception ex) when (ex is FormatException || ex is OverflowException || ex is InvalidCastException || ex is ArithmeticException)
+            {
+                // Constant folding skipped for this expression: not foldable at compile time
+            }
             
             return null;
         }
@@ -981,9 +984,18 @@ namespace BasicLang.Compiler.IR.Optimization
             }
             
             // Modulo by power of 2 Ã¢â€ â€™ bitwise AND
-// NOTE: Modulo by power of 2 -> bitwise AND optimization is disabled
-            // because BinaryOpKind.And maps to logical && in C#, not bitwise &
-            // TODO: Add BinaryOpKind.BitwiseAnd to properly support this optimization
+            // Modulo by power of 2 -> bitwise AND (x % 8 == x & 7)
+            if (op.Operation == BinaryOpKind.Mod)
+            {
+                if (op.Right is IRConstant modConst && modConst.Value is int power2)
+                {
+                    if (IsPowerOfTwo(power2))
+                    {
+                        var mask = new IRConstant(power2 - 1, op.Right.Type);
+                        return new IRBinaryOp(op.Name, BinaryOpKind.BitwiseAnd, op.Left, mask, op.Type);
+                    }
+                }
+            }
 
             return null;
         }

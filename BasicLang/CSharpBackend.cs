@@ -30,6 +30,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private readonly Dictionary<string, string> _typeMap;
         private readonly HashSet<string> _usings;
+        private readonly HashSet<string> _usedNamespaces;
 
         private IRModule _currentModule;
         private IRFunction _currentFunction;
@@ -82,6 +83,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _indentLevel = 0;
 
             _usings = new HashSet<string>();
+            _usedNamespaces = new HashSet<string>();
             _valueNames = new Dictionary<IRValue, string>();
             _variableNameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _declaredIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -103,7 +105,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 { "Boolean", "bool" },
                 { "Char", "char" },
                 { "Void", "void" },
-                { "Object", "object" }
+                { "Object", "object" },
+                { "Byte", "byte" },
+                { "Short", "short" },
+                { "SByte", "sbyte" },
+                { "UByte", "byte" },
+                { "UShort", "ushort" },
+                { "UInteger", "uint" },
+                { "ULong", "ulong" },
+                { "Decimal", "decimal" }
             };
 
             // Default using
@@ -121,7 +131,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _indentLevel = 0;
             _usings.Clear();
 
-            // Add default usings
+            // Build the candidate usings set
             _usings.Add("System");
             _usings.Add("System.Collections.Generic");
             _usings.Add("System.Threading.Tasks");
@@ -149,17 +159,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Pre-scan for stdlib function calls to collect required imports
             CollectStdLibImports(module);
 
-            // Emit using directives
-            foreach (var usingDirective in _usings.OrderBy(u => u))
-                WriteLine($"using {usingDirective};");
-
-            // Emit aliased usings separately
-            foreach (var netUsing in module.NetUsings.Where(u => !string.IsNullOrEmpty(u.Alias)))
+            // Track which namespaces are actually used during code generation
+            _usedNamespaces.Clear();
+            // System is always needed (basic types, Console, etc.)
+            _usedNamespaces.Add("System");
+            // Namespaces explicitly imported in source code are always emitted
+            foreach (var netUsing in module.NetUsings)
             {
-                WriteLine($"using {netUsing.Alias} = {netUsing.Namespace};");
+                _usedNamespaces.Add(netUsing.Namespace);
             }
 
-            WriteLine();
+            // Placeholder for usings - will be replaced after code generation
+            var usingsPlaceholder = "<<USINGS_PLACEHOLDER>>";
+            _output.Append(usingsPlaceholder);
 
             // Group types by namespace
             var classesByNamespace = module.Classes.Values
@@ -364,7 +376,105 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             _currentModule = null;
-            return _output.ToString();
+
+            // Determine which namespaces are actually used by scanning generated code
+            var generatedBody = _output.ToString();
+            DetectUsedNamespaces(generatedBody);
+
+            // Build the usings header with only used namespaces
+            var usingsBuilder = new StringBuilder();
+            foreach (var usingDirective in _usings.Where(u => _usedNamespaces.Contains(u)).OrderBy(u => u))
+                usingsBuilder.AppendLine($"using {usingDirective};");
+
+            // Emit aliased usings separately
+            foreach (var netUsing in module.NetUsings.Where(u => !string.IsNullOrEmpty(u.Alias)))
+            {
+                usingsBuilder.AppendLine($"using {netUsing.Alias} = {netUsing.Namespace};");
+            }
+
+            usingsBuilder.AppendLine();
+
+            // Replace the placeholder with actual usings
+            return generatedBody.Replace("<<USINGS_PLACEHOLDER>>", usingsBuilder.ToString());
+        }
+
+        /// <summary>
+        /// Scan generated code to detect which namespaces are actually referenced
+        /// </summary>
+        private void DetectUsedNamespaces(string code)
+        {
+            // Map of type/keyword patterns to the namespace they require
+            var namespaceIndicators = new Dictionary<string, string[]>
+            {
+                { "List<", new[] { "System.Collections.Generic" } },
+                { "Dictionary<", new[] { "System.Collections.Generic" } },
+                { "HashSet<", new[] { "System.Collections.Generic" } },
+                { "Queue<", new[] { "System.Collections.Generic" } },
+                { "Stack<", new[] { "System.Collections.Generic" } },
+                { "KeyValuePair<", new[] { "System.Collections.Generic" } },
+                { "IEnumerable<", new[] { "System.Collections.Generic" } },
+                { "IList<", new[] { "System.Collections.Generic" } },
+                { "IDictionary<", new[] { "System.Collections.Generic" } },
+                { "ICollection<", new[] { "System.Collections.Generic" } },
+                { "IEnumerable", new[] { "System.Collections" } },
+                { "ICollection", new[] { "System.Collections" } },
+                { "ArrayList", new[] { "System.Collections" } },
+                { "Hashtable", new[] { "System.Collections" } },
+                { "Task", new[] { "System.Threading.Tasks" } },
+                { "async ", new[] { "System.Threading.Tasks" } },
+                { "await ", new[] { "System.Threading.Tasks" } },
+                { "StringBuilder", new[] { "System.Text" } },
+                { "Encoding", new[] { "System.Text" } },
+                { "File.", new[] { "System.IO" } },
+                { "Directory.", new[] { "System.IO" } },
+                { "Path.", new[] { "System.IO" } },
+                { "StreamReader", new[] { "System.IO" } },
+                { "StreamWriter", new[] { "System.IO" } },
+                { ".Select(", new[] { "System.Linq" } },
+                { ".Where(", new[] { "System.Linq" } },
+                { ".OrderBy(", new[] { "System.Linq" } },
+                { ".ToList(", new[] { "System.Linq" } },
+                { ".ToArray(", new[] { "System.Linq" } },
+                { ".First(", new[] { "System.Linq" } },
+                { ".Any(", new[] { "System.Linq" } },
+                { ".Count(", new[] { "System.Linq" } },
+                { "HttpClient", new[] { "System.Net.Http" } },
+                { "HttpResponseMessage", new[] { "System.Net.Http" } },
+                { "IPAddress", new[] { "System.Net" } },
+                { "Dns.", new[] { "System.Net" } },
+                { "TcpClient", new[] { "System.Net.Sockets" } },
+                { "TcpListener", new[] { "System.Net.Sockets" } },
+                { "Socket", new[] { "System.Net.Sockets" } },
+                { "JsonSerializer", new[] { "System.Text.Json" } },
+                { "JsonDocument", new[] { "System.Text.Json" } },
+                { "JsonNode", new[] { "System.Text.Json.Nodes" } },
+                { "JsonObject", new[] { "System.Text.Json.Nodes" } },
+                { "JsonArray", new[] { "System.Text.Json.Nodes" } },
+                { "Regex", new[] { "System.Text.RegularExpressions" } },
+                { "DllImport", new[] { "System.Runtime.InteropServices" } },
+                { "Marshal", new[] { "System.Runtime.InteropServices" } },
+                { "StructLayout", new[] { "System.Runtime.InteropServices" } },
+                { "Process", new[] { "System.Diagnostics" } },
+                { "Stopwatch", new[] { "System.Diagnostics" } },
+                { "Debug.", new[] { "System.Diagnostics" } },
+                { "Thread", new[] { "System.Threading" } },
+                { "Monitor", new[] { "System.Threading" } },
+                { "Mutex", new[] { "System.Threading" } },
+                { "Semaphore", new[] { "System.Threading" } },
+                { "SHA256", new[] { "System.Security.Cryptography" } },
+                { "SHA512", new[] { "System.Security.Cryptography" } },
+                { "MD5", new[] { "System.Security.Cryptography" } },
+                { "Aes", new[] { "System.Security.Cryptography" } },
+            };
+
+            foreach (var (indicator, namespaces) in namespaceIndicators)
+            {
+                if (code.Contains(indicator))
+                {
+                    foreach (var ns in namespaces)
+                        _usedNamespaces.Add(ns);
+                }
+            }
         }
 
         /// <summary>

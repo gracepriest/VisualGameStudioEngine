@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 
 namespace BasicLang.Compiler
@@ -711,6 +712,8 @@ namespace BasicLang.Compiler
                 case '&':
                     if (Match('&'))
                         AddToken(TokenType.AndAnd, "&&", null, startLine, startColumn);
+                    else if (!IsAtEnd() && (Peek() == 'H' || Peek() == 'h' || Peek() == 'O' || Peek() == 'o' || Peek() == 'B' || Peek() == 'b'))
+                        ScanPrefixedNumber(startLine, startColumn);
                     else
                         AddToken(TokenType.Concatenate, "&", null, startLine, startColumn);
                     break;
@@ -918,7 +921,20 @@ namespace BasicLang.Compiler
             }
             
             Advance(); // Consume closing quote
-            
+
+            // Check for VB-style char literal suffix: "A"c or "A"C
+            if (!IsAtEnd() && (Peek() == 'c' || Peek() == 'C'))
+            {
+                if (sb.Length == 1)
+                {
+                    Advance(); // Consume the 'c' suffix
+                    AddToken(TokenType.CharLiteral, $"\"{sb}\"c", sb[0], startLine, startColumn);
+                    return;
+                }
+                // If string is not exactly 1 char, fall through to emit as string literal
+                // (the 'c' will be scanned as a separate identifier token)
+            }
+
             AddToken(TokenType.StringLiteral, $"\"{sb}\"", sb.ToString(), startLine, startColumn);
         }
 
@@ -1028,12 +1044,12 @@ namespace BasicLang.Compiler
                 if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
                 {
                     sb.Append(Advance());
-                    float value = float.Parse(sb.ToString().TrimEnd('f', 'F'));
+                    float value = float.Parse(sb.ToString().TrimEnd('f', 'F'), CultureInfo.InvariantCulture);
                     AddToken(TokenType.SingleLiteral, sb.ToString(), value, startLine, startColumn);
                 }
                 else
                 {
-                    double value = double.Parse(sb.ToString());
+                    double value = double.Parse(sb.ToString(), CultureInfo.InvariantCulture);
                     AddToken(TokenType.DoubleLiteral, sb.ToString(), value, startLine, startColumn);
                 }
             }
@@ -1043,23 +1059,95 @@ namespace BasicLang.Compiler
                 if (!IsAtEnd() && (Peek() == 'L' || Peek() == 'l'))
                 {
                     sb.Append(Advance());
-                    long value = long.Parse(sb.ToString().TrimEnd('L', 'l'));
+                    string numStr = sb.ToString().TrimEnd('L', 'l');
+                    long value = long.Parse(numStr, CultureInfo.InvariantCulture);
                     AddToken(TokenType.LongLiteral, sb.ToString(), value, startLine, startColumn);
                 }
                 else if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
                 {
                     sb.Append(Advance());
-                    float value = float.Parse(sb.ToString().TrimEnd('f', 'F'));
+                    float value = float.Parse(sb.ToString().TrimEnd('f', 'F'), CultureInfo.InvariantCulture);
                     AddToken(TokenType.SingleLiteral, sb.ToString(), value, startLine, startColumn);
                 }
                 else
                 {
-                    int value = int.Parse(sb.ToString());
-                    AddToken(TokenType.IntegerLiteral, sb.ToString(), value, startLine, startColumn);
+                    string numStr = sb.ToString();
+                    if (int.TryParse(numStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int intValue))
+                    {
+                        AddToken(TokenType.IntegerLiteral, numStr, intValue, startLine, startColumn);
+                    }
+                    else if (long.TryParse(numStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out long longValue))
+                    {
+                        AddToken(TokenType.LongLiteral, numStr, longValue, startLine, startColumn);
+                    }
+                    else
+                    {
+                        throw new LexerException(
+                            ErrorCode.BL1004_InvalidNumberFormat,
+                            $"Number literal '{numStr}' is too large for Integer or Long types.",
+                            startLine, startColumn, _source);
+                    }
                 }
             }
         }
         
+        private void ScanPrefixedNumber(int startLine, int startColumn)
+        {
+            char prefix = Advance(); // Consume H, O, or B
+            StringBuilder sb = new StringBuilder();
+
+            int numBase;
+            Func<char, bool> isValidDigit;
+
+            switch (char.ToUpperInvariant(prefix))
+            {
+                case 'H':
+                    numBase = 16;
+                    isValidDigit = c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                    break;
+                case 'O':
+                    numBase = 8;
+                    isValidDigit = c => c >= '0' && c <= '7';
+                    break;
+                case 'B':
+                    numBase = 2;
+                    isValidDigit = c => c == '0' || c == '1';
+                    break;
+                default:
+                    throw new LexerException(
+                        ErrorCode.BL1004_InvalidNumberFormat,
+                        $"Invalid number prefix '&{prefix}'.",
+                        startLine, startColumn, _source);
+            }
+
+            while (!IsAtEnd() && isValidDigit(Peek()))
+            {
+                sb.Append(Advance());
+            }
+
+            if (sb.Length == 0)
+            {
+                throw new LexerException(
+                    ErrorCode.BL1004_InvalidNumberFormat,
+                    $"Expected digits after '&{prefix}'.",
+                    startLine, startColumn, _source);
+            }
+
+            string digits = sb.ToString();
+            string lexeme = $"&{prefix}{digits}";
+
+            try
+            {
+                int intValue = Convert.ToInt32(digits, numBase);
+                AddToken(TokenType.IntegerLiteral, lexeme, intValue, startLine, startColumn);
+            }
+            catch (OverflowException)
+            {
+                long longValue = Convert.ToInt64(digits, numBase);
+                AddToken(TokenType.LongLiteral, lexeme, longValue, startLine, startColumn);
+            }
+        }
+
         private void ScanIdentifierOrKeyword(char firstChar, int startLine, int startColumn)
         {
             StringBuilder sb = new StringBuilder();
@@ -1072,11 +1160,60 @@ namespace BasicLang.Compiler
 
             string identifier = sb.ToString();
 
+            // Line continuation: standalone _ followed by optional whitespace and newline
+            if (identifier == "_")
+            {
+                int savedPos = _position;
+                int savedCol = _column;
+                // Skip optional spaces/tabs
+                while (!IsAtEnd() && (Peek() == ' ' || Peek() == '\t'))
+                {
+                    Advance();
+                }
+                // Check for newline
+                if (!IsAtEnd() && (Peek() == '\n' || Peek() == '\r'))
+                {
+                    // Consume the newline
+                    if (Peek() == '\r')
+                    {
+                        Advance();
+                        if (!IsAtEnd() && Peek() == '\n')
+                            Advance();
+                    }
+                    else
+                    {
+                        Advance();
+                    }
+                    _line++;
+                    _column = 1;
+                    // Line continuation - don't emit any token, just return
+                    return;
+                }
+                else
+                {
+                    // Not a line continuation, restore position and treat _ as identifier
+                    _position = savedPos;
+                    _column = savedCol;
+                }
+            }
+
             // After a dot, treat everything as an identifier (member access)
             // This allows using keywords as member names like obj.Property
             if (_tokens.Count > 0 && _tokens[_tokens.Count - 1].Type == TokenType.Dot)
             {
                 AddToken(TokenType.Identifier, identifier, identifier, startLine, startColumn);
+                return;
+            }
+
+            // Handle Rem keyword as comment (VB-style) - consume rest of line
+            if (identifier.Equals("Rem", StringComparison.OrdinalIgnoreCase))
+            {
+                StringBuilder commentSb = new StringBuilder("Rem");
+                while (!IsAtEnd() && Peek() != '\n' && Peek() != '\r')
+                {
+                    commentSb.Append(Advance());
+                }
+                AddToken(TokenType.Comment, commentSb.ToString(), null, startLine, startColumn);
                 return;
             }
 

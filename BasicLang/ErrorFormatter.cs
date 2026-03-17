@@ -7,7 +7,9 @@ using BasicLang.Compiler.SemanticAnalysis;
 namespace BasicLang.Compiler
 {
     /// <summary>
-    /// Error codes for BasicLang compiler errors
+    /// Error codes for BasicLang compiler errors.
+    /// Organized by phase: BL1xxx = Lexer, BL2xxx = Parser, BL3xxx = Semantic,
+    /// BL4xxx = IR/CodeGen, BL5xxx = Linker/Build, BL9xxx = General.
     /// </summary>
     public enum ErrorCode
     {
@@ -18,6 +20,10 @@ namespace BasicLang.Compiler
         BL1004_InvalidNumberFormat,
         BL1005_InvalidEscapeSequence,
         BL1006_UnrecognizedDirective,
+        BL1007_InvalidCharLiteral,
+        BL1008_UnterminatedComment,
+        BL1009_InvalidPreprocessorDirective,
+        BL1010_NestedPreprocessorMismatch,
 
         // Parser errors (BL2xxx)
         BL2001_UnexpectedToken,
@@ -26,6 +32,12 @@ namespace BasicLang.Compiler
         BL2004_MismatchedBlock,
         BL2005_InvalidSyntax,
         BL2006_UnexpectedEndOfFile,
+        BL2007_DuplicateModifier,
+        BL2008_InvalidModifier,
+        BL2009_MissingExpression,
+        BL2010_InvalidArrayDeclaration,
+        BL2011_MissingEndBlock,
+        BL2012_InvalidParameterList,
 
         // Semantic errors (BL3xxx)
         BL3001_TypeMismatch,
@@ -40,9 +52,151 @@ namespace BasicLang.Compiler
         BL3010_CircularDependency,
         BL3011_InvalidMemberAccess,
         BL3012_InvalidArrayAccess,
+        BL3013_AbstractMethodNotImplemented,
+        BL3014_SealedClassInheritance,
+        BL3015_InvalidConstructorCall,
+        BL3016_AmbiguousOverload,
+        BL3017_MissingReturnStatement,
+        BL3018_UnreachableCode,
+        BL3019_UninitializedVariable,
+        BL3020_InvalidCast,
+        BL3021_ConstraintViolation,
+        BL3022_InvalidBaseCall,
+        BL3023_ReadOnlyAssignment,
+        BL3024_InvalidEventUsage,
+        BL3025_MissingImport,
+
+        // IR/CodeGen errors (BL4xxx)
+        BL4001_UnsupportedFeature,
+        BL4002_BackendError,
+        BL4003_InvalidIR,
+
+        // Linker/Build errors (BL5xxx)
+        BL5001_FileNotFound,
+        BL5002_CircularImport,
+        BL5003_DuplicateModule,
 
         // General errors
         BL9999_UnknownError
+    }
+
+    /// <summary>
+    /// Maps error messages to error codes based on content patterns
+    /// </summary>
+    public static class ErrorCodeMapper
+    {
+        /// <summary>
+        /// Infer an ErrorCode from a diagnostic message string
+        /// </summary>
+        public static ErrorCode InferErrorCode(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+                return ErrorCode.BL9999_UnknownError;
+
+            var msg = message.ToLowerInvariant();
+
+            // Lexer-level
+            if (msg.Contains("unterminated string"))
+                return ErrorCode.BL1001_UnterminatedString;
+            if (msg.Contains("unterminated interpolated"))
+                return ErrorCode.BL1002_UnterminatedInterpolatedString;
+            if (msg.Contains("invalid character") || msg.Contains("unexpected character"))
+                return ErrorCode.BL1003_InvalidCharacter;
+            if (msg.Contains("invalid number") || msg.Contains("malformed number"))
+                return ErrorCode.BL1004_InvalidNumberFormat;
+            if (msg.Contains("invalid escape"))
+                return ErrorCode.BL1005_InvalidEscapeSequence;
+            if (msg.Contains("char literal"))
+                return ErrorCode.BL1007_InvalidCharLiteral;
+
+            // Parser-level
+            if (msg.Contains("unexpected token"))
+                return ErrorCode.BL2001_UnexpectedToken;
+            if (msg.Contains("expected") && msg.Contains("found"))
+                return ErrorCode.BL2002_MissingToken;
+            if (msg.Contains("missing keyword") || msg.Contains("expected keyword"))
+                return ErrorCode.BL2003_MissingKeyword;
+            if (msg.Contains("block mismatch") || msg.Contains("mismatched"))
+                return ErrorCode.BL2004_MismatchedBlock;
+            if (msg.Contains("unexpected end of file") || msg.Contains("unexpected eof"))
+                return ErrorCode.BL2006_UnexpectedEndOfFile;
+            if (msg.Contains("missing end"))
+                return ErrorCode.BL2011_MissingEndBlock;
+
+            // Semantic-level
+            if (msg.Contains("type mismatch") || msg.Contains("cannot convert"))
+                return ErrorCode.BL3001_TypeMismatch;
+            if (msg.Contains("undefined") || msg.Contains("not defined") || msg.Contains("undeclared"))
+                return ErrorCode.BL3002_UndefinedSymbol;
+            if (msg.Contains("already defined") || msg.Contains("redefinition") || msg.Contains("duplicate"))
+                return ErrorCode.BL3003_RedefinedSymbol;
+            if (msg.Contains("argument") && (msg.Contains("count") || msg.Contains("expects")))
+                return ErrorCode.BL3004_WrongNumberOfArguments;
+            if (msg.Contains("cannot assign") || msg.Contains("invalid assignment"))
+                return ErrorCode.BL3005_InvalidAssignment;
+            if (msg.Contains("invalid operation") || msg.Contains("operator") && msg.Contains("cannot"))
+                return ErrorCode.BL3006_InvalidOperation;
+            if (msg.Contains("missing return"))
+                return ErrorCode.BL3017_MissingReturnStatement;
+            if (msg.Contains("unreachable"))
+                return ErrorCode.BL3018_UnreachableCode;
+            if (msg.Contains("uninitialized") || msg.Contains("not initialized"))
+                return ErrorCode.BL3019_UninitializedVariable;
+            if (msg.Contains("invalid cast"))
+                return ErrorCode.BL3020_InvalidCast;
+            if (msg.Contains("accessibility") || msg.Contains("not accessible") || msg.Contains("is private"))
+                return ErrorCode.BL3009_AccessibilityError;
+            if (msg.Contains("circular"))
+                return ErrorCode.BL3010_CircularDependency;
+            if (msg.Contains("member") && msg.Contains("not found"))
+                return ErrorCode.BL3011_InvalidMemberAccess;
+            if (msg.Contains("abstract") && msg.Contains("implement"))
+                return ErrorCode.BL3013_AbstractMethodNotImplemented;
+            if (msg.Contains("sealed"))
+                return ErrorCode.BL3014_SealedClassInheritance;
+            if (msg.Contains("constructor"))
+                return ErrorCode.BL3015_InvalidConstructorCall;
+            if (msg.Contains("ambiguous"))
+                return ErrorCode.BL3016_AmbiguousOverload;
+            if (msg.Contains("read-only") || msg.Contains("readonly"))
+                return ErrorCode.BL3023_ReadOnlyAssignment;
+            if (msg.Contains("import") || msg.Contains("using"))
+                return ErrorCode.BL3025_MissingImport;
+
+            // Build-level
+            if (msg.Contains("file not found") || msg.Contains("could not find file"))
+                return ErrorCode.BL5001_FileNotFound;
+            if (msg.Contains("circular import"))
+                return ErrorCode.BL5002_CircularImport;
+
+            return ErrorCode.BL9999_UnknownError;
+        }
+
+        /// <summary>
+        /// Get the string representation of an error code (e.g., "BL3002")
+        /// </summary>
+        public static string GetCodeString(ErrorCode code)
+        {
+            var parts = code.ToString().Split('_');
+            return parts.Length > 0 ? parts[0] : "BL9999";
+        }
+
+        /// <summary>
+        /// Format a message with its error code prefix
+        /// </summary>
+        public static string FormatWithCode(ErrorCode code, string message)
+        {
+            return $"{GetCodeString(code)}: {message}";
+        }
+
+        /// <summary>
+        /// Format a message by inferring its error code
+        /// </summary>
+        public static string FormatWithInferredCode(string message)
+        {
+            var code = InferErrorCode(message);
+            return FormatWithCode(code, message);
+        }
     }
 
     /// <summary>

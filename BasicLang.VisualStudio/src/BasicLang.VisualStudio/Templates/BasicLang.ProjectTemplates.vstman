@@ -6,7 +6,7 @@
       <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
         <Name>BasicLang Console Application</Name>
         <Description>A console application project for the BasicLang programming language.</Description>
-        <ProjectType>VisualBasic</ProjectType>
+        <ProjectType>BasicLang</ProjectType>
         <LanguageTag>BasicLang</LanguageTag>
         <PlatformTag>Windows</PlatformTag>
         <ProjectTypeTag>Console</ProjectTypeTag>
@@ -25,7 +25,7 @@
       <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
         <Name>BasicLang Class Library</Name>
         <Description>A class library project for the BasicLang programming language.</Description>
-        <ProjectType>VisualBasic</ProjectType>
+        <ProjectType>BasicLang</ProjectType>
         <LanguageTag>BasicLang</LanguageTag>
         <PlatformTag>Windows</PlatformTag>
         <ProjectTypeTag>Library</ProjectTypeTag>
@@ -44,7 +44,7 @@
       <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
         <Name>BasicLang Windows Forms App</Name>
         <Description>A Windows Forms desktop application for the BasicLang programming language.</Description>
-        <ProjectType>VisualBasic</ProjectType>
+        <ProjectType>BasicLang</ProjectType>
         <LanguageTag>BasicLang</LanguageTag>
         <PlatformTag>Windows</PlatformTag>
         <ProjectTypeTag>Desktop</ProjectTypeTag>
@@ -63,7 +63,7 @@
       <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
         <Name>BasicLang WPF Application</Name>
         <Description>A WPF desktop application for the BasicLang programming language.</Description>
-        <ProjectType>VisualBasic</ProjectType>
+        <ProjectType>BasicLang</ProjectType>
         <LanguageTag>BasicLang</LanguageTag>
         <PlatformTag>Windows</PlatformTag>
         <ProjectTypeTag>Desktop</ProjectTypeTag>

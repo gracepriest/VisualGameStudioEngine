@@ -42,8 +42,19 @@ All functions are exported from `VisualGameStudioEngine.dll` and declared in `Ra
 34. [Gradient Drawing](#gradient-drawing)
 35. [Parallax Scrolling](#parallax-scrolling)
 36. [Trail Renderer](#trail-renderer)
-37. [Constants & Enums](#constants--enums)
-38. [VB.NET Helper Classes](#vbnet-helper-classes)
+37. [Random Number Generator](#random-number-generator)
+38. [Additional Shape Drawing](#additional-shape-drawing)
+39. [Text Measurement & Advanced Text](#text-measurement--advanced-text)
+40. [Gamepad/Controller Input](#gamepadcontroller-input)
+41. [Color Utilities](#color-utilities)
+42. [Window/Display Utilities](#windowdisplay-utilities)
+43. [Sprite Animation Player](#sprite-animation-player)
+44. [Tilemap Collision](#tilemap-collision)
+45. [Nine-Slice Drawing](#nine-slice-drawing)
+46. [Touch Input](#touch-input)
+47. [Screenshot & Recording](#screenshot--recording)
+48. [Constants & Enums](#constants--enums)
+49. [VB.NET Helper Classes](#vbnet-helper-classes)
 
 ---
 
@@ -1101,6 +1112,477 @@ Framework_Trail_GetTrailCount() As Integer
 Framework_Trail_Update()         ' Call each frame
 Framework_Trail_DrawAll()        ' Draw all active trails
 Framework_Trail_DestroyAll()     ' Cleanup all trails
+```
+
+---
+
+## Random Number Generator
+
+Seeded random number generation for deterministic or varied gameplay. Seed is auto-initialized on engine start; call `Framework_RandomSeed` for reproducible sequences.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_RandomSeed(seed As Integer)` | Seed the RNG with a specific value |
+| `Framework_RandomInt(min As Integer, max As Integer) As Integer` | Random integer in range [min, max] |
+| `Framework_RandomFloat(min As Single, max As Single) As Single` | Random float in range [min, max] |
+| `Framework_RandomBool() As Boolean` | Random true/false (50/50) |
+| `Framework_RandomChance(percent As Single) As Boolean` | True with given probability (0-100) |
+| `Framework_RandomDirection(ByRef outX As Single, ByRef outY As Single)` | Random unit vector (normalized) |
+| `Framework_RandomPointInCircle(cx As Single, cy As Single, radius As Single, ByRef outX As Single, ByRef outY As Single)` | Random point inside a circle |
+| `Framework_RandomPointInRect(x As Single, y As Single, w As Single, h As Single, ByRef outX As Single, ByRef outY As Single)` | Random point inside a rectangle |
+| `Framework_RandomWeighted(weights As Single(), count As Integer) As Integer` | Weighted random index selection |
+| `Framework_RandomDice(sides As Integer) As Integer` | Roll a die (returns 1 to sides) |
+| `Framework_RandomShuffle(arr As Integer(), count As Integer)` | Shuffle an array in place |
+| `Framework_RandomColor(ByRef outR As Integer, ByRef outG As Integer, ByRef outB As Integer, ByRef outA As Integer)` | Random RGBA color (alpha always 255) |
+
+### Example: Spawning Random Enemies
+
+```vb
+' Seed for reproducible testing
+Framework_RandomSeed(12345)
+
+' Spawn enemies at random positions in a zone
+For i As Integer = 1 To 10
+    Dim spawnX As Single, spawnY As Single
+    Framework_RandomPointInRect(100, 100, 600, 400, spawnX, spawnY)
+
+    Dim enemyId As Integer = Framework_Ecs_CreateEntity()
+    Framework_Ecs_SetTransformPosition(enemyId, spawnX, spawnY)
+
+    ' 30% chance of being elite
+    If Framework_RandomChance(30) Then
+        Framework_Ecs_SetTag(enemyId, "elite")
+    End If
+Next
+
+' Random movement direction
+Dim dirX As Single, dirY As Single
+Framework_RandomDirection(dirX, dirY)
+
+' Roll for damage
+Dim damage As Integer = Framework_RandomDice(6) + Framework_RandomDice(6)
+```
+
+---
+
+## Additional Shape Drawing
+
+Extended shape primitives for drawing ellipses, rings, rounded rectangles, polygons, and circle sectors.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_DrawEllipse(cx As Integer, cy As Integer, radiusH As Single, radiusV As Single, r, g, b, a As Integer)` | Draw filled ellipse |
+| `Framework_DrawEllipseLines(cx As Integer, cy As Integer, radiusH As Single, radiusV As Single, r, g, b, a As Integer)` | Draw ellipse outline |
+| `Framework_DrawRing(cx As Single, cy As Single, innerRadius As Single, outerRadius As Single, startAngle As Single, endAngle As Single, segments As Integer, r, g, b, a As Integer)` | Draw filled ring/arc |
+| `Framework_DrawRingLines(cx As Single, cy As Single, innerRadius As Single, outerRadius As Single, startAngle As Single, endAngle As Single, segments As Integer, r, g, b, a As Integer)` | Draw ring outline |
+| `Framework_DrawRoundedRect(x As Single, y As Single, w As Single, h As Single, roundness As Single, segments As Integer, r, g, b, a As Integer)` | Draw filled rounded rectangle |
+| `Framework_DrawRoundedRectLines(x As Single, y As Single, w As Single, h As Single, roundness As Single, segments As Integer, thick As Single, r, g, b, a As Integer)` | Draw rounded rectangle outline |
+| `Framework_DrawPoly(cx As Single, cy As Single, sides As Integer, radius As Single, rotation As Single, r, g, b, a As Integer)` | Draw filled regular polygon |
+| `Framework_DrawPolyLines(cx As Single, cy As Single, sides As Integer, radius As Single, rotation As Single, thick As Single, r, g, b, a As Integer)` | Draw polygon outline |
+| `Framework_DrawCircleSector(cx As Single, cy As Single, radius As Single, startAngle As Single, endAngle As Single, segments As Integer, r, g, b, a As Integer)` | Draw filled circle sector (pie slice) |
+| `Framework_DrawCircleSectorLines(cx As Single, cy As Single, radius As Single, startAngle As Single, endAngle As Single, segments As Integer, r, g, b, a As Integer)` | Draw circle sector outline |
+
+### Example: Drawing UI Elements
+
+```vb
+' Rounded button background
+Framework_DrawRoundedRect(200, 300, 160, 48, 0.5, 6, 60, 120, 200, 255)
+
+' Health ring indicator (270 degrees = 75% health)
+Framework_DrawRing(400, 300, 40, 50, 0, 270, 36, 0, 200, 0, 255)
+
+' Hexagonal tile
+Framework_DrawPoly(300, 200, 6, 40, 30, 100, 150, 100, 255)
+
+' Pie chart sector
+Framework_DrawCircleSector(500, 300, 80, 0, 120, 36, 200, 80, 80, 255)
+```
+
+---
+
+## Text Measurement & Advanced Text
+
+Measure text dimensions before drawing, and draw text with alignment options.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_MeasureText(text As String, fontSize As Integer) As Integer` | Measure text width in pixels (default font) |
+| `Framework_MeasureTextEx(fontId As Integer, text As String, fontSize As Single, spacing As Single, ByRef outW As Single, ByRef outH As Single)` | Measure text width and height with custom font |
+| `Framework_DrawTextCentered(text As String, cx As Integer, cy As Integer, fontSize As Integer, r, g, b, a As Integer)` | Draw text centered at position |
+| `Framework_DrawTextRight(text As String, rightX As Integer, y As Integer, fontSize As Integer, r, g, b, a As Integer)` | Draw text right-aligned to position |
+
+### Example: Centered Title and Score
+
+```vb
+' Center the title on screen
+Dim screenW As Integer = 800
+Framework_DrawTextCentered("SPACE SHOOTER", screenW / 2, 40, 36, 255, 255, 255, 255)
+
+' Right-align score
+Dim scoreText As String = "Score: " & score.ToString()
+Framework_DrawTextRight(scoreText, screenW - 20, 10, 20, 255, 255, 0, 255)
+
+' Measure text for custom positioning
+Dim textW As Single, textH As Single
+Framework_MeasureTextEx(fontId, "Level Complete", 32, 2, textW, textH)
+' Use textW and textH to position a background box behind text
+Framework_DrawRectangle(CInt(400 - textW/2 - 10), 280, CInt(textW + 20), CInt(textH + 20), 0, 0, 0, 180)
+```
+
+---
+
+## Gamepad/Controller Input
+
+Support for gamepad/controller input. Gamepad indices start at 0. Button and axis constants follow Raylib conventions (Xbox layout).
+
+| Function | Description |
+|----------|-------------|
+| `Framework_IsGamepadAvailable(gamepad As Integer) As Boolean` | Check if a gamepad is connected |
+| `Framework_IsGamepadButtonPressed(gamepad As Integer, button As Integer) As Boolean` | Check if button was just pressed |
+| `Framework_IsGamepadButtonDown(gamepad As Integer, button As Integer) As Boolean` | Check if button is currently held |
+| `Framework_IsGamepadButtonReleased(gamepad As Integer, button As Integer) As Boolean` | Check if button was just released |
+| `Framework_GetGamepadAxisValue(gamepad As Integer, axis As Integer) As Single` | Get axis value (-1.0 to 1.0) |
+| `Framework_GetGamepadName(gamepad As Integer) As String` | Get gamepad name string |
+| `Framework_GetGamepadButtonCount(gamepad As Integer) As Integer` | Get number of buttons |
+| `Framework_GetGamepadAxisCount(gamepad As Integer) As Integer` | Get number of axes |
+| `Framework_SetGamepadMappings(mappings As String) As Integer` | Set custom SDL gamepad mappings |
+| `Framework_GetGamepadButtonPressed() As Integer` | Get last pressed gamepad button |
+
+### Example: Dual-Stick Controller Movement
+
+```vb
+If Framework_IsGamepadAvailable(0) Then
+    ' Left stick for movement
+    Dim moveX As Single = Framework_GetGamepadAxisValue(0, 0)  ' Left X
+    Dim moveY As Single = Framework_GetGamepadAxisValue(0, 1)  ' Left Y
+
+    ' Dead zone
+    If Math.Abs(moveX) < 0.15 Then moveX = 0
+    If Math.Abs(moveY) < 0.15 Then moveY = 0
+
+    playerX += moveX * speed * Framework_GetDeltaTime()
+    playerY += moveY * speed * Framework_GetDeltaTime()
+
+    ' A button to jump (button 7 = Xbox A)
+    If Framework_IsGamepadButtonPressed(0, 7) Then
+        playerVelY = -jumpForce
+    End If
+
+    ' Right trigger for shooting (axis 5)
+    Dim trigger As Single = Framework_GetGamepadAxisValue(0, 5)
+    If trigger > 0.5 Then
+        FireBullet()
+    End If
+End If
+```
+
+---
+
+## Color Utilities
+
+Convert between color spaces, blend colors, and apply adjustments.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_ColorFromHSV(hue As Single, saturation As Single, value As Single, ByRef outR As Integer, ByRef outG As Integer, ByRef outB As Integer)` | Convert HSV (0-360, 0-1, 0-1) to RGB |
+| `Framework_ColorToHSV(r As Integer, g As Integer, b As Integer, ByRef outH As Single, ByRef outS As Single, ByRef outV As Single)` | Convert RGB to HSV |
+| `Framework_ColorLerp(r1, g1, b1, a1 As Integer, r2, g2, b2, a2 As Integer, t As Single, ByRef outR, ByRef outG, ByRef outB, ByRef outA As Integer)` | Linearly interpolate between two colors |
+| `Framework_ColorAlphaMultiply(r, g, b, a As Integer, alpha As Single, ByRef outR, ByRef outG, ByRef outB, ByRef outA As Integer)` | Multiply alpha channel by factor |
+| `Framework_ColorBrighten(r, g, b As Integer, factor As Single, ByRef outR, ByRef outG, ByRef outB As Integer)` | Brighten color (factor 0-1) |
+| `Framework_ColorDarken(r, g, b As Integer, factor As Single, ByRef outR, ByRef outG, ByRef outB As Integer)` | Darken color (factor 0-1) |
+
+### Example: Rainbow Cycle and Damage Flash
+
+```vb
+' Rainbow cycle using HSV
+Dim hue As Single = (Framework_GetTime() * 60) Mod 360
+Dim cr As Integer, cg As Integer, cb As Integer
+Framework_ColorFromHSV(hue, 1.0, 1.0, cr, cg, cb)
+Framework_DrawCircle(400, 300, 50, cr, cg, cb, 255)
+
+' Flash red on damage, lerp back to white
+Dim flashT As Single = Math.Max(0, 1.0 - timeSinceHit)
+Dim fr As Integer, fg As Integer, fb As Integer, fa As Integer
+Framework_ColorLerp(255,255,255,255, 255,0,0,255, flashT, fr, fg, fb, fa)
+
+' Darken color for shadow
+Dim sr As Integer, sg As Integer, sb As Integer
+Framework_ColorDarken(fr, fg, fb, 0.5, sr, sg, sb)
+```
+
+---
+
+## Window/Display Utilities
+
+Control window properties, toggle fullscreen/borderless modes, and query display information.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_ToggleFullscreen()` | Toggle fullscreen mode |
+| `Framework_ToggleBorderless()` | Toggle borderless windowed mode |
+| `Framework_SetWindowSize(width As Integer, height As Integer)` | Resize the window |
+| `Framework_SetWindowPosition(x As Integer, y As Integer)` | Move the window |
+| `Framework_SetWindowTitle(title As String)` | Change window title |
+| `Framework_GetScreenWidth() As Integer` | Get current screen/window width |
+| `Framework_GetScreenHeight() As Integer` | Get current screen/window height |
+| `Framework_GetMonitorCount() As Integer` | Get number of connected monitors |
+| `Framework_GetMonitorWidth(monitor As Integer) As Integer` | Get monitor width |
+| `Framework_GetMonitorHeight(monitor As Integer) As Integer` | Get monitor height |
+| `Framework_GetMonitorRefreshRate(monitor As Integer) As Integer` | Get monitor refresh rate |
+| `Framework_SetWindowMinSize(width As Integer, height As Integer)` | Set minimum window size |
+
+### Example: Fullscreen Toggle and Display Info
+
+```vb
+' Toggle fullscreen with F11
+If Framework_IsKeyPressed(KEY_F11) Then
+    Framework_ToggleFullscreen()
+End If
+
+' Adapt to screen size
+Dim w As Integer = Framework_GetScreenWidth()
+Dim h As Integer = Framework_GetScreenHeight()
+Dim scale As Single = CSng(w) / 800.0   ' Scale relative to base 800px width
+
+' Display monitor info
+Dim monCount As Integer = Framework_GetMonitorCount()
+For i As Integer = 0 To monCount - 1
+    Dim mw As Integer = Framework_GetMonitorWidth(i)
+    Dim mh As Integer = Framework_GetMonitorHeight(i)
+    Dim hz As Integer = Framework_GetMonitorRefreshRate(i)
+    Console.WriteLine("Monitor " & i & ": " & mw & "x" & mh & " @ " & hz & "Hz")
+Next
+```
+
+---
+
+## Sprite Animation Player
+
+Create named animations with frame ranges and playback control. Animations reference frames from a sprite sheet texture.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_AnimPlayer_Create() As Integer` | Create a new animation player (returns ID) |
+| `Framework_AnimPlayer_Destroy(playerId As Integer)` | Destroy an animation player |
+| `Framework_AnimPlayer_AddAnim(playerId As Integer, name As String, startFrame As Integer, endFrame As Integer, fps As Single)` | Add a named animation with frame range and speed |
+| `Framework_AnimPlayer_Play(playerId As Integer, name As String)` | Play a named animation |
+| `Framework_AnimPlayer_Stop(playerId As Integer)` | Stop current animation |
+| `Framework_AnimPlayer_Pause(playerId As Integer)` | Pause current animation |
+| `Framework_AnimPlayer_Resume(playerId As Integer)` | Resume paused animation |
+| `Framework_AnimPlayer_GetFrame(playerId As Integer) As Integer` | Get current frame index |
+| `Framework_AnimPlayer_SetSpeed(playerId As Integer, speed As Single)` | Set playback speed multiplier |
+| `Framework_AnimPlayer_IsPlaying(playerId As Integer) As Boolean` | Check if animation is playing |
+| `Framework_AnimPlayer_SetLoop(playerId As Integer, loop As Boolean)` | Enable/disable looping |
+| `Framework_AnimPlayer_GetCurrentAnim(playerId As Integer) As String` | Get name of current animation |
+| `Framework_AnimPlayer_Update(playerId As Integer, dt As Single)` | Update animation (call each frame) |
+| `Framework_AnimPlayer_Draw(playerId As Integer, textureId As Integer, x As Single, y As Single, frameW As Integer, frameH As Integer)` | Draw current frame from sprite sheet |
+
+### Example: Character Animation
+
+```vb
+Dim animPlayer As Integer = Framework_AnimPlayer_Create()
+Dim spriteSheet As Integer = Framework_LoadTexture("player_sheet.png")
+
+' Define animations (frame indices in sprite sheet)
+Framework_AnimPlayer_AddAnim(animPlayer, "idle", 0, 3, 8)      ' Frames 0-3 at 8 FPS
+Framework_AnimPlayer_AddAnim(animPlayer, "run", 4, 11, 12)     ' Frames 4-11 at 12 FPS
+Framework_AnimPlayer_AddAnim(animPlayer, "jump", 12, 15, 10)   ' Frames 12-15 at 10 FPS
+Framework_AnimPlayer_AddAnim(animPlayer, "attack", 16, 21, 15) ' Frames 16-21 at 15 FPS
+
+Framework_AnimPlayer_Play(animPlayer, "idle")
+
+' In game loop:
+Dim dt As Single = Framework_GetDeltaTime()
+Framework_AnimPlayer_Update(animPlayer, dt)
+
+' Switch animation based on state
+If isRunning Then
+    If Framework_AnimPlayer_GetCurrentAnim(animPlayer) <> "run" Then
+        Framework_AnimPlayer_Play(animPlayer, "run")
+    End If
+End If
+
+' Draw at player position (each frame is 64x64)
+Framework_AnimPlayer_Draw(animPlayer, spriteSheet, playerX, playerY, 64, 64)
+```
+
+---
+
+## Tilemap Collision
+
+Create tile-based maps with collision detection. Tiles are addressed by column/row indices. Solid tiles block entity movement.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_Tilemap_Create(cols As Integer, rows As Integer, tileW As Integer, tileH As Integer) As Integer` | Create a tilemap (returns ID) |
+| `Framework_Tilemap_Destroy(mapId As Integer)` | Destroy a tilemap |
+| `Framework_Tilemap_SetTile(mapId As Integer, col As Integer, row As Integer, tileIndex As Integer)` | Set tile index at position |
+| `Framework_Tilemap_GetTile(mapId As Integer, col As Integer, row As Integer) As Integer` | Get tile index at position |
+| `Framework_Tilemap_SetSolid(mapId As Integer, tileIndex As Integer, solid As Boolean)` | Mark a tile index as solid/passable |
+| `Framework_Tilemap_IsSolid(mapId As Integer, col As Integer, row As Integer) As Boolean` | Check if tile at position is solid |
+| `Framework_Tilemap_CheckCollision(mapId As Integer, x As Single, y As Single, w As Single, h As Single) As Boolean` | Check rectangle collision against solid tiles |
+| `Framework_Tilemap_WorldToTile(mapId As Integer, worldX As Single, worldY As Single, ByRef col As Integer, ByRef row As Integer)` | Convert world coordinates to tile indices |
+| `Framework_Tilemap_TileToWorld(mapId As Integer, col As Integer, row As Integer, ByRef worldX As Single, ByRef worldY As Single)` | Convert tile indices to world coordinates |
+| `Framework_Tilemap_Draw(mapId As Integer, textureId As Integer, tilesPerRow As Integer)` | Draw tilemap using a tile atlas texture |
+| `Framework_Tilemap_DrawOffset(mapId As Integer, textureId As Integer, tilesPerRow As Integer, offsetX As Single, offsetY As Single)` | Draw tilemap with scroll offset |
+| `Framework_Tilemap_Fill(mapId As Integer, tileIndex As Integer)` | Fill entire map with one tile index |
+
+### Example: Platformer Tilemap
+
+```vb
+Dim tileAtlas As Integer = Framework_LoadTexture("tiles.png")
+Dim map As Integer = Framework_Tilemap_Create(20, 15, 32, 32)
+
+' Mark wall/ground tiles as solid
+Framework_Tilemap_SetSolid(map, 1, True)   ' Tile index 1 = wall
+Framework_Tilemap_SetSolid(map, 2, True)   ' Tile index 2 = ground
+
+' Build floor
+For col As Integer = 0 To 19
+    Framework_Tilemap_SetTile(map, col, 14, 2)  ' Ground on bottom row
+Next
+
+' Add some walls
+Framework_Tilemap_SetTile(map, 5, 10, 1)
+Framework_Tilemap_SetTile(map, 5, 11, 1)
+
+' Check player collision before moving
+Dim newX As Single = playerX + velX * dt
+Dim newY As Single = playerY + velY * dt
+If Not Framework_Tilemap_CheckCollision(map, newX, newY, 24, 32) Then
+    playerX = newX
+    playerY = newY
+End If
+
+' Draw the map (8 tiles per row in atlas texture)
+Framework_Tilemap_Draw(map, tileAtlas, 8)
+```
+
+---
+
+## Nine-Slice Drawing
+
+Draw scalable UI elements using nine-slice (9-patch) sprites. The corners stay fixed size while edges and center stretch.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_NineSlice_Create(textureId As Integer, left As Integer, right As Integer, top As Integer, bottom As Integer) As Integer` | Create a nine-slice config (returns ID) with border insets |
+| `Framework_NineSlice_Destroy(configId As Integer)` | Destroy a nine-slice config |
+| `Framework_NineSlice_Draw(configId As Integer, x As Single, y As Single, w As Single, h As Single)` | Draw nine-slice at position and size |
+| `Framework_NineSlice_DrawTinted(configId As Integer, x As Single, y As Single, w As Single, h As Single, r, g, b, a As Integer)` | Draw nine-slice with color tint |
+| `Framework_NineSlice_SetBorders(configId As Integer, left As Integer, right As Integer, top As Integer, bottom As Integer)` | Update border insets |
+| `Framework_NineSlice_DrawEx(configId As Integer, x As Single, y As Single, w As Single, h As Single, rotation As Single, r, g, b, a As Integer)` | Draw with rotation and tint |
+
+### Example: Scalable Dialog Box
+
+```vb
+Dim panelTex As Integer = Framework_LoadTexture("ui_panel.png")
+
+' Create nine-slice with 12px borders on all sides
+Dim panel As Integer = Framework_NineSlice_Create(panelTex, 12, 12, 12, 12)
+
+' Draw dialog at different sizes - corners stay sharp
+Framework_NineSlice_Draw(panel, 100, 100, 300, 200)      ' Small dialog
+Framework_NineSlice_Draw(panel, 100, 350, 600, 150)      ' Wide banner
+
+' Tinted variant for warning dialog
+Framework_NineSlice_DrawTinted(panel, 200, 200, 400, 250, 255, 200, 200, 255)
+
+' Draw text inside (offset by border size)
+Framework_DrawText("Are you sure?", 112, 112, 20, 255, 255, 255, 255)
+
+' Cleanup
+Framework_NineSlice_Destroy(panel)
+```
+
+---
+
+## Touch Input
+
+Multi-touch input support for touch screens and mobile targets. Touch points are indexed (0 = first finger, etc.).
+
+| Function | Description |
+|----------|-------------|
+| `Framework_GetTouchPointCount() As Integer` | Get number of active touch points |
+| `Framework_GetTouchPointId(index As Integer) As Integer` | Get touch point ID by index |
+| `Framework_GetTouchX() As Integer` | Get X position of first touch point |
+| `Framework_GetTouchY() As Integer` | Get Y position of first touch point |
+| `Framework_GetTouchPosition(index As Integer, ByRef outX As Integer, ByRef outY As Integer)` | Get position of touch point by index |
+| `Framework_IsTouchPressed(index As Integer) As Boolean` | Check if touch point was just pressed |
+| `Framework_IsTouchReleased(index As Integer) As Boolean` | Check if touch point was just released |
+| `Framework_GetTouchDelta(index As Integer, ByRef outDX As Single, ByRef outDY As Single)` | Get touch movement delta since last frame |
+| `Framework_GetGestureDetected() As Integer` | Get last detected gesture type |
+| `Framework_GetGesturePinchAngle() As Single` | Get pinch gesture angle |
+
+### Example: Touch-Based Movement
+
+```vb
+Dim touchCount As Integer = Framework_GetTouchPointCount()
+
+If touchCount > 0 Then
+    ' First finger controls movement
+    Dim tx As Integer, ty As Integer
+    Framework_GetTouchPosition(0, tx, ty)
+
+    ' Move player toward touch point
+    Dim dx As Single = tx - playerX
+    Dim dy As Single = ty - playerY
+    Dim dist As Single = Math.Sqrt(dx * dx + dy * dy)
+    If dist > 5 Then
+        playerX += (dx / dist) * speed * Framework_GetDeltaTime()
+        playerY += (dy / dist) * speed * Framework_GetDeltaTime()
+    End If
+
+    ' Second finger fires
+    If touchCount > 1 AndAlso Framework_IsTouchPressed(1) Then
+        FireBullet()
+    End If
+End If
+
+' Detect pinch-to-zoom
+Dim gesture As Integer = Framework_GetGestureDetected()
+If gesture = GESTURE_PINCH Then
+    Dim angle As Single = Framework_GetGesturePinchAngle()
+    ' Adjust camera zoom
+End If
+```
+
+---
+
+## Screenshot & Recording
+
+Capture screenshots and record gameplay to file.
+
+| Function | Description |
+|----------|-------------|
+| `Framework_TakeScreenshot(fileName As String)` | Save a screenshot to file (PNG format) |
+| `Framework_StartRecording(fileName As String)` | Start recording frames to file |
+| `Framework_StopRecording()` | Stop recording |
+| `Framework_IsRecording() As Boolean` | Check if currently recording |
+
+### Example: Screenshot on Key Press
+
+```vb
+' Take screenshot with F12
+If Framework_IsKeyPressed(KEY_F12) Then
+    Dim fileName As String = "screenshot_" & DateTime.Now.ToString("yyyyMMdd_HHmmss") & ".png"
+    Framework_TakeScreenshot(fileName)
+End If
+
+' Toggle recording with F9
+If Framework_IsKeyPressed(KEY_F9) Then
+    If Framework_IsRecording() Then
+        Framework_StopRecording()
+    Else
+        Framework_StartRecording("gameplay.gif")
+    End If
+End If
+
+' Show recording indicator
+If Framework_IsRecording() Then
+    Framework_DrawCircle(760, 20, 8, 255, 0, 0, 255)
+    Framework_DrawText("REC", 730, 12, 16, 255, 0, 0, 255)
+End If
 ```
 
 ---

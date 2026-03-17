@@ -312,6 +312,16 @@ Public Module FrameworkWrapper
     Public Function Framework_CheckCollisionPointLine(point As Vector2, p1 As Vector2, p2 As Vector2, threshold As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 
+    ''' <summary>Checks if a point is inside a polygon defined by an array of points</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CheckCollisionPointPoly(point As Vector2, points As Vector2(), pointCount As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Checks if two lines intersect, returns collision point via out parameters</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CheckCollisionLines(startPos1 As Vector2, endPos1 As Vector2, startPos2 As Vector2, endPos2 As Vector2, ByRef collisionPoint As Vector2) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_GetCollisionRec(rec1 As Rectangle, rec2 As Rectangle) As Rectangle
     End Function
@@ -1362,6 +1372,84 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_Physics_GetOverlappingEntities(entity As Integer, buffer As Integer(), bufferSize As Integer) As Integer
     End Function
+#End Region
+
+#Region "Introspection (Editor-ready)"
+    ' ---- Entity Component Queries ----
+
+    ''' <summary>Gets the number of components attached to an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Entity_GetComponentCount(entity As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the component type ID at the given index for an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Entity_GetComponentTypeAt(entity As Integer, index As Integer) As Integer
+    End Function
+
+    ''' <summary>Checks if an entity has a component of the given type</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Entity_HasComponent(entity As Integer, compType As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ' ---- Component Field Info (static, doesn't need entity) ----
+
+    ''' <summary>Gets the number of fields in a component type</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Component_GetFieldCount(compType As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the name of a field in a component type</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Component_GetFieldName(compType As Integer, fieldIndex As Integer) As <MarshalAs(UnmanagedType.LPStr)> String
+    End Function
+
+    ''' <summary>Gets the type of a field (0=float, 1=int, 2=bool, 3=string)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Component_GetFieldType(compType As Integer, fieldIndex As Integer) As Integer
+    End Function
+
+    ' ---- Field Get/Set (by entity + component type + field index) ----
+
+    ''' <summary>Gets a float field value from a component on an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Component_GetFieldFloat(entity As Integer, compType As Integer, fieldIndex As Integer) As Single
+    End Function
+
+    ''' <summary>Gets an integer field value from a component on an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Component_GetFieldInt(entity As Integer, compType As Integer, fieldIndex As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets a boolean field value from a component on an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Component_GetFieldBool(entity As Integer, compType As Integer, fieldIndex As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets a string field value from a component on an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Component_GetFieldString(entity As Integer, compType As Integer, fieldIndex As Integer) As <MarshalAs(UnmanagedType.LPStr)> String
+    End Function
+
+    ''' <summary>Sets a float field value on a component on an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Component_SetFieldFloat(entity As Integer, compType As Integer, fieldIndex As Integer, value As Single)
+    End Sub
+
+    ''' <summary>Sets an integer field value on a component on an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Component_SetFieldInt(entity As Integer, compType As Integer, fieldIndex As Integer, value As Integer)
+    End Sub
+
+    ''' <summary>Sets a boolean field value on a component on an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Component_SetFieldBool(entity As Integer, compType As Integer, fieldIndex As Integer, <MarshalAs(UnmanagedType.I1)> value As Boolean)
+    End Sub
+
+    ''' <summary>Sets a string field value on a component on an entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Component_SetFieldString(entity As Integer, compType As Integer, fieldIndex As Integer, <MarshalAs(UnmanagedType.LPStr)> value As String)
+    End Sub
 #End Region
 
 #Region "Debug Overlay"
@@ -10548,6 +10636,528 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Sub Framework_Trail_DestroyAll()
     End Sub
+#End Region
+
+#Region "Random Number Generator"
+    ''' <summary>Seeds the random number generator with a specific value for reproducible sequences</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Random_Seed(seed As Integer)
+    End Sub
+
+    ''' <summary>Returns a random non-negative integer</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_Int() As Integer
+    End Function
+
+    ''' <summary>Returns a random integer in the range [min, max]</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_IntRange(min As Integer, max As Integer) As Integer
+    End Function
+
+    ''' <summary>Returns a random float in the range [0.0, 1.0]</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_Float() As Single
+    End Function
+
+    ''' <summary>Returns a random float in the range [min, max]</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_FloatRange(min As Single, max As Single) As Single
+    End Function
+
+    ''' <summary>Returns a random boolean value (True or False)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_Bool() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Returns True if a random number (0-99) is less than the given percent</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_Chance(percent As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Generates a random unit direction vector</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Random_Direction(ByRef outX As Single, ByRef outY As Single)
+    End Sub
+
+    ''' <summary>Generates a random point uniformly distributed inside a circle. Returns distance from center.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_PointInCircle(cx As Single, cy As Single, radius As Single, ByRef outX As Single, ByRef outY As Single) As Single
+    End Function
+
+    ''' <summary>Generates a random point inside a rectangle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Random_PointInRect(x As Single, y As Single, w As Single, h As Single, ByRef outX As Single, ByRef outY As Single)
+    End Sub
+
+    ''' <summary>Selects a random index from an array of weights (higher weight = more likely)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_WeightedIndex(weights As Single(), count As Integer) As Integer
+    End Function
+
+    ''' <summary>Simulates rolling a die with the given number of sides (returns 1 to sides)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Random_DiceRoll(sides As Integer) As Integer
+    End Function
+#End Region
+
+#Region "Additional Shape Drawing"
+    ''' <summary>Draws a filled ellipse</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawEllipse(cx As Integer, cy As Integer, radiusH As Single, radiusV As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws an ellipse outline</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawEllipseLines(cx As Integer, cy As Integer, radiusH As Single, radiusV As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a filled ring (annulus sector)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRing(cx As Single, cy As Single, innerRadius As Single, outerRadius As Single, startAngle As Single, endAngle As Single, segments As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a ring outline</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRingLines(cx As Single, cy As Single, innerRadius As Single, outerRadius As Single, startAngle As Single, endAngle As Single, segments As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a filled rounded rectangle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleRounded(x As Single, y As Single, w As Single, h As Single, roundness As Single, segments As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a rounded rectangle outline</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleRoundedLines(x As Single, y As Single, w As Single, h As Single, roundness As Single, segments As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a filled regular polygon</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawPoly(cx As Single, cy As Single, sides As Integer, radius As Single, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a regular polygon outline</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawPolyLines(cx As Single, cy As Single, sides As Integer, radius As Single, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a filled circle sector (pie slice)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCircleSector(cx As Single, cy As Single, radius As Single, startAngle As Single, endAngle As Single, segments As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a circle sector outline</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCircleSectorLines(cx As Single, cy As Single, radius As Single, startAngle As Single, endAngle As Single, segments As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+#End Region
+
+#Region "Text Measurement"
+    ''' <summary>Measures the width in pixels of text at the given font size</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_MeasureText(text As String, fontSize As Integer) As Integer
+    End Function
+
+    ''' <summary>Measures text dimensions using a loaded font with custom spacing</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_MeasureTextEx(fontHandle As Integer, text As String, fontSize As Single, spacing As Single, ByRef outWidth As Single, ByRef outHeight As Single)
+    End Sub
+
+    ''' <summary>Draws text centered at the given position</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTextCentered(text As String, centerX As Integer, centerY As Integer, fontSize As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws text right-aligned at the given X position</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTextRight(text As String, rightX As Integer, y As Integer, fontSize As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+#End Region
+
+#Region "Gamepad Input"
+    ''' <summary>Checks if a gamepad is available (connected)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsGamepadAvailable(gamepad As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets the name of the specified gamepad</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGamepadName(gamepad As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Checks if a gamepad button was pressed this frame</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsGamepadButtonPressed(gamepad As Integer, button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Checks if a gamepad button is currently held down</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsGamepadButtonDown(gamepad As Integer, button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Checks if a gamepad button was released this frame</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsGamepadButtonReleased(gamepad As Integer, button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Checks if a gamepad button is NOT being pressed</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsGamepadButtonUp(gamepad As Integer, button As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets the last gamepad button pressed</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGamepadButtonPressed() As Integer
+    End Function
+
+    ''' <summary>Gets the number of axes on the specified gamepad</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGamepadAxisCount(gamepad As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the movement value of a gamepad axis (-1.0 to 1.0)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGamepadAxisMovement(gamepad As Integer, axis As Integer) As Single
+    End Function
+
+    ''' <summary>Sets gamepad mappings (SDL_GameControllerDB format)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_SetGamepadMappings(mappings As String) As Integer
+    End Function
+#End Region
+
+#Region "Color Utilities"
+    ''' <summary>Converts HSV color values to RGB</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Color_FromHSV(h As Single, s As Single, v As Single, ByRef outR As Byte, ByRef outG As Byte, ByRef outB As Byte)
+    End Sub
+
+    ''' <summary>Converts RGB color values to HSV</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Color_ToHSV(r As Byte, g As Byte, b As Byte, ByRef outH As Single, ByRef outS As Single, ByRef outV As Single)
+    End Sub
+
+    ''' <summary>Linearly interpolates between two colors by factor t (0.0 to 1.0)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Color_Lerp(r1 As Byte, g1 As Byte, b1 As Byte, r2 As Byte, g2 As Byte, b2 As Byte, t As Single, ByRef outR As Byte, ByRef outG As Byte, ByRef outB As Byte)
+    End Sub
+
+    ''' <summary>Applies alpha multiplier to a color's alpha channel</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Color_Alpha(r As Byte, g As Byte, b As Byte, a As Byte, alpha As Single) As Byte
+    End Function
+
+    ''' <summary>Brightens or darkens a color by the given factor (-1.0 to 1.0)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Color_Brighten(r As Byte, g As Byte, b As Byte, factor As Single, ByRef outR As Byte, ByRef outG As Byte, ByRef outB As Byte)
+    End Sub
+
+    ''' <summary>Inverts a color (255 - component for each RGB channel)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Color_Invert(r As Byte, g As Byte, b As Byte, ByRef outR As Byte, ByRef outG As Byte, ByRef outB As Byte)
+    End Sub
+#End Region
+
+#Region "Window/Display Utilities"
+    ''' <summary>Toggles fullscreen mode</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ToggleFullscreen()
+    End Sub
+
+    ''' <summary>Toggles borderless windowed mode</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ToggleBorderlessWindowed()
+    End Sub
+
+    ''' <summary>Sets the window size</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowSize(width As Integer, height As Integer)
+    End Sub
+
+    ''' <summary>Sets the minimum window size</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowMinSize(width As Integer, height As Integer)
+    End Sub
+
+    ''' <summary>Sets the window title</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowTitle(title As String)
+    End Sub
+
+    ''' <summary>Gets the current screen/window width</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetScreenWidth() As Integer
+    End Function
+
+    ''' <summary>Gets the current screen/window height</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetScreenHeight() As Integer
+    End Function
+
+    ''' <summary>Gets the width of the specified monitor</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorWidth(monitor As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the height of the specified monitor</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorHeight(monitor As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the number of connected monitors</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorCount() As Integer
+    End Function
+
+    ''' <summary>Gets the refresh rate of the specified monitor</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorRefreshRate(monitor As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the index of the current monitor (where the window is displayed)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetCurrentMonitor() As Integer
+    End Function
+#End Region
+
+#Region "Standalone Sprite Animation Player"
+    ''' <summary>Creates a new animation player and returns its handle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CreateAnimationPlayer() As Integer
+    End Function
+
+    ''' <summary>Destroys an animation player by handle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DestroyAnimationPlayer(handle As Integer)
+    End Sub
+
+    ''' <summary>Adds a named animation clip with start/end frames and playback FPS</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerAddAnimation(handle As Integer, name As String, startFrame As Integer, endFrame As Integer, fps As Single)
+    End Sub
+
+    ''' <summary>Plays the named animation, optionally looping</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerPlay(handle As Integer, animName As String, <MarshalAs(UnmanagedType.I1)> [loop] As Boolean)
+    End Sub
+
+    ''' <summary>Stops the current animation and resets timer</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerStop(handle As Integer)
+    End Sub
+
+    ''' <summary>Pauses the current animation</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerPause(handle As Integer)
+    End Sub
+
+    ''' <summary>Resumes a paused animation</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerResume(handle As Integer)
+    End Sub
+
+    ''' <summary>Updates the animation player by the given delta time</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerUpdate(handle As Integer, deltaTime As Single)
+    End Sub
+
+    ''' <summary>Gets the current frame index of the animation</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimPlayerGetCurrentFrame(handle As Integer) As Integer
+    End Function
+
+    ''' <summary>Returns true if the animation player is actively playing (not paused)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimPlayerIsPlaying(handle As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Sets the playback speed multiplier (1.0 = normal)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerSetSpeed(handle As Integer, speed As Single)
+    End Sub
+
+    ''' <summary>Gets the name of the currently playing animation</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_AnimPlayerGetAnimation(handle As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Sets the texture (sprite sheet) handle for the animation player</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerSetTexture(handle As Integer, textureHandle As Integer)
+    End Sub
+
+    ''' <summary>Draws the current animation frame at the given position and size</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AnimPlayerDraw(handle As Integer, x As Single, y As Single, width As Single, height As Single)
+    End Sub
+#End Region
+
+#Region "Tilemap Collision Integration"
+    ''' <summary>Creates a tilemap with the given dimensions and tile size, returns handle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CreateTilemap(width As Integer, height As Integer, tileWidth As Integer, tileHeight As Integer) As Integer
+    End Function
+
+    ''' <summary>Destroys a tilemap by handle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DestroyTilemap(handle As Integer)
+    End Sub
+
+    ''' <summary>Sets the tile ID at the given grid position</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_TilemapSetTile(handle As Integer, x As Integer, y As Integer, tileId As Integer)
+    End Sub
+
+    ''' <summary>Gets the tile ID at the given grid position (-1 if out of bounds)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_TilemapGetTile(handle As Integer, x As Integer, y As Integer) As Integer
+    End Function
+
+    ''' <summary>Marks a tile ID as solid (collidable) or not</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_TilemapSetCollision(handle As Integer, tileId As Integer, <MarshalAs(UnmanagedType.I1)> solid As Boolean)
+    End Sub
+
+    ''' <summary>Checks if an AABB rectangle collides with any solid tiles</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_TilemapCheckCollision(handle As Integer, x As Single, y As Single, w As Single, h As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets the tile IDs of solid tiles overlapping an AABB, returns count</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_TilemapGetCollisionTiles(handle As Integer, x As Single, y As Single, w As Single, h As Single, outTiles As Integer(), maxCount As Integer) As Integer
+    End Function
+
+    ''' <summary>Converts world coordinates to tile grid coordinates</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_TilemapWorldToTile(handle As Integer, worldX As Single, worldY As Single, ByRef tileX As Integer, ByRef tileY As Integer)
+    End Sub
+
+    ''' <summary>Converts tile grid coordinates to world coordinates</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_TilemapTileToWorld(handle As Integer, tileX As Integer, tileY As Integer, ByRef worldX As Single, ByRef worldY As Single)
+    End Sub
+
+    ''' <summary>Draws the tilemap using the given texture (tileset) at the given offset</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_TilemapDraw(handle As Integer, textureHandle As Integer, offsetX As Single, offsetY As Single)
+    End Sub
+
+    ''' <summary>Sets whether the tilemap layer is visible for drawing</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_TilemapSetLayerVisible(handle As Integer, <MarshalAs(UnmanagedType.I1)> visible As Boolean)
+    End Sub
+
+    ''' <summary>Gets the tilemap grid dimensions (width and height in tiles)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_TilemapGetSize(handle As Integer, ByRef width As Integer, ByRef height As Integer)
+    End Sub
+#End Region
+
+#Region "Nine-Slice Drawing"
+    ''' <summary>Draws a texture using nine-slice scaling with the given border insets</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawNineSlice(textureHandle As Integer, x As Single, y As Single, w As Single, h As Single, left As Integer, top As Integer, right As Integer, bottom As Integer)
+    End Sub
+
+    ''' <summary>Draws a tinted nine-slice texture with the given border insets and RGBA color</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawNineSliceTinted(textureHandle As Integer, x As Single, y As Single, w As Single, h As Single, left As Integer, top As Integer, right As Integer, bottom As Integer, r As Integer, g As Integer, b As Integer, a As Integer)
+    End Sub
+
+    ''' <summary>Creates a reusable nine-slice config and stores the handle in the output parameter</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetNineSliceBorders(ByRef handle As Integer, left As Integer, top As Integer, right As Integer, bottom As Integer)
+    End Sub
+
+    ''' <summary>Draws a nine-slice texture using a pre-created config handle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawNineSliceEx(textureHandle As Integer, nineSliceHandle As Integer, x As Single, y As Single, w As Single, h As Single)
+    End Sub
+
+    ''' <summary>Creates a reusable nine-slice border config and returns its handle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CreateNineSliceConfig(left As Integer, top As Integer, right As Integer, bottom As Integer) As Integer
+    End Function
+
+    ''' <summary>Destroys a nine-slice config by handle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DestroyNineSliceConfig(handle As Integer)
+    End Sub
+#End Region
+
+#Region "Touch Input"
+    ''' <summary>Gets the number of active touch points</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetTouchPointCount() As Integer
+    End Function
+
+    ''' <summary>Gets the touch point identifier for the given index</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetTouchPointId(index As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the X coordinate of a touch point by index</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetTouchX(index As Integer) As Single
+    End Function
+
+    ''' <summary>Gets the Y coordinate of a touch point by index</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetTouchY(index As Integer) As Single
+    End Function
+
+    ''' <summary>Returns true if the touch point at index is currently down</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsTouchDown(index As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Returns true if a touch was just pressed this frame</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsTouchPressed(index As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Returns true if a touch was just released this frame</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsTouchReleased(index As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets the X delta (drag) of a touch point</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetTouchDeltaX(index As Integer) As Single
+    End Function
+
+    ''' <summary>Gets the Y delta (drag) of a touch point</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetTouchDeltaY(index As Integer) As Single
+    End Function
+
+    ''' <summary>Gets the last detected gesture (tap, swipe, drag, etc.)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGesture() As Integer
+    End Function
+#End Region
+
+#Region "Screenshot / Recording"
+    ''' <summary>Takes a screenshot and saves it to the given filename</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_TakeScreenshot(filename As String)
+    End Sub
+
+    ''' <summary>Begins recording frames (stub implementation for future video/GIF recording)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginRecording(filename As String, fps As Integer)
+    End Sub
+
+    ''' <summary>Ends the current recording session</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndRecording()
+    End Sub
+
+    ''' <summary>Returns true if currently recording</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsRecording() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
 #End Region
 
 End Module

@@ -123,6 +123,7 @@ namespace BasicLang.Compiler
             }
             // Handle visibility and other modifiers for top-level declarations
             if (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend) ||
+                Check(TokenType.Protected) ||
                 Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
                 Check(TokenType.Shared))
             {
@@ -134,11 +135,19 @@ namespace BasicLang.Compiler
 
                 // Parse modifiers in any order
                 while (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend) ||
+                       Check(TokenType.Protected) ||
                        Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
                        Check(TokenType.Shared))
                 {
                     if (Match(TokenType.Public)) access = AccessModifier.Public;
                     else if (Match(TokenType.Private)) access = AccessModifier.Private;
+                    else if (Match(TokenType.Protected))
+                    {
+                        if (Match(TokenType.Friend))
+                            access = AccessModifier.ProtectedFriend;
+                        else
+                            access = AccessModifier.Protected;
+                    }
                     else if (Match(TokenType.Friend)) access = AccessModifier.Friend;
                     else if (Match(TokenType.Async)) isAsync = true;
                     else if (Match(TokenType.Iterator)) isIterator = true;

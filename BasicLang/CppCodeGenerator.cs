@@ -920,6 +920,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _typeMap["Char"] = "char";
             _typeMap["Void"] = "void";
             _typeMap["Object"] = "void*";
+            _typeMap["Byte"] = "uint8_t";
+            _typeMap["Short"] = "int16_t";
+            _typeMap["SByte"] = "int8_t";
+            _typeMap["UByte"] = "uint8_t";
+            _typeMap["UShort"] = "uint16_t";
+            _typeMap["UInteger"] = "uint32_t";
+            _typeMap["ULong"] = "uint64_t";
+            _typeMap["Decimal"] = "long double";
         }
         
         #region Visitor Methods
@@ -1398,8 +1406,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
                 else
                 {
-                    // Unknown function — emit a comment so user knows
-                    sb.AppendLine($"    // TODO: {funcName} — declaration not found, check framework.h");
+                    // Unknown function — emit a compiler error so it's caught at build time
+                    sb.AppendLine($"    #error \"Unknown framework function: {funcName} — declaration not found, check framework.h\"");
                 }
             }
 
@@ -1527,17 +1535,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRAwait awaitInst)
         {
-            // C++ doesn't have native async/await, generate a comment
-            WriteLine($"// await {awaitInst.Expression?.Name ?? "expression"} - C++ async not supported");
+            // C++ doesn't have native async/await - emit compiler warning
+            WriteLine($"#warning \"await is not supported in C++ backend - expression '{awaitInst.Expression?.Name ?? "expression"}' will be evaluated synchronously\"");
         }
 
         public override void Visit(IRYield yieldInst)
         {
-            // C++ doesn't have native yield, generate a comment
+            // C++ doesn't have native yield - emit compiler warning
             if (yieldInst.IsBreak)
-                WriteLine("// yield break - C++ iterators not supported");
+                WriteLine("#warning \"yield break is not supported in C++ backend - iterator will not function correctly\"");
             else
-                WriteLine($"// yield return {yieldInst.Value?.Name ?? "value"} - C++ iterators not supported");
+                WriteLine($"#warning \"yield return is not supported in C++ backend - value '{yieldInst.Value?.Name ?? "value"}' will not be yielded\"");
         }
 
         public override void Visit(IRNewObject newObj)
@@ -1678,14 +1686,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"for ({elemType} {varName} : {collection})");
             WriteLine("{");
             Indent();
-            // Body would be processed separately by block processing
+
+            // Emit body block instructions
+            if (forEach.BodyBlock != null)
+            {
+                foreach (var instruction in forEach.BodyBlock.Instructions)
+                {
+                    instruction.Accept(this);
+                }
+            }
+
             Unindent();
             WriteLine("}");
         }
 
         public override void Visit(IRIndexerAccess indexer)
         {
-            // C++ indexer access handled in expression emission
+            var collection = GetValueName(indexer.Collection);
+            var indices = string.Join("][", indexer.Indices.Select(i => GetValueName(i)));
+            var result = GetValueName(indexer);
+
+            WriteLine($"{result} = {collection}[{indices}];");
         }
 
         #endregion

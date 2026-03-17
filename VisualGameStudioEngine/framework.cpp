@@ -15,6 +15,7 @@
 #include <cmath>
 #include <fstream>
 #include <functional>
+#include <random>
 
 // ============================================================================
 // GLOBAL ENGINE STATE
@@ -25,6 +26,9 @@ namespace {
     float g_timeScale = 1.0f;
     float g_masterVolume = 1.0f;
     bool g_audioPaused = false;
+
+    // Random number generator
+    std::mt19937 g_rng(std::random_device{}());
 
     // Fixed timestep
     double g_fixedStep = 1.0 / 60.0;
@@ -27978,4 +27982,835 @@ extern "C" {
         g_trails.clear();
     }
 
+    // ========================================================================
+    // RANDOM NUMBER GENERATOR
+    // ========================================================================
+
+    void Framework_Random_Seed(int seed) {
+        g_rng.seed(static_cast<unsigned int>(seed));
+    }
+
+    int Framework_Random_Int() {
+        std::uniform_int_distribution<int> dist(0, INT_MAX);
+        return dist(g_rng);
+    }
+
+    int Framework_Random_IntRange(int min, int max) {
+        if (min > max) std::swap(min, max);
+        std::uniform_int_distribution<int> dist(min, max);
+        return dist(g_rng);
+    }
+
+    float Framework_Random_Float() {
+        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+        return dist(g_rng);
+    }
+
+    float Framework_Random_FloatRange(float min, float max) {
+        if (min > max) std::swap(min, max);
+        std::uniform_real_distribution<float> dist(min, max);
+        return dist(g_rng);
+    }
+
+    bool Framework_Random_Bool() {
+        std::uniform_int_distribution<int> dist(0, 1);
+        return dist(g_rng) == 1;
+    }
+
+    bool Framework_Random_Chance(int percent) {
+        std::uniform_int_distribution<int> dist(0, 99);
+        return dist(g_rng) < percent;
+    }
+
+    void Framework_Random_Direction(float* outX, float* outY) {
+        if (!outX || !outY) return;
+        std::uniform_real_distribution<float> dist(0.0f, 2.0f * 3.14159265358979323846f);
+        float angle = dist(g_rng);
+        *outX = cosf(angle);
+        *outY = sinf(angle);
+    }
+
+    float Framework_Random_PointInCircle(float cx, float cy, float radius, float* outX, float* outY) {
+        if (!outX || !outY) return 0.0f;
+        std::uniform_real_distribution<float> angleDist(0.0f, 2.0f * 3.14159265358979323846f);
+        std::uniform_real_distribution<float> radiusDist(0.0f, 1.0f);
+        float angle = angleDist(g_rng);
+        float r = radius * sqrtf(radiusDist(g_rng)); // sqrt for uniform distribution
+        *outX = cx + r * cosf(angle);
+        *outY = cy + r * sinf(angle);
+        return r; // return distance from center
+    }
+
+    void Framework_Random_PointInRect(float x, float y, float w, float h, float* outX, float* outY) {
+        if (!outX || !outY) return;
+        std::uniform_real_distribution<float> distX(x, x + w);
+        std::uniform_real_distribution<float> distY(y, y + h);
+        *outX = distX(g_rng);
+        *outY = distY(g_rng);
+    }
+
+    int Framework_Random_WeightedIndex(float* weights, int count) {
+        if (!weights || count <= 0) return 0;
+        float total = 0.0f;
+        for (int i = 0; i < count; i++) total += weights[i];
+        if (total <= 0.0f) return 0;
+        std::uniform_real_distribution<float> dist(0.0f, total);
+        float roll = dist(g_rng);
+        float cumulative = 0.0f;
+        for (int i = 0; i < count; i++) {
+            cumulative += weights[i];
+            if (roll < cumulative) return i;
+        }
+        return count - 1;
+    }
+
+    int Framework_Random_DiceRoll(int sides) {
+        if (sides <= 0) return 1;
+        std::uniform_int_distribution<int> dist(1, sides);
+        return dist(g_rng);
+    }
+
+    // ========================================================================
+    // ADDITIONAL SHAPE DRAWING
+    // ========================================================================
+
+    void Framework_DrawEllipse(int cx, int cy, float radiusH, float radiusV, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawEllipse(cx, cy, radiusH, radiusV, {r, g, b, a});
+    }
+
+    void Framework_DrawEllipseLines(int cx, int cy, float radiusH, float radiusV, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawEllipseLines(cx, cy, radiusH, radiusV, {r, g, b, a});
+    }
+
+    void Framework_DrawRing(float cx, float cy, float innerRadius, float outerRadius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRing({cx, cy}, innerRadius, outerRadius, startAngle, endAngle, segments, {r, g, b, a});
+    }
+
+    void Framework_DrawRingLines(float cx, float cy, float innerRadius, float outerRadius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRingLines({cx, cy}, innerRadius, outerRadius, startAngle, endAngle, segments, {r, g, b, a});
+    }
+
+    void Framework_DrawRectangleRounded(float x, float y, float w, float h, float roundness, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRectangleRounded({x, y, w, h}, roundness, segments, {r, g, b, a});
+    }
+
+    void Framework_DrawRectangleRoundedLines(float x, float y, float w, float h, float roundness, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRectangleRoundedLines({x, y, w, h}, roundness, segments, {r, g, b, a});
+    }
+
+    void Framework_DrawPoly(float cx, float cy, int sides, float radius, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawPoly({cx, cy}, sides, radius, rotation, {r, g, b, a});
+    }
+
+    void Framework_DrawPolyLines(float cx, float cy, int sides, float radius, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawPolyLinesEx({cx, cy}, sides, radius, rotation, 1.0f, {r, g, b, a});
+    }
+
+    void Framework_DrawCircleSector(float cx, float cy, float radius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawCircleSector({cx, cy}, radius, startAngle, endAngle, segments, {r, g, b, a});
+    }
+
+    void Framework_DrawCircleSectorLines(float cx, float cy, float radius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawCircleSectorLines({cx, cy}, radius, startAngle, endAngle, segments, {r, g, b, a});
+    }
+
+    // ========================================================================
+    // TEXT MEASUREMENT
+    // ========================================================================
+
+    int Framework_MeasureText(const char* text, int fontSize) {
+        return MeasureText(text, fontSize);
+    }
+
+    void Framework_MeasureTextEx(int fontHandle, const char* text, float fontSize, float spacing, float* outWidth, float* outHeight) {
+        if (!outWidth || !outHeight) return;
+        Font font = UI_GetFontByHandle(fontHandle);
+        Vector2 size = MeasureTextEx(font, text, fontSize, spacing);
+        *outWidth = size.x;
+        *outHeight = size.y;
+    }
+
+    void Framework_DrawTextCentered(const char* text, int centerX, int centerY, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        int w = MeasureText(text, fontSize);
+        DrawText(text, centerX - w / 2, centerY - fontSize / 2, fontSize, {r, g, b, a});
+    }
+
+    void Framework_DrawTextRight(const char* text, int rightX, int y, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        int w = MeasureText(text, fontSize);
+        DrawText(text, rightX - w, y, fontSize, {r, g, b, a});
+    }
+
+    // ========================================================================
+    // GAMEPAD INPUT
+    // ========================================================================
+
+    bool Framework_IsGamepadAvailable(int gamepad) {
+        return IsGamepadAvailable(gamepad);
+    }
+
+    const char* Framework_GetGamepadName(int gamepad) {
+        return GetGamepadName(gamepad);
+    }
+
+    bool Framework_IsGamepadButtonPressed(int gamepad, int button) {
+        return IsGamepadButtonPressed(gamepad, button);
+    }
+
+    bool Framework_IsGamepadButtonDown(int gamepad, int button) {
+        return IsGamepadButtonDown(gamepad, button);
+    }
+
+    bool Framework_IsGamepadButtonReleased(int gamepad, int button) {
+        return IsGamepadButtonReleased(gamepad, button);
+    }
+
+    bool Framework_IsGamepadButtonUp(int gamepad, int button) {
+        return IsGamepadButtonUp(gamepad, button);
+    }
+
+    int Framework_GetGamepadButtonPressed() {
+        return GetGamepadButtonPressed();
+    }
+
+    int Framework_GetGamepadAxisCount(int gamepad) {
+        return GetGamepadAxisCount(gamepad);
+    }
+
+    float Framework_GetGamepadAxisMovement(int gamepad, int axis) {
+        return GetGamepadAxisMovement(gamepad, axis);
+    }
+
+    int Framework_SetGamepadMappings(const char* mappings) {
+        return SetGamepadMappings(mappings);
+    }
+
+    // ========================================================================
+    // COLOR UTILITIES
+    // ========================================================================
+
+    void Framework_Color_FromHSV(float h, float s, float v, unsigned char* outR, unsigned char* outG, unsigned char* outB) {
+        if (!outR || !outG || !outB) return;
+        Color c = ColorFromHSV(h, s, v);
+        *outR = c.r;
+        *outG = c.g;
+        *outB = c.b;
+    }
+
+    void Framework_Color_ToHSV(unsigned char r, unsigned char g, unsigned char b, float* outH, float* outS, float* outV) {
+        if (!outH || !outS || !outV) return;
+        Vector3 hsv = ColorToHSV({r, g, b, 255});
+        *outH = hsv.x;
+        *outS = hsv.y;
+        *outV = hsv.z;
+    }
+
+    void Framework_Color_Lerp(unsigned char r1, unsigned char g1, unsigned char b1, unsigned char r2, unsigned char g2, unsigned char b2, float t, unsigned char* outR, unsigned char* outG, unsigned char* outB) {
+        if (!outR || !outG || !outB) return;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        *outR = (unsigned char)(r1 + (r2 - r1) * t);
+        *outG = (unsigned char)(g1 + (g2 - g1) * t);
+        *outB = (unsigned char)(b1 + (b2 - b1) * t);
+    }
+
+    unsigned char Framework_Color_Alpha(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float alpha) {
+        if (alpha < 0.0f) alpha = 0.0f;
+        if (alpha > 1.0f) alpha = 1.0f;
+        return (unsigned char)(a * alpha);
+    }
+
+    void Framework_Color_Brighten(unsigned char r, unsigned char g, unsigned char b, float factor, unsigned char* outR, unsigned char* outG, unsigned char* outB) {
+        if (!outR || !outG || !outB) return;
+        Color c = ColorBrightness({r, g, b, 255}, factor);
+        *outR = c.r;
+        *outG = c.g;
+        *outB = c.b;
+    }
+
+    void Framework_Color_Invert(unsigned char r, unsigned char g, unsigned char b, unsigned char* outR, unsigned char* outG, unsigned char* outB) {
+        if (!outR || !outG || !outB) return;
+        *outR = 255 - r;
+        *outG = 255 - g;
+        *outB = 255 - b;
+    }
+
+    // ========================================================================
+    // WINDOW/DISPLAY UTILITIES
+    // ========================================================================
+
+    void Framework_ToggleFullscreen() {
+        ToggleFullscreen();
+    }
+
+    void Framework_ToggleBorderlessWindowed() {
+        ToggleBorderlessWindowed();
+    }
+
+    void Framework_SetWindowSize(int width, int height) {
+        SetWindowSize(width, height);
+    }
+
+    void Framework_SetWindowMinSize(int width, int height) {
+        SetWindowMinSize(width, height);
+    }
+
+    void Framework_SetWindowTitle(const char* title) {
+        SetWindowTitle(title);
+    }
+
+    int Framework_GetScreenWidth() {
+        return GetScreenWidth();
+    }
+
+    int Framework_GetScreenHeight() {
+        return GetScreenHeight();
+    }
+
+    int Framework_GetMonitorWidth(int monitor) {
+        return GetMonitorWidth(monitor);
+    }
+
+    int Framework_GetMonitorHeight(int monitor) {
+        return GetMonitorHeight(monitor);
+    }
+
+    int Framework_GetMonitorCount() {
+        return GetMonitorCount();
+    }
+
+    int Framework_GetMonitorRefreshRate(int monitor) {
+        return GetMonitorRefreshRate(monitor);
+    }
+
+    int Framework_GetCurrentMonitor() {
+        return GetCurrentMonitor();
+    }
+
 } // extern "C"
+
+// ============================================================================
+// ANIMATION PLAYER STATE
+// ============================================================================
+namespace {
+    struct AnimClip {
+        std::string name;
+        int startFrame;
+        int endFrame;
+        float fps;
+    };
+
+    struct AnimationPlayer {
+        std::unordered_map<std::string, AnimClip> animations;
+        std::string currentAnim;
+        int currentFrame = 0;
+        float timer = 0.0f;
+        float speed = 1.0f;
+        bool playing = false;
+        bool paused = false;
+        bool loop = false;
+        int textureHandle = -1;
+    };
+
+    std::unordered_map<int, AnimationPlayer> g_animPlayers;
+    int g_nextAnimPlayer = 1;
+}
+
+// ============================================================================
+// TILEMAP STATE
+// ============================================================================
+namespace {
+    struct Tilemap {
+        std::vector<int> tiles;
+        std::unordered_set<int> solidTiles;
+        int width = 0;
+        int height = 0;
+        int tileWidth = 0;
+        int tileHeight = 0;
+        bool visible = true;
+    };
+
+    std::unordered_map<int, Tilemap> g_tilemaps;
+    int g_nextTilemap = 1;
+}
+
+// ============================================================================
+// NINE-SLICE CONFIG STATE
+// ============================================================================
+namespace {
+    struct NineSliceConfig {
+        int left, top, right, bottom;
+    };
+
+    std::unordered_map<int, NineSliceConfig> g_nineSliceConfigs;
+    int g_nextNineSlice = 1;
+
+    void DrawNineSliceInternal(const Texture2D* tex, float x, float y, float w, float h,
+                                int left, int top, int right, int bottom, Color tint) {
+        if (!tex) return;
+        float texW = (float)tex->width;
+        float texH = (float)tex->height;
+        float midSrcW = texW - left - right;
+        float midSrcH = texH - top - bottom;
+        float midDstW = w - left - right;
+        float midDstH = h - top - bottom;
+
+        // Top-left corner
+        DrawTexturePro(*tex, {0, 0, (float)left, (float)top},
+                       {x, y, (float)left, (float)top}, {0, 0}, 0.0f, tint);
+        // Top edge
+        DrawTexturePro(*tex, {(float)left, 0, midSrcW, (float)top},
+                       {x + left, y, midDstW, (float)top}, {0, 0}, 0.0f, tint);
+        // Top-right corner
+        DrawTexturePro(*tex, {texW - right, 0, (float)right, (float)top},
+                       {x + w - right, y, (float)right, (float)top}, {0, 0}, 0.0f, tint);
+        // Left edge
+        DrawTexturePro(*tex, {0, (float)top, (float)left, midSrcH},
+                       {x, y + top, (float)left, midDstH}, {0, 0}, 0.0f, tint);
+        // Center
+        DrawTexturePro(*tex, {(float)left, (float)top, midSrcW, midSrcH},
+                       {x + left, y + top, midDstW, midDstH}, {0, 0}, 0.0f, tint);
+        // Right edge
+        DrawTexturePro(*tex, {texW - right, (float)top, (float)right, midSrcH},
+                       {x + w - right, y + top, (float)right, midDstH}, {0, 0}, 0.0f, tint);
+        // Bottom-left corner
+        DrawTexturePro(*tex, {0, texH - bottom, (float)left, (float)bottom},
+                       {x, y + h - bottom, (float)left, (float)bottom}, {0, 0}, 0.0f, tint);
+        // Bottom edge
+        DrawTexturePro(*tex, {(float)left, texH - bottom, midSrcW, (float)bottom},
+                       {x + left, y + h - bottom, midDstW, (float)bottom}, {0, 0}, 0.0f, tint);
+        // Bottom-right corner
+        DrawTexturePro(*tex, {texW - right, texH - bottom, (float)right, (float)bottom},
+                       {x + w - right, y + h - bottom, (float)right, (float)bottom}, {0, 0}, 0.0f, tint);
+    }
+}
+
+// ============================================================================
+// RECORDING STATE
+// ============================================================================
+namespace {
+    bool g_isRecording = false;
+    std::string g_recordingFilename;
+    int g_recordingFps = 30;
+}
+
+// ============================================================================
+// STANDALONE SPRITE ANIMATION PLAYER IMPLEMENTATION
+// ============================================================================
+extern "C" {
+
+    int Framework_CreateAnimationPlayer() {
+        int h = g_nextAnimPlayer++;
+        g_animPlayers[h] = AnimationPlayer{};
+        return h;
+    }
+
+    void Framework_DestroyAnimationPlayer(int handle) {
+        g_animPlayers.erase(handle);
+    }
+
+    void Framework_AnimPlayerAddAnimation(int handle, const char* name, int startFrame, int endFrame, float fps) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end() || !name) return;
+        AnimClip clip;
+        clip.name = name;
+        clip.startFrame = startFrame;
+        clip.endFrame = endFrame;
+        clip.fps = fps;
+        it->second.animations[name] = clip;
+    }
+
+    void Framework_AnimPlayerPlay(int handle, const char* animName, bool loop) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end() || !animName) return;
+        auto& player = it->second;
+        auto clipIt = player.animations.find(animName);
+        if (clipIt == player.animations.end()) return;
+        player.currentAnim = animName;
+        player.currentFrame = clipIt->second.startFrame;
+        player.timer = 0.0f;
+        player.playing = true;
+        player.paused = false;
+        player.loop = loop;
+    }
+
+    void Framework_AnimPlayerStop(int handle) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return;
+        it->second.playing = false;
+        it->second.paused = false;
+        it->second.timer = 0.0f;
+    }
+
+    void Framework_AnimPlayerPause(int handle) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return;
+        if (it->second.playing) it->second.paused = true;
+    }
+
+    void Framework_AnimPlayerResume(int handle) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return;
+        it->second.paused = false;
+    }
+
+    void Framework_AnimPlayerUpdate(int handle, float deltaTime) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return;
+        auto& player = it->second;
+        if (!player.playing || player.paused || player.currentAnim.empty()) return;
+
+        auto clipIt = player.animations.find(player.currentAnim);
+        if (clipIt == player.animations.end()) return;
+        auto& clip = clipIt->second;
+
+        player.timer += deltaTime * player.speed;
+        float frameDuration = 1.0f / clip.fps;
+
+        while (player.timer >= frameDuration) {
+            player.timer -= frameDuration;
+            player.currentFrame++;
+
+            if (player.currentFrame > clip.endFrame) {
+                if (player.loop) {
+                    player.currentFrame = clip.startFrame;
+                } else {
+                    player.currentFrame = clip.endFrame;
+                    player.playing = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    int Framework_AnimPlayerGetCurrentFrame(int handle) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return 0;
+        return it->second.currentFrame;
+    }
+
+    bool Framework_AnimPlayerIsPlaying(int handle) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return false;
+        return it->second.playing && !it->second.paused;
+    }
+
+    void Framework_AnimPlayerSetSpeed(int handle, float speed) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return;
+        it->second.speed = speed;
+    }
+
+    const char* Framework_AnimPlayerGetAnimation(int handle) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return "";
+        return it->second.currentAnim.c_str();
+    }
+
+    void Framework_AnimPlayerSetTexture(int handle, int textureHandle) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return;
+        it->second.textureHandle = textureHandle;
+    }
+
+    void Framework_AnimPlayerDraw(int handle, float x, float y, float width, float height) {
+        auto it = g_animPlayers.find(handle);
+        if (it == g_animPlayers.end()) return;
+        auto& player = it->second;
+
+        const Texture2D* tex = GetTextureH_Internal(player.textureHandle);
+        if (!tex) return;
+
+        // Calculate source rectangle from current frame
+        // Assumes horizontal sprite sheet
+        if (player.currentAnim.empty()) return;
+        auto clipIt = player.animations.find(player.currentAnim);
+        if (clipIt == player.animations.end()) return;
+
+        int totalFrames = clipIt->second.endFrame - clipIt->second.startFrame + 1;
+        if (totalFrames <= 0) return;
+
+        float frameWidth = (float)tex->width / (float)(clipIt->second.endFrame + 1);
+        float frameHeight = (float)tex->height;
+
+        Rectangle src = { frameWidth * player.currentFrame, 0, frameWidth, frameHeight };
+        Rectangle dst = { x, y, width, height };
+        DrawTexturePro(*tex, src, dst, {0, 0}, 0.0f, WHITE);
+    }
+
+    // ========================================================================
+    // TILEMAP COLLISION INTEGRATION IMPLEMENTATION
+    // ========================================================================
+
+    int Framework_CreateTilemap(int width, int height, int tileWidth, int tileHeight) {
+        int h = g_nextTilemap++;
+        Tilemap tm;
+        tm.width = width;
+        tm.height = height;
+        tm.tileWidth = tileWidth;
+        tm.tileHeight = tileHeight;
+        tm.tiles.resize(width * height, 0);
+        tm.visible = true;
+        g_tilemaps[h] = std::move(tm);
+        return h;
+    }
+
+    void Framework_DestroyTilemap(int handle) {
+        g_tilemaps.erase(handle);
+    }
+
+    void Framework_TilemapSetTile(int handle, int x, int y, int tileId) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end()) return;
+        auto& tm = it->second;
+        if (x < 0 || x >= tm.width || y < 0 || y >= tm.height) return;
+        tm.tiles[y * tm.width + x] = tileId;
+    }
+
+    int Framework_TilemapGetTile(int handle, int x, int y) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end()) return -1;
+        auto& tm = it->second;
+        if (x < 0 || x >= tm.width || y < 0 || y >= tm.height) return -1;
+        return tm.tiles[y * tm.width + x];
+    }
+
+    void Framework_TilemapSetCollision(int handle, int tileId, bool solid) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end()) return;
+        if (solid)
+            it->second.solidTiles.insert(tileId);
+        else
+            it->second.solidTiles.erase(tileId);
+    }
+
+    bool Framework_TilemapCheckCollision(int handle, float x, float y, float w, float h) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end()) return false;
+        auto& tm = it->second;
+
+        int startTX = (int)(x / tm.tileWidth);
+        int startTY = (int)(y / tm.tileHeight);
+        int endTX = (int)((x + w - 1) / tm.tileWidth);
+        int endTY = (int)((y + h - 1) / tm.tileHeight);
+
+        for (int ty = startTY; ty <= endTY; ty++) {
+            for (int tx = startTX; tx <= endTX; tx++) {
+                if (tx < 0 || tx >= tm.width || ty < 0 || ty >= tm.height) continue;
+                int tileId = tm.tiles[ty * tm.width + tx];
+                if (tm.solidTiles.count(tileId)) return true;
+            }
+        }
+        return false;
+    }
+
+    int Framework_TilemapGetCollisionTiles(int handle, float x, float y, float w, float h, int* outTiles, int maxCount) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end() || !outTiles) return 0;
+        auto& tm = it->second;
+
+        int startTX = (int)(x / tm.tileWidth);
+        int startTY = (int)(y / tm.tileHeight);
+        int endTX = (int)((x + w - 1) / tm.tileWidth);
+        int endTY = (int)((y + h - 1) / tm.tileHeight);
+
+        int count = 0;
+        for (int ty = startTY; ty <= endTY && count < maxCount; ty++) {
+            for (int tx = startTX; tx <= endTX && count < maxCount; tx++) {
+                if (tx < 0 || tx >= tm.width || ty < 0 || ty >= tm.height) continue;
+                int tileId = tm.tiles[ty * tm.width + tx];
+                if (tm.solidTiles.count(tileId)) {
+                    outTiles[count++] = tileId;
+                }
+            }
+        }
+        return count;
+    }
+
+    void Framework_TilemapWorldToTile(int handle, float worldX, float worldY, int* tileX, int* tileY) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end() || !tileX || !tileY) return;
+        *tileX = (int)(worldX / it->second.tileWidth);
+        *tileY = (int)(worldY / it->second.tileHeight);
+    }
+
+    void Framework_TilemapTileToWorld(int handle, int tileX, int tileY, float* worldX, float* worldY) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end() || !worldX || !worldY) return;
+        *worldX = (float)(tileX * it->second.tileWidth);
+        *worldY = (float)(tileY * it->second.tileHeight);
+    }
+
+    void Framework_TilemapDraw(int handle, int textureHandle, float offsetX, float offsetY) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end()) return;
+        auto& tm = it->second;
+        if (!tm.visible) return;
+
+        const Texture2D* tex = GetTextureH_Internal(textureHandle);
+        if (!tex) return;
+
+        int tilesPerRow = tex->width / tm.tileWidth;
+        if (tilesPerRow <= 0) tilesPerRow = 1;
+
+        for (int y = 0; y < tm.height; y++) {
+            for (int x = 0; x < tm.width; x++) {
+                int tileId = tm.tiles[y * tm.width + x];
+                if (tileId <= 0) continue;
+
+                int srcX = ((tileId - 1) % tilesPerRow) * tm.tileWidth;
+                int srcY = ((tileId - 1) / tilesPerRow) * tm.tileHeight;
+
+                Rectangle src = { (float)srcX, (float)srcY, (float)tm.tileWidth, (float)tm.tileHeight };
+                Rectangle dst = { offsetX + x * tm.tileWidth, offsetY + y * tm.tileHeight,
+                                  (float)tm.tileWidth, (float)tm.tileHeight };
+                DrawTexturePro(*tex, src, dst, {0, 0}, 0.0f, WHITE);
+            }
+        }
+    }
+
+    void Framework_TilemapSetLayerVisible(int handle, bool visible) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end()) return;
+        it->second.visible = visible;
+    }
+
+    void Framework_TilemapGetSize(int handle, int* width, int* height) {
+        auto it = g_tilemaps.find(handle);
+        if (it == g_tilemaps.end() || !width || !height) return;
+        *width = it->second.width;
+        *height = it->second.height;
+    }
+
+    // ========================================================================
+    // NINE-SLICE DRAWING IMPLEMENTATION
+    // ========================================================================
+
+    void Framework_DrawNineSlice(int textureHandle, float x, float y, float w, float h,
+                                  int left, int top, int right, int bottom) {
+        const Texture2D* tex = GetTextureH_Internal(textureHandle);
+        DrawNineSliceInternal(tex, x, y, w, h, left, top, right, bottom, WHITE);
+    }
+
+    void Framework_DrawNineSliceTinted(int textureHandle, float x, float y, float w, float h,
+                                        int left, int top, int right, int bottom,
+                                        int r, int g, int b, int a) {
+        const Texture2D* tex = GetTextureH_Internal(textureHandle);
+        Color tint = { (unsigned char)r, (unsigned char)g, (unsigned char)b, (unsigned char)a };
+        DrawNineSliceInternal(tex, x, y, w, h, left, top, right, bottom, tint);
+    }
+
+    void Framework_SetNineSliceBorders(int* handle, int left, int top, int right, int bottom) {
+        if (!handle) return;
+        int h = g_nextNineSlice++;
+        NineSliceConfig cfg;
+        cfg.left = left;
+        cfg.top = top;
+        cfg.right = right;
+        cfg.bottom = bottom;
+        g_nineSliceConfigs[h] = cfg;
+        *handle = h;
+    }
+
+    void Framework_DrawNineSliceEx(int textureHandle, int nineSliceHandle, float x, float y, float w, float h) {
+        auto cfgIt = g_nineSliceConfigs.find(nineSliceHandle);
+        if (cfgIt == g_nineSliceConfigs.end()) return;
+        const Texture2D* tex = GetTextureH_Internal(textureHandle);
+        auto& cfg = cfgIt->second;
+        DrawNineSliceInternal(tex, x, y, w, h, cfg.left, cfg.top, cfg.right, cfg.bottom, WHITE);
+    }
+
+    int Framework_CreateNineSliceConfig(int left, int top, int right, int bottom) {
+        int h = g_nextNineSlice++;
+        NineSliceConfig cfg;
+        cfg.left = left;
+        cfg.top = top;
+        cfg.right = right;
+        cfg.bottom = bottom;
+        g_nineSliceConfigs[h] = cfg;
+        return h;
+    }
+
+    void Framework_DestroyNineSliceConfig(int handle) {
+        g_nineSliceConfigs.erase(handle);
+    }
+
+    // ========================================================================
+    // TOUCH INPUT IMPLEMENTATION
+    // ========================================================================
+
+    int Framework_GetTouchPointCount() {
+        return GetTouchPointCount();
+    }
+
+    int Framework_GetTouchPointId(int index) {
+        return GetTouchPointId(index);
+    }
+
+    float Framework_GetTouchX(int index) {
+        Vector2 pos = GetTouchPosition(index);
+        return pos.x;
+    }
+
+    float Framework_GetTouchY(int index) {
+        Vector2 pos = GetTouchPosition(index);
+        return pos.y;
+    }
+
+    bool Framework_IsTouchDown(int index) {
+        // Touch is "down" if the point count exceeds the index
+        return index < GetTouchPointCount();
+    }
+
+    bool Framework_IsTouchPressed(int index) {
+        // Raylib doesn't have per-touch pressed; approximate via gesture
+        // A touch is "pressed" on the frame it first appears
+        return (GetGestureDetected() == GESTURE_TAP) && (index < GetTouchPointCount());
+    }
+
+    bool Framework_IsTouchReleased(int index) {
+        // Approximate: gesture NONE after a tap
+        return (GetGestureDetected() == GESTURE_NONE) && (index == 0);
+    }
+
+    float Framework_GetTouchDeltaX(int index) {
+        // Raylib provides drag vector for gesture, not per-touch delta
+        Vector2 drag = GetGestureDragVector();
+        return (index == 0) ? drag.x : 0.0f;
+    }
+
+    float Framework_GetTouchDeltaY(int index) {
+        Vector2 drag = GetGestureDragVector();
+        return (index == 0) ? drag.y : 0.0f;
+    }
+
+    int Framework_GetGesture() {
+        return GetGestureDetected();
+    }
+
+    // ========================================================================
+    // SCREENSHOT / RECORDING IMPLEMENTATION
+    // ========================================================================
+
+    void Framework_TakeScreenshot(const char* filename) {
+        if (!filename) return;
+        TakeScreenshot(filename);
+    }
+
+    void Framework_BeginRecording(const char* filename, int fps) {
+        // Stub implementation - store state for future GIF/video recording
+        if (!filename) return;
+        g_isRecording = true;
+        g_recordingFilename = filename;
+        g_recordingFps = fps;
+    }
+
+    void Framework_EndRecording() {
+        g_isRecording = false;
+        g_recordingFilename.clear();
+    }
+
+    bool Framework_IsRecording() {
+        return g_isRecording;
+    }
+
+} // extern "C" (new features)

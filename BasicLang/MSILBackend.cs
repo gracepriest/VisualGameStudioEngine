@@ -59,6 +59,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _typeMap["Object"] = "object";
             _typeMap["Byte"] = "uint8";
             _typeMap["Short"] = "int16";
+            _typeMap["SByte"] = "int8";
+            _typeMap["UByte"] = "uint8";
+            _typeMap["UShort"] = "uint16";
+            _typeMap["UInteger"] = "uint32";
+            _typeMap["ULong"] = "uint64";
+            _typeMap["Decimal"] = "valuetype [System.Runtime]System.Decimal";
         }
 
         public override string Generate(IRModule module)
@@ -1723,18 +1729,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         public override void Visit(IRAwait awaitInst)
         {
             // MSIL async/await requires complex state machine generation
-            // For now, generate a comment
-            WriteLine($"    // await - MSIL async not fully implemented");
+            WriteLine($"    // WARNING: await not fully implemented in MSIL backend - expression will be evaluated synchronously");
         }
 
         public override void Visit(IRYield yieldInst)
         {
             // MSIL yield requires iterator state machine generation
-            // For now, generate a comment
             if (yieldInst.IsBreak)
-                WriteLine("    // yield break - MSIL iterators not fully implemented");
+                WriteLine("    // WARNING: yield break not fully implemented in MSIL backend - iterator will not function correctly");
             else
-                WriteLine($"    // yield return - MSIL iterators not fully implemented");
+                WriteLine($"    // WARNING: yield return not fully implemented in MSIL backend - iterator will not function correctly");
         }
 
         public override void Visit(IRNewObject newObj)
