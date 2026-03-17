@@ -4,7 +4,7 @@
     <Name>BasicLang WPF Application</Name>
     <Description>A WPF desktop application for the BasicLang programming language.</Description>
     <ProjectType>VisualBasic</ProjectType>
-    <LanguageTag>visualbasic</LanguageTag>
+    <LanguageTag>BasicLang</LanguageTag>
     <PlatformTag>Windows</PlatformTag>
     <ProjectTypeTag>Desktop</ProjectTypeTag>
     <ProjectTypeTag>WPF</ProjectTypeTag>

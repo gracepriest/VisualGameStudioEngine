@@ -19,7 +19,7 @@ namespace BasicLang.Debugger
     public class DebugSession
     {
         private readonly Stream _input;
-        private readonly Stream _output;
+        private readonly Stream _outputStream;
         private readonly Dictionary<int, Breakpoint> _breakpoints = new();
         private readonly Dictionary<int, VariableInfo> _variables = new();
         private readonly List<StackFrameInfo> _stackFrames = new();
@@ -31,11 +31,12 @@ namespace BasicLang.Debugger
         private int _nextVariableRef = 1;
         private int _seq = 0;
         private int _nextBreakpointId = 1;
+        private readonly object _writeLock = new();
 
         public DebugSession(Stream input, Stream output)
         {
             _input = input;
-            _output = output;
+            _outputStream = output;
         }
 
         public async Task RunAsync()
@@ -75,6 +76,8 @@ namespace BasicLang.Debugger
                     "launch" => await HandleLaunchAsync(message),
                     "setBreakpoints" => HandleSetBreakpoints(message),
                     "setFunctionBreakpoints" => HandleSetFunctionBreakpoints(message),
+                    "dataBreakpointInfo" => HandleDataBreakpointInfo(message),
+                    "setDataBreakpoints" => HandleSetDataBreakpoints(message),
                     "configurationDone" => HandleConfigurationDone(message),
                     "threads" => HandleThreads(message),
                     "stackTrace" => HandleStackTrace(message),
@@ -87,6 +90,9 @@ namespace BasicLang.Debugger
                     "pause" => HandlePause(message),
                     "disconnect" => HandleDisconnect(message),
                     "evaluate" => HandleEvaluate(message),
+                    "gotoTargets" => HandleGotoTargets(message),
+                    "goto" => HandleGoto(message),
+                    "setExceptionBreakpoints" => HandleSetExceptionBreakpoints(message),
                     _ => CreateResponse(message, true)
                 };
 
@@ -109,14 +115,21 @@ namespace BasicLang.Debugger
                 ["supportsHitConditionalBreakpoints"] = true,
                 ["supportsLogPoints"] = true,
                 ["supportsEvaluateForHovers"] = true,
+                ["supportsDataBreakpoints"] = true,
                 ["supportsStepBack"] = false,
                 ["supportsSetVariable"] = false,
                 ["supportsRestartFrame"] = false,
-                ["supportsGotoTargetsRequest"] = false,
+                ["supportsGotoTargetsRequest"] = true,
                 ["supportsStepInTargetsRequest"] = false,
                 ["supportsCompletionsRequest"] = false,
                 ["supportsModulesRequest"] = false,
-                ["supportsExceptionOptions"] = false,
+                ["supportsExceptionOptions"] = true,
+                ["supportsDataBreakpoints"] = true,
+                ["exceptionBreakpointFilters"] = new object[]
+                {
+                    new Dictionary<string, object> { ["filter"] = "all", ["label"] = "All Exceptions", ["default"] = false },
+                    new Dictionary<string, object> { ["filter"] = "uncaught", ["label"] = "Uncaught Exceptions", ["default"] = true }
+                },
                 ["supportsValueFormattingOptions"] = false,
                 ["supportsExceptionInfoRequest"] = false,
                 ["supportTerminateDebuggee"] = true,
@@ -124,10 +137,11 @@ namespace BasicLang.Debugger
                 ["supportsLoadedSourcesRequest"] = false
             };
 
-            // Send initialized event
-            Task.Run(async () =>
+            // Send initialized event after response is sent
+            // Use a completion source to ensure proper ordering
+            _ = Task.Run(async () =>
             {
-                await Task.Delay(100);
+                await Task.Delay(50);
                 await SendEventAsync("initialized", null);
             });
 
@@ -140,7 +154,7 @@ namespace BasicLang.Debugger
 
             if (args.TryGetProperty("program", out var programProp))
             {
-                _currentFile = programProp.GetString();
+                _currentFile = programProp.GetString() ?? string.Empty;
             }
 
             if (args.TryGetProperty("stopOnEntry", out var stopProp))
@@ -171,6 +185,7 @@ namespace BasicLang.Debugger
                     _interpreter.StepComplete += OnStepComplete;
                     _interpreter.OutputProduced += OnOutputProduced;
                     _interpreter.LogpointHit += OnLogpointHit;
+                    _interpreter.DataBreakpointHit += OnDataBreakpointHit;
 
                     // Set breakpoints
                     foreach (var bp in _breakpoints.Values)
@@ -270,8 +285,8 @@ namespace BasicLang.Debugger
                                 breakpoint.LogMessage = logMsgProp.GetString();
                             }
 
-                            // Validate breakpoint (would need source code access)
-                            breakpoint.Verified = true; // For now, always verified
+                            // Validate breakpoint line
+                            breakpoint.Verified = ValidateBreakpointLine(path, ref line, breakpoint);
 
                             var id = _nextBreakpointId++;
                             breakpoint.Id = id;
@@ -360,6 +375,168 @@ namespace BasicLang.Debugger
                         {
                             ["id"] = id,
                             ["verified"] = breakpoint.Verified
+                        });
+                    }
+                }
+            }
+
+            var response = CreateResponse(request, true);
+            response.Body = new Dictionary<string, object>
+            {
+                ["breakpoints"] = breakpoints
+            };
+            return response;
+        }
+
+        /// <summary>
+        /// Handle dataBreakpointInfo request - returns whether a variable can be watched
+        /// </summary>
+        private DAPResponse HandleDataBreakpointInfo(DAPMessage request)
+        {
+            var args = request.Arguments;
+            string variableName = null;
+            string dataId = null;
+            string description = null;
+            var accessTypes = new List<string>();
+
+            if (args.TryGetProperty("name", out var nameProp))
+            {
+                variableName = nameProp.GetString();
+            }
+
+            // Also check variablesReference for scoped variable access
+            if (args.TryGetProperty("variablesReference", out var varRefProp))
+            {
+                var varRef = varRefProp.GetInt32();
+                // If we have a variables reference, the name is relative to that scope
+                // For simplicity, we use the name directly since BasicLang uses flat scoping
+            }
+
+            if (!string.IsNullOrEmpty(variableName))
+            {
+                // All variables in BasicLang can be watched
+                dataId = variableName;
+                description = $"Break when '{variableName}' changes";
+                accessTypes.Add("write");
+                accessTypes.Add("read");
+                accessTypes.Add("readWrite");
+            }
+
+            var response = CreateResponse(request, true);
+            var body = new Dictionary<string, object>
+            {
+                ["dataId"] = dataId ?? (object)DBNull.Value,
+                ["description"] = description ?? ""
+            };
+
+            if (accessTypes.Count > 0)
+            {
+                body["accessTypes"] = accessTypes;
+                body["canPersist"] = false; // Data breakpoints don't persist across sessions
+            }
+
+            response.Body = body;
+            return response;
+        }
+
+        /// <summary>
+        /// Handle setDataBreakpoints request - set watchpoints on variables
+        /// </summary>
+        private DAPResponse HandleSetDataBreakpoints(DAPMessage request)
+        {
+            var args = request.Arguments;
+            var breakpoints = new List<object>();
+
+            // Clear existing data breakpoints
+            _interpreter?.ClearDataBreakpoints();
+
+            var toRemove = _breakpoints.Where(kvp =>
+                kvp.Value.Type == BreakpointType.Data)
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var id in toRemove)
+            {
+                _breakpoints.Remove(id);
+            }
+
+            if (args.TryGetProperty("breakpoints", out var bpArray))
+            {
+                foreach (var bp in bpArray.EnumerateArray())
+                {
+                    string dataId = null;
+                    string condition = null;
+                    var accessType = DataBreakpointAccessType.Write;
+
+                    if (bp.TryGetProperty("dataId", out var dataIdProp))
+                    {
+                        dataId = dataIdProp.GetString();
+                    }
+
+                    if (bp.TryGetProperty("accessType", out var accessProp))
+                    {
+                        var accessStr = accessProp.GetString();
+                        accessType = accessStr switch
+                        {
+                            "read" => DataBreakpointAccessType.Read,
+                            "readWrite" => DataBreakpointAccessType.ReadWrite,
+                            _ => DataBreakpointAccessType.Write
+                        };
+                    }
+
+                    if (bp.TryGetProperty("condition", out var condProp) &&
+                        !string.IsNullOrWhiteSpace(condProp.GetString()))
+                    {
+                        condition = condProp.GetString();
+                    }
+
+                    if (!string.IsNullOrEmpty(dataId))
+                    {
+                        // Add data breakpoint to interpreter
+                        var breakpoint = _interpreter?.AddDataBreakpoint(dataId, accessType, condition);
+
+                        if (breakpoint != null)
+                        {
+                            var id = _nextBreakpointId++;
+                            breakpoint.Id = id;
+                            _breakpoints[id] = breakpoint;
+
+                            breakpoints.Add(new Dictionary<string, object>
+                            {
+                                ["id"] = id,
+                                ["verified"] = true
+                            });
+                        }
+                        else
+                        {
+                            // Interpreter not started yet, store for later
+                            var pendingBp = new Breakpoint
+                            {
+                                Type = BreakpointType.Data,
+                                VariableName = dataId,
+                                DataAccessType = accessType,
+                                Condition = condition ?? string.Empty,
+                                Verified = true
+                            };
+
+                            var id = _nextBreakpointId++;
+                            pendingBp.Id = id;
+                            _breakpoints[id] = pendingBp;
+
+                            breakpoints.Add(new Dictionary<string, object>
+                            {
+                                ["id"] = id,
+                                ["verified"] = true
+                            });
+                        }
+                    }
+                    else
+                    {
+                        breakpoints.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = 0,
+                            ["verified"] = false,
+                            ["message"] = "Invalid data breakpoint: no variable specified"
                         });
                     }
                 }
@@ -727,8 +904,16 @@ namespace BasicLang.Debugger
             return value.ToString();
         }
 
+        private void ClearVariableReferences()
+        {
+            _variables.Clear();
+            _stackFrames.Clear();
+            _nextVariableRef = 1;
+        }
+
         private DAPResponse HandleContinue(DAPMessage request)
         {
+            ClearVariableReferences();
             Task.Run(() => _interpreter?.Continue());
             var response = CreateResponse(request, true);
             response.Body = new Dictionary<string, object>
@@ -740,18 +925,21 @@ namespace BasicLang.Debugger
 
         private DAPResponse HandleNext(DAPMessage request)
         {
+            ClearVariableReferences();
             Task.Run(() => _interpreter?.StepOver());
             return CreateResponse(request, true);
         }
 
         private DAPResponse HandleStepIn(DAPMessage request)
         {
+            ClearVariableReferences();
             Task.Run(() => _interpreter?.StepInto());
             return CreateResponse(request, true);
         }
 
         private DAPResponse HandleStepOut(DAPMessage request)
         {
+            ClearVariableReferences();
             Task.Run(() => _interpreter?.StepOut());
             return CreateResponse(request, true);
         }
@@ -789,34 +977,211 @@ namespace BasicLang.Debugger
             return response;
         }
 
+        private DAPResponse HandleGotoTargets(DAPMessage request)
+        {
+            var args = request.Arguments;
+            var response = CreateResponse(request, true);
+
+            var targets = new List<object>();
+            if (_interpreter != null && args.TryGetProperty("line", out var lineProp))
+            {
+                var targetLine = lineProp.GetInt32();
+                var executableLines = _interpreter.GetExecutableLines();
+
+                // Return the target line if executable, or nearest executable lines
+                for (int d = 0; d <= 5; d++)
+                {
+                    if (executableLines.Contains(targetLine + d))
+                    {
+                        var line = targetLine + d;
+                        targets.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = line,
+                            ["label"] = $"Line {line}",
+                            ["line"] = line
+                        });
+                    }
+                    if (d > 0 && executableLines.Contains(targetLine - d))
+                    {
+                        var line = targetLine - d;
+                        targets.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = line,
+                            ["label"] = $"Line {line}",
+                            ["line"] = line
+                        });
+                    }
+                }
+            }
+
+            response.Body = new Dictionary<string, object>
+            {
+                ["targets"] = targets
+            };
+            return response;
+        }
+
+        private DAPResponse HandleGoto(DAPMessage request)
+        {
+            var args = request.Arguments;
+            var response = CreateResponse(request, true);
+
+            if (_interpreter != null && args.TryGetProperty("targetId", out var targetIdProp))
+            {
+                var targetLine = targetIdProp.GetInt32();
+                var success = _interpreter.SetNextStatement(_currentFile, targetLine);
+
+                if (success)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        await SendEventAsync("stopped", new Dictionary<string, object>
+                        {
+                            ["reason"] = "goto",
+                            ["threadId"] = 1,
+                            ["allThreadsStopped"] = true
+                        });
+                    });
+                }
+                else
+                {
+                    response.Success = false;
+                    response.Body = new Dictionary<string, object>
+                    {
+                        ["error"] = new Dictionary<string, object>
+                        {
+                            ["id"] = 1,
+                            ["format"] = "Cannot set next statement while running"
+                        }
+                    };
+                }
+            }
+
+            return response;
+        }
+
+        private DAPResponse HandleSetExceptionBreakpoints(DAPMessage request)
+        {
+            var args = request.Arguments;
+            var filters = new List<string>();
+
+            if (args.TryGetProperty("filters", out var filterArray))
+            {
+                foreach (var f in filterArray.EnumerateArray())
+                {
+                    var filterStr = f.GetString();
+                    if (!string.IsNullOrEmpty(filterStr))
+                        filters.Add(filterStr);
+                }
+            }
+
+            _interpreter?.SetExceptionFilters(filters);
+
+            var response = CreateResponse(request, true);
+            response.Body = new Dictionary<string, object>
+            {
+                ["breakpoints"] = filters.Select(f => new Dictionary<string, object>
+                {
+                    ["verified"] = true,
+                    ["message"] = f == "all" ? "Break on all exceptions" : "Break on uncaught exceptions"
+                }).ToList()
+            };
+            return response;
+        }
+
+        // HandleSetDataBreakpoints and HandleDataBreakpointInfo defined earlier in the file
+
+        private bool ValidateBreakpointLine(string path, ref int line, Breakpoint breakpoint)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                return true; // Can't validate, assume ok
+
+            try
+            {
+                var lines = File.ReadAllLines(path);
+                if (line < 1 || line > lines.Length)
+                {
+                    breakpoint.Message = $"Line {line} is beyond end of file ({lines.Length} lines)";
+                    return false;
+                }
+
+                var lineText = lines[line - 1].Trim();
+
+                // Empty line or comment-only
+                if (string.IsNullOrWhiteSpace(lineText) || lineText.StartsWith("'") ||
+                    lineText.StartsWith("REM ", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Try to find nearest executable line
+                    if (_interpreter != null)
+                    {
+                        var nearest = _interpreter.FindNearestExecutableLine(line, 5);
+                        if (nearest > 0)
+                        {
+                            breakpoint.Line = nearest;
+                            line = nearest;
+                            return true;
+                        }
+                    }
+
+                    // Fallback: search adjacent lines in source
+                    for (int d = 1; d <= 5; d++)
+                    {
+                        var checkIdx = line - 1 + d;
+                        if (checkIdx < lines.Length)
+                        {
+                            var checkText = lines[checkIdx].Trim();
+                            if (!string.IsNullOrWhiteSpace(checkText) && !checkText.StartsWith("'") &&
+                                !checkText.StartsWith("REM ", StringComparison.OrdinalIgnoreCase))
+                            {
+                                line = checkIdx + 1;
+                                breakpoint.Line = line;
+                                return true;
+                            }
+                        }
+                    }
+
+                    breakpoint.Message = "No executable code at this line";
+                    return false;
+                }
+
+                return true;
+            }
+            catch
+            {
+                return true; // Can't read file, assume ok
+            }
+        }
+
         private void OnBreakpointHit(object sender, DebugEventArgs e)
         {
-            Task.Run(() => SendEventAsync("stopped", new Dictionary<string, object>
+            // Send synchronously on the interpreter thread -- completes before _pauseEvent.Wait() blocks
+            SendEventAsync("stopped", new Dictionary<string, object>
             {
                 ["reason"] = "breakpoint",
                 ["threadId"] = 1,
                 ["allThreadsStopped"] = true
-            }));
+            }).GetAwaiter().GetResult();
         }
 
         private void OnStepComplete(object sender, DebugEventArgs e)
         {
-            Task.Run(() => SendEventAsync("stopped", new Dictionary<string, object>
+            // Send synchronously on the interpreter thread
+            SendEventAsync("stopped", new Dictionary<string, object>
             {
                 ["reason"] = "step",
                 ["threadId"] = 1,
                 ["allThreadsStopped"] = true
-            }));
+            }).GetAwaiter().GetResult();
         }
 
         private void OnOutputProduced(object sender, OutputEventArgs e)
         {
-            // Use synchronous wait to ensure output is sent before continuing
+            // Send synchronously to ensure output ordering is preserved
             SendEventAsync("output", new Dictionary<string, object>
             {
                 ["category"] = "stdout",
                 ["output"] = e.Text
-            }).Wait();
+            }).GetAwaiter().GetResult();
         }
 
         private void OnLogpointHit(object sender, LogpointEventArgs e)
@@ -834,11 +1199,38 @@ namespace BasicLang.Debugger
             }));
         }
 
+        private void OnDataBreakpointHit(object sender, DataBreakpointEventArgs e)
+        {
+            // Send stopped event with reason "data breakpoint" synchronously on the interpreter thread
+            // The interpreter will wait on _pauseEvent after this event fires
+            SendEventAsync("stopped", new Dictionary<string, object>
+            {
+                ["reason"] = "data breakpoint",
+                ["description"] = $"Data breakpoint on '{e.VariableName}': {FormatDataBreakpointMessage(e)}",
+                ["threadId"] = 1,
+                ["allThreadsStopped"] = true
+            }).GetAwaiter().GetResult();
+        }
+
+        private string FormatDataBreakpointMessage(DataBreakpointEventArgs e)
+        {
+            var oldStr = e.OldValue?.ToString() ?? "Nothing";
+            var newStr = e.NewValue?.ToString() ?? "Nothing";
+
+            return e.AccessType switch
+            {
+                DataBreakpointAccessType.Write => $"value changed from {oldStr} to {newStr}",
+                DataBreakpointAccessType.Read => $"value read: {newStr}",
+                DataBreakpointAccessType.ReadWrite => $"accessed (value: {newStr})",
+                _ => $"triggered"
+            };
+        }
+
         private DAPResponse CreateResponse(DAPMessage request, bool success)
         {
             return new DAPResponse
             {
-                Seq = ++_seq,
+                Seq = Interlocked.Increment(ref _seq),
                 Type = "response",
                 RequestSeq = request.Seq,
                 Success = success,
@@ -860,7 +1252,7 @@ namespace BasicLang.Debugger
         {
             var evt = new DAPEvent
             {
-                Seq = ++_seq,
+                Seq = Interlocked.Increment(ref _seq),
                 Type = "event",
                 Event = eventName,
                 Body = body
@@ -873,15 +1265,19 @@ namespace BasicLang.Debugger
             await SendMessageAsync(json);
         }
 
-        private async Task SendMessageAsync(string json)
+        private Task SendMessageAsync(string json)
         {
-            var bytes = Encoding.UTF8.GetBytes(json);
-            var header = $"Content-Length: {bytes.Length}\r\n\r\n";
+            var contentBytes = Encoding.UTF8.GetBytes(json);
+            var header = $"Content-Length: {contentBytes.Length}\r\n\r\n";
             var headerBytes = Encoding.UTF8.GetBytes(header);
 
-            await _output.WriteAsync(headerBytes, 0, headerBytes.Length);
-            await _output.WriteAsync(bytes, 0, bytes.Length);
-            await _output.FlushAsync();
+            lock (_writeLock)
+            {
+                _outputStream.Write(headerBytes, 0, headerBytes.Length);
+                _outputStream.Write(contentBytes, 0, contentBytes.Length);
+                _outputStream.Flush();
+            }
+            return Task.CompletedTask;
         }
     }
 

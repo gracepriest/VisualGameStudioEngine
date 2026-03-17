@@ -4116,6 +4116,125 @@ extern "C" {
     __declspec(dllexport) bool  Framework_Asset_VerifyManifest(const char* manifestPath, const char* assetFolder);
 
     // ========================================================================
+    // BEZIER CURVES & SPLINES
+    // ========================================================================
+
+    // Quadratic bezier curve (3 control points)
+    __declspec(dllexport) void  Framework_DrawBezierQuad(float x0, float y0, float cx, float cy, float x1, float y1, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    // Cubic bezier curve (4 control points)
+    __declspec(dllexport) void  Framework_DrawBezierCubic(float x0, float y0, float cx0, float cy0, float cx1, float cy1, float x1, float y1, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    // Evaluate point on quadratic bezier at t (0-1)
+    __declspec(dllexport) void  Framework_BezierQuadPoint(float x0, float y0, float cx, float cy, float x1, float y1, float t, float* outX, float* outY);
+    // Evaluate point on cubic bezier at t (0-1)
+    __declspec(dllexport) void  Framework_BezierCubicPoint(float x0, float y0, float cx0, float cy0, float cx1, float cy1, float x1, float y1, float t, float* outX, float* outY);
+    // Draw a Catmull-Rom spline through a set of points
+    __declspec(dllexport) void  Framework_DrawSpline(const float* points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    // Evaluate point on Catmull-Rom spline at t (0 to pointCount-1)
+    __declspec(dllexport) void  Framework_SplinePoint(const float* points, int pointCount, float t, float* outX, float* outY);
+
+    // ========================================================================
+    // GRADIENT DRAWING
+    // ========================================================================
+
+    // Rectangle with horizontal gradient (left-to-right)
+    __declspec(dllexport) void  Framework_DrawGradientRectH(int x, int y, int width, int height,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2);
+    // Rectangle with vertical gradient (top-to-bottom)
+    __declspec(dllexport) void  Framework_DrawGradientRectV(int x, int y, int width, int height,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2);
+    // Rectangle with 4-corner gradient
+    __declspec(dllexport) void  Framework_DrawGradientRect4(int x, int y, int width, int height,
+        unsigned char tlR, unsigned char tlG, unsigned char tlB, unsigned char tlA,
+        unsigned char trR, unsigned char trG, unsigned char trB, unsigned char trA,
+        unsigned char blR, unsigned char blG, unsigned char blB, unsigned char blA,
+        unsigned char brR, unsigned char brG, unsigned char brB, unsigned char brA);
+    // Radial gradient circle (center color to edge color)
+    __declspec(dllexport) void  Framework_DrawGradientCircle(int centerX, int centerY, float radius, int segments,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2);
+    // Gradient line (thick line with color transition)
+    __declspec(dllexport) void  Framework_DrawGradientLine(float x0, float y0, float x1, float y1, float thick,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2);
+
+    // ========================================================================
+    // PARALLAX SCROLLING
+    // ========================================================================
+
+    // Create a parallax layer (returns layer ID). scrollSpeedX/Y: multiplier vs camera (0=static, 1=moves with camera, <1=background)
+    __declspec(dllexport) int   Framework_Parallax_CreateLayer(int textureHandle, float scrollSpeedX, float scrollSpeedY);
+    __declspec(dllexport) void  Framework_Parallax_DestroyLayer(int layerId);
+    __declspec(dllexport) bool  Framework_Parallax_IsValid(int layerId);
+
+    // Layer properties
+    __declspec(dllexport) void  Framework_Parallax_SetScrollSpeed(int layerId, float speedX, float speedY);
+    __declspec(dllexport) void  Framework_Parallax_GetScrollSpeed(int layerId, float* speedX, float* speedY);
+    __declspec(dllexport) void  Framework_Parallax_SetOffset(int layerId, float offsetX, float offsetY);
+    __declspec(dllexport) void  Framework_Parallax_GetOffset(int layerId, float* offsetX, float* offsetY);
+    __declspec(dllexport) void  Framework_Parallax_SetScale(int layerId, float scaleX, float scaleY);
+    __declspec(dllexport) void  Framework_Parallax_SetTint(int layerId, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_Parallax_SetVisible(int layerId, bool visible);
+    __declspec(dllexport) bool  Framework_Parallax_IsVisible(int layerId);
+    __declspec(dllexport) void  Framework_Parallax_SetRepeat(int layerId, bool repeatX, bool repeatY);
+    __declspec(dllexport) void  Framework_Parallax_SetZOrder(int layerId, int zOrder);  // Lower = drawn first (behind)
+    __declspec(dllexport) int   Framework_Parallax_GetZOrder(int layerId);
+    __declspec(dllexport) void  Framework_Parallax_SetTexture(int layerId, int textureHandle);
+
+    // Auto-scrolling (for clouds, water, etc.)
+    __declspec(dllexport) void  Framework_Parallax_SetAutoScroll(int layerId, float velX, float velY);  // Pixels per second
+    __declspec(dllexport) void  Framework_Parallax_GetAutoScroll(int layerId, float* velX, float* velY);
+
+    // Draw all layers relative to a camera position
+    __declspec(dllexport) void  Framework_Parallax_Draw(float cameraX, float cameraY);
+    // Draw a single layer
+    __declspec(dllexport) void  Framework_Parallax_DrawLayer(int layerId, float cameraX, float cameraY);
+    // Update auto-scroll timers
+    __declspec(dllexport) void  Framework_Parallax_Update(float dt);
+
+    // Management
+    __declspec(dllexport) int   Framework_Parallax_GetLayerCount();
+    __declspec(dllexport) void  Framework_Parallax_DestroyAll();
+
+    // ========================================================================
+    // TRAIL RENDERER
+    // ========================================================================
+
+    // Create a trail renderer (returns trail ID). maxPoints = max trail segments stored
+    __declspec(dllexport) int   Framework_Trail_Create(int maxPoints, float width);
+    __declspec(dllexport) void  Framework_Trail_Destroy(int trailId);
+    __declspec(dllexport) bool  Framework_Trail_IsValid(int trailId);
+
+    // Add a new point to the trail (call each frame with entity position)
+    __declspec(dllexport) void  Framework_Trail_AddPoint(int trailId, float x, float y);
+
+    // Trail properties
+    __declspec(dllexport) void  Framework_Trail_SetWidth(int trailId, float startWidth, float endWidth);  // Taper from start to end
+    __declspec(dllexport) void  Framework_Trail_SetColor(int trailId,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2);  // Start color to end color
+    __declspec(dllexport) void  Framework_Trail_SetMinDistance(int trailId, float minDist);  // Min distance between points
+    __declspec(dllexport) void  Framework_Trail_SetLifetime(int trailId, float seconds);  // Points fade after this time
+    __declspec(dllexport) void  Framework_Trail_SetEnabled(int trailId, bool enabled);
+    __declspec(dllexport) bool  Framework_Trail_IsEnabled(int trailId);
+    __declspec(dllexport) void  Framework_Trail_SetTextured(int trailId, int textureHandle);  // Optional texture
+    __declspec(dllexport) void  Framework_Trail_SetSmoothing(int trailId, bool enabled);  // Catmull-Rom smoothing
+
+    // Trail management
+    __declspec(dllexport) void  Framework_Trail_Clear(int trailId);  // Remove all points
+    __declspec(dllexport) int   Framework_Trail_GetPointCount(int trailId);
+    __declspec(dllexport) void  Framework_Trail_Draw(int trailId);  // Draw single trail
+    __declspec(dllexport) void  Framework_Trail_DrawAll();  // Draw all active trails
+    __declspec(dllexport) void  Framework_Trail_Update(float dt);  // Update lifetimes
+    __declspec(dllexport) void  Framework_Trail_AttachToEntity(int trailId, int entityId);  // Auto-add points from entity position
+    __declspec(dllexport) void  Framework_Trail_Detach(int trailId);
+
+    // Global management
+    __declspec(dllexport) int   Framework_Trail_GetCount();
+    __declspec(dllexport) void  Framework_Trail_DestroyAll();
+
+    // ========================================================================
     // CLEANUP
     // ========================================================================
     __declspec(dllexport) void  Framework_ResourcesShutdown();

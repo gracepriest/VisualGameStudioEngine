@@ -169,7 +169,7 @@ Sub UpdatePlaying()
         gameState = STATE_PAUSED
         Return
     End If
-
+     
     UpdatePaddles()
     UpdateBall()
 End Sub

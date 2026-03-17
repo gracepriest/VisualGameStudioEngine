@@ -14,7 +14,12 @@ namespace BasicLang.Compiler.IR
         public int Id { get; set; }
         public BasicBlock ParentBlock { get; set; }
         public TypeInfo Type { get; set; }
-        
+
+        /// <summary>
+        /// Source line number from the original source code (1-based). 0 means unknown.
+        /// </summary>
+        public int SourceLine { get; set; }
+
         protected IRInstruction(TypeInfo type = null)
         {
             Type = type;

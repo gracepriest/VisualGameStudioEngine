@@ -27311,4 +27311,671 @@ extern "C" {
         return true;
     }
 
+    // ========================================================================
+    // BEZIER CURVES & SPLINES
+    // ========================================================================
+
+    void Framework_DrawBezierQuad(float x0, float y0, float cx, float cy, float x1, float y1,
+        float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        Color col = { r, g, b, a };
+        const int segments = 24;
+        Vector2 prev = { x0, y0 };
+        for (int i = 1; i <= segments; i++) {
+            float t = (float)i / (float)segments;
+            float u = 1.0f - t;
+            Vector2 cur;
+            cur.x = u * u * x0 + 2.0f * u * t * cx + t * t * x1;
+            cur.y = u * u * y0 + 2.0f * u * t * cy + t * t * y1;
+            DrawLineEx(prev, cur, thick, col);
+            prev = cur;
+        }
+    }
+
+    void Framework_DrawBezierCubic(float x0, float y0, float cx0, float cy0, float cx1, float cy1, float x1, float y1,
+        float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        Color col = { r, g, b, a };
+        const int segments = 24;
+        Vector2 prev = { x0, y0 };
+        for (int i = 1; i <= segments; i++) {
+            float t = (float)i / (float)segments;
+            float u = 1.0f - t;
+            float uu = u * u;
+            float uuu = uu * u;
+            float tt = t * t;
+            float ttt = tt * t;
+            Vector2 cur;
+            cur.x = uuu * x0 + 3.0f * uu * t * cx0 + 3.0f * u * tt * cx1 + ttt * x1;
+            cur.y = uuu * y0 + 3.0f * uu * t * cy0 + 3.0f * u * tt * cy1 + ttt * y1;
+            DrawLineEx(prev, cur, thick, col);
+            prev = cur;
+        }
+    }
+
+    void Framework_BezierQuadPoint(float x0, float y0, float cx, float cy, float x1, float y1,
+        float t, float* outX, float* outY) {
+        if (!outX || !outY) return;
+        float u = 1.0f - t;
+        *outX = u * u * x0 + 2.0f * u * t * cx + t * t * x1;
+        *outY = u * u * y0 + 2.0f * u * t * cy + t * t * y1;
+    }
+
+    void Framework_BezierCubicPoint(float x0, float y0, float cx0, float cy0, float cx1, float cy1, float x1, float y1,
+        float t, float* outX, float* outY) {
+        if (!outX || !outY) return;
+        float u = 1.0f - t;
+        float uu = u * u;
+        float uuu = uu * u;
+        float tt = t * t;
+        float ttt = tt * t;
+        *outX = uuu * x0 + 3.0f * uu * t * cx0 + 3.0f * u * tt * cx1 + ttt * x1;
+        *outY = uuu * y0 + 3.0f * uu * t * cy0 + 3.0f * u * tt * cy1 + ttt * y1;
+    }
+
+    // Catmull-Rom spline interpolation helper
+    static Vector2 CatmullRomInterp(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t) {
+        float tt = t * t;
+        float ttt = tt * t;
+        Vector2 result;
+        result.x = 0.5f * (2.0f * p1.x + (-p0.x + p2.x) * t +
+            (2.0f * p0.x - 5.0f * p1.x + 4.0f * p2.x - p3.x) * tt +
+            (-p0.x + 3.0f * p1.x - 3.0f * p2.x + p3.x) * ttt);
+        result.y = 0.5f * (2.0f * p1.y + (-p0.y + p2.y) * t +
+            (2.0f * p0.y - 5.0f * p1.y + 4.0f * p2.y - p3.y) * tt +
+            (-p0.y + 3.0f * p1.y - 3.0f * p2.y + p3.y) * ttt);
+        return result;
+    }
+
+    void Framework_DrawSpline(const float* points, int pointCount, float thick,
+        unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!points || pointCount < 2) return;
+        Color col = { r, g, b, a };
+        const int segments = 20;
+
+        for (int i = 0; i < pointCount - 1; i++) {
+            // Catmull-Rom uses 4 points: p[i-1], p[i], p[i+1], p[i+2]
+            int i0 = (i > 0) ? i - 1 : 0;
+            int i1 = i;
+            int i2 = i + 1;
+            int i3 = (i + 2 < pointCount) ? i + 2 : pointCount - 1;
+            Vector2 p0 = { points[i0 * 2], points[i0 * 2 + 1] };
+            Vector2 p1 = { points[i1 * 2], points[i1 * 2 + 1] };
+            Vector2 p2 = { points[i2 * 2], points[i2 * 2 + 1] };
+            Vector2 p3 = { points[i3 * 2], points[i3 * 2 + 1] };
+
+            Vector2 prev = p1;
+            for (int s = 1; s <= segments; s++) {
+                float t = (float)s / (float)segments;
+                Vector2 cur = CatmullRomInterp(p0, p1, p2, p3, t);
+                DrawLineEx(prev, cur, thick, col);
+                prev = cur;
+            }
+        }
+    }
+
+    void Framework_SplinePoint(const float* points, int pointCount, float t, float* outX, float* outY) {
+        if (!points || !outX || !outY || pointCount < 2) return;
+        // Clamp t
+        if (t < 0.0f) t = 0.0f;
+        float maxT = (float)(pointCount - 1);
+        if (t > maxT) t = maxT;
+
+        int seg = (int)t;
+        if (seg >= pointCount - 1) seg = pointCount - 2;
+        float localT = t - (float)seg;
+
+        int i0 = (seg > 0) ? seg - 1 : 0;
+        int i1 = seg;
+        int i2 = seg + 1;
+        int i3 = (seg + 2 < pointCount) ? seg + 2 : pointCount - 1;
+        Vector2 p0 = { points[i0 * 2], points[i0 * 2 + 1] };
+        Vector2 p1 = { points[i1 * 2], points[i1 * 2 + 1] };
+        Vector2 p2 = { points[i2 * 2], points[i2 * 2 + 1] };
+        Vector2 p3 = { points[i3 * 2], points[i3 * 2 + 1] };
+        Vector2 result = CatmullRomInterp(p0, p1, p2, p3, localT);
+        *outX = result.x;
+        *outY = result.y;
+    }
+
+    // ========================================================================
+    // GRADIENT DRAWING
+    // ========================================================================
+
+    void Framework_DrawGradientRectH(int x, int y, int width, int height,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2) {
+        DrawRectangleGradientH(x, y, width, height, Color{ r1, g1, b1, a1 }, Color{ r2, g2, b2, a2 });
+    }
+
+    void Framework_DrawGradientRectV(int x, int y, int width, int height,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2) {
+        DrawRectangleGradientV(x, y, width, height, Color{ r1, g1, b1, a1 }, Color{ r2, g2, b2, a2 });
+    }
+
+    void Framework_DrawGradientRect4(int x, int y, int width, int height,
+        unsigned char tlR, unsigned char tlG, unsigned char tlB, unsigned char tlA,
+        unsigned char trR, unsigned char trG, unsigned char trB, unsigned char trA,
+        unsigned char blR, unsigned char blG, unsigned char blB, unsigned char blA,
+        unsigned char brR, unsigned char brG, unsigned char brB, unsigned char brA) {
+        DrawRectangleGradientEx(
+            Rectangle{ (float)x, (float)y, (float)width, (float)height },
+            Color{ tlR, tlG, tlB, tlA },
+            Color{ blR, blG, blB, blA },
+            Color{ brR, brG, brB, brA },
+            Color{ trR, trG, trB, trA });
+    }
+
+    void Framework_DrawGradientCircle(int centerX, int centerY, float radius, int segments,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2) {
+        if (segments < 3) segments = 36;
+        Color centerCol = { r1, g1, b1, a1 };
+        Color edgeCol = { r2, g2, b2, a2 };
+        float angleStep = 360.0f / (float)segments;
+
+        for (int i = 0; i < segments; i++) {
+            float angle1 = DEG2RAD * angleStep * (float)i;
+            float angle2 = DEG2RAD * angleStep * (float)(i + 1);
+            Vector2 v1 = { centerX + cosf(angle1) * radius, centerY + sinf(angle1) * radius };
+            Vector2 v2 = { centerX + cosf(angle2) * radius, centerY + sinf(angle2) * radius };
+            Vector2 center = { (float)centerX, (float)centerY };
+
+            // Draw triangle with vertex colors using rlgl
+            rlBegin(RL_TRIANGLES);
+                rlColor4ub(centerCol.r, centerCol.g, centerCol.b, centerCol.a);
+                rlVertex2f(center.x, center.y);
+                rlColor4ub(edgeCol.r, edgeCol.g, edgeCol.b, edgeCol.a);
+                rlVertex2f(v1.x, v1.y);
+                rlColor4ub(edgeCol.r, edgeCol.g, edgeCol.b, edgeCol.a);
+                rlVertex2f(v2.x, v2.y);
+            rlEnd();
+        }
+    }
+
+    void Framework_DrawGradientLine(float x0, float y0, float x1, float y1, float thick,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2) {
+        // Build a quad along the line direction
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float len = sqrtf(dx * dx + dy * dy);
+        if (len < 0.001f) return;
+        float nx = -dy / len * thick * 0.5f;
+        float ny = dx / len * thick * 0.5f;
+
+        Color c1 = { r1, g1, b1, a1 };
+        Color c2 = { r2, g2, b2, a2 };
+
+        rlBegin(RL_QUADS);
+            rlColor4ub(c1.r, c1.g, c1.b, c1.a);
+            rlVertex2f(x0 + nx, y0 + ny);
+            rlColor4ub(c1.r, c1.g, c1.b, c1.a);
+            rlVertex2f(x0 - nx, y0 - ny);
+            rlColor4ub(c2.r, c2.g, c2.b, c2.a);
+            rlVertex2f(x1 - nx, y1 - ny);
+            rlColor4ub(c2.r, c2.g, c2.b, c2.a);
+            rlVertex2f(x1 + nx, y1 + ny);
+        rlEnd();
+    }
+
+    // ========================================================================
+    // PARALLAX SCROLLING
+    // ========================================================================
+
+    struct ParallaxLayer {
+        bool active = false;
+        int textureHandle = -1;
+        float scrollSpeedX = 1.0f;
+        float scrollSpeedY = 1.0f;
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
+        float scaleX = 1.0f;
+        float scaleY = 1.0f;
+        Color tint = { 255, 255, 255, 255 };
+        bool visible = true;
+        bool repeatX = true;
+        bool repeatY = false;
+        int zOrder = 0;
+        float autoScrollVelX = 0.0f;
+        float autoScrollVelY = 0.0f;
+        float autoScrollAccumX = 0.0f;
+        float autoScrollAccumY = 0.0f;
+    };
+
+    static std::vector<ParallaxLayer> g_parallaxLayers;
+
+    static int FindFreeParallaxSlot() {
+        for (size_t i = 0; i < g_parallaxLayers.size(); i++) {
+            if (!g_parallaxLayers[i].active) return (int)i;
+        }
+        g_parallaxLayers.push_back(ParallaxLayer{});
+        return (int)g_parallaxLayers.size() - 1;
+    }
+
+    int Framework_Parallax_CreateLayer(int textureHandle, float scrollSpeedX, float scrollSpeedY) {
+        int id = FindFreeParallaxSlot();
+        auto& layer = g_parallaxLayers[id];
+        layer = ParallaxLayer{};
+        layer.active = true;
+        layer.textureHandle = textureHandle;
+        layer.scrollSpeedX = scrollSpeedX;
+        layer.scrollSpeedY = scrollSpeedY;
+        return id;
+    }
+
+    void Framework_Parallax_DestroyLayer(int layerId) {
+        if (layerId < 0 || layerId >= (int)g_parallaxLayers.size()) return;
+        g_parallaxLayers[layerId].active = false;
+    }
+
+    bool Framework_Parallax_IsValid(int layerId) {
+        return layerId >= 0 && layerId < (int)g_parallaxLayers.size() && g_parallaxLayers[layerId].active;
+    }
+
+    void Framework_Parallax_SetScrollSpeed(int layerId, float speedX, float speedY) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].scrollSpeedX = speedX;
+        g_parallaxLayers[layerId].scrollSpeedY = speedY;
+    }
+
+    void Framework_Parallax_GetScrollSpeed(int layerId, float* speedX, float* speedY) {
+        if (!Framework_Parallax_IsValid(layerId) || !speedX || !speedY) return;
+        *speedX = g_parallaxLayers[layerId].scrollSpeedX;
+        *speedY = g_parallaxLayers[layerId].scrollSpeedY;
+    }
+
+    void Framework_Parallax_SetOffset(int layerId, float offsetX, float offsetY) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].offsetX = offsetX;
+        g_parallaxLayers[layerId].offsetY = offsetY;
+    }
+
+    void Framework_Parallax_GetOffset(int layerId, float* offsetX, float* offsetY) {
+        if (!Framework_Parallax_IsValid(layerId) || !offsetX || !offsetY) return;
+        *offsetX = g_parallaxLayers[layerId].offsetX;
+        *offsetY = g_parallaxLayers[layerId].offsetY;
+    }
+
+    void Framework_Parallax_SetScale(int layerId, float scaleX, float scaleY) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].scaleX = scaleX;
+        g_parallaxLayers[layerId].scaleY = scaleY;
+    }
+
+    void Framework_Parallax_SetTint(int layerId, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].tint = Color{ r, g, b, a };
+    }
+
+    void Framework_Parallax_SetVisible(int layerId, bool visible) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].visible = visible;
+    }
+
+    bool Framework_Parallax_IsVisible(int layerId) {
+        if (!Framework_Parallax_IsValid(layerId)) return false;
+        return g_parallaxLayers[layerId].visible;
+    }
+
+    void Framework_Parallax_SetRepeat(int layerId, bool repeatX, bool repeatY) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].repeatX = repeatX;
+        g_parallaxLayers[layerId].repeatY = repeatY;
+    }
+
+    void Framework_Parallax_SetZOrder(int layerId, int zOrder) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].zOrder = zOrder;
+    }
+
+    int Framework_Parallax_GetZOrder(int layerId) {
+        if (!Framework_Parallax_IsValid(layerId)) return 0;
+        return g_parallaxLayers[layerId].zOrder;
+    }
+
+    void Framework_Parallax_SetTexture(int layerId, int textureHandle) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].textureHandle = textureHandle;
+    }
+
+    void Framework_Parallax_SetAutoScroll(int layerId, float velX, float velY) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        g_parallaxLayers[layerId].autoScrollVelX = velX;
+        g_parallaxLayers[layerId].autoScrollVelY = velY;
+    }
+
+    void Framework_Parallax_GetAutoScroll(int layerId, float* velX, float* velY) {
+        if (!Framework_Parallax_IsValid(layerId) || !velX || !velY) return;
+        *velX = g_parallaxLayers[layerId].autoScrollVelX;
+        *velY = g_parallaxLayers[layerId].autoScrollVelY;
+    }
+
+    // Helper: draw a single parallax layer
+    static void DrawParallaxLayerInternal(ParallaxLayer& layer, float cameraX, float cameraY) {
+        if (!layer.active || !layer.visible || layer.textureHandle < 0) return;
+        auto it = g_texByHandle.find(layer.textureHandle);
+        if (it == g_texByHandle.end() || !it->second.valid) return;
+        Texture2D& tex = it->second.tex;
+        if (tex.id == 0) return;
+
+        float texW = (float)tex.width * layer.scaleX;
+        float texH = (float)tex.height * layer.scaleY;
+        if (texW < 1.0f || texH < 1.0f) return;
+
+        // Calculate parallax offset
+        float px = -cameraX * layer.scrollSpeedX + layer.offsetX + layer.autoScrollAccumX;
+        float py = -cameraY * layer.scrollSpeedY + layer.offsetY + layer.autoScrollAccumY;
+
+        int screenW = GetScreenWidth();
+        int screenH = GetScreenHeight();
+
+        if (layer.repeatX || layer.repeatY) {
+            // Wrap the offset
+            if (layer.repeatX) {
+                px = fmodf(px, texW);
+                if (px > 0) px -= texW;
+            }
+            if (layer.repeatY) {
+                py = fmodf(py, texH);
+                if (py > 0) py -= texH;
+            }
+
+            // Tile the texture across the screen
+            int tilesX = layer.repeatX ? (int)(screenW / texW) + 2 : 1;
+            int tilesY = layer.repeatY ? (int)(screenH / texH) + 2 : 1;
+
+            for (int ty = 0; ty < tilesY; ty++) {
+                for (int tx = 0; tx < tilesX; tx++) {
+                    Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
+                    Rectangle dst = { px + tx * texW, py + ty * texH, texW, texH };
+                    DrawTexturePro(tex, src, dst, Vector2{ 0, 0 }, 0.0f, layer.tint);
+                }
+            }
+        } else {
+            Rectangle src = { 0, 0, (float)tex.width, (float)tex.height };
+            Rectangle dst = { px, py, texW, texH };
+            DrawTexturePro(tex, src, dst, Vector2{ 0, 0 }, 0.0f, layer.tint);
+        }
+    }
+
+    void Framework_Parallax_Draw(float cameraX, float cameraY) {
+        // Collect active layer indices and sort by zOrder
+        std::vector<int> indices;
+        for (size_t i = 0; i < g_parallaxLayers.size(); i++) {
+            if (g_parallaxLayers[i].active) indices.push_back((int)i);
+        }
+        std::sort(indices.begin(), indices.end(), [](int a, int b) {
+            return g_parallaxLayers[a].zOrder < g_parallaxLayers[b].zOrder;
+        });
+        for (int idx : indices) {
+            DrawParallaxLayerInternal(g_parallaxLayers[idx], cameraX, cameraY);
+        }
+    }
+
+    void Framework_Parallax_DrawLayer(int layerId, float cameraX, float cameraY) {
+        if (!Framework_Parallax_IsValid(layerId)) return;
+        DrawParallaxLayerInternal(g_parallaxLayers[layerId], cameraX, cameraY);
+    }
+
+    void Framework_Parallax_Update(float dt) {
+        for (auto& layer : g_parallaxLayers) {
+            if (!layer.active) continue;
+            layer.autoScrollAccumX += layer.autoScrollVelX * dt;
+            layer.autoScrollAccumY += layer.autoScrollVelY * dt;
+        }
+    }
+
+    int Framework_Parallax_GetLayerCount() {
+        int count = 0;
+        for (auto& l : g_parallaxLayers) if (l.active) count++;
+        return count;
+    }
+
+    void Framework_Parallax_DestroyAll() {
+        g_parallaxLayers.clear();
+    }
+
+    // ========================================================================
+    // TRAIL RENDERER
+    // ========================================================================
+
+    struct TrailPoint {
+        float x, y;
+        float timeAlive;
+    };
+
+    struct TrailRenderer {
+        bool active = false;
+        bool enabled = true;
+        int maxPoints = 50;
+        float startWidth = 5.0f;
+        float endWidth = 1.0f;
+        Color startColor = { 255, 255, 255, 255 };
+        Color endColor = { 255, 255, 255, 0 };
+        float minDistance = 2.0f;
+        float lifetime = 0.5f;
+        int textureHandle = -1;
+        bool smoothing = false;
+        int attachedEntity = -1;
+        std::vector<TrailPoint> points;
+    };
+
+    static std::vector<TrailRenderer> g_trails;
+
+    static int FindFreeTrailSlot() {
+        for (size_t i = 0; i < g_trails.size(); i++) {
+            if (!g_trails[i].active) return (int)i;
+        }
+        g_trails.push_back(TrailRenderer{});
+        return (int)g_trails.size() - 1;
+    }
+
+    int Framework_Trail_Create(int maxPoints, float width) {
+        int id = FindFreeTrailSlot();
+        auto& trail = g_trails[id];
+        trail = TrailRenderer{};
+        trail.active = true;
+        trail.maxPoints = (maxPoints > 0) ? maxPoints : 50;
+        trail.startWidth = width;
+        trail.endWidth = width * 0.1f;
+        return id;
+    }
+
+    void Framework_Trail_Destroy(int trailId) {
+        if (trailId < 0 || trailId >= (int)g_trails.size()) return;
+        g_trails[trailId].active = false;
+        g_trails[trailId].points.clear();
+    }
+
+    bool Framework_Trail_IsValid(int trailId) {
+        return trailId >= 0 && trailId < (int)g_trails.size() && g_trails[trailId].active;
+    }
+
+    void Framework_Trail_AddPoint(int trailId, float x, float y) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        auto& trail = g_trails[trailId];
+        if (!trail.enabled) return;
+
+        // Check minimum distance from last point
+        if (!trail.points.empty()) {
+            auto& last = trail.points.back();
+            float dx = x - last.x;
+            float dy = y - last.y;
+            if (dx * dx + dy * dy < trail.minDistance * trail.minDistance) return;
+        }
+
+        TrailPoint tp;
+        tp.x = x;
+        tp.y = y;
+        tp.timeAlive = 0.0f;
+        trail.points.push_back(tp);
+
+        // Trim excess points
+        while ((int)trail.points.size() > trail.maxPoints) {
+            trail.points.erase(trail.points.begin());
+        }
+    }
+
+    void Framework_Trail_SetWidth(int trailId, float startWidth, float endWidth) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].startWidth = startWidth;
+        g_trails[trailId].endWidth = endWidth;
+    }
+
+    void Framework_Trail_SetColor(int trailId,
+        unsigned char r1, unsigned char g1, unsigned char b1, unsigned char a1,
+        unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].startColor = Color{ r1, g1, b1, a1 };
+        g_trails[trailId].endColor = Color{ r2, g2, b2, a2 };
+    }
+
+    void Framework_Trail_SetMinDistance(int trailId, float minDist) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].minDistance = minDist;
+    }
+
+    void Framework_Trail_SetLifetime(int trailId, float seconds) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].lifetime = seconds;
+    }
+
+    void Framework_Trail_SetEnabled(int trailId, bool enabled) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].enabled = enabled;
+    }
+
+    bool Framework_Trail_IsEnabled(int trailId) {
+        if (!Framework_Trail_IsValid(trailId)) return false;
+        return g_trails[trailId].enabled;
+    }
+
+    void Framework_Trail_SetTextured(int trailId, int textureHandle) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].textureHandle = textureHandle;
+    }
+
+    void Framework_Trail_SetSmoothing(int trailId, bool enabled) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].smoothing = enabled;
+    }
+
+    void Framework_Trail_Clear(int trailId) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].points.clear();
+    }
+
+    int Framework_Trail_GetPointCount(int trailId) {
+        if (!Framework_Trail_IsValid(trailId)) return 0;
+        return (int)g_trails[trailId].points.size();
+    }
+
+    static Color LerpColor(Color a, Color b, float t) {
+        return Color{
+            (unsigned char)(a.r + (b.r - a.r) * t),
+            (unsigned char)(a.g + (b.g - a.g) * t),
+            (unsigned char)(a.b + (b.b - a.b) * t),
+            (unsigned char)(a.a + (b.a - a.a) * t)
+        };
+    }
+
+    void Framework_Trail_Draw(int trailId) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        auto& trail = g_trails[trailId];
+        int count = (int)trail.points.size();
+        if (count < 2) return;
+
+        for (int i = 0; i < count - 1; i++) {
+            float t1 = (float)i / (float)(count - 1);
+            float t2 = (float)(i + 1) / (float)(count - 1);
+
+            // Older points are at lower indices, newer at higher
+            // t=0 is oldest (tail), t=1 is newest (head)
+            float w1 = trail.endWidth + (trail.startWidth - trail.endWidth) * t1;
+            float w2 = trail.endWidth + (trail.startWidth - trail.endWidth) * t2;
+            Color c1 = LerpColor(trail.endColor, trail.startColor, t1);
+            Color c2 = LerpColor(trail.endColor, trail.startColor, t2);
+
+            // Apply lifetime fade
+            if (trail.lifetime > 0.0f) {
+                float fade1 = 1.0f - (trail.points[i].timeAlive / trail.lifetime);
+                float fade2 = 1.0f - (trail.points[i + 1].timeAlive / trail.lifetime);
+                if (fade1 < 0.0f) fade1 = 0.0f;
+                if (fade2 < 0.0f) fade2 = 0.0f;
+                c1.a = (unsigned char)(c1.a * fade1);
+                c2.a = (unsigned char)(c2.a * fade2);
+            }
+
+            // Build quad segment
+            float dx = trail.points[i + 1].x - trail.points[i].x;
+            float dy = trail.points[i + 1].y - trail.points[i].y;
+            float len = sqrtf(dx * dx + dy * dy);
+            if (len < 0.001f) continue;
+            float nx = -dy / len;
+            float ny = dx / len;
+
+            rlBegin(RL_QUADS);
+                rlColor4ub(c1.r, c1.g, c1.b, c1.a);
+                rlVertex2f(trail.points[i].x + nx * w1 * 0.5f, trail.points[i].y + ny * w1 * 0.5f);
+                rlColor4ub(c1.r, c1.g, c1.b, c1.a);
+                rlVertex2f(trail.points[i].x - nx * w1 * 0.5f, trail.points[i].y - ny * w1 * 0.5f);
+                rlColor4ub(c2.r, c2.g, c2.b, c2.a);
+                rlVertex2f(trail.points[i + 1].x - nx * w2 * 0.5f, trail.points[i + 1].y - ny * w2 * 0.5f);
+                rlColor4ub(c2.r, c2.g, c2.b, c2.a);
+                rlVertex2f(trail.points[i + 1].x + nx * w2 * 0.5f, trail.points[i + 1].y + ny * w2 * 0.5f);
+            rlEnd();
+        }
+    }
+
+    void Framework_Trail_DrawAll() {
+        for (size_t i = 0; i < g_trails.size(); i++) {
+            if (g_trails[i].active) Framework_Trail_Draw((int)i);
+        }
+    }
+
+    void Framework_Trail_Update(float dt) {
+        for (auto& trail : g_trails) {
+            if (!trail.active) continue;
+
+            // Update time alive for each point
+            for (auto& pt : trail.points) {
+                pt.timeAlive += dt;
+            }
+
+            // Remove expired points
+            if (trail.lifetime > 0.0f) {
+                while (!trail.points.empty() && trail.points.front().timeAlive >= trail.lifetime) {
+                    trail.points.erase(trail.points.begin());
+                }
+            }
+
+            // Auto-add points from attached entity
+            if (trail.attachedEntity >= 0) {
+                // Use the ECS transform to get entity position
+                Vector2 pos = Framework_Ecs_GetTransformPosition(trail.attachedEntity);
+                Framework_Trail_AddPoint((int)(&trail - &g_trails[0]), pos.x, pos.y);
+            }
+        }
+    }
+
+    void Framework_Trail_AttachToEntity(int trailId, int entityId) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].attachedEntity = entityId;
+    }
+
+    void Framework_Trail_Detach(int trailId) {
+        if (!Framework_Trail_IsValid(trailId)) return;
+        g_trails[trailId].attachedEntity = -1;
+    }
+
+    int Framework_Trail_GetCount() {
+        int count = 0;
+        for (auto& t : g_trails) if (t.active) count++;
+        return count;
+    }
+
+    void Framework_Trail_DestroyAll() {
+        g_trails.clear();
+    }
+
 } // extern "C"

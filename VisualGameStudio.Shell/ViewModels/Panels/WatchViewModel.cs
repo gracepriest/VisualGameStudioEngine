@@ -10,7 +10,7 @@ using VisualGameStudio.Core.Abstractions.ViewModels;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
-public partial class WatchViewModel : ViewModelBase
+public partial class WatchViewModel : ViewModelBase, IDisposable
 {
     private readonly IDebugService _debugService;
 
@@ -31,6 +31,12 @@ public partial class WatchViewModel : ViewModelBase
 
         // Add empty item for new entries
         WatchItems.Add(new WatchPanelItem { Expression = "", IsEditable = true });
+    }
+
+    public void Dispose()
+    {
+        _debugService.StateChanged -= OnDebugStateChanged;
+        _debugService.Stopped -= OnDebugStopped;
     }
 
     private async void OnDebugStateChanged(object? sender, DebugStateChangedEventArgs e)

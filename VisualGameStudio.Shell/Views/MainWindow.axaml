@@ -58,6 +58,8 @@
     <KeyBinding Gesture="Ctrl+Alt+W" Command="{Binding ShowWatchCommand}"/>
     <KeyBinding Gesture="Ctrl+Alt+I" Command="{Binding ShowImmediateWindowCommand}"/>
     <KeyBinding Gesture="Ctrl+Alt+X" Command="{Binding ShowExceptionSettingsCommand}"/>
+    <!-- Command Palette -->
+    <KeyBinding Gesture="Ctrl+Shift+P" Command="{Binding OpenCommandPaletteCommand}"/>
   </Window.KeyBindings>
 
   <Design.DataContext>
@@ -128,6 +130,8 @@
       </MenuItem>
 
       <MenuItem Header="_View">
+        <MenuItem Header="_Command Palette..." Command="{Binding OpenCommandPaletteCommand}" InputGesture="Ctrl+Shift+P"/>
+        <Separator/>
         <MenuItem Header="_Solution Explorer" Command="{Binding ShowSolutionExplorerCommand}"/>
         <MenuItem Header="_Output" Command="{Binding ShowOutputCommand}"/>
         <MenuItem Header="_Error List" Command="{Binding ShowErrorListCommand}"/>
@@ -243,19 +247,22 @@
 
     <!-- Status Bar -->
     <Border DockPanel.Dock="Bottom" Classes="statusBar">
-      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+        <!-- Status message (left-aligned, fills remaining space) -->
         <TextBlock Grid.Column="0"
                    Text="{Binding StatusText}"
                    VerticalAlignment="Center"
                    Margin="8,0"
                    Foreground="White"/>
 
+        <!-- Build configuration -->
         <TextBlock Grid.Column="1"
                    Text="{Binding CurrentConfiguration}"
                    VerticalAlignment="Center"
                    Margin="8,0"
                    Foreground="White"/>
 
+        <!-- Caret position -->
         <TextBlock Grid.Column="2"
                    VerticalAlignment="Center"
                    Margin="8,0"
@@ -268,11 +275,61 @@
           </TextBlock.Text>
         </TextBlock>
 
-        <TextBlock Grid.Column="3"
-                   Text="UTF-8"
-                   VerticalAlignment="Center"
-                   Margin="8,0"
-                   Foreground="White"/>
+        <!-- Indentation indicator (clickable) -->
+        <Border Grid.Column="3" Padding="4,0" Cursor="Hand"
+                Background="Transparent"
+                PointerPressed="OnIndentationClicked">
+          <TextBlock Text="{Binding StatusBar.Indentation}"
+                     VerticalAlignment="Center"
+                     Margin="4,0"
+                     Foreground="#BBBBBB"
+                     ToolTip.Tip="Click to change indentation settings"/>
+        </Border>
+
+        <!-- Encoding indicator (clickable) -->
+        <Border Grid.Column="4" Padding="4,0" Cursor="Hand"
+                Background="Transparent"
+                PointerPressed="OnEncodingClicked">
+          <TextBlock Text="{Binding StatusBar.Encoding}"
+                     VerticalAlignment="Center"
+                     Margin="4,0"
+                     Foreground="#BBBBBB"
+                     ToolTip.Tip="Click to change file encoding"/>
+        </Border>
+
+        <!-- Line ending indicator (clickable) -->
+        <Border Grid.Column="5" Padding="4,0" Cursor="Hand"
+                Background="Transparent"
+                PointerPressed="OnLineEndingClicked">
+          <TextBlock Text="{Binding StatusBar.LineEnding}"
+                     VerticalAlignment="Center"
+                     Margin="4,0"
+                     Foreground="#BBBBBB"
+                     ToolTip.Tip="Click to change line ending style"/>
+        </Border>
+
+        <!-- Language mode indicator (clickable) -->
+        <Border Grid.Column="6" Padding="4,0" Cursor="Hand"
+                Background="Transparent"
+                PointerPressed="OnLanguageModeClicked">
+          <TextBlock Text="{Binding StatusBar.LanguageMode}"
+                     VerticalAlignment="Center"
+                     Margin="4,0"
+                     Foreground="#569CD6"
+                     ToolTip.Tip="Current language mode"/>
+        </Border>
+
+        <!-- Ctrl+Shift+P hint -->
+        <Border Grid.Column="7" Padding="4,0" Cursor="Hand"
+                Background="Transparent"
+                PointerPressed="OnCommandPaletteHintClicked">
+          <TextBlock Text="Ctrl+Shift+P"
+                     VerticalAlignment="Center"
+                     Margin="4,0"
+                     Foreground="#606060"
+                     FontSize="11"
+                     ToolTip.Tip="Open Command Palette"/>
+        </Border>
       </Grid>
     </Border>
 

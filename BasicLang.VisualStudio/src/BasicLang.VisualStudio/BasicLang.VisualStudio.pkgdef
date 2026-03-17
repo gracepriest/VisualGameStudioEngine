@@ -27,7 +27,7 @@
 "PossibleProjectExtensions"="blproj"
 "ProjectTemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
 "ItemTemplatesDir"="$PackageFolder$\ItemTemplates\BasicLang"
-"Language(VsTemplate)"="VisualBasic"
+"Language(VsTemplate)"="BasicLang"
 "EditorFactoryNotify"=dword:00000000
 
 ; Project file extension registration
@@ -148,3 +148,18 @@
 ; ============================================
 [$RootKey$\TemplateHostingAssemblies]
 "{95a8f3e1-1234-4567-8901-abcdef123456}"="$PackageFolder$\BasicLang.VisualStudio.dll"
+
+; ============================================
+; TextMate Grammar Repository Registration
+; ============================================
+; Point VS to the folder containing the TextMate grammar JSON
+[$RootKey$\TextMate\Repositories]
+"BasicLang"="$PackageFolder$\LanguageService"
+
+; Map TextMate scope to language configuration
+[$RootKey$\TextMate\LanguageConfiguration\GrammarMapping]
+"source.basiclang"="$PackageFolder$\LanguageService\basiclang-language-configuration.json"
+
+; Map content type to language configuration
+[$RootKey$\TextMate\LanguageConfiguration\ContentTypeMapping]
+"basiclang"="$PackageFolder$\LanguageService\basiclang-language-configuration.json"

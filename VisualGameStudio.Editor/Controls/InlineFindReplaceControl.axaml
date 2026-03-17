@@ -1,0 +1,217 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="72"
+             x:Class="VisualGameStudio.Editor.Controls.InlineFindReplaceControl"
+             MaxWidth="460"
+             MinWidth="320">
+
+  <UserControl.Styles>
+    <Style Selector="TextBox.searchBox">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="CaretBrush" Value="#CCCCCC"/>
+      <Setter Property="MinHeight" Value="26"/>
+      <Setter Property="Padding" Value="6,3"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontFamily" Value="Segoe UI, sans-serif"/>
+      <Setter Property="CornerRadius" Value="2"/>
+    </Style>
+    <Style Selector="TextBox.searchBox:focus">
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="TextBox.searchBox.hasError">
+      <Setter Property="BorderBrush" Value="#F44747"/>
+    </Style>
+    <Style Selector="Button.iconBtn">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Padding" Value="4,2"/>
+      <Setter Property="Width" Value="26"/>
+      <Setter Property="Height" Value="26"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="CornerRadius" Value="3"/>
+    </Style>
+    <Style Selector="Button.iconBtn:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#454545"/>
+    </Style>
+    <Style Selector="Button.iconBtn:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="#505050"/>
+    </Style>
+    <Style Selector="ToggleButton.toggleBtn">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#808080"/>
+      <Setter Property="Padding" Value="4,2"/>
+      <Setter Property="Width" Value="28"/>
+      <Setter Property="Height" Value="26"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="FontFamily" Value="Consolas, Courier New, monospace"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="CornerRadius" Value="3"/>
+    </Style>
+    <Style Selector="ToggleButton.toggleBtn:checked /template/ ContentPresenter">
+      <Setter Property="Background" Value="#094771"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="ToggleButton.toggleBtn:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#454545"/>
+    </Style>
+    <Style Selector="ToggleButton.toggleBtn:checked:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#0D5E9E"/>
+    </Style>
+  </UserControl.Styles>
+
+  <Border Background="#252526"
+          BorderBrush="#3C3C3C"
+          BorderThickness="1"
+          CornerRadius="0,0,4,4"
+          Padding="6,4"
+          BoxShadow="0 2 8 0 #40000000">
+    <Grid RowDefinitions="Auto,Auto">
+      <!-- Find Row -->
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,2,0,2">
+        <!-- Toggle Replace Chevron -->
+        <Button Grid.Column="0"
+                Classes="iconBtn"
+                Click="OnToggleReplace"
+                ToolTip.Tip="Toggle Replace (Ctrl+H)"
+                Width="20" Height="26"
+                Margin="0,0,2,0">
+          <Panel>
+            <TextBlock x:Name="ChevronRight" Text=">" FontFamily="Consolas" FontSize="12" IsVisible="True"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <TextBlock x:Name="ChevronDown" Text="v" FontFamily="Consolas" FontSize="10" IsVisible="False"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Panel>
+        </Button>
+
+        <!-- Search TextBox -->
+        <TextBox Grid.Column="1"
+                 x:Name="SearchTextBox"
+                 Classes="searchBox"
+                 Watermark="Find"
+                 KeyDown="OnSearchKeyDown"
+                 TextChanged="OnSearchTextChanged"/>
+
+        <!-- Match Count -->
+        <TextBlock Grid.Column="2"
+                   x:Name="MatchCountDisplay"
+                   Text="No results"
+                   Foreground="#808080"
+                   FontSize="11"
+                   FontFamily="Segoe UI, sans-serif"
+                   VerticalAlignment="Center"
+                   IsVisible="False"
+                   Margin="6,0,4,0"/>
+
+        <!-- Match Case Toggle -->
+        <ToggleButton Grid.Column="3"
+                      x:Name="MatchCaseToggle"
+                      Classes="toggleBtn"
+                      ToolTip.Tip="Match Case (Alt+C)"
+                      Content="Aa"
+                      Margin="1,0"
+                      Click="OnOptionChanged"/>
+
+        <!-- Whole Word Toggle -->
+        <ToggleButton Grid.Column="4"
+                      x:Name="WholeWordToggle"
+                      Classes="toggleBtn"
+                      ToolTip.Tip="Match Whole Word (Alt+W)"
+                      Margin="1,0"
+                      Click="OnOptionChanged">
+          <TextBlock Text="Ab" FontFamily="Consolas" FontSize="12" FontWeight="Bold">
+            <TextBlock.TextDecorations>
+              <TextDecorationCollection>
+                <TextDecoration Location="Underline"/>
+              </TextDecorationCollection>
+            </TextBlock.TextDecorations>
+          </TextBlock>
+        </ToggleButton>
+
+        <!-- Regex Toggle -->
+        <ToggleButton Grid.Column="5"
+                      x:Name="RegexToggle"
+                      Classes="toggleBtn"
+                      ToolTip.Tip="Use Regular Expression (Alt+R)"
+                      Content=".*"
+                      Margin="1,0"
+                      Click="OnOptionChanged"/>
+
+        <!-- Find Previous -->
+        <Button Grid.Column="6"
+                Classes="iconBtn"
+                Click="OnFindPrevious"
+                ToolTip.Tip="Previous Match (Shift+Enter)"
+                Margin="4,0,0,0">
+          <TextBlock Text="^" FontFamily="Consolas" FontSize="14" FontWeight="Bold"/>
+        </Button>
+
+        <!-- Find Next -->
+        <Button Grid.Column="7"
+                Classes="iconBtn"
+                Click="OnFindNext"
+                ToolTip.Tip="Next Match (Enter)">
+          <TextBlock Text="v" FontFamily="Consolas" FontSize="14" FontWeight="Bold"/>
+        </Button>
+
+        <!-- Close -->
+        <Button Grid.Column="8"
+                Classes="iconBtn"
+                Click="OnClose"
+                ToolTip.Tip="Close (Escape)"
+                Margin="4,0,0,0">
+          <TextBlock Text="x" FontFamily="Consolas" FontSize="13"/>
+        </Button>
+      </Grid>
+
+      <!-- Replace Row -->
+      <Grid Grid.Row="1"
+            x:Name="ReplaceRow"
+            ColumnDefinitions="Auto,*,Auto,Auto"
+            IsVisible="False"
+            Margin="0,2,0,2">
+        <!-- Spacer to align with search box -->
+        <Border Grid.Column="0" Width="22"/>
+
+        <!-- Replace TextBox -->
+        <TextBox Grid.Column="1"
+                 x:Name="ReplaceTextBox"
+                 Classes="searchBox"
+                 Watermark="Replace"
+                 KeyDown="OnReplaceKeyDown"/>
+
+        <!-- Replace Single -->
+        <Button Grid.Column="2"
+                Classes="iconBtn"
+                Click="OnReplaceSingle"
+                ToolTip.Tip="Replace (Ctrl+Shift+1)"
+                Width="30"
+                Margin="4,0,0,0">
+          <TextBlock Text="R" FontFamily="Consolas" FontSize="12" FontWeight="Bold"
+                     ToolTip.Tip="Replace"/>
+        </Button>
+
+        <!-- Replace All -->
+        <Button Grid.Column="3"
+                Classes="iconBtn"
+                Click="OnReplaceAll"
+                ToolTip.Tip="Replace All (Ctrl+Alt+Enter)"
+                Width="30"
+                Margin="1,0">
+          <TextBlock Text="Ra" FontFamily="Consolas" FontSize="11" FontWeight="Bold"
+                     ToolTip.Tip="Replace All"/>
+        </Button>
+      </Grid>
+    </Grid>
+  </Border>
+</UserControl>

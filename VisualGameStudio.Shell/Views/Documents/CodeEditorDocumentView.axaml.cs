@@ -15,6 +15,8 @@ public partial class CodeEditorDocumentView : UserControl
 {
     private int _currentMatchIndex;
     private int _totalMatches;
+    private CodeEditorDocumentViewModel? _subscribedVm;
+    private bool _editorEventsWired;
 
     public CodeEditorDocumentView()
     {
@@ -23,18 +25,157 @@ public partial class CodeEditorDocumentView : UserControl
         KeyDown += OnViewKeyDown;
     }
 
+    private void UnsubscribeFromViewModel(CodeEditorDocumentViewModel vm)
+    {
+        vm.NavigationRequested -= OnNavigationRequested;
+        vm.FindRequested -= OnFindRequested;
+        vm.ReplaceRequested -= OnReplaceRequested;
+        vm.ToggleCommentRequested -= OnToggleCommentRequestedHandler;
+        vm.DuplicateLineRequested -= OnDuplicateLineRequestedHandler;
+        vm.MoveLineUpRequested -= OnMoveLineUpRequestedHandler;
+        vm.MoveLineDownRequested -= OnMoveLineDownRequestedHandler;
+        vm.DeleteLineRequested -= OnDeleteLineRequestedHandler;
+        vm.GetSelectionInfo = null;
+        vm.DiagnosticsUpdated -= OnDiagnosticsUpdated;
+        vm.CodeLensUpdated -= OnCodeLensUpdated;
+        vm.InlineDebugValuesUpdated -= OnInlineDebugValuesUpdated;
+        vm.ExecutionLineChanged -= OnExecutionLineChanged;
+        vm.CompletionReceived -= OnCompletionReceived;
+        vm.HoverResultReceived -= OnHoverResultReceived;
+        vm.SignatureHelpResultReceived -= OnSignatureHelpResultReceived;
+        vm.DocumentHighlightResultReceived -= OnDocumentHighlightResultReceived;
+        vm.RenameResultReceived -= OnRenameResultReceived;
+        vm.SelectionRangeReceived -= OnSelectionRangeReceived;
+    }
+
+    private void UnsubscribeFromEditor()
+    {
+        if (MainEditor != null && _editorEventsWired)
+        {
+            MainEditor.CompletionRequested -= OnCompletionRequested;
+            MainEditor.GoToDefinitionRequested -= OnEditorGoToDefinition;
+            MainEditor.PeekDefinitionRequested -= OnEditorPeekDefinition;
+            MainEditor.FindAllReferencesRequested -= OnEditorFindAllReferences;
+            MainEditor.RenameSymbolRequested -= OnEditorRenameSymbol;
+            MainEditor.CodeActionsRequested -= OnEditorCodeActions;
+            MainEditor.FormatDocumentRequested -= OnEditorFormatDocument;
+            MainEditor.CodeLensClicked -= OnEditorCodeLensClicked;
+            MainEditor.DataTipRequested -= OnDataTipRequested;
+            MainEditor.SignatureHelpRequested -= OnEditorSignatureHelp;
+            MainEditor.DocumentHighlightRequested -= OnEditorDocumentHighlight;
+            MainEditor.DocumentLinkClicked -= OnEditorDocumentLinkClicked;
+            MainEditor.EditorReady -= OnEditorReady;
+            _editorEventsWired = false;
+        }
+    }
+
+    // Named handlers to allow unsubscribe (replaces lambdas)
+    private void OnToggleCommentRequestedHandler(object? s, EventArgs args) => MainEditor?.ToggleLineComment();
+    private void OnDuplicateLineRequestedHandler(object? s, EventArgs args) => MainEditor?.DuplicateLine();
+    private void OnMoveLineUpRequestedHandler(object? s, EventArgs args) => MainEditor?.MoveLineUp();
+    private void OnMoveLineDownRequestedHandler(object? s, EventArgs args) => MainEditor?.MoveLineDown();
+    private void OnDeleteLineRequestedHandler(object? s, EventArgs args) => MainEditor?.DeleteLine();
+
+    private void OnEditorGoToDefinition(object? s, EventArgs e) => _subscribedVm?.RequestGoToDefinition();
+    private void OnEditorPeekDefinition(object? s, EventArgs e) => _subscribedVm?.RequestPeekDefinition();
+    private void OnEditorFindAllReferences(object? s, EventArgs e) => _subscribedVm?.RequestFindAllReferences();
+    private void OnEditorRenameSymbol(object? s, EventArgs e) => _subscribedVm?.RequestRenameSymbol();
+    private void OnEditorCodeActions(object? s, EventArgs e) => _subscribedVm?.RequestCodeActions();
+    private void OnEditorFormatDocument(object? s, EventArgs e) => _subscribedVm?.RequestFormatDocument();
+    private void OnEditorCodeLensClicked(object? s, Editor.TextMarkers.CodeLensClickedEventArgs e) =>
+        _subscribedVm?.OnCodeLensClicked(new CodeLensClickedInfo
+        {
+            Title = e.Title,
+            CommandName = e.CommandName,
+            CommandArguments = e.CommandArguments,
+            Line = e.Line
+        });
+    private void OnEditorSignatureHelp(object? s, Editor.Controls.SignatureHelpRequestEventArgs e) =>
+        _subscribedVm?.RequestSignatureHelp(e.Line, e.Column);
+    private void OnEditorDocumentHighlight(object? s, Editor.Controls.DocumentHighlightRequestEventArgs e) =>
+        _subscribedVm?.RequestDocumentHighlight(e.Line, e.Column);
+
+    private void OnEditorDocumentLinkClicked(object? s, Editor.Controls.DocumentLinkClickedEventArgs e)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(e.Target)) return;
+
+            var target = e.Target;
+
+            // Convert file URI to path
+            if (target.StartsWith("file:///", StringComparison.OrdinalIgnoreCase))
+            {
+                target = Uri.UnescapeDataString(target.Substring(8));
+                // Handle Windows paths (file:///C:/path -> C:\path)
+                target = target.Replace('/', System.IO.Path.DirectorySeparatorChar);
+            }
+            else if (target.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                     target.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                // Open URLs in the default browser
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = target,
+                        UseShellExecute = true
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DocumentLink] Failed to open URL: {ex.Message}");
+                }
+                return;
+            }
+
+            // Open the file in the IDE - find the MainWindowViewModel to call OpenFileAsync
+            if (System.IO.File.Exists(target))
+            {
+                // Navigate up the visual tree to find MainWindow and its DataContext
+                var mainWindow = TopLevel.GetTopLevel(this) as Avalonia.Controls.Window;
+                if (mainWindow?.DataContext is MainWindowViewModel mainVm)
+                {
+                    _ = mainVm.OpenFileFromLinkAsync(target);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DocumentLink] Error handling link: {ex.Message}");
+        }
+    }
+
+    private void OnEditorReady(object? s, EventArgs e)
+    {
+        if (_subscribedVm != null)
+            InitializeBreakpointSupport(_subscribedVm);
+    }
+
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
+        try
+        {
+        // Unsubscribe from previous ViewModel
+        if (_subscribedVm != null)
+        {
+            UnsubscribeFromViewModel(_subscribedVm);
+            UnsubscribeFromEditor();
+            _subscribedVm = null;
+        }
+
         if (DataContext is CodeEditorDocumentViewModel vm)
         {
+            _subscribedVm = vm;
+
             vm.NavigationRequested += OnNavigationRequested;
             vm.FindRequested += OnFindRequested;
             vm.ReplaceRequested += OnReplaceRequested;
-            vm.ToggleCommentRequested += (s, args) => MainEditor?.ToggleLineComment();
-            vm.DuplicateLineRequested += (s, args) => MainEditor?.DuplicateLine();
-            vm.MoveLineUpRequested += (s, args) => MainEditor?.MoveLineUp();
-            vm.MoveLineDownRequested += (s, args) => MainEditor?.MoveLineDown();
-            vm.DeleteLineRequested += (s, args) => MainEditor?.DeleteLine();
+            vm.ToggleCommentRequested += OnToggleCommentRequestedHandler;
+            vm.DuplicateLineRequested += OnDuplicateLineRequestedHandler;
+            vm.MoveLineUpRequested += OnMoveLineUpRequestedHandler;
+            vm.MoveLineDownRequested += OnMoveLineDownRequestedHandler;
+            vm.DeleteLineRequested += OnDeleteLineRequestedHandler;
 
             // Wire up selection info callback for extract method
             vm.GetSelectionInfo = () =>
@@ -67,28 +208,31 @@ public partial class CodeEditorDocumentView : UserControl
             // Wire up inline debug values
             vm.InlineDebugValuesUpdated += OnInlineDebugValuesUpdated;
 
+            // Wire up execution line highlighting
+            vm.ExecutionLineChanged += OnExecutionLineChanged;
+
             // Wire up code completion
             if (MainEditor != null)
             {
                 MainEditor.CompletionRequested += OnCompletionRequested;
 
                 // Wire up keyboard shortcut events from editor
-                MainEditor.GoToDefinitionRequested += (s, e) => vm.RequestGoToDefinition();
-                MainEditor.PeekDefinitionRequested += (s, e) => vm.RequestPeekDefinition();
-                MainEditor.FindAllReferencesRequested += (s, e) => vm.RequestFindAllReferences();
-                MainEditor.RenameSymbolRequested += (s, e) => vm.RequestRenameSymbol();
-                MainEditor.CodeActionsRequested += (s, e) => vm.RequestCodeActions();
-                MainEditor.FormatDocumentRequested += (s, e) => vm.RequestFormatDocument();
-                MainEditor.CodeLensClicked += (s, e) => vm.OnCodeLensClicked(new CodeLensClickedInfo
-                {
-                    Title = e.Title,
-                    CommandName = e.CommandName,
-                    CommandArguments = e.CommandArguments,
-                    Line = e.Line
-                });
+                MainEditor.GoToDefinitionRequested += OnEditorGoToDefinition;
+                MainEditor.PeekDefinitionRequested += OnEditorPeekDefinition;
+                MainEditor.FindAllReferencesRequested += OnEditorFindAllReferences;
+                MainEditor.RenameSymbolRequested += OnEditorRenameSymbol;
+                MainEditor.CodeActionsRequested += OnEditorCodeActions;
+                MainEditor.FormatDocumentRequested += OnEditorFormatDocument;
+                MainEditor.CodeLensClicked += OnEditorCodeLensClicked;
 
                 // Wire up hover/data tip events
                 MainEditor.DataTipRequested += OnDataTipRequested;
+
+                MainEditor.SignatureHelpRequested += OnEditorSignatureHelp;
+                MainEditor.DocumentHighlightRequested += OnEditorDocumentHighlight;
+                MainEditor.DocumentLinkClicked += OnEditorDocumentLinkClicked;
+
+                _editorEventsWired = true;
 
                 // Initialize breakpoints when editor is ready
                 if (MainEditor.IsReady)
@@ -97,7 +241,7 @@ public partial class CodeEditorDocumentView : UserControl
                 }
                 else
                 {
-                    MainEditor.EditorReady += (s, e) => InitializeBreakpointSupport(vm);
+                    MainEditor.EditorReady += OnEditorReady;
                 }
             }
             vm.CompletionReceived += OnCompletionReceived;
@@ -105,16 +249,21 @@ public partial class CodeEditorDocumentView : UserControl
             // Wire up hover result display
             vm.HoverResultReceived += OnHoverResultReceived;
 
-            // Wire up signature help
-            if (MainEditor != null)
-            {
-                MainEditor.SignatureHelpRequested += (s, e) => vm.RequestSignatureHelp(e.Line, e.Column);
-                MainEditor.DocumentHighlightRequested += (s, e) => vm.RequestDocumentHighlight(e.Line, e.Column);
-            }
             vm.SignatureHelpResultReceived += OnSignatureHelpResultReceived;
             vm.DocumentHighlightResultReceived += OnDocumentHighlightResultReceived;
             vm.RenameResultReceived += OnRenameResultReceived;
             vm.SelectionRangeReceived += OnSelectionRangeReceived;
+        }
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var crashLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "vgs_crash.log");
+                var msg = $"[{DateTime.Now:HH:mm:ss}] [DataContextChanged] {ex.GetType().FullName}: {ex.Message}\n{ex.StackTrace}\n";
+                System.IO.File.AppendAllText(crashLogPath, msg);
+            }
+            catch { }
         }
     }
 
@@ -223,6 +372,14 @@ public partial class CodeEditorDocumentView : UserControl
                         Value = v.Value
                     }));
             }
+        });
+    }
+
+    private void OnExecutionLineChanged(object? sender, int? line)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            SetCurrentExecutionLine(line);
         });
     }
 
@@ -351,24 +508,19 @@ public partial class CodeEditorDocumentView : UserControl
 
     public void ShowFindBar(bool showReplace = false)
     {
-        FindReplaceBar.IsVisible = true;
-        FindReplaceBar.ShowReplace = showReplace;
-
-        // Set initial search text from selection
-        var selectedText = MainEditor?.GetSelectedTextOrWordUnderCaret();
-        if (!string.IsNullOrEmpty(selectedText))
+        // Use the inline find/replace overlay embedded in the editor control
+        if (MainEditor != null)
         {
-            FindReplaceBar.SetInitialSearchText(selectedText);
+            if (showReplace)
+                MainEditor.ShowInlineFindReplace();
+            else
+                MainEditor.ShowInlineFind();
         }
-
-        FindReplaceBar.FocusSearchBox();
-        UpdateMatchCount();
     }
 
     public void HideFindBar()
     {
-        FindReplaceBar.IsVisible = false;
-        MainEditor?.Focus();
+        MainEditor?.HideInlineFind();
     }
 
     private void OnDataTipRequested(object? sender, DataTipRequestEventArgs e)
@@ -424,17 +576,20 @@ public partial class CodeEditorDocumentView : UserControl
             UpdateBreadcrumb(editor.CaretLine);
 
             // Debounce document highlight requests (250ms delay like VS Code)
-            _highlightDebounceTimer?.Stop();
-            _highlightDebounceTimer?.Dispose();
-            _highlightDebounceTimer = new System.Timers.Timer(250);
-            _highlightDebounceTimer.AutoReset = false;
-            _highlightDebounceTimer.Elapsed += (_, _) =>
+            if (_highlightDebounceTimer == null)
             {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                _highlightDebounceTimer = new System.Timers.Timer(250);
+                _highlightDebounceTimer.AutoReset = false;
+                _highlightDebounceTimer.Elapsed += (_, _) =>
                 {
-                    vm.RequestDocumentHighlight(editor.CaretLine, editor.CaretColumn);
-                });
-            };
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        if (_subscribedVm != null && MainEditor != null)
+                            _subscribedVm.RequestDocumentHighlight(MainEditor.CaretLine, MainEditor.CaretColumn);
+                    });
+                };
+            }
+            _highlightDebounceTimer.Stop();
             _highlightDebounceTimer.Start();
         }
     }
@@ -1001,9 +1156,7 @@ public partial class CodeEditorDocumentView : UserControl
     {
         if (MainEditor == null) return;
 
-        // Use reflection or direct method if available
-        // For now, use Find which will select the text
-        MainEditor.Find(FindReplaceBar.SearchText, FindReplaceBar.MatchCase, FindReplaceBar.WholeWord, FindReplaceBar.UseRegex);
+        MainEditor.SetSelection(offset, length);
     }
 
     private bool IsWholeWord(string text, int offset, int length)

@@ -109,6 +109,11 @@ public interface IDebugService : IDisposable
     Task SetExceptionBreakpointsAsync(IEnumerable<string> filters, IEnumerable<ExceptionFilterOption>? filterOptions = null);
 
     /// <summary>
+    /// Restart the current debug session with the same configuration
+    /// </summary>
+    Task RestartAsync();
+
+    /// <summary>
     /// Set breakpoints for a file
     /// </summary>
     Task<IReadOnlyList<BreakpointInfo>> SetBreakpointsAsync(string filePath, IEnumerable<SourceBreakpoint> breakpoints);

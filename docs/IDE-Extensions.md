@@ -32,41 +32,124 @@ The VS Code extension provides language support for BasicLang in Visual Studio C
 
 ### Supported File Extensions
 
-- `.bl` - BasicLang source files
-- `.bas` - BasicLang source files (alternative)
+- `.bas` - BasicLang source files (primary)
 - `.blproj` - BasicLang project files
 
 ---
 
-## Visual Studio 2022 Extension
+## Visual Studio 2022 Extension (BasicLang.VisualStudio v2.4.0)
 
-The Visual Studio extension provides language support for BasicLang in VS 2022.
+The primary Visual Studio extension, built on CPS (Common Project System) for full project system integration.
 
 ### Installation
 
-1. Build the extension using MSBuild with VSSDK targets
-2. Install the VSIX: `VS.BasicLang.vsix`
-3. Restart Visual Studio
+1. Build the VSIX:
+   ```bash
+   cd BasicLang.VisualStudio/src/BasicLang.VisualStudio
+   "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" BasicLang.VisualStudio.csproj -p:Configuration=Release
+   ```
+2. Close all VS 2022 instances
+3. Install `BasicLang.VisualStudio.vsix`
+4. Run `devenv.exe /updateConfiguration`
 
 ### Features
 
-- **Language Service**: LSP client for IntelliSense and diagnostics
-- **Syntax Highlighting**: Via pkgdef registration
-- **Build Commands**: Tools menu integration for build/run
-- **File Associations**: Auto-detection of .bl/.bas/.blproj files
+- **CPS Project System**: Full project type with Solution Explorer integration
+- **LSP IntelliSense**: Connects to `BasicLang.exe --lsp` for completions, hover, diagnostics, references
+- **TextMate Syntax Highlighting**: Shared grammar with VS Code extension
+- **Language Configuration**: Bracket matching, auto-closing pairs, comment toggling, indentation rules
+- **4 Project Templates**: Console App, Class Library, WinForms App, WPF App
+- **3 Item Templates**: Class, Module, Interface
+- **Menu Commands**: Build, Run, Change Backend, Restart Server, Go To Definition, Find References
+- **Options Pages**: General (LSP path, auto-start) + Compiler (backend, framework, warnings)
+- **Custom Language Tag**: Templates appear under "BasicLang" in the New Project dialog language filter
+
+### Template Tags
+
+Templates use custom `<LanguageTag>BasicLang</LanguageTag>` which creates a dedicated "BasicLang" entry in the VS 2022 New Project dialog language dropdown.
 
 ### Build Requirements
 
-- Visual Studio 2022 (17.0+)
+- Visual Studio 2022 (17.0+) with VS SDK workload
 - .NET Framework 4.8
 - Microsoft.VSSDK.BuildTools 17.9+
+- Must use MSBuild (not `dotnet build`)
 
-### Menu Commands
+### pkgdef Registration
 
-Access via Tools > BasicLang:
-- **Build Project** - Build the current file/project
-- **Run Project** - Run the current project
-- **Restart Language Server** - Restart the LSP connection
+The extension registers:
+- TextMate grammar repository and language configuration
+- Project factory with `Language(VsTemplate) = "BasicLang"`
+- Template engine directories for project and item templates
+- Menu resource for VSCT commands
+- Auto-load triggers
+
+### VSIX Contents
+
+```
+BasicLang.VisualStudio.dll
+BasicLang.VisualStudio.pkgdef
+LanguageService/BasicLangGrammar.json
+LanguageService/basiclang-language-configuration.json
+BuildSystem/BasicLang.targets
+ProjectTemplates/BasicLang/*.zip (4 templates)
+ProjectTemplates/BasicLang.ProjectTemplates.vstman
+ItemTemplates/BasicLang/*.zip (3 templates)
+ItemTemplates/BasicLang.ItemTemplates.vstman
+Menus.ctmenu
+```
+
+---
+
+## VS.BasicLang (Legacy Extension v1.3.0)
+
+A simpler MEF-based extension. Superseded by BasicLang.VisualStudio but still functional.
+
+### Build
+
+```bash
+dotnet build VS.BasicLang/VS.BasicLang.csproj -c Release
+```
+
+Output: `VS.BasicLang/VS.BasicLang.vsix` (~13KB)
+
+### Features
+
+- LSP client for IntelliSense
+- TextMate grammar for syntax highlighting
+- 1 project template (uses `<ProjectType>CSharp</ProjectType>` workaround)
+- No menu commands or options pages
+
+---
+
+## Visual Game Studio IDE (Avalonia)
+
+The full-featured Avalonia-based IDE with ~93% VS Code feature parity.
+
+### Key Features
+
+| Category | Features |
+|----------|----------|
+| **IntelliSense** | Completions, signature help, hover, inlay hints, code lens |
+| **Navigation** | Go to definition, find references, document outline, type hierarchy, call hierarchy |
+| **Editing** | Multi-cursor, auto-closing brackets, surrounding pairs, smart indentation, 30+ snippets |
+| **Search** | Inline find/replace (Ctrl+F/H), command palette (Ctrl+Shift+P), workspace symbol search |
+| **Debugging** | Breakpoints (persistent, data, exception), set next statement, restart, inline debug values |
+| **UI** | Indentation guides, status bar (encoding, line ending, language mode), code folding |
+| **Formatting** | Format document, on-type formatting, rename symbol |
+
+### Build & Run
+
+```bash
+# Build
+dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
+
+# Run
+./IDE/VisualGameStudio.exe
+
+# Run tests (1,636 tests)
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
+```
 
 ---
 
@@ -97,43 +180,28 @@ await client.LaunchAsync(program, args);
 
 Parse and apply VS Code TextMate grammars and themes.
 
-```csharp
-var service = new TextMateService();
-var grammar = await service.LoadGrammarAsync("path/to/grammar.json");
-var theme = await service.LoadThemeAsync("path/to/theme.json");
-```
-
 ### Snippet Service
 
 Load and expand code snippets from VS Code format.
 
-```csharp
-var service = new SnippetService();
-service.LoadSnippets("path/to/snippets.json");
-var expanded = service.ExpandSnippet("if", values);
-```
-
 ---
 
-## Building Extensions
+## AI Agent SDK Applications
 
-### VS Code Extension
+4 Claude Agent SDK applications automate maintenance across the project:
 
-```bash
-cd vscode-basiclang
-npm install
-npm run compile
-npm run package
-```
+| Agent | Scope | Profiles | MCP Tools |
+|-------|-------|----------|-----------|
+| **BasicLangAgent** | Compiler (lexer, parser, backends, tests) | 6 | 4 |
+| **IDEAgent** | IDE (editor, shell, debugger, project) | 7 | 6 |
+| **EngineAgent** | C++ engine + VB.NET wrapper sync | 8 | 7 |
+| **VSExtensionAgent** | VSIX (CPS, LSP, templates, pkgdef) | 7 | 6 |
 
-Output: `basiclang-1.0.0.vsix`
-
-### Visual Studio Extension
+### Usage
 
 ```bash
-cd VS.BasicLang
-dotnet restore
-msbuild VS.BasicLang.csproj -p:Configuration=Release -p:VSToolsPath="path/to/VSSDK" -t:Rebuild,CreateVsixContainer
+cd BasicLangAgent
+pip install -r requirements.txt
+python basiclang_agent.py --profile tests "Run all compiler tests and report results"
+python basiclang_agent.py --list-profiles
 ```
-
-Output: `VS.BasicLang.vsix`

@@ -7,37 +7,52 @@ Visual Game Studio is a modern game development environment designed to make cre
 ## Components
 
 ### Game Engine (C++ DLL)
-- **Framework v1.0**: Direct Raylib wrapper for immediate-mode 2D game development
+- **Framework v1.0**: Direct Raylib wrapper for immediate-mode 2D game development (~2,300+ exported functions)
 - **Engine v0.5**: Unity-like runtime with ECS, scene management, prefabs, and serialization
+- **New 2D Features**: Bezier curves & splines, gradient drawing, parallax scrolling, trail renderer
 
 ### BasicLang Compiler
 A custom programming language compiler with:
 - Full lexer and parser for a VB-like syntax
-- Semantic analysis with type checking
+- Semantic analysis with type checking and forward references
 - **Pattern matching** with When guards, Or patterns, Nothing patterns, range/comparison patterns
 - LINQ support for queries
 - Async/Await support
-- Class, interface, and module support
+- Class, interface, and module support with inheritance
 - Template/generic support
 - Inline code blocks (C#, C++, LLVM, MSIL)
-- Preprocessor directives
-- Multiple backend targets (C#, native)
+- Preprocessor directives (`#IfDef`, `#IfNDef`, `#Else`, `#EndIf`)
+- **4 backend targets**: C#, LLVM, MSIL, C++
+- Bitwise operators (`And`, `Or`, `Xor`, `Shl`, `Shr`) and compound assignments (`+=`, `-=`, `*=`, `/=`, `&=`, etc.)
+- Constructor validation, base class support, .NET interop
+- **1,636 passing tests**
 
 ### Visual Game Studio IDE
-A full-featured Avalonia-based IDE with:
-- **IntelliSense**: Code completion, parameter hints, quick info
-- **LSP Integration**: Language Server Protocol for advanced editor features
+A full-featured Avalonia-based IDE (~93% VS Code feature parity) with:
+- **IntelliSense**: Code completion, parameter hints, quick info, signature help, inlay hints
+- **LSP Integration**: Language Server Protocol for 13+ features
 - **Syntax Highlighting**: Semantic token-based highlighting
 - **Code Folding**: Collapsible regions for code organization
-- **Bracket Matching**: Automatic bracket highlighting
+- **Bracket Matching**: Automatic bracket highlighting with auto-closing pairs
 - **Multi-Cursor Editing**: Multiple cursor support
+- **Code Lens**: Clickable annotations above functions/classes
+- **Inline Find/Replace**: Ctrl+F/H with incremental search and match highlighting
+- **Command Palette**: Ctrl+Shift+P with ~50 commands and fuzzy search
+- **Code Snippets**: 30+ snippets matching VS Code (func, sub, if, for, class, try, etc.)
+- **Smart Indentation**: Regex-based indent/outdent matching VS Code behavior
+- **Surrounding Pairs**: Select text + type bracket/quote to wrap selection
+- **Indentation Guides**: Vertical lines at tab stops with active guide highlighted
 - **Bookmarks**: Navigate code with bookmarks
-- **Breakpoints**: Set breakpoints for debugging
-- **Diagnostics**: Real-time error and warning display
-- **Go to Definition**: Navigate to symbol definitions
+- **Breakpoints**: Persistent breakpoints with visual distinction, data breakpoints, exception settings
+- **Diagnostics**: Real-time error and warning display with diagnostic tags
+- **Go to Definition**: Navigate to symbol definitions and type definitions
 - **Find References**: Find all usages of symbols
 - **Document Symbols**: Outline view of code structure
 - **Hover Documentation**: Rich hover information
+- **Rename Symbol**: LSP-powered rename with input dialog
+- **Format Document**: With undo preservation
+- **Call/Type Hierarchy**: Navigate function call chains and type relationships
+- **Debugging**: Set Next Statement, restart debugging, exception breakpoint filters, inline debug values
 
 ## Architecture
 
@@ -54,19 +69,43 @@ VisualGameStudioEngine.dll (C++)    BasicLang.dll (C#)
    Your VB.NET Game              Code Editor Features
 ```
 
+### Visual Studio 2022 Extension
+- **BasicLang.VisualStudio** (v2.4.0): CPS-based VSIX with full project system, LSP client, TextMate grammar
+- 4 project templates + 3 item templates with custom "BasicLang" language tag
+- Build, Run, Change Backend, Restart Server commands
+- General + Compiler options pages
+
+### AI Agent SDK Applications
+4 Claude Agent SDK applications for automated maintenance:
+- **BasicLangAgent**: Compiler testing and review (6 profiles, 4 MCP tools)
+- **IDEAgent**: IDE feature development and testing (7 profiles, 6 MCP tools)
+- **EngineAgent**: C++/VB.NET engine sync maintenance (8 profiles, 7 MCP tools)
+- **VSExtensionAgent**: VSIX build and validation (7 profiles, 6 MCP tools)
+
 ## Project Structure
 
 ```
 VisualGameStudioEngine/
-├── BasicLang/                    # Compiler and LSP server
-│   ├── Compiler/                 # Lexer, parser, semantic analysis
-│   └── LSP/                      # Language Server Protocol handlers
-├── VisualGameStudio.Core/        # Core models and services
-├── VisualGameStudio.Editor/      # Editor components (Avalonia)
-├── VisualGameStudio.ProjectSystem/# Project and solution management
-├── VisualGameStudio.Tests/       # Unit test suite (800+ tests)
-├── RaylibWrapper/                # VB.NET bindings for engine
-└── TestVbDLL/                    # Sample games
+├── BasicLang/                     # Compiler and LSP server (C#, ~45K lines)
+│   ├── Compiler/                  # Lexer, parser, semantic analysis
+│   └── LSP/                       # Language Server Protocol handlers
+├── VisualGameStudio.Core/         # Core models and services
+├── VisualGameStudio.Editor/       # Editor components (Avalonia)
+├── VisualGameStudio.ProjectSystem/ # Project and solution management
+├── VisualGameStudio.Shell/        # Main IDE application shell
+├── VisualGameStudio.Tests/        # Unit test suite (1,636 tests)
+├── VisualGameStudioEngine/        # C++ game engine DLL (Raylib-based)
+├── RaylibWrapper/                 # VB.NET P/Invoke bindings
+├── BasicLang.VisualStudio/        # VS 2022 VSIX extension (CPS + LSP)
+├── VS.BasicLang/                  # Legacy VS 2022 extension (MEF)
+├── vscode-basiclang/              # VS Code extension
+├── BasicLangAgent/                # AI agent for compiler
+├── IDEAgent/                      # AI agent for IDE
+├── EngineAgent/                   # AI agent for engine
+├── VSExtensionAgent/              # AI agent for VS extension
+├── SampleGames/                   # Sample games (Pong, SpaceShooter)
+├── TestVbDLL/                     # VB.NET engine test project
+└── docs/                          # Documentation
 ```
 
 ## Quick Start
@@ -76,50 +115,54 @@ VisualGameStudioEngine/
 ```vb
 ' Initialize
 Framework_Initialize(800, 600, "My Game")
-Framework_SetFixedStep(1.0 / 60.0)
+Framework_SetTargetFPS(60)
 Framework_InitAudio()
-
-' Set draw callback
-Framework_SetDrawCallback(AddressOf MyDraw)
 
 ' Game loop
 While Not Framework_ShouldClose()
     Framework_Update()
+    Framework_Camera_Update()
+    Framework_Ecs_UpdateVelocities()
+
+    Framework_BeginDrawing()
+    Framework_ClearBackground(30, 30, 50, 255)
+    Framework_Camera_BeginMode()
+        Framework_DrawText("Hello World!", 100, 100, 24, 255, 255, 255, 255)
+        Framework_Ecs_DrawSprites()
+    Framework_Camera_EndMode()
+    Framework_EndDrawing()
+
+    Framework_UpdateAllMusic()
+    Framework_Audio_Update()
 End While
 
 ' Cleanup
+Framework_CloseAudio()
 Framework_Shutdown()
-
-Sub MyDraw()
-    Framework_BeginDrawing()
-    Framework_ClearBackground(30, 30, 50, 255)
-    Framework_DrawText("Hello World!", 100, 100, 24, 255, 255, 255, 255)
-    Framework_EndDrawing()
-End Sub
 ```
 
-### Engine-Style (ECS + Scenes)
+### Engine-Style (ECS + Sprites)
 
 ```vb
-' Create an entity
+' Create a player entity with components
 Dim player As Integer = Framework_Ecs_CreateEntity()
 Framework_Ecs_SetName(player, "Player")
 Framework_Ecs_SetTag(player, "player")
 Framework_Ecs_AddTransform2D(player, 400, 300, 0, 1, 1)
 Framework_Ecs_AddVelocity2D(player, 0, 0)
 Framework_Ecs_AddBoxCollider2D(player, -20, -20, 40, 40)
+Framework_Ecs_AddSprite2D(player)
+Framework_Ecs_SetSpriteTexture(player, texHandle)
 Framework_Ecs_SetEnabled(player, True)
 
-' Create hierarchy
+' Create hierarchy (weapon attached to player)
 Dim weapon As Integer = Framework_Ecs_CreateEntity()
 Framework_Ecs_SetParent(weapon, player)
 
-' Save as prefab
-Framework_Prefab_SaveEntity(player, "player.prefab")
-
-' Instantiate prefab
-Dim prefab As Integer = Framework_Prefab_Load("player.prefab")
-Dim instance As Integer = Framework_Prefab_Instantiate(prefab, -1, 100, 100)
+' Check collisions
+If Framework_Physics_CheckEntityOverlap(player, enemy) Then
+    ' Handle collision
+End If
 ```
 
 ## BasicLang Language Features
@@ -304,7 +347,7 @@ Real-time error checking with:
 
 ## Testing
 
-The project includes a comprehensive test suite with 800+ unit tests covering:
+The project includes a comprehensive test suite with 1,636 unit tests covering:
 
 - **Core Models**: Project, solution, build configuration
 - **Editor Features**: Folding, bracket highlighting, completion, multi-cursor
@@ -324,7 +367,7 @@ The `docs/` folder contains detailed documentation:
 
 | File | Contents |
 |------|----------|
-| `docs/API_REFERENCE.md` | Full game engine API with code examples (35+ systems) |
+| `docs/API_REFERENCE.md` | Full game engine API with code examples (35+ systems, ~450 functions) |
 | `docs/GETTING_STARTED.md` | Quick-start guide with step-by-step examples |
 | `docs/articles/engine-guide.md` | Engine architecture overview |
 | `docs/articles/basiclang-guide.md` | BasicLang language reference |
@@ -332,6 +375,8 @@ The `docs/` folder contains detailed documentation:
 | `docs/articles/ide-guide.md` | IDE user guide |
 | `docs/BasicLang-Reference.md` | Full language syntax reference |
 | `docs/UserGuide.md` | End-user guide |
+| `docs/IDE-Extensions.md` | VS 2022 and VS Code extension documentation |
+| `docs/vs2022-language-support-research.md` | VS 2022 custom language support research |
 
 ---
 
@@ -830,6 +875,55 @@ A ref-counted handle system for safe, disposable texture management.
 | `Framework_Ecs_UpdateVelocities()` | Apply Velocity2D to Transform2D positions |
 | `Framework_Ecs_DrawSprites()` | Render all Sprite2D components |
 
+### Bezier Curves & Splines
+
+| Function | Description |
+|----------|-------------|
+| `Framework_DrawBezierQuad(x1,y1, cx,cy, x2,y2, thick, r,g,b,a)` | Draw quadratic bezier curve |
+| `Framework_DrawBezierCubic(x1,y1, cx1,cy1, cx2,cy2, x2,y2, thick, r,g,b,a)` | Draw cubic bezier curve |
+| `Framework_BezierQuadPoint(x1,y1, cx,cy, x2,y2, t, outX,outY)` | Get point on quadratic bezier at t |
+| `Framework_BezierCubicPoint(x1,y1, cx1,cy1, cx2,cy2, x2,y2, t, outX,outY)` | Get point on cubic bezier at t |
+| `Framework_DrawSpline(points, count, thick, r,g,b,a)` | Draw Catmull-Rom spline through points |
+| `Framework_SplinePoint(points, count, t, outX,outY)` | Get point on spline at t |
+
+### Gradient Drawing
+
+| Function | Description |
+|----------|-------------|
+| `Framework_DrawGradientRectH(x, y, w, h, r1,g1,b1,a1, r2,g2,b2,a2)` | Horizontal gradient rectangle |
+| `Framework_DrawGradientRectV(x, y, w, h, r1,g1,b1,a1, r2,g2,b2,a2)` | Vertical gradient rectangle |
+| `Framework_DrawGradientRect4(x, y, w, h, tl, tr, bl, br)` | Four-corner gradient rectangle |
+| `Framework_DrawGradientCircle(cx, cy, radius, r1,g1,b1,a1, r2,g2,b2,a2)` | Radial gradient circle |
+| `Framework_DrawGradientLine(x1,y1, x2,y2, thick, r1,g1,b1,a1, r2,g2,b2,a2)` | Gradient line |
+
+### Parallax Scrolling
+
+| Function | Description |
+|----------|-------------|
+| `Framework_Parallax_CreateLayer(textureHandle)` | Create parallax layer, returns layerId |
+| `Framework_Parallax_DestroyLayer(layerId)` | Destroy parallax layer |
+| `Framework_Parallax_SetScrollSpeed(layerId, speedX, speedY)` | Set layer scroll speed |
+| `Framework_Parallax_SetOffset(layerId, offsetX, offsetY)` | Set layer offset |
+| `Framework_Parallax_SetScale(layerId, scaleX, scaleY)` | Set layer scale |
+| `Framework_Parallax_SetTint(layerId, r,g,b,a)` | Set layer tint color |
+| `Framework_Parallax_SetZOrder(layerId, zOrder)` | Set layer draw order |
+| `Framework_Parallax_SetAutoScroll(layerId, enabled, speedX, speedY)` | Enable auto-scrolling |
+| `Framework_Parallax_SetRepeat(layerId, repeatX, repeatY)` | Enable tiling |
+| `Framework_Parallax_DrawAll()` | Draw all parallax layers |
+
+### Trail Renderer
+
+| Function | Description |
+|----------|-------------|
+| `Framework_Trail_Create()` | Create trail, returns trailId |
+| `Framework_Trail_Destroy(trailId)` | Destroy trail |
+| `Framework_Trail_SetWidth(trailId, startWidth, endWidth)` | Set width tapering |
+| `Framework_Trail_SetColor(trailId, r1,g1,b1,a1, r2,g2,b2,a2)` | Set color fade (start to end) |
+| `Framework_Trail_SetLifetime(trailId, seconds)` | Set point lifetime |
+| `Framework_Trail_AttachToEntity(trailId, entityId)` | Attach trail to entity |
+| `Framework_Trail_AddPoint(trailId, x, y)` | Manually add trail point |
+| `Framework_Trail_DrawAll()` | Draw all active trails |
+
 ### Physics Overlap Queries
 
 | Function | Description |
@@ -958,12 +1052,15 @@ End Enum
 
 ## Highlights
 
-- **RayLib Powered**: Built on one of the most beginner-friendly and performance-focused game libraries available.
-- **DLL Framework**: The heart of Visual Game Basic is a DLL, making it reusable, compact, and easy to integrate.
+- **Raylib Powered**: Built on one of the most beginner-friendly and performance-focused game libraries available.
+- **2,300+ API Functions**: Comprehensive 2D game engine with ECS, audio, camera, scenes, and more.
 - **Multi-Language Support**: Call the same framework from Visual Basic, C++, or C#, giving you freedom of choice.
-- **Full IDE**: Complete development environment with IntelliSense, debugging, and project management.
-- **Comprehensive Testing**: 800+ unit tests ensuring code quality and reliability.
+- **Full IDE**: Complete Avalonia-based development environment with ~93% VS Code feature parity.
+- **VS 2022 Extension**: CPS-based VSIX with LSP, templates, and full project system integration.
+- **4 Backend Targets**: Compile BasicLang to C#, LLVM, MSIL, or C++.
+- **Comprehensive Testing**: 1,636 unit tests ensuring code quality and reliability.
 - **LSP Integration**: Modern editor features through Language Server Protocol.
+- **AI Agent Maintenance**: 4 Claude Agent SDK applications for automated compiler, IDE, engine, and extension maintenance.
 
 ## License
 

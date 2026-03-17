@@ -1,13 +1,13 @@
 <VSTemplateManifest Version="1.0" Locale="1033" xmlns="http://schemas.microsoft.com/developer/vstemplatemanifest/2015">
   <VSTemplateContainer TemplateType="Project">
     <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
-    <TemplateFileName>ConsoleApp.zip</TemplateFileName>
+    <TemplateFileName>ConsoleApp.vstemplate</TemplateFileName>
     <VSTemplateHeader>
       <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
         <Name>BasicLang Console Application</Name>
         <Description>A console application project for the BasicLang programming language.</Description>
         <ProjectType>VisualBasic</ProjectType>
-        <LanguageTag>visualbasic</LanguageTag>
+        <LanguageTag>BasicLang</LanguageTag>
         <PlatformTag>Windows</PlatformTag>
         <ProjectTypeTag>Console</ProjectTypeTag>
         <SortOrder>1000</SortOrder>
@@ -20,13 +20,13 @@
   </VSTemplateContainer>
   <VSTemplateContainer TemplateType="Project">
     <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
-    <TemplateFileName>ClassLibrary.zip</TemplateFileName>
+    <TemplateFileName>ClassLibrary.vstemplate</TemplateFileName>
     <VSTemplateHeader>
       <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
         <Name>BasicLang Class Library</Name>
         <Description>A class library project for the BasicLang programming language.</Description>
         <ProjectType>VisualBasic</ProjectType>
-        <LanguageTag>visualbasic</LanguageTag>
+        <LanguageTag>BasicLang</LanguageTag>
         <PlatformTag>Windows</PlatformTag>
         <ProjectTypeTag>Library</ProjectTypeTag>
         <SortOrder>1001</SortOrder>
@@ -39,13 +39,13 @@
   </VSTemplateContainer>
   <VSTemplateContainer TemplateType="Project">
     <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
-    <TemplateFileName>WinFormsApp.zip</TemplateFileName>
+    <TemplateFileName>WinFormsApp.vstemplate</TemplateFileName>
     <VSTemplateHeader>
       <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
         <Name>BasicLang Windows Forms App</Name>
         <Description>A Windows Forms desktop application for the BasicLang programming language.</Description>
         <ProjectType>VisualBasic</ProjectType>
-        <LanguageTag>visualbasic</LanguageTag>
+        <LanguageTag>BasicLang</LanguageTag>
         <PlatformTag>Windows</PlatformTag>
         <ProjectTypeTag>Desktop</ProjectTypeTag>
         <SortOrder>1002</SortOrder>
@@ -58,13 +58,13 @@
   </VSTemplateContainer>
   <VSTemplateContainer TemplateType="Project">
     <RelativePathOnDisk>BasicLang</RelativePathOnDisk>
-    <TemplateFileName>WpfApp.zip</TemplateFileName>
+    <TemplateFileName>WpfApp.vstemplate</TemplateFileName>
     <VSTemplateHeader>
       <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
         <Name>BasicLang WPF Application</Name>
         <Description>A WPF desktop application for the BasicLang programming language.</Description>
         <ProjectType>VisualBasic</ProjectType>
-        <LanguageTag>visualbasic</LanguageTag>
+        <LanguageTag>BasicLang</LanguageTag>
         <PlatformTag>Windows</PlatformTag>
         <ProjectTypeTag>Desktop</ProjectTypeTag>
         <SortOrder>1003</SortOrder>

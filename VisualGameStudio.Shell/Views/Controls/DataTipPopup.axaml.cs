@@ -24,8 +24,10 @@ public partial class DataTipPopup : UserControl
 
         ExpressionText.Text = expression;
         ValueText.Text = value;
+        ValueText.Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#D4D4D4"));
         TypeText.Text = type ?? "";
         TypeText.IsVisible = !string.IsNullOrEmpty(type);
+        AddToWatchButton.IsVisible = true;
     }
 
     public void SetError(string expression, string errorMessage)

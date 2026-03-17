@@ -16,6 +16,20 @@ public partial class App : Application
     public static IServiceProvider Services { get; private set; } = null!;
     public static Window? MainWindow { get; private set; }
 
+    private static readonly string CrashLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "vgs_crash.log");
+
+    private static void LogCrash(string prefix, Exception? ex)
+    {
+        try
+        {
+            var msg = $"[{DateTime.Now:HH:mm:ss}] [{prefix}] {ex?.GetType().FullName}: {ex?.Message}\n{ex?.StackTrace}\n";
+            if (ex?.InnerException != null)
+                msg += $"  [INNER] {ex.InnerException.GetType().FullName}: {ex.InnerException.Message}\n  {ex.InnerException.StackTrace}\n";
+            System.IO.File.AppendAllText(CrashLogPath, msg);
+        }
+        catch { }
+    }
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -23,6 +37,19 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // Global exception handlers for crash diagnostics
+        AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            LogCrash("UNHANDLED", e.ExceptionObject as Exception);
+
+        TaskScheduler.UnobservedTaskException += (s, e) =>
+        {
+            LogCrash("TASK", e.Exception);
+            e.SetObserved();
+        };
+
+        // Avalonia UI thread exceptions
+        RxApp_DefaultExceptionHandler();
+
         // Setup dependency injection
         var services = new ServiceCollection();
         services.ConfigureServices();
@@ -70,5 +97,10 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static void RxApp_DefaultExceptionHandler()
+    {
+        // No-op: Avalonia scheduler doesn't expose a public catch handler
     }
 }

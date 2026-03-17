@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "breakpoints": [
+    {
+      "filePath": "C:\\Users\\melvi\\source\\repos\\VisualGameStudioEngine\\SampleGames\\Pong\\Main.bas",
+      "line": 72,
+      "isEnabled": true
+    }
+  ],
+  "functionBreakpoints": [],
+  "dataBreakpoints": []
+}

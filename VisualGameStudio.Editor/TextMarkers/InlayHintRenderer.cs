@@ -27,7 +27,7 @@ public class InlayHintRenderer : IBackgroundRenderer
     public void SetHints(IEnumerable<InlayHintItem> hints)
     {
         _hints = hints.ToList();
-        _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
+        _editor?.TextArea?.TextView?.InvalidateLayer(KnownLayer.Selection);
     }
 
     /// <summary>
@@ -36,7 +36,7 @@ public class InlayHintRenderer : IBackgroundRenderer
     public void Clear()
     {
         _hints.Clear();
-        _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
+        _editor?.TextArea?.TextView?.InvalidateLayer(KnownLayer.Selection);
     }
 
     public void Draw(TextView textView, DrawingContext drawingContext)

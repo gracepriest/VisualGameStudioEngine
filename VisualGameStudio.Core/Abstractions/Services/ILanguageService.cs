@@ -48,6 +48,11 @@ public interface ILanguageService : IDisposable
     Task CloseDocumentAsync(string uri, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Notify the server that a document was saved
+    /// </summary>
+    Task SaveDocumentAsync(string uri, string text, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Get completions at a position
     /// </summary>
     Task<IReadOnlyList<CompletionItem>> GetCompletionsAsync(string uri, int line, int column, CancellationToken cancellationToken = default);

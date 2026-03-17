@@ -233,6 +233,17 @@ public class LanguageService : ILanguageService
         });
     }
 
+    public async Task SaveDocumentAsync(string uri, string text, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return;
+
+        await SendNotificationAsync("textDocument/didSave", new
+        {
+            textDocument = new { uri = PathToUri(uri) },
+            text
+        });
+    }
+
     public async Task<IReadOnlyList<CompletionItem>> GetCompletionsAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
     {
         _outputService.WriteLine($"[LSP] GetCompletionsAsync: uri={uri}, line={line}, col={column}", OutputCategory.Build);
@@ -402,7 +413,8 @@ public class LanguageService : ILanguageService
 
             if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
             {
-                contentLength = int.Parse(line.Substring(15).Trim());
+                if (!int.TryParse(line.Substring(15).Trim(), out contentLength))
+                    contentLength = 0;
             }
         }
 
@@ -532,13 +544,28 @@ public class LanguageService : ILanguageService
         await _writeLock.WaitAsync();
         try
         {
+            // Re-check after acquiring lock (another thread may have nulled it)
+            var writer = _writer;
+            if (writer == null) return;
+
             var json = JsonSerializer.Serialize(message, JsonOptions);
             var content = Encoding.UTF8.GetBytes(json);
 
             var header = $"Content-Length: {content.Length}\r\n\r\n";
-            await _writer.WriteAsync(header);
-            await _writer.WriteAsync(json);
-            await _writer.FlushAsync();
+            await writer.WriteAsync(header);
+            await writer.WriteAsync(json);
+            await writer.FlushAsync();
+        }
+        catch (IOException)
+        {
+            // LSP server pipe closed — mark as disconnected
+            _writer = null;
+            IsConnected = false;
+        }
+        catch (ObjectDisposedException)
+        {
+            _writer = null;
+            IsConnected = false;
         }
         finally
         {

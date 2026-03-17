@@ -39,6 +39,9 @@ namespace BasicLang.Compiler.IR
         // Flag to suppress instruction emission (used for When guard expressions)
         private bool _suppressEmit = false;
 
+        // Current source line being processed (set from AST nodes)
+        private int _currentSourceLine = 0;
+
         public IRModule Module => _module;
 
         public IRBuilder(SemanticAnalyzer semanticAnalyzer)
@@ -119,9 +122,26 @@ namespace BasicLang.Compiler.IR
             // from modifying them (they're not part of block control flow)
             if (_suppressEmit) return;
 
+            // Stamp source line from current AST context
+            if (_currentSourceLine > 0 && instruction.SourceLine == 0)
+            {
+                instruction.SourceLine = _currentSourceLine;
+            }
+
             if (_currentBlock != null)
             {
                 _currentBlock.AddInstruction(instruction);
+            }
+        }
+
+        /// <summary>
+        /// Track the source line from an AST node before emitting instructions
+        /// </summary>
+        private void TrackSourceLine(ASTNode node)
+        {
+            if (node != null && node.Line > 0)
+            {
+                _currentSourceLine = node.Line;
             }
         }
 
@@ -356,6 +376,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(VariableDeclarationNode node)
         {
+            TrackSourceLine(node);
             var varType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class);
 
             if (_currentFunction == null)
@@ -1834,6 +1855,7 @@ namespace BasicLang.Compiler.IR
         {
             foreach (var statement in node.Statements)
             {
+                TrackSourceLine(statement);
                 statement.Accept(this);
 
                 // Stop if we hit a terminator
@@ -1844,6 +1866,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(IfStatementNode node)
         {
+            TrackSourceLine(node);
             // Evaluate condition
             node.Condition.Accept(this);
             var condition = _expressionResult;
@@ -1912,6 +1935,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(SelectStatementNode node)
         {
+            TrackSourceLine(node);
             // Evaluate switch expression
             node.Expression.Accept(this);
             var switchValue = _expressionResult;
@@ -2150,6 +2174,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ForLoopNode node)
         {
+            TrackSourceLine(node);
             // Create loop blocks
             var condBlock = _currentFunction.CreateBlock("for.cond");
             var bodyBlock = _currentFunction.CreateBlock("for.body");
@@ -2237,6 +2262,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ForEachLoopNode node)
         {
+            TrackSourceLine(node);
             // Evaluate collection expression
             node.Collection.Accept(this);
             var collection = _expressionResult;
@@ -2318,6 +2344,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(WhileLoopNode node)
         {
+            TrackSourceLine(node);
             var condBlock = _currentFunction.CreateBlock("while.cond");
             var bodyBlock = _currentFunction.CreateBlock("while.body");
             var endBlock = _currentFunction.CreateBlock("while.end");
@@ -2347,6 +2374,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(DoLoopNode node)
         {
+            TrackSourceLine(node);
             var condBlock = _currentFunction.CreateBlock("do.cond");
             var bodyBlock = _currentFunction.CreateBlock("do.body");
             var endBlock = _currentFunction.CreateBlock("do.end");
@@ -2420,6 +2448,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(TryStatementNode node)
         {
+            TrackSourceLine(node);
             // Create all blocks first
             var tryBlock = _currentFunction.CreateBlock("try.body");
             var endBlock = _currentFunction.CreateBlock("try.end");
@@ -2523,6 +2552,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ReturnStatementNode node)
         {
+            TrackSourceLine(node);
             if (node.Value != null)
             {
                 node.Value.Accept(this);
@@ -2560,6 +2590,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(AssignmentStatementNode node)
         {
+            TrackSourceLine(node);
             // Evaluate right-hand side
             node.Value.Accept(this);
             var value = _expressionResult;
@@ -2678,6 +2709,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ExpressionStatementNode node)
         {
+            TrackSourceLine(node);
             node.Expression.Accept(this);
         }
 

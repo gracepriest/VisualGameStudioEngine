@@ -88,6 +88,11 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private string _debugStatusText = "";
 
+    /// <summary>
+    /// Enhanced status bar view model with interactive indicators.
+    /// </summary>
+    public StatusBarViewModel StatusBar { get; } = new();
+
     public SolutionExplorerViewModel SolutionExplorer { get; }
     public OutputPanelViewModel OutputPanel { get; }
     public ErrorListViewModel ErrorList { get; }
@@ -108,6 +113,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public TypeHierarchyViewModel TypeHierarchy { get; }
 
     private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new();
+    private readonly Dictionary<string, Action> _documentCleanupActions = new();
 
     public MainWindowViewModel(
         IProjectService projectService,
@@ -212,14 +218,24 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void OnDiagnosticsReceived(object? sender, DiagnosticsEventArgs e)
     {
-        // Forward diagnostics to the error list
-        ErrorList.UpdateDiagnostics(e.Diagnostics);
-
-        // Forward to the specific document for error highlighting
-        var filePath = e.Uri.Replace("file:///", "").Replace("/", "\\");
-        if (_openDocuments.TryGetValue(filePath, out var doc))
+        try
         {
-            doc.UpdateDiagnostics(e.Diagnostics);
+            if (e?.Diagnostics == null) return;
+
+            // Forward diagnostics to the error list
+            ErrorList.UpdateDiagnostics(e.Diagnostics);
+
+            // Forward to the specific document for error highlighting
+            var uri = e.Uri ?? "";
+            var filePath = uri.Replace("file:///", "").Replace("/", "\\");
+            if (!string.IsNullOrEmpty(filePath) && _openDocuments.TryGetValue(filePath, out var doc))
+            {
+                doc.UpdateDiagnostics(e.Diagnostics);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Diagnostics] Error processing diagnostics: {ex.Message}");
         }
     }
 
@@ -251,7 +267,22 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void OnDocumentClosed(object? sender, string filePath)
     {
+        // Run cleanup actions (unsubscribe events) for this document
+        if (_documentCleanupActions.TryGetValue(filePath, out var cleanup))
+        {
+            cleanup();
+            _documentCleanupActions.Remove(filePath);
+        }
+
         _openDocuments.Remove(filePath);
+
+        // Notify LSP that the document was closed
+        if (_languageService.IsConnected &&
+            (filePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
+             filePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+        {
+            _ = _languageService.CloseDocumentAsync(filePath);
+        }
     }
 
     private void OnProjectClosed(object? sender, ProjectEventArgs e)
@@ -505,6 +536,23 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Opens a file from a document link click (Import navigation).
+    /// Public so the view can call it. Wraps OpenFileAsync with error handling.
+    /// </summary>
+    public async Task OpenFileFromLinkAsync(string filePath)
+    {
+        try
+        {
+            await OpenFileAsync(filePath);
+            StatusText = $"Opened: {Path.GetFileName(filePath)}";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to open file: {ex.Message}";
+        }
+    }
+
     private async Task OpenFileAsync(string filePath)
     {
         // Check if already open
@@ -520,7 +568,9 @@ public partial class MainWindowViewModel : ViewModelBase
             var content = await _fileService.ReadFileAsync(filePath);
 
             // Notify LSP about opened document
-            if (_languageService.IsConnected && filePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase))
+            if (_languageService.IsConnected &&
+                (filePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
+                 filePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
             {
                 await _languageService.OpenDocumentAsync(filePath, content);
             }
@@ -531,72 +581,139 @@ public partial class MainWindowViewModel : ViewModelBase
             };
             document.SetContent(content);
 
-            document.CaretPositionChanged += (s, e) =>
+            // Update status bar for the new document
+            StatusBar.UpdateForFile(filePath);
+            StatusBar.DetectLineEnding(content);
+
+            // Use named handler variables so we can unsubscribe on document close
+            EventHandler onCaretChanged = (s, e) =>
             {
                 CaretLine = document.CaretLine;
                 CaretColumn = document.CaretColumn;
             };
+            document.CaretPositionChanged += onCaretChanged;
 
             document.AddToWatchRequested += OnAddToWatchRequested;
             document.DataTipEvaluationRequested += OnDataTipEvaluationRequested;
-            document.GoToDefinitionRequested += async (s, e) => await GoToDefinitionAsync();
-            document.FindAllReferencesRequested += async (s, e) => await FindReferencesAsync();
-            document.RenameSymbolRequested += async (s, e) => await RenameSymbolAsync();
-            document.ExtractMethodRequested += async (s, e) => await ExtractMethodAsync();
-            document.InlineMethodRequested += async (s, e) => await InlineMethodAsync();
-            document.IntroduceVariableRequested += async (s, e) => await IntroduceVariableAsync();
-            document.ExtractConstantRequested += async (s, e) => await ExtractConstantAsync();
-            document.InlineConstantRequested += async (s, e) => await InlineConstantAsync();
-            document.InlineVariableRequested += async (s, e) => await InlineVariableAsync();
-            document.ChangeSignatureRequested += async (s, e) => await ChangeSignatureAsync();
-            document.EncapsulateFieldRequested += async (s, e) => await EncapsulateFieldAsync();
-            document.InlineFieldRequested += async (s, e) => await InlineFieldAsync();
-            document.MoveTypeToFileRequested += async (s, e) => await MoveTypeToFileAsync();
-            document.ExtractInterfaceRequested += async (s, e) => await ExtractInterfaceAsync();
-            document.GenerateConstructorRequested += async (s, e) => await GenerateConstructorAsync();
-            document.ImplementInterfaceRequested += async (s, e) => await ImplementInterfaceAsync();
-            document.OverrideMethodRequested += async (s, e) => await OverrideMethodAsync();
-            document.AddParameterRequested += async (s, e) => await AddParameterAsync();
-            document.RemoveParameterRequested += async (s, e) => await RemoveParameterAsync();
-            document.ReorderParametersRequested += async (s, e) => await ReorderParametersAsync();
-            document.RenameParameterRequested += async (s, e) => await RenameParameterAsync();
-            document.ChangeParameterTypeRequested += async (s, e) => await ChangeParameterTypeAsync();
-            document.MakeParameterOptionalRequested += async (s, e) => await MakeParameterOptionalAsync();
-            document.MakeParameterRequiredRequested += async (s, e) => await MakeParameterRequiredAsync();
-            document.ConvertToNamedArgumentsRequested += async (s, e) => await ConvertToNamedArgumentsAsync();
-            document.ConvertToPositionalArgumentsRequested += async (s, e) => await ConvertToPositionalArgumentsAsync();
-            document.SafeDeleteRequested += async (s, e) => await SafeDeleteAsync();
-            document.PullMembersUpRequested += async (s, e) => await PullMembersUpAsync();
-            document.PushMembersDownRequested += async (s, e) => await PushMembersDownAsync();
-            document.UseBaseTypeRequested += async (s, e) => await UseBaseTypeAsync();
-            document.ConvertToInterfaceRequested += async (s, e) => await ConvertToInterfaceAsync();
-            document.InvertIfRequested += async (s, e) => await InvertIfAsync();
-            document.ConvertToSelectCaseRequested += async (s, e) => await ConvertToSelectCaseAsync();
-            document.SplitDeclarationRequested += async (s, e) => await SplitDeclarationAsync();
-            document.IntroduceFieldRequested += async (s, e) => await IntroduceFieldAsync();
-            document.SurroundWithRequested += async (s, e) => await SurroundWithAsync();
-            document.PeekDefinitionRequested += async (s, e) => await PeekDefinitionAsync();
-            document.FormatDocumentRequested += async (s, e) => await FormatDocumentAsync();
-            document.CodeActionsRequested += async (s, e) => await ShowCodeActionsAsync();
-            document.ExpandSelectionRequested += async (s, e) => await ExpandSelectionAsync();
-            document.ShrinkSelectionRequested += (s, e) => ShrinkSelection();
-            document.HoverRequested += async (s, e) =>
+
+            // Named async handlers for refactoring commands
+            EventHandler onGoToDef = async (s, e) => await GoToDefinitionAsync();
+            EventHandler onFindRefs = async (s, e) => await FindReferencesAsync();
+            EventHandler onRename = async (s, e) => await RenameSymbolAsync();
+            EventHandler onExtractMethod = async (s, e) => await ExtractMethodAsync();
+            EventHandler onInlineMethod = async (s, e) => await InlineMethodAsync();
+            EventHandler onIntroduceVar = async (s, e) => await IntroduceVariableAsync();
+            EventHandler onExtractConst = async (s, e) => await ExtractConstantAsync();
+            EventHandler onInlineConst = async (s, e) => await InlineConstantAsync();
+            EventHandler onInlineVar = async (s, e) => await InlineVariableAsync();
+            EventHandler onChangeSig = async (s, e) => await ChangeSignatureAsync();
+            EventHandler onEncapField = async (s, e) => await EncapsulateFieldAsync();
+            EventHandler onInlineField = async (s, e) => await InlineFieldAsync();
+            EventHandler onMoveType = async (s, e) => await MoveTypeToFileAsync();
+            EventHandler onExtractIface = async (s, e) => await ExtractInterfaceAsync();
+            EventHandler onGenCtor = async (s, e) => await GenerateConstructorAsync();
+            EventHandler onImplIface = async (s, e) => await ImplementInterfaceAsync();
+            EventHandler onOverride = async (s, e) => await OverrideMethodAsync();
+            EventHandler onAddParam = async (s, e) => await AddParameterAsync();
+            EventHandler onRemoveParam = async (s, e) => await RemoveParameterAsync();
+            EventHandler onReorderParams = async (s, e) => await ReorderParametersAsync();
+            EventHandler onRenameParam = async (s, e) => await RenameParameterAsync();
+            EventHandler onChangeParamType = async (s, e) => await ChangeParameterTypeAsync();
+            EventHandler onMakeOptional = async (s, e) => await MakeParameterOptionalAsync();
+            EventHandler onMakeRequired = async (s, e) => await MakeParameterRequiredAsync();
+            EventHandler onToNamed = async (s, e) => await ConvertToNamedArgumentsAsync();
+            EventHandler onToPositional = async (s, e) => await ConvertToPositionalArgumentsAsync();
+            EventHandler onSafeDelete = async (s, e) => await SafeDeleteAsync();
+            EventHandler onPullUp = async (s, e) => await PullMembersUpAsync();
+            EventHandler onPushDown = async (s, e) => await PushMembersDownAsync();
+            EventHandler onUseBase = async (s, e) => await UseBaseTypeAsync();
+            EventHandler onToIface = async (s, e) => await ConvertToInterfaceAsync();
+            EventHandler onInvertIf = async (s, e) => await InvertIfAsync();
+            EventHandler onToSelect = async (s, e) => await ConvertToSelectCaseAsync();
+            EventHandler onSplitDecl = async (s, e) => await SplitDeclarationAsync();
+            EventHandler onIntroField = async (s, e) => await IntroduceFieldAsync();
+            EventHandler onSurround = async (s, e) => await SurroundWithAsync();
+            EventHandler onPeek = async (s, e) => await PeekDefinitionAsync();
+            EventHandler onFormat = async (s, e) => await FormatDocumentAsync();
+            EventHandler onCodeActions = async (s, e) => await ShowCodeActionsAsync();
+            EventHandler onExpandSel = async (s, e) => await ExpandSelectionAsync();
+            EventHandler onShrinkSel = (s, e) => ShrinkSelection();
+
+            document.GoToDefinitionRequested += onGoToDef;
+            document.FindAllReferencesRequested += onFindRefs;
+            document.RenameSymbolRequested += onRename;
+            document.ExtractMethodRequested += onExtractMethod;
+            document.InlineMethodRequested += onInlineMethod;
+            document.IntroduceVariableRequested += onIntroduceVar;
+            document.ExtractConstantRequested += onExtractConst;
+            document.InlineConstantRequested += onInlineConst;
+            document.InlineVariableRequested += onInlineVar;
+            document.ChangeSignatureRequested += onChangeSig;
+            document.EncapsulateFieldRequested += onEncapField;
+            document.InlineFieldRequested += onInlineField;
+            document.MoveTypeToFileRequested += onMoveType;
+            document.ExtractInterfaceRequested += onExtractIface;
+            document.GenerateConstructorRequested += onGenCtor;
+            document.ImplementInterfaceRequested += onImplIface;
+            document.OverrideMethodRequested += onOverride;
+            document.AddParameterRequested += onAddParam;
+            document.RemoveParameterRequested += onRemoveParam;
+            document.ReorderParametersRequested += onReorderParams;
+            document.RenameParameterRequested += onRenameParam;
+            document.ChangeParameterTypeRequested += onChangeParamType;
+            document.MakeParameterOptionalRequested += onMakeOptional;
+            document.MakeParameterRequiredRequested += onMakeRequired;
+            document.ConvertToNamedArgumentsRequested += onToNamed;
+            document.ConvertToPositionalArgumentsRequested += onToPositional;
+            document.SafeDeleteRequested += onSafeDelete;
+            document.PullMembersUpRequested += onPullUp;
+            document.PushMembersDownRequested += onPushDown;
+            document.UseBaseTypeRequested += onUseBase;
+            document.ConvertToInterfaceRequested += onToIface;
+            document.InvertIfRequested += onInvertIf;
+            document.ConvertToSelectCaseRequested += onToSelect;
+            document.SplitDeclarationRequested += onSplitDecl;
+            document.IntroduceFieldRequested += onIntroField;
+            document.SurroundWithRequested += onSurround;
+            document.PeekDefinitionRequested += onPeek;
+            document.FormatDocumentRequested += onFormat;
+            document.CodeActionsRequested += onCodeActions;
+            document.ExpandSelectionRequested += onExpandSel;
+            document.ShrinkSelectionRequested += onShrinkSel;
+
+            EventHandler<HoverRequestEventArgs>? onHover = async (s, e) =>
             {
-                if (e == null || document.FilePath == null) return;
-                var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
-                document.ProvideHoverResult(hover);
+                try
+                {
+                    if (e == null || document.FilePath == null) return;
+                    var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
+                    document.ProvideHoverResult(hover);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Hover] Error: {ex.Message}");
+                }
             };
+            document.HoverRequested += onHover;
 
             // Wire up signature help
-            document.SignatureHelpRequested += async (s, e) =>
+            EventHandler<SignatureHelpRequestEventArgs>? onSigHelp = async (s, e) =>
             {
-                if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
-                var help = await _languageService.GetSignatureHelpAsync(document.FilePath, e.Line, e.Column);
-                document.ProvideSignatureHelp(help);
+                try
+                {
+                    if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
+                    var help = await _languageService.GetSignatureHelpAsync(document.FilePath, e.Line, e.Column);
+                    document.ProvideSignatureHelp(help);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SignatureHelp] Error: {ex.Message}");
+                }
             };
+            document.SignatureHelpRequested += onSigHelp;
 
             // Wire up document highlight on caret position change
-            document.DocumentHighlightRequested += async (s, e) =>
+            EventHandler<DocumentHighlightRequestEventArgs>? onDocHighlight = async (s, e) =>
             {
                 if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
                 try
@@ -624,78 +741,172 @@ public partial class MainWindowViewModel : ViewModelBase
                     document.ProvideDocumentHighlights(Array.Empty<DocumentHighlightInfo>());
                 }
             };
+            document.DocumentHighlightRequested += onDocHighlight;
 
             // Wire up code completion requests
-            document.CompletionRequested += async (s, e) =>
+            EventHandler<CompletionRequestedEventArgs>? onCompletion = async (s, e) =>
             {
-                System.Diagnostics.Debug.WriteLine($"[Completion] Request received: Line={e?.Line}, Col={e?.Column}, LSP={_languageService.IsConnected}, FilePath={document.FilePath}");
-
-                if (e == null) return;
-
-                IReadOnlyList<CompletionItem>? completions = null;
-
-                if (_languageService.IsConnected)
+                try
                 {
-                    completions = await _languageService.GetCompletionsAsync(
-                        document.FilePath ?? "",
-                        e.Line,
-                        e.Column);
+                    if (e == null) return;
 
-                    System.Diagnostics.Debug.WriteLine($"[Completion] Got {completions?.Count ?? 0} completions from LSP");
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"[Completion] LSP not connected, using fallback completions");
-                }
+                    IReadOnlyList<CompletionItem>? completions = null;
 
-                // Provide completions (either from LSP or fallback)
-                if (completions?.Any() == true)
-                {
-                    document.ProvideCompletions(completions);
-                }
-                else
-                {
-                    // Fallback to basic completions when LSP is not available or returns nothing
-                    var fallbackCompletions = GetFallbackCompletions();
-                    if (fallbackCompletions.Any())
+                    if (_languageService.IsConnected)
                     {
-                        document.ProvideCompletions(fallbackCompletions);
+                        completions = await _languageService.GetCompletionsAsync(
+                            document.FilePath ?? "",
+                            e.Line,
+                            e.Column);
+                    }
+
+                    // Provide completions (either from LSP or fallback)
+                    if (completions?.Any() == true)
+                    {
+                        // Filter to type-only completions after "As " keyword
+                        completions = FilterCompletionsForContext(document, e.Line, e.Column, completions);
+                        document.ProvideCompletions(completions);
+                    }
+                    else
+                    {
+                        // Fallback to basic completions when LSP is not available or returns nothing
+                        var fallbackCompletions = GetFallbackCompletions();
+                        if (fallbackCompletions.Any())
+                        {
+                            // Filter fallback completions too
+                            var filtered = FilterCompletionsForContext(document, e.Line, e.Column, fallbackCompletions);
+                            document.ProvideCompletions(filtered);
+                        }
                     }
                 }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Completion] Error: {ex.Message}");
+                }
             };
+            document.CompletionRequested += onCompletion;
 
             // Wire up text change notifications for LSP
             var documentVersion = 1;
-            document.TextChanged += async (s, newText) =>
+            EventHandler<string>? onTextChanged = async (s, newText) =>
             {
-                if (_languageService.IsConnected && document.FilePath != null &&
-                    (document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
-                     document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+                try
                 {
-                    documentVersion++;
-                    await _languageService.ChangeDocumentAsync(document.FilePath, newText, documentVersion);
+                    if (_languageService.IsConnected && document.FilePath != null &&
+                        (document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
+                         document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        documentVersion++;
+                        await _languageService.ChangeDocumentAsync(document.FilePath, newText, documentVersion);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[LSP TextChanged] Error: {ex.Message}");
                 }
             };
+            document.TextChanged += onTextChanged;
 
             // Wire up breakpoint toggle from editor margin to debugger
-            document.BreakpointToggled += (s, line) =>
+            EventHandler<int>? onBreakpoint = (s, line) =>
             {
                 if (!string.IsNullOrEmpty(document.FilePath))
                 {
                     Breakpoints.AddBreakpoint(document.FilePath, line);
                 }
             };
+            document.BreakpointToggled += onBreakpoint;
 
-            // Wire up code lens commands
-            document.CodeLensCommandRequested += async (s, e) =>
+            // Register cleanup action to unsubscribe all handlers on document close
+            _documentCleanupActions[filePath] = () =>
             {
-                await HandleCodeLensCommandAsync(document, e);
+                document.CaretPositionChanged -= onCaretChanged;
+                document.AddToWatchRequested -= OnAddToWatchRequested;
+                document.DataTipEvaluationRequested -= OnDataTipEvaluationRequested;
+                document.GoToDefinitionRequested -= onGoToDef;
+                document.FindAllReferencesRequested -= onFindRefs;
+                document.RenameSymbolRequested -= onRename;
+                document.ExtractMethodRequested -= onExtractMethod;
+                document.InlineMethodRequested -= onInlineMethod;
+                document.IntroduceVariableRequested -= onIntroduceVar;
+                document.ExtractConstantRequested -= onExtractConst;
+                document.InlineConstantRequested -= onInlineConst;
+                document.InlineVariableRequested -= onInlineVar;
+                document.ChangeSignatureRequested -= onChangeSig;
+                document.EncapsulateFieldRequested -= onEncapField;
+                document.InlineFieldRequested -= onInlineField;
+                document.MoveTypeToFileRequested -= onMoveType;
+                document.ExtractInterfaceRequested -= onExtractIface;
+                document.GenerateConstructorRequested -= onGenCtor;
+                document.ImplementInterfaceRequested -= onImplIface;
+                document.OverrideMethodRequested -= onOverride;
+                document.AddParameterRequested -= onAddParam;
+                document.RemoveParameterRequested -= onRemoveParam;
+                document.ReorderParametersRequested -= onReorderParams;
+                document.RenameParameterRequested -= onRenameParam;
+                document.ChangeParameterTypeRequested -= onChangeParamType;
+                document.MakeParameterOptionalRequested -= onMakeOptional;
+                document.MakeParameterRequiredRequested -= onMakeRequired;
+                document.ConvertToNamedArgumentsRequested -= onToNamed;
+                document.ConvertToPositionalArgumentsRequested -= onToPositional;
+                document.SafeDeleteRequested -= onSafeDelete;
+                document.PullMembersUpRequested -= onPullUp;
+                document.PushMembersDownRequested -= onPushDown;
+                document.UseBaseTypeRequested -= onUseBase;
+                document.ConvertToInterfaceRequested -= onToIface;
+                document.InvertIfRequested -= onInvertIf;
+                document.ConvertToSelectCaseRequested -= onToSelect;
+                document.SplitDeclarationRequested -= onSplitDecl;
+                document.IntroduceFieldRequested -= onIntroField;
+                document.SurroundWithRequested -= onSurround;
+                document.PeekDefinitionRequested -= onPeek;
+                document.FormatDocumentRequested -= onFormat;
+                document.CodeActionsRequested -= onCodeActions;
+                document.ExpandSelectionRequested -= onExpandSel;
+                document.ShrinkSelectionRequested -= onShrinkSel;
+                document.HoverRequested -= onHover;
+                document.SignatureHelpRequested -= onSigHelp;
+                document.DocumentHighlightRequested -= onDocHighlight;
+                document.CompletionRequested -= onCompletion;
+                document.TextChanged -= onTextChanged;
+                document.BreakpointToggled -= onBreakpoint;
             };
 
-            // Fetch code lenses after text changes (debounced via existing LSP change notification)
-            document.TextChanged += async (s, newText) =>
+            // Wire up code lens commands
+            EventHandler<CodeLensClickedInfo>? onCodeLensCmd = async (s, e) =>
             {
-                await RefreshCodeLensesAsync(document);
+                try
+                {
+                    await HandleCodeLensCommandAsync(document, e);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[CodeLens Command] Error: {ex.Message}");
+                }
+            };
+            document.CodeLensCommandRequested += onCodeLensCmd;
+
+            // Fetch code lenses after text changes (debounced via existing LSP change notification)
+            EventHandler<string>? onTextChangedCodeLens = async (s, newText) =>
+            {
+                try
+                {
+                    await RefreshCodeLensesAsync(document);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[CodeLens] Error: {ex.Message}");
+                }
+            };
+            document.TextChanged += onTextChangedCodeLens;
+
+            // Add code lens handlers to cleanup
+            var existingCleanup = _documentCleanupActions.GetValueOrDefault(filePath);
+            _documentCleanupActions[filePath] = () =>
+            {
+                existingCleanup?.Invoke();
+                document.CodeLensCommandRequested -= onCodeLensCmd;
+                document.TextChanged -= onTextChangedCodeLens;
             };
 
             _openDocuments[filePath] = document;
@@ -709,6 +920,16 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            // Log crash details to file for diagnostics
+            try
+            {
+                var msg = $"[{DateTime.Now:HH:mm:ss}] [OpenFile] {ex.GetType().FullName}: {ex.Message}\n{ex.StackTrace}\n";
+                if (ex.InnerException != null)
+                    msg += $"  [INNER] {ex.InnerException.GetType().FullName}: {ex.InnerException.Message}\n  {ex.InnerException.StackTrace}\n";
+                System.IO.File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "vgs_crash.log"), msg);
+            }
+            catch { }
+
             await _dialogService.ShowMessageAsync("Error", $"Failed to open file: {ex.Message}",
                 DialogButtons.Ok, DialogIcon.Error);
         }
@@ -720,7 +941,21 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc != null)
         {
-            await activeDoc.SaveAsync();
+            if (await activeDoc.SaveAsync())
+            {
+                await NotifyLspDocumentSavedAsync(activeDoc);
+            }
+        }
+    }
+
+    private async Task NotifyLspDocumentSavedAsync(CodeEditorDocumentViewModel doc)
+    {
+        if (_languageService.IsConnected && doc.FilePath != null &&
+            (doc.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
+             doc.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+        {
+            try { await _languageService.SaveDocumentAsync(doc.FilePath, doc.Text); }
+            catch { }
         }
     }
 
@@ -729,7 +964,10 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         foreach (var doc in _openDocuments.Values.Where(d => d.IsDirty))
         {
-            await doc.SaveAsync();
+            if (await doc.SaveAsync())
+            {
+                await NotifyLspDocumentSavedAsync(doc);
+            }
         }
 
         if (_projectService.HasUnsavedChanges)
@@ -825,6 +1063,13 @@ public partial class MainWindowViewModel : ViewModelBase
     // Debug event handlers
     private void OnDebugStateChanged(object? sender, DebugStateChangedEventArgs e)
     {
+        // Must run on UI thread since we update observable properties bound to UI
+        if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => OnDebugStateChanged(sender, e));
+            return;
+        }
+
         IsDebugging = e.NewState == DebugState.Running || e.NewState == DebugState.Paused;
         IsPaused = e.NewState == DebugState.Paused;
 
@@ -840,11 +1085,13 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             StatusText = "Debug session ended";
             ClearAllInlineDebugValues();
+            ClearAllExecutionLines();
         }
         else if (e.NewState == DebugState.Running)
         {
-            // Clear inline values when resuming execution
+            // Clear inline values and execution line when resuming execution
             ClearAllInlineDebugValues();
+            ClearAllExecutionLines();
         }
     }
 
@@ -868,7 +1115,13 @@ public partial class MainWindowViewModel : ViewModelBase
             if (firstFrame?.FilePath != null)
             {
                 await OpenFileAsync(firstFrame.FilePath);
-                // Could set caret position here
+
+                // Navigate to and highlight the current execution line
+                if (_openDocuments.TryGetValue(firstFrame.FilePath, out var doc))
+                {
+                    doc.SetExecutionLine(firstFrame.Line);
+                    doc.NavigateTo(firstFrame.Line);
+                }
 
                 // Show inline debug values for variables in scope
                 await ShowInlineDebugValuesAsync(firstFrame);
@@ -990,6 +1243,14 @@ public partial class MainWindowViewModel : ViewModelBase
         foreach (var doc in _openDocuments.Values)
         {
             doc.ClearInlineDebugValues();
+        }
+    }
+
+    private void ClearAllExecutionLines()
+    {
+        foreach (var doc in _openDocuments.Values)
+        {
+            doc.ClearExecutionLine();
         }
     }
 
@@ -1429,6 +1690,34 @@ public partial class MainWindowViewModel : ViewModelBase
     private void ShowFindResults()
     {
         _dockFactory.ActivateTool("FindInFiles");
+    }
+
+    [RelayCommand]
+    private async Task OpenCommandPaletteAsync()
+    {
+        if (App.MainWindow == null) return;
+
+        var vm = new ViewModels.Dialogs.CommandPaletteViewModel();
+        vm.RegisterCommands(this);
+        vm.Open();
+
+        var dialog = new Views.Dialogs.CommandPaletteDialog
+        {
+            DataContext = vm
+        };
+
+        var result = await dialog.ShowDialog<ViewModels.Dialogs.CommandPaletteItem?>(App.MainWindow);
+        if (result?.Execute != null)
+        {
+            try
+            {
+                result.Execute();
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Command failed: {ex.Message}";
+            }
+        }
     }
 
     [RelayCommand]
@@ -3777,6 +4066,89 @@ public partial class MainWindowViewModel : ViewModelBase
                 Kind = CompletionItemKind.Function,
                 Detail = description
             });
+        }
+
+        return completions;
+    }
+
+    /// <summary>
+    /// Filters completions based on context. After "As " keyword, only type-related
+    /// completion items are shown (Class, Struct, Interface, Enum, Module, TypeParameter).
+    /// </summary>
+    private static IReadOnlyList<CompletionItem> FilterCompletionsForContext(
+        CodeEditorDocumentViewModel document, int line, int column,
+        IReadOnlyList<CompletionItem> completions)
+    {
+        try
+        {
+            var text = document.Text;
+            if (string.IsNullOrEmpty(text)) return completions;
+
+            // Get the text of the current line up to the cursor position
+            var lines = text.Split('\n');
+            var lineIndex = line - 1; // Convert to 0-based
+            if (lineIndex < 0 || lineIndex >= lines.Length) return completions;
+
+            var lineText = lines[lineIndex];
+            // Column is 1-based; get text before the current word being typed
+            var colIndex = Math.Min(column - 1, lineText.Length);
+            var textBeforeCursor = lineText.Substring(0, colIndex);
+
+            // Walk back past the current word prefix (letters/digits/underscore)
+            var prefixEnd = textBeforeCursor.Length;
+            while (prefixEnd > 0 && (char.IsLetterOrDigit(textBeforeCursor[prefixEnd - 1]) || textBeforeCursor[prefixEnd - 1] == '_'))
+            {
+                prefixEnd--;
+            }
+            var textBeforeWord = textBeforeCursor.Substring(0, prefixEnd).TrimEnd();
+
+            // Check if the text before the word ends with "As" (case-insensitive)
+            if (textBeforeWord.EndsWith("As", StringComparison.OrdinalIgnoreCase))
+            {
+                // Verify "As" is a standalone keyword (preceded by space, start of trimmed line, or paren)
+                var asIndex = textBeforeWord.Length - 2;
+                if (asIndex == 0 || !char.IsLetterOrDigit(textBeforeWord[asIndex - 1]))
+                {
+                    // Filter to only type-related completion kinds
+                    var typeKinds = new HashSet<CompletionItemKind>
+                    {
+                        CompletionItemKind.Class,
+                        CompletionItemKind.Struct,
+                        CompletionItemKind.Interface,
+                        CompletionItemKind.Enum,
+                        CompletionItemKind.Module,
+                        CompletionItemKind.TypeParameter
+                    };
+
+                    var filtered = completions.Where(c => typeKinds.Contains(c.Kind)).ToList();
+
+                    // If LSP didn't return any type items, provide built-in type names as fallback
+                    if (filtered.Count == 0)
+                    {
+                        var builtinTypes = new[]
+                        {
+                            "Integer", "String", "Double", "Boolean", "Single", "Long",
+                            "Short", "Byte", "Char", "Decimal", "Date", "Object",
+                            "SByte", "UShort", "UInteger", "ULong"
+                        };
+                        foreach (var typeName in builtinTypes)
+                        {
+                            filtered.Add(new CompletionItem
+                            {
+                                Label = typeName,
+                                Kind = CompletionItemKind.Class,
+                                Detail = "Built-in type"
+                            });
+                        }
+                    }
+
+                    return filtered;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[FilterCompletions] Error: {ex.Message}");
         }
 
         return completions;

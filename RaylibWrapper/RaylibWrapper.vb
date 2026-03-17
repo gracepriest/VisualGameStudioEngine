@@ -10272,5 +10272,283 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Bezier Curves & Splines"
+    ''' <summary>Draws a quadratic bezier curve (3 control points)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBezierQuad(x0 As Single, y0 As Single, cx As Single, cy As Single, x1 As Single, y1 As Single, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cubic bezier curve (4 control points)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBezierCubic(x0 As Single, y0 As Single, cx0 As Single, cy0 As Single, cx1 As Single, cy1 As Single, x1 As Single, y1 As Single, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Evaluates a point on a quadratic bezier at t (0-1)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BezierQuadPoint(x0 As Single, y0 As Single, cx As Single, cy As Single, x1 As Single, y1 As Single, t As Single, ByRef outX As Single, ByRef outY As Single)
+    End Sub
+
+    ''' <summary>Evaluates a point on a cubic bezier at t (0-1)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BezierCubicPoint(x0 As Single, y0 As Single, cx0 As Single, cy0 As Single, cx1 As Single, cy1 As Single, x1 As Single, y1 As Single, t As Single, ByRef outX As Single, ByRef outY As Single)
+    End Sub
+
+    ''' <summary>Draws a Catmull-Rom spline through a set of points. Points array is [x0,y0,x1,y1,...]</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSpline(points As Single(), pointCount As Integer, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Evaluates a point on a Catmull-Rom spline at t (0 to pointCount-1)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SplinePoint(points As Single(), pointCount As Integer, t As Single, ByRef outX As Single, ByRef outY As Single)
+    End Sub
+#End Region
+
+#Region "Gradient Drawing"
+    ''' <summary>Draws a rectangle with horizontal gradient (left to right)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawGradientRectH(x As Integer, y As Integer, width As Integer, height As Integer, r1 As Byte, g1 As Byte, b1 As Byte, a1 As Byte, r2 As Byte, g2 As Byte, b2 As Byte, a2 As Byte)
+    End Sub
+
+    ''' <summary>Draws a rectangle with vertical gradient (top to bottom)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawGradientRectV(x As Integer, y As Integer, width As Integer, height As Integer, r1 As Byte, g1 As Byte, b1 As Byte, a1 As Byte, r2 As Byte, g2 As Byte, b2 As Byte, a2 As Byte)
+    End Sub
+
+    ''' <summary>Draws a rectangle with 4-corner gradient (topLeft, topRight, bottomLeft, bottomRight)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawGradientRect4(x As Integer, y As Integer, width As Integer, height As Integer, tlR As Byte, tlG As Byte, tlB As Byte, tlA As Byte, trR As Byte, trG As Byte, trB As Byte, trA As Byte, blR As Byte, blG As Byte, blB As Byte, blA As Byte, brR As Byte, brG As Byte, brB As Byte, brA As Byte)
+    End Sub
+
+    ''' <summary>Draws a radial gradient circle (center color to edge color)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawGradientCircle(centerX As Integer, centerY As Integer, radius As Single, segments As Integer, r1 As Byte, g1 As Byte, b1 As Byte, a1 As Byte, r2 As Byte, g2 As Byte, b2 As Byte, a2 As Byte)
+    End Sub
+
+    ''' <summary>Draws a gradient line (thick line with color transition)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawGradientLine(x0 As Single, y0 As Single, x1 As Single, y1 As Single, thick As Single, r1 As Byte, g1 As Byte, b1 As Byte, a1 As Byte, r2 As Byte, g2 As Byte, b2 As Byte, a2 As Byte)
+    End Sub
+#End Region
+
+#Region "Parallax Scrolling"
+    ''' <summary>Creates a parallax layer. scrollSpeedX/Y: multiplier vs camera (0=static, 1=moves with camera, less than 1=background)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Parallax_CreateLayer(textureHandle As Integer, scrollSpeedX As Single, scrollSpeedY As Single) As Integer
+    End Function
+
+    ''' <summary>Destroys a parallax layer</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_DestroyLayer(layerId As Integer)
+    End Sub
+
+    ''' <summary>Checks if a parallax layer is valid</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Parallax_IsValid(layerId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Sets parallax layer scroll speed multiplier</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetScrollSpeed(layerId As Integer, speedX As Single, speedY As Single)
+    End Sub
+
+    ''' <summary>Gets parallax layer scroll speed multiplier</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_GetScrollSpeed(layerId As Integer, ByRef speedX As Single, ByRef speedY As Single)
+    End Sub
+
+    ''' <summary>Sets parallax layer offset</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetOffset(layerId As Integer, offsetX As Single, offsetY As Single)
+    End Sub
+
+    ''' <summary>Gets parallax layer offset</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_GetOffset(layerId As Integer, ByRef offsetX As Single, ByRef offsetY As Single)
+    End Sub
+
+    ''' <summary>Sets parallax layer scale</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetScale(layerId As Integer, scaleX As Single, scaleY As Single)
+    End Sub
+
+    ''' <summary>Sets parallax layer tint color</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetTint(layerId As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Sets parallax layer visibility</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetVisible(layerId As Integer, <MarshalAs(UnmanagedType.I1)> visible As Boolean)
+    End Sub
+
+    ''' <summary>Checks if parallax layer is visible</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Parallax_IsVisible(layerId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Sets whether the layer repeats horizontally and/or vertically</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetRepeat(layerId As Integer, <MarshalAs(UnmanagedType.I1)> repeatX As Boolean, <MarshalAs(UnmanagedType.I1)> repeatY As Boolean)
+    End Sub
+
+    ''' <summary>Sets draw order (lower = drawn first, behind other layers)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetZOrder(layerId As Integer, zOrder As Integer)
+    End Sub
+
+    ''' <summary>Gets draw order</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Parallax_GetZOrder(layerId As Integer) As Integer
+    End Function
+
+    ''' <summary>Sets the texture for a parallax layer</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetTexture(layerId As Integer, textureHandle As Integer)
+    End Sub
+
+    ''' <summary>Sets auto-scroll velocity in pixels per second (for clouds, water, etc.)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_SetAutoScroll(layerId As Integer, velX As Single, velY As Single)
+    End Sub
+
+    ''' <summary>Gets auto-scroll velocity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_GetAutoScroll(layerId As Integer, ByRef velX As Single, ByRef velY As Single)
+    End Sub
+
+    ''' <summary>Draws all parallax layers relative to a camera position, sorted by z-order</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_Draw(cameraX As Single, cameraY As Single)
+    End Sub
+
+    ''' <summary>Draws a single parallax layer</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_DrawLayer(layerId As Integer, cameraX As Single, cameraY As Single)
+    End Sub
+
+    ''' <summary>Updates auto-scroll timers</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_Update(dt As Single)
+    End Sub
+
+    ''' <summary>Gets the number of active parallax layers</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Parallax_GetLayerCount() As Integer
+    End Function
+
+    ''' <summary>Destroys all parallax layers</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Parallax_DestroyAll()
+    End Sub
+#End Region
+
+#Region "Trail Renderer"
+    ''' <summary>Creates a trail renderer. maxPoints = max trail segments, width = trail width</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Trail_Create(maxPoints As Integer, width As Single) As Integer
+    End Function
+
+    ''' <summary>Destroys a trail renderer</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_Destroy(trailId As Integer)
+    End Sub
+
+    ''' <summary>Checks if a trail renderer is valid</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Trail_IsValid(trailId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Adds a new point to the trail (call each frame with position)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_AddPoint(trailId As Integer, x As Single, y As Single)
+    End Sub
+
+    ''' <summary>Sets trail width tapering from start (newest) to end (oldest)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_SetWidth(trailId As Integer, startWidth As Single, endWidth As Single)
+    End Sub
+
+    ''' <summary>Sets trail color gradient from start (newest) to end (oldest)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_SetColor(trailId As Integer, r1 As Byte, g1 As Byte, b1 As Byte, a1 As Byte, r2 As Byte, g2 As Byte, b2 As Byte, a2 As Byte)
+    End Sub
+
+    ''' <summary>Sets minimum distance between trail points</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_SetMinDistance(trailId As Integer, minDist As Single)
+    End Sub
+
+    ''' <summary>Sets trail point lifetime in seconds (points fade after this time)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_SetLifetime(trailId As Integer, seconds As Single)
+    End Sub
+
+    ''' <summary>Enables or disables the trail renderer</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_SetEnabled(trailId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
+    End Sub
+
+    ''' <summary>Checks if a trail renderer is enabled</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Trail_IsEnabled(trailId As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Sets an optional texture for the trail</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_SetTextured(trailId As Integer, textureHandle As Integer)
+    End Sub
+
+    ''' <summary>Enables or disables Catmull-Rom smoothing for the trail</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_SetSmoothing(trailId As Integer, <MarshalAs(UnmanagedType.I1)> enabled As Boolean)
+    End Sub
+
+    ''' <summary>Removes all points from the trail</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_Clear(trailId As Integer)
+    End Sub
+
+    ''' <summary>Gets the number of points in the trail</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Trail_GetPointCount(trailId As Integer) As Integer
+    End Function
+
+    ''' <summary>Draws a single trail</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_Draw(trailId As Integer)
+    End Sub
+
+    ''' <summary>Draws all active trails</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_DrawAll()
+    End Sub
+
+    ''' <summary>Updates trail lifetimes and auto-attached entity positions</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_Update(dt As Single)
+    End Sub
+
+    ''' <summary>Attaches trail to an entity (auto-adds points from entity position each update)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_AttachToEntity(trailId As Integer, entityId As Integer)
+    End Sub
+
+    ''' <summary>Detaches trail from entity</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_Detach(trailId As Integer)
+    End Sub
+
+    ''' <summary>Gets the number of active trail renderers</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Trail_GetCount() As Integer
+    End Function
+
+    ''' <summary>Destroys all trail renderers</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_Trail_DestroyAll()
+    End Sub
+#End Region
+
 End Module
 

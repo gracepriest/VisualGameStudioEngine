@@ -21,6 +21,7 @@ public class DebugService : IDebugService
     private int _requestSeq;
     private readonly Dictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
     private readonly object _lock = new();
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly string _compilerPath;
     private readonly IOutputService _outputService;
 
@@ -28,6 +29,10 @@ public class DebugService : IDebugService
     private string? _runToCursorFile;
     private int _runToCursorLine;
     private List<SourceBreakpoint>? _originalBreakpoints;
+
+    // Restart state
+    private DebugConfiguration? _lastConfig;
+    private Dictionary<string, IEnumerable<SourceBreakpoint>>? _lastBreakpoints;
 
     public DebugState State { get; private set; } = DebugState.NotStarted;
     public bool IsDebugging => State == DebugState.Running || State == DebugState.Paused;
@@ -78,6 +83,9 @@ public class DebugService : IDebugService
 
     public async Task<bool> StartDebuggingAsync(DebugConfiguration config, Dictionary<string, IEnumerable<SourceBreakpoint>> breakpoints, CancellationToken cancellationToken = default)
     {
+        // Save for restart
+        _lastConfig = config;
+        _lastBreakpoints = breakpoints;
 
         if (IsDebugging) return false;
 
@@ -249,6 +257,24 @@ public class DebugService : IDebugService
         }
     }
 
+    public async Task RestartAsync()
+    {
+        if (_lastConfig == null) return;
+
+        var config = _lastConfig;
+        var breakpoints = _lastBreakpoints;
+
+        await StopDebuggingAsync();
+
+        // Brief delay for cleanup
+        await Task.Delay(200);
+
+        if (breakpoints != null)
+            await StartDebuggingAsync(config, breakpoints);
+        else
+            await StartDebuggingAsync(config);
+    }
+
     public async Task StopDebuggingAsync()
     {
         // Try to send disconnect request with timeout before cancelling
@@ -306,29 +332,66 @@ public class DebugService : IDebugService
     public async Task ContinueAsync()
     {
         if (State != DebugState.Paused) return;
-        await SendRequestAsync("continue", new { threadId = 1 });
         SetState(DebugState.Running);
+        await SendRequestAsync("continue", new { threadId = 1 });
     }
 
     public async Task StepOverAsync()
     {
-        if (State != DebugState.Paused) return;
-        await SendRequestAsync("next", new { threadId = 1 });
+        _outputService.WriteLine($"[DAP] StepOver called, State={State}", OutputCategory.Debug);
+        if (State != DebugState.Paused)
+        {
+            _outputService.WriteLine($"[DAP] StepOver SKIPPED - not paused (State={State})", OutputCategory.Debug);
+            return;
+        }
         SetState(DebugState.Running);
+        await SendStepRequestAsync("next");
     }
 
     public async Task StepIntoAsync()
     {
-        if (State != DebugState.Paused) return;
-        await SendRequestAsync("stepIn", new { threadId = 1 });
+        _outputService.WriteLine($"[DAP] StepInto called, State={State}", OutputCategory.Debug);
+        if (State != DebugState.Paused)
+        {
+            _outputService.WriteLine($"[DAP] StepInto SKIPPED - not paused (State={State})", OutputCategory.Debug);
+            return;
+        }
         SetState(DebugState.Running);
+        await SendStepRequestAsync("stepIn");
     }
 
     public async Task StepOutAsync()
     {
-        if (State != DebugState.Paused) return;
-        await SendRequestAsync("stepOut", new { threadId = 1 });
+        _outputService.WriteLine($"[DAP] StepOut called, State={State}", OutputCategory.Debug);
+        if (State != DebugState.Paused)
+        {
+            _outputService.WriteLine($"[DAP] StepOut SKIPPED - not paused (State={State})", OutputCategory.Debug);
+            return;
+        }
         SetState(DebugState.Running);
+        await SendStepRequestAsync("stepOut");
+    }
+
+    /// <summary>
+    /// Send a step request (next/stepIn/stepOut) with a timeout.
+    /// Step commands don't need the response body — the stopped event is what matters.
+    /// </summary>
+    private async Task SendStepRequestAsync(string command)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await SendRequestAsync(command, new { threadId = 1 }, cts.Token);
+            _outputService.WriteLine($"[DAP] {command} response received, State={State}", OutputCategory.Debug);
+        }
+        catch (OperationCanceledException)
+        {
+            _outputService.WriteLine($"[DAP] {command} response timed out (5s) - continuing anyway", OutputCategory.Debug);
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteLine($"[DAP] {command} error: {ex.Message}", OutputCategory.Debug);
+        }
     }
 
     public async Task PauseAsync()
@@ -365,8 +428,8 @@ public class DebugService : IDebugService
             _outputService.WriteLine($"Run to cursor: line {line} in {Path.GetFileName(filePath)}", OutputCategory.Debug);
 
             // Continue execution
-            await SendRequestAsync("continue", new { threadId = 1 });
             SetState(DebugState.Running);
+            await SendRequestAsync("continue", new { threadId = 1 });
         }
         catch (Exception ex)
         {
@@ -878,10 +941,13 @@ public class DebugService : IDebugService
         {
             var eventType = message.TryGetProperty("event", out var e) ? e.GetString() : null;
             var body = message.TryGetProperty("body", out var b) ? b : default;
+            _outputService.WriteLine($"[DAP] Event received: {eventType}", OutputCategory.Debug);
 
             switch (eventType)
             {
                 case "stopped":
+                    var reason = body.TryGetProperty("reason", out var r2) ? r2.GetString() : "unknown";
+                    _outputService.WriteLine($"[DAP] Stopped event: reason={reason}, setting state to Paused", OutputCategory.Debug);
                     SetState(DebugState.Paused);
                     var stoppedArgs = new StoppedEventArgs
                     {
@@ -952,7 +1018,11 @@ public class DebugService : IDebugService
         var request = new { seq, type = "request", command, arguments };
         await SendMessageAsync(request);
 
-        using var ctr = cancellationToken.Register(() => tcs.TrySetCanceled());
+        using var ctr = cancellationToken.Register(() =>
+        {
+            lock (_lock) { _pendingRequests.Remove(seq); }
+            tcs.TrySetCanceled();
+        });
         return await tcs.Task;
     }
 
@@ -962,11 +1032,29 @@ public class DebugService : IDebugService
 
         var json = JsonSerializer.Serialize(message, JsonOptions);
         var content = Encoding.UTF8.GetBytes(json);
-
         var header = $"Content-Length: {content.Length}\r\n\r\n";
-        await _writer.WriteAsync(header);
-        await _writer.WriteAsync(json);
-        await _writer.FlushAsync();
+
+        await _writeLock.WaitAsync();
+        try
+        {
+            var writer = _writer;
+            if (writer == null) return;
+            await writer.WriteAsync(header);
+            await writer.WriteAsync(json);
+            await writer.FlushAsync();
+        }
+        catch (IOException)
+        {
+            _writer = null;
+        }
+        catch (ObjectDisposedException)
+        {
+            _writer = null;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     public void Dispose()

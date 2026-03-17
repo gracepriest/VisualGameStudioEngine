@@ -17,14 +17,21 @@ namespace BasicLang.Debugger
         private readonly Dictionary<string, object> _globalVariables = new();
         private readonly Stack<CallFrame> _callStack = new();
         private readonly Random _random = new();
+        private readonly Dictionary<string, object> _watchedVariables = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<Breakpoint> _dataBreakpoints = new();
+        private readonly object _dataBreakpointLock = new();
 
         private bool _paused;
         private bool _stepping;
         private StepMode _stepMode;
         private int _stepDepth;
+        private int _stepStartLine; // Line where stepping was initiated (skip same-line stops)
         private bool _stopRequested;
         private int _currentLine;
         private string _currentFile;
+        private int _gotoLine;
+        private bool _gotoRequested;
+        private readonly HashSet<string> _exceptionFilters = new();
         private readonly object _syncLock = new();
         private readonly ManualResetEventSlim _pauseEvent = new(true);
 
@@ -118,6 +125,80 @@ namespace BasicLang.Debugger
             }
         }
 
+        /// <summary>
+        /// Add a data breakpoint (watchpoint) for a variable
+        /// </summary>
+        public Breakpoint AddDataBreakpoint(string variableName, DataBreakpointAccessType accessType, string condition = null)
+        {
+            var breakpoint = new Breakpoint
+            {
+                Type = BreakpointType.Data,
+                VariableName = variableName,
+                DataAccessType = accessType,
+                Condition = condition ?? string.Empty,
+                Verified = true
+            };
+
+            lock (_dataBreakpointLock)
+            {
+                _dataBreakpoints.Add(breakpoint);
+                // Snapshot the current value so we can detect changes
+                var currentValue = GetVariable(variableName);
+                _watchedVariables[variableName] = currentValue;
+            }
+
+            lock (_syncLock)
+            {
+                _breakpointManager.AddBreakpoint(breakpoint);
+            }
+
+            return breakpoint;
+        }
+
+        /// <summary>
+        /// Remove a data breakpoint by variable name
+        /// </summary>
+        public bool RemoveDataBreakpoint(string variableName)
+        {
+            lock (_dataBreakpointLock)
+            {
+                _dataBreakpoints.RemoveAll(bp =>
+                    string.Equals(bp.VariableName, variableName, StringComparison.OrdinalIgnoreCase));
+                _watchedVariables.Remove(variableName);
+            }
+
+            lock (_syncLock)
+            {
+                var bp = _breakpointManager.GetDataBreakpoint(variableName);
+                if (bp != null)
+                {
+                    return _breakpointManager.RemoveBreakpoint(bp.Id);
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Clear all data breakpoints
+        /// </summary>
+        public void ClearDataBreakpoints()
+        {
+            lock (_dataBreakpointLock)
+            {
+                _dataBreakpoints.Clear();
+                _watchedVariables.Clear();
+            }
+
+            lock (_syncLock)
+            {
+                var allData = _breakpointManager.GetAllDataBreakpoints();
+                foreach (var bp in allData)
+                {
+                    _breakpointManager.RemoveBreakpoint(bp.Id);
+                }
+            }
+        }
+
         public void Run()
         {
             _stopRequested = false;
@@ -200,6 +281,7 @@ namespace BasicLang.Debugger
                 _stepping = true;
                 _stepMode = StepMode.Over;
                 _stepDepth = _callStack.Count;
+                _stepStartLine = _currentLine;
                 _paused = false;
                 _pauseEvent.Set();
             }
@@ -211,6 +293,7 @@ namespace BasicLang.Debugger
             {
                 _stepping = true;
                 _stepMode = StepMode.Into;
+                _stepStartLine = _currentLine;
                 _paused = false;
                 _pauseEvent.Set();
             }
@@ -223,6 +306,7 @@ namespace BasicLang.Debugger
                 _stepping = true;
                 _stepMode = StepMode.Out;
                 _stepDepth = _callStack.Count - 1;
+                _stepStartLine = _currentLine;
                 _paused = false;
                 _pauseEvent.Set();
             }
@@ -243,6 +327,87 @@ namespace BasicLang.Debugger
             {
                 _stopRequested = true;
                 _pauseEvent.Set();
+            }
+        }
+
+        /// <summary>
+        /// Set the next statement to execute (jump to a specific line)
+        /// Only works when paused.
+        /// </summary>
+        public bool SetNextStatement(string filePath, int line)
+        {
+            lock (_syncLock)
+            {
+                if (!_paused) return false;
+
+                _currentLine = line;
+                _gotoLine = line;
+                _gotoRequested = true;
+
+                // Update the top call frame
+                if (_callStack.Count > 0)
+                {
+                    _callStack.Peek().CurrentLine = line;
+                }
+
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Get all lines that have executable IR instructions
+        /// </summary>
+        public HashSet<int> GetExecutableLines()
+        {
+            var lines = new HashSet<int>();
+            foreach (var func in _module.Functions)
+            {
+                foreach (var block in func.Blocks)
+                {
+                    foreach (var instr in block.Instructions)
+                    {
+                        if (instr.SourceLine > 0)
+                            lines.Add(instr.SourceLine);
+                    }
+                }
+            }
+            return lines;
+        }
+
+        /// <summary>
+        /// Check if a specific line has executable code
+        /// </summary>
+        public bool HasExecutableCodeAtLine(int line)
+        {
+            return GetExecutableLines().Contains(line);
+        }
+
+        /// <summary>
+        /// Find the nearest executable line to the target
+        /// </summary>
+        public int FindNearestExecutableLine(int targetLine, int maxDistance = 5)
+        {
+            var lines = GetExecutableLines();
+            if (lines.Contains(targetLine)) return targetLine;
+
+            for (int d = 1; d <= maxDistance; d++)
+            {
+                if (lines.Contains(targetLine + d)) return targetLine + d;
+                if (lines.Contains(targetLine - d)) return targetLine - d;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Set exception filters ("all" = break on all, "uncaught" = break on unhandled only)
+        /// </summary>
+        public void SetExceptionFilters(IEnumerable<string> filters)
+        {
+            lock (_syncLock)
+            {
+                _exceptionFilters.Clear();
+                foreach (var f in filters)
+                    _exceptionFilters.Add(f);
             }
         }
 
@@ -371,21 +536,24 @@ namespace BasicLang.Debugger
             if (shouldBreak)
             {
                 _paused = true;
-                BreakpointHit?.Invoke(this, new DebugEventArgs { Line = line, File = _currentFile });
                 _pauseEvent.Reset();
+                BreakpointHit?.Invoke(this, new DebugEventArgs { Line = line, File = _currentFile });
             }
             else if (_stepping)
             {
                 bool shouldStop = false;
                 lock (_syncLock)
                 {
+                    // Only stop when we've moved to a different source line
+                    bool lineChanged = line != _stepStartLine;
+
                     switch (_stepMode)
                     {
                         case StepMode.Into:
-                            shouldStop = true;
+                            shouldStop = lineChanged;
                             break;
                         case StepMode.Over:
-                            shouldStop = _callStack.Count <= _stepDepth;
+                            shouldStop = lineChanged && _callStack.Count <= _stepDepth;
                             break;
                         case StepMode.Out:
                             shouldStop = _callStack.Count < _stepDepth;
@@ -397,8 +565,8 @@ namespace BasicLang.Debugger
                 {
                     _stepping = false;
                     _paused = true;
-                    StepComplete?.Invoke(this, new DebugEventArgs { Line = line, File = _currentFile });
                     _pauseEvent.Reset();
+                    StepComplete?.Invoke(this, new DebugEventArgs { Line = line, File = _currentFile });
                 }
             }
 
@@ -468,11 +636,15 @@ namespace BasicLang.Debugger
 
         private object ExecuteBlock(BasicBlock block, CallFrame frame)
         {
-            frame.CurrentLine = Math.Abs(block.Name?.GetHashCode() ?? 1) % 1000 + 1; // Approximate line
-
             foreach (var instruction in block.Instructions)
             {
                 if (_stopRequested) return null;
+
+                // Use real source line from IR instruction (set by IRBuilder from AST)
+                if (instruction.SourceLine > 0)
+                {
+                    frame.CurrentLine = instruction.SourceLine;
+                }
 
                 CheckBreakpoint(frame.CurrentLine);
                 var result = ExecuteInstruction(instruction, frame);
@@ -584,8 +756,22 @@ namespace BasicLang.Debugger
             // Set the new value
             frame.LocalVariables[variableName] = newValue;
 
+            // Update watched variables tracking
+            lock (_dataBreakpointLock)
+            {
+                if (_watchedVariables.ContainsKey(variableName))
+                {
+                    _watchedVariables[variableName] = newValue;
+                }
+            }
+
             // Check for data breakpoints on this variable
-            var dataBreakpoint = _breakpointManager.GetDataBreakpoint(variableName);
+            Breakpoint dataBreakpoint;
+            lock (_syncLock)
+            {
+                dataBreakpoint = _breakpointManager.GetDataBreakpoint(variableName);
+            }
+
             if (dataBreakpoint != null && dataBreakpoint.Enabled)
             {
                 bool shouldTrigger = false;
@@ -601,6 +787,22 @@ namespace BasicLang.Debugger
                     case DataBreakpointAccessType.ReadWrite:
                         shouldTrigger = valueChanged; // Write access
                         break;
+                }
+
+                // Evaluate optional condition
+                if (shouldTrigger && !string.IsNullOrEmpty(dataBreakpoint.Condition))
+                {
+                    try
+                    {
+                        var condResult = EvaluateExpression(dataBreakpoint.Condition);
+                        if (condResult == null || !Convert.ToBoolean(condResult))
+                            shouldTrigger = false;
+                    }
+                    catch
+                    {
+                        // If condition evaluation fails, don't trigger
+                        shouldTrigger = false;
+                    }
                 }
 
                 if (shouldTrigger)
@@ -619,9 +821,10 @@ namespace BasicLang.Debugger
                         File = _currentFile
                     });
 
-                    // Pause execution
+                    // Pause execution and wait for resume
                     _paused = true;
                     _pauseEvent.Reset();
+                    _pauseEvent.Wait();
                 }
             }
         }
@@ -631,12 +834,32 @@ namespace BasicLang.Debugger
         /// </summary>
         private void CheckReadDataBreakpoint(string variableName, object value)
         {
-            var dataBreakpoint = _breakpointManager.GetDataBreakpoint(variableName);
+            Breakpoint dataBreakpoint;
+            lock (_syncLock)
+            {
+                dataBreakpoint = _breakpointManager.GetDataBreakpoint(variableName);
+            }
+
             if (dataBreakpoint != null && dataBreakpoint.Enabled)
             {
                 if (dataBreakpoint.DataAccessType == DataBreakpointAccessType.Read ||
                     dataBreakpoint.DataAccessType == DataBreakpointAccessType.ReadWrite)
                 {
+                    // Evaluate optional condition
+                    if (!string.IsNullOrEmpty(dataBreakpoint.Condition))
+                    {
+                        try
+                        {
+                            var condResult = EvaluateExpression(dataBreakpoint.Condition);
+                            if (condResult == null || !Convert.ToBoolean(condResult))
+                                return; // Condition not met, skip
+                        }
+                        catch
+                        {
+                            return; // Condition evaluation failed, skip
+                        }
+                    }
+
                     // Fire the event
                     DataBreakpointHit?.Invoke(this, new DataBreakpointEventArgs
                     {
@@ -648,9 +871,10 @@ namespace BasicLang.Debugger
                         File = _currentFile
                     });
 
-                    // Pause execution
+                    // Pause execution and wait for resume
                     _paused = true;
                     _pauseEvent.Reset();
+                    _pauseEvent.Wait();
                 }
             }
         }

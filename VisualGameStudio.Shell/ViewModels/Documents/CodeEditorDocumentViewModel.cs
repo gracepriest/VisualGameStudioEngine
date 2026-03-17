@@ -732,6 +732,22 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     }
 
     #endregion
+
+    #region Execution Line
+
+    public event EventHandler<int?>? ExecutionLineChanged;
+
+    public void SetExecutionLine(int line)
+    {
+        ExecutionLineChanged?.Invoke(this, line);
+    }
+
+    public void ClearExecutionLine()
+    {
+        ExecutionLineChanged?.Invoke(this, null);
+    }
+
+    #endregion
 }
 
 /// <summary>

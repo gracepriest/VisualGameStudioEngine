@@ -38,8 +38,12 @@ All functions are exported from `VisualGameStudioEngine.dll` and declared in `Ra
 30. [Component Introspection](#component-introspection)
 31. [Debug Overlay](#debug-overlay)
 32. [Asset Cache](#asset-cache)
-33. [Constants & Enums](#constants--enums)
-34. [VB.NET Helper Classes](#vbnet-helper-classes)
+33. [Bezier Curves & Splines](#bezier-curves--splines)
+34. [Gradient Drawing](#gradient-drawing)
+35. [Parallax Scrolling](#parallax-scrolling)
+36. [Trail Renderer](#trail-renderer)
+37. [Constants & Enums](#constants--enums)
+38. [VB.NET Helper Classes](#vbnet-helper-classes)
 
 ---
 
@@ -967,6 +971,136 @@ Framework_Debug_Render()                              ' Call after EndDrawing ea
 ```vb
 Framework_SetAssetRoot(path As String)  ' Base directory prepended to all asset paths
 Framework_GetAssetRoot() As String
+```
+
+---
+
+## Bezier Curves & Splines
+
+Draw smooth curves and get points along them for movement paths, particle trails, etc.
+
+```vb
+' Draw a quadratic bezier curve (one control point)
+Framework_DrawBezierQuad(x1, y1, cx, cy, x2, y2, thick, r, g, b, a)
+
+' Draw a cubic bezier curve (two control points)
+Framework_DrawBezierCubic(x1, y1, cx1, cy1, cx2, cy2, x2, y2, thick, r, g, b, a)
+
+' Get a point along a quadratic bezier at parameter t (0.0 to 1.0)
+Framework_BezierQuadPoint(x1, y1, cx, cy, x2, y2, t, ByRef outX, ByRef outY)
+
+' Get a point along a cubic bezier at parameter t (0.0 to 1.0)
+Framework_BezierCubicPoint(x1, y1, cx1, cy1, cx2, cy2, x2, y2, t, ByRef outX, ByRef outY)
+
+' Draw a Catmull-Rom spline through an array of points
+Framework_DrawSpline(points As Single(), count As Integer, thick As Single, r, g, b, a)
+
+' Get a point along the spline at parameter t (0.0 to 1.0)
+Framework_SplinePoint(points As Single(), count As Integer, t As Single, ByRef outX, ByRef outY)
+```
+
+### Example: Moving Entity Along Bezier Path
+```vb
+Dim t As Single = 0
+While Not Framework_ShouldClose()
+    t += Framework_GetDeltaTime() * 0.5  ' Move at half speed
+    If t > 1.0 Then t = 0.0
+
+    Dim px As Single, py As Single
+    Framework_BezierCubicPoint(100, 400, 200, 100, 600, 100, 700, 400, t, px, py)
+    Framework_Ecs_SetTransformPosition(entityId, px, py)
+End While
+```
+
+---
+
+## Gradient Drawing
+
+Draw rectangles, circles, and lines with color gradients.
+
+```vb
+' Horizontal gradient rectangle (left color to right color)
+Framework_DrawGradientRectH(x, y, w, h, r1, g1, b1, a1, r2, g2, b2, a2)
+
+' Vertical gradient rectangle (top color to bottom color)
+Framework_DrawGradientRectV(x, y, w, h, r1, g1, b1, a1, r2, g2, b2, a2)
+
+' Four-corner gradient rectangle
+Framework_DrawGradientRect4(x, y, w, h, tlR,tlG,tlB,tlA, trR,trG,trB,trA, blR,blG,blB,blA, brR,brG,brB,brA)
+
+' Radial gradient circle (center color to edge color)
+Framework_DrawGradientCircle(cx, cy, radius, r1, g1, b1, a1, r2, g2, b2, a2)
+
+' Gradient line (start color to end color)
+Framework_DrawGradientLine(x1, y1, x2, y2, thick, r1, g1, b1, a1, r2, g2, b2, a2)
+```
+
+---
+
+## Parallax Scrolling
+
+Create layered scrolling backgrounds with different speeds for depth effect.
+
+```vb
+' Create and configure a parallax layer
+Dim layerId As Integer = Framework_Parallax_CreateLayer(textureHandle)
+Framework_Parallax_SetScrollSpeed(layerId, 0.5, 0.0)  ' Half speed = far background
+Framework_Parallax_SetRepeat(layerId, True, False)      ' Tile horizontally
+Framework_Parallax_SetZOrder(layerId, -10)               ' Draw behind everything
+
+' Full API
+Framework_Parallax_CreateLayer(textureHandle) As Integer
+Framework_Parallax_DestroyLayer(layerId)
+Framework_Parallax_SetScrollSpeed(layerId, speedX, speedY)
+Framework_Parallax_SetOffset(layerId, offsetX, offsetY)
+Framework_Parallax_SetScale(layerId, scaleX, scaleY)
+Framework_Parallax_SetTint(layerId, r, g, b, a)
+Framework_Parallax_SetZOrder(layerId, zOrder)
+Framework_Parallax_SetAutoScroll(layerId, enabled, speedX, speedY)
+Framework_Parallax_SetRepeat(layerId, repeatX, repeatY)
+Framework_Parallax_GetScrollSpeed(layerId, ByRef speedX, ByRef speedY)
+Framework_Parallax_GetOffset(layerId, ByRef offsetX, ByRef offsetY)
+Framework_Parallax_GetScale(layerId, ByRef scaleX, ByRef scaleY)
+Framework_Parallax_GetTint(layerId, ByRef r, ByRef g, ByRef b, ByRef a)
+Framework_Parallax_GetZOrder(layerId) As Integer
+Framework_Parallax_IsAutoScrolling(layerId) As Boolean
+Framework_Parallax_GetLayerCount() As Integer
+Framework_Parallax_Update()       ' Call each frame
+Framework_Parallax_DrawAll()      ' Draw all layers in z-order
+Framework_Parallax_DestroyAll()   ' Cleanup all layers
+```
+
+---
+
+## Trail Renderer
+
+Create visual trails behind moving objects with width tapering and color fading.
+
+```vb
+' Create a trail and attach to an entity
+Dim trailId As Integer = Framework_Trail_Create()
+Framework_Trail_SetWidth(trailId, 8.0, 1.0)      ' Taper from 8px to 1px
+Framework_Trail_SetColor(trailId, 255,100,50,255, 255,100,50,0)  ' Fade to transparent
+Framework_Trail_SetLifetime(trailId, 0.5)          ' Points last 0.5 seconds
+Framework_Trail_AttachToEntity(trailId, playerId)  ' Auto-follow entity
+
+' Full API
+Framework_Trail_Create() As Integer
+Framework_Trail_Destroy(trailId)
+Framework_Trail_SetWidth(trailId, startWidth, endWidth)
+Framework_Trail_SetColor(trailId, r1,g1,b1,a1, r2,g2,b2,a2)
+Framework_Trail_SetLifetime(trailId, seconds)
+Framework_Trail_AttachToEntity(trailId, entityId)
+Framework_Trail_DetachFromEntity(trailId)
+Framework_Trail_AddPoint(trailId, x, y)        ' Manual point (if not attached)
+Framework_Trail_Clear(trailId)                  ' Clear all points
+Framework_Trail_SetEnabled(trailId, enabled)
+Framework_Trail_IsEnabled(trailId) As Boolean
+Framework_Trail_GetPointCount(trailId) As Integer
+Framework_Trail_GetTrailCount() As Integer
+Framework_Trail_Update()         ' Call each frame
+Framework_Trail_DrawAll()        ' Draw all active trails
+Framework_Trail_DestroyAll()     ' Cleanup all trails
 ```
 
 ---

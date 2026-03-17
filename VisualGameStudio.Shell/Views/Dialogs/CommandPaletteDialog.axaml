@@ -1,0 +1,99 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.CommandPaletteDialog"
+        x:DataType="vm:CommandPaletteViewModel"
+        Title="Command Palette"
+        Width="600" Height="400"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        SystemDecorations="BorderOnly"
+        TransparencyLevelHint="AcrylicBlur"
+        Background="Transparent">
+
+  <Border Background="#E8252526" CornerRadius="8" BorderBrush="#3C3C3C" BorderThickness="1">
+    <DockPanel>
+      <!-- Search Box -->
+      <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12" CornerRadius="8,8,0,0">
+        <Grid ColumnDefinitions="Auto,*">
+          <TextBlock Grid.Column="0"
+                     Text=">"
+                     FontSize="16"
+                     Foreground="#569CD6"
+                     VerticalAlignment="Center"
+                     Margin="0,0,8,0"
+                     FontWeight="Bold"/>
+          <TextBox Grid.Column="1"
+                   x:Name="SearchBox"
+                   Text="{Binding SearchText, Mode=TwoWay}"
+                   Watermark="Type a command name..."
+                   FontSize="16"
+                   BorderThickness="0"
+                   Background="Transparent"
+                   Foreground="#CCCCCC"/>
+        </Grid>
+      </Border>
+
+      <!-- Hint bar -->
+      <Border DockPanel.Dock="Top" Background="#252526" Padding="12,4">
+        <StackPanel Orientation="Horizontal" Spacing="16">
+          <TextBlock FontSize="11" Foreground="#808080">
+            <Run Text="Command Palette" Foreground="#569CD6"/>
+          </TextBlock>
+          <TextBlock Text="Up/Down Navigate" FontSize="11" Foreground="#606060"/>
+          <TextBlock Text="Enter Execute" FontSize="11" Foreground="#606060"/>
+          <TextBlock Text="Esc Close" FontSize="11" Foreground="#606060"/>
+        </StackPanel>
+      </Border>
+
+      <!-- Command List -->
+      <ListBox ItemsSource="{Binding FilteredCommands}"
+               SelectedItem="{Binding SelectedItem}"
+               SelectedIndex="{Binding SelectedIndex}"
+               Background="Transparent"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Border Padding="8,6" Background="Transparent">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding Category}"
+                             FontSize="12"
+                             Foreground="#569CD6"
+                             VerticalAlignment="Center"
+                             MinWidth="60"/>
+                  <TextBlock Text="{Binding Name}"
+                             FontSize="14"
+                             Foreground="#CCCCCC"
+                             VerticalAlignment="Center"/>
+                </StackPanel>
+                <Border Grid.Column="1"
+                        IsVisible="{Binding Shortcut, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                        Background="#333333"
+                        CornerRadius="3"
+                        Padding="6,2"
+                        VerticalAlignment="Center">
+                  <TextBlock Text="{Binding Shortcut}"
+                             FontSize="11"
+                             Foreground="#808080"
+                             FontFamily="Consolas, Courier New, monospace"/>
+                </Border>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+        <ListBox.Styles>
+          <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="#094771"/>
+          </Style>
+          <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2A2D2E"/>
+          </Style>
+        </ListBox.Styles>
+      </ListBox>
+    </DockPanel>
+  </Border>
+</Window>

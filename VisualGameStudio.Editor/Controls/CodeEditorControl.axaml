@@ -28,6 +28,14 @@
                            Background="#1E1E1E"
                            Foreground="#D4D4D4" />
 
+    <!-- Inline Find/Replace overlay - top-right of the editor -->
+    <controls:InlineFindReplaceControl x:Name="InlineFindReplace"
+                                        Grid.Column="0"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Top"
+                                        Margin="0,4,20,0"
+                                        IsVisible="False"/>
+
     <controls:MinimapControl x:Name="Minimap"
                              Grid.Column="1"
                              Width="100"

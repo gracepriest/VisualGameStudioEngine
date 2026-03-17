@@ -28,7 +28,7 @@ public class InlineDebugValueRenderer : IBackgroundRenderer
     public void SetValues(IEnumerable<InlineDebugValue> values)
     {
         _values = values.ToList();
-        _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
+        _editor?.TextArea?.TextView?.InvalidateLayer(KnownLayer.Selection);
     }
 
     /// <summary>
@@ -37,7 +37,7 @@ public class InlineDebugValueRenderer : IBackgroundRenderer
     public void Clear()
     {
         _values.Clear();
-        _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
+        _editor?.TextArea?.TextView?.InvalidateLayer(KnownLayer.Selection);
     }
 
     public void Draw(TextView textView, DrawingContext drawingContext)

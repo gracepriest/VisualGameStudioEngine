@@ -37,7 +37,10 @@ public class CodeLensRenderer : IBackgroundRenderer
     public CodeLensRenderer(TextEditor editor)
     {
         _editor = editor;
-        _editor.TextArea.TextView.PointerPressed += OnTextViewPointerPressed;
+        if (_editor?.TextArea?.TextView != null)
+        {
+            _editor.TextArea.TextView.PointerPressed += OnTextViewPointerPressed;
+        }
     }
 
     /// <summary>
@@ -48,7 +51,7 @@ public class CodeLensRenderer : IBackgroundRenderer
     {
         _lenses = lenses.ToList();
         _hitRegions.Clear();
-        _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+        _editor?.TextArea?.TextView?.InvalidateLayer(KnownLayer.Background);
     }
 
     /// <summary>
@@ -58,7 +61,7 @@ public class CodeLensRenderer : IBackgroundRenderer
     {
         _lenses.Clear();
         _hitRegions.Clear();
-        _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+        _editor?.TextArea?.TextView?.InvalidateLayer(KnownLayer.Background);
     }
 
     public void Draw(TextView textView, DrawingContext drawingContext)

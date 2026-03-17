@@ -53,7 +53,7 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
         try
         {
             var shell = Environment.OSVersion.Platform == PlatformID.Win32NT
-                ? "cmd.exe"
+                ? "powershell.exe"
                 : "/bin/bash";
 
             var startInfo = new ProcessStartInfo
@@ -81,7 +81,7 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
             _shellProcess.BeginErrorReadLine();
 
             IsRunning = true;
-            Title = $"Terminal - {(Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd" : "bash")}";
+            Title = $"Terminal - {(Environment.OSVersion.Platform == PlatformID.Win32NT ? "PowerShell" : "bash")}";
 
             AppendOutput($"Terminal started in {WorkingDirectory}\r\n\r\n");
         }
@@ -189,10 +189,13 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
             {
                 _outputBuffer.Append(text);
 
-                // Limit buffer size to prevent memory issues
+                // Limit buffer size to prevent memory issues (truncate at line boundary)
                 if (_outputBuffer.Length > 100000)
                 {
-                    _outputBuffer.Remove(0, _outputBuffer.Length - 80000);
+                    var excess = _outputBuffer.Length - 80000;
+                    var newlineIdx = _outputBuffer.ToString().IndexOf('\n', excess);
+                    var removeCount = newlineIdx >= 0 ? newlineIdx + 1 : excess;
+                    _outputBuffer.Remove(0, removeCount);
                 }
 
                 OutputText = _outputBuffer.ToString();

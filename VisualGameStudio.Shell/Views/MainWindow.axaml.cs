@@ -135,4 +135,45 @@ public partial class MainWindow : Window
             // Ignore exceptions in event handler
         }
     }
+
+    // Status bar click handlers
+    private void OnIndentationClicked(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm)
+        {
+            vm.StatusBar.CycleIndentationCommand.Execute(null);
+        }
+    }
+
+    private void OnEncodingClicked(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm)
+        {
+            vm.StatusBar.CycleEncodingCommand.Execute(null);
+        }
+    }
+
+    private void OnLineEndingClicked(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm)
+        {
+            vm.StatusBar.CycleLineEndingCommand.Execute(null);
+        }
+    }
+
+    private void OnLanguageModeClicked(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm)
+        {
+            vm.StatusBar.ShowLanguageModeCommand.Execute(null);
+        }
+    }
+
+    private void OnCommandPaletteHintClicked(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm)
+        {
+            vm.OpenCommandPaletteCommand.Execute(null);
+        }
+    }
 }

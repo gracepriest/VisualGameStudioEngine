@@ -34,6 +34,7 @@ public partial class CodeEditorControl : UserControl
     private MultiCursorManager? _multiCursorManager;
     private MultiCursorRenderer? _multiCursorRenderer;
     private MultiCursorInputHandler? _multiCursorInputHandler;
+    private IndentationGuideRenderer? _indentationGuideRenderer;
     private bool _isInitialized = false;
     private CompletionWindow? _completionWindow;
     private BreakpointMargin? _breakpointMargin;
@@ -46,6 +47,30 @@ public partial class CodeEditorControl : UserControl
     private TextBlock? _errorTooltipText;
     private int _lastHoverOffset = -1;
     private IReadOnlyList<DocumentLinkInfo>? _documentLinks;
+    private InlineFindReplaceControl? _inlineFindReplace;
+    private bool _autoCloseBrackets = true;
+    private BasicLangIndentationStrategy? _indentationStrategy;
+
+    private static readonly Dictionary<char, char> AutoClosePairs = new()
+    {
+        { '(', ')' }, { '[', ']' }, { '{', '}' }, { '"', '"' }, { '\'', '\'' }
+    };
+    private static readonly HashSet<char> ClosingBrackets = new() { ')', ']', '}' };
+
+    /// <summary>
+    /// Pairs that wrap selected text when typed with an active selection.
+    /// Mirrors VS Code's "surroundingPairs" from language-configuration.json.
+    /// </summary>
+    private static readonly Dictionary<char, char> SurroundingPairs = new()
+    {
+        { '(', ')' }, { '[', ']' }, { '{', '}' }, { '"', '"' }
+    };
+
+    public bool AutoCloseBrackets
+    {
+        get => _autoCloseBrackets;
+        set => _autoCloseBrackets = value;
+    }
 
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
@@ -175,6 +200,7 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler<SignatureHelpRequestEventArgs>? SignatureHelpRequested;
     public event EventHandler<DocumentHighlightRequestEventArgs>? DocumentHighlightRequested;
     public event EventHandler<DocumentLinkClickedEventArgs>? DocumentLinkClicked;
+    public event EventHandler? GoToLineRequested;
 
     /// <summary>
     /// Returns true if the editor is fully initialized and ready for use
@@ -217,6 +243,17 @@ public partial class CodeEditorControl : UserControl
         // Initialize minimap
         _minimap = this.FindControl<MinimapControl>("Minimap");
         _minimap?.AttachEditor(_textEditor);
+
+        // Initialize inline find/replace overlay
+        _inlineFindReplace = this.FindControl<InlineFindReplaceControl>("InlineFindReplace");
+        _inlineFindReplace?.AttachToEditor(_textEditor);
+        if (_inlineFindReplace != null)
+        {
+            _inlineFindReplace.CloseRequested += (_, _) =>
+            {
+                _textEditor?.Focus();
+            };
+        }
 
         // Register syntax highlighting
         HighlightingLoader.RegisterHighlighting();
@@ -268,6 +305,10 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.TextView.BackgroundRenderers.Add(_multiCursorRenderer);
         _multiCursorManager.CursorsChanged += OnMultiCursorsChanged;
 
+        // Setup indentation guide renderer
+        _indentationGuideRenderer = new IndentationGuideRenderer(_textEditor);
+        _textEditor.TextArea.TextView.BackgroundRenderers.Add(_indentationGuideRenderer);
+
         // Configure editor appearance
         ConfigureEditor();
 
@@ -280,6 +321,7 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.PointerPressed += OnTextAreaPointerPressed;
         _textEditor.TextArea.KeyDown += OnTextAreaKeyDown;
         _textEditor.TextArea.TextEntering += OnTextAreaTextEntering;
+        _textEditor.TextArea.TextEntered += OnTextAreaTextEntered;
 
         // Listen at the TextEditor level for margin clicks (with tunneling)
         _textEditor.AddHandler(PointerPressedEvent, OnEditorPointerPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
@@ -384,6 +426,9 @@ public partial class CodeEditorControl : UserControl
         _textMarkerService = new TextMarkerService(_textEditor.Document);
         _textEditor.TextArea.TextView.LineTransformers.Add(_textMarkerService);
         _textEditor.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
+
+        // Update inline find/replace renderer for new document
+        _inlineFindReplace?.OnDocumentChanged();
 
         // Force visual refresh to display the document content
         _textEditor.TextArea.TextView.Redraw();
@@ -632,6 +677,41 @@ public partial class CodeEditorControl : UserControl
 
     private void OnTextAreaKeyDown(object? sender, KeyEventArgs e)
     {
+        // Handle Tab for snippet expansion: if no completion window is open and current word
+        // matches a snippet prefix exactly, expand the snippet instead of inserting a tab
+        if (e.Key == Key.Tab && e.KeyModifiers == KeyModifiers.None && !IsCompletionWindowOpen)
+        {
+            if (TryExpandSnippet())
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // Handle Ctrl+F to open inline Find bar
+        if (e.Key == Key.F && e.KeyModifiers == KeyModifiers.Control)
+        {
+            ShowInlineFind();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+H to open inline Find & Replace bar
+        if (e.Key == Key.H && e.KeyModifiers == KeyModifiers.Control)
+        {
+            ShowInlineFindReplace();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Escape to close inline Find bar
+        if (e.Key == Key.Escape && _inlineFindReplace?.IsVisible == true)
+        {
+            _inlineFindReplace.CloseFindBar();
+            e.Handled = true;
+            return;
+        }
+
         // Handle Ctrl+Space for code completion
         if (e.Key == Key.Space && e.KeyModifiers == KeyModifiers.Control)
         {
@@ -736,11 +816,133 @@ public partial class CodeEditorControl : UserControl
             return;
         }
 
+        // Handle Alt+Z to toggle word wrap
+        if (e.Key == Key.Z && e.KeyModifiers == KeyModifiers.Alt)
+        {
+            WordWrap = !WordWrap;
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+G for Go to Line
+        if (e.Key == Key.G && e.KeyModifiers == KeyModifiers.Control)
+        {
+            GoToLineRequested?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+/ to toggle line comment
+        if (e.Key == Key.Oem2 && e.KeyModifiers == KeyModifiers.Control)
+        {
+            ToggleLineComment();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+Enter to insert line below
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.Control)
+        {
+            InsertLineBelow();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+Shift+Enter to insert line above
+        if (e.Key == Key.Enter && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+        {
+            InsertLineAbove();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Backspace to delete empty auto-close pairs
+        if (e.Key == Key.Back && e.KeyModifiers == KeyModifiers.None && _autoCloseBrackets)
+        {
+            if (DeleteEmptyPair())
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // Handle Backspace dismissing completion window when prefix is fully deleted
+        if (e.Key == Key.Back && _completionWindow != null)
+        {
+            // Schedule check after the backspace is processed
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (_completionWindow == null) return;
+                var prefix = GetCurrentWordPrefix();
+                if (string.IsNullOrEmpty(prefix))
+                {
+                    _completionWindow.Close();
+                }
+            }, Avalonia.Threading.DispatcherPriority.Background);
+        }
+
         _multiCursorInputHandler?.HandleKeyDown(e);
     }
 
     private void OnTextAreaTextEntering(object? sender, TextInputEventArgs e)
     {
+        // Surround selected text with matching pairs (VS Code-style surrounding pairs)
+        if (!string.IsNullOrEmpty(e.Text) && e.Text.Length == 1
+            && _textEditor?.TextArea?.Selection != null
+            && !_textEditor.TextArea.Selection.IsEmpty
+            && SurroundingPairs.TryGetValue(e.Text[0], out var closingPair))
+        {
+            var selection = _textEditor.TextArea.Selection;
+            var segment = selection.SurroundingSegment;
+            var selectedText = _textEditor.SelectedText;
+            var document = _textEditor.Document;
+
+            // Wrap selection: replace "text" with "(text)" etc.
+            var wrapped = e.Text[0] + selectedText + closingPair;
+            document.BeginUpdate();
+            try
+            {
+                document.Replace(segment.Offset, segment.Length, wrapped);
+                // Select the inner text (between the pair chars)
+                _textEditor.Select(segment.Offset + 1, selectedText.Length);
+            }
+            finally
+            {
+                document.EndUpdate();
+            }
+            e.Handled = true;
+            return;
+        }
+
+        // Skip-over closing brackets if the next char is already that bracket
+        if (_autoCloseBrackets && !string.IsNullOrEmpty(e.Text) && e.Text.Length == 1
+            && ClosingBrackets.Contains(e.Text[0]) && _textEditor?.Document != null)
+        {
+            var offset = _textEditor.CaretOffset;
+            if (offset < _textEditor.Document.TextLength
+                && _textEditor.Document.GetCharAt(offset) == e.Text[0])
+            {
+                // Skip over the existing closing bracket
+                _textEditor.CaretOffset = offset + 1;
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // Skip-over closing quote if next char matches
+        if (_autoCloseBrackets && !string.IsNullOrEmpty(e.Text) && e.Text.Length == 1
+            && (e.Text[0] == '"') && _textEditor?.Document != null)
+        {
+            var offset = _textEditor.CaretOffset;
+            if (offset < _textEditor.Document.TextLength
+                && _textEditor.Document.GetCharAt(offset) == e.Text[0])
+            {
+                _textEditor.CaretOffset = offset + 1;
+                e.Handled = true;
+                return;
+            }
+        }
+
         _multiCursorInputHandler?.HandleTextInput(e);
 
         // Auto-trigger completion when typing a dot (for member access)
@@ -844,6 +1046,14 @@ public partial class CodeEditorControl : UserControl
         _textEditor.Options.HighlightCurrentLine = true;
         _textEditor.Options.IndentationSize = 4;
         _textEditor.Options.ConvertTabsToSpaces = true;
+
+        // Smart indentation for BasicLang (auto-indent after Sub, Function, If, etc.)
+        _indentationStrategy = new BasicLangIndentationStrategy
+        {
+            IndentSize = _textEditor.Options.IndentationSize,
+            UseTabs = !_textEditor.Options.ConvertTabsToSpaces
+        };
+        _textEditor.TextArea.IndentationStrategy = _indentationStrategy;
     }
 
     private void OnEditorTextChanged(object? sender, EventArgs e)
@@ -1138,6 +1348,35 @@ public partial class CodeEditorControl : UserControl
         _textEditor?.Focus();
     }
 
+    /// <summary>
+    /// Opens the inline find bar (Ctrl+F).
+    /// </summary>
+    public void ShowInlineFind()
+    {
+        _inlineFindReplace?.OpenFind();
+    }
+
+    /// <summary>
+    /// Opens the inline find and replace bar (Ctrl+H).
+    /// </summary>
+    public void ShowInlineFindReplace()
+    {
+        _inlineFindReplace?.OpenFindReplace();
+    }
+
+    /// <summary>
+    /// Closes the inline find/replace bar if open.
+    /// </summary>
+    public void HideInlineFind()
+    {
+        _inlineFindReplace?.CloseFindBar();
+    }
+
+    /// <summary>
+    /// Gets whether the inline find/replace bar is currently visible.
+    /// </summary>
+    public bool IsInlineFindVisible => _inlineFindReplace?.IsVisible == true;
+
     public void SelectAll()
     {
         _textEditor?.SelectAll();
@@ -1159,6 +1398,19 @@ public partial class CodeEditorControl : UserControl
 
         _textEditor.Select(startOffset, endOffset - startOffset);
         _textEditor.ScrollToLine(startLine);
+    }
+
+    /// <summary>
+    /// Sets the selection by offset and length, and scrolls to it.
+    /// </summary>
+    public void SetSelection(int offset, int length)
+    {
+        if (_textEditor?.Document == null) return;
+        offset = Math.Clamp(offset, 0, _textEditor.Document.TextLength);
+        length = Math.Clamp(length, 0, _textEditor.Document.TextLength - offset);
+        _textEditor.Select(offset, length);
+        var loc = _textEditor.Document.GetLocation(offset);
+        _textEditor.ScrollToLine(loc.Line);
     }
 
     public void Copy()
@@ -2072,8 +2324,12 @@ public partial class CodeEditorControl : UserControl
         // Materialize the list first to check count
         var itemsList = completionItems.ToList();
 
-        // Don't do anything if no items - preserve any existing completion window
-        if (itemsList.Count == 0) return;
+        // Check for matching snippets before bailing out
+        var snippetPrefix = GetCurrentWordPrefix() ?? "";
+        var hasSnippets = !string.IsNullOrEmpty(snippetPrefix) && SnippetProvider.FindByPrefix(snippetPrefix).Any();
+
+        // Don't do anything if no items and no snippets
+        if (itemsList.Count == 0 && !hasSnippets) return;
 
         // Close any existing completion window
         _completionWindow?.Close();
@@ -2104,6 +2360,17 @@ public partial class CodeEditorControl : UserControl
         _completionWindow.StartOffset = startOffset;
 
         var data = _completionWindow.CompletionList.CompletionData;
+
+        // Add matching snippet completions first (they get a snippet icon)
+        var currentPrefix = GetCurrentWordPrefix() ?? "";
+        if (!string.IsNullOrEmpty(currentPrefix))
+        {
+            var matchingSnippets = SnippetProvider.FindByPrefix(currentPrefix);
+            foreach (var snippet in matchingSnippets)
+            {
+                data.Add(new SnippetCompletionData(snippet));
+            }
+        }
 
         foreach (var item in itemsList)
         {
@@ -2183,6 +2450,53 @@ public partial class CodeEditorControl : UserControl
     /// Returns true if a completion window is currently shown
     /// </summary>
     public bool IsCompletionWindowOpen => _completionWindow != null;
+
+    /// <summary>
+    /// Tries to expand a snippet at the current caret position.
+    /// Looks at the word immediately before the caret and checks if it matches
+    /// a snippet prefix exactly. If so, replaces the prefix with the expanded snippet.
+    /// </summary>
+    private bool TryExpandSnippet()
+    {
+        if (_textEditor?.Document == null) return false;
+
+        var prefix = GetCurrentWordPrefix();
+        if (string.IsNullOrEmpty(prefix)) return false;
+
+        var snippet = SnippetProvider.FindExactMatch(prefix);
+        if (snippet == null) return false;
+
+        var document = _textEditor.Document;
+        var caretOffset = _textEditor.CaretOffset;
+        var prefixStart = caretOffset - prefix.Length;
+
+        // Get the indentation of the current line
+        var line = document.GetLineByOffset(prefixStart);
+        var lineTextBeforePrefix = document.GetText(line.Offset, prefixStart - line.Offset);
+        var indent = "";
+        foreach (var c in lineTextBeforePrefix)
+        {
+            if (c == ' ' || c == '\t') indent += c;
+            else break;
+        }
+
+        // Expand the snippet
+        var (expandedText, cursorOffset) = snippet.Expand(indent);
+
+        // Replace the prefix with the expanded snippet
+        document.BeginUpdate();
+        try
+        {
+            document.Replace(prefixStart, prefix.Length, expandedText);
+            _textEditor.CaretOffset = prefixStart + cursorOffset;
+        }
+        finally
+        {
+            document.EndUpdate();
+        }
+
+        return true;
+    }
 
     #endregion
 
@@ -2384,7 +2698,7 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void ShowInlayHints(IEnumerable<TextMarkers.InlayHintItem> hints)
     {
-        if (_textEditor == null) return;
+        if (_textEditor?.TextArea?.TextView == null) return;
 
         if (_inlayHintRenderer == null)
         {
@@ -2414,7 +2728,7 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void ShowInlineDebugValues(IEnumerable<TextMarkers.InlineDebugValue> values)
     {
-        if (_textEditor == null) return;
+        if (_textEditor?.TextArea?.TextView == null) return;
 
         if (_inlineDebugValueRenderer == null)
         {
@@ -2449,7 +2763,7 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void ShowCodeLenses(IEnumerable<TextMarkers.CodeLensItem> lenses)
     {
-        if (_textEditor == null) return;
+        if (_textEditor?.TextArea?.TextView == null) return;
 
         if (_codeLensRenderer == null)
         {
@@ -2563,6 +2877,123 @@ public partial class CodeEditorControl : UserControl
         }
 
         _textEditor.TextArea.TextView.Redraw();
+    }
+
+    #endregion
+
+    #region Auto-Close Brackets & Line Insert
+
+    private void OnTextAreaTextEntered(object? sender, TextInputEventArgs e)
+    {
+        if (!_autoCloseBrackets || string.IsNullOrEmpty(e.Text) || e.Text.Length != 1) return;
+        if (_textEditor?.Document == null) return;
+
+        var typed = e.Text[0];
+        if (!AutoClosePairs.TryGetValue(typed, out var closing)) return;
+
+        var offset = _textEditor.CaretOffset;
+
+        // For quotes, don't auto-close if inside a string or comment
+        if (typed == '"' || typed == '\'')
+        {
+            if (IsCaretInsideStringOrComment(offset - 1)) return;
+            // Don't auto-close single quote if it looks like an apostrophe in text
+            if (typed == '\'' && offset > 1)
+            {
+                var prevChar = _textEditor.Document.GetCharAt(offset - 2);
+                if (char.IsLetterOrDigit(prevChar)) return; // e.g., "don't"
+            }
+        }
+
+        // Don't auto-close if the next character is a letter/digit (likely editing mid-word)
+        if (offset < _textEditor.Document.TextLength)
+        {
+            var nextChar = _textEditor.Document.GetCharAt(offset);
+            if (char.IsLetterOrDigit(nextChar)) return;
+        }
+
+        // Insert closing character
+        _textEditor.Document.Insert(offset, closing.ToString());
+        // Keep caret between the pair
+        _textEditor.CaretOffset = offset;
+    }
+
+    private bool IsCaretInsideStringOrComment(int offset)
+    {
+        if (_textEditor?.Document == null || offset < 0) return false;
+
+        var doc = _textEditor.Document;
+        var line = doc.GetLineByOffset(Math.Min(offset, doc.TextLength));
+        var lineText = doc.GetText(line.Offset, Math.Min(offset - line.Offset, line.Length));
+
+        bool inString = false;
+        foreach (var c in lineText)
+        {
+            if (c == '\'') return true; // Rest of line is comment
+            if (c == '"') inString = !inString;
+        }
+        return inString;
+    }
+
+    private bool DeleteEmptyPair()
+    {
+        if (_textEditor?.Document == null) return false;
+
+        var offset = _textEditor.CaretOffset;
+        if (offset <= 0 || offset >= _textEditor.Document.TextLength) return false;
+
+        var before = _textEditor.Document.GetCharAt(offset - 1);
+        var after = _textEditor.Document.GetCharAt(offset);
+
+        if (AutoClosePairs.TryGetValue(before, out var expected) && after == expected)
+        {
+            _textEditor.Document.Remove(offset - 1, 2);
+            _textEditor.CaretOffset = offset - 1;
+            return true;
+        }
+        return false;
+    }
+
+    private void InsertLineBelow()
+    {
+        if (_textEditor?.Document == null) return;
+
+        var doc = _textEditor.Document;
+        var line = doc.GetLineByNumber(_textEditor.TextArea.Caret.Line);
+        var lineText = doc.GetText(line.Offset, line.Length);
+
+        // Get indentation of current line
+        var indent = "";
+        foreach (var c in lineText)
+        {
+            if (c == ' ' || c == '\t') indent += c;
+            else break;
+        }
+
+        doc.Insert(line.EndOffset, Environment.NewLine + indent);
+        _textEditor.TextArea.Caret.Line = line.LineNumber + 1;
+        _textEditor.TextArea.Caret.Column = indent.Length + 1;
+    }
+
+    private void InsertLineAbove()
+    {
+        if (_textEditor?.Document == null) return;
+
+        var doc = _textEditor.Document;
+        var line = doc.GetLineByNumber(_textEditor.TextArea.Caret.Line);
+        var lineText = doc.GetText(line.Offset, line.Length);
+
+        // Get indentation of current line
+        var indent = "";
+        foreach (var c in lineText)
+        {
+            if (c == ' ' || c == '\t') indent += c;
+            else break;
+        }
+
+        doc.Insert(line.Offset, indent + Environment.NewLine);
+        _textEditor.TextArea.Caret.Line = line.LineNumber;
+        _textEditor.TextArea.Caret.Column = indent.Length + 1;
     }
 
     #endregion

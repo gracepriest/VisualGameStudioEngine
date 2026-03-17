@@ -78,17 +78,42 @@ public class BracketHighlighter : DocumentColorizingTransformer
         {
             var c = document.GetCharAt(pos);
 
-            // Skip strings and comments (simplified check)
-            if (c == '"' || c == '\'')
+            // Skip strings and comments
+            if (c == '\'')
             {
-                // Skip to end of string/comment
-                var quote = c;
+                // BasicLang comment — skip to end/start of line
+                if (direction == 1)
+                {
+                    // Forward: skip to end of line
+                    while (pos < document.TextLength && scanned < maxScanDistance)
+                    {
+                        c = document.GetCharAt(pos);
+                        if (c == '\n') break;
+                        pos += direction;
+                        scanned++;
+                    }
+                }
+                else
+                {
+                    // Backward: skip to start of line (we're inside a comment)
+                    while (pos >= 0 && scanned < maxScanDistance)
+                    {
+                        c = document.GetCharAt(pos);
+                        if (c == '\n') break;
+                        pos += direction;
+                        scanned++;
+                    }
+                }
+            }
+            else if (c == '"')
+            {
+                // Skip to matching quote
                 pos += direction;
                 scanned++;
                 while (pos >= 0 && pos < document.TextLength && scanned < maxScanDistance)
                 {
                     c = document.GetCharAt(pos);
-                    if (c == quote)
+                    if (c == '"')
                         break;
                     pos += direction;
                     scanned++;

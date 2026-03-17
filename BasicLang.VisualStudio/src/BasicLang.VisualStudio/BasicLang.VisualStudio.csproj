@@ -74,9 +74,13 @@
     </Content>
   </ItemGroup>
 
-  <!-- TextMate Grammar -->
+  <!-- TextMate Grammar and Language Configuration -->
   <ItemGroup>
     <Content Include="LanguageService\BasicLangGrammar.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="LanguageService\basiclang-language-configuration.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
