@@ -994,6 +994,11 @@ namespace BasicLang.Compiler.IR
         public string ModuleName { get; set; }
 
         /// <summary>
+        /// Absolute path to the source .bas file this function was compiled from
+        /// </summary>
+        public string SourceFilePath { get; set; }
+
+        /// <summary>
         /// Access modifier for the function (Public, Private, Friend)
         /// </summary>
         public AccessModifier Access { get; set; } = AccessModifier.Private;

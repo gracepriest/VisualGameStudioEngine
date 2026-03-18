@@ -398,7 +398,7 @@ namespace BasicLang.Compiler
                 // IR generation
                 unit.Status = CompilationStatus.GeneratingIR;
                 var irBuilder = new IRBuilder(analyzer);
-                unit.IR = irBuilder.Build(unit.AST, unit.ModuleName);
+                unit.IR = irBuilder.Build(unit.AST, unit.ModuleName, unit.FilePath);
 
                 unit.Status = CompilationStatus.Complete;
                 unit.CompletedAt = DateTime.UtcNow;

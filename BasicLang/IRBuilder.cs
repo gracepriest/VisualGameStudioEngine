@@ -22,6 +22,7 @@ namespace BasicLang.Compiler.IR
         private string _currentClassName;
         private string _currentNamespace;
         private string _currentModuleName;  // Track current module for constants/globals
+        private string _sourceFilePath;
         private List<IRValue> _pendingBaseConstructorArgs;  // Temporary storage for base constructor args
 
         // For SSA construction
@@ -56,8 +57,9 @@ namespace BasicLang.Compiler.IR
         /// <summary>
         /// Build IR from program AST
         /// </summary>
-        public IRModule Build(ProgramNode program, string moduleName = "main")
+        public IRModule Build(ProgramNode program, string moduleName = "main", string sourceFilePath = null)
         {
+            _sourceFilePath = sourceFilePath;
             _module = new IRModule(moduleName);
             _currentFunction = null;
             _currentBlock = null;
@@ -225,6 +227,7 @@ namespace BasicLang.Compiler.IR
 
             // Set module name for multi-file compilation
             _currentFunction.ModuleName = _currentModuleName ?? _module.Name;
+            _currentFunction.SourceFilePath = _sourceFilePath;
 
             // Set access modifier (convert from AST to IR enum)
             _currentFunction.Access = (IR.AccessModifier)(int)node.Access;
@@ -304,6 +307,7 @@ namespace BasicLang.Compiler.IR
 
             // Set module name for multi-file compilation
             _currentFunction.ModuleName = _currentModuleName ?? _module.Name;
+            _currentFunction.SourceFilePath = _sourceFilePath;
 
             // Set access modifier (convert from AST to IR enum)
             _currentFunction.Access = (IR.AccessModifier)(int)node.Access;
