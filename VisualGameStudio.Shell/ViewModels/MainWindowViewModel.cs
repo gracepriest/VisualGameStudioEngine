@@ -89,6 +89,22 @@ public partial class MainWindowViewModel : ViewModelBase
     private string _debugStatusText = "";
 
     /// <summary>
+    /// Tracks the executable name being debugged, for status bar display.
+    /// </summary>
+    private string _debugTargetName = "";
+
+    /// <summary>
+    /// Tracks whether debug panels have been auto-shown for the current debug session,
+    /// so we only switch panels once per session start (not on every pause/resume).
+    /// </summary>
+    private bool _debugPanelsShown;
+
+    /// <summary>
+    /// Remembers the output category before debug session started, so we can restore it when debugging stops.
+    /// </summary>
+    private OutputCategory _preDebugOutputCategory;
+
+    /// <summary>
     /// Enhanced status bar view model with interactive indicators.
     /// </summary>
     public StatusBarViewModel StatusBar { get; } = new();
@@ -112,8 +128,8 @@ public partial class MainWindowViewModel : ViewModelBase
     public CallHierarchyViewModel CallHierarchy { get; }
     public TypeHierarchyViewModel TypeHierarchy { get; }
 
-    private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new();
-    private readonly Dictionary<string, Action> _documentCleanupActions = new();
+    private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Action> _documentCleanupActions = new(StringComparer.OrdinalIgnoreCase);
 
     public MainWindowViewModel(
         IProjectService projectService,
@@ -199,12 +215,16 @@ public partial class MainWindowViewModel : ViewModelBase
         // Handle error list navigation
         ErrorList.DiagnosticDoubleClicked += OnDiagnosticDoubleClicked;
 
-        // Handle breakpoint condition editing
+        // Handle breakpoint condition editing and visual updates
         Breakpoints.EditConditionRequested += OnEditBreakpointCondition;
         Breakpoints.EditFunctionConditionRequested += OnEditFunctionBreakpointCondition;
+        Breakpoints.BreakpointsChanged += OnBreakpointVisualsChanged;
 
         // Handle bookmark navigation
         Bookmarks.NavigationRequested += OnBookmarkNavigationRequested;
+
+        // Handle call stack frame selection (navigate to source)
+        CallStack.FrameSelected += OnCallStackFrameSelected;
 
         // Wire up Find in Files navigation
         FindInFiles.SetNavigationCallback(OpenFileAtLine);
@@ -381,6 +401,21 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception)
         {
             // Ignore exceptions in event handler
+        }
+    }
+
+    /// <summary>
+    /// Refreshes breakpoint visuals (verified/unverified/kind) in all open editors
+    /// when breakpoint state changes (e.g., after debugger binds breakpoints).
+    /// </summary>
+    private void OnBreakpointVisualsChanged(object? sender, EventArgs e)
+    {
+        foreach (var kvp in _openDocuments)
+        {
+            var filePath = kvp.Key;
+            var doc = kvp.Value;
+            var visuals = Breakpoints.GetBreakpointVisualsForFile(filePath);
+            doc.UpdateBreakpointVisuals(visuals);
         }
     }
 
@@ -1073,9 +1108,10 @@ public partial class MainWindowViewModel : ViewModelBase
         IsDebugging = e.NewState == DebugState.Running || e.NewState == DebugState.Paused;
         IsPaused = e.NewState == DebugState.Paused;
 
+        var targetLabel = string.IsNullOrEmpty(_debugTargetName) ? "" : $": {_debugTargetName}";
         DebugStatusText = e.NewState switch
         {
-            DebugState.Running => "Running",
+            DebugState.Running => $"Running{targetLabel}",
             DebugState.Paused => "Paused",
             DebugState.Stopped => "Stopped",
             _ => ""
@@ -1083,16 +1119,70 @@ public partial class MainWindowViewModel : ViewModelBase
 
         if (e.NewState == DebugState.Stopped)
         {
-            StatusText = "Debug session ended";
+            StatusText = "Ready";
+            _debugTargetName = "";
             ClearAllInlineDebugValues();
             ClearAllExecutionLines();
+            RestorePreDebugPanels();
+
+            // Refresh breakpoint visuals: all revert to filled circles (verified) when not debugging
+            OnBreakpointVisualsChanged(this, EventArgs.Empty);
         }
-        else if (e.NewState == DebugState.Running)
+        else if (e.NewState == DebugState.Running || e.NewState == DebugState.Paused)
         {
-            // Clear inline values and execution line when resuming execution
-            ClearAllInlineDebugValues();
-            ClearAllExecutionLines();
+            if (e.NewState == DebugState.Running)
+            {
+                StatusText = "Running...";
+                // Clear inline values and execution line when resuming execution
+                ClearAllInlineDebugValues();
+                ClearAllExecutionLines();
+            }
+
+            // Auto-show debug panels on first transition into a debug state
+            if (!_debugPanelsShown)
+            {
+                ShowDebugPanels();
+            }
         }
+    }
+
+    /// <summary>
+    /// Auto-shows debug-related panels when a debug session starts.
+    /// Activates the Variables panel in the debug tool group, switches the Output
+    /// panel to the Debug category, and ensures debug tools are visible.
+    /// </summary>
+    private void ShowDebugPanels()
+    {
+        _debugPanelsShown = true;
+
+        // Remember current output category so we can restore it later
+        _preDebugOutputCategory = OutputPanel.SelectedCategory;
+
+        // Switch output panel to Debug category
+        OutputPanel.SelectedCategory = OutputCategory.Debug;
+
+        // Activate Output panel in the bottom-left tool group
+        _dockFactory.ActivateTool("Output");
+
+        // Activate Variables panel in the bottom-right debug tool group
+        // (this is the most useful panel when paused at a breakpoint)
+        _dockFactory.ActivateTool("Variables");
+    }
+
+    /// <summary>
+    /// Restores the panel state from before the debug session started.
+    /// Resets the output category and switches the debug tool group back to Breakpoints.
+    /// </summary>
+    private void RestorePreDebugPanels()
+    {
+        if (!_debugPanelsShown) return;
+        _debugPanelsShown = false;
+
+        // Restore the output category to what it was before debugging
+        OutputPanel.SelectedCategory = _preDebugOutputCategory;
+
+        // Switch debug tool group back to Breakpoints (the default non-debug view)
+        _dockFactory.ActivateTool("Breakpoints");
     }
 
     private async void OnDebugStopped(object? sender, StoppedEventArgs e)
@@ -1108,20 +1198,33 @@ public partial class MainWindowViewModel : ViewModelBase
                 App.MainWindow.Topmost = false;
             }
 
-            StatusText = e.Reason switch
-            {
-                StopReason.Breakpoint => "Breakpoint hit",
-                StopReason.Step => "Step complete",
-                StopReason.Exception => $"Exception: {e.Text}",
-                StopReason.Pause => "Paused",
-                _ => "Stopped"
-            };
-
-            // Navigate to the stopped location
+            // Navigate to the stopped location and build location string for status
             var frames = await _debugService.GetStackTraceAsync();
             var firstFrame = frames.FirstOrDefault();
+            var locationSuffix = "";
             if (firstFrame?.FilePath != null)
             {
+                locationSuffix = $" \u2014 {Path.GetFileName(firstFrame.FilePath)}:{firstFrame.Line}";
+            }
+
+            StatusText = e.Reason switch
+            {
+                StopReason.Breakpoint => $"Breakpoint hit{locationSuffix}",
+                StopReason.Step => $"Step{locationSuffix}",
+                StopReason.Exception => $"Exception: {e.Text}{locationSuffix}",
+                StopReason.Pause => $"Paused{locationSuffix}",
+                StopReason.DataBreakpoint => $"Data breakpoint hit{locationSuffix}",
+                StopReason.FunctionBreakpoint => $"Function breakpoint hit{locationSuffix}",
+                _ => $"Stopped{locationSuffix}"
+            };
+
+            if (firstFrame?.FilePath != null)
+            {
+                // Clear ALL old execution line highlights before setting the new one.
+                // This ensures the previous highlight is removed when stepping between
+                // lines or across files, regardless of event ordering.
+                ClearAllExecutionLines();
+
                 await OpenFileAsync(firstFrame.FilePath);
 
                 // Navigate to and highlight the current execution line
@@ -1262,6 +1365,32 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    private async void OnCallStackFrameSelected(object? sender, StackFrameItem frame)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(frame.FilePath)) return;
+
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                await OpenFileAsync(frame.FilePath);
+
+                // Clear previous execution line highlights, then set the new one
+                ClearAllExecutionLines();
+
+                if (_openDocuments.TryGetValue(frame.FilePath, out var doc))
+                {
+                    doc.SetExecutionLine(frame.Line);
+                    doc.NavigateTo(frame.Line, frame.Column > 0 ? frame.Column : 1);
+                }
+            });
+        }
+        catch (Exception)
+        {
+            // Ignore navigation errors to prevent crashes
+        }
+    }
+
     private void OnDebugOutput(object? sender, DebugOutputEventArgs e)
     {
         Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
@@ -1304,9 +1433,10 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        StatusText = "Starting debugger...";
+        _debugTargetName = Path.GetFileName(buildResult.ExecutablePath);
+        StatusText = $"Debugging: {_debugTargetName}";
         OutputPanel.SelectedCategory = OutputCategory.Debug;
-        OutputPanel.AppendOutput($"\n========== Debugging: {Path.GetFileName(buildResult.ExecutablePath)} ==========\n");
+        OutputPanel.AppendOutput($"\n========== Debugging: {_debugTargetName} ==========\n");
 
         var config = new DebugConfiguration
         {
@@ -1315,12 +1445,7 @@ public partial class MainWindowViewModel : ViewModelBase
         };
 
         // Collect all breakpoints to send to the debug adapter
-        OutputPanel.AppendOutput($"[Debug] Breakpoints.Breakpoints.Count = {Breakpoints.Breakpoints.Count}\n");
         var breakpoints = Breakpoints.GetAllBreakpoints();
-        var totalBps = breakpoints.Sum(kvp => kvp.Value.Count());
-        OutputPanel.AppendOutput($"[Debug] Breakpoints: {totalBps} across {breakpoints.Count} file(s)\n");
-        foreach (var kvp in breakpoints)
-            OutputPanel.AppendOutput($"[Debug]   {kvp.Key}: lines {string.Join(", ", kvp.Value.Select(b => b.Line))}\n");
 
         var success = await _debugService.StartDebuggingAsync(config, breakpoints);
         if (!success)
@@ -1421,9 +1546,17 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private async Task RestartDebuggingAsync()
+    {
+        if (!IsDebugging) return;
+        await _debugService.RestartAsync();
+    }
+
+    [RelayCommand]
     private async Task ContinueAsync()
     {
         if (!IsPaused) return;
+        StatusText = "Running...";
         await _debugService.ContinueAsync();
     }
 
@@ -1431,6 +1564,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private async Task StepOverAsync()
     {
         if (!IsPaused) return;
+        StatusText = "Stepping...";
         await _debugService.StepOverAsync();
     }
 
@@ -1438,6 +1572,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private async Task StepIntoAsync()
     {
         if (!IsPaused) return;
+        StatusText = "Stepping into...";
         await _debugService.StepIntoAsync();
     }
 
@@ -1445,6 +1580,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private async Task StepOutAsync()
     {
         if (!IsPaused) return;
+        StatusText = "Stepping out...";
         await _debugService.StepOutAsync();
     }
 
@@ -1452,6 +1588,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private async Task PauseAsync()
     {
         if (!IsDebugging || IsPaused) return;
+        StatusText = "Pausing...";
         await _debugService.PauseAsync();
     }
 

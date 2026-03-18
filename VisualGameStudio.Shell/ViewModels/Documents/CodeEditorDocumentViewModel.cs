@@ -6,6 +6,7 @@ using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
 using VisualGameStudio.Core.Events;
 using VisualGameStudio.Core.Models;
+using VisualGameStudio.Editor.Margins;
 using VisualGameStudio.Shell.ViewModels;
 
 namespace VisualGameStudio.Shell.ViewModels.Documents;
@@ -729,6 +730,20 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void ClearInlineDebugValues()
     {
         InlineDebugValuesUpdated?.Invoke(this, Enumerable.Empty<InlineDebugValueInfo>());
+    }
+
+    #endregion
+
+    #region Breakpoint Visuals
+
+    public event EventHandler<Dictionary<int, BreakpointVisualInfo>>? BreakpointVisualsUpdated;
+
+    /// <summary>
+    /// Updates the breakpoint margin visuals with verified/unverified state and breakpoint kind.
+    /// </summary>
+    public void UpdateBreakpointVisuals(Dictionary<int, BreakpointVisualInfo> visuals)
+    {
+        BreakpointVisualsUpdated?.Invoke(this, visuals);
     }
 
     #endregion

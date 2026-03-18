@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dock.Model.Mvvm.Controls;
 using VisualGameStudio.Core.Abstractions.Services;
+using VisualGameStudio.Editor.Margins;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
@@ -60,24 +61,60 @@ public partial class BreakpointsViewModel : Tool
     private void OnBreakpointsChanged(object? sender, BreakpointsChangedEventArgs e)
     {
         // Update verified status from debugger
-        if (_breakpointsByFile.TryGetValue(e.FilePath, out var bps))
+        bool anyChanged = false;
+
+        // Determine which files to search for matching breakpoints
+        IEnumerable<List<BreakpointItem>> bpLists;
+        if (!string.IsNullOrEmpty(e.FilePath) && _breakpointsByFile.TryGetValue(e.FilePath, out var fileBps))
+        {
+            bpLists = new[] { fileBps };
+        }
+        else if (string.IsNullOrEmpty(e.FilePath))
+        {
+            // No file path in event (e.g., DAP breakpoint event without source) — search all files by ID
+            bpLists = _breakpointsByFile.Values;
+        }
+        else
+        {
+            bpLists = Enumerable.Empty<List<BreakpointItem>>();
+        }
+
+        foreach (var bps in bpLists)
         {
             foreach (var bp in bps)
             {
-                var verified = e.Breakpoints.FirstOrDefault(b => b.Line == bp.Line);
+                var verified = e.Breakpoints.FirstOrDefault(b => b.Line == bp.Line && b.Line > 0);
                 if (verified != null)
                 {
                     bp.Id = verified.Id;
                     bp.IsVerified = verified.Verified;
                     bp.Message = verified.Message;
+                    anyChanged = true;
+                }
+                else if (e.Breakpoints.Count > 0)
+                {
+                    // Also try matching by ID for breakpoint events that don't carry line info
+                    var byId = e.Breakpoints.FirstOrDefault(b => b.Id == bp.Id && b.Id != 0);
+                    if (byId != null)
+                    {
+                        bp.IsVerified = byId.Verified;
+                        bp.Message = byId.Message;
+                        if (byId.Line > 0) bp.Line = byId.Line;
+                        anyChanged = true;
+                    }
                 }
             }
+        }
+
+        if (anyChanged)
+        {
+            // Notify the UI to refresh breakpoint visuals (e.g., filled vs hollow circles)
+            BreakpointsChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
     public void AddBreakpoint(string filePath, int line, string? condition = null, string? hitCondition = null, string? logMessage = null)
     {
-        System.Diagnostics.Debug.WriteLine($"[BP] AddBreakpoint called: {filePath}:{line}");
         var bp = new BreakpointItem
         {
             FilePath = filePath,
@@ -100,14 +137,12 @@ public partial class BreakpointsViewModel : Tool
         if (existing != null)
         {
             // Remove existing (toggle off)
-            System.Diagnostics.Debug.WriteLine($"[BP]   Removing existing at line {line}");
             list.Remove(existing);
             Breakpoints.Remove(existing);
         }
         else
         {
             // Add new (toggle on)
-            System.Diagnostics.Debug.WriteLine($"[BP]   Adding new at line {line}, total for file: {list.Count + 1}");
             list.Add(bp);
             Breakpoints.Add(bp);
         }
@@ -170,12 +205,43 @@ public partial class BreakpointsViewModel : Tool
         return Enumerable.Empty<BreakpointItem>();
     }
 
+    /// <summary>
+    /// Gets breakpoint visual info for a file, including verified/unverified state and kind.
+    /// Used by the editor margin to render filled vs hollow breakpoint indicators.
+    /// When not debugging, all breakpoints show as verified (filled circles).
+    /// During debugging, unverified breakpoints show as hollow circles until the debugger binds them.
+    /// </summary>
+    public Dictionary<int, BreakpointVisualInfo> GetBreakpointVisualsForFile(string filePath)
+    {
+        var isDebugging = _debugService.IsDebugging;
+        var result = new Dictionary<int, BreakpointVisualInfo>();
+        if (_breakpointsByFile.TryGetValue(filePath, out var list))
+        {
+            foreach (var bp in list)
+            {
+                var kind = BreakpointKind.Normal;
+                if (!string.IsNullOrEmpty(bp.LogMessage))
+                    kind = BreakpointKind.Logpoint;
+                else if (!string.IsNullOrEmpty(bp.HitCondition))
+                    kind = BreakpointKind.HitCount;
+                else if (!string.IsNullOrEmpty(bp.Condition))
+                    kind = BreakpointKind.Conditional;
+
+                result[bp.Line] = new BreakpointVisualInfo
+                {
+                    IsEnabled = bp.IsEnabled,
+                    // When not debugging, always show as verified (filled circle).
+                    // During debugging, show actual verified state from the debug adapter.
+                    IsVerified = isDebugging ? bp.IsVerified : true,
+                    Kind = kind
+                };
+            }
+        }
+        return result;
+    }
+
     public Dictionary<string, IEnumerable<SourceBreakpoint>> GetAllBreakpoints()
     {
-        System.Diagnostics.Debug.WriteLine($"[BP] GetAllBreakpoints: _breakpointsByFile has {_breakpointsByFile.Count} file(s), {_breakpointsByFile.Values.Sum(l => l.Count)} total entries");
-        foreach (var kvp in _breakpointsByFile)
-            System.Diagnostics.Debug.WriteLine($"[BP]   {kvp.Key}: {kvp.Value.Count} bp(s), enabled: {kvp.Value.Count(b => b.IsEnabled)}");
-
         var result = new Dictionary<string, IEnumerable<SourceBreakpoint>>();
         foreach (var kvp in _breakpointsByFile)
         {

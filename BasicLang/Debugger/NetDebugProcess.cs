@@ -241,6 +241,19 @@ namespace BasicLang.Debugger
             {
                 // Best-effort — process may already be dead
             }
+
+            // Fallback: force-kill the OS process if CLR terminate didn't work
+            try
+            {
+                if (_process != null && !_process.HasExited)
+                {
+                    _process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (Exception)
+            {
+                // Process may already be dead or access denied
+            }
         }
 
         /// <summary>
@@ -289,16 +302,18 @@ namespace BasicLang.Debugger
                 _runtimeStartupToken = IntPtr.Zero;
             }
 
+            // Detach ICorDebug first so it releases its hold on the process
             Detach();
 
             _threads.Clear();
             _attachedEvent.Dispose();
 
-            // Kill the process if still running
+            // Kill the entire process tree if still running
+            // (entireProcessTree: true ensures child processes like game windows are also killed)
             try
             {
                 if (_process != null && !_process.HasExited)
-                    _process.Kill();
+                    _process.Kill(entireProcessTree: true);
             }
             catch (Exception) { /* ignore */ }
 

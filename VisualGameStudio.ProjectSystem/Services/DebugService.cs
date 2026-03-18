@@ -299,6 +299,16 @@ public class DebugService : IDebugService
         // Cancel the read loop
         _cts?.Cancel();
 
+        // Cancel all pending DAP requests to avoid leaked tasks
+        lock (_lock)
+        {
+            foreach (var tcs in _pendingRequests.Values)
+            {
+                tcs.TrySetCanceled();
+            }
+            _pendingRequests.Clear();
+        }
+
         CleanupProcesses();
         SetState(DebugState.Stopped);
         _outputService.WriteLine("Debugging stopped", OutputCategory.Debug);
@@ -311,15 +321,18 @@ public class DebugService : IDebugService
         _stdinWriter?.Dispose();
         _stdinWriter = null;
 
+        // Kill the debug adapter process and its entire process tree
+        // (the game/debuggee is a child process of the adapter)
         if (_debugProcess != null && !_debugProcess.HasExited)
         {
-            try { _debugProcess.Kill(); } catch { }
+            try { _debugProcess.Kill(entireProcessTree: true); } catch { }
         }
         _debugProcess?.Dispose();
 
+        // Kill the target process tree (used in "Run without debugging" mode)
         if (_targetProcess != null && !_targetProcess.HasExited)
         {
-            try { _targetProcess.Kill(); } catch { }
+            try { _targetProcess.Kill(entireProcessTree: true); } catch { }
         }
         _targetProcess?.Dispose();
 
@@ -980,6 +993,10 @@ public class DebugService : IDebugService
                     SetState(DebugState.Stopped);
                     break;
 
+                case "breakpoint":
+                    HandleBreakpointEvent(body);
+                    break;
+
                 case "exited":
                     var exitCode = body.TryGetProperty("exitCode", out var ec) ? ec.GetInt32() : 0;
                     _outputService.WriteLine($"Program exited with code {exitCode}", OutputCategory.Debug);
@@ -987,6 +1004,40 @@ public class DebugService : IDebugService
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Handles DAP "breakpoint" events sent when a breakpoint's status changes
+    /// (e.g., verified after module load, or moved to a valid line).
+    /// </summary>
+    private void HandleBreakpointEvent(JsonElement body)
+    {
+        var reason = body.TryGetProperty("reason", out var r) ? r.GetString() : "unknown";
+        if (!body.TryGetProperty("breakpoint", out var bp)) return;
+
+        var bpInfo = new BreakpointInfo
+        {
+            Id = bp.TryGetProperty("id", out var id) ? id.GetInt32() : 0,
+            Verified = bp.TryGetProperty("verified", out var v) && v.GetBoolean(),
+            Message = bp.TryGetProperty("message", out var m) ? m.GetString() : null,
+            Line = bp.TryGetProperty("line", out var l) ? l.GetInt32() : 0,
+            Column = bp.TryGetProperty("column", out var c) ? c.GetInt32() : null
+        };
+
+        var filePath = "";
+        if (bp.TryGetProperty("source", out var src) && src.TryGetProperty("path", out var path))
+        {
+            filePath = path.GetString() ?? "";
+        }
+
+        _outputService.WriteLine($"[DAP] Breakpoint event: reason={reason}, id={bpInfo.Id}, verified={bpInfo.Verified}, line={bpInfo.Line}", OutputCategory.Debug);
+
+        // Fire BreakpointsChanged so the IDE can update verified/unverified display
+        BreakpointsChanged?.Invoke(this, new BreakpointsChangedEventArgs
+        {
+            FilePath = filePath,
+            Breakpoints = new List<BreakpointInfo> { bpInfo }
+        });
     }
 
     private static StopReason ParseStopReason(string? reason)

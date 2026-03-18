@@ -14,7 +14,7 @@
   <Window.KeyBindings>
     <KeyBinding Gesture="F5" Command="{Binding StartDebuggingCommand}"/>
     <KeyBinding Gesture="Ctrl+F5" Command="{Binding StartWithoutDebuggingCommand}"/>
-    <KeyBinding Gesture="Ctrl+Shift+F5" Command="{Binding RunInExternalConsoleCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+F5" Command="{Binding RestartDebuggingCommand}"/>
     <KeyBinding Gesture="Shift+F5" Command="{Binding StopDebuggingCommand}"/>
     <KeyBinding Gesture="F9" Command="{Binding ToggleBreakpointCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+F9" Command="{Binding NewFunctionBreakpointCommand}"/>
@@ -156,7 +156,8 @@
       <MenuItem Header="_Debug">
         <MenuItem Header="_Start Debugging" Command="{Binding StartDebuggingCommand}" InputGesture="F5"/>
         <MenuItem Header="Start _Without Debugging" Command="{Binding StartWithoutDebuggingCommand}" InputGesture="Ctrl+F5"/>
-        <MenuItem Header="Run in _External Console" Command="{Binding RunInExternalConsoleCommand}" InputGesture="Ctrl+Shift+F5"/>
+        <MenuItem Header="Run in _External Console" Command="{Binding RunInExternalConsoleCommand}"/>
+        <MenuItem Header="_Restart Debugging" Command="{Binding RestartDebuggingCommand}" InputGesture="Ctrl+Shift+F5" IsEnabled="{Binding IsDebugging}"/>
         <MenuItem Header="_Stop Debugging" Command="{Binding StopDebuggingCommand}" InputGesture="Shift+F5"/>
         <Separator/>
         <MenuItem Header="_Continue" Command="{Binding ContinueCommand}" InputGesture="F5" IsEnabled="{Binding IsPaused}"/>
@@ -226,6 +227,9 @@
         </Button>
         <Button Classes="toolbarButton" Command="{Binding StopDebuggingCommand}" ToolTip.Tip="Stop Debugging (Shift+F5)" IsVisible="{Binding IsDebugging}">
           <TextBlock Text="■" FontSize="12" Foreground="#E51400"/>
+        </Button>
+        <Button Classes="toolbarButton" Command="{Binding RestartDebuggingCommand}" ToolTip.Tip="Restart Debugging (Ctrl+Shift+F5)" IsVisible="{Binding IsDebugging}">
+          <TextBlock Text="⟳" FontSize="14" Foreground="#89D185"/>
         </Button>
 
         <Border Width="1" Background="#3C3C3C" Margin="4,2" IsVisible="{Binding IsDebugging}"/>

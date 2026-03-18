@@ -5,6 +5,7 @@ using Avalonia.Interactivity;
 using VisualGameStudio.Core.Models;
 using VisualGameStudio.Editor.Completion;
 using VisualGameStudio.Editor.Controls;
+using VisualGameStudio.Editor.Margins;
 using VisualGameStudio.Shell.ViewModels;
 using VisualGameStudio.Shell.ViewModels.Documents;
 using VisualGameStudio.Shell.Views.Controls;
@@ -40,6 +41,7 @@ public partial class CodeEditorDocumentView : UserControl
         vm.CodeLensUpdated -= OnCodeLensUpdated;
         vm.InlineDebugValuesUpdated -= OnInlineDebugValuesUpdated;
         vm.ExecutionLineChanged -= OnExecutionLineChanged;
+        vm.BreakpointVisualsUpdated -= OnBreakpointVisualsUpdated;
         vm.CompletionReceived -= OnCompletionReceived;
         vm.HoverResultReceived -= OnHoverResultReceived;
         vm.SignatureHelpResultReceived -= OnSignatureHelpResultReceived;
@@ -210,6 +212,9 @@ public partial class CodeEditorDocumentView : UserControl
 
             // Wire up execution line highlighting
             vm.ExecutionLineChanged += OnExecutionLineChanged;
+
+            // Wire up breakpoint visual updates (verified/unverified state)
+            vm.BreakpointVisualsUpdated += OnBreakpointVisualsUpdated;
 
             // Wire up code completion
             if (MainEditor != null)
@@ -383,6 +388,14 @@ public partial class CodeEditorDocumentView : UserControl
         });
     }
 
+    private void OnBreakpointVisualsUpdated(object? sender, Dictionary<int, BreakpointVisualInfo> visuals)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            SyncBreakpointVisuals(visuals);
+        });
+    }
+
     private void OnCompletionRequested(object? sender, CompletionRequestEventArgs e)
     {
         if (DataContext is CodeEditorDocumentViewModel vm)
@@ -464,6 +477,15 @@ public partial class CodeEditorDocumentView : UserControl
     {
         _breakpointLines = new HashSet<int>(lines);
         MainEditor?.UpdateBreakpoints(_breakpointLines);
+    }
+
+    /// <summary>
+    /// Updates breakpoint visuals with full info including verified/unverified state and kind.
+    /// </summary>
+    public void SyncBreakpointVisuals(Dictionary<int, BreakpointVisualInfo> visuals)
+    {
+        _breakpointLines = new HashSet<int>(visuals.Keys);
+        MainEditor?.UpdateBreakpoints(visuals);
     }
 
     /// <summary>

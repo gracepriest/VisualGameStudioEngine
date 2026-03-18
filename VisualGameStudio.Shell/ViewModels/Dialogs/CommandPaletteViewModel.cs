@@ -99,6 +99,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("Debug", "Start Without Debugging", "Ctrl+F5", () => vm.StartWithoutDebuggingCommand.Execute(null));
         AddCommand("Debug", "Run in External Console", "Ctrl+Shift+F5", () => vm.RunInExternalConsoleCommand.Execute(null));
         AddCommand("Debug", "Stop Debugging", "Shift+F5", () => vm.StopDebuggingCommand.Execute(null));
+        AddCommand("Debug", "Restart Debugging", "Ctrl+Shift+F5", () => vm.RestartDebuggingCommand.Execute(null));
         AddCommand("Debug", "Continue", "F5", () => vm.ContinueCommand.Execute(null));
         AddCommand("Debug", "Step Over", "F10", () => vm.StepOverCommand.Execute(null));
         AddCommand("Debug", "Step Into", "F11", () => vm.StepIntoCommand.Execute(null));

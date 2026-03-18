@@ -25,6 +25,7 @@ public enum BreakpointKind
 public class BreakpointVisualInfo
 {
     public bool IsEnabled { get; set; } = true;
+    public bool IsVerified { get; set; } = true;
     public BreakpointKind Kind { get; set; } = BreakpointKind.Normal;
 }
 
@@ -48,6 +49,7 @@ public class BreakpointMargin : AbstractMargin
     private static readonly IBrush MarginBackground = new SolidColorBrush(Color.Parse("#1E1E1E"));
     private static readonly IPen BreakpointBorderPen = new Pen(new SolidColorBrush(Color.Parse("#8B0000")), 1);
     private static readonly IPen DisabledBorderPen = new Pen(new SolidColorBrush(Color.Parse("#505050")), 1);
+    private static readonly IPen UnverifiedBreakpointPen = new Pen(new SolidColorBrush(Color.Parse("#E51400")), 1.5);
     private static readonly IPen WhitePen = new Pen(Brushes.White, 1.5);
     private static readonly IPen WhiteThinPen = new Pen(Brushes.White, 1.0);
 
@@ -150,20 +152,36 @@ public class BreakpointMargin : AbstractMargin
             // Draw breakpoint indicator
             if (_breakpoints.TryGetValue(lineNumber, out var info))
             {
-                switch (info.Kind)
+                if (info.IsEnabled && !info.IsVerified)
                 {
-                    case BreakpointKind.Conditional:
-                        DrawConditionalBreakpoint(context, y, visualLine.Height, info.IsEnabled);
-                        break;
-                    case BreakpointKind.HitCount:
-                        DrawHitCountBreakpoint(context, y, visualLine.Height, info.IsEnabled);
-                        break;
-                    case BreakpointKind.Logpoint:
-                        DrawLogpointBreakpoint(context, y, visualLine.Height, info.IsEnabled);
-                        break;
-                    default:
-                        DrawBreakpoint(context, y, visualLine.Height, info.IsEnabled);
-                        break;
+                    // Unverified breakpoint: hollow circle/diamond
+                    switch (info.Kind)
+                    {
+                        case BreakpointKind.Conditional:
+                            DrawUnverifiedConditionalBreakpoint(context, y, visualLine.Height);
+                            break;
+                        default:
+                            DrawUnverifiedBreakpoint(context, y, visualLine.Height);
+                            break;
+                    }
+                }
+                else
+                {
+                    switch (info.Kind)
+                    {
+                        case BreakpointKind.Conditional:
+                            DrawConditionalBreakpoint(context, y, visualLine.Height, info.IsEnabled);
+                            break;
+                        case BreakpointKind.HitCount:
+                            DrawHitCountBreakpoint(context, y, visualLine.Height, info.IsEnabled);
+                            break;
+                        case BreakpointKind.Logpoint:
+                            DrawLogpointBreakpoint(context, y, visualLine.Height, info.IsEnabled);
+                            break;
+                        default:
+                            DrawBreakpoint(context, y, visualLine.Height, info.IsEnabled);
+                            break;
+                    }
                 }
             }
         }
@@ -256,6 +274,42 @@ public class BreakpointMargin : AbstractMargin
         context.DrawLine(WhiteThinPen,
             new Point(cx - halfLine, cy),
             new Point(cx + halfLine, cy));
+    }
+
+    /// <summary>
+    /// Draws an unverified breakpoint: hollow red circle (not yet bound by debugger).
+    /// </summary>
+    private void DrawUnverifiedBreakpoint(DrawingContext context, double y, double lineHeight)
+    {
+        var size = Math.Min(12 * _scaleFactor, lineHeight - 2 * _scaleFactor);
+        var x = (Bounds.Width - size) / 2;
+        var yPos = y + (lineHeight - size) / 2;
+
+        // Draw hollow circle (no fill, just a red border)
+        context.DrawEllipse(null, UnverifiedBreakpointPen, new Rect(x, yPos, size, size));
+    }
+
+    /// <summary>
+    /// Draws an unverified conditional breakpoint: hollow red diamond.
+    /// </summary>
+    private void DrawUnverifiedConditionalBreakpoint(DrawingContext context, double y, double lineHeight)
+    {
+        var size = Math.Min(12 * _scaleFactor, lineHeight - 2 * _scaleFactor);
+        var cx = Bounds.Width / 2;
+        var cy = y + lineHeight / 2;
+        var half = size / 2;
+
+        var geometry = new StreamGeometry();
+        using (var ctx = geometry.Open())
+        {
+            ctx.BeginFigure(new Point(cx, cy - half), false);   // top, not filled
+            ctx.LineTo(new Point(cx + half, cy));
+            ctx.LineTo(new Point(cx, cy + half));
+            ctx.LineTo(new Point(cx - half, cy));
+            ctx.EndFigure(true);
+        }
+
+        context.DrawGeometry(null, UnverifiedBreakpointPen, geometry);
     }
 
     private void DrawExecutionArrow(DrawingContext context, double y, double lineHeight)

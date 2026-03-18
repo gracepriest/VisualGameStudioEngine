@@ -1141,7 +1141,12 @@ namespace BasicLang.Debugger
                 args.Add(EvaluateValue(arg, frame));
             }
 
-            // Check built-in functions first
+            // Check engine functions first (P/Invoke to VisualGameStudioEngine.dll)
+            var engineResult = EngineBindings.TryExecute(call.FunctionName, args.ToArray(), BuiltInNotFound);
+            if (engineResult != BuiltInNotFound)
+                return engineResult;
+
+            // Check built-in functions
             var builtInResult = ExecuteBuiltIn(call.FunctionName, args.ToArray());
             if (builtInResult != BuiltInNotFound)
                 return builtInResult;
