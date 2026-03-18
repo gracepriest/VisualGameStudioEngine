@@ -353,7 +353,7 @@ public class BuildService : IBuildService
                 try
                 {
                     var irBuilder = new BasicLang.Compiler.IR.IRBuilder(analyzer);
-                    irBuilder.Build(unit.AST, unit.ModuleName);
+                    irBuilder.Build(unit.AST, unit.ModuleName, unit.FilePath);
                     allIRModules.Add(irBuilder.Module);
                     unit.IR = irBuilder.Module;
                 }
@@ -1041,7 +1041,7 @@ public class BuildService : IBuildService
                 {
                     // Build IR
                     var irBuilder = new BasicLang.Compiler.IR.IRBuilder(analyzer);
-                    irBuilder.Build(ast);
+                    irBuilder.Build(ast, "main", filePath);
                     var irModule = irBuilder.Module;
 
                     // Apply optimizations

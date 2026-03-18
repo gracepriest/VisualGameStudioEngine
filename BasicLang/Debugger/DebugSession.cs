@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -162,22 +163,77 @@ namespace BasicLang.Debugger
                 _stopOnEntry = stopProp.GetBoolean();
             }
 
-            // Compile and prepare the program
+            // Compile and prepare the program using full multi-file compiler
             if (!string.IsNullOrEmpty(_currentFile) && File.Exists(_currentFile))
             {
                 try
                 {
-                    var source = await File.ReadAllTextAsync(_currentFile);
-                    var lexer = new Lexer(source);
-                    var tokens = lexer.Tokenize();
-                    var parser = new Parser(tokens);
-                    var ast = parser.Parse();
+                    // Check if there's a .blproj file in the working directory
+                    var projectDir = Path.GetDirectoryName(_currentFile) ?? ".";
+                    var blprojFiles = Directory.GetFiles(projectDir, "*.blproj", SearchOption.TopDirectoryOnly);
 
-                    var semanticAnalyzer = new SemanticAnalyzer();
-                    semanticAnalyzer.Analyze(ast);
+                    IRModule module;
 
-                    var irBuilder = new IRBuilder(semanticAnalyzer);
-                    var module = irBuilder.Build(ast);
+                    if (blprojFiles.Length > 0)
+                    {
+                        // Multi-file project: compile via project file
+                        var project = BasicLang.Compiler.ProjectSystem.ProjectFile.Load(blprojFiles[0]);
+                        var sourceFiles = project.GetSourceFiles().ToList();
+
+                        // Find the entry point file and compile with all project files
+                        var compiler = new BasicCompiler();
+                        var additionalFiles = sourceFiles.Where(f =>
+                            !string.Equals(f, _currentFile, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                        var compilationResult = additionalFiles.Count > 0
+                            ? compiler.CompileProject(_currentFile, additionalFiles)
+                            : compiler.CompileFile(_currentFile);
+
+                        if (!compilationResult.Success || compilationResult.CombinedIR == null)
+                        {
+                            var errors = string.Join("\n", compilationResult.AllErrors.Select(e => e.Message));
+                            await SendEventAsync("output", new Dictionary<string, object>
+                            {
+                                ["category"] = "stderr",
+                                ["output"] = $"Compilation errors:\n{errors}\n"
+                            });
+                            return CreateResponse(request, true);
+                        }
+
+                        module = compilationResult.CombinedIR;
+                    }
+                    else
+                    {
+                        // Single file or no project: use compiler which handles Import directives
+                        var compiler = new BasicCompiler();
+                        var compilationResult = compiler.CompileFile(_currentFile);
+
+                        if (!compilationResult.Success || compilationResult.CombinedIR == null)
+                        {
+                            var errors = string.Join("\n", compilationResult.AllErrors.Select(e => e.Message));
+                            await SendEventAsync("output", new Dictionary<string, object>
+                            {
+                                ["category"] = "stderr",
+                                ["output"] = $"Compilation errors:\n{errors}\n"
+                            });
+                            return CreateResponse(request, true);
+                        }
+
+                        module = compilationResult.CombinedIR;
+                    }
+
+                    // Diagnostic: report what was compiled
+                    var funcNames = string.Join(", ", module.Functions.Select(f => f.Name));
+                    await SendEventAsync("output", new Dictionary<string, object>
+                    {
+                        ["category"] = "console",
+                        ["output"] = $"[DAP] Compiled {module.Functions.Count} function(s): {funcNames}\n"
+                    });
+                    await SendEventAsync("output", new Dictionary<string, object>
+                    {
+                        ["category"] = "console",
+                        ["output"] = $"[DAP] Engine DLL available: {EngineBindings.IsAvailable()}\n"
+                    });
 
                     _interpreter = new DebuggableInterpreter(module);
                     _interpreter.SetCurrentFile(_currentFile);
@@ -617,6 +673,14 @@ namespace BasicLang.Debugger
             // Start execution if not stopping on entry
             if (!_stopOnEntry && _interpreter != null)
             {
+                // Log breakpoint count
+                var allBps = _interpreter.GetAllBreakpoints();
+                _ = SendEventAsync("output", new Dictionary<string, object>
+                {
+                    ["category"] = "console",
+                    ["output"] = $"[DAP] Starting execution with {allBps.Count} breakpoint(s): {string.Join(", ", allBps.Select(b => $"{Path.GetFileName(b.FilePath ?? "?")}:{b.Line}"))}\n"
+                });
+
                 Task.Run(async () =>
                 {
                     int exitCode = 0;

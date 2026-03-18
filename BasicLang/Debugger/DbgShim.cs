@@ -44,16 +44,35 @@ namespace BasicLang.Debugger
             if (_loaded) return _dbgshimPath != null;
             _loaded = true;
 
+            // dbgshim.dll is NOT in the .NET runtime — it ships with:
+            // - Visual Studio (Common7/IDE/Remote Debugger/x64/)
+            // - Visual Studio (Common7/Packages/Debugger/)
+            // - JetBrains Rider
+            // - .NET SDK diagnostics tools
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             var searchPaths = new[]
             {
-                // Next to compiler (IDE/dbgshim.dll)
+                // Next to compiler (IDE/dbgshim.dll) — user can copy it here
                 Path.Combine(AppContext.BaseDirectory, "dbgshim.dll"),
+                // VS 2022 Remote Debugger (most reliable location)
+                Path.Combine(programFiles, "Microsoft Visual Studio", "2022", "Enterprise",
+                    "Common7", "IDE", "Remote Debugger", "x64", "dbgshim.dll"),
+                Path.Combine(programFiles, "Microsoft Visual Studio", "2022", "Professional",
+                    "Common7", "IDE", "Remote Debugger", "x64", "dbgshim.dll"),
+                Path.Combine(programFiles, "Microsoft Visual Studio", "2022", "Community",
+                    "Common7", "IDE", "Remote Debugger", "x64", "dbgshim.dll"),
+                // VS 2022 Packages/Debugger
+                Path.Combine(programFiles, "Microsoft Visual Studio", "2022", "Enterprise",
+                    "Common7", "Packages", "Debugger", "dbgshim.dll"),
+                Path.Combine(programFiles, "Microsoft Visual Studio", "2022", "Professional",
+                    "Common7", "Packages", "Debugger", "dbgshim.dll"),
+                Path.Combine(programFiles, "Microsoft Visual Studio", "2022", "Community",
+                    "Common7", "Packages", "Debugger", "dbgshim.dll"),
                 // DOTNET_ROOT environment variable
                 Environment.GetEnvironmentVariable("DOTNET_ROOT") is string root
                     ? Path.Combine(root, "shared", "Microsoft.NETCore.App") : null,
-                // Standard Windows install
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                    "dotnet", "shared", "Microsoft.NETCore.App"),
+                // .NET runtime (some SDK installs include it)
+                Path.Combine(programFiles, "dotnet", "shared", "Microsoft.NETCore.App"),
             };
 
             foreach (var basePath in searchPaths)

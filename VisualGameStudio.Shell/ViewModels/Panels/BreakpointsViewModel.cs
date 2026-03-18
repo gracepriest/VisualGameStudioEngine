@@ -77,6 +77,7 @@ public partial class BreakpointsViewModel : Tool
 
     public void AddBreakpoint(string filePath, int line, string? condition = null, string? hitCondition = null, string? logMessage = null)
     {
+        System.Diagnostics.Debug.WriteLine($"[BP] AddBreakpoint called: {filePath}:{line}");
         var bp = new BreakpointItem
         {
             FilePath = filePath,
@@ -98,12 +99,15 @@ public partial class BreakpointsViewModel : Tool
         var existing = list.FirstOrDefault(b => b.Line == line);
         if (existing != null)
         {
-            // Remove existing
+            // Remove existing (toggle off)
+            System.Diagnostics.Debug.WriteLine($"[BP]   Removing existing at line {line}");
             list.Remove(existing);
             Breakpoints.Remove(existing);
         }
         else
         {
+            // Add new (toggle on)
+            System.Diagnostics.Debug.WriteLine($"[BP]   Adding new at line {line}, total for file: {list.Count + 1}");
             list.Add(bp);
             Breakpoints.Add(bp);
         }
@@ -168,6 +172,10 @@ public partial class BreakpointsViewModel : Tool
 
     public Dictionary<string, IEnumerable<SourceBreakpoint>> GetAllBreakpoints()
     {
+        System.Diagnostics.Debug.WriteLine($"[BP] GetAllBreakpoints: _breakpointsByFile has {_breakpointsByFile.Count} file(s), {_breakpointsByFile.Values.Sum(l => l.Count)} total entries");
+        foreach (var kvp in _breakpointsByFile)
+            System.Diagnostics.Debug.WriteLine($"[BP]   {kvp.Key}: {kvp.Value.Count} bp(s), enabled: {kvp.Value.Count(b => b.IsEnabled)}");
+
         var result = new Dictionary<string, IEnumerable<SourceBreakpoint>>();
         foreach (var kvp in _breakpointsByFile)
         {

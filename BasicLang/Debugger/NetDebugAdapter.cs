@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -234,15 +235,16 @@ namespace BasicLang.Debugger
                 await SendEventAsync("output", new Dictionary<string, object>
                 {
                     ["category"] = "stderr",
-                    ["output"] = $"Failed to launch and attach debugger to: {exePath}\n"
+                    ["output"] = $"Failed to launch and attach debugger to: {exePath}\nReason: {_process?.LastError ?? "Unknown error"}\n"
                 });
                 var response = CreateResponse(request, false);
+                var errorMsg = _process?.LastError ?? "Failed to launch process or attach debugger.";
                 response.Body = new Dictionary<string, object>
                 {
                     ["error"] = new Dictionary<string, object>
                     {
                         ["id"] = 2,
-                        ["format"] = "Failed to launch process or attach debugger. Ensure dbgshim.dll is available."
+                        ["format"] = errorMsg
                     }
                 };
                 return response;
@@ -269,6 +271,13 @@ namespace BasicLang.Debugger
             if (string.IsNullOrEmpty(sourcePath))
                 return CreateResponse(request, true);
 
+            // Diagnostic output
+            _ = SendEventAsync("output", new Dictionary<string, object>
+            {
+                ["category"] = "console",
+                ["output"] = $"[DAP] setBreakpoints for: {Path.GetFileName(sourcePath)}, mapper={_sourceMapper != null}, modules={_loadedModules.Count}, docs={_sourceMapper?.GetSourceDocuments()?.Count ?? 0}\n"
+            });
+
             // Clear existing breakpoints for this file
             _breakpointManager.ClearFile(sourcePath);
 
@@ -291,11 +300,19 @@ namespace BasicLang.Debugger
                     int actualLine = line;
 
                     var ilInfo = _sourceMapper?.GetILOffsetForLine(sourcePath, line);
-                    if (ilInfo.HasValue)
+                    if (ilInfo.HasValue && _loadedModules.Count > 0)
                     {
                         actualLine = _sourceMapper.FindNearestExecutableLine(sourcePath, line);
-                        verified = TryBindBreakpoint(entry, ilInfo.Value.methodToken, ilInfo.Value.ilOffset);
+                        // Try to bind on the first user module (not system assemblies)
+                        var userModule = _loadedModules.Values.FirstOrDefault();
+                        verified = TryBindBreakpoint(entry, ilInfo.Value.methodToken, ilInfo.Value.ilOffset, userModule);
                     }
+
+                    _ = SendEventAsync("output", new Dictionary<string, object>
+                    {
+                        ["category"] = "console",
+                        ["output"] = $"[DAP]   BP line {line}: IL={ilInfo?.ilOffset.ToString() ?? "none"}, verified={verified}\n"
+                    });
 
                     resultBreakpoints.Add(new Dictionary<string, object>
                     {
@@ -336,27 +353,13 @@ namespace BasicLang.Debugger
         {
             var threadList = new List<object>();
 
-            if (_process != null && _process.IsAttached)
+            // Always report thread ID 1 as the main thread
+            // The actual OS thread IDs are mapped internally
+            threadList.Add(new Dictionary<string, object>
             {
-                foreach (var kvp in _process.Threads)
-                {
-                    threadList.Add(new Dictionary<string, object>
-                    {
-                        ["id"] = kvp.Key,
-                        ["name"] = $"Thread {kvp.Key}"
-                    });
-                }
-            }
-
-            // Always return at least one thread
-            if (threadList.Count == 0)
-            {
-                threadList.Add(new Dictionary<string, object>
-                {
-                    ["id"] = 1,
-                    ["name"] = "Main Thread"
-                });
-            }
+                ["id"] = 1,
+                ["name"] = "Main Thread"
+            });
 
             var response = CreateResponse(request, true);
             response.Body = new Dictionary<string, object>
@@ -379,81 +382,100 @@ namespace BasicLang.Debugger
 
             try
             {
-                ICorDebugThread thread = null;
-                if (_process?.Threads.ContainsKey(threadId) == true)
-                    thread = _process.Threads[threadId];
+                // Try raw vtable walk of the thread's frames
+                ICorDebugThread thread = GetFirstThread();
 
                 if (thread != null)
                 {
-                    // Get the active chain and enumerate its frames
-                    thread.GetActiveChain(out var chain);
-                    if (chain != null)
+                    var threadPtr = Marshal.GetIUnknownForObject(thread);
+                    try
                     {
-                        chain.EnumerateFrames(out var frameEnum);
-                        if (frameEnum != null)
+                        var vtable = Marshal.ReadIntPtr(threadPtr);
+
+                        // ICorDebugThread::GetActiveFrame is slot 12 (IUnknown(3) + slot 9=CreateStepper... wait)
+                        // From CorDebugWrappers: GetProcess(0), GetID(1), GetHandle(2), GetAppDomain(3),
+                        // SetDebugState(4), GetDebugState(5), GetUserState(6), GetCurrentException(7),
+                        // ClearCurrentException(8), CreateStepper(9), EnumerateChains(10),
+                        // GetActiveChain(11), GetActiveFrame(12)
+                        // So GetActiveFrame is slot 3+12 = 15
+                        var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                        var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                        int hr = getActiveFrame(threadPtr, out var framePtr);
+                        Console.Error.WriteLine($"[DAP] GetActiveFrame: hr=0x{hr:X8}, ptr={framePtr}");
+
+                        if (hr >= 0 && framePtr != IntPtr.Zero)
                         {
-                            frameEnum.GetCount(out uint frameCount);
-                            var frames = new ICorDebugFrame[frameCount];
-                            frameEnum.Next(frameCount, frames, out uint fetched);
+                            // ICorDebugILFrame extends ICorDebugFrame
+                            // ICorDebugFrame: GetChain(0), GetCode(1), GetFunction(2), GetFunctionToken(3),
+                            //                 GetStackRange(4), GetCaller(5), GetCallee(6), CreateStepper(7)
+                            // ICorDebugILFrame adds: GetIP(8), SetIP(9), EnumerateLocalVariables(10),
+                            //                        GetLocalVariable(11), EnumerateArguments(12), GetArgument(13)
+                            // GetFunction is slot 3+2 = 5
+                            // GetFunctionToken is slot 3+3 = 6
+                            // GetIP (ICorDebugILFrame) is slot 3+8 = 11
 
-                            for (int i = 0; i < (int)fetched; i++)
+                            var frameVtable = Marshal.ReadIntPtr(framePtr);
+
+                            // Get function token (on ICorDebugFrame — slot 6)
+                            var getFunctionTokenSlot = Marshal.ReadIntPtr(frameVtable, 6 * IntPtr.Size);
+                            var getFunctionToken = Marshal.GetDelegateForFunctionPointer<GetFunctionTokenDelegate>(getFunctionTokenSlot);
+                            hr = getFunctionToken(framePtr, out uint functionToken);
+
+                            // Get IL offset — MUST QueryInterface for ICorDebugILFrame first
+                            uint ilOffset = 0;
+                            Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                            int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                            if (qiHr >= 0 && ilFramePtr != IntPtr.Zero)
                             {
-                                var frame = frames[i];
-                                if (frame is ICorDebugILFrame ilFrame)
-                                {
-                                    int frameId = _nextFrameId++;
-                                    _frameMap[frameId] = ilFrame;
-
-                                    // Get function token and IL offset
-                                    ilFrame.GetFunctionToken(out uint functionToken);
-                                    ilFrame.GetIP(out uint ilOffset, out _);
-
-                                    string frameName = $"Frame {frameId}";
-                                    string sourceFile = null;
-                                    int sourceLine = 0;
-                                    int sourceColumn = 1;
-
-                                    // Try to map IL offset to source location
-                                    var location = _sourceMapper?.GetSourceLocation((int)functionToken, (int)ilOffset);
-                                    if (location.HasValue)
-                                    {
-                                        sourceFile = location.Value.file;
-                                        sourceLine = location.Value.line;
-                                        sourceColumn = location.Value.column;
-                                        frameName = Path.GetFileNameWithoutExtension(sourceFile) ?? frameName;
-                                    }
-
-                                    // Try to get a better name from the function token
-                                    ilFrame.GetFunction(out var function);
-                                    if (function != null)
-                                    {
-                                        function.GetToken(out uint methodDef);
-                                        // Use method token as display name fallback
-                                        if (frameName.StartsWith("Frame"))
-                                            frameName = $"0x{methodDef:X8}";
-                                    }
-
-                                    var frameDict = new Dictionary<string, object>
-                                    {
-                                        ["id"] = frameId,
-                                        ["name"] = frameName,
-                                        ["line"] = sourceLine,
-                                        ["column"] = sourceColumn
-                                    };
-
-                                    if (sourceFile != null)
-                                    {
-                                        frameDict["source"] = new Dictionary<string, object>
-                                        {
-                                            ["path"] = sourceFile,
-                                            ["name"] = Path.GetFileName(sourceFile)
-                                        };
-                                    }
-
-                                    stackFrames.Add(frameDict);
-                                }
+                                var ilFrameVtable = Marshal.ReadIntPtr(ilFramePtr);
+                                var getIPSlot = Marshal.ReadIntPtr(ilFrameVtable, 11 * IntPtr.Size);
+                                var getIP = Marshal.GetDelegateForFunctionPointer<GetIPDelegate>(getIPSlot);
+                                getIP(ilFramePtr, out ilOffset, out _);
+                                Marshal.Release(ilFramePtr);
                             }
+
+                            Console.Error.WriteLine($"[DAP] Frame: token=0x{functionToken:X8}, IL={ilOffset}, QI={qiHr:X8}");
+
+                            string frameName = "Main";
+                            string sourceFile = null;
+                            int sourceLine = 0;
+                            int sourceColumn = 1;
+
+                            // Map IL offset to source location via PDB
+                            var location = _sourceMapper?.GetSourceLocation((int)functionToken, (int)ilOffset);
+                            if (location.HasValue)
+                            {
+                                sourceFile = location.Value.file;
+                                sourceLine = location.Value.line;
+                                sourceColumn = location.Value.column;
+                                frameName = Path.GetFileNameWithoutExtension(sourceFile) ?? frameName;
+                            }
+
+                            int frameId = _nextFrameId++;
+                            var frameDict = new Dictionary<string, object>
+                            {
+                                ["id"] = frameId,
+                                ["name"] = frameName,
+                                ["line"] = sourceLine,
+                                ["column"] = sourceColumn
+                            };
+
+                            if (sourceFile != null)
+                            {
+                                frameDict["source"] = new Dictionary<string, object>
+                                {
+                                    ["path"] = sourceFile,
+                                    ["name"] = Path.GetFileName(sourceFile)
+                                };
+                            }
+
+                            stackFrames.Add(frameDict);
+                            Marshal.Release(framePtr);
                         }
+                    }
+                    finally
+                    {
+                        Marshal.Release(threadPtr);
                     }
                 }
             }
@@ -577,7 +599,7 @@ namespace BasicLang.Debugger
         private DAPResponse HandleContinue(DAPMessage request)
         {
             ClearDebugState();
-            _process?.Continue();
+            RawContinueProcess();
 
             var response = CreateResponse(request, true);
             response.Body = new Dictionary<string, object>
@@ -596,20 +618,22 @@ namespace BasicLang.Debugger
 
             try
             {
-                if (_process?.Threads.ContainsKey(threadId) == true)
+                // Use ICorDebugStepper for step over (skips P/Invoke automatically)
+                var thread = GetFirstThread();
+                if (thread != null)
                 {
-                    var thread = _process.Threads[threadId];
-                    var stepper = _process.CreateStepper(thread);
-                    if (stepper != null)
-                    {
-                        stepper.Step(false); // false = step over (don't step into calls)
-                        _process.Continue();
-                    }
+                    RawCreateStepperAndStep(thread, stepInto: false);
+                    RawContinueProcess();
                 }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"StepOver error: {ex.Message}");
+                Console.Error.WriteLine($"[DAP] StepOver error: {ex.Message}");
+                _ = SendEventAsync("output", new Dictionary<string, object>
+                {
+                    ["category"] = "stderr",
+                    ["output"] = $"Step Over failed: {ex.Message}\n"
+                });
             }
 
             return CreateResponse(request, true);
@@ -619,25 +643,23 @@ namespace BasicLang.Debugger
         {
             ClearDebugState();
 
-            var args = request.Arguments;
-            int threadId = args.TryGetProperty("threadId", out var tidProp) ? tidProp.GetInt32() : 0;
-
             try
             {
-                if (_process?.Threads.ContainsKey(threadId) == true)
+                var thread = GetFirstThread();
+                if (thread != null)
                 {
-                    var thread = _process.Threads[threadId];
-                    var stepper = _process.CreateStepper(thread);
-                    if (stepper != null)
-                    {
-                        stepper.Step(true); // true = step into calls
-                        _process.Continue();
-                    }
+                    RawCreateStepperAndStep(thread, stepInto: true);
+                    RawContinueProcess();
                 }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"StepIn error: {ex.Message}");
+                Console.Error.WriteLine($"[DAP] StepIn error: {ex.Message}");
+                _ = SendEventAsync("output", new Dictionary<string, object>
+                {
+                    ["category"] = "stderr",
+                    ["output"] = $"Step In failed: {ex.Message}\n"
+                });
             }
 
             return CreateResponse(request, true);
@@ -655,17 +677,13 @@ namespace BasicLang.Debugger
                 if (_process?.Threads.ContainsKey(threadId) == true)
                 {
                     var thread = _process.Threads[threadId];
-                    var stepper = _process.CreateStepper(thread);
-                    if (stepper != null)
-                    {
-                        stepper.StepOut();
-                        _process.Continue();
-                    }
+                    RawCreateStepperAndStepOut(thread);
+                    RawContinueProcess();
                 }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"StepOut error: {ex.Message}");
+                Console.Error.WriteLine($"[DAP] StepOut error: {ex.Message}");
             }
 
             return CreateResponse(request, true);
@@ -786,10 +804,20 @@ namespace BasicLang.Debugger
         {
             try
             {
+                int dapThreadId = MapToDapThreadId(e.ThreadId);
+                string reason = "breakpoint";
+
+                // Check if this is a temporary step breakpoint
+                if (_isStepBreakpoint)
+                {
+                    reason = "step";
+                    RemoveTempStepBreakpoint();
+                }
+
                 await SendEventAsync("stopped", new Dictionary<string, object>
                 {
-                    ["reason"] = "breakpoint",
-                    ["threadId"] = e.ThreadId,
+                    ["reason"] = reason,
+                    ["threadId"] = dapThreadId,
                     ["allThreadsStopped"] = true
                 });
             }
@@ -803,10 +831,12 @@ namespace BasicLang.Debugger
         {
             try
             {
+                int dapThreadId = MapToDapThreadId(e.ThreadId);
+                Console.Error.WriteLine($"[DAP] OnStepCompleted: osThreadId={e.ThreadId}, dapThreadId={dapThreadId}");
                 await SendEventAsync("stopped", new Dictionary<string, object>
                 {
                     ["reason"] = "step",
-                    ["threadId"] = e.ThreadId,
+                    ["threadId"] = dapThreadId,
                     ["allThreadsStopped"] = true
                 });
             }
@@ -867,8 +897,15 @@ namespace BasicLang.Debugger
                     }
                 }
 
-                // Try to bind any pending breakpoints now that a module is loaded
-                TryBindPendingBreakpoints(e.Module);
+                // Only try to bind breakpoints on user modules (skip system assemblies)
+                bool isSystemModule = e.ModuleName.StartsWith("System.") ||
+                    e.ModuleName == "mscorlib.dll" ||
+                    e.ModuleName == "netstandard.dll";
+                if (!isSystemModule)
+                {
+                    Console.Error.WriteLine($"[DAP] Binding breakpoints on user module: {e.ModuleName}");
+                    TryBindPendingBreakpoints(e.Module);
+                }
 
                 await SendEventAsync("output", new Dictionary<string, object>
                 {
@@ -938,38 +975,74 @@ namespace BasicLang.Debugger
         /// Try to bind a single breakpoint entry to a CLR breakpoint using the loaded module.
         /// Returns true if the breakpoint was successfully bound.
         /// </summary>
-        private bool TryBindBreakpoint(ClrBreakpointEntry entry, int methodToken, int ilOffset)
+        private bool TryBindBreakpoint(ClrBreakpointEntry entry, int methodToken, int ilOffset, ICorDebugModule targetModule)
         {
-            if (_loadedModules.Count == 0)
+            if (targetModule == null)
                 return false;
 
             try
             {
-                // Try each loaded module — the method token should match one of them
-                foreach (var module in _loadedModules.Values)
                 {
-                    int hr = module.GetFunctionFromToken((uint)methodToken, out var function);
-                    if (hr < 0 || function == null)
-                        continue;
+                    var module = targetModule;
+                    // Use raw vtable calls to avoid QI issues with .NET Core COM objects
+                    // ICorDebugModule::GetFunctionFromToken is vtable slot 6 (after 3 IUnknown slots)
+                    var modulePtr = Marshal.GetIUnknownForObject(module);
+                    try
+                    {
+                        // Get vtable
+                        var vtable = Marshal.ReadIntPtr(modulePtr);
+                        // Slot 9 = IUnknown(3) + GetProcess(0) + GetBaseAddress(1) + GetAssembly(2) + GetName(3) + EnableJITDebugging(4) + EnableClassLoadCallbacks(5) + GetFunctionFromToken(6)
+                        var getFunctionSlot = Marshal.ReadIntPtr(vtable, 9 * IntPtr.Size);
 
-                    hr = function.GetILCode(out var code);
-                    if (hr < 0 || code == null)
-                        continue;
+                        // Call GetFunctionFromToken(this, methodDef, out ppFunction)
+                        var getFunctionFromToken = Marshal.GetDelegateForFunctionPointer<GetFunctionFromTokenDelegate>(getFunctionSlot);
+                        int hr = getFunctionFromToken(modulePtr, (uint)methodToken, out var functionPtr);
+                        Console.Error.WriteLine($"[DAP] GetFunctionFromToken(0x{methodToken:X8}): hr=0x{hr:X8}, ptr={functionPtr}");
+                        if (hr < 0 || functionPtr == IntPtr.Zero)
+                            return false;
 
-                    hr = code.CreateBreakpoint((uint)ilOffset, out var clrBreakpoint);
-                    if (hr < 0 || clrBreakpoint == null)
-                        continue;
+                        // ICorDebugFunction::GetILCode is vtable slot 6 (IUnknown(3) + GetModule(0) + GetClass(1) + GetToken(2) + GetILCode(3))
+                        var funcVtable = Marshal.ReadIntPtr(functionPtr);
+                        var getILCodeSlot = Marshal.ReadIntPtr(funcVtable, 6 * IntPtr.Size);
+                        var getILCode = Marshal.GetDelegateForFunctionPointer<GetILCodeDelegate>(getILCodeSlot);
+                        hr = getILCode(functionPtr, out var codePtr);
+                        if (hr < 0 || codePtr == IntPtr.Zero)
+                        {
+                            Marshal.Release(functionPtr);
+                            return false;
+                        }
 
-                    hr = clrBreakpoint.Activate(true);
-                    if (hr < 0)
-                        continue;
+                        // ICorDebugCode::CreateBreakpoint — vtable slot 7 (IUnknown(3) + IsIL + GetFunction + GetAddress + GetSize + CreateBreakpoint)
+                        var codeVtable = Marshal.ReadIntPtr(codePtr);
+                        var createBpSlot = Marshal.ReadIntPtr(codeVtable, 7 * IntPtr.Size);
+                        var createBreakpointFn = Marshal.GetDelegateForFunctionPointer<CreateBreakpointDelegate>(createBpSlot);
+                        hr = createBreakpointFn(codePtr, (uint)ilOffset, out var bpPtr);
+                        Console.Error.WriteLine($"[DAP] CreateBreakpoint(offset={ilOffset}): hr=0x{hr:X8}, ptr={bpPtr}");
+                        Marshal.Release(codePtr);
+                        Marshal.Release(functionPtr);
+                        if (hr < 0 || bpPtr == IntPtr.Zero)
+                            return false;
 
-                    // Successfully bound
-                    int actualLine = _sourceMapper?.FindNearestExecutableLine(entry.FilePath, entry.RequestedLine)
-                        ?? entry.RequestedLine;
-                    _breakpointManager.MarkBound(entry.Id, actualLine, clrBreakpoint);
-                    _breakpointManager.MarkVerified(entry.Id);
-                    return true;
+                        // ICorDebugBreakpoint::Activate — vtable slot 3 (IUnknown(3) + Activate(0))
+                        var bpVtable = Marshal.ReadIntPtr(bpPtr);
+                        var activateSlot = Marshal.ReadIntPtr(bpVtable, 3 * IntPtr.Size);
+                        var activate = Marshal.GetDelegateForFunctionPointer<ActivateBreakpointDelegate>(activateSlot);
+                        hr = activate(bpPtr, 1); // 1 = true
+                        Console.Error.WriteLine($"[DAP] Activate: hr=0x{hr:X8}");
+                        if (hr < 0)
+                            return false;
+
+                        // Successfully bound!
+                        int actualLine = _sourceMapper?.FindNearestExecutableLine(entry.FilePath, entry.RequestedLine)
+                            ?? entry.RequestedLine;
+                        _breakpointManager.MarkBound(entry.Id, actualLine, null);
+                        _breakpointManager.MarkVerified(entry.Id);
+                        return true;
+                    }
+                    finally
+                    {
+                        Marshal.Release(modulePtr);
+                    }
                 }
             }
             catch (Exception ex)
@@ -992,7 +1065,7 @@ namespace BasicLang.Debugger
                 var ilInfo = _sourceMapper?.GetILOffsetForLine(entry.FilePath, entry.RequestedLine);
                 if (ilInfo.HasValue)
                 {
-                    if (TryBindBreakpoint(entry, ilInfo.Value.methodToken, ilInfo.Value.ilOffset))
+                    if (TryBindBreakpoint(entry, ilInfo.Value.methodToken, ilInfo.Value.ilOffset, module))
                     {
                         // Send breakpoint changed event to update IDE
                         _ = Task.Run(async () =>
@@ -1016,6 +1089,21 @@ namespace BasicLang.Debugger
         // =====================================================================
         // Helpers
         // =====================================================================
+
+        /// <summary>
+        /// Map OS thread ID to DAP thread ID. We always use 1 for the main thread.
+        /// </summary>
+        private int MapToDapThreadId(int osThreadId) => 1;
+
+        /// <summary>
+        /// Get the first available ICorDebugThread (for stepping/stack trace when threadId doesn't match)
+        /// </summary>
+        private ICorDebugThread GetFirstThread()
+        {
+            if (_process?.Threads.Count > 0)
+                return _process.Threads.Values.First();
+            return null;
+        }
 
         private void ClearDebugState()
         {
@@ -1095,5 +1183,303 @@ namespace BasicLang.Debugger
             public int FrameId { get; set; }
             public ScopeKind Kind { get; set; }
         }
+
+        // =================================================================
+        // Step via temporary breakpoint
+        // =================================================================
+
+        private IntPtr _tempStepBreakpoint = IntPtr.Zero;
+        private bool _isStepBreakpoint; // true if next breakpoint hit is from a step
+
+        /// <summary>
+        /// Step to the next source line by setting a temporary breakpoint.
+        /// Works across P/Invoke boundaries unlike ICorDebugStepper.
+        /// </summary>
+        private void StepToNextLineViaBreakpoint()
+        {
+            var thread = GetFirstThread();
+            if (thread == null)
+            {
+                Console.Error.WriteLine("[DAP] Step: no thread available");
+                RawContinueProcess();
+                return;
+            }
+
+            // Get current frame's function token and IL offset
+            var threadPtr = Marshal.GetIUnknownForObject(thread);
+            try
+            {
+                var vtable = Marshal.ReadIntPtr(threadPtr);
+                // GetActiveFrame is slot 15 (IUnknown(3) + 12)
+                var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                int hr = getActiveFrame(threadPtr, out var framePtr);
+                if (hr < 0 || framePtr == IntPtr.Zero)
+                {
+                    Console.Error.WriteLine("[DAP] Step: no active frame");
+                    RawContinueProcess();
+                    return;
+                }
+
+                try
+                {
+                    // GetFunctionToken is on ICorDebugFrame (slot 6) — works on the base frame pointer
+                    var frameVtable = Marshal.ReadIntPtr(framePtr);
+                    var getFnTokenSlot = Marshal.ReadIntPtr(frameVtable, 6 * IntPtr.Size);
+                    var getFnToken = Marshal.GetDelegateForFunctionPointer<GetFunctionTokenDelegate>(getFnTokenSlot);
+                    getFnToken(framePtr, out uint functionToken);
+
+                    // GetIP is on ICorDebugILFrame — MUST QueryInterface for the ILFrame vtable
+                    Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                    int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                    uint currentIL = 0;
+                    if (qiHr >= 0 && ilFramePtr != IntPtr.Zero)
+                    {
+                        var ilFrameVtable = Marshal.ReadIntPtr(ilFramePtr);
+                        var getIPSlot = Marshal.ReadIntPtr(ilFrameVtable, 11 * IntPtr.Size);
+                        var getIP = Marshal.GetDelegateForFunctionPointer<GetIPDelegate>(getIPSlot);
+                        getIP(ilFramePtr, out currentIL, out _);
+                        Marshal.Release(ilFramePtr);
+                    }
+                    Console.Error.WriteLine($"[DAP] Step frame: token=0x{functionToken:X8}, IL={currentIL}, QI={qiHr:X8}");
+
+                    // Find current source line
+                    var currentLoc = _sourceMapper?.GetSourceLocation((int)functionToken, (int)currentIL);
+                    if (currentLoc == null)
+                    {
+                        Console.Error.WriteLine("[DAP] Step: can't map current IL to source");
+                        RawContinueProcess();
+                        return;
+                    }
+
+                    // Find next executable line after current
+                    var nextLine = _sourceMapper.GetNextExecutableLine(
+                        currentLoc.Value.file, currentLoc.Value.line, (int)functionToken);
+
+                    if (nextLine == null)
+                    {
+                        Console.Error.WriteLine("[DAP] Step: no next line found (end of method), continuing");
+                        RawContinueProcess();
+                        return;
+                    }
+
+                    Console.Error.WriteLine($"[DAP] Step: current={currentLoc.Value.file}:{currentLoc.Value.line}, next=line {nextLine.Value.line} IL={nextLine.Value.ilOffset}");
+
+                    // Remove previous temp breakpoint if any
+                    RemoveTempStepBreakpoint();
+
+                    // Set temporary breakpoint on next line using the user module
+                    foreach (var module in _loadedModules.Values)
+                    {
+                        var modulePtr = Marshal.GetIUnknownForObject(module);
+                        try
+                        {
+                            var modVtable = Marshal.ReadIntPtr(modulePtr);
+                            var getFuncSlot = Marshal.ReadIntPtr(modVtable, 9 * IntPtr.Size);
+                            var getFunc = Marshal.GetDelegateForFunctionPointer<GetFunctionFromTokenDelegate>(getFuncSlot);
+                            hr = getFunc(modulePtr, (uint)nextLine.Value.methodToken, out var funcPtr);
+                            if (hr < 0 || funcPtr == IntPtr.Zero) continue;
+
+                            var funcVtable2 = Marshal.ReadIntPtr(funcPtr);
+                            var getCodeSlot = Marshal.ReadIntPtr(funcVtable2, 6 * IntPtr.Size);
+                            var getCode = Marshal.GetDelegateForFunctionPointer<GetILCodeDelegate>(getCodeSlot);
+                            hr = getCode(funcPtr, out var codePtr);
+                            Marshal.Release(funcPtr);
+                            if (hr < 0 || codePtr == IntPtr.Zero) continue;
+
+                            var codeVtable2 = Marshal.ReadIntPtr(codePtr);
+                            var createBpSlot = Marshal.ReadIntPtr(codeVtable2, 7 * IntPtr.Size);
+                            var createBp = Marshal.GetDelegateForFunctionPointer<CreateBreakpointDelegate>(createBpSlot);
+                            hr = createBp(codePtr, (uint)nextLine.Value.ilOffset, out var bpPtr);
+                            Marshal.Release(codePtr);
+                            if (hr < 0 || bpPtr == IntPtr.Zero) continue;
+
+                            var bpVtable2 = Marshal.ReadIntPtr(bpPtr);
+                            var activateSlot = Marshal.ReadIntPtr(bpVtable2, 3 * IntPtr.Size);
+                            var activate = Marshal.GetDelegateForFunctionPointer<ActivateBreakpointDelegate>(activateSlot);
+                            hr = activate(bpPtr, 1);
+                            if (hr >= 0)
+                            {
+                                _tempStepBreakpoint = bpPtr;
+                                _isStepBreakpoint = true;
+                                Console.Error.WriteLine($"[DAP] Step: temp breakpoint set at line {nextLine.Value.line}");
+                                RawContinueProcess();
+                                return;
+                            }
+                            Marshal.Release(bpPtr);
+                        }
+                        finally
+                        {
+                            Marshal.Release(modulePtr);
+                        }
+                    }
+
+                    // Fallback: just continue
+                    Console.Error.WriteLine("[DAP] Step: failed to set temp breakpoint, continuing");
+                    RawContinueProcess();
+                }
+                finally
+                {
+                    Marshal.Release(framePtr);
+                }
+            }
+            finally
+            {
+                Marshal.Release(threadPtr);
+            }
+        }
+
+        /// <summary>
+        /// Remove the temporary step breakpoint.
+        /// </summary>
+        private void RemoveTempStepBreakpoint()
+        {
+            if (_tempStepBreakpoint != IntPtr.Zero)
+            {
+                try
+                {
+                    // Deactivate: ICorDebugBreakpoint::Activate(false) at slot 3
+                    var bpVtable = Marshal.ReadIntPtr(_tempStepBreakpoint);
+                    var deactivateSlot = Marshal.ReadIntPtr(bpVtable, 3 * IntPtr.Size);
+                    var deactivate = Marshal.GetDelegateForFunctionPointer<ActivateBreakpointDelegate>(deactivateSlot);
+                    deactivate(_tempStepBreakpoint, 0); // 0 = false = deactivate
+                    Marshal.Release(_tempStepBreakpoint);
+                }
+                catch { }
+                _tempStepBreakpoint = IntPtr.Zero;
+                _isStepBreakpoint = false;
+            }
+        }
+
+        // =================================================================
+        // Raw vtable helpers — bypass QI issues with .NET Core COM objects
+        // =================================================================
+
+        /// <summary>
+        /// Continue the process using raw vtable call on ICorDebugProcess.
+        /// ICorDebugController::Continue is vtable slot 4 (IUnknown(3) + Stop(0) + Continue(1))
+        /// </summary>
+        private void RawContinueProcess()
+        {
+            if (_process?.CorDebugProcess == null) return;
+            var processPtr = Marshal.GetIUnknownForObject(_process.CorDebugProcess);
+            try
+            {
+                var vtable = Marshal.ReadIntPtr(processPtr);
+                // ICorDebugController: slot 3=Stop, slot 4=Continue
+                var continueSlot = Marshal.ReadIntPtr(vtable, 4 * IntPtr.Size);
+                var continueFn = Marshal.GetDelegateForFunctionPointer<ContinueProcessDelegate>(continueSlot);
+                int hr = continueFn(processPtr, 0); // 0 = fIsOutOfBand = false
+                Console.Error.WriteLine($"[DAP] RawContinue: hr=0x{hr:X8}");
+            }
+            finally
+            {
+                Marshal.Release(processPtr);
+            }
+        }
+
+        /// <summary>
+        /// Create a stepper and step using raw vtable calls.
+        /// ICorDebugThread::CreateStepper is vtable slot 12 (IUnknown(3) + 9 methods)
+        /// ICorDebugStepper::Step is vtable slot 7 (IUnknown(3) + IsActive + Deactivate + SetInterceptMask + SetUnmappedStopMask + Step)
+        /// Wait — let me recount: IUnknown(3) + IsActive(0) + Deactivate(1) + SetInterceptMask(2) + SetUnmappedStopMask(3) + Step(4) = slot 7
+        /// </summary>
+        private void RawCreateStepperAndStep(ICorDebugThread thread, bool stepInto)
+        {
+            var threadPtr = Marshal.GetIUnknownForObject(thread);
+            try
+            {
+                var vtable = Marshal.ReadIntPtr(threadPtr);
+                // ICorDebugThread: GetProcess(0), GetID(1), GetHandle(2), GetAppDomain(3),
+                // SetDebugState(4), GetDebugState(5), CreateStepper(6), EnumerateChains(7),
+                // GetActiveChain(8), CreateEval(9), GetCurrentException(10)
+                // WAIT: I need to check the actual vtable. ICorDebugThread inherits IUnknown directly.
+                // ICorDebugThread vtable (from CorDebugWrappers.cs):
+                // IUnknown(3) + GetProcess(0), GetID(1), GetHandle(2), GetAppDomain(3),
+                // SetDebugState(4), GetDebugState(5), GetUserState(6),
+                // GetCurrentException(7), ClearCurrentException(8), CreateStepper(9)
+                // So CreateStepper is at vtable slot 3+9 = 12
+                var createStepperSlot = Marshal.ReadIntPtr(vtable, 12 * IntPtr.Size);
+                var createStepperFn = Marshal.GetDelegateForFunctionPointer<CreateStepperOnThreadDelegate>(createStepperSlot);
+                int hr = createStepperFn(threadPtr, out var stepperPtr);
+                Console.Error.WriteLine($"[DAP] CreateStepper on thread: hr=0x{hr:X8}, ptr={stepperPtr}");
+                if (hr < 0 || stepperPtr == IntPtr.Zero) return;
+
+                // ICorDebugStepper: IsActive(0), Deactivate(1), SetInterceptMask(2),
+                // SetUnmappedStopMask(3), Step(4), StepRange(5), StepOut(6)
+                // Step is at vtable slot 3+4 = 7
+                var stepperVtable = Marshal.ReadIntPtr(stepperPtr);
+                var stepSlot = Marshal.ReadIntPtr(stepperVtable, 7 * IntPtr.Size);
+                var stepFn = Marshal.GetDelegateForFunctionPointer<StepDelegate>(stepSlot);
+                hr = stepFn(stepperPtr, stepInto ? 1 : 0);
+                Console.Error.WriteLine($"[DAP] Stepper.Step(into={stepInto}): hr=0x{hr:X8}");
+            }
+            finally
+            {
+                Marshal.Release(threadPtr);
+            }
+        }
+
+        /// <summary>
+        /// Create a stepper and step out using raw vtable calls.
+        /// ICorDebugStepper::StepOut is vtable slot 9 (IUnknown(3) + 6 methods)
+        /// </summary>
+        private void RawCreateStepperAndStepOut(ICorDebugThread thread)
+        {
+            var threadPtr = Marshal.GetIUnknownForObject(thread);
+            try
+            {
+                var vtable = Marshal.ReadIntPtr(threadPtr);
+                var createStepperSlot = Marshal.ReadIntPtr(vtable, 12 * IntPtr.Size);
+                var createStepperFn = Marshal.GetDelegateForFunctionPointer<CreateStepperOnThreadDelegate>(createStepperSlot);
+                int hr = createStepperFn(threadPtr, out var stepperPtr);
+                if (hr < 0 || stepperPtr == IntPtr.Zero) return;
+
+                // StepOut is at vtable slot 3+6 = 9
+                var stepperVtable = Marshal.ReadIntPtr(stepperPtr);
+                var stepOutSlot = Marshal.ReadIntPtr(stepperVtable, 9 * IntPtr.Size);
+                var stepOutFn = Marshal.GetDelegateForFunctionPointer<StepOutDelegate>(stepOutSlot);
+                hr = stepOutFn(stepperPtr);
+                Console.Error.WriteLine($"[DAP] Stepper.StepOut: hr=0x{hr:X8}");
+            }
+            finally
+            {
+                Marshal.Release(threadPtr);
+            }
+        }
+
+        // Raw vtable call delegates for ICorDebug COM interop (bypasses QI issues on .NET Core)
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetFunctionFromTokenDelegate(IntPtr self, uint methodDef, out IntPtr ppFunction);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetILCodeDelegate(IntPtr self, out IntPtr ppCode);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int CreateBreakpointDelegate(IntPtr self, uint offset, out IntPtr ppBreakpoint);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int ActivateBreakpointDelegate(IntPtr self, int bActive);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int ContinueProcessDelegate(IntPtr self, int fIsOutOfBand);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int CreateStepperOnThreadDelegate(IntPtr self, out IntPtr ppStepper);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int StepDelegate(IntPtr self, int bStepIn);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int StepOutDelegate(IntPtr self);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetActiveFrameDelegate(IntPtr self, out IntPtr ppFrame);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetFunctionTokenDelegate(IntPtr self, out uint pToken);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetIPDelegate(IntPtr self, out uint pnOffset, out int pMappingResult);
     }
 }

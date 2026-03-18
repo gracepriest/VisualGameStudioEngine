@@ -120,6 +120,42 @@ public sealed class SourceMapper : IDisposable
     }
 
     /// <summary>
+    /// Get the next executable line AFTER the given line in the same method.
+    /// Returns null if no next line exists (end of method).
+    /// </summary>
+    public (int methodToken, int ilOffset, int line)? GetNextExecutableLine(string basFilePath, int currentLine, int currentMethodToken)
+    {
+        if (!_sequencePointsByMethod.TryGetValue(currentMethodToken, out var sps))
+            return null;
+
+        // Find all lines in this method after the current line
+        var nextEntry = sps
+            .Where(sp => sp.StartLine > currentLine &&
+                   string.Equals(sp.FilePath, basFilePath, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(sp => sp.StartLine)
+            .FirstOrDefault();
+
+        if (nextEntry == null) return null;
+
+        return (nextEntry.MethodToken, nextEntry.ILOffset, nextEntry.StartLine);
+    }
+
+    /// <summary>
+    /// Get all executable lines for a method (for step-over via temporary breakpoints)
+    /// </summary>
+    public IReadOnlyList<(int line, int ilOffset)> GetMethodLines(int methodToken)
+    {
+        if (!_sequencePointsByMethod.TryGetValue(methodToken, out var sps))
+            return Array.Empty<(int, int)>();
+
+        return sps
+            .OrderBy(sp => sp.ILOffset)
+            .Select(sp => (sp.StartLine, sp.ILOffset))
+            .Distinct()
+            .ToList();
+    }
+
+    /// <summary>
     /// Returns all source file paths referenced in the loaded PDB.
     /// </summary>
     public IReadOnlyList<string> GetSourceDocuments()

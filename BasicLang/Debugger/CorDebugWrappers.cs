@@ -231,7 +231,7 @@ namespace BasicLang.Debugger
     // =========================================================================
 
     [ComImport]
-    [Guid("3D6F5F63-7538-11D3-8D5B-00104B35E7EF")]
+    [Guid("3D6F5F64-7538-11D3-8D5B-00104B35E7EF")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface ICorDebugProcess
     {
@@ -381,7 +381,7 @@ namespace BasicLang.Debugger
     // =========================================================================
 
     [ComImport]
-    [Guid("3D6F5F64-7538-11D3-8D5B-00104B35E7EF")]
+    [Guid("3D6F5F63-7538-11D3-8D5B-00104B35E7EF")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface ICorDebugAppDomain
     {
@@ -609,7 +609,7 @@ namespace BasicLang.Debugger
         [PreserveSig]
         int GetFunctionFromToken(
             uint methodDef,
-            [MarshalAs(UnmanagedType.Interface)] out ICorDebugFunction ppFunction);
+            [MarshalAs(UnmanagedType.IUnknown)] out object ppFunction);
 
         // vtable slot 7
         [PreserveSig]
@@ -1262,7 +1262,7 @@ namespace BasicLang.Debugger
     // =========================================================================
 
     [ComImport]
-    [Guid("CC7BCAE7-8A68-11D2-983C-0000F808342D")]
+    [Guid("CC7BCAEC-8A68-11D2-983C-0000F808342D")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface ICorDebugStepper
     {
@@ -1362,11 +1362,12 @@ namespace BasicLang.Debugger
             [MarshalAs(UnmanagedType.Interface)] ICorDebugBreakpoint pBreakpoint);
 
         // vtable slot 1
+        // NOTE: pStepper is IntPtr to avoid QI failure during COM callback marshaling
         [PreserveSig]
         int StepComplete(
             [MarshalAs(UnmanagedType.Interface)] ICorDebugAppDomain pAppDomain,
             [MarshalAs(UnmanagedType.Interface)] ICorDebugThread pThread,
-            [MarshalAs(UnmanagedType.Interface)] ICorDebugStepper pStepper,
+            IntPtr pStepper,
             CorDebugStepReason reason);
 
         // vtable slot 2

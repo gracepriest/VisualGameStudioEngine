@@ -90,6 +90,11 @@ namespace BasicLang.Debugger
         public bool IsAttached => _attached;
 
         /// <summary>
+        /// Last error message if launch/attach failed.
+        /// </summary>
+        public string LastError { get; private set; }
+
+        /// <summary>
         /// Snapshot of tracked managed thread IDs to ICorDebugThread instances.
         /// </summary>
         public IReadOnlyDictionary<int, ICorDebugThread> Threads => _threads;
@@ -105,7 +110,10 @@ namespace BasicLang.Debugger
         {
             // 1. Verify dbgshim.dll is available
             if (!DbgShim.TryLoad())
+            {
+                LastError = "dbgshim.dll not found. Install Visual Studio 2022 or copy dbgshim.dll next to BasicLang.exe.";
                 return false;
+            }
 
             // 2. Launch the process normally
             var startInfo = new ProcessStartInfo
@@ -137,7 +145,10 @@ namespace BasicLang.Debugger
             var hr = DbgShim.RegisterForRuntimeStartup(
                 _process.Id, _startupCallback, IntPtr.Zero, out _runtimeStartupToken);
             if (hr < 0)
+            {
+                LastError = $"RegisterForRuntimeStartup failed with HRESULT 0x{hr:X8}. dbgshim loaded from: {DbgShim.GetLoadedPath()}";
                 return false;
+            }
 
             // 4. Wait for the CLR to load and our callback to fire
             return await Task.Run(() =>
@@ -164,8 +175,9 @@ namespace BasicLang.Debugger
 
                 _attached = true;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                LastError = $"ICorDebug attach failed: {ex.Message}";
                 // Attach failed — leave _attached = false
             }
             finally
@@ -338,28 +350,104 @@ namespace BasicLang.Debugger
                 _owner = owner;
             }
 
-            // Helper: get thread ID from an ICorDebugThread
+            // Helper: get thread ID using raw vtable call (bypasses QI)
+            // ICorDebugThread::GetID is slot 4 (IUnknown(3) + GetProcess(0) + GetID(1))
+            [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+            private delegate int RawGetIDDelegate(IntPtr self, out uint pdwThreadId);
+
+            // ICorDebugAppDomain::GetProcess is slot 3 (IUnknown(3) + GetProcess(0))
+            // But ICorDebugAppDomain extends ICorDebugController which has:
+            // Stop(0), Continue(1), IsRunning(2), HasQueuedCallbacks(3), EnumerateThreads(4), GetID(5)
+            // Then ICorDebugAppDomain adds: GetProcess(6)...
+            // Actually ICorDebugAppDomain inherits ICorDebugController methods first.
+            // ICorDebugController: Stop=0, Continue=1, IsRunning=2, HasQueuedCallbacks=3, EnumerateThreads=4, GetID=5
+            // ICorDebugAppDomain: GetProcess=6, ...
+            // So GetProcess is slot 3+6 = 9
+            [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+            private delegate int RawGetProcessDelegate(IntPtr self, out IntPtr ppProcess);
+
+            // ICorDebugController::Continue is slot 3+1 = 4
+            [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+            private delegate int RawContinueDelegate(IntPtr self, int fIsOutOfBand);
+
+            // ICorDebugController::Stop is slot 3+0 = 3
+            [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+            private delegate int RawStopDelegate(IntPtr self, uint dwTimeoutIgnored);
+
             private static int GetThreadId(ICorDebugThread thread)
             {
                 if (thread == null) return 0;
-                thread.GetID(out uint id);
-                return (int)id;
+                try
+                {
+                    var ptr = Marshal.GetIUnknownForObject(thread);
+                    try
+                    {
+                        var vtable = Marshal.ReadIntPtr(ptr);
+                        // ICorDebugThread::GetID is slot 3+1 = 4
+                        var getIdSlot = Marshal.ReadIntPtr(vtable, 4 * IntPtr.Size);
+                        var getId = Marshal.GetDelegateForFunctionPointer<RawGetIDDelegate>(getIdSlot);
+                        getId(ptr, out uint id);
+                        return (int)id;
+                    }
+                    finally { Marshal.Release(ptr); }
+                }
+                catch { return 0; }
             }
 
-            // Helper: get process from app domain and continue
             private static void ContinueFromAppDomain(ICorDebugAppDomain pAppDomain)
             {
                 if (pAppDomain == null) return;
-                pAppDomain.GetProcess(out var process);
-                process?.Continue(false);
+                try
+                {
+                    var adPtr = Marshal.GetIUnknownForObject(pAppDomain);
+                    try
+                    {
+                        var vtable = Marshal.ReadIntPtr(adPtr);
+                        // ICorDebugAppDomain: Continue is inherited from ICorDebugController at slot 3+1=4
+                        var continueSlot = Marshal.ReadIntPtr(vtable, 4 * IntPtr.Size);
+                        var continueFn = Marshal.GetDelegateForFunctionPointer<RawContinueDelegate>(continueSlot);
+                        continueFn(adPtr, 0);
+                    }
+                    finally { Marshal.Release(adPtr); }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[DAP] ContinueFromAppDomain error: {ex.Message}");
+                }
             }
 
-            // Helper: get process from app domain
-            private static ICorDebugProcess GetProcess(ICorDebugAppDomain pAppDomain)
+            private static void StopProcess(ICorDebugAppDomain pAppDomain)
             {
-                if (pAppDomain == null) return null;
-                pAppDomain.GetProcess(out var process);
-                return process;
+                if (pAppDomain == null) return;
+                try
+                {
+                    var adPtr = Marshal.GetIUnknownForObject(pAppDomain);
+                    try
+                    {
+                        var vtable = Marshal.ReadIntPtr(adPtr);
+                        // ICorDebugAppDomain::GetProcess — slot 3+6=9 (after ICorDebugController's 6 methods + IUnknown's 3)
+                        // Wait: ICorDebugController has Stop,Continue,IsRunning,HasQueuedCallbacks,EnumerateThreads,GetID = 6 methods
+                        // ICorDebugAppDomain adds GetProcess as first method = index 6
+                        // So GetProcess = slot 3+6 = 9
+                        var getProcessSlot = Marshal.ReadIntPtr(vtable, 9 * IntPtr.Size);
+                        var getProcess = Marshal.GetDelegateForFunctionPointer<RawGetProcessDelegate>(getProcessSlot);
+                        int hr = getProcess(adPtr, out var processPtr);
+                        if (hr >= 0 && processPtr != IntPtr.Zero)
+                        {
+                            var pVtable = Marshal.ReadIntPtr(processPtr);
+                            // ICorDebugProcess inherits ICorDebugController: Stop = slot 3+0 = 3
+                            var stopSlot = Marshal.ReadIntPtr(pVtable, 3 * IntPtr.Size);
+                            var stopFn = Marshal.GetDelegateForFunctionPointer<RawStopDelegate>(stopSlot);
+                            stopFn(processPtr, 0);
+                            Marshal.Release(processPtr);
+                        }
+                    }
+                    finally { Marshal.Release(adPtr); }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[DAP] StopProcess error: {ex.Message}");
+                }
             }
 
             // Helper: get module name from ICorDebugModule
@@ -378,33 +466,50 @@ namespace BasicLang.Debugger
 
             public int Breakpoint(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugBreakpoint pBreakpoint)
             {
-                var process = GetProcess(pAppDomain);
-                process?.Stop(0);
-
-                int threadId = GetThreadId(pThread);
-                _owner.RaiseBreakpointHit(threadId, pBreakpoint);
+                try
+                {
+                    StopProcess(pAppDomain);
+                    int threadId = GetThreadId(pThread);
+                    Console.Error.WriteLine($"[DAP] Breakpoint callback: threadId={threadId}");
+                    _owner.RaiseBreakpointHit(threadId, pBreakpoint);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[DAP] Breakpoint callback error: {ex.Message}");
+                }
                 // Do NOT continue — the adapter will call Continue() when ready
-                return 0; // S_OK
+                return 0;
             }
 
-            public int StepComplete(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugStepper pStepper, CorDebugStepReason reason)
+            public int StepComplete(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, IntPtr pStepper, CorDebugStepReason reason)
             {
-                var process = GetProcess(pAppDomain);
-                process?.Stop(0);
-
-                int threadId = GetThreadId(pThread);
-                _owner.RaiseStepCompleted(threadId);
+                try
+                {
+                    Console.Error.WriteLine($"[DAP] StepComplete callback fired! reason={reason}");
+                    StopProcess(pAppDomain);
+                    int threadId = GetThreadId(pThread);
+                    _owner.RaiseStepCompleted(threadId);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[DAP] StepComplete callback error: {ex.Message}");
+                }
                 // Do NOT continue — the adapter will call Continue() when ready
                 return 0;
             }
 
             public int Break(ICorDebugAppDomain pAppDomain, ICorDebugThread thread)
             {
-                var process = GetProcess(pAppDomain);
-                process?.Stop(0);
-                // Treat debugger break like a step complete
-                int threadId = GetThreadId(thread);
-                _owner.RaiseStepCompleted(threadId);
+                try
+                {
+                    StopProcess(pAppDomain);
+                    int threadId = GetThreadId(thread);
+                    _owner.RaiseStepCompleted(threadId);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[DAP] Break callback error: {ex.Message}");
+                }
                 return 0;
             }
 
@@ -412,11 +517,16 @@ namespace BasicLang.Debugger
             {
                 if (unhandled)
                 {
-                    var process = GetProcess(pAppDomain);
-                    process?.Stop(0);
-
-                    int threadId = GetThreadId(pThread);
-                    _owner.RaiseExceptionThrown(threadId, true, "Unhandled exception");
+                    try
+                    {
+                        StopProcess(pAppDomain);
+                        int threadId = GetThreadId(pThread);
+                        _owner.RaiseExceptionThrown(threadId, true, "Unhandled exception");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[DAP] Exception callback error: {ex.Message}");
+                    }
                     // Do NOT continue — the adapter will decide
                 }
                 else
@@ -612,11 +722,16 @@ namespace BasicLang.Debugger
             {
                 if (dwEventType == CorDebugExceptionCallbackType.DEBUG_EXCEPTION_UNHANDLED)
                 {
-                    var process = GetProcess(pAppDomain);
-                    process?.Stop(0);
-
-                    int threadId = GetThreadId(pThread);
-                    _owner.RaiseExceptionThrown(threadId, true, "Unhandled exception (callback2)");
+                    try
+                    {
+                        StopProcess(pAppDomain);
+                        int threadId = GetThreadId(pThread);
+                        _owner.RaiseExceptionThrown(threadId, true, "Unhandled exception (callback2)");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[DAP] Exception2 callback error: {ex.Message}");
+                    }
                     // Do NOT continue — let the adapter decide
                 }
                 else

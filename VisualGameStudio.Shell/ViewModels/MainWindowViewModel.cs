@@ -1100,6 +1100,14 @@ public partial class MainWindowViewModel : ViewModelBase
         // Marshal to UI thread
         await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
         {
+            // Bring IDE window to front when debugger stops
+            if (App.MainWindow != null)
+            {
+                App.MainWindow.Activate();
+                App.MainWindow.Topmost = true;
+                App.MainWindow.Topmost = false;
+            }
+
             StatusText = e.Reason switch
             {
                 StopReason.Breakpoint => "Breakpoint hit",
@@ -1307,7 +1315,12 @@ public partial class MainWindowViewModel : ViewModelBase
         };
 
         // Collect all breakpoints to send to the debug adapter
+        OutputPanel.AppendOutput($"[Debug] Breakpoints.Breakpoints.Count = {Breakpoints.Breakpoints.Count}\n");
         var breakpoints = Breakpoints.GetAllBreakpoints();
+        var totalBps = breakpoints.Sum(kvp => kvp.Value.Count());
+        OutputPanel.AppendOutput($"[Debug] Breakpoints: {totalBps} across {breakpoints.Count} file(s)\n");
+        foreach (var kvp in breakpoints)
+            OutputPanel.AppendOutput($"[Debug]   {kvp.Key}: lines {string.Join(", ", kvp.Value.Select(b => b.Line))}\n");
 
         var success = await _debugService.StartDebuggingAsync(config, breakpoints);
         if (!success)
