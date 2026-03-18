@@ -27,6 +27,7 @@ namespace BasicLang.Debugger
     {
         public int ThreadId { get; set; }
         public bool IsUnhandled { get; set; }
+        public string ExceptionType { get; set; }
         public string ExceptionMessage { get; set; }
     }
 
@@ -331,8 +332,8 @@ namespace BasicLang.Debugger
         internal void RaiseStepCompleted(int threadId) =>
             StepCompleted?.Invoke(this, new StepCompletedEventArgs { ThreadId = threadId });
 
-        internal void RaiseExceptionThrown(int threadId, bool unhandled, string message) =>
-            ExceptionThrown?.Invoke(this, new ExceptionThrownEventArgs { ThreadId = threadId, IsUnhandled = unhandled, ExceptionMessage = message });
+        internal void RaiseExceptionThrown(int threadId, bool unhandled, string exceptionType, string message) =>
+            ExceptionThrown?.Invoke(this, new ExceptionThrownEventArgs { ThreadId = threadId, IsUnhandled = unhandled, ExceptionType = exceptionType, ExceptionMessage = message });
 
         internal void RaiseModuleLoaded(string name, string path, ICorDebugModule module) =>
             ModuleLoaded?.Invoke(this, new ModuleLoadedEventArgs { ModuleName = name, ModulePath = path, Module = module });
@@ -476,6 +477,206 @@ namespace BasicLang.Debugger
             }
 
             // =================================================================
+            // Exception info extraction
+            // =================================================================
+
+            /// <summary>
+            /// Extract exception type name and message from the current exception on the thread.
+            /// Uses ICorDebugThread.GetCurrentException() to get the exception object,
+            /// then reads the type via IMetaDataImport and the _message field via field enumeration.
+            /// Returns (typeName, message) — either may be null/empty on failure.
+            /// </summary>
+            private static (string typeName, string message) ExtractExceptionInfo(ICorDebugThread pThread)
+            {
+                string typeName = "Exception";
+                string message = null;
+
+                try
+                {
+                    if (pThread == null)
+                        return (typeName, message);
+
+                    // Get the exception object from the thread
+                    int hr = pThread.GetCurrentException(out ICorDebugValue exValue);
+                    if (hr < 0 || exValue == null)
+                        return (typeName, message);
+
+                    // The exception value is typically a reference — dereference it
+                    ICorDebugValue actualValue = exValue;
+                    if (exValue is ICorDebugReferenceValue refVal)
+                    {
+                        refVal.IsNull(out bool isNull);
+                        if (isNull)
+                            return (typeName, message);
+                        hr = refVal.Dereference(out actualValue);
+                        if (hr < 0 || actualValue == null)
+                            return (typeName, message);
+                    }
+
+                    // Get the object value to access class info and fields
+                    if (actualValue is not ICorDebugObjectValue objVal)
+                        return (typeName, message);
+
+                    // --- Extract type name ---
+                    objVal.GetClass(out ICorDebugClass cls);
+                    if (cls != null)
+                    {
+                        cls.GetModule(out ICorDebugModule module);
+                        cls.GetToken(out uint typeDefToken);
+
+                        if (module != null)
+                        {
+                            Guid imdImportGuid = new Guid("7DAC8207-D3AE-4C75-9B67-92801A497D44");
+                            module.GetMetaDataInterface(ref imdImportGuid, out object mdObj);
+
+                            if (mdObj is IMetaDataImport mdImport)
+                            {
+                                char[] nameBuffer = new char[1024];
+                                hr = mdImport.GetTypeDefProps(
+                                    typeDefToken,
+                                    nameBuffer,
+                                    (uint)nameBuffer.Length,
+                                    out uint nameLen,
+                                    out _,
+                                    out _);
+
+                                if (hr >= 0 && nameLen > 0)
+                                {
+                                    typeName = new string(nameBuffer, 0, (int)(nameLen - 1));
+                                }
+
+                                // --- Extract _message field ---
+                                message = ReadExceptionMessageField(mdImport, objVal, cls, typeDefToken);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[DAP] ExtractExceptionInfo error: {ex.Message}");
+                }
+
+                return (typeName, message);
+            }
+
+            /// <summary>
+            /// Read the _message field from an exception object by enumerating fields.
+            /// Walks up the type hierarchy (via extends token) to find the field in base classes.
+            /// </summary>
+            private static string ReadExceptionMessageField(IMetaDataImport mdImport, ICorDebugObjectValue objVal, ICorDebugClass cls, uint typeDefToken)
+            {
+                // Try the current class and its base classes (Exception._message is defined on System.Exception)
+                uint currentTypeDef = typeDefToken;
+
+                for (int depth = 0; depth < 10; depth++) // max 10 levels of inheritance
+                {
+                    IntPtr hEnum = IntPtr.Zero;
+                    try
+                    {
+                        uint[] fieldTokens = new uint[32];
+                        while (true)
+                        {
+                            int hr = mdImport.EnumFields(ref hEnum, currentTypeDef, fieldTokens, (uint)fieldTokens.Length, out uint fetched);
+                            if (hr < 0 || fetched == 0)
+                                break;
+
+                            for (uint i = 0; i < fetched; i++)
+                            {
+                                uint fieldToken = fieldTokens[i];
+                                char[] fieldNameBuf = new char[256];
+                                hr = mdImport.GetFieldProps(
+                                    fieldToken,
+                                    out _,
+                                    fieldNameBuf,
+                                    (uint)fieldNameBuf.Length,
+                                    out uint fieldNameLen,
+                                    out _,
+                                    out _,
+                                    out _,
+                                    out _,
+                                    out _,
+                                    out _);
+
+                                if (hr < 0 || fieldNameLen == 0)
+                                    continue;
+
+                                string fieldName = new string(fieldNameBuf, 0, (int)(fieldNameLen - 1));
+                                if (fieldName == "_message")
+                                {
+                                    try
+                                    {
+                                        objVal.GetFieldValue(cls, fieldToken, out ICorDebugValue fieldValue);
+                                        if (fieldValue == null)
+                                            return null;
+
+                                        // _message is a string reference — dereference and read
+                                        if (fieldValue is ICorDebugReferenceValue msgRef)
+                                        {
+                                            msgRef.IsNull(out bool isNull);
+                                            if (isNull)
+                                                return null;
+                                            msgRef.Dereference(out ICorDebugValue derefMsg);
+                                            if (derefMsg is ICorDebugStringValue strVal)
+                                            {
+                                                strVal.GetLength(out uint strLen);
+                                                char[] strBuf = new char[strLen + 1];
+                                                strVal.GetString((uint)strBuf.Length, out _, strBuf);
+                                                return new string(strBuf, 0, (int)strLen);
+                                            }
+                                        }
+                                        else if (fieldValue is ICorDebugStringValue directStr)
+                                        {
+                                            directStr.GetLength(out uint strLen);
+                                            char[] strBuf = new char[strLen + 1];
+                                            directStr.GetString((uint)strBuf.Length, out _, strBuf);
+                                            return new string(strBuf, 0, (int)strLen);
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        // Field read failed — continue searching
+                                    }
+                                }
+                            }
+
+                            if (fetched < (uint)fieldTokens.Length)
+                                break;
+                        }
+                    }
+                    finally
+                    {
+                        if (hEnum != IntPtr.Zero)
+                        {
+                            try { mdImport.CloseEnum(hEnum); } catch { }
+                        }
+                    }
+
+                    // Walk up to the base class
+                    char[] baseNameBuf = new char[1024];
+                    int hr2 = mdImport.GetTypeDefProps(currentTypeDef, baseNameBuf, (uint)baseNameBuf.Length, out _, out _, out uint extendsToken);
+                    if (hr2 < 0 || extendsToken == 0)
+                        break;
+
+                    // extendsToken may be a TypeDef or TypeRef — only follow TypeDefs (0x02xxxxxx)
+                    if ((extendsToken & 0xFF000000) == 0x02000000)
+                    {
+                        currentTypeDef = extendsToken;
+                    }
+                    else
+                    {
+                        // TypeRef to another module — can't follow, stop here
+                        break;
+                    }
+                }
+
+                return null;
+            }
+
+            // IMetaDataImport — needed locally for field name reading in exception extraction.
+            // The full interface is defined in VariableInspector.cs; we reference it via the COM Guid.
+            // We use the same interface but cast the metadata object obtained from GetMetaDataInterface.
+
+            // =================================================================
             // ICorDebugManagedCallback
             // =================================================================
 
@@ -530,25 +731,25 @@ namespace BasicLang.Debugger
 
             public int Exception(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, bool unhandled)
             {
-                if (unhandled)
+                // Callback1 Exception: always raise to the adapter and let it decide
+                // whether to stop (based on exception filters) or continue.
+                try
                 {
-                    try
-                    {
-                        StopProcess(pAppDomain);
-                        int threadId = GetThreadId(pThread);
-                        _owner.RaiseExceptionThrown(threadId, true, "Unhandled exception");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.Error.WriteLine($"[DAP] Exception callback error: {ex.Message}");
-                    }
-                    // Do NOT continue — the adapter will decide
+                    StopProcess(pAppDomain);
+                    int threadId = GetThreadId(pThread);
+                    var (exType, exMsg) = ExtractExceptionInfo(pThread);
+                    string label = unhandled ? "Unhandled" : "First-chance";
+                    string description = !string.IsNullOrEmpty(exMsg)
+                        ? $"{label} exception: {exType}: {exMsg}"
+                        : $"{label} exception: {exType}";
+                    Console.Error.WriteLine($"[DAP] Exception callback: threadId={threadId}, unhandled={unhandled}, type={exType}");
+                    _owner.RaiseExceptionThrown(threadId, unhandled, exType, description);
                 }
-                else
+                catch (Exception ex)
                 {
-                    // First-chance exception — continue
-                    ContinueFromAppDomain(pAppDomain);
+                    Console.Error.WriteLine($"[DAP] Exception callback error: {ex.Message}");
                 }
+                // Do NOT continue — the adapter will decide based on filters
                 return 0;
             }
 
@@ -735,22 +936,38 @@ namespace BasicLang.Debugger
 
             public int Exception(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugFrame pFrame, uint nOffset, CorDebugExceptionCallbackType dwEventType, uint dwFlags)
             {
-                if (dwEventType == CorDebugExceptionCallbackType.DEBUG_EXCEPTION_UNHANDLED)
+                // Callback2 Exception: provides richer exception type classification.
+                // DEBUG_EXCEPTION_FIRST_CHANCE = thrown but may be caught
+                // DEBUG_EXCEPTION_USER_FIRST_CHANCE = first-chance in user code
+                // DEBUG_EXCEPTION_CATCH_HANDLER_FOUND = a catch handler exists
+                // DEBUG_EXCEPTION_UNHANDLED = no catch handler, will crash
+                bool isUnhandled = dwEventType == CorDebugExceptionCallbackType.DEBUG_EXCEPTION_UNHANDLED;
+                bool isFirstChance = dwEventType == CorDebugExceptionCallbackType.DEBUG_EXCEPTION_FIRST_CHANCE
+                                  || dwEventType == CorDebugExceptionCallbackType.DEBUG_EXCEPTION_USER_FIRST_CHANCE;
+
+                if (isUnhandled || isFirstChance)
                 {
                     try
                     {
                         StopProcess(pAppDomain);
                         int threadId = GetThreadId(pThread);
-                        _owner.RaiseExceptionThrown(threadId, true, "Unhandled exception (callback2)");
+                        var (exType, exMsg) = ExtractExceptionInfo(pThread);
+                        string label = isUnhandled ? "Unhandled" : "First-chance";
+                        string description = !string.IsNullOrEmpty(exMsg)
+                            ? $"{label} exception: {exType}: {exMsg}"
+                            : $"{label} exception: {exType}";
+                        Console.Error.WriteLine($"[DAP] Exception2 callback: threadId={threadId}, type={dwEventType}, exType={exType}");
+                        _owner.RaiseExceptionThrown(threadId, isUnhandled, exType, description);
                     }
                     catch (Exception ex)
                     {
                         Console.Error.WriteLine($"[DAP] Exception2 callback error: {ex.Message}");
                     }
-                    // Do NOT continue — let the adapter decide
+                    // Do NOT continue — let the adapter decide based on filters
                 }
                 else
                 {
+                    // CATCH_HANDLER_FOUND — a handler exists, continue execution
                     ContinueFromAppDomain(pAppDomain);
                 }
                 return 0;

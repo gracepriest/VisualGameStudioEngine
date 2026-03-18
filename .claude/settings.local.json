@@ -412,7 +412,9 @@
       "Bash(cp BasicLang/bin/Release/net8.0/BasicLang.exe IDE/BasicLang.exe)",
       "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.dll IDE/VisualGameStudio.dll)",
       "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.exe IDE/VisualGameStudio.exe)",
-      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.ProjectSystem.dll IDE/VisualGameStudio.ProjectSystem.dll)"
+      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.ProjectSystem.dll IDE/VisualGameStudio.ProjectSystem.dll)",
+      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.Core.dll IDE/VisualGameStudio.Core.dll)",
+      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.Editor.dll IDE/VisualGameStudio.Editor.dll)"
     ]
   }
 }

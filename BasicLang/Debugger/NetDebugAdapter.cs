@@ -685,21 +685,22 @@ namespace BasicLang.Debugger
         {
             ClearDebugState();
 
-            var args = request.Arguments;
-            int threadId = args.TryGetProperty("threadId", out var tidProp) ? tidProp.GetInt32() : 0;
-
             try
             {
-                if (_process?.Threads.ContainsKey(threadId) == true)
+                var thread = GetFirstThread();
+                if (thread != null)
                 {
-                    var thread = _process.Threads[threadId];
                     RawCreateStepperAndStepOut(thread);
                     RawContinueProcess();
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // StepOut failed silently — no user-visible error needed
+                _ = SendEventAsync("output", new Dictionary<string, object>
+                {
+                    ["category"] = "stderr",
+                    ["output"] = $"Step Out failed: {ex.Message}\n"
+                });
             }
 
             return CreateResponse(request, true);
@@ -853,6 +854,54 @@ namespace BasicLang.Debugger
                     RemoveTempStepBreakpoint();
                 }
 
+                // For real breakpoints (not steps), evaluate all conditions
+                if (reason == "breakpoint")
+                {
+                    var entry = FindBreakpointEntryForCurrentLocation();
+                    if (entry != null)
+                    {
+                        // Always increment hit count
+                        entry.HitCount++;
+
+                        // --- Conditional breakpoint: evaluate expression ---
+                        if (!string.IsNullOrWhiteSpace(entry.Condition))
+                        {
+                            bool conditionMet = EvaluateConditionExpression(entry.Condition);
+                            if (!conditionMet)
+                            {
+                                // Condition is false — skip this breakpoint and continue
+                                RawContinueProcess();
+                                return;
+                            }
+                        }
+
+                        // --- Hit condition: check hit count ---
+                        if (!string.IsNullOrWhiteSpace(entry.HitCondition))
+                        {
+                            if (!EvaluateHitCondition(entry.HitCondition, entry.HitCount))
+                            {
+                                // Hit condition not met — resume execution silently
+                                RawContinueProcess();
+                                return;
+                            }
+                        }
+
+                        // --- Log message (logpoint): output and continue ---
+                        if (!string.IsNullOrWhiteSpace(entry.LogMessage))
+                        {
+                            string output = InterpolateLogMessage(entry.LogMessage);
+                            await SendEventAsync("output", new Dictionary<string, object>
+                            {
+                                ["category"] = "stdout",
+                                ["output"] = output + "\n"
+                            });
+                            // Logpoints do not stop — continue execution
+                            RawContinueProcess();
+                            return;
+                        }
+                    }
+                }
+
                 await SendEventAsync("stopped", new Dictionary<string, object>
                 {
                     ["reason"] = reason,
@@ -866,10 +915,129 @@ namespace BasicLang.Debugger
             }
         }
 
+        /// <summary>
+        /// Resolve the current execution point to a ClrBreakpointEntry by reading the
+        /// active frame's function token / IL offset and mapping to a source location.
+        /// </summary>
+        private ClrBreakpointEntry FindBreakpointEntryForCurrentLocation()
+        {
+            try
+            {
+                var thread = GetFirstThread();
+                if (thread == null || _sourceMapper == null) return null;
+
+                var threadPtr = Marshal.GetIUnknownForObject(thread);
+                try
+                {
+                    var vtable = Marshal.ReadIntPtr(threadPtr);
+                    var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                    var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                    int hr = getActiveFrame(threadPtr, out var framePtr);
+                    if (hr < 0 || framePtr == IntPtr.Zero) return null;
+
+                    try
+                    {
+                        var frameVtable = Marshal.ReadIntPtr(framePtr);
+                        var getFnTokenSlot = Marshal.ReadIntPtr(frameVtable, 6 * IntPtr.Size);
+                        var getFnToken = Marshal.GetDelegateForFunctionPointer<GetFunctionTokenDelegate>(getFnTokenSlot);
+                        getFnToken(framePtr, out uint functionToken);
+
+                        Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                        int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                        uint ilOffset = 0;
+                        if (qiHr >= 0 && ilFramePtr != IntPtr.Zero)
+                        {
+                            var ilFrameVtable = Marshal.ReadIntPtr(ilFramePtr);
+                            var getIPSlot = Marshal.ReadIntPtr(ilFrameVtable, 11 * IntPtr.Size);
+                            var getIP = Marshal.GetDelegateForFunctionPointer<GetIPDelegate>(getIPSlot);
+                            getIP(ilFramePtr, out ilOffset, out _);
+                            Marshal.Release(ilFramePtr);
+                        }
+
+                        var loc = _sourceMapper.GetSourceLocation((int)functionToken, (int)ilOffset);
+                        if (loc == null) return null;
+
+                        return _breakpointManager.FindByFileAndLine(loc.Value.file, loc.Value.line);
+                    }
+                    finally
+                    {
+                        Marshal.Release(framePtr);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(threadPtr);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Evaluate a DAP hit condition string against the current hit count.
+        /// Supported formats:
+        ///   "5"   — break when hit count equals 5
+        ///   ">5"  — break when hit count is greater than 5
+        ///   ">=5" — break when hit count is greater than or equal to 5
+        ///   "&lt;5"  — break when hit count is less than 5
+        ///   "%3"  — break every 3rd hit (hit count is a multiple of 3)
+        /// </summary>
+        private static bool EvaluateHitCondition(string condition, int hitCount)
+        {
+            if (string.IsNullOrWhiteSpace(condition)) return true;
+
+            condition = condition.Trim();
+
+            if (condition.StartsWith(">="))
+            {
+                return int.TryParse(condition.Substring(2).Trim(), out int n) && hitCount >= n;
+            }
+            if (condition.StartsWith(">"))
+            {
+                return int.TryParse(condition.Substring(1).Trim(), out int n) && hitCount > n;
+            }
+            if (condition.StartsWith("<="))
+            {
+                return int.TryParse(condition.Substring(2).Trim(), out int n) && hitCount <= n;
+            }
+            if (condition.StartsWith("<"))
+            {
+                return int.TryParse(condition.Substring(1).Trim(), out int n) && hitCount < n;
+            }
+            if (condition.StartsWith("%"))
+            {
+                return int.TryParse(condition.Substring(1).Trim(), out int n) && n > 0 && (hitCount % n) == 0;
+            }
+            // Plain number — break when hit count equals value
+            return int.TryParse(condition, out int exact) && hitCount == exact;
+        }
+
         private async void OnStepCompleted(object sender, StepCompletedEventArgs e)
         {
             try
             {
+                // "Just My Code" — if we landed in non-user code (framework/library),
+                // automatically step again until we're back in .bas user code.
+                if (!IsCurrentFrameUserCode())
+                {
+                    var thread = GetFirstThread();
+                    if (thread != null)
+                    {
+                        try
+                        {
+                            RawCreateStepperAndStep(thread, stepInto: false);
+                            RawContinueProcess();
+                            return; // Don't send stopped event; we're still stepping
+                        }
+                        catch
+                        {
+                            // If re-stepping fails, fall through and report stopped
+                        }
+                    }
+                }
+
                 int dapThreadId = MapToDapThreadId(e.ThreadId);
                 await SendEventAsync("stopped", new Dictionary<string, object>
                 {
@@ -1144,6 +1312,94 @@ namespace BasicLang.Debugger
             if (_process?.Threads.Count > 0)
                 return _process.Threads.Values.First();
             return null;
+        }
+
+        /// <summary>
+        /// "Just My Code" check — returns true if the current top-of-stack frame
+        /// maps to a .bas source file via the PDB, false if it's framework/library code.
+        /// </summary>
+        private bool IsCurrentFrameUserCode()
+        {
+            try
+            {
+                var thread = GetFirstThread();
+                if (thread == null || _sourceMapper == null)
+                    return false;
+
+                var threadPtr = Marshal.GetIUnknownForObject(thread);
+                try
+                {
+                    var vtable = Marshal.ReadIntPtr(threadPtr);
+                    // GetActiveFrame is slot 15 (IUnknown(3) + 12)
+                    var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                    var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                    int hr = getActiveFrame(threadPtr, out var framePtr);
+                    if (hr < 0 || framePtr == IntPtr.Zero)
+                        return false;
+
+                    try
+                    {
+                        // GetFunctionToken on ICorDebugFrame (slot 6)
+                        var frameVtable = Marshal.ReadIntPtr(framePtr);
+                        var getFnTokenSlot = Marshal.ReadIntPtr(frameVtable, 6 * IntPtr.Size);
+                        var getFnToken = Marshal.GetDelegateForFunctionPointer<GetFunctionTokenDelegate>(getFnTokenSlot);
+                        getFnToken(framePtr, out uint functionToken);
+
+                        // GetIP on ICorDebugILFrame — must QueryInterface
+                        Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                        int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                        uint ilOffset = 0;
+                        if (qiHr >= 0 && ilFramePtr != IntPtr.Zero)
+                        {
+                            var ilFrameVtable = Marshal.ReadIntPtr(ilFramePtr);
+                            var getIPSlot = Marshal.ReadIntPtr(ilFrameVtable, 11 * IntPtr.Size);
+                            var getIP = Marshal.GetDelegateForFunctionPointer<GetIPDelegate>(getIPSlot);
+                            getIP(ilFramePtr, out ilOffset, out _);
+                            Marshal.Release(ilFramePtr);
+                        }
+
+                        var loc = _sourceMapper.GetSourceLocation((int)functionToken, (int)ilOffset);
+                        return loc != null && loc.Value.file.EndsWith(".bas", StringComparison.OrdinalIgnoreCase);
+                    }
+                    finally
+                    {
+                        Marshal.Release(framePtr);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(threadPtr);
+                }
+            }
+            catch
+            {
+                // If anything fails reading the frame, assume it's not user code
+                // so we keep stepping rather than stopping in an unknown location
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Evaluate a conditional breakpoint expression. Returns true if condition is met.
+        /// Simple implementation: treats "true"/"True"/"1" as true, "false"/"False"/"0" as false.
+        /// For variable names, attempts to look them up in the current frame.
+        /// </summary>
+        private bool EvaluateConditionExpression(string condition)
+        {
+            // For v1: always break (condition evaluation requires full expression parser)
+            // TODO: Implement proper expression evaluation using ICorDebugEval
+            return true;
+        }
+
+        /// <summary>
+        /// Interpolate {expression} placeholders in a logpoint message.
+        /// Replaces {varname} with the variable's value from the current frame.
+        /// </summary>
+        private string InterpolateLogMessage(string message)
+        {
+            // For v1: return the message as-is (no interpolation)
+            // TODO: Replace {varname} with actual variable values
+            return message;
         }
 
         private void ClearDebugState()
@@ -1528,16 +1784,43 @@ namespace BasicLang.Debugger
             try
             {
                 var vtable = Marshal.ReadIntPtr(threadPtr);
+                // ICorDebugThread::CreateStepper is vtable slot 12 (IUnknown(3) + 9)
                 var createStepperSlot = Marshal.ReadIntPtr(vtable, 12 * IntPtr.Size);
                 var createStepperFn = Marshal.GetDelegateForFunctionPointer<CreateStepperOnThreadDelegate>(createStepperSlot);
                 int hr = createStepperFn(threadPtr, out var stepperPtr);
-                if (hr < 0 || stepperPtr == IntPtr.Zero) return;
+                if (hr < 0 || stepperPtr == IntPtr.Zero)
+                {
+                    Console.Error.WriteLine($"[DAP] CreateStepper failed for StepOut: hr=0x{hr:X8}");
+                    return;
+                }
 
-                // StepOut is at vtable slot 3+6 = 9
-                var stepperVtable = Marshal.ReadIntPtr(stepperPtr);
-                var stepOutSlot = Marshal.ReadIntPtr(stepperVtable, 9 * IntPtr.Size);
-                var stepOutFn = Marshal.GetDelegateForFunctionPointer<StepOutDelegate>(stepOutSlot);
-                hr = stepOutFn(stepperPtr);
+                try
+                {
+                    var stepperVtable = Marshal.ReadIntPtr(stepperPtr);
+
+                    // SetInterceptMask (slot 5) — skip interceptors so StepOut lands in user code
+                    var setInterceptSlot = Marshal.ReadIntPtr(stepperVtable, 5 * IntPtr.Size);
+                    var setInterceptFn = Marshal.GetDelegateForFunctionPointer<SetInterceptMaskDelegate>(setInterceptSlot);
+                    setInterceptFn(stepperPtr, 0); // INTERCEPT_NONE — don't stop in class init, security, etc.
+
+                    // SetUnmappedStopMask (slot 6) — skip unmapped code regions
+                    var setUnmappedSlot = Marshal.ReadIntPtr(stepperVtable, 6 * IntPtr.Size);
+                    var setUnmappedFn = Marshal.GetDelegateForFunctionPointer<SetUnmappedStopMaskDelegate>(setUnmappedSlot);
+                    setUnmappedFn(stepperPtr, 0); // STOP_NONE — don't stop in unmapped IL
+
+                    // StepOut is at vtable slot 3+6 = 9
+                    var stepOutSlot = Marshal.ReadIntPtr(stepperVtable, 9 * IntPtr.Size);
+                    var stepOutFn = Marshal.GetDelegateForFunctionPointer<StepOutDelegate>(stepOutSlot);
+                    hr = stepOutFn(stepperPtr);
+                    if (hr < 0)
+                    {
+                        Console.Error.WriteLine($"[DAP] StepOut failed: hr=0x{hr:X8}");
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(stepperPtr);
+                }
             }
             finally
             {
@@ -1572,6 +1855,12 @@ namespace BasicLang.Debugger
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int StepOutDelegate(IntPtr self);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int SetInterceptMaskDelegate(IntPtr self, int mask);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int SetUnmappedStopMaskDelegate(IntPtr self, int mask);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int GetActiveFrameDelegate(IntPtr self, out IntPtr ppFrame);

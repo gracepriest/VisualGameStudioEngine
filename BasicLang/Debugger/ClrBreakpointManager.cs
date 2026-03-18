@@ -16,6 +16,7 @@ namespace BasicLang.Debugger
         public string Condition;
         public string HitCondition;
         public string LogMessage;
+        public int HitCount;
         public object ClrBreakpoint; // ICorDebugFunctionBreakpoint when bound
     }
 
@@ -90,6 +91,14 @@ namespace BasicLang.Debugger
                 .ToList();
             foreach (var id in toRemove)
                 _breakpoints.Remove(id);
+        }
+
+        public ClrBreakpointEntry FindByFileAndLine(string filePath, int line)
+        {
+            return _breakpoints.Values.FirstOrDefault(bp =>
+                (bp.Status == ClrBreakpointStatus.Bound || bp.Status == ClrBreakpointStatus.Verified) &&
+                bp.ActualLine == line &&
+                string.Equals(bp.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
         }
 
         public void ClearAll() => _breakpoints.Clear();

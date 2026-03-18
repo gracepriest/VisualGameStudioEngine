@@ -156,6 +156,50 @@ public sealed class SourceMapper : IDisposable
     }
 
     /// <summary>
+    /// Finds the entry point (method token + first IL offset) for a Sub or Function
+    /// by scanning the source files referenced in the PDB for a declaration line matching
+    /// "Sub {name}" or "Function {name}".
+    /// Returns null if no match is found.
+    /// </summary>
+    public (int methodToken, int ilOffset, string filePath, int line)? FindMethodEntryByName(string functionName)
+    {
+        foreach (var kvp in _sequencePointsByFile)
+        {
+            string filePath = kvp.Key;
+            if (!File.Exists(filePath))
+                continue;
+
+            try
+            {
+                var lines = File.ReadAllLines(filePath);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    string trimmed = lines[i].Trim();
+                    // Match patterns like: Sub Main, Function Foo, Public Sub Main, Private Function Bar(...)
+                    // We look for "Sub <name>" or "Function <name>" as a word boundary match
+                    if (IsMethodDeclaration(trimmed, functionName))
+                    {
+                        // Found the declaration line (1-based)
+                        int declLine = i + 1;
+                        // Get the IL offset for the next executable line at or after the declaration
+                        var ilInfo = GetILOffsetForLine(filePath, declLine);
+                        if (ilInfo.HasValue)
+                        {
+                            return (ilInfo.Value.methodToken, ilInfo.Value.ilOffset, filePath, declLine);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Skip files that can't be read
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Returns all source file paths referenced in the loaded PDB.
     /// </summary>
     public IReadOnlyList<string> GetSourceDocuments()
@@ -198,6 +242,84 @@ public sealed class SourceMapper : IDisposable
         }
 
         return (startOffset, endOffset);
+    }
+
+    /// <summary>
+    /// Returns the local variable names for the given method, ordered by slot index.
+    /// Uses the PDB's LocalScope and LocalVariable tables.
+    /// If no PDB data is available, returns an empty dictionary.
+    /// Key = slot index, Value = variable name.
+    /// </summary>
+    public Dictionary<int, string> GetLocalVariableNames(int methodToken)
+    {
+        var result = new Dictionary<int, string>();
+        if (_pdbReader is null) return result;
+
+        try
+        {
+            // Convert method token to MethodDefinitionHandle
+            int rowNumber = MetadataTokens.GetRowNumber(MetadataTokens.EntityHandle(methodToken));
+            var methodDefHandle = MetadataTokens.MethodDefinitionHandle(rowNumber);
+
+            foreach (var scopeHandle in _pdbReader.GetLocalScopes(methodDefHandle))
+            {
+                var scope = _pdbReader.GetLocalScope(scopeHandle);
+                foreach (var varHandle in scope.GetLocalVariables())
+                {
+                    var localVar = _pdbReader.GetLocalVariable(varHandle);
+                    string name = _pdbReader.GetString(localVar.Name);
+                    int slot = localVar.Index;
+                    // Only store if not already present (outer scope takes precedence)
+                    if (!result.ContainsKey(slot))
+                    {
+                        result[slot] = name;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // PDB may not have local variable info for all methods
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Returns the parameter names for the given method token by reading the PE metadata.
+    /// This requires the assembly metadata reader, not the PDB reader.
+    /// Returns an empty dictionary if metadata is not available.
+    /// Key = parameter index (0-based), Value = parameter name.
+    /// </summary>
+    public Dictionary<int, string> GetParameterNames(int methodToken, MetadataReader? assemblyReader)
+    {
+        var result = new Dictionary<int, string>();
+        if (assemblyReader == null) return result;
+
+        try
+        {
+            int rowNumber = MetadataTokens.GetRowNumber(MetadataTokens.EntityHandle(methodToken));
+            var methodDefHandle = MetadataTokens.MethodDefinitionHandle(rowNumber);
+            var methodDef = assemblyReader.GetMethodDefinition(methodDefHandle);
+
+            int index = 0;
+            foreach (var paramHandle in methodDef.GetParameters())
+            {
+                var param = assemblyReader.GetParameter(paramHandle);
+                string name = assemblyReader.GetString(param.Name);
+                if (!string.IsNullOrEmpty(name))
+                {
+                    result[param.SequenceNumber - 1] = name; // SequenceNumber is 1-based
+                }
+                index++;
+            }
+        }
+        catch
+        {
+            // Metadata may not be available
+        }
+
+        return result;
     }
 
     // -----------------------------------------------------------------------
@@ -283,6 +405,75 @@ public sealed class SourceMapper : IDisposable
     // -----------------------------------------------------------------------
     // Private nested type
     // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Checks whether a trimmed source line declares a Sub or Function with the given name.
+    /// Matches patterns like "Sub Main", "Public Function Foo()", "Private Sub Bar(x As Integer)".
+    /// </summary>
+    private static bool IsMethodDeclaration(string trimmedLine, string functionName)
+    {
+        // Remove leading access modifiers and other keywords
+        // Common prefixes: Public, Private, Protected, Friend, Shared, Overrides, Overloads, Static, Async
+        string line = trimmedLine;
+
+        // Look for "Sub <name>" or "Function <name>" anywhere in the line
+        int subIdx = FindKeywordIndex(line, "Sub");
+        if (subIdx >= 0)
+        {
+            string afterSub = line.Substring(subIdx + 3).TrimStart();
+            if (NameMatches(afterSub, functionName))
+                return true;
+        }
+
+        int funcIdx = FindKeywordIndex(line, "Function");
+        if (funcIdx >= 0)
+        {
+            string afterFunc = line.Substring(funcIdx + 8).TrimStart();
+            if (NameMatches(afterFunc, functionName))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Finds the index of a keyword in the line, ensuring it's a whole word (not part of "EndSub" etc.).
+    /// </summary>
+    private static int FindKeywordIndex(string line, string keyword)
+    {
+        int idx = 0;
+        while (idx <= line.Length - keyword.Length)
+        {
+            int pos = line.IndexOf(keyword, idx, StringComparison.OrdinalIgnoreCase);
+            if (pos < 0)
+                return -1;
+
+            // Check that it's a whole word
+            bool startOk = pos == 0 || !char.IsLetterOrDigit(line[pos - 1]);
+            bool endOk = pos + keyword.Length >= line.Length || !char.IsLetterOrDigit(line[pos + keyword.Length]);
+            if (startOk && endOk)
+                return pos;
+
+            idx = pos + 1;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Checks whether the text starts with the function name (case-insensitive),
+    /// followed by end-of-string, '(', or whitespace.
+    /// </summary>
+    private static bool NameMatches(string text, string functionName)
+    {
+        if (text.Length < functionName.Length)
+            return false;
+        if (!text.StartsWith(functionName, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (text.Length == functionName.Length)
+            return true;
+        char next = text[functionName.Length];
+        return next == '(' || char.IsWhiteSpace(next);
+    }
 
     private sealed class SequencePointEntry
     {

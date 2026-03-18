@@ -49,6 +49,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     [ObservableProperty]
     private SplitOrientation _splitOrientation = SplitOrientation.Horizontal;
 
+    /// <summary>
+    /// True when the debugger is paused. Used to prioritize debug data tips over LSP hover.
+    /// </summary>
+    public bool IsDebugPaused { get; set; }
+
     public new string Id => FilePath ?? Guid.NewGuid().ToString();
     public new string Title => GetTitle();
     public new bool CanClose => true;

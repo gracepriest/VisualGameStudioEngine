@@ -94,6 +94,12 @@ public partial class MainWindowViewModel : ViewModelBase
     private string _debugTargetName = "";
 
     /// <summary>
+    /// Tracks the current (topmost) stack frame ID so debug hover evaluate
+    /// requests are scoped to the correct frame.
+    /// </summary>
+    private int? _currentFrameId;
+
+    /// <summary>
     /// Tracks whether debug panels have been auto-shown for the current debug session,
     /// so we only switch panels once per session start (not on every pause/resume).
     /// </summary>
@@ -444,8 +450,8 @@ public partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            var result = await _debugService.EvaluateAsync(e.Expression);
-            if (result != null)
+            var result = await _debugService.EvaluateAsync(e.Expression, _currentFrameId);
+            if (result != null && !result.Result.StartsWith("Error:"))
             {
                 DataTipResult?.Invoke(this, new DataTipResultEventArgs(
                     e.Expression,
@@ -459,14 +465,8 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            DataTipResult?.Invoke(this, new DataTipResultEventArgs(
-                e.Expression,
-                ex.Message,
-                null,
-                e.ScreenX,
-                e.ScreenY,
-                true
-            ));
+            // Silently ignore evaluation errors for hover - the variable may not exist in scope
+            System.Diagnostics.Debug.WriteLine($"[DataTip] Evaluate failed for '{e.Expression}': {ex.Message}");
         }
     }
 
@@ -1108,6 +1108,14 @@ public partial class MainWindowViewModel : ViewModelBase
         IsDebugging = e.NewState == DebugState.Running || e.NewState == DebugState.Paused;
         IsPaused = e.NewState == DebugState.Paused;
 
+        // Propagate debug-paused state to all open documents so hover can
+        // prioritize debug data tips over LSP hover info
+        var debugPaused = e.NewState == DebugState.Paused;
+        foreach (var doc in _openDocuments.Values)
+        {
+            doc.IsDebugPaused = debugPaused;
+        }
+
         var targetLabel = string.IsNullOrEmpty(_debugTargetName) ? "" : $": {_debugTargetName}";
         DebugStatusText = e.NewState switch
         {
@@ -1119,6 +1127,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         if (e.NewState == DebugState.Stopped)
         {
+            _currentFrameId = null;
             StatusText = "Ready";
             _debugTargetName = "";
             ClearAllInlineDebugValues();
@@ -1132,6 +1141,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             if (e.NewState == DebugState.Running)
             {
+                _currentFrameId = null;
                 StatusText = "Running...";
                 // Clear inline values and execution line when resuming execution
                 ClearAllInlineDebugValues();
@@ -1201,6 +1211,10 @@ public partial class MainWindowViewModel : ViewModelBase
             // Navigate to the stopped location and build location string for status
             var frames = await _debugService.GetStackTraceAsync();
             var firstFrame = frames.FirstOrDefault();
+
+            // Track current frame ID for debug hover evaluate requests
+            _currentFrameId = firstFrame?.Id;
+
             var locationSuffix = "";
             if (firstFrame?.FilePath != null)
             {
