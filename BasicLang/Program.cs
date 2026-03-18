@@ -39,8 +39,18 @@ namespace BasicLang.Compiler.Driver
             // Check for Debug Adapter mode
             if (args.Contains("--debug-adapter") || args.Contains("--dap"))
             {
-                var debugSession = new DebugSession(Console.OpenStandardInput(), Console.OpenStandardOutput());
-                await debugSession.RunAsync();
+                // Use .NET debug adapter for compiled .exe debugging
+                // Falls back to interpreter-based DebugSession if --dap-legacy is specified
+                if (args.Contains("--dap-legacy"))
+                {
+                    var debugSession = new DebugSession(Console.OpenStandardInput(), Console.OpenStandardOutput());
+                    await debugSession.RunAsync();
+                }
+                else
+                {
+                    var netAdapter = new NetDebugAdapter(Console.OpenStandardInput(), Console.OpenStandardOutput());
+                    await netAdapter.RunAsync();
+                }
                 return;
             }
 

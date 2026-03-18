@@ -1296,31 +1296,13 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Start debugging with the DAP debug adapter
-        // The debug adapter interprets the source file directly (not the compiled exe)
-        var mainSourceFile = (_projectService.CurrentProject as BasicLangProject)?.GetMainFile();
-        if (string.IsNullOrEmpty(mainSourceFile) || !File.Exists(mainSourceFile))
-        {
-            // Fallback: find the first .bas file in the project directory
-            mainSourceFile = Directory.GetFiles(
-                _projectService.CurrentProject.ProjectDirectory, "*.bas", SearchOption.TopDirectoryOnly)
-                .FirstOrDefault();
-        }
-
-        if (string.IsNullOrEmpty(mainSourceFile))
-        {
-            await _dialogService.ShowMessageAsync("Debug", "No source file found for debugging.",
-                DialogButtons.Ok, DialogIcon.Error);
-            return;
-        }
-
         StatusText = "Starting debugger...";
         OutputPanel.SelectedCategory = OutputCategory.Debug;
-        OutputPanel.AppendOutput($"\n========== Debugging: {Path.GetFileName(mainSourceFile)} ==========\n");
+        OutputPanel.AppendOutput($"\n========== Debugging: {Path.GetFileName(buildResult.ExecutablePath)} ==========\n");
 
         var config = new DebugConfiguration
         {
-            Program = mainSourceFile,
+            Program = buildResult.ExecutablePath,  // Pass compiled .exe, not .bas
             WorkingDirectory = _projectService.CurrentProject.ProjectDirectory
         };
 
