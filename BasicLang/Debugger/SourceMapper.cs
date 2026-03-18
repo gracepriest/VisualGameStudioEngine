@@ -173,23 +173,31 @@ public sealed class SourceMapper : IDisposable
         if (!_sequencePointsByMethod.TryGetValue(methodToken, out var entries))
             return null;
 
-        // Find the entry whose StartLine matches exactly
-        var sorted = entries.Where(e => e.StartLine == line)
+        // Find all entries on this line
+        var onLine = entries.Where(e => e.StartLine == line)
                             .OrderBy(e => e.ILOffset)
                             .ToList();
-        if (sorted.Count == 0)
+        if (onLine.Count == 0)
             return null;
 
-        var first = sorted[0];
+        int startOffset = onLine[0].ILOffset;
 
-        // The end offset is the start of the next sequence point (or first.ILOffset + 1 as fallback)
+        // End offset = start of the first sequence point on a DIFFERENT line (after this one)
         var allSorted = entries.OrderBy(e => e.ILOffset).ToList();
-        int idx = allSorted.FindIndex(e => e.ILOffset == first.ILOffset);
-        int endOffset = idx >= 0 && idx + 1 < allSorted.Count
-            ? allSorted[idx + 1].ILOffset
-            : first.ILOffset + 1;
+        int endOffset = startOffset + 1; // fallback
 
-        return (first.ILOffset, endOffset);
+        // Find the first sequence point after our line's last entry that's on a different line
+        var lastOnLine = onLine[onLine.Count - 1];
+        foreach (var sp in allSorted)
+        {
+            if (sp.ILOffset > lastOnLine.ILOffset && sp.StartLine != line)
+            {
+                endOffset = sp.ILOffset;
+                break;
+            }
+        }
+
+        return (startOffset, endOffset);
     }
 
     // -----------------------------------------------------------------------

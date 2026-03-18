@@ -1380,39 +1380,113 @@ namespace BasicLang.Debugger
 
         /// <summary>
         /// Create a stepper and step using raw vtable calls.
+        /// Uses StepRange to step by SOURCE LINE instead of single IL instruction.
+        /// Falls back to Step if the IL range for the current line cannot be determined.
         /// ICorDebugThread::CreateStepper is vtable slot 12 (IUnknown(3) + 9 methods)
-        /// ICorDebugStepper::Step is vtable slot 7 (IUnknown(3) + IsActive + Deactivate + SetInterceptMask + SetUnmappedStopMask + Step)
-        /// Wait — let me recount: IUnknown(3) + IsActive(0) + Deactivate(1) + SetInterceptMask(2) + SetUnmappedStopMask(3) + Step(4) = slot 7
+        /// ICorDebugStepper::Step is vtable slot 7, StepRange is vtable slot 8
         /// </summary>
         private void RawCreateStepperAndStep(ICorDebugThread thread, bool stepInto)
         {
             var threadPtr = Marshal.GetIUnknownForObject(thread);
             try
             {
+                // --- Get current frame's method token and IL offset for StepRange ---
+                uint methodToken = 0;
+                uint currentIL = 0;
+                bool haveFrameInfo = false;
+
                 var vtable = Marshal.ReadIntPtr(threadPtr);
-                // ICorDebugThread: GetProcess(0), GetID(1), GetHandle(2), GetAppDomain(3),
-                // SetDebugState(4), GetDebugState(5), CreateStepper(6), EnumerateChains(7),
-                // GetActiveChain(8), CreateEval(9), GetCurrentException(10)
-                // WAIT: I need to check the actual vtable. ICorDebugThread inherits IUnknown directly.
-                // ICorDebugThread vtable (from CorDebugWrappers.cs):
-                // IUnknown(3) + GetProcess(0), GetID(1), GetHandle(2), GetAppDomain(3),
-                // SetDebugState(4), GetDebugState(5), GetUserState(6),
-                // GetCurrentException(7), ClearCurrentException(8), CreateStepper(9)
-                // So CreateStepper is at vtable slot 3+9 = 12
+
+                // GetActiveFrame is slot 15 (IUnknown(3) + 12)
+                var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                int hr = getActiveFrame(threadPtr, out var framePtr);
+                if (hr >= 0 && framePtr != IntPtr.Zero)
+                {
+                    try
+                    {
+                        // GetFunctionToken is on ICorDebugFrame (slot 6)
+                        var frameVtable = Marshal.ReadIntPtr(framePtr);
+                        var getFnTokenSlot = Marshal.ReadIntPtr(frameVtable, 6 * IntPtr.Size);
+                        var getFnToken = Marshal.GetDelegateForFunctionPointer<GetFunctionTokenDelegate>(getFnTokenSlot);
+                        getFnToken(framePtr, out methodToken);
+
+                        // GetIP is on ICorDebugILFrame — must QueryInterface
+                        Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                        int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                        if (qiHr >= 0 && ilFramePtr != IntPtr.Zero)
+                        {
+                            var ilFrameVtable = Marshal.ReadIntPtr(ilFramePtr);
+                            var getIPSlot = Marshal.ReadIntPtr(ilFrameVtable, 11 * IntPtr.Size);
+                            var getIP = Marshal.GetDelegateForFunctionPointer<GetIPDelegate>(getIPSlot);
+                            getIP(ilFramePtr, out currentIL, out _);
+                            Marshal.Release(ilFramePtr);
+                            haveFrameInfo = true;
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(framePtr);
+                    }
+                }
+
+                // --- Create stepper ---
+                // ICorDebugThread vtable: IUnknown(3) + ... CreateStepper(9) = slot 12
                 var createStepperSlot = Marshal.ReadIntPtr(vtable, 12 * IntPtr.Size);
                 var createStepperFn = Marshal.GetDelegateForFunctionPointer<CreateStepperOnThreadDelegate>(createStepperSlot);
-                int hr = createStepperFn(threadPtr, out var stepperPtr);
+                hr = createStepperFn(threadPtr, out var stepperPtr);
                 Console.Error.WriteLine($"[DAP] CreateStepper on thread: hr=0x{hr:X8}, ptr={stepperPtr}");
                 if (hr < 0 || stepperPtr == IntPtr.Zero) return;
 
-                // ICorDebugStepper: IsActive(0), Deactivate(1), SetInterceptMask(2),
-                // SetUnmappedStopMask(3), Step(4), StepRange(5), StepOut(6)
-                // Step is at vtable slot 3+4 = 7
                 var stepperVtable = Marshal.ReadIntPtr(stepperPtr);
-                var stepSlot = Marshal.ReadIntPtr(stepperVtable, 7 * IntPtr.Size);
-                var stepFn = Marshal.GetDelegateForFunctionPointer<StepDelegate>(stepSlot);
-                hr = stepFn(stepperPtr, stepInto ? 1 : 0);
-                Console.Error.WriteLine($"[DAP] Stepper.Step(into={stepInto}): hr=0x{hr:X8}");
+
+                // --- Try StepRange for source-line stepping ---
+                bool usedStepRange = false;
+                if (haveFrameInfo && _sourceMapper != null)
+                {
+                    // Find current source line from IL offset
+                    var currentLoc = _sourceMapper.GetSourceLocation((int)methodToken, (int)currentIL);
+                    if (currentLoc != null)
+                    {
+                        // Get the IL range [startOffset, endOffset) for the current source line
+                        var ilRange = _sourceMapper.GetILRangeForLine((int)methodToken, currentLoc.Value.line);
+                        if (ilRange != null)
+                        {
+                            Console.Error.WriteLine($"[DAP] StepRange: line={currentLoc.Value.line}, IL range=[{ilRange.Value.startOffset}, {ilRange.Value.endOffset})");
+
+                            // Allocate COR_DEBUG_STEP_RANGE struct (two uint32 = 8 bytes)
+                            IntPtr rangePtr = Marshal.AllocHGlobal(8);
+                            try
+                            {
+                                Marshal.WriteInt32(rangePtr, 0, ilRange.Value.startOffset);      // startOffset
+                                Marshal.WriteInt32(rangePtr, 4, ilRange.Value.endOffset);         // endOffset
+
+                                // StepRange is at vtable slot 3+5 = 8
+                                var stepRangeSlot = Marshal.ReadIntPtr(stepperVtable, 8 * IntPtr.Size);
+                                var stepRangeFn = Marshal.GetDelegateForFunctionPointer<StepRangeDelegate>(stepRangeSlot);
+                                hr = stepRangeFn(stepperPtr, stepInto ? 1 : 0, rangePtr, 1);
+                                Console.Error.WriteLine($"[DAP] Stepper.StepRange(into={stepInto}): hr=0x{hr:X8}");
+                                if (hr >= 0)
+                                    usedStepRange = true;
+                            }
+                            finally
+                            {
+                                Marshal.FreeHGlobal(rangePtr);
+                            }
+                        }
+                    }
+                }
+
+                // --- Fallback to single-instruction Step if StepRange failed ---
+                if (!usedStepRange)
+                {
+                    Console.Error.WriteLine($"[DAP] StepRange unavailable, falling back to Step(into={stepInto})");
+                    // Step is at vtable slot 3+4 = 7
+                    var stepSlot = Marshal.ReadIntPtr(stepperVtable, 7 * IntPtr.Size);
+                    var stepFn = Marshal.GetDelegateForFunctionPointer<StepDelegate>(stepSlot);
+                    hr = stepFn(stepperPtr, stepInto ? 1 : 0);
+                    Console.Error.WriteLine($"[DAP] Stepper.Step(into={stepInto}): hr=0x{hr:X8}");
+                }
             }
             finally
             {
@@ -1469,6 +1543,9 @@ namespace BasicLang.Debugger
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int StepDelegate(IntPtr self, int bStepIn);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int StepRangeDelegate(IntPtr self, int bStepIn, IntPtr ranges, uint cRangeCount);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int StepOutDelegate(IntPtr self);
