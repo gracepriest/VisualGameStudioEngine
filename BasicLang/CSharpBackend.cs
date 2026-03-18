@@ -54,6 +54,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private readonly CSharpStdLibProvider _stdLib;
         private readonly FrameworkStdLibProvider _frameworkStdLib;
 
+        // #line directive tracking for source-level debugging
+        private int _lastEmittedSourceLine = -1;
+        private string _lastEmittedSourceFile = null;
+
         public string GeneratedCode => _output.ToString();
 
         // Helper methods to check both stdlib providers (Framework first, then CSharp)
@@ -171,6 +175,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Placeholder for usings - will be replaced after code generation
             var usingsPlaceholder = "<<USINGS_PLACEHOLDER>>";
+            EmitLineHidden();
             _output.Append(usingsPlaceholder);
 
             // Group types by namespace
@@ -461,6 +466,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 { "Monitor", new[] { "System.Threading" } },
                 { "Mutex", new[] { "System.Threading" } },
                 { "Semaphore", new[] { "System.Threading" } },
+                { "FrameworkWrapper.", new[] { "RaylibWrapper" } },
                 { "SHA256", new[] { "System.Security.Cryptography" } },
                 { "SHA512", new[] { "System.Security.Cryptography" } },
                 { "MD5", new[] { "System.Security.Cryptography" } },
@@ -1181,6 +1187,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _declaredIdentifiers.Clear();
             _tempDefsByName.Clear();
             _useCounts.Clear();
+            _lastEmittedSourceLine = -1;
+            _lastEmittedSourceFile = null;
 
             // Track declared identifiers
             foreach (var param in function.Parameters)
@@ -1248,6 +1256,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _declaredIdentifiers.Clear();
             _tempDefsByName.Clear();
             _useCounts.Clear();
+            _lastEmittedSourceLine = -1;
+            _lastEmittedSourceFile = null;
 
             // Track declared identifiers (params, locals, globals)
             foreach (var param in function.Parameters)
@@ -1651,6 +1661,24 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // For other terminators, the Visit method handles them
         }
 
+        private void EmitLineDirective(int sourceLine, string sourceFile)
+        {
+            if (sourceLine <= 0 || string.IsNullOrEmpty(sourceFile)) return;
+            if (sourceLine == _lastEmittedSourceLine && sourceFile == _lastEmittedSourceFile) return;
+
+            _lastEmittedSourceLine = sourceLine;
+            _lastEmittedSourceFile = sourceFile;
+
+            _output.AppendLine($"#line {sourceLine} \"{sourceFile}\"");
+        }
+
+        private void EmitLineHidden()
+        {
+            _lastEmittedSourceLine = -1;
+            _lastEmittedSourceFile = null;
+            _output.AppendLine("#line hidden");
+        }
+
         private void EmitBlockInstructions(BasicBlock block)
         {
             var instructions = block.Instructions.ToList();
@@ -1696,6 +1724,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         EmitTupleDeconstruction(group);
                         continue;
                     }
+                }
+
+                // Emit #line directive for source-level debugging
+                if (instruction is IRInstruction irInstr && irInstr.SourceLine > 0)
+                {
+                    EmitLineDirective(irInstr.SourceLine, _currentFunction?.SourceFilePath);
                 }
 
                 instruction.Accept(this);
