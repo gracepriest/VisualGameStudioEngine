@@ -316,6 +316,26 @@ public class LanguageService : ILanguageService
         }
     }
 
+    public async Task<LocationInfo?> GetImplementationAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return null;
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/implementation", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 }
+            }, cancellationToken);
+
+            return ParseLocation(result);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task<IReadOnlyList<LocationInfo>> FindReferencesAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
     {
         if (!IsConnected) return Array.Empty<LocationInfo>();
@@ -1203,6 +1223,33 @@ public class LanguageService : ILanguageService
         }
     }
 
+    public async Task<IReadOnlyList<TextEditInfo>> OnTypeFormattingAsync(string uri, int line, int column, string ch, FormattingOptionsInfo? options = null, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<TextEditInfo>();
+
+        try
+        {
+            var opts = options ?? new FormattingOptionsInfo();
+            var result = await SendRequestAsync("textDocument/onTypeFormatting", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 },
+                ch,
+                options = new
+                {
+                    tabSize = opts.TabSize,
+                    insertSpaces = opts.InsertSpaces
+                }
+            }, cancellationToken);
+
+            return ParseTextEdits(result);
+        }
+        catch
+        {
+            return Array.Empty<TextEditInfo>();
+        }
+    }
+
     private static WorkspaceEditInfo? ParseWorkspaceEdit(JsonElement result)
     {
         if (result.ValueKind == JsonValueKind.Null || result.ValueKind == JsonValueKind.Undefined)
@@ -1628,6 +1675,140 @@ public class LanguageService : ILanguageService
         {
             return Array.Empty<DocumentLinkInfo>();
         }
+    }
+
+    public async Task<IReadOnlyList<FoldingRangeInfo>> GetFoldingRangesAsync(string uri, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<FoldingRangeInfo>();
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/foldingRange", new
+            {
+                textDocument = new { uri = PathToUri(uri) }
+            }, cancellationToken);
+
+            if (result.ValueKind != JsonValueKind.Array) return Array.Empty<FoldingRangeInfo>();
+
+            var ranges = new List<FoldingRangeInfo>();
+            foreach (var item in result.EnumerateArray())
+            {
+                var range = new FoldingRangeInfo
+                {
+                    // LSP uses 0-based lines; convert to 1-based
+                    StartLine = item.TryGetProperty("startLine", out var sl) ? sl.GetInt32() + 1 : 0,
+                    EndLine = item.TryGetProperty("endLine", out var el) ? el.GetInt32() + 1 : 0,
+                    Kind = item.TryGetProperty("kind", out var k) ? k.GetString() : null
+                };
+                if (range.StartLine > 0 && range.EndLine > 0)
+                    ranges.Add(range);
+            }
+            return ranges;
+        }
+        catch
+        {
+            return Array.Empty<FoldingRangeInfo>();
+        }
+    }
+
+    public async Task<IReadOnlyList<WorkspaceSymbolInfo>> GetWorkspaceSymbolsAsync(string query, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return Array.Empty<WorkspaceSymbolInfo>();
+
+        try
+        {
+            var result = await SendRequestAsync("workspace/symbol", new
+            {
+                query
+            }, cancellationToken);
+
+            if (result.ValueKind != JsonValueKind.Array) return Array.Empty<WorkspaceSymbolInfo>();
+
+            var symbols = new List<WorkspaceSymbolInfo>();
+            foreach (var item in result.EnumerateArray())
+            {
+                var sym = new WorkspaceSymbolInfo
+                {
+                    Name = item.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                    Kind = item.TryGetProperty("kind", out var k) ? (SymbolKind)k.GetInt32() : SymbolKind.Variable,
+                    ContainerName = item.TryGetProperty("containerName", out var cn) ? cn.GetString() ?? "" : ""
+                };
+
+                if (item.TryGetProperty("location", out var location))
+                {
+                    if (location.TryGetProperty("uri", out var uri))
+                        sym.FilePath = UriToPath(uri.GetString() ?? "");
+
+                    if (location.TryGetProperty("range", out var range) && range.TryGetProperty("start", out var start))
+                    {
+                        sym.Line = start.TryGetProperty("line", out var l) ? l.GetInt32() + 1 : 0;
+                        sym.Column = start.TryGetProperty("character", out var c) ? c.GetInt32() + 1 : 0;
+                    }
+                }
+
+                symbols.Add(sym);
+            }
+            return symbols;
+        }
+        catch
+        {
+            return Array.Empty<WorkspaceSymbolInfo>();
+        }
+    }
+
+    public async Task<LinkedEditingRangeResult?> GetLinkedEditingRangesAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return null;
+
+        try
+        {
+            var result = await SendRequestAsync("textDocument/linkedEditingRange", new
+            {
+                textDocument = new { uri = PathToUri(uri) },
+                position = new { line = line - 1, character = column - 1 }
+            }, cancellationToken);
+
+            return ParseLinkedEditingRanges(result);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private LinkedEditingRangeResult? ParseLinkedEditingRanges(JsonElement result)
+    {
+        if (result.ValueKind == JsonValueKind.Null || result.ValueKind == JsonValueKind.Undefined)
+            return null;
+
+        var linked = new LinkedEditingRangeResult();
+
+        if (result.TryGetProperty("wordPattern", out var wp))
+            linked.WordPattern = wp.GetString();
+
+        if (result.TryGetProperty("ranges", out var rangesArray) && rangesArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var range in rangesArray.EnumerateArray())
+            {
+                var item = new LinkedEditingRange();
+
+                if (range.TryGetProperty("start", out var start))
+                {
+                    item.StartLine = start.TryGetProperty("line", out var sl) ? sl.GetInt32() + 1 : 0;
+                    item.StartColumn = start.TryGetProperty("character", out var sc) ? sc.GetInt32() + 1 : 0;
+                }
+
+                if (range.TryGetProperty("end", out var end))
+                {
+                    item.EndLine = end.TryGetProperty("line", out var el) ? el.GetInt32() + 1 : 0;
+                    item.EndColumn = end.TryGetProperty("character", out var ec) ? ec.GetInt32() + 1 : 0;
+                }
+
+                linked.Ranges.Add(item);
+            }
+        }
+
+        return linked.Ranges.Count > 0 ? linked : null;
     }
 
     public void Dispose()

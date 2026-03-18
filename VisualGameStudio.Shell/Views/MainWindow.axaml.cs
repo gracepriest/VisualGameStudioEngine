@@ -2,6 +2,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Threading;
 using VisualGameStudio.Shell.ViewModels;
 using VisualGameStudio.Shell.Views.Controls;
@@ -14,6 +16,12 @@ public partial class MainWindow : Window
     private DataTipPopup? _dataTipContent;
     private DispatcherTimer? _hideTimer;
     private MainWindowViewModel? _subscribedVm;
+    private StackPanel? _notificationArea;
+
+    /// <summary>
+    /// Stores the window state before entering Zen mode so it can be restored on exit.
+    /// </summary>
+    private WindowState _preZenWindowState;
 
     public MainWindow()
     {
@@ -28,6 +36,22 @@ public partial class MainWindow : Window
             HideDataTip();
             _hideTimer.Stop();
         };
+
+        _notificationArea = this.FindControl<StackPanel>("NotificationArea");
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        // Escape exits Zen mode
+        if (e.Key == Key.Escape && DataContext is MainWindowViewModel vm && vm.IsZenMode)
+        {
+            vm.ExitZenMode();
+            RestoreFromZenMode();
+            e.Handled = true;
+            return;
+        }
+
+        base.OnKeyDown(e);
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -36,14 +60,105 @@ public partial class MainWindow : Window
         if (_subscribedVm != null)
         {
             _subscribedVm.DataTipResult -= OnDataTipResult;
+            _subscribedVm.NotificationRequested -= OnNotificationRequested;
+            _subscribedVm.PropertyChanged -= OnViewModelPropertyChanged;
             _subscribedVm = null;
         }
 
         if (DataContext is MainWindowViewModel vm)
         {
             vm.DataTipResult += OnDataTipResult;
+            vm.NotificationRequested += OnNotificationRequested;
+            vm.PropertyChanged += OnViewModelPropertyChanged;
             _subscribedVm = vm;
         }
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainWindowViewModel.IsZenMode) && sender is MainWindowViewModel vm)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (vm.IsZenMode)
+                    EnterZenMode();
+                else
+                    RestoreFromZenMode();
+            });
+        }
+    }
+
+    private void EnterZenMode()
+    {
+        _preZenWindowState = WindowState;
+        WindowState = WindowState.Maximized;
+    }
+
+    private void RestoreFromZenMode()
+    {
+        WindowState = _preZenWindowState;
+    }
+
+    private void OnNotificationRequested(object? sender, NotificationEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() => ShowToastNotification(e.Message, e.Severity));
+    }
+
+    private void ShowToastNotification(string message, string severity)
+    {
+        if (_notificationArea == null) return;
+
+        // Choose background color based on severity
+        IBrush background = severity.ToLowerInvariant() switch
+        {
+            "warning" => new SolidColorBrush(Color.FromArgb(230, 180, 150, 20)),   // dark yellow
+            "error"   => new SolidColorBrush(Color.FromArgb(230, 180, 40, 40)),     // dark red
+            _         => new SolidColorBrush(Color.FromArgb(230, 40, 100, 180)),    // dark blue (info)
+        };
+
+        var textBlock = new TextBlock
+        {
+            Text = message,
+            Foreground = Brushes.White,
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var toast = new Border
+        {
+            Background = background,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(14, 10),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+            BorderThickness = new Thickness(1),
+            MinWidth = 200,
+            MaxWidth = 400,
+            IsHitTestVisible = true,
+            Child = textBlock,
+            // Drop shadow effect via BoxShadow
+            BoxShadow = new BoxShadows(new BoxShadow
+            {
+                OffsetX = 0,
+                OffsetY = 2,
+                Blur = 8,
+                Color = Color.FromArgb(120, 0, 0, 0),
+            }),
+        };
+
+        _notificationArea.Children.Add(toast);
+
+        // Auto-remove after 5 seconds
+        var removeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        removeTimer.Tick += (s, args) =>
+        {
+            removeTimer.Stop();
+            if (_notificationArea.Children.Contains(toast))
+            {
+                _notificationArea.Children.Remove(toast);
+            }
+        };
+        removeTimer.Start();
     }
 
     private void OnDataTipResult(object? sender, DataTipResultEventArgs e)

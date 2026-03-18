@@ -37,6 +37,7 @@
     <KeyBinding Gesture="Shift+F2" Command="{Binding PreviousBookmarkCommand}"/>
     <!-- Navigation shortcuts -->
     <KeyBinding Gesture="F12" Command="{Binding GoToDefinitionCommand}"/>
+    <KeyBinding Gesture="Ctrl+F12" Command="{Binding GoToImplementationCommand}"/>
     <KeyBinding Gesture="Shift+F12" Command="{Binding FindReferencesCommand}"/>
     <!-- Refactoring shortcuts -->
     <KeyBinding Gesture="Ctrl+R" Command="{Binding RenameSymbolCommand}"/>
@@ -60,15 +61,24 @@
     <KeyBinding Gesture="Ctrl+Alt+X" Command="{Binding ShowExceptionSettingsCommand}"/>
     <!-- Command Palette -->
     <KeyBinding Gesture="Ctrl+Shift+P" Command="{Binding OpenCommandPaletteCommand}"/>
+    <!-- Quick Open (File Search) -->
+    <KeyBinding Gesture="Ctrl+P" Command="{Binding OpenQuickOpenCommand}"/>
+    <!-- Zen Mode -->
+    <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding ToggleZenModeCommand}"/>
+    <!-- Show Whitespace -->
+    <KeyBinding Gesture="Ctrl+Shift+W" Command="{Binding ToggleWhitespaceCommand}"/>
+    <!-- Column Selection Mode -->
+    <KeyBinding Gesture="Alt+Shift+Insert" Command="{Binding ToggleColumnSelectionModeCommand}"/>
   </Window.KeyBindings>
 
   <Design.DataContext>
     <vm:MainWindowViewModel/>
   </Design.DataContext>
 
+  <Grid>
   <DockPanel>
     <!-- Menu Bar -->
-    <Menu DockPanel.Dock="Top">
+    <Menu DockPanel.Dock="Top" IsVisible="{Binding !IsZenMode}">
       <MenuItem Header="_File">
         <MenuItem Header="_New Project..." Command="{Binding NewProjectCommand}" InputGesture="Ctrl+Shift+N"/>
         <Separator/>
@@ -94,6 +104,7 @@
         <MenuItem Header="Find in _Files..." Command="{Binding ShowFindInFilesCommand}" InputGesture="Ctrl+Shift+F"/>
         <Separator/>
         <MenuItem Header="_Go to Definition" Command="{Binding GoToDefinitionCommand}" InputGesture="F12"/>
+        <MenuItem Header="Go to _Implementation" Command="{Binding GoToImplementationCommand}" InputGesture="Ctrl+F12"/>
         <MenuItem Header="Find All _References" Command="{Binding FindReferencesCommand}" InputGesture="Shift+F12"/>
         <MenuItem Header="_Rename Symbol..." Command="{Binding RenameSymbolCommand}" InputGesture="Ctrl+R"/>
         <MenuItem Header="_Extract Method..." Command="{Binding ExtractMethodCommand}" InputGesture="Ctrl+Shift+M"/>
@@ -131,6 +142,7 @@
 
       <MenuItem Header="_View">
         <MenuItem Header="_Command Palette..." Command="{Binding OpenCommandPaletteCommand}" InputGesture="Ctrl+Shift+P"/>
+        <MenuItem Header="_Quick Open..." Command="{Binding OpenQuickOpenCommand}" InputGesture="Ctrl+P"/>
         <Separator/>
         <MenuItem Header="_Solution Explorer" Command="{Binding ShowSolutionExplorerCommand}"/>
         <MenuItem Header="_Output" Command="{Binding ShowOutputCommand}"/>
@@ -138,10 +150,23 @@
         <MenuItem Header="_Terminal" Command="{Binding ShowTerminalCommand}"/>
         <MenuItem Header="Find _Results" Command="{Binding ShowFindResultsCommand}"/>
         <Separator/>
+        <MenuItem Header="Show _Whitespace" Command="{Binding ToggleWhitespaceCommand}" InputGesture="Ctrl+Shift+W">
+          <MenuItem.Icon>
+            <CheckBox IsChecked="{Binding ShowWhitespace}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
+          </MenuItem.Icon>
+        </MenuItem>
+        <MenuItem Header="Column Se_lection Mode" Command="{Binding ToggleColumnSelectionModeCommand}" InputGesture="Alt+Shift+Insert">
+          <MenuItem.Icon>
+            <CheckBox IsChecked="{Binding IsColumnSelectionMode}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
+          </MenuItem.Icon>
+        </MenuItem>
+        <MenuItem Header="_Zen Mode" Command="{Binding ToggleZenModeCommand}" InputGesture="Ctrl+Shift+Z"/>
         <MenuItem Header="_Full Screen" InputGesture="Shift+Alt+Enter"/>
       </MenuItem>
 
       <MenuItem Header="_Tools">
+        <MenuItem Header="_Keyboard Shortcuts..." Command="{Binding ShowKeyboardShortcutsCommand}"/>
+        <Separator/>
         <MenuItem Header="_Settings..." Command="{Binding SettingsCommand}"/>
       </MenuItem>
 
@@ -187,7 +212,7 @@
     </Menu>
 
     <!-- Toolbar -->
-    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="4" BorderThickness="0,0,0,1" BorderBrush="#3C3C3C">
+    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="4" BorderThickness="0,0,0,1" BorderBrush="#3C3C3C" IsVisible="{Binding !IsZenMode}">
       <StackPanel Orientation="Horizontal" Spacing="4">
         <Button Classes="toolbarButton" Command="{Binding NewProjectCommand}" ToolTip.Tip="New Project">
           <TextBlock Text="New" FontSize="12"/>
@@ -250,7 +275,7 @@
     </Border>
 
     <!-- Status Bar -->
-    <Border DockPanel.Dock="Bottom" Classes="statusBar">
+    <Border DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}">
       <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
         <!-- Status message (left-aligned, fills remaining space) -->
         <TextBlock Grid.Column="0"
@@ -341,4 +366,14 @@
     <dock:DockControl Layout="{Binding Layout}"/>
 
   </DockPanel>
+
+  <!-- Toast Notification Overlay -->
+  <StackPanel Name="NotificationArea"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Bottom"
+              Margin="0,0,20,40"
+              MaxWidth="400"
+              Spacing="5"
+              IsHitTestVisible="False"/>
+  </Grid>
 </Window>

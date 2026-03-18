@@ -27,7 +27,8 @@
     <!-- Breadcrumb Bar -->
     <editor:BreadcrumbControl x:Name="BreadcrumbBar"
                                Grid.Row="1"
-                               ItemClicked="OnBreadcrumbItemClicked"/>
+                               ItemClicked="OnBreadcrumbItemClicked"
+                               SiblingSelected="OnBreadcrumbSiblingSelected"/>
 
     <!-- Editor Content -->
     <Grid Grid.Row="2" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">

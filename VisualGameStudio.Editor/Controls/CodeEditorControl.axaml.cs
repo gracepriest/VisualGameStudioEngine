@@ -5,6 +5,7 @@ using Avalonia.Media;
 using AvaloniaEdit;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Document;
+using AvaloniaEdit.Editing;
 using AvaloniaEdit.Folding;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Rendering;
@@ -50,6 +51,9 @@ public partial class CodeEditorControl : UserControl
     private InlineFindReplaceControl? _inlineFindReplace;
     private bool _autoCloseBrackets = true;
     private BasicLangIndentationStrategy? _indentationStrategy;
+    private ILanguageService? _languageService;
+    private string? _documentFilePath;
+    private bool _isColumnSelectionMode;
 
     private static readonly Dictionary<char, char> AutoClosePairs = new()
     {
@@ -145,6 +149,50 @@ public partial class CodeEditorControl : UserControl
     public int CaretOffset => _textEditor?.CaretOffset ?? 0;
 
     /// <summary>
+    /// Gets or sets whether column (rectangular) selection mode is active.
+    /// When enabled, all mouse and keyboard selections produce rectangular selections
+    /// without requiring the Alt key to be held.
+    /// Alt+click/drag always works for rectangular selection regardless of this setting.
+    /// </summary>
+    public bool IsColumnSelectionMode
+    {
+        get => _isColumnSelectionMode;
+        set
+        {
+            if (_isColumnSelectionMode == value) return;
+            _isColumnSelectionMode = value;
+
+            if (_textEditor?.TextArea != null)
+            {
+                // When column mode is active, convert the current selection to rectangular
+                // or clear to a simple caret position
+                if (value && _textEditor.TextArea.Selection is not RectangleSelection
+                    && !_textEditor.TextArea.Selection.IsEmpty)
+                {
+                    var start = _textEditor.TextArea.Selection.StartPosition;
+                    var end = _textEditor.TextArea.Selection.EndPosition;
+                    _textEditor.TextArea.Selection = new RectangleSelection(_textEditor.TextArea, start, end);
+                }
+            }
+
+            ColumnSelectionModeChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Toggles column (rectangular) selection mode on/off.
+    /// </summary>
+    public void ToggleColumnSelectionMode()
+    {
+        IsColumnSelectionMode = !IsColumnSelectionMode;
+    }
+
+    /// <summary>
+    /// Raised when column selection mode is toggled.
+    /// </summary>
+    public event EventHandler? ColumnSelectionModeChanged;
+
+    /// <summary>
     /// Gets information about the current selection
     /// </summary>
     public SelectionInfo? GetSelectionInfo()
@@ -227,6 +275,16 @@ public partial class CodeEditorControl : UserControl
     public void UpdateBookmarkFilePath(string? filePath)
     {
         _bookmarkMargin?.SetFilePath(filePath);
+    }
+
+    /// <summary>
+    /// Injects the LSP language service so folding ranges can be fetched from the server.
+    /// When set, UpdateFoldings will prefer LSP-based ranges over the local regex strategy.
+    /// </summary>
+    public void SetLanguageService(ILanguageService? languageService, string? filePath)
+    {
+        _languageService = languageService;
+        _documentFilePath = filePath;
     }
 
     public CodeEditorControl()
@@ -319,6 +377,8 @@ public partial class CodeEditorControl : UserControl
 
         // Subscribe to input events for multi-cursor
         _textEditor.TextArea.PointerPressed += OnTextAreaPointerPressed;
+        _textEditor.TextArea.PointerReleased += OnTextAreaPointerReleasedForColumnSelection;
+        _textEditor.TextArea.KeyUp += OnTextAreaKeyUpForColumnSelection;
         _textEditor.TextArea.KeyDown += OnTextAreaKeyDown;
         _textEditor.TextArea.TextEntering += OnTextAreaTextEntering;
         _textEditor.TextArea.TextEntered += OnTextAreaTextEntered;
@@ -555,6 +615,62 @@ public partial class CodeEditorControl : UserControl
         }
 
         _multiCursorInputHandler?.HandlePointerPressed(e);
+    }
+
+    /// <summary>
+    /// After a mouse selection completes, convert to rectangular selection if column mode is active.
+    /// </summary>
+    private void OnTextAreaPointerReleasedForColumnSelection(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_isColumnSelectionMode || _textEditor?.TextArea == null) return;
+        ConvertToRectangularSelectionIfNeeded();
+    }
+
+    /// <summary>
+    /// After a keyboard selection (Shift+Arrow), convert to rectangular selection if column mode is active.
+    /// </summary>
+    private void OnTextAreaKeyUpForColumnSelection(object? sender, KeyEventArgs e)
+    {
+        if (!_isColumnSelectionMode || _textEditor?.TextArea == null) return;
+
+        // Only act on shift+arrow key combinations that produce selections
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            switch (e.Key)
+            {
+                case Key.Up:
+                case Key.Down:
+                case Key.Left:
+                case Key.Right:
+                case Key.Home:
+                case Key.End:
+                case Key.PageUp:
+                case Key.PageDown:
+                    ConvertToRectangularSelectionIfNeeded();
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Converts the current normal selection to a rectangular selection if column mode is active.
+    /// </summary>
+    private void ConvertToRectangularSelectionIfNeeded()
+    {
+        if (_textEditor?.TextArea == null) return;
+        var selection = _textEditor.TextArea.Selection;
+        if (selection.IsEmpty || selection is RectangleSelection) return;
+
+        try
+        {
+            var start = selection.StartPosition;
+            var end = selection.EndPosition;
+            _textEditor.TextArea.Selection = new RectangleSelection(_textEditor.TextArea, start, end);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error converting to rectangular selection: {ex.Message}");
+        }
     }
 
     private double GetLeftMarginWidth()
@@ -1021,22 +1137,14 @@ public partial class CodeEditorControl : UserControl
 
     private void ConfigureEditor()
     {
-        // Dark theme colors
-        _textEditor.Background = new SolidColorBrush(Color.Parse("#1E1E1E"));
-        _textEditor.Foreground = new SolidColorBrush(Color.Parse("#D4D4D4"));
+        // Apply theme-aware colors
+        ApplyEditorThemeColors();
 
-        // Line number styling
-        _textEditor.LineNumbersForeground = new SolidColorBrush(Color.Parse("#858585"));
-
-        // Current line highlighting
-        _textEditor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(Color.Parse("#2A2D2E"));
-        _textEditor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(Color.Parse("#2A2D2E")));
-
-        // Selection colors
-        _textEditor.TextArea.SelectionBrush = new SolidColorBrush(Color.Parse("#264F78"));
-        _textEditor.TextArea.SelectionForeground = null; // Keep text color
+        // Subscribe to theme changes
+        EditorTheme.ThemeChanged += OnEditorThemeChanged;
 
         // Configure options
+        _textEditor.Options.EnableRectangularSelection = true;
         _textEditor.Options.EnableHyperlinks = true;
         _textEditor.Options.EnableEmailHyperlinks = false;
         _textEditor.Options.EnableTextDragDrop = true;
@@ -1054,6 +1162,44 @@ public partial class CodeEditorControl : UserControl
             UseTabs = !_textEditor.Options.ConvertTabsToSpaces
         };
         _textEditor.TextArea.IndentationStrategy = _indentationStrategy;
+    }
+
+    /// <summary>
+    /// Applies theme colors to the editor surface. Called on init and when the theme changes.
+    /// </summary>
+    private void ApplyEditorThemeColors()
+    {
+        _textEditor.Background = new SolidColorBrush(EditorTheme.Background);
+        _textEditor.Foreground = new SolidColorBrush(EditorTheme.Foreground);
+
+        // Line number styling
+        _textEditor.LineNumbersForeground = new SolidColorBrush(EditorTheme.LineNumbersForeground);
+
+        // Current line highlighting
+        _textEditor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(EditorTheme.CurrentLineBackground);
+        _textEditor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(EditorTheme.CurrentLineBackground));
+
+        // Selection colors
+        _textEditor.TextArea.SelectionBrush = new SolidColorBrush(EditorTheme.SelectionBackground);
+        _textEditor.TextArea.SelectionForeground = null; // Keep text color
+
+        // Refresh the text view
+        _textEditor.TextArea.TextView.Redraw();
+    }
+
+    private void OnEditorThemeChanged(object? sender, EventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            ApplyEditorThemeColors();
+
+            // Re-apply syntax highlighting with theme-appropriate colors
+            var highlighting = HighlightingManager.Instance.GetDefinition("BasicLang");
+            if (highlighting != null)
+            {
+                _textEditor.SyntaxHighlighting = highlighting;
+            }
+        });
     }
 
     private void OnEditorTextChanged(object? sender, EventArgs e)
@@ -1074,6 +1220,9 @@ public partial class CodeEditorControl : UserControl
         // Restart folding update timer
         _foldingUpdateTimer?.Stop();
         _foldingUpdateTimer?.Start();
+
+        // Request debounced semantic token refresh
+        RequestSemanticTokenRefresh();
     }
 
     private void OnCaretPositionChanged(object? sender, EventArgs e)
@@ -1088,6 +1237,38 @@ public partial class CodeEditorControl : UserControl
     }
 
     private void UpdateFoldings()
+    {
+        // If LSP is available, request folding ranges asynchronously
+        if (!_isUpdatingFoldings && _isFoldingEnabled
+            && _foldingManager != null && _textEditor?.Document != null && _textEditor?.TextArea != null
+            && _languageService != null && _languageService.IsConnected && !string.IsNullOrEmpty(_documentFilePath))
+        {
+            _ = UpdateFoldingsFromLspAsync();
+            return;
+        }
+        // Fall back to local regex-based folding strategy
+        ApplyFoldings(null);
+    }
+
+    private async Task UpdateFoldingsFromLspAsync()
+    {
+        if (_isUpdatingFoldings || _languageService == null || _documentFilePath == null) return;
+        try
+        {
+            var ranges = await _languageService.GetFoldingRangesAsync(_documentFilePath);
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                ApplyFoldings(ranges != null && ranges.Count > 0 ? ranges : null);
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"LSP folding error: {ex.Message}");
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => ApplyFoldings(null));
+        }
+    }
+
+    private void ApplyFoldings(IReadOnlyList<FoldingRangeInfo>? lspRanges)
     {
         // Prevent re-entrancy and skip if folding disabled
         if (_isUpdatingFoldings || !_isFoldingEnabled) return;
@@ -1126,8 +1307,43 @@ public partial class CodeEditorControl : UserControl
 
             _foldingManager = FoldingManager.Install(_textEditor.TextArea);
 
-            // Apply new foldings
-            _foldingStrategy.UpdateFoldings(_foldingManager, _textEditor.Document);
+            // Apply new foldings - prefer LSP ranges, fall back to local strategy
+            if (lspRanges != null && lspRanges.Count > 0)
+            {
+                var newFoldings = new List<AvaloniaEdit.Folding.NewFolding>();
+                var doc = _textEditor.Document;
+
+                foreach (var range in lspRanges)
+                {
+                    if (range.StartLine < 1 || range.EndLine < 1
+                        || range.StartLine > doc.LineCount || range.EndLine > doc.LineCount)
+                        continue;
+
+                    var startLine = doc.GetLineByNumber(range.StartLine);
+                    var endLine = doc.GetLineByNumber(range.EndLine);
+                    var startOffset = startLine.Offset;
+                    var endOffset = endLine.EndOffset;
+
+                    if (endOffset > startOffset)
+                    {
+                        var lineText = doc.GetText(startLine.Offset, startLine.Length).Trim();
+                        var name = lineText.Length > 50 ? lineText.Substring(0, 50) + "..." : lineText;
+
+                        newFoldings.Add(new AvaloniaEdit.Folding.NewFolding(startOffset, endOffset)
+                        {
+                            Name = name,
+                            DefaultClosed = false
+                        });
+                    }
+                }
+
+                newFoldings.Sort((a, b) => a.StartOffset.CompareTo(b.StartOffset));
+                _foldingManager.UpdateFoldings(newFoldings, -1);
+            }
+            else
+            {
+                _foldingStrategy.UpdateFoldings(_foldingManager, _textEditor.Document);
+            }
 
             // Re-attach fold margin click handlers
             foreach (var margin in _textEditor.TextArea.LeftMargins)
@@ -1497,6 +1713,33 @@ public partial class CodeEditorControl : UserControl
     {
         _textMarkerService?.Clear();
         _textEditor?.TextArea.TextView.Redraw();
+    }
+
+    /// <summary>
+    /// Toggles whitespace rendering (spaces, tabs, end of line markers)
+    /// </summary>
+    /// <returns>True if whitespace is now visible, false if hidden</returns>
+    public bool ToggleWhitespace()
+    {
+        if (_textEditor == null) return false;
+
+        var newState = !_textEditor.Options.ShowSpaces;
+        _textEditor.Options.ShowSpaces = newState;
+        _textEditor.Options.ShowTabs = newState;
+        _textEditor.Options.ShowEndOfLine = newState;
+        return newState;
+    }
+
+    /// <summary>
+    /// Sets whitespace rendering to a specific state
+    /// </summary>
+    public void SetWhitespaceVisible(bool visible)
+    {
+        if (_textEditor == null) return;
+
+        _textEditor.Options.ShowSpaces = visible;
+        _textEditor.Options.ShowTabs = visible;
+        _textEditor.Options.ShowEndOfLine = visible;
     }
 
     /// <summary>
@@ -2454,7 +2697,8 @@ public partial class CodeEditorControl : UserControl
     /// <summary>
     /// Tries to expand a snippet at the current caret position.
     /// Looks at the word immediately before the caret and checks if it matches
-    /// a snippet prefix exactly. If so, replaces the prefix with the expanded snippet.
+    /// a snippet prefix exactly. If so, replaces the prefix with an AvaloniaEdit
+    /// Snippet that supports Tab/Shift+Tab cycling between placeholder positions.
     /// </summary>
     private bool TryExpandSnippet()
     {
@@ -2463,8 +2707,8 @@ public partial class CodeEditorControl : UserControl
         var prefix = GetCurrentWordPrefix();
         if (string.IsNullOrEmpty(prefix)) return false;
 
-        var snippet = SnippetProvider.FindExactMatch(prefix);
-        if (snippet == null) return false;
+        var snippetDef = SnippetProvider.FindExactMatch(prefix);
+        if (snippetDef == null) return false;
 
         var document = _textEditor.Document;
         var caretOffset = _textEditor.CaretOffset;
@@ -2480,20 +2724,14 @@ public partial class CodeEditorControl : UserControl
             else break;
         }
 
-        // Expand the snippet
-        var (expandedText, cursorOffset) = snippet.Expand(indent);
+        // Remove the typed prefix text
+        document.Remove(prefixStart, prefix.Length);
+        _textEditor.CaretOffset = prefixStart;
 
-        // Replace the prefix with the expanded snippet
-        document.BeginUpdate();
-        try
-        {
-            document.Replace(prefixStart, prefix.Length, expandedText);
-            _textEditor.CaretOffset = prefixStart + cursorOffset;
-        }
-        finally
-        {
-            document.EndUpdate();
-        }
+        // Build and insert the AvaloniaEdit Snippet with interactive tab-stops.
+        // Tab/Shift+Tab cycles between placeholders; Escape/Enter exits snippet mode.
+        var snippet = snippetDef.BuildSnippet(indent);
+        snippet.Insert(_textEditor.TextArea);
 
         return true;
     }
@@ -2823,6 +3061,77 @@ public partial class CodeEditorControl : UserControl
 
     #endregion
 
+    #region Semantic Token Highlighting
+
+    private Highlighting.SemanticTokenHighlighter? _semanticTokenHighlighter;
+    private System.Timers.Timer? _semanticTokenTimer;
+    private CancellationTokenSource? _semanticTokenCts;
+
+    /// <summary>
+    /// Event raised when semantic tokens need to be refreshed (after debounce).
+    /// The ViewModel/View should subscribe to this and call the LSP server.
+    /// </summary>
+    public event EventHandler? SemanticTokensRefreshNeeded;
+
+    /// <summary>
+    /// Updates the semantic token highlighting from LSP-provided encoded data.
+    /// Must be called on the UI thread.
+    /// </summary>
+    /// <param name="encodedData">Raw LSP semantic token data: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers] * N</param>
+    public void UpdateSemanticTokens(int[] encodedData)
+    {
+        if (_textEditor?.TextArea?.TextView == null) return;
+
+        if (_semanticTokenHighlighter == null)
+        {
+            _semanticTokenHighlighter = new Highlighting.SemanticTokenHighlighter();
+            // Insert at position 0 so that lexer-based highlighting runs after and can be overridden
+            // Actually, we want semantic tokens to override lexer, so add at end (last transformer wins)
+            _textEditor.TextArea.TextView.LineTransformers.Add(_semanticTokenHighlighter);
+        }
+
+        _semanticTokenHighlighter.Update(encodedData, _textEditor.Document.LineCount);
+        _textEditor.TextArea.TextView.Redraw();
+    }
+
+    /// <summary>
+    /// Clears all semantic token highlighting.
+    /// </summary>
+    public void ClearSemanticTokens()
+    {
+        _semanticTokenHighlighter?.Clear();
+        _textEditor?.TextArea?.TextView?.Redraw();
+    }
+
+    /// <summary>
+    /// Starts the debounced semantic token refresh timer.
+    /// Called internally when the document text changes.
+    /// </summary>
+    private void RequestSemanticTokenRefresh()
+    {
+        // Cancel any pending request
+        _semanticTokenCts?.Cancel();
+        _semanticTokenCts = new CancellationTokenSource();
+
+        if (_semanticTokenTimer == null)
+        {
+            _semanticTokenTimer = new System.Timers.Timer(500);
+            _semanticTokenTimer.AutoReset = false;
+            _semanticTokenTimer.Elapsed += (s, e) =>
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    SemanticTokensRefreshNeeded?.Invoke(this, EventArgs.Empty);
+                });
+            };
+        }
+
+        _semanticTokenTimer.Stop();
+        _semanticTokenTimer.Start();
+    }
+
+    #endregion
+
     #region Diagnostics / Error Markers
 
     /// <summary>
@@ -3070,6 +3379,8 @@ public partial class CodeEditorControl : UserControl
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnDetachedFromVisualTree(e);
+
+        EditorTheme.ThemeChanged -= OnEditorThemeChanged;
 
         _foldingUpdateTimer?.Stop();
         _foldingUpdateTimer?.Dispose();

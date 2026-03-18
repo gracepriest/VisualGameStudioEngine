@@ -46,7 +46,7 @@ public class BreakpointMargin : AbstractMargin
     private static readonly IBrush BreakpointBrush = new SolidColorBrush(Color.Parse("#E51400"));
     private static readonly IBrush DisabledBreakpointBrush = new SolidColorBrush(Color.Parse("#808080"));
     private static readonly IBrush CurrentLineBrush = new SolidColorBrush(Color.Parse("#FFCC00"));
-    private static readonly IBrush MarginBackground = new SolidColorBrush(Color.Parse("#1E1E1E"));
+    private static IBrush MarginBackground => new SolidColorBrush(EditorTheme.MarginBackground);
     private static readonly IPen BreakpointBorderPen = new Pen(new SolidColorBrush(Color.Parse("#8B0000")), 1);
     private static readonly IPen DisabledBorderPen = new Pen(new SolidColorBrush(Color.Parse("#505050")), 1);
     private static readonly IPen UnverifiedBreakpointPen = new Pen(new SolidColorBrush(Color.Parse("#E51400")), 1.5);

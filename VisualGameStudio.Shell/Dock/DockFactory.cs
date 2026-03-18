@@ -368,6 +368,16 @@ public class DockFactory : Factory
         return (_documentDock?.ActiveDockable as CodeEditorDocument)?.ViewModel;
     }
 
+    public IEnumerable<object> GetAllDocuments()
+    {
+        if (_documentDock?.VisibleDockables == null) return Enumerable.Empty<object>();
+
+        return _documentDock.VisibleDockables
+            .OfType<CodeEditorDocument>()
+            .Select(d => d.ViewModel)
+            .Where(vm => vm != null)!;
+    }
+
     public void ActivateTool(string toolId)
     {
         if (_rootDock == null) return;

@@ -32,6 +32,8 @@ public partial class CodeEditorDocumentView : UserControl
         vm.FindRequested -= OnFindRequested;
         vm.ReplaceRequested -= OnReplaceRequested;
         vm.ToggleCommentRequested -= OnToggleCommentRequestedHandler;
+        vm.ToggleWhitespaceRequested -= OnToggleWhitespaceRequestedHandler;
+        vm.ToggleColumnSelectionRequested -= OnToggleColumnSelectionRequestedHandler;
         vm.DuplicateLineRequested -= OnDuplicateLineRequestedHandler;
         vm.MoveLineUpRequested -= OnMoveLineUpRequestedHandler;
         vm.MoveLineDownRequested -= OnMoveLineDownRequestedHandler;
@@ -48,6 +50,7 @@ public partial class CodeEditorDocumentView : UserControl
         vm.DocumentHighlightResultReceived -= OnDocumentHighlightResultReceived;
         vm.RenameResultReceived -= OnRenameResultReceived;
         vm.SelectionRangeReceived -= OnSelectionRangeReceived;
+        vm.SemanticTokensUpdated -= OnSemanticTokensUpdated;
     }
 
     private void UnsubscribeFromEditor()
@@ -73,6 +76,22 @@ public partial class CodeEditorDocumentView : UserControl
 
     // Named handlers to allow unsubscribe (replaces lambdas)
     private void OnToggleCommentRequestedHandler(object? s, EventArgs args) => MainEditor?.ToggleLineComment();
+    private void OnToggleWhitespaceRequestedHandler(object? s, bool show)
+    {
+        if (MainEditor != null)
+        {
+            // Set the whitespace state directly rather than toggling,
+            // so all open editors stay in sync with the ViewModel's state
+            MainEditor.SetWhitespaceVisible(show);
+        }
+    }
+    private void OnToggleColumnSelectionRequestedHandler(object? s, bool enabled)
+    {
+        if (MainEditor != null)
+        {
+            MainEditor.IsColumnSelectionMode = enabled;
+        }
+    }
     private void OnDuplicateLineRequestedHandler(object? s, EventArgs args) => MainEditor?.DuplicateLine();
     private void OnMoveLineUpRequestedHandler(object? s, EventArgs args) => MainEditor?.MoveLineUp();
     private void OnMoveLineDownRequestedHandler(object? s, EventArgs args) => MainEditor?.MoveLineDown();
@@ -174,6 +193,8 @@ public partial class CodeEditorDocumentView : UserControl
             vm.FindRequested += OnFindRequested;
             vm.ReplaceRequested += OnReplaceRequested;
             vm.ToggleCommentRequested += OnToggleCommentRequestedHandler;
+            vm.ToggleWhitespaceRequested += OnToggleWhitespaceRequestedHandler;
+            vm.ToggleColumnSelectionRequested += OnToggleColumnSelectionRequestedHandler;
             vm.DuplicateLineRequested += OnDuplicateLineRequestedHandler;
             vm.MoveLineUpRequested += OnMoveLineUpRequestedHandler;
             vm.MoveLineDownRequested += OnMoveLineDownRequestedHandler;
@@ -201,6 +222,12 @@ public partial class CodeEditorDocumentView : UserControl
                 MainEditor.InitializeBookmarks(vm.BookmarkService, vm.FilePath);
             }
 
+            // Wire up LSP-based folding ranges
+            if (MainEditor != null)
+            {
+                MainEditor.SetLanguageService(vm.LanguageService, vm.FilePath);
+            }
+
             // Wire up diagnostics (error highlighting)
             vm.DiagnosticsUpdated += OnDiagnosticsUpdated;
 
@@ -215,6 +242,9 @@ public partial class CodeEditorDocumentView : UserControl
 
             // Wire up breakpoint visual updates (verified/unverified state)
             vm.BreakpointVisualsUpdated += OnBreakpointVisualsUpdated;
+
+            // Wire up semantic token highlighting
+            vm.SemanticTokensUpdated += OnSemanticTokensUpdated;
 
             // Wire up code completion
             if (MainEditor != null)
@@ -396,6 +426,17 @@ public partial class CodeEditorDocumentView : UserControl
         });
     }
 
+    private void OnSemanticTokensUpdated(object? sender, int[] encodedData)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (encodedData.Length == 0)
+                MainEditor?.ClearSemanticTokens();
+            else
+                MainEditor?.UpdateSemanticTokens(encodedData);
+        });
+    }
+
     private void OnCompletionRequested(object? sender, CompletionRequestEventArgs e)
     {
         if (DataContext is CodeEditorDocumentViewModel vm)
@@ -549,13 +590,19 @@ public partial class CodeEditorDocumentView : UserControl
     {
         if (DataContext is CodeEditorDocumentViewModel vm)
         {
-            // Request debug data tip evaluation (works when debugging and paused)
-            vm.RequestDataTipEvaluation(e.Expression, e.ScreenX, e.ScreenY);
-
-            // Also request LSP hover info (works when LSP is connected)
-            if (e.Line > 0 && e.Column > 0)
+            if (vm.IsDebugPaused)
             {
-                vm.RequestHover(e.Line, e.Column);
+                // When paused, try debug evaluation first. The handler in
+                // MainWindowViewModel will fall back to LSP hover if eval fails.
+                vm.RequestDataTipEvaluation(e.Expression, e.ScreenX, e.ScreenY, e.Line, e.Column);
+            }
+            else
+            {
+                // Not debugging - request LSP hover info only
+                if (e.Line > 0 && e.Column > 0)
+                {
+                    vm.RequestHover(e.Line, e.Column);
+                }
             }
         }
     }
@@ -576,6 +623,16 @@ public partial class CodeEditorDocumentView : UserControl
         MainEditor?.Focus();
     }
 
+    private string _previousText = "";
+
+    /// <summary>
+    /// Trigger keywords that should invoke on-type formatting when typed at the end of a line.
+    /// </summary>
+    private static readonly string[] OnTypeFormattingTriggerKeywords = new[]
+    {
+        "End Sub", "End If", "End Function", "End While", "End Module", "End Class"
+    };
+
     private void OnTextChanged(object? sender, EventArgs e)
     {
         // Since we're using Document binding, edits go directly to vm.TextDocument
@@ -585,6 +642,45 @@ public partial class CodeEditorDocumentView : UserControl
             // Get text from the shared document
             var currentText = vm.TextDocument?.Text ?? "";
             vm.UpdateTextFromEditor(currentText);
+
+            // Check for on-type formatting triggers
+            CheckOnTypeFormattingTrigger(editor, vm, currentText);
+
+            _previousText = currentText;
+        }
+    }
+
+    private void CheckOnTypeFormattingTrigger(CodeEditorControl editor, CodeEditorDocumentViewModel vm, string currentText)
+    {
+        var caretLine = editor.CaretLine;
+        var caretColumn = editor.CaretColumn;
+        if (caretLine < 1 || string.IsNullOrEmpty(currentText)) return;
+
+        var lines = currentText.Split('\n');
+
+        // Check if Enter was pressed (new line inserted)
+        var prevLineCount = _previousText.Split('\n').Length;
+        var currLineCount = lines.Length;
+        if (currLineCount > prevLineCount && caretLine >= 2)
+        {
+            // Enter was pressed - trigger on-type formatting for the previous line
+            vm.RequestOnTypeFormatting(caretLine, caretColumn, "\n");
+            return;
+        }
+
+        // Check if current line ends with a trigger keyword (e.g., "End Sub")
+        if (caretLine <= lines.Length)
+        {
+            var lineText = lines[caretLine - 1].TrimEnd('\r');
+            var trimmedLine = lineText.Trim();
+            foreach (var keyword in OnTypeFormattingTriggerKeywords)
+            {
+                if (trimmedLine.Equals(keyword, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    vm.RequestOnTypeFormatting(caretLine, caretColumn, keyword);
+                    return;
+                }
+            }
         }
     }
 
@@ -623,10 +719,130 @@ public partial class CodeEditorDocumentView : UserControl
         var text = vm.Text;
         if (string.IsNullOrEmpty(text)) return;
 
-        var breadcrumbItems = new List<(string Name, int Line, string Kind)>();
         var lines = text.Split('\n');
 
-        // Simple breadcrumb parser - track containing structures
+        // Parse all symbols in the file for dropdown population
+        var allSymbols = ParseAllSymbols(lines);
+
+        // Find the containing symbols at the current caret line
+        var containingSymbols = FindContainingSymbols(lines, line);
+
+        // Determine project name (from the MainWindowViewModel)
+        string? projectName = null;
+        var mainWindow = TopLevel.GetTopLevel(this) as Avalonia.Controls.Window;
+        if (mainWindow?.DataContext is MainWindowViewModel mainVm)
+        {
+            projectName = mainVm.ProjectName;
+        }
+
+        // Determine file name and sibling files
+        var fileName = vm.FilePath != null ? Path.GetFileName(vm.FilePath) : null;
+        var siblingFiles = GetSiblingFiles(vm.FilePath);
+
+        // Build sibling symbols for the dropdown (peer symbols at the same nesting level)
+        var siblingSymbols = BuildSiblingSymbols(allSymbols, containingSymbols);
+
+        BreadcrumbBar.SetFullPath(
+            projectName,
+            fileName,
+            vm.FilePath,
+            containingSymbols,
+            siblingFiles,
+            siblingSymbols);
+    }
+
+    /// <summary>
+    /// Parses all named symbols (modules, classes, interfaces, functions, subs, properties, enums) from the file.
+    /// </summary>
+    private static List<ParsedSymbol> ParseAllSymbols(string[] lines)
+    {
+        var symbols = new List<ParsedSymbol>();
+        string? currentContainer = null;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var lineText = lines[i].Trim();
+            var lineNum = i + 1;
+
+            if (lineText.StartsWith("Module ", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = ExtractName(lineText, "Module ");
+                if (!string.IsNullOrEmpty(name))
+                {
+                    symbols.Add(new ParsedSymbol(name, lineNum, "Module", null));
+                    currentContainer = name;
+                }
+            }
+            else if (lineText.StartsWith("End Module", StringComparison.OrdinalIgnoreCase))
+            {
+                currentContainer = null;
+            }
+            else if (lineText.StartsWith("Class ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Class ", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = ExtractName(lineText, "Class ");
+                if (!string.IsNullOrEmpty(name))
+                {
+                    symbols.Add(new ParsedSymbol(name, lineNum, "Class", currentContainer));
+                    currentContainer = name;
+                }
+            }
+            else if (lineText.StartsWith("End Class", StringComparison.OrdinalIgnoreCase))
+            {
+                currentContainer = null;
+            }
+            else if (lineText.StartsWith("Interface ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Interface ", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = ExtractName(lineText, "Interface ");
+                if (!string.IsNullOrEmpty(name))
+                {
+                    symbols.Add(new ParsedSymbol(name, lineNum, "Interface", currentContainer));
+                    currentContainer = name;
+                }
+            }
+            else if (lineText.StartsWith("End Interface", StringComparison.OrdinalIgnoreCase))
+            {
+                currentContainer = null;
+            }
+            else if (lineText.StartsWith("Sub ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Sub ", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = ExtractMethodName(lineText, "Sub ");
+                if (!string.IsNullOrEmpty(name))
+                    symbols.Add(new ParsedSymbol(name, lineNum, "Sub", currentContainer));
+            }
+            else if (lineText.StartsWith("Function ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Function ", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = ExtractMethodName(lineText, "Function ");
+                if (!string.IsNullOrEmpty(name))
+                    symbols.Add(new ParsedSymbol(name, lineNum, "Function", currentContainer));
+            }
+            else if (lineText.StartsWith("Property ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Property ", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = ExtractName(lineText, "Property ");
+                if (!string.IsNullOrEmpty(name))
+                    symbols.Add(new ParsedSymbol(name, lineNum, "Property", currentContainer));
+            }
+            else if (lineText.StartsWith("Enum ", StringComparison.OrdinalIgnoreCase) ||
+                     lineText.Contains(" Enum ", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = ExtractName(lineText, "Enum ");
+                if (!string.IsNullOrEmpty(name))
+                    symbols.Add(new ParsedSymbol(name, lineNum, "Enum", currentContainer));
+            }
+        }
+
+        return symbols;
+    }
+
+    /// <summary>
+    /// Finds the containing module/class/function at the given line.
+    /// </summary>
+    private static List<(string Name, int Line, string Kind)> FindContainingSymbols(string[] lines, int line)
+    {
         string? currentModule = null;
         int moduleStartLine = 0;
         string? currentClass = null;
@@ -683,15 +899,90 @@ public partial class CodeEditorDocumentView : UserControl
             }
         }
 
-        // Build breadcrumb path
+        var result = new List<(string Name, int Line, string Kind)>();
         if (!string.IsNullOrEmpty(currentModule))
-            breadcrumbItems.Add((currentModule, moduleStartLine, "Module"));
+            result.Add((currentModule!, moduleStartLine, "Module"));
         if (!string.IsNullOrEmpty(currentClass))
-            breadcrumbItems.Add((currentClass, classStartLine, "Class"));
+            result.Add((currentClass!, classStartLine, "Class"));
         if (!string.IsNullOrEmpty(currentMethod))
-            breadcrumbItems.Add((currentMethod, methodStartLine, "Function"));
+            result.Add((currentMethod!, methodStartLine, "Function"));
+        return result;
+    }
 
-        BreadcrumbBar.UpdateBreadcrumb(breadcrumbItems);
+    /// <summary>
+    /// Collects sibling files in the same directory (for the file segment dropdown).
+    /// </summary>
+    private static List<BreadcrumbSibling>? GetSiblingFiles(string? filePath)
+    {
+        if (string.IsNullOrEmpty(filePath)) return null;
+        try
+        {
+            var dir = Path.GetDirectoryName(filePath);
+            if (dir == null || !Directory.Exists(dir)) return null;
+
+            var siblings = new List<BreadcrumbSibling>();
+            var extensions = new[] { ".bas", ".bl", ".blproj", ".cs", ".vb", ".cpp", ".h", ".json", ".xml", ".txt" };
+            foreach (var file in Directory.GetFiles(dir)
+                .Where(f => extensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
+                .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase))
+            {
+                siblings.Add(new BreadcrumbSibling
+                {
+                    Name = Path.GetFileName(file),
+                    FullPath = file,
+                    Kind = "File"
+                });
+            }
+            return siblings.Count > 0 ? siblings : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Builds sibling symbols for the dropdown based on the current container.
+    /// Shows peer symbols at the same nesting level.
+    /// </summary>
+    private static List<BreadcrumbSibling>? BuildSiblingSymbols(
+        List<ParsedSymbol> allSymbols,
+        List<(string Name, int Line, string Kind)> containingSymbols)
+    {
+        var siblings = new List<BreadcrumbSibling>();
+
+        if (containingSymbols.Count == 0)
+        {
+            // At top level: show all top-level symbols
+            foreach (var sym in allSymbols.Where(s => s.Container == null))
+            {
+                siblings.Add(new BreadcrumbSibling
+                {
+                    Name = sym.Name,
+                    Kind = sym.Kind,
+                    Line = sym.Line
+                });
+            }
+        }
+        else
+        {
+            // Inside a container: show peer members of the innermost container
+            var innermost = containingSymbols.Last();
+            foreach (var sym in allSymbols.Where(s =>
+                s.Container != null &&
+                s.Container.Equals(innermost.Name, StringComparison.OrdinalIgnoreCase) &&
+                (s.Kind == "Function" || s.Kind == "Sub" || s.Kind == "Property")))
+            {
+                siblings.Add(new BreadcrumbSibling
+                {
+                    Name = sym.Name,
+                    Kind = sym.Kind,
+                    Line = sym.Line
+                });
+            }
+        }
+
+        return siblings.Count > 0 ? siblings : null;
     }
 
     private static string ExtractName(string line, string keyword)
@@ -715,8 +1006,36 @@ public partial class CodeEditorDocumentView : UserControl
 
     private void OnBreadcrumbItemClicked(object? sender, BreadcrumbItem item)
     {
-        MainEditor?.GoToLine(item.Line);
+        if (item.Line > 0)
+        {
+            MainEditor?.GoToLine(item.Line);
+        }
     }
+
+    private void OnBreadcrumbSiblingSelected(object? sender, BreadcrumbSiblingSelectedEventArgs e)
+    {
+        var sibling = e.Sibling;
+
+        if (e.SourceType == BreadcrumbItemType.File && !string.IsNullOrEmpty(sibling.FullPath))
+        {
+            // Open sibling file via MainWindowViewModel
+            var mainWindow = TopLevel.GetTopLevel(this) as Avalonia.Controls.Window;
+            if (mainWindow?.DataContext is MainWindowViewModel mainVm)
+            {
+                _ = mainVm.OpenFileFromLinkAsync(sibling.FullPath);
+            }
+        }
+        else if (e.SourceType == BreadcrumbItemType.Symbol && sibling.Line > 0)
+        {
+            // Navigate to the symbol in the current document
+            MainEditor?.GoToLine(sibling.Line);
+        }
+    }
+
+    /// <summary>
+    /// Simple parsed symbol record for breadcrumb analysis.
+    /// </summary>
+    private record ParsedSymbol(string Name, int Line, string Kind, string? Container);
 
     private void OnCut(object? sender, RoutedEventArgs e)
     {

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using AvaloniaEdit.Snippets;
 
 namespace VisualGameStudio.Editor.Completion;
 
@@ -51,6 +52,99 @@ public class SnippetDefinition
 
         // No $0 marker — place cursor at end
         return (expanded, expanded.Length);
+    }
+
+    /// <summary>
+    /// Builds an AvaloniaEdit Snippet object with proper tab-stop elements.
+    /// Parses $1, $2, ${1:default}, $0 patterns and creates SnippetReplaceableTextElement
+    /// entries that support Tab/Shift+Tab cycling between placeholder positions.
+    /// Repeated tab-stop numbers (e.g. multiple ${1:Name}) use SnippetBoundElement
+    /// so editing one updates all linked occurrences.
+    /// </summary>
+    public Snippet BuildSnippet(string currentIndent)
+    {
+        var lines = new List<string>();
+        foreach (var line in BodyLines)
+        {
+            var prefix = lines.Count == 0 ? "" : currentIndent;
+            lines.Add(prefix + line);
+        }
+
+        var raw = string.Join(Environment.NewLine, lines);
+
+        // Parse the raw text into a sequence of snippet elements.
+        // We scan for $0, $N, ${N:text} patterns and split around them.
+        var snippet = new Snippet();
+
+        // Dictionary mapping tab-stop number -> the first SnippetReplaceableTextElement for that number.
+        // Subsequent occurrences of the same number become SnippetBoundElement linked to the first.
+        var tabStopElements = new Dictionary<int, SnippetReplaceableTextElement>();
+
+        // Regex matches ${N:text} or $N patterns
+        var pattern = new Regex(@"\$\{(\d+):([^}]*)\}|\$(\d+)");
+
+        int lastIndex = 0;
+        foreach (Match match in pattern.Matches(raw))
+        {
+            // Add any literal text before this match
+            if (match.Index > lastIndex)
+            {
+                snippet.Elements.Add(new SnippetTextElement
+                {
+                    Text = raw.Substring(lastIndex, match.Index - lastIndex)
+                });
+            }
+
+            int tabStopNumber;
+            string defaultText;
+
+            if (match.Groups[1].Success)
+            {
+                // ${N:text} pattern
+                tabStopNumber = int.Parse(match.Groups[1].Value);
+                defaultText = match.Groups[2].Value;
+            }
+            else
+            {
+                // $N pattern
+                tabStopNumber = int.Parse(match.Groups[3].Value);
+                defaultText = "";
+            }
+
+            if (tabStopNumber == 0)
+            {
+                // $0 is the final caret position
+                snippet.Elements.Add(new SnippetCaretElement());
+            }
+            else if (!tabStopElements.ContainsKey(tabStopNumber))
+            {
+                // First occurrence of this tab-stop: create a replaceable element
+                var replaceable = new SnippetReplaceableTextElement { Text = defaultText };
+                tabStopElements[tabStopNumber] = replaceable;
+                snippet.Elements.Add(replaceable);
+            }
+            else
+            {
+                // Subsequent occurrence: create a bound element linked to the first
+                snippet.Elements.Add(new SnippetBoundElement
+                {
+                    TargetElement = tabStopElements[tabStopNumber]
+                });
+            }
+
+            lastIndex = match.Index + match.Length;
+        }
+
+        // Add any remaining literal text after the last match
+        if (lastIndex < raw.Length)
+        {
+            snippet.Elements.Add(new SnippetTextElement
+            {
+                Text = raw.Substring(lastIndex)
+            });
+        }
+
+        return snippet;
     }
 }
 

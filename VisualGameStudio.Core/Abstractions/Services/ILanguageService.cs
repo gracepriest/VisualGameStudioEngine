@@ -68,6 +68,11 @@ public interface ILanguageService : IDisposable
     Task<LocationInfo?> GetDefinitionAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Go to implementation
+    /// </summary>
+    Task<LocationInfo?> GetImplementationAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Find all references
     /// </summary>
     Task<IReadOnlyList<LocationInfo>> FindReferencesAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
@@ -123,6 +128,11 @@ public interface ILanguageService : IDisposable
     Task<IReadOnlyList<TextEditInfo>> FormatRangeAsync(string uri, int startLine, int startColumn, int endLine, int endColumn, FormattingOptionsInfo? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Format on type - triggered after the user types a character (e.g., Enter, End Sub, End If)
+    /// </summary>
+    Task<IReadOnlyList<TextEditInfo>> OnTypeFormattingAsync(string uri, int line, int column, string ch, FormattingOptionsInfo? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Get code lenses for the document
     /// </summary>
     Task<IReadOnlyList<CodeLensInfo>> GetCodeLensAsync(string uri, CancellationToken cancellationToken = default);
@@ -156,6 +166,34 @@ public interface ILanguageService : IDisposable
     /// Get document links (clickable imports, file paths, URLs)
     /// </summary>
     Task<IReadOnlyList<DocumentLinkInfo>> GetDocumentLinksAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Search for symbols across the entire workspace using the LSP workspace/symbol request
+    /// </summary>
+    Task<IReadOnlyList<WorkspaceSymbolInfo>> GetWorkspaceSymbolsAsync(string query, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get folding ranges for the document (regions, blocks, imports, comments)
+    /// </summary>
+    Task<IReadOnlyList<FoldingRangeInfo>> GetFoldingRangesAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get linked editing ranges at a position (e.g., synchronized variable renaming)
+    /// </summary>
+    Task<LinkedEditingRangeResult?> GetLinkedEditingRangesAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// A symbol found via workspace/symbol search
+/// </summary>
+public class WorkspaceSymbolInfo
+{
+    public string Name { get; set; } = "";
+    public SymbolKind Kind { get; set; }
+    public string ContainerName { get; set; } = "";
+    public string FilePath { get; set; } = "";
+    public int Line { get; set; }
+    public int Column { get; set; }
 }
 
 public class DiagnosticsEventArgs : EventArgs
@@ -471,4 +509,44 @@ public class DocumentLinkInfo
     public int EndColumn { get; set; }
     public string Target { get; set; } = "";
     public string? Tooltip { get; set; }
+}
+
+/// <summary>
+/// Folding range information from LSP textDocument/foldingRange
+/// </summary>
+public class FoldingRangeInfo
+{
+    /// <summary>Start line (1-based)</summary>
+    public int StartLine { get; set; }
+    /// <summary>End line (1-based)</summary>
+    public int EndLine { get; set; }
+    /// <summary>Optional kind: "comment", "imports", "region", or null for code blocks</summary>
+    public string? Kind { get; set; }
+}
+
+/// <summary>
+/// Result of a linked editing range request (textDocument/linkedEditingRange)
+/// </summary>
+public class LinkedEditingRangeResult
+{
+    /// <summary>
+    /// The ranges that are linked together. Editing one should update all others.
+    /// </summary>
+    public List<LinkedEditingRange> Ranges { get; set; } = new();
+
+    /// <summary>
+    /// Optional word pattern (regex) that describes valid contents for the ranges.
+    /// </summary>
+    public string? WordPattern { get; set; }
+}
+
+/// <summary>
+/// A single range within a linked editing range result
+/// </summary>
+public class LinkedEditingRange
+{
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public int EndLine { get; set; }
+    public int EndColumn { get; set; }
 }

@@ -134,6 +134,10 @@ public partial class SettingsViewModel : ViewModelBase
     {
         SaveSettings();
         DialogResult = true;
+
+        // Apply theme change immediately
+        ThemeManager.Apply(SelectedTheme);
+
         SettingsChanged?.Invoke(this, EventArgs.Empty);
         CloseDialog?.Invoke();
     }

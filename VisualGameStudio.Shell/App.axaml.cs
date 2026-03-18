@@ -33,6 +33,9 @@ public partial class App : Application
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
+
+        // Apply saved theme (Dark/Light) before UI renders
+        ThemeManager.ApplyFromSettings();
     }
 
     public override void OnFrameworkInitializationCompleted()

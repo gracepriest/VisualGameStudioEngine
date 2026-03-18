@@ -67,6 +67,11 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private string _statusText = "Ready";
 
+    /// <summary>
+    /// Gets the current project name for breadcrumb display.
+    /// </summary>
+    public string? ProjectName => _projectService.CurrentProject?.Name;
+
     [ObservableProperty]
     private int _caretLine = 1;
 
@@ -87,6 +92,26 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private string _debugStatusText = "";
+
+    /// <summary>
+    /// Whether whitespace characters (spaces, tabs, EOL) are rendered in the editor.
+    /// </summary>
+    [ObservableProperty]
+    private bool _showWhitespace;
+
+    /// <summary>
+    /// Whether Zen mode (distraction-free editing) is active.
+    /// Hides menu bar, toolbar, status bar, and side/bottom panels.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isZenMode;
+
+    /// <summary>
+    /// Whether column (rectangular) selection mode is active across all editors.
+    /// When active, selections are always rectangular without needing to hold Alt.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isColumnSelectionMode;
 
     /// <summary>
     /// Tracks the executable name being debugged, for status bar display.
@@ -323,10 +348,12 @@ public partial class MainWindowViewModel : ViewModelBase
         if (result.Success)
         {
             StatusText = $"Build succeeded - {result.Duration.TotalSeconds:F1}s";
+            ShowNotification($"Build succeeded - {result.Duration.TotalSeconds:F1}s", "info");
         }
         else
         {
             StatusText = $"Build failed - {result.ErrorCount} error(s), {result.WarningCount} warning(s)";
+            ShowNotification($"Build failed: {result.ErrorCount} error(s), {result.WarningCount} warning(s)", "error");
         }
 
         // Update error list
@@ -440,11 +467,28 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public event EventHandler<DataTipResultEventArgs>? DataTipResult;
 
+    /// <summary>
+    /// Raised when a toast notification should be displayed in the UI.
+    /// </summary>
+    public event EventHandler<NotificationEventArgs>? NotificationRequested;
+
+    /// <summary>
+    /// Shows a toast notification in the bottom-right corner of the IDE.
+    /// </summary>
+    /// <param name="message">The notification message text.</param>
+    /// <param name="severity">Severity level: "info", "warning", or "error".</param>
+    public void ShowNotification(string message, string severity = "info")
+    {
+        NotificationRequested?.Invoke(this, new NotificationEventArgs(message, severity));
+    }
+
     private async void OnDataTipEvaluationRequested(object? sender, DataTipEvaluationRequestEventArgs e)
     {
         // Only evaluate if we're debugging and paused
         if (!_debugService.IsDebugging || _debugService.State != Core.Abstractions.Services.DebugState.Paused)
         {
+            // Not paused - fall back to LSP hover
+            FallbackToLspHover(sender as CodeEditorDocumentViewModel, e);
             return;
         }
 
@@ -461,12 +505,32 @@ public partial class MainWindowViewModel : ViewModelBase
                     e.ScreenY,
                     false
                 ));
+                return; // Debug eval succeeded - don't show LSP hover
             }
         }
         catch (Exception ex)
         {
-            // Silently ignore evaluation errors for hover - the variable may not exist in scope
             System.Diagnostics.Debug.WriteLine($"[DataTip] Evaluate failed for '{e.Expression}': {ex.Message}");
+        }
+
+        // Debug evaluation returned no result or an error - fall back to LSP hover
+        FallbackToLspHover(sender as CodeEditorDocumentViewModel, e);
+    }
+
+    /// <summary>
+    /// Falls back to LSP hover when debug evaluation is unavailable or fails.
+    /// </summary>
+    private async void FallbackToLspHover(CodeEditorDocumentViewModel? document, DataTipEvaluationRequestEventArgs e)
+    {
+        if (document == null || e.Line <= 0 || e.Column <= 0) return;
+        try
+        {
+            var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
+            document.ProvideHoverResult(hover);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DataTip] LSP hover fallback failed: {ex.Message}");
         }
     }
 
@@ -612,7 +676,8 @@ public partial class MainWindowViewModel : ViewModelBase
 
             var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
             {
-                FilePath = filePath
+                FilePath = filePath,
+                LanguageService = _languageService
             };
             document.SetContent(content);
 
@@ -715,6 +780,20 @@ public partial class MainWindowViewModel : ViewModelBase
             document.CodeActionsRequested += onCodeActions;
             document.ExpandSelectionRequested += onExpandSel;
             document.ShrinkSelectionRequested += onShrinkSel;
+
+            EventHandler<OnTypeFormattingRequestEventArgs>? onTypeFormat = async (s, e) =>
+            {
+                try
+                {
+                    if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
+                    await OnTypeFormattingAsync(document, e.Line, e.Column, e.TriggerCharacter);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[OnTypeFormatting] Error: {ex.Message}");
+                }
+            };
+            document.OnTypeFormattingRequested += onTypeFormat;
 
             EventHandler<HoverRequestEventArgs>? onHover = async (s, e) =>
             {
@@ -896,6 +975,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 document.SurroundWithRequested -= onSurround;
                 document.PeekDefinitionRequested -= onPeek;
                 document.FormatDocumentRequested -= onFormat;
+                document.OnTypeFormattingRequested -= onTypeFormat;
                 document.CodeActionsRequested -= onCodeActions;
                 document.ExpandSelectionRequested -= onExpandSel;
                 document.ShrinkSelectionRequested -= onShrinkSel;
@@ -935,13 +1015,37 @@ public partial class MainWindowViewModel : ViewModelBase
             };
             document.TextChanged += onTextChangedCodeLens;
 
-            // Add code lens handlers to cleanup
+            // Fetch semantic tokens after text changes (debounced)
+            CancellationTokenSource? semanticTokenCts = null;
+            EventHandler<string>? onTextChangedSemanticTokens = async (s, newText) =>
+            {
+                try
+                {
+                    semanticTokenCts?.Cancel();
+                    semanticTokenCts = new CancellationTokenSource();
+                    var ct = semanticTokenCts.Token;
+                    await Task.Delay(500, ct);
+                    if (ct.IsCancellationRequested) return;
+                    await RefreshSemanticTokensAsync(document, ct);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SemanticTokens] Error: {ex.Message}");
+                }
+            };
+            document.TextChanged += onTextChangedSemanticTokens;
+
+            // Add code lens and semantic token handlers to cleanup
             var existingCleanup = _documentCleanupActions.GetValueOrDefault(filePath);
             _documentCleanupActions[filePath] = () =>
             {
                 existingCleanup?.Invoke();
                 document.CodeLensCommandRequested -= onCodeLensCmd;
                 document.TextChanged -= onTextChangedCodeLens;
+                document.TextChanged -= onTextChangedSemanticTokens;
+                semanticTokenCts?.Cancel();
+                semanticTokenCts?.Dispose();
             };
 
             _openDocuments[filePath] = document;
@@ -950,8 +1054,9 @@ public partial class MainWindowViewModel : ViewModelBase
             // Update document outline
             await UpdateDocumentOutlineAsync(filePath, content);
 
-            // Fetch initial code lenses
+            // Fetch initial code lenses and semantic tokens
             await RefreshCodeLensesAsync(document);
+            _ = RefreshSemanticTokensAsync(document);
         }
         catch (Exception ex)
         {
@@ -1152,6 +1257,7 @@ public partial class MainWindowViewModel : ViewModelBase
             if (!_debugPanelsShown)
             {
                 ShowDebugPanels();
+                ShowNotification("Debug session started", "info");
             }
         }
     }
@@ -1838,14 +1944,72 @@ public partial class MainWindowViewModel : ViewModelBase
         _dockFactory.ActivateTool("FindInFiles");
     }
 
+    /// <summary>
+    /// Toggles Zen mode (distraction-free editing).
+    /// Hides menu bar, toolbar, status bar, and side/bottom panels.
+    /// Press Escape or re-toggle to exit.
+    /// </summary>
+    [RelayCommand]
+    private void ToggleZenMode()
+    {
+        IsZenMode = !IsZenMode;
+        StatusText = IsZenMode ? "Zen Mode — press Escape to exit" : "Ready";
+    }
+
+    /// <summary>
+    /// Exits Zen mode if currently active. Called from code-behind on Escape key.
+    /// </summary>
+    public void ExitZenMode()
+    {
+        if (IsZenMode)
+        {
+            IsZenMode = false;
+            StatusText = "Ready";
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleWhitespace()
+    {
+        ShowWhitespace = !ShowWhitespace;
+        foreach (var doc in _dockFactory.GetAllDocuments().OfType<CodeEditorDocumentViewModel>())
+        {
+            doc.RequestToggleWhitespace(ShowWhitespace);
+        }
+        StatusText = ShowWhitespace ? "Whitespace characters visible" : "Whitespace characters hidden";
+    }
+
+    [RelayCommand]
+    private void ToggleColumnSelectionMode()
+    {
+        IsColumnSelectionMode = !IsColumnSelectionMode;
+        foreach (var doc in _dockFactory.GetAllDocuments().OfType<CodeEditorDocumentViewModel>())
+        {
+            doc.RequestToggleColumnSelection(IsColumnSelectionMode);
+        }
+        StatusText = IsColumnSelectionMode ? "Column selection mode ON" : "Column selection mode OFF";
+    }
+
     [RelayCommand]
     private async Task OpenCommandPaletteAsync()
+    {
+        await OpenCommandPaletteInternalAsync(ViewModels.Dialogs.CommandPaletteMode.Command);
+    }
+
+    [RelayCommand]
+    private async Task OpenQuickOpenAsync()
+    {
+        await OpenCommandPaletteInternalAsync(ViewModels.Dialogs.CommandPaletteMode.File);
+    }
+
+    private async Task OpenCommandPaletteInternalAsync(ViewModels.Dialogs.CommandPaletteMode mode)
     {
         if (App.MainWindow == null) return;
 
         var vm = new ViewModels.Dialogs.CommandPaletteViewModel();
         vm.RegisterCommands(this);
-        vm.Open();
+        vm.RegisterFiles(_projectService);
+        vm.Open(mode);
 
         var dialog = new Views.Dialogs.CommandPaletteDialog
         {
@@ -1853,6 +2017,35 @@ public partial class MainWindowViewModel : ViewModelBase
         };
 
         var result = await dialog.ShowDialog<ViewModels.Dialogs.CommandPaletteItem?>(App.MainWindow);
+
+        // Handle file open request from Quick Open mode
+        if (dialog.SelectedFilePath != null)
+        {
+            try
+            {
+                await OpenFileFromLinkAsync(dialog.SelectedFilePath);
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Failed to open file: {ex.Message}";
+            }
+            return;
+        }
+
+        // Handle go-to-line request
+        if (dialog.RequestedLineNumber > 0)
+        {
+            try
+            {
+                GoToLineCommand.Execute(null);
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Go to line failed: {ex.Message}";
+            }
+            return;
+        }
+
         if (result?.Execute != null)
         {
             try
@@ -1864,6 +2057,37 @@ public partial class MainWindowViewModel : ViewModelBase
                 StatusText = $"Command failed: {ex.Message}";
             }
         }
+    }
+
+    [RelayCommand]
+    private async Task ShowKeyboardShortcutsAsync()
+    {
+        if (App.MainWindow == null) return;
+
+        var vm = new ViewModels.Dialogs.KeyboardShortcutsViewModel();
+        vm.LoadFromCommandPalette(this);
+
+        var dialog = new Views.Dialogs.KeyboardShortcutsDialog
+        {
+            DataContext = vm
+        };
+
+        await dialog.ShowDialog(App.MainWindow);
+    }
+
+    [RelayCommand]
+    private async Task SettingsAsync()
+    {
+        if (App.MainWindow == null) return;
+
+        var vm = new ViewModels.Dialogs.SettingsViewModel();
+
+        var dialog = new Views.Dialogs.SettingsDialog
+        {
+            DataContext = vm
+        };
+
+        await dialog.ShowDialog(App.MainWindow);
     }
 
     [RelayCommand]
@@ -1958,45 +2182,34 @@ public partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            // Search all open documents using LSP document symbols
-            var allSymbols = new List<(string Name, string File, int Line, int Column)>();
-            foreach (var (path, doc) in _openDocuments)
-            {
-                if (_languageService.IsConnected)
-                {
-                    var symbols = await _languageService.GetDocumentSymbolsAsync(path);
-                    foreach (var sym in FlattenSymbols(symbols))
-                    {
-                        if (sym.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
-                        {
-                            allSymbols.Add((sym.Name, Path.GetFileName(path), sym.Line, sym.Column));
-                        }
-                    }
-                }
-            }
+            // Use LSP workspace/symbol request to search across the entire workspace
+            var workspaceSymbols = await _languageService.GetWorkspaceSymbolsAsync(query);
 
-            if (allSymbols.Count == 0)
+            if (workspaceSymbols.Count == 0)
             {
                 StatusText = $"No symbols matching '{query}' found";
                 return;
             }
 
-            var symbolNames = allSymbols.Select(s => $"{s.Name} - {s.File}:{s.Line}").ToList();
+            var symbolNames = workspaceSymbols.Select(s =>
+            {
+                var container = string.IsNullOrEmpty(s.ContainerName) ? "" : $" ({s.ContainerName})";
+                return $"{s.Name}{container} [{s.Kind}] - {Path.GetFileName(s.FilePath)}:{s.Line}";
+            }).ToList();
+
             var selected = await _dialogService.ShowListSelectionAsync(
                 "Workspace Symbols",
-                $"Found {allSymbols.Count} symbol(s) matching '{query}':",
+                $"Found {workspaceSymbols.Count} symbol(s) matching '{query}':",
                 symbolNames);
 
-            if (selected >= 0 && selected < allSymbols.Count)
+            if (selected >= 0 && selected < workspaceSymbols.Count)
             {
-                var (_, file, line, column) = allSymbols[selected];
-                // Find the full path for the file
-                var fullPath = _openDocuments.Keys.FirstOrDefault(p => Path.GetFileName(p) == file);
-                if (fullPath != null)
+                var sym = workspaceSymbols[selected];
+                if (!string.IsNullOrEmpty(sym.FilePath))
                 {
-                    await OpenFileAsync(fullPath);
+                    await OpenFileAsync(sym.FilePath);
                     var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
-                    activeDoc?.NavigateTo(line, column);
+                    activeDoc?.NavigateTo(sym.Line, sym.Column);
                 }
             }
         }
@@ -2152,6 +2365,29 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Fall back to simple symbol search
         await GoToDefinitionFallbackAsync(activeDoc);
+    }
+
+    [RelayCommand]
+    private async Task GoToImplementationAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null) return;
+
+        if (_languageService.IsConnected)
+        {
+            var location = await _languageService.GetImplementationAsync(
+                activeDoc.FilePath,
+                activeDoc.CaretLine,
+                activeDoc.CaretColumn);
+
+            if (location != null)
+            {
+                await NavigateToLocationAsync(location);
+                return;
+            }
+        }
+
+        StatusText = "No implementation found";
     }
 
     private async Task GoToDefinitionFallbackAsync(CodeEditorDocumentViewModel activeDoc)
@@ -3914,6 +4150,36 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Fetches semantic tokens from the LSP server and displays them in the editor.
+    /// </summary>
+    private async Task RefreshSemanticTokensAsync(CodeEditorDocumentViewModel document, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (!_languageService.IsConnected || document.FilePath == null) return;
+            if (!document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) &&
+                !document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)) return;
+
+            var result = await _languageService.GetSemanticTokensAsync(document.FilePath, cancellationToken);
+            if (cancellationToken.IsCancellationRequested) return;
+
+            if (result?.Data != null && result.Data.Length > 0)
+            {
+                document.UpdateSemanticTokens(result.Data);
+            }
+            else
+            {
+                document.ClearSemanticTokens();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            // Silently fail — semantic tokens are non-critical
+        }
+    }
+
+    /// <summary>
     /// Handles code lens command execution (show references, run, debug).
     /// </summary>
     private async Task HandleCodeLensCommandAsync(CodeEditorDocumentViewModel document, CodeLensClickedInfo info)
@@ -4024,6 +4290,41 @@ public partial class MainWindowViewModel : ViewModelBase
         else
         {
             StatusText = "Document is already formatted";
+        }
+    }
+
+    private async Task OnTypeFormattingAsync(CodeEditorDocumentViewModel document, int line, int column, string triggerCharacter)
+    {
+        if (document.FilePath == null || !_languageService.IsConnected) return;
+
+        var edits = await _languageService.OnTypeFormattingAsync(document.FilePath, line, column, triggerCharacter);
+        if (edits.Count > 0)
+        {
+            // Apply the edits in reverse order to preserve offsets
+            var sortedEdits = edits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
+            var text = document.Text;
+            var lines = text.Split('\n');
+
+            foreach (var edit in sortedEdits)
+            {
+                // Convert to 0-based indices
+                var startLine = edit.StartLine - 1;
+                var endLine = edit.EndLine - 1;
+                var startCol = edit.StartColumn - 1;
+                var endCol = edit.EndColumn - 1;
+
+                // Simple line-based replacement for now
+                if (startLine >= 0 && startLine < lines.Length)
+                {
+                    if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
+                    {
+                        var lineText = lines[startLine];
+                        lines[startLine] = lineText.Substring(0, startCol) + edit.NewText + lineText.Substring(endCol);
+                    }
+                }
+            }
+
+            document.ReplaceContent(string.Join("\n", lines));
         }
     }
 
@@ -4329,5 +4630,17 @@ public class DataTipResultEventArgs : EventArgs
         ScreenX = screenX;
         ScreenY = screenY;
         IsError = isError;
+    }
+}
+
+public class NotificationEventArgs : EventArgs
+{
+    public string Message { get; }
+    public string Severity { get; }
+
+    public NotificationEventArgs(string message, string severity)
+    {
+        Message = message;
+        Severity = severity;
     }
 }

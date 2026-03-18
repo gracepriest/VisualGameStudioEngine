@@ -70,6 +70,8 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler? GoToDefinitionRequested;
     public event EventHandler? FindAllReferencesRequested;
     public event EventHandler? ToggleCommentRequested;
+    public event EventHandler<bool>? ToggleWhitespaceRequested;
+    public event EventHandler<bool>? ToggleColumnSelectionRequested;
     public event EventHandler? DuplicateLineRequested;
     public event EventHandler? MoveLineUpRequested;
     public event EventHandler? MoveLineDownRequested;
@@ -111,6 +113,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler? PeekDefinitionRequested;
     public event EventHandler<int>? BreakpointToggled;
     public event EventHandler? FormatDocumentRequested;
+    public event EventHandler<OnTypeFormattingRequestEventArgs>? OnTypeFormattingRequested;
     public event EventHandler? CodeActionsRequested;
     public event EventHandler<HoverRequestEventArgs>? HoverRequested;
     public event EventHandler<HoverResultEventArgs>? HoverResultReceived;
@@ -140,6 +143,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     }
 
     public IBookmarkService? BookmarkService => _bookmarkService;
+
+    /// <summary>
+    /// Language service for LSP-based features (folding ranges, etc.)
+    /// </summary>
+    public ILanguageService? LanguageService { get; set; }
 
     private string GetTitle()
     {
@@ -216,6 +224,16 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void RequestToggleComment()
     {
         ToggleCommentRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestToggleWhitespace(bool show)
+    {
+        ToggleWhitespaceRequested?.Invoke(this, show);
+    }
+
+    public void RequestToggleColumnSelection(bool enabled)
+    {
+        ToggleColumnSelectionRequested?.Invoke(this, enabled);
     }
 
     public void RequestDuplicateLine()
@@ -418,6 +436,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         FormatDocumentRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    public void RequestOnTypeFormatting(int line, int column, string triggerCharacter)
+    {
+        OnTypeFormattingRequested?.Invoke(this, new OnTypeFormattingRequestEventArgs(line, column, triggerCharacter));
+    }
+
     public void RequestCodeActions()
     {
         CodeActionsRequested?.Invoke(this, EventArgs.Empty);
@@ -506,11 +529,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
     }
 
-    public void RequestDataTipEvaluation(string expression, double screenX, double screenY)
+    public void RequestDataTipEvaluation(string expression, double screenX, double screenY, int line = 0, int column = 0)
     {
         if (!string.IsNullOrWhiteSpace(expression))
         {
-            DataTipEvaluationRequested?.Invoke(this, new DataTipEvaluationRequestEventArgs(expression, screenX, screenY));
+            DataTipEvaluationRequested?.Invoke(this, new DataTipEvaluationRequestEventArgs(expression, screenX, screenY, line, column));
         }
     }
 
@@ -739,6 +762,28 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
     #endregion
 
+    #region Semantic Tokens
+
+    public event EventHandler<int[]>? SemanticTokensUpdated;
+
+    /// <summary>
+    /// Updates semantic token highlighting in the editor.
+    /// </summary>
+    public void UpdateSemanticTokens(int[] encodedData)
+    {
+        SemanticTokensUpdated?.Invoke(this, encodedData);
+    }
+
+    /// <summary>
+    /// Clears semantic token highlighting.
+    /// </summary>
+    public void ClearSemanticTokens()
+    {
+        SemanticTokensUpdated?.Invoke(this, Array.Empty<int>());
+    }
+
+    #endregion
+
     #region Breakpoint Visuals
 
     public event EventHandler<Dictionary<int, BreakpointVisualInfo>>? BreakpointVisualsUpdated;
@@ -837,12 +882,16 @@ public class DataTipEvaluationRequestEventArgs : EventArgs
     public string Expression { get; }
     public double ScreenX { get; }
     public double ScreenY { get; }
+    public int Line { get; }
+    public int Column { get; }
 
-    public DataTipEvaluationRequestEventArgs(string expression, double screenX, double screenY)
+    public DataTipEvaluationRequestEventArgs(string expression, double screenX, double screenY, int line = 0, int column = 0)
     {
         Expression = expression;
         ScreenX = screenX;
         ScreenY = screenY;
+        Line = line;
+        Column = column;
     }
 }
 
@@ -981,5 +1030,19 @@ public class SelectionRangeResultEventArgs : EventArgs
     public SelectionRangeResultEventArgs(SelectionRangeInfo? range)
     {
         Range = range;
+    }
+}
+
+public class OnTypeFormattingRequestEventArgs : EventArgs
+{
+    public int Line { get; }
+    public int Column { get; }
+    public string TriggerCharacter { get; }
+
+    public OnTypeFormattingRequestEventArgs(int line, int column, string triggerCharacter)
+    {
+        Line = line;
+        Column = column;
+        TriggerCharacter = triggerCharacter;
     }
 }

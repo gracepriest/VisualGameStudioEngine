@@ -38,7 +38,7 @@ namespace BasicLang.Debugger
 
         // Scope / frame tracking for variables requests
         private readonly Dictionary<int, ScopeInfo> _scopeReferences = new();
-        private readonly Dictionary<int, ICorDebugILFrame> _frameMap = new();
+        private readonly Dictionary<int, FrameInfo> _frameInfoMap = new();
         private int _nextScopeRef = 1;
         private int _nextFrameId = 1;
 
@@ -364,7 +364,7 @@ namespace BasicLang.Debugger
             var stackFrames = new List<object>();
 
             // Clear previous frame mapping
-            _frameMap.Clear();
+            _frameInfoMap.Clear();
             _nextFrameId = 1;
 
             const int MaxFrames = 50;
@@ -421,17 +421,28 @@ namespace BasicLang.Debugger
                                 var getIP = Marshal.GetDelegateForFunctionPointer<GetIPDelegate>(getIPSlot);
                                 getIP(ilFramePtr, out ilOffset, out _);
 
-                                // Store ICorDebugILFrame in frame map for variable inspection
+                                // Store frame info for variable inspection
                                 int frameId = _nextFrameId++;
+                                var frameInfo = new FrameInfo
+                                {
+                                    FunctionToken = (int)functionToken,
+                                    RawILFramePtr = ilFramePtr,
+                                    ManagedFrame = null
+                                };
+                                // Add ref so the raw pointer stays valid
+                                Marshal.AddRef(ilFramePtr);
+
                                 try
                                 {
                                     var ilFrameObj = (ICorDebugILFrame)Marshal.GetObjectForIUnknown(ilFramePtr);
-                                    _frameMap[frameId] = ilFrameObj;
+                                    frameInfo.ManagedFrame = ilFrameObj;
                                 }
                                 catch
                                 {
-                                    // QI succeeded but cast failed -- still add the frame to stack trace
+                                    // QI succeeded but managed cast failed -- will use raw vtable or PDB fallback
                                 }
+
+                                _frameInfoMap[frameId] = frameInfo;
 
                                 Marshal.Release(ilFramePtr);
 
@@ -522,9 +533,9 @@ namespace BasicLang.Debugger
 
             var scopes = new List<object>();
 
-            if (_frameMap.TryGetValue(frameId, out var ilFrame))
+            if (_frameInfoMap.ContainsKey(frameId))
             {
-                // Locals scope
+                // Locals scope — always returned; will use COM, raw vtable, or PDB fallback
                 int localsRef = _nextScopeRef++;
                 _scopeReferences[localsRef] = new ScopeInfo { FrameId = frameId, Kind = ScopeKind.Locals };
                 scopes.Add(new Dictionary<string, object>
@@ -564,14 +575,60 @@ namespace BasicLang.Debugger
             {
                 if (_scopeReferences.TryGetValue(varRef, out var scopeInfo))
                 {
-                    // This is a scope reference — fetch locals or arguments from the frame
-                    if (_frameMap.TryGetValue(scopeInfo.FrameId, out var ilFrame))
+                    if (_frameInfoMap.TryGetValue(scopeInfo.FrameId, out var frameInfo))
                     {
-                        List<DapVariable> dapVars;
-                        if (scopeInfo.Kind == ScopeKind.Locals)
-                            dapVars = _variableInspector.GetLocals(ilFrame);
-                        else
-                            dapVars = _variableInspector.GetArguments(ilFrame);
+                        List<DapVariable> dapVars = null;
+
+                        // Strategy 1: Managed COM interface (works when RCW cast succeeded)
+                        if (frameInfo.ManagedFrame != null)
+                        {
+                            try
+                            {
+                                if (scopeInfo.Kind == ScopeKind.Locals)
+                                    dapVars = _variableInspector.GetLocals(frameInfo.ManagedFrame);
+                                else
+                                    dapVars = _variableInspector.GetArguments(frameInfo.ManagedFrame);
+
+                                if (dapVars != null && dapVars.Count > 0 &&
+                                    !dapVars.TrueForAll(v => v.Name == "<error>"))
+                                {
+                                    if (scopeInfo.Kind == ScopeKind.Locals)
+                                        ApplyPdbLocalNames(dapVars, frameInfo.FunctionToken);
+                                }
+                                else
+                                {
+                                    dapVars = null;
+                                }
+                            }
+                            catch
+                            {
+                                dapVars = null;
+                            }
+                        }
+
+                        // Strategy 2: Raw vtable calls to read locals/arguments
+                        if (dapVars == null && frameInfo.RawILFramePtr != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                if (scopeInfo.Kind == ScopeKind.Locals)
+                                    dapVars = ReadLocalsViaRawVtable(frameInfo);
+                                else
+                                    dapVars = ReadArgumentsViaRawVtable(frameInfo);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.Error.WriteLine($"Raw vtable variable read failed: {ex.Message}");
+                                dapVars = null;
+                            }
+                        }
+
+                        // Strategy 3: PDB-only fallback — variable names with placeholder values
+                        if (dapVars == null && scopeInfo.Kind == ScopeKind.Locals)
+                            dapVars = GetPdbLocalsFallback(frameInfo.FunctionToken);
+
+                        if (dapVars == null)
+                            dapVars = new List<DapVariable>();
 
                         foreach (var dv in dapVars)
                         {
@@ -739,17 +796,17 @@ namespace BasicLang.Debugger
 
             try
             {
-                if (_frameMap.TryGetValue(frameId, out var ilFrame))
+                if (_frameInfoMap.TryGetValue(frameId, out var frameInfo) && frameInfo.ManagedFrame != null)
                 {
                     // Search locals for a matching variable name
-                    var locals = _variableInspector.GetLocals(ilFrame);
+                    var locals = _variableInspector.GetLocals(frameInfo.ManagedFrame);
                     var match = locals.FirstOrDefault(v =>
                         string.Equals(v.Name, expression, StringComparison.OrdinalIgnoreCase));
 
                     if (match == null)
                     {
                         // Try arguments
-                        var arguments = _variableInspector.GetArguments(ilFrame);
+                        var arguments = _variableInspector.GetArguments(frameInfo.ManagedFrame);
                         match = arguments.FirstOrDefault(v =>
                             string.Equals(v.Name, expression, StringComparison.OrdinalIgnoreCase));
                     }
@@ -1020,21 +1077,83 @@ namespace BasicLang.Debugger
             {
                 // "Just My Code" — if we landed in non-user code (framework/library),
                 // automatically step again until we're back in .bas user code.
-                if (!IsCurrentFrameUserCode())
+                // Uses a retry counter (max 100) to prevent infinite loops in case
+                // we never land back in user code.
+                const int maxRetries = 100;
+                int retryCount = 0;
+
+                while (retryCount < maxRetries)
                 {
                     var thread = GetFirstThread();
-                    if (thread != null)
+                    if (thread == null || _sourceMapper == null)
+                        break;
+
+                    // Get active frame to extract method token and IL offset
+                    bool isUser = false;
+                    var threadPtr = Marshal.GetIUnknownForObject(thread);
+                    try
                     {
-                        try
+                        var vtable = Marshal.ReadIntPtr(threadPtr);
+                        // GetActiveFrame is slot 15 (IUnknown(3) + 12)
+                        var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                        var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                        int hr = getActiveFrame(threadPtr, out var framePtr);
+                        if (hr >= 0 && framePtr != IntPtr.Zero)
                         {
-                            RawCreateStepperAndStep(thread, stepInto: false);
-                            RawContinueProcess();
-                            return; // Don't send stopped event; we're still stepping
+                            try
+                            {
+                                // GetFunctionToken on ICorDebugFrame (slot 6)
+                                var frameVtable = Marshal.ReadIntPtr(framePtr);
+                                var getFnTokenSlot = Marshal.ReadIntPtr(frameVtable, 6 * IntPtr.Size);
+                                var getFnToken = Marshal.GetDelegateForFunctionPointer<GetFunctionTokenDelegate>(getFnTokenSlot);
+                                getFnToken(framePtr, out uint functionToken);
+
+                                // GetIP on ICorDebugILFrame — must QueryInterface
+                                Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                                int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                                uint ilOffset = 0;
+                                if (qiHr >= 0 && ilFramePtr != IntPtr.Zero)
+                                {
+                                    var ilFrameVtable = Marshal.ReadIntPtr(ilFramePtr);
+                                    var getIPSlot = Marshal.ReadIntPtr(ilFrameVtable, 11 * IntPtr.Size);
+                                    var getIP = Marshal.GetDelegateForFunctionPointer<GetIPDelegate>(getIPSlot);
+                                    getIP(ilFramePtr, out ilOffset, out _);
+                                    Marshal.Release(ilFramePtr);
+                                }
+
+                                isUser = IsUserCode((int)functionToken, (int)ilOffset);
+                            }
+                            finally
+                            {
+                                Marshal.Release(framePtr);
+                            }
                         }
-                        catch
-                        {
-                            // If re-stepping fails, fall through and report stopped
-                        }
+                    }
+                    catch
+                    {
+                        // If frame inspection fails, assume not user code on first try,
+                        // but stop to avoid infinite loop
+                        break;
+                    }
+                    finally
+                    {
+                        Marshal.Release(threadPtr);
+                    }
+
+                    if (isUser)
+                        break; // We're in user code — send the stopped event
+
+                    // Not user code — step again automatically
+                    try
+                    {
+                        RawCreateStepperAndStep(thread, stepInto: false);
+                        RawContinueProcess();
+                        return; // Don't send stopped event; the next StepCompleted callback will re-check
+                    }
+                    catch
+                    {
+                        // If re-stepping fails, fall through and report stopped
+                        break;
                     }
                 }
 
@@ -1380,15 +1499,221 @@ namespace BasicLang.Debugger
         }
 
         /// <summary>
+        /// "Just My Code" check for a specific method token and IL offset.
+        /// Returns true if the location maps to a .bas source file via the PDB.
+        /// </summary>
+        private bool IsUserCode(int methodToken, int ilOffset)
+        {
+            var loc = _sourceMapper?.GetSourceLocation(methodToken, ilOffset);
+            return loc != null && loc.Value.file.EndsWith(".bas", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// Evaluate a conditional breakpoint expression. Returns true if condition is met.
         /// Simple implementation: treats "true"/"True"/"1" as true, "false"/"False"/"0" as false.
         /// For variable names, attempts to look them up in the current frame.
         /// </summary>
         private bool EvaluateConditionExpression(string condition)
         {
-            // For v1: always break (condition evaluation requires full expression parser)
-            // TODO: Implement proper expression evaluation using ICorDebugEval
+            if (string.IsNullOrWhiteSpace(condition))
+                return true;
+
+            try
+            {
+                // Get the current thread and active IL frame
+                var thread = GetFirstThread();
+                if (thread == null) return true; // default to break on failure
+
+                var threadPtr = Marshal.GetIUnknownForObject(thread);
+                try
+                {
+                    var vtable = Marshal.ReadIntPtr(threadPtr);
+                    var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                    var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                    int hr = getActiveFrame(threadPtr, out var framePtr);
+                    if (hr < 0 || framePtr == IntPtr.Zero) return true;
+
+                    try
+                    {
+                        // Get function token for PDB variable name lookup
+                        var frameVtable = Marshal.ReadIntPtr(framePtr);
+                        var getFnTokenSlot = Marshal.ReadIntPtr(frameVtable, 6 * IntPtr.Size);
+                        var getFnToken = Marshal.GetDelegateForFunctionPointer<GetFunctionTokenDelegate>(getFnTokenSlot);
+                        getFnToken(framePtr, out uint functionToken);
+
+                        // Get the ICorDebugILFrame managed object
+                        Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                        int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                        if (qiHr < 0 || ilFramePtr == IntPtr.Zero) return true;
+
+                        try
+                        {
+                            var ilFrame = (ICorDebugILFrame)Marshal.GetObjectForIUnknown(ilFramePtr);
+
+                            // Build a name→value dictionary from locals and arguments
+                            var varValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+                            // Get PDB local variable names (slot index → real name)
+                            var localNames = _sourceMapper?.GetLocalVariableNames((int)functionToken)
+                                             ?? new Dictionary<int, string>();
+
+                            // Collect locals
+                            var locals = _variableInspector.GetLocals(ilFrame);
+                            for (int i = 0; i < locals.Count; i++)
+                            {
+                                var dv = locals[i];
+                                // Map PDB name to value; fall back to indexed name
+                                if (localNames.TryGetValue(i, out string realName))
+                                    varValues[realName] = dv.Value;
+                                varValues[dv.Name] = dv.Value; // also store local_N
+                            }
+
+                            // Collect arguments
+                            var args = _variableInspector.GetArguments(ilFrame);
+                            for (int i = 0; i < args.Count; i++)
+                            {
+                                var dv = args[i];
+                                varValues[dv.Name] = dv.Value;
+                            }
+
+                            return EvaluateConditionWithVariables(condition.Trim(), varValues);
+                        }
+                        finally
+                        {
+                            Marshal.Release(ilFramePtr);
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(framePtr);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(threadPtr);
+                }
+            }
+            catch
+            {
+                // On any failure, default to breaking
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Parse and evaluate a condition string against variable values.
+        /// Supported forms:
+        ///   "varname"              — truthy check (non-zero, non-null, non-empty, not "false")
+        ///   "varname == value"     — equality
+        ///   "varname != value"     — inequality
+        ///   "varname > value"      — greater than
+        ///   "varname < value"      — less than
+        ///   "varname >= value"     — greater than or equal
+        ///   "varname <= value"     — less than or equal
+        /// Values can be integers, doubles, or quoted strings.
+        /// </summary>
+        private static bool EvaluateConditionWithVariables(string condition, Dictionary<string, string> varValues)
+        {
+            // Try to parse as "lhs op rhs" — check multi-char operators first
+            string[] operators = { "==", "!=", ">=", "<=", ">", "<" };
+            foreach (var op in operators)
+            {
+                int idx = condition.IndexOf(op, StringComparison.Ordinal);
+                if (idx > 0)
+                {
+                    string lhs = condition.Substring(0, idx).Trim();
+                    string rhs = condition.Substring(idx + op.Length).Trim();
+
+                    // Look up the left-hand side variable
+                    if (!varValues.TryGetValue(lhs, out string varValue))
+                        return true; // variable not found — default to break
+
+                    // Strip surrounding quotes from the variable value (strings come as "\"value\"")
+                    string cleanVarValue = StripQuotes(varValue);
+                    string cleanRhs = StripQuotes(rhs);
+
+                    // Try numeric comparison first
+                    if (double.TryParse(cleanVarValue, System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture, out double numVar) &&
+                        double.TryParse(cleanRhs, System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture, out double numRhs))
+                    {
+                        return op switch
+                        {
+                            "==" => Math.Abs(numVar - numRhs) < double.Epsilon,
+                            "!=" => Math.Abs(numVar - numRhs) >= double.Epsilon,
+                            ">"  => numVar > numRhs,
+                            "<"  => numVar < numRhs,
+                            ">=" => numVar >= numRhs,
+                            "<=" => numVar <= numRhs,
+                            _    => true
+                        };
+                    }
+
+                    // Fall back to string comparison
+                    int cmp = string.Compare(cleanVarValue, cleanRhs, StringComparison.OrdinalIgnoreCase);
+                    return op switch
+                    {
+                        "==" => cmp == 0,
+                        "!=" => cmp != 0,
+                        ">"  => cmp > 0,
+                        "<"  => cmp < 0,
+                        ">=" => cmp >= 0,
+                        "<=" => cmp <= 0,
+                        _    => true
+                    };
+                }
+            }
+
+            // No operator found — treat as bare variable name (truthy check)
+            if (varValues.TryGetValue(condition, out string val))
+                return IsTruthy(val);
+
+            // Check for literal "true"/"false"
+            if (string.Equals(condition, "true", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (string.Equals(condition, "false", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Variable not found — default to break
             return true;
+        }
+
+        /// <summary>
+        /// Determine if a variable value string is "truthy".
+        /// False: "0", "false", "False", "null", "Nothing", empty string, "\"\"".
+        /// True: everything else.
+        /// </summary>
+        private static bool IsTruthy(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return false;
+
+            string cleaned = StripQuotes(value);
+            if (string.IsNullOrEmpty(cleaned)) return false;
+
+            if (string.Equals(cleaned, "0", StringComparison.Ordinal)) return false;
+            if (string.Equals(cleaned, "false", StringComparison.OrdinalIgnoreCase)) return false;
+            if (string.Equals(cleaned, "null", StringComparison.OrdinalIgnoreCase)) return false;
+            if (string.Equals(cleaned, "Nothing", StringComparison.OrdinalIgnoreCase)) return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Remove surrounding double quotes from a string value.
+        /// Handles both the DAP-style quoted values ("\"hello\"") and user-provided quoted literals ("hello").
+        /// </summary>
+        private static string StripQuotes(string value)
+        {
+            if (value == null) return "";
+            value = value.Trim();
+            // Remove escaped quotes first (DAP format: \"value\")
+            if (value.StartsWith("\\\"") && value.EndsWith("\\\"") && value.Length >= 4)
+                return value.Substring(2, value.Length - 4);
+            // Remove regular quotes
+            if (value.StartsWith("\"") && value.EndsWith("\"") && value.Length >= 2)
+                return value.Substring(1, value.Length - 2);
+            return value;
         }
 
         /// <summary>
@@ -1397,16 +1722,149 @@ namespace BasicLang.Debugger
         /// </summary>
         private string InterpolateLogMessage(string message)
         {
-            // For v1: return the message as-is (no interpolation)
-            // TODO: Replace {varname} with actual variable values
-            return message;
+            if (string.IsNullOrEmpty(message) || !message.Contains('{'))
+                return message;
+
+            // Get the current thread's active IL frame for variable lookup
+            ICorDebugILFrame currentILFrame = null;
+            try
+            {
+                var thread = GetFirstThread();
+                if (thread != null)
+                {
+                    var threadPtr = Marshal.GetIUnknownForObject(thread);
+                    try
+                    {
+                        var vtable = Marshal.ReadIntPtr(threadPtr);
+                        var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                        var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                        int hr = getActiveFrame(threadPtr, out var framePtr);
+                        if (hr >= 0 && framePtr != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                                int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                                if (qiHr >= 0 && ilFramePtr != IntPtr.Zero)
+                                {
+                                    try
+                                    {
+                                        currentILFrame = (ICorDebugILFrame)Marshal.GetObjectForIUnknown(ilFramePtr);
+                                    }
+                                    catch
+                                    {
+                                        // Cast failed -- fall through with null frame
+                                    }
+                                    finally
+                                    {
+                                        Marshal.Release(ilFramePtr);
+                                    }
+                                }
+                            }
+                            finally
+                            {
+                                Marshal.Release(framePtr);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(threadPtr);
+                    }
+                }
+            }
+            catch
+            {
+                // If we can't get the frame, placeholders will resolve to <undefined>
+            }
+
+            // Build lookup of variable name -> display value from locals and arguments
+            var variableValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (currentILFrame != null && _variableInspector != null)
+            {
+                try
+                {
+                    var locals = _variableInspector.GetLocals(currentILFrame);
+                    foreach (var v in locals)
+                    {
+                        if (!string.IsNullOrEmpty(v.Name))
+                            variableValues[v.Name] = v.Value ?? "<null>";
+                    }
+                }
+                catch
+                {
+                    // Locals unavailable
+                }
+
+                try
+                {
+                    var arguments = _variableInspector.GetArguments(currentILFrame);
+                    foreach (var v in arguments)
+                    {
+                        if (!string.IsNullOrEmpty(v.Name) && !variableValues.ContainsKey(v.Name))
+                            variableValues[v.Name] = v.Value ?? "<null>";
+                    }
+                }
+                catch
+                {
+                    // Arguments unavailable
+                }
+            }
+
+            // Replace all {expression} placeholders with variable values
+            var result = new StringBuilder(message.Length);
+            int i = 0;
+            while (i < message.Length)
+            {
+                if (message[i] == '{')
+                {
+                    int closingBrace = message.IndexOf('}', i + 1);
+                    if (closingBrace > i + 1)
+                    {
+                        string expr = message.Substring(i + 1, closingBrace - i - 1).Trim();
+                        if (expr.Length > 0 && variableValues.TryGetValue(expr, out string value))
+                        {
+                            result.Append(value);
+                        }
+                        else
+                        {
+                            result.Append("<undefined>");
+                        }
+                        i = closingBrace + 1;
+                    }
+                    else
+                    {
+                        // No closing brace found -- emit the rest as-is
+                        result.Append(message, i, message.Length - i);
+                        break;
+                    }
+                }
+                else
+                {
+                    result.Append(message[i]);
+                    i++;
+                }
+            }
+
+            return result.ToString();
         }
 
         private void ClearDebugState()
         {
             _variableInspector?.ClearReferences();
             _scopeReferences.Clear();
-            _frameMap.Clear();
+
+            // Release raw IL frame pointers before clearing
+            foreach (var kvp in _frameInfoMap)
+            {
+                if (kvp.Value.RawILFramePtr != IntPtr.Zero)
+                {
+                    try { Marshal.Release(kvp.Value.RawILFramePtr); } catch { }
+                    kvp.Value.RawILFramePtr = IntPtr.Zero;
+                }
+            }
+            _frameInfoMap.Clear();
+
             _nextScopeRef = 1;
             _nextFrameId = 1;
         }
@@ -1470,6 +1928,382 @@ namespace BasicLang.Debugger
         }
 
         // =====================================================================
+        // Variable reading helpers (PDB fallback + raw vtable)
+        // =====================================================================
+
+        /// <summary>
+        /// Replace generic "local_N" names with actual names from PDB data.
+        /// </summary>
+        private void ApplyPdbLocalNames(List<DapVariable> locals, int functionToken)
+        {
+            if (_sourceMapper == null) return;
+            var pdbNames = _sourceMapper.GetLocalVariableNames(functionToken);
+            if (pdbNames.Count == 0) return;
+
+            for (int i = 0; i < locals.Count; i++)
+            {
+                if (pdbNames.TryGetValue(i, out var name) && !string.IsNullOrEmpty(name))
+                {
+                    locals[i] = new DapVariable
+                    {
+                        Name = name,
+                        Value = locals[i].Value,
+                        Type = locals[i].Type,
+                        VariablesReference = locals[i].VariablesReference
+                    };
+                }
+            }
+        }
+
+        /// <summary>
+        /// PDB-only fallback: returns local variable names with placeholder values.
+        /// Used when both managed COM and raw vtable approaches fail.
+        /// </summary>
+        private List<DapVariable> GetPdbLocalsFallback(int functionToken)
+        {
+            var result = new List<DapVariable>();
+            if (_sourceMapper == null)
+            {
+                result.Add(new DapVariable
+                {
+                    Name = "(info)",
+                    Value = "Variables unavailable in CLR mode",
+                    Type = "String",
+                    VariablesReference = 0
+                });
+                return result;
+            }
+
+            var pdbNames = _sourceMapper.GetLocalVariableNames(functionToken);
+            if (pdbNames.Count == 0)
+            {
+                result.Add(new DapVariable
+                {
+                    Name = "(info)",
+                    Value = "No local variable info in PDB",
+                    Type = "String",
+                    VariablesReference = 0
+                });
+                return result;
+            }
+
+            // Sort by slot index for stable ordering
+            var sorted = new SortedDictionary<int, string>(pdbNames);
+            foreach (var kvp in sorted)
+            {
+                result.Add(new DapVariable
+                {
+                    Name = kvp.Value,
+                    Value = "<value unavailable>",
+                    Type = "Object",
+                    VariablesReference = 0
+                });
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Read local variables via raw ICorDebugILFrame vtable calls.
+        /// ICorDebugILFrame::EnumerateLocalVariables is slot 13 (IUnknown 3 + ICorDebugFrame 8 + offset 2).
+        /// ICorDebugILFrame::GetLocalVariable is slot 14.
+        /// </summary>
+        private List<DapVariable> ReadLocalsViaRawVtable(FrameInfo frameInfo)
+        {
+            var ilFramePtr = frameInfo.RawILFramePtr;
+            if (ilFramePtr == IntPtr.Zero) return null;
+
+            var vtable = Marshal.ReadIntPtr(ilFramePtr);
+
+            // First try to get count via EnumerateLocalVariables (slot 13)
+            var enumLocalsSlot = Marshal.ReadIntPtr(vtable, 13 * IntPtr.Size);
+            var enumLocals = Marshal.GetDelegateForFunctionPointer<EnumerateLocalVariablesDelegate>(enumLocalsSlot);
+            int hr = enumLocals(ilFramePtr, out IntPtr valueEnumPtr);
+            if (hr < 0 || valueEnumPtr == IntPtr.Zero) return null;
+
+            try
+            {
+                var enumVtable = Marshal.ReadIntPtr(valueEnumPtr);
+
+                // GetCount is slot 6 (IUnknown 3 + ICorDebugEnum: Skip(0), Reset(1), Clone(2), GetCount(3))
+                var getCountSlot = Marshal.ReadIntPtr(enumVtable, 6 * IntPtr.Size);
+                var getCount = Marshal.GetDelegateForFunctionPointer<ValueEnumGetCountDelegate>(getCountSlot);
+                hr = getCount(valueEnumPtr, out uint count);
+                if (hr < 0) return null;
+
+                // Get PDB names for display
+                Dictionary<int, string> pdbNames = null;
+                if (_sourceMapper != null)
+                    pdbNames = _sourceMapper.GetLocalVariableNames(frameInfo.FunctionToken);
+
+                var result = new List<DapVariable>();
+
+                // Read each local via GetLocalVariable (slot 14) for indexed access
+                var getLocalSlot = Marshal.ReadIntPtr(vtable, 14 * IntPtr.Size);
+                var getLocal = Marshal.GetDelegateForFunctionPointer<GetLocalVariableDelegate>(getLocalSlot);
+
+                for (uint i = 0; i < count; i++)
+                {
+                    string name = (pdbNames != null && pdbNames.TryGetValue((int)i, out var pdbName))
+                        ? pdbName
+                        : $"local_{i}";
+
+                    hr = getLocal(ilFramePtr, i, out IntPtr valuePtr);
+                    if (hr >= 0 && valuePtr != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            var dapVar = ReadValueFromRawPointer(valuePtr, name);
+                            result.Add(dapVar);
+                        }
+                        catch
+                        {
+                            result.Add(new DapVariable { Name = name, Value = "<read error>", Type = "Object", VariablesReference = 0 });
+                        }
+                        finally
+                        {
+                            Marshal.Release(valuePtr);
+                        }
+                    }
+                    else
+                    {
+                        result.Add(new DapVariable { Name = name, Value = "<unavailable>", Type = "Object", VariablesReference = 0 });
+                    }
+                }
+
+                return result.Count > 0 ? result : null;
+            }
+            finally
+            {
+                Marshal.Release(valueEnumPtr);
+            }
+        }
+
+        /// <summary>
+        /// Read arguments via raw ICorDebugILFrame vtable calls.
+        /// ICorDebugILFrame::EnumerateArguments is slot 15, GetArgument is slot 16.
+        /// </summary>
+        private List<DapVariable> ReadArgumentsViaRawVtable(FrameInfo frameInfo)
+        {
+            var ilFramePtr = frameInfo.RawILFramePtr;
+            if (ilFramePtr == IntPtr.Zero) return null;
+
+            var vtable = Marshal.ReadIntPtr(ilFramePtr);
+
+            // EnumerateArguments is slot 15
+            var enumArgsSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+            var enumArgs = Marshal.GetDelegateForFunctionPointer<EnumerateArgumentsDelegate>(enumArgsSlot);
+            int hr = enumArgs(ilFramePtr, out IntPtr valueEnumPtr);
+            if (hr < 0 || valueEnumPtr == IntPtr.Zero) return null;
+
+            try
+            {
+                var enumVtable = Marshal.ReadIntPtr(valueEnumPtr);
+                var getCountSlot = Marshal.ReadIntPtr(enumVtable, 6 * IntPtr.Size);
+                var getCount = Marshal.GetDelegateForFunctionPointer<ValueEnumGetCountDelegate>(getCountSlot);
+                hr = getCount(valueEnumPtr, out uint count);
+                if (hr < 0) return null;
+
+                var result = new List<DapVariable>();
+
+                // GetArgument is slot 16
+                var getArgSlot = Marshal.ReadIntPtr(vtable, 16 * IntPtr.Size);
+                var getArg = Marshal.GetDelegateForFunctionPointer<GetArgumentDelegate>(getArgSlot);
+
+                for (uint i = 0; i < count; i++)
+                {
+                    string name = $"arg_{i}";
+
+                    hr = getArg(ilFramePtr, i, out IntPtr valuePtr);
+                    if (hr >= 0 && valuePtr != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            var dapVar = ReadValueFromRawPointer(valuePtr, name);
+                            result.Add(dapVar);
+                        }
+                        catch
+                        {
+                            result.Add(new DapVariable { Name = name, Value = "<read error>", Type = "Object", VariablesReference = 0 });
+                        }
+                        finally
+                        {
+                            Marshal.Release(valuePtr);
+                        }
+                    }
+                    else
+                    {
+                        result.Add(new DapVariable { Name = name, Value = "<unavailable>", Type = "Object", VariablesReference = 0 });
+                    }
+                }
+
+                return result.Count > 0 ? result : null;
+            }
+            finally
+            {
+                Marshal.Release(valueEnumPtr);
+            }
+        }
+
+        /// <summary>
+        /// Read a CLR value from a raw ICorDebugValue pointer.
+        /// Tries to QI for ICorDebugGenericValue to read primitive types.
+        /// </summary>
+        private DapVariable ReadValueFromRawPointer(IntPtr valuePtr, string name)
+        {
+            var vtable = Marshal.ReadIntPtr(valuePtr);
+
+            // ICorDebugValue::GetType (slot 3)
+            var getTypeSlot = Marshal.ReadIntPtr(vtable, 3 * IntPtr.Size);
+            var getType = Marshal.GetDelegateForFunctionPointer<ValueGetTypeDelegate>(getTypeSlot);
+            int hr = getType(valuePtr, out int elementType);
+
+            string typeName = hr >= 0 ? CorElementTypeToString(elementType) : "Object";
+
+            // ICorDebugValue::GetSize (slot 4)
+            var getSizeSlot = Marshal.ReadIntPtr(vtable, 4 * IntPtr.Size);
+            var getSize = Marshal.GetDelegateForFunctionPointer<ValueGetSizeDelegate>(getSizeSlot);
+            getSize(valuePtr, out uint size);
+
+            // Try to QI for ICorDebugGenericValue to read the raw bytes
+            Guid iidGenericValue = new Guid("CC7BCAF8-8A68-11D2-983C-0000F808342D");
+            int qiHr = Marshal.QueryInterface(valuePtr, ref iidGenericValue, out IntPtr genericPtr);
+            if (qiHr >= 0 && genericPtr != IntPtr.Zero)
+            {
+                try
+                {
+                    var genVtable = Marshal.ReadIntPtr(genericPtr);
+                    // ICorDebugGenericValue::GetValue (slot 6 = IUnknown(3) + ICorDebugValue(3) + 0)
+                    var getValueSlot = Marshal.ReadIntPtr(genVtable, 6 * IntPtr.Size);
+                    var getValue = Marshal.GetDelegateForFunctionPointer<GenericValueGetValueDelegate>(getValueSlot);
+
+                    IntPtr buffer = Marshal.AllocHGlobal((int)size);
+                    try
+                    {
+                        hr = getValue(genericPtr, buffer);
+                        if (hr >= 0)
+                        {
+                            string value = FormatPrimitiveValue(elementType, buffer, size);
+                            return new DapVariable { Name = name, Value = value, Type = typeName, VariablesReference = 0 };
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(buffer);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(genericPtr);
+                }
+            }
+
+            // If we can't read the value, try QI for ICorDebugReferenceValue to check for null
+            Guid iidRefValue = new Guid("CC7BCAF9-8A68-11D2-983C-0000F808342D");
+            qiHr = Marshal.QueryInterface(valuePtr, ref iidRefValue, out IntPtr refPtr);
+            if (qiHr >= 0 && refPtr != IntPtr.Zero)
+            {
+                Marshal.Release(refPtr);
+                return new DapVariable { Name = name, Value = "{object}", Type = typeName, VariablesReference = 0 };
+            }
+
+            return new DapVariable { Name = name, Value = "<complex value>", Type = typeName, VariablesReference = 0 };
+        }
+
+        /// <summary>
+        /// Format a primitive CLR value from raw bytes based on CorElementType.
+        /// </summary>
+        private static string FormatPrimitiveValue(int elementType, IntPtr buffer, uint size)
+        {
+            // CorElementType constants
+            const int ELEMENT_TYPE_BOOLEAN = 0x02;
+            const int ELEMENT_TYPE_CHAR = 0x03;
+            const int ELEMENT_TYPE_I1 = 0x04;
+            const int ELEMENT_TYPE_U1 = 0x05;
+            const int ELEMENT_TYPE_I2 = 0x06;
+            const int ELEMENT_TYPE_U2 = 0x07;
+            const int ELEMENT_TYPE_I4 = 0x08;
+            const int ELEMENT_TYPE_U4 = 0x09;
+            const int ELEMENT_TYPE_I8 = 0x0A;
+            const int ELEMENT_TYPE_U8 = 0x0B;
+            const int ELEMENT_TYPE_R4 = 0x0C;
+            const int ELEMENT_TYPE_R8 = 0x0D;
+            const int ELEMENT_TYPE_I = 0x18;
+            const int ELEMENT_TYPE_U = 0x19;
+
+            switch (elementType)
+            {
+                case ELEMENT_TYPE_BOOLEAN:
+                    return Marshal.ReadByte(buffer) != 0 ? "True" : "False";
+                case ELEMENT_TYPE_CHAR:
+                    return $"'{(char)Marshal.ReadInt16(buffer)}'";
+                case ELEMENT_TYPE_I1:
+                    return ((sbyte)Marshal.ReadByte(buffer)).ToString();
+                case ELEMENT_TYPE_U1:
+                    return Marshal.ReadByte(buffer).ToString();
+                case ELEMENT_TYPE_I2:
+                    return Marshal.ReadInt16(buffer).ToString();
+                case ELEMENT_TYPE_U2:
+                    return ((ushort)Marshal.ReadInt16(buffer)).ToString();
+                case ELEMENT_TYPE_I4:
+                    return Marshal.ReadInt32(buffer).ToString();
+                case ELEMENT_TYPE_U4:
+                    return ((uint)Marshal.ReadInt32(buffer)).ToString();
+                case ELEMENT_TYPE_I8:
+                    return Marshal.ReadInt64(buffer).ToString();
+                case ELEMENT_TYPE_U8:
+                    return ((ulong)Marshal.ReadInt64(buffer)).ToString();
+                case ELEMENT_TYPE_R4:
+                    {
+                        float[] arr = new float[1];
+                        Marshal.Copy(buffer, arr, 0, 1);
+                        return arr[0].ToString("G");
+                    }
+                case ELEMENT_TYPE_R8:
+                    {
+                        double[] arr = new double[1];
+                        Marshal.Copy(buffer, arr, 0, 1);
+                        return arr[0].ToString("G");
+                    }
+                case ELEMENT_TYPE_I:
+                    return Marshal.ReadIntPtr(buffer).ToString();
+                case ELEMENT_TYPE_U:
+                    return ((ulong)(long)Marshal.ReadIntPtr(buffer)).ToString();
+                default:
+                    return $"<raw {size} bytes>";
+            }
+        }
+
+        /// <summary>
+        /// Map CorElementType to a human-readable type name.
+        /// </summary>
+        private static string CorElementTypeToString(int elementType)
+        {
+            return elementType switch
+            {
+                0x02 => "Boolean",
+                0x03 => "Char",
+                0x04 => "SByte",
+                0x05 => "Byte",
+                0x06 => "Int16",
+                0x07 => "UInt16",
+                0x08 => "Int32",
+                0x09 => "UInt32",
+                0x0A => "Int64",
+                0x0B => "UInt64",
+                0x0C => "Single",
+                0x0D => "Double",
+                0x0E => "String",
+                0x1C => "Object",
+                0x11 => "ValueType",
+                0x12 => "Class",
+                0x14 => "Array",
+                0x18 => "IntPtr",
+                0x19 => "UIntPtr",
+                _ => "Object"
+            };
+        }
+
+        // =====================================================================
         // Internal types
         // =====================================================================
 
@@ -1479,6 +2313,13 @@ namespace BasicLang.Debugger
         {
             public int FrameId { get; set; }
             public ScopeKind Kind { get; set; }
+        }
+
+        private class FrameInfo
+        {
+            public int FunctionToken { get; set; }
+            public IntPtr RawILFramePtr { get; set; }
+            public ICorDebugILFrame ManagedFrame { get; set; }
         }
 
         // =================================================================
@@ -1873,5 +2714,39 @@ namespace BasicLang.Debugger
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int GetCallerDelegate(IntPtr self, out IntPtr ppFrame);
+
+        // ICorDebugILFrame variable enumeration delegates
+        // ICorDebugILFrame vtable: IUnknown(3) + ICorDebugFrame(8) + GetIP(0), SetIP(1), EnumerateLocalVariables(2), GetLocalVariable(3), EnumerateArguments(4), GetArgument(5)
+        // EnumerateLocalVariables = slot 3+8+2 = 13, GetLocalVariable = 14, EnumerateArguments = 15, GetArgument = 16
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int EnumerateLocalVariablesDelegate(IntPtr self, out IntPtr ppValueEnum);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetLocalVariableDelegate(IntPtr self, uint dwIndex, out IntPtr ppValue);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int EnumerateArgumentsDelegate(IntPtr self, out IntPtr ppValueEnum);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetArgumentDelegate(IntPtr self, uint dwIndex, out IntPtr ppValue);
+
+        // ICorDebugEnum: IUnknown(3) + Skip(0), Reset(1), Clone(2), GetCount(3)
+        // ICorDebugValueEnum: Next(4) at slot 3+4 = 7
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int ValueEnumGetCountDelegate(IntPtr self, out uint pcelt);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int ValueEnumNextDelegate(IntPtr self, uint celt, out IntPtr ppValues, out uint pceltFetched);
+
+        // ICorDebugValue: IUnknown(3) + GetType(0), GetSize(1), GetAddress(2) → slots 3,4,5
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int ValueGetTypeDelegate(IntPtr self, out int pType);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int ValueGetSizeDelegate(IntPtr self, out uint pSize);
+
+        // ICorDebugGenericValue: extends ICorDebugValue + GetValue(0), SetValue(1) → slots 6,7
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GenericValueGetValueDelegate(IntPtr self, IntPtr pTo);
     }
 }

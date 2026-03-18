@@ -7,8 +7,8 @@ using AvaloniaEdit.Editing;
 namespace VisualGameStudio.Editor.Completion;
 
 /// <summary>
-/// Completion data for a code snippet. When accepted, expands the full snippet body
-/// (with default tab-stop values filled in) and places the caret at the $0 position.
+/// Completion data for a code snippet. When accepted, inserts an AvaloniaEdit Snippet
+/// with tab-stop placeholders that support Tab/Shift+Tab cycling between positions.
 /// </summary>
 public class SnippetCompletionData : ICompletionData
 {
@@ -70,13 +70,14 @@ public class SnippetCompletionData : ICompletionData
             else break;
         }
 
-        // Expand the snippet
-        var (expandedText, cursorOffset) = _snippet.Expand(indent);
+        // Remove the completion segment text (the typed prefix) so the snippet
+        // insertion replaces it cleanly
+        document.Remove(completionSegment);
+        textArea.Caret.Offset = completionSegment.Offset;
 
-        // Replace the completion segment with the expanded snippet
-        document.Replace(completionSegment, expandedText);
-
-        // Position caret at the $0 location
-        textArea.Caret.Offset = completionSegment.Offset + cursorOffset;
+        // Build and insert the AvaloniaEdit Snippet with interactive tab-stops.
+        // Tab/Shift+Tab cycles between placeholders; Escape/Enter exits snippet mode.
+        var snippet = _snippet.BuildSnippet(indent);
+        snippet.Insert(textArea);
     }
 }

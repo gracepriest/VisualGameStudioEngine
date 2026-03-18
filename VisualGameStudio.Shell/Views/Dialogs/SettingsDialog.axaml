@@ -10,13 +10,13 @@
         Width="800" Height="600"
         WindowStartupLocation="CenterOwner">
 
-  <Grid RowDefinitions="*,Auto" Background="#1E1E1E">
+  <Grid RowDefinitions="*,Auto" Background="{DynamicResource IdeBg}">
     <TabControl Grid.Row="0" Margin="16">
       <!-- Editor Tab -->
       <TabItem Header="Editor">
         <ScrollViewer>
           <StackPanel Spacing="24" Margin="16">
-            <Border Background="#252526" CornerRadius="4" Padding="16">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
               <StackPanel Spacing="12">
                 <TextBlock Text="Font" FontWeight="SemiBold"/>
 
@@ -43,7 +43,7 @@
               </StackPanel>
             </Border>
 
-            <Border Background="#252526" CornerRadius="4" Padding="16">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
               <StackPanel Spacing="12">
                 <TextBlock Text="Tabs" FontWeight="SemiBold"/>
 
@@ -66,7 +66,7 @@
               </StackPanel>
             </Border>
 
-            <Border Background="#252526" CornerRadius="4" Padding="16">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
               <StackPanel Spacing="12">
                 <TextBlock Text="Display" FontWeight="SemiBold"/>
 
@@ -87,7 +87,7 @@
               </StackPanel>
             </Border>
 
-            <Border Background="#252526" CornerRadius="4" Padding="16">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
               <StackPanel Spacing="12">
                 <TextBlock Text="Behavior" FontWeight="SemiBold"/>
 
@@ -112,7 +112,7 @@
       <TabItem Header="IntelliSense">
         <ScrollViewer>
           <StackPanel Spacing="24" Margin="16">
-            <Border Background="#252526" CornerRadius="4" Padding="16">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
               <StackPanel Spacing="12">
                 <TextBlock Text="Auto Complete" FontWeight="SemiBold"/>
 
@@ -145,7 +145,7 @@
       <TabItem Header="Build">
         <ScrollViewer>
           <StackPanel Spacing="24" Margin="16">
-            <Border Background="#252526" CornerRadius="4" Padding="16">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
               <StackPanel Spacing="12">
                 <TextBlock Text="Build Options" FontWeight="SemiBold"/>
 
@@ -174,7 +174,7 @@
       <TabItem Header="Appearance">
         <ScrollViewer>
           <StackPanel Spacing="24" Margin="16">
-            <Border Background="#252526" CornerRadius="4" Padding="16">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
               <StackPanel Spacing="12">
                 <TextBlock Text="Theme" FontWeight="SemiBold"/>
 
@@ -208,7 +208,7 @@
                     CanUserReorderColumns="False"
                     CanUserSortColumns="False"
                     GridLinesVisibility="Horizontal"
-                    Background="#252526">
+                    Background="{DynamicResource IdePanelBg}">
             <DataGrid.Columns>
               <DataGridTextColumn Header="Action"
                                   Binding="{Binding Action}"
@@ -229,10 +229,10 @@
 
     <!-- Buttons -->
     <Border Grid.Row="1"
-            Background="#2D2D2D"
+            Background="{DynamicResource IdeFooterBg}"
             Padding="16,12"
             BorderThickness="0,1,0,0"
-            BorderBrush="#3C3C3C">
+            BorderBrush="{DynamicResource IdeFooterBorder}">
       <Grid ColumnDefinitions="Auto,*,Auto">
         <Button Grid.Column="0"
                 Content="Reset to Defaults"

@@ -2,9 +2,26 @@ using System.Collections.ObjectModel;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
+using VisualGameStudio.Core.Models;
 
 namespace VisualGameStudio.Shell.ViewModels.Dialogs;
+
+/// <summary>
+/// The mode the command palette is currently operating in.
+/// </summary>
+public enum CommandPaletteMode
+{
+    /// <summary>File search mode (Ctrl+P, no prefix). Lists project files with fuzzy matching.</summary>
+    File,
+    /// <summary>Command mode (> prefix). Lists all IDE commands.</summary>
+    Command,
+    /// <summary>Go-to-line mode (: prefix). Enter a line number to jump to.</summary>
+    GoToLine,
+    /// <summary>Symbol search mode (@ prefix). Lists symbols in the current file.</summary>
+    Symbol
+}
 
 /// <summary>
 /// Represents a single command entry in the command palette.
@@ -15,16 +32,22 @@ public class CommandPaletteItem
     public string Category { get; set; } = "";
     public string? Shortcut { get; set; }
     public Action? Execute { get; set; }
+    /// <summary>
+    /// For file mode: the full path to the file. Null for command items.
+    /// </summary>
+    public string? FilePath { get; set; }
     public string DisplayName => string.IsNullOrEmpty(Category) ? Name : $"{Category}: {Name}";
 }
 
 /// <summary>
-/// ViewModel for the Command Palette dialog (Ctrl+Shift+P).
-/// Provides a searchable list of all available IDE commands with fuzzy filtering.
+/// ViewModel for the Command Palette dialog (Ctrl+Shift+P / Ctrl+P).
+/// Supports multiple modes: file search, command palette, go-to-line, and symbol search.
 /// </summary>
 public partial class CommandPaletteViewModel : ViewModelBase
 {
     private readonly List<CommandPaletteItem> _allCommands = new();
+    private readonly List<CommandPaletteItem> _allFiles = new();
+    private MainWindowViewModel? _mainVm;
 
     [ObservableProperty]
     private string _searchText = "";
@@ -38,14 +61,35 @@ public partial class CommandPaletteViewModel : ViewModelBase
     [ObservableProperty]
     private int _selectedIndex;
 
+    [ObservableProperty]
+    private CommandPaletteMode _currentMode = CommandPaletteMode.Command;
+
+    [ObservableProperty]
+    private string _modePrefix = ">";
+
+    [ObservableProperty]
+    private string _modeName = "Command Palette";
+
+    [ObservableProperty]
+    private string _watermarkText = "Type a command name...";
+
     public event EventHandler<CommandPaletteItem>? CommandExecuted;
     public event EventHandler? Dismissed;
+    /// <summary>
+    /// Raised when the user wants to go to a specific line number.
+    /// </summary>
+    public event EventHandler<int>? GoToLineRequested;
+    /// <summary>
+    /// Raised when the user wants to open a file by path.
+    /// </summary>
+    public event EventHandler<string>? FileOpenRequested;
 
     /// <summary>
     /// Registers all available commands from the MainWindowViewModel.
     /// </summary>
     public void RegisterCommands(MainWindowViewModel vm)
     {
+        _mainVm = vm;
         _allCommands.Clear();
 
         // File commands
@@ -87,6 +131,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("View", "Error List", "Ctrl+Alt+E", () => vm.ShowErrorListCommand.Execute(null));
         AddCommand("View", "Find Results", null, () => vm.ShowFindResultsCommand.Execute(null));
         AddCommand("View", "Bookmarks", null, () => vm.ShowBookmarksCommand.Execute(null));
+        AddCommand("View", "Toggle Column Selection Mode", "Alt+Shift+Insert", () => vm.ToggleColumnSelectionModeCommand.Execute(null));
 
         // Build commands
         AddCommand("Build", "Build Project", "Ctrl+Shift+B", () => vm.BuildCommand.Execute(null));
@@ -126,7 +171,71 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("Selection", "Expand Selection", null, () => vm.ExpandSelectionCommand.Execute(null));
         AddCommand("Selection", "Shrink Selection", null, () => vm.ShrinkSelectionCommand.Execute(null));
 
-        UpdateFilteredCommands();
+        // Tools
+        AddCommand("Tools", "Keyboard Shortcuts...", null, () => vm.ShowKeyboardShortcutsCommand.Execute(null));
+        AddCommand("Tools", "Settings...", null, () => vm.SettingsCommand.Execute(null));
+    }
+
+    /// <summary>
+    /// Populates the file list from the current project and its directory.
+    /// Enumerates .bas, .bl, and .blproj files.
+    /// </summary>
+    public void RegisterFiles(IProjectService projectService)
+    {
+        _allFiles.Clear();
+
+        var project = projectService.CurrentProject;
+        if (project == null) return;
+
+        var projectDir = project.ProjectDirectory;
+        if (string.IsNullOrEmpty(projectDir) || !Directory.Exists(projectDir)) return;
+
+        // Collect files from project items first
+        var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in project.Items.Where(i =>
+            i.ItemType == ProjectItemType.Compile || i.ItemType == ProjectItemType.Content))
+        {
+            var fullPath = Path.IsPathRooted(item.Include)
+                ? item.Include
+                : Path.Combine(projectDir, item.Include);
+
+            if (File.Exists(fullPath) && addedPaths.Add(fullPath))
+            {
+                var relativePath = Path.GetRelativePath(projectDir, fullPath);
+                _allFiles.Add(new CommandPaletteItem
+                {
+                    Name = Path.GetFileName(fullPath),
+                    Category = Path.GetDirectoryName(relativePath) ?? "",
+                    FilePath = fullPath
+                });
+            }
+        }
+
+        // Also scan directory for .bas, .bl, .blproj files not yet in the project
+        try
+        {
+            var extensions = new[] { "*.bas", "*.bl", "*.blproj" };
+            foreach (var ext in extensions)
+            {
+                foreach (var file in Directory.EnumerateFiles(projectDir, ext, SearchOption.AllDirectories))
+                {
+                    if (addedPaths.Add(file))
+                    {
+                        var relativePath = Path.GetRelativePath(projectDir, file);
+                        _allFiles.Add(new CommandPaletteItem
+                        {
+                            Name = Path.GetFileName(file),
+                            Category = Path.GetDirectoryName(relativePath) ?? "",
+                            FilePath = file
+                        });
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Directory enumeration may fail for inaccessible directories
+        }
     }
 
     private void AddCommand(string category, string name, string? shortcut, Action execute)
@@ -141,18 +250,148 @@ public partial class CommandPaletteViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Resets the palette state for a fresh open.
+    /// Resets the palette state for a fresh open in the specified mode.
     /// </summary>
-    public void Open()
+    public void Open(CommandPaletteMode mode = CommandPaletteMode.Command)
     {
+        CurrentMode = mode;
         SearchText = "";
         SelectedIndex = 0;
-        UpdateFilteredCommands();
+        ApplyModeSettings();
+        UpdateFilteredItems();
+    }
+
+    private void ApplyModeSettings()
+    {
+        switch (CurrentMode)
+        {
+            case CommandPaletteMode.File:
+                ModePrefix = "";
+                ModeName = "Quick Open";
+                WatermarkText = "Type a file name to search...";
+                break;
+            case CommandPaletteMode.Command:
+                ModePrefix = ">";
+                ModeName = "Command Palette";
+                WatermarkText = "Type a command name...";
+                break;
+            case CommandPaletteMode.GoToLine:
+                ModePrefix = ":";
+                ModeName = "Go to Line";
+                WatermarkText = "Type a line number...";
+                break;
+            case CommandPaletteMode.Symbol:
+                ModePrefix = "@";
+                ModeName = "Go to Symbol";
+                WatermarkText = "Type a symbol name...";
+                break;
+        }
     }
 
     partial void OnSearchTextChanged(string value)
     {
-        UpdateFilteredCommands();
+        // Detect mode switches based on prefix typed
+        if (CurrentMode == CommandPaletteMode.File)
+        {
+            if (value.StartsWith(">"))
+            {
+                CurrentMode = CommandPaletteMode.Command;
+                ApplyModeSettings();
+                // Strip the prefix from search text for filtering
+                SearchText = value.Substring(1);
+                return; // OnSearchTextChanged will fire again with the new value
+            }
+            else if (value.StartsWith(":"))
+            {
+                CurrentMode = CommandPaletteMode.GoToLine;
+                ApplyModeSettings();
+                SearchText = value.Substring(1);
+                return;
+            }
+            else if (value.StartsWith("@"))
+            {
+                CurrentMode = CommandPaletteMode.Symbol;
+                ApplyModeSettings();
+                SearchText = value.Substring(1);
+                return;
+            }
+        }
+        else if (CurrentMode == CommandPaletteMode.Command)
+        {
+            if (value.StartsWith(":"))
+            {
+                CurrentMode = CommandPaletteMode.GoToLine;
+                ApplyModeSettings();
+                SearchText = value.Substring(1);
+                return;
+            }
+            else if (value.StartsWith("@"))
+            {
+                CurrentMode = CommandPaletteMode.Symbol;
+                ApplyModeSettings();
+                SearchText = value.Substring(1);
+                return;
+            }
+        }
+
+        UpdateFilteredItems();
+    }
+
+    private void UpdateFilteredItems()
+    {
+        switch (CurrentMode)
+        {
+            case CommandPaletteMode.File:
+                UpdateFilteredFiles();
+                break;
+            case CommandPaletteMode.Command:
+                UpdateFilteredCommands();
+                break;
+            case CommandPaletteMode.GoToLine:
+                UpdateGoToLine();
+                break;
+            case CommandPaletteMode.Symbol:
+                UpdateSymbolSearch();
+                break;
+        }
+    }
+
+    private void UpdateFilteredFiles()
+    {
+        FilteredCommands.Clear();
+
+        var filter = SearchText?.Trim() ?? "";
+
+        IEnumerable<CommandPaletteItem> items;
+
+        if (string.IsNullOrEmpty(filter))
+        {
+            items = _allFiles;
+        }
+        else
+        {
+            items = _allFiles
+                .Select(f => new { File = f, Score = FuzzyMatch(f.Name, filter) + FuzzyMatch(f.Category, filter) / 2 })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.File.Name.Length)
+                .Select(x => x.File);
+        }
+
+        foreach (var item in items.Take(50))
+        {
+            FilteredCommands.Add(item);
+        }
+
+        if (FilteredCommands.Count > 0)
+        {
+            SelectedIndex = 0;
+            SelectedItem = FilteredCommands[0];
+        }
+        else
+        {
+            SelectedItem = null;
+        }
     }
 
     private void UpdateFilteredCommands()
@@ -193,6 +432,54 @@ public partial class CommandPaletteViewModel : ViewModelBase
         }
     }
 
+    private void UpdateGoToLine()
+    {
+        FilteredCommands.Clear();
+
+        var text = SearchText?.Trim() ?? "";
+        if (int.TryParse(text, out var lineNumber) && lineNumber > 0)
+        {
+            FilteredCommands.Add(new CommandPaletteItem
+            {
+                Name = $"Go to line {lineNumber}",
+                Category = "Navigate",
+                Execute = () => GoToLineRequested?.Invoke(this, lineNumber)
+            });
+            SelectedIndex = 0;
+            SelectedItem = FilteredCommands[0];
+        }
+        else if (string.IsNullOrEmpty(text))
+        {
+            FilteredCommands.Add(new CommandPaletteItem
+            {
+                Name = "Type a line number and press Enter",
+                Category = "Navigate"
+            });
+            SelectedIndex = 0;
+            SelectedItem = FilteredCommands[0];
+        }
+        else
+        {
+            SelectedItem = null;
+        }
+    }
+
+    private void UpdateSymbolSearch()
+    {
+        FilteredCommands.Clear();
+
+        // Symbol search delegates to the Go to Symbol command for now.
+        // A future version can query the LSP server for document symbols.
+        FilteredCommands.Add(new CommandPaletteItem
+        {
+            Name = "Go to Symbol... (opens symbol search)",
+            Category = "Navigate",
+            Execute = () => _mainVm?.GoToSymbolCommand.Execute(null)
+        });
+        SelectedIndex = 0;
+        SelectedItem = FilteredCommands[0];
+    }
+
     private static int FuzzyMatch(string text, string pattern)
     {
         if (string.IsNullOrEmpty(pattern)) return 1;
@@ -217,8 +504,8 @@ public partial class CommandPaletteViewModel : ViewModelBase
                 consecutive++;
                 patternIdx++;
 
-                // Bonus for matching after separator (space, colon)
-                if (i > 0 && (text[i - 1] == ' ' || text[i - 1] == ':'))
+                // Bonus for matching after separator (space, colon, path separator)
+                if (i > 0 && (text[i - 1] == ' ' || text[i - 1] == ':' || text[i - 1] == '/' || text[i - 1] == '\\'))
                 {
                     score += 15;
                 }
@@ -251,6 +538,24 @@ public partial class CommandPaletteViewModel : ViewModelBase
     [RelayCommand]
     private void Confirm()
     {
+        if (CurrentMode == CommandPaletteMode.File && SelectedItem?.FilePath != null)
+        {
+            FileOpenRequested?.Invoke(this, SelectedItem.FilePath);
+            Dismissed?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (CurrentMode == CommandPaletteMode.GoToLine)
+        {
+            var text = SearchText?.Trim() ?? "";
+            if (int.TryParse(text, out var lineNumber) && lineNumber > 0)
+            {
+                GoToLineRequested?.Invoke(this, lineNumber);
+                Dismissed?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+        }
+
         if (SelectedItem != null)
         {
             CommandExecuted?.Invoke(this, SelectedItem);

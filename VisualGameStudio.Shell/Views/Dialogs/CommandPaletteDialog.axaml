@@ -20,16 +20,17 @@
       <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12" CornerRadius="8,8,0,0">
         <Grid ColumnDefinitions="Auto,*">
           <TextBlock Grid.Column="0"
-                     Text=">"
+                     Text="{Binding ModePrefix}"
                      FontSize="16"
                      Foreground="#569CD6"
                      VerticalAlignment="Center"
                      Margin="0,0,8,0"
-                     FontWeight="Bold"/>
+                     FontWeight="Bold"
+                     IsVisible="{Binding ModePrefix, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
           <TextBox Grid.Column="1"
                    x:Name="SearchBox"
                    Text="{Binding SearchText, Mode=TwoWay}"
-                   Watermark="Type a command name..."
+                   Watermark="{Binding WatermarkText}"
                    FontSize="16"
                    BorderThickness="0"
                    Background="Transparent"
@@ -41,11 +42,12 @@
       <Border DockPanel.Dock="Top" Background="#252526" Padding="12,4">
         <StackPanel Orientation="Horizontal" Spacing="16">
           <TextBlock FontSize="11" Foreground="#808080">
-            <Run Text="Command Palette" Foreground="#569CD6"/>
+            <Run Text="{Binding ModeName}" Foreground="#569CD6"/>
           </TextBlock>
           <TextBlock Text="Up/Down Navigate" FontSize="11" Foreground="#606060"/>
           <TextBlock Text="Enter Execute" FontSize="11" Foreground="#606060"/>
           <TextBlock Text="Esc Close" FontSize="11" Foreground="#606060"/>
+          <TextBlock Text="> Commands  : Line  @ Symbol" FontSize="11" Foreground="#505050"/>
         </StackPanel>
       </Border>
 

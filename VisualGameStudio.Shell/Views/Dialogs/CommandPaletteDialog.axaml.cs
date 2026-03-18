@@ -11,6 +11,16 @@ public partial class CommandPaletteDialog : Window
         InitializeComponent();
     }
 
+    /// <summary>
+    /// Gets the file path that was selected for opening, if any.
+    /// </summary>
+    public string? SelectedFilePath { get; private set; }
+
+    /// <summary>
+    /// Gets the line number requested via go-to-line mode, or -1 if not applicable.
+    /// </summary>
+    public int RequestedLineNumber { get; private set; } = -1;
+
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
@@ -22,6 +32,8 @@ public partial class CommandPaletteDialog : Window
         {
             vm.CommandExecuted += OnCommandExecuted;
             vm.Dismissed += OnDismissed;
+            vm.FileOpenRequested += OnFileOpenRequested;
+            vm.GoToLineRequested += OnGoToLineRequested;
         }
     }
 
@@ -31,6 +43,8 @@ public partial class CommandPaletteDialog : Window
         {
             vm.CommandExecuted -= OnCommandExecuted;
             vm.Dismissed -= OnDismissed;
+            vm.FileOpenRequested -= OnFileOpenRequested;
+            vm.GoToLineRequested -= OnGoToLineRequested;
         }
         base.OnClosed(e);
     }
@@ -42,6 +56,18 @@ public partial class CommandPaletteDialog : Window
 
     private void OnDismissed(object? sender, EventArgs e)
     {
+        Close(null);
+    }
+
+    private void OnFileOpenRequested(object? sender, string filePath)
+    {
+        SelectedFilePath = filePath;
+        Close(null);
+    }
+
+    private void OnGoToLineRequested(object? sender, int lineNumber)
+    {
+        RequestedLineNumber = lineNumber;
         Close(null);
     }
 

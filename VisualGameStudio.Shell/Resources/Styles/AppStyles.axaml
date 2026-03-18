@@ -2,14 +2,71 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:idc="using:Dock.Avalonia.Controls">
 
-  <!-- IDE Dark Theme Colors -->
+  <!-- ========== DARK THEME ========== -->
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="IdeBg" Color="#1E1E1E"/>
+          <SolidColorBrush x:Key="IdeFg" Color="#CCCCCC"/>
+          <SolidColorBrush x:Key="IdePanelBg" Color="#252526"/>
+          <SolidColorBrush x:Key="IdeMenuBg" Color="#2D2D2D"/>
+          <SolidColorBrush x:Key="IdeBorder" Color="#3C3C3C"/>
+          <SolidColorBrush x:Key="IdeHoverBg" Color="#3E3E3E"/>
+          <SolidColorBrush x:Key="IdeInputBg" Color="#3C3C3C"/>
+          <SolidColorBrush x:Key="IdeInputBorder" Color="#5A5A5A"/>
+          <SolidColorBrush x:Key="IdeSelectionBg" Color="#264F78"/>
+          <SolidColorBrush x:Key="IdeHeaderBg" Color="#3C3C3C"/>
+          <SolidColorBrush x:Key="IdeThumbBg" Color="#424242"/>
+          <SolidColorBrush x:Key="IdeThumbHover" Color="#5A5A5A"/>
+          <SolidColorBrush x:Key="IdeContextBg" Color="#252526"/>
+          <SolidColorBrush x:Key="IdeContextBorder" Color="#454545"/>
+          <SolidColorBrush x:Key="IdeSecondaryBg" Color="#3C3C3C"/>
+          <SolidColorBrush x:Key="IdeSecondaryFg" Color="#CCCCCC"/>
+          <SolidColorBrush x:Key="IdeSecondaryBorder" Color="#5A5A5A"/>
+          <SolidColorBrush x:Key="IdeSecondaryHover" Color="#4A4A4A"/>
+          <SolidColorBrush x:Key="IdeListHover" Color="#2A2D2E"/>
+          <SolidColorBrush x:Key="IdeListSelected" Color="#094771"/>
+          <SolidColorBrush x:Key="IdeFooterBg" Color="#2D2D2D"/>
+          <SolidColorBrush x:Key="IdeFooterBorder" Color="#3C3C3C"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="IdeBg" Color="#F5F5F5"/>
+          <SolidColorBrush x:Key="IdeFg" Color="#1E1E1E"/>
+          <SolidColorBrush x:Key="IdePanelBg" Color="#EEEEF2"/>
+          <SolidColorBrush x:Key="IdeMenuBg" Color="#E8E8E8"/>
+          <SolidColorBrush x:Key="IdeBorder" Color="#CCCEDB"/>
+          <SolidColorBrush x:Key="IdeHoverBg" Color="#D8D8DC"/>
+          <SolidColorBrush x:Key="IdeInputBg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeInputBorder" Color="#CCCEDB"/>
+          <SolidColorBrush x:Key="IdeSelectionBg" Color="#ADD6FF"/>
+          <SolidColorBrush x:Key="IdeHeaderBg" Color="#DDDDE1"/>
+          <SolidColorBrush x:Key="IdeThumbBg" Color="#C2C2C2"/>
+          <SolidColorBrush x:Key="IdeThumbHover" Color="#999999"/>
+          <SolidColorBrush x:Key="IdeContextBg" Color="#F6F6F6"/>
+          <SolidColorBrush x:Key="IdeContextBorder" Color="#C8C8C8"/>
+          <SolidColorBrush x:Key="IdeSecondaryBg" Color="#E5E5E5"/>
+          <SolidColorBrush x:Key="IdeSecondaryFg" Color="#1E1E1E"/>
+          <SolidColorBrush x:Key="IdeSecondaryBorder" Color="#C8C8C8"/>
+          <SolidColorBrush x:Key="IdeSecondaryHover" Color="#D0D0D0"/>
+          <SolidColorBrush x:Key="IdeListHover" Color="#E0E0E4"/>
+          <SolidColorBrush x:Key="IdeListSelected" Color="#CCE8FF"/>
+          <SolidColorBrush x:Key="IdeFooterBg" Color="#E8E8E8"/>
+          <SolidColorBrush x:Key="IdeFooterBorder" Color="#CCCEDB"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <!-- Window -->
   <Style Selector="Window">
-    <Setter Property="Background" Value="#1E1E1E"/>
-    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="Background" Value="{DynamicResource IdeBg}"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
   </Style>
 
+  <!-- Menu -->
   <Style Selector="Menu">
-    <Setter Property="Background" Value="#2D2D2D"/>
+    <Setter Property="Background" Value="{DynamicResource IdeMenuBg}"/>
   </Style>
 
   <Style Selector="MenuItem">
@@ -17,12 +74,12 @@
   </Style>
 
   <Style Selector="MenuItem:pointerover /template/ Border#PART_LayoutRoot">
-    <Setter Property="Background" Value="#3E3E3E"/>
+    <Setter Property="Background" Value="{DynamicResource IdeHoverBg}"/>
   </Style>
 
   <!-- TreeView styling -->
   <Style Selector="TreeView">
-    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
   </Style>
 
   <Style Selector="TreeViewItem">
@@ -31,7 +88,7 @@
 
   <!-- Tab styling for documents -->
   <Style Selector="TabControl">
-    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
   </Style>
 
   <!-- Status bar -->
@@ -42,34 +99,34 @@
 
   <!-- Tool panels -->
   <Style Selector="Border.toolPanel">
-    <Setter Property="Background" Value="#252526"/>
-    <Setter Property="BorderBrush" Value="#3C3C3C"/>
+    <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource IdeBorder}"/>
     <Setter Property="BorderThickness" Value="1"/>
   </Style>
 
   <!-- Panel headers -->
   <Style Selector="Border.panelHeader">
-    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
     <Setter Property="Padding" Value="8,4"/>
   </Style>
 
   <Style Selector="TextBlock.panelTitle">
     <Setter Property="FontSize" Value="12"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
-    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
   </Style>
 
   <!-- DataGrid styling -->
   <Style Selector="DataGrid">
-    <Setter Property="Background" Value="#252526"/>
-    <Setter Property="RowBackground" Value="#252526"/>
+    <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
+    <Setter Property="RowBackground" Value="{DynamicResource IdePanelBg}"/>
     <Setter Property="GridLinesVisibility" Value="Horizontal"/>
     <Setter Property="HeadersVisibility" Value="Column"/>
   </Style>
 
   <Style Selector="DataGridColumnHeader">
-    <Setter Property="Background" Value="#3C3C3C"/>
-    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
     <Setter Property="Padding" Value="8,4"/>
   </Style>
 
@@ -83,38 +140,38 @@
   </Style>
 
   <Style Selector="Button.toolbarButton:pointerover /template/ ContentPresenter">
-    <Setter Property="Background" Value="#3E3E3E"/>
+    <Setter Property="Background" Value="{DynamicResource IdeHoverBg}"/>
   </Style>
 
   <!-- Dock.Avalonia Tool Tab Styling -->
   <Style Selector="idc|ToolControl">
-    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
   </Style>
 
   <!-- Style the tool tab strip for better visibility -->
   <Style Selector="idc|ToolTabStrip">
-    <Setter Property="Background" Value="#2D2D2D"/>
+    <Setter Property="Background" Value="{DynamicResource IdeMenuBg}"/>
   </Style>
 
   <Style Selector="idc|ToolTabStripItem">
-    <Setter Property="Background" Value="#2D2D2D"/>
-    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="Background" Value="{DynamicResource IdeMenuBg}"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
     <Setter Property="Padding" Value="8,4"/>
     <Setter Property="FontSize" Value="12"/>
   </Style>
 
   <Style Selector="idc|ToolTabStripItem:selected">
-    <Setter Property="Background" Value="#3C3C3C"/>
-    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
   </Style>
 
   <Style Selector="idc|ToolTabStripItem:pointerover">
-    <Setter Property="Background" Value="#3E3E3E"/>
+    <Setter Property="Background" Value="{DynamicResource IdeHoverBg}"/>
   </Style>
 
   <!-- Tool chrome styling -->
   <Style Selector="idc|ToolChromeControl">
-    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
   </Style>
 
   <!-- Primary button styling -->
@@ -136,27 +193,26 @@
 
   <!-- Secondary button styling -->
   <Style Selector="Button.secondary">
-    <Setter Property="Background" Value="#3C3C3C"/>
-    <Setter Property="Foreground" Value="#CCCCCC"/>
-    <Setter Property="BorderBrush" Value="#5A5A5A"/>
+    <Setter Property="Background" Value="{DynamicResource IdeSecondaryBg}"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeSecondaryFg}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource IdeSecondaryBorder}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="12,6"/>
     <Setter Property="CornerRadius" Value="2"/>
   </Style>
 
   <Style Selector="Button.secondary:pointerover">
-    <Setter Property="Background" Value="#4A4A4A"/>
+    <Setter Property="Background" Value="{DynamicResource IdeSecondaryHover}"/>
   </Style>
 
   <!-- TextBox styling -->
   <Style Selector="TextBox">
-    <Setter Property="Background" Value="#3C3C3C"/>
-    <Setter Property="Foreground" Value="#CCCCCC"/>
-    <Setter Property="BorderBrush" Value="#5A5A5A"/>
+    <Setter Property="Background" Value="{DynamicResource IdeInputBg}"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource IdeInputBorder}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="SelectionBrush" Value="#264F78"/>
-    <Setter Property="SelectionForegroundBrush" Value="#FFFFFF"/>
-    <Setter Property="CaretBrush" Value="#AEAFAD"/>
+    <Setter Property="SelectionBrush" Value="{DynamicResource IdeSelectionBg}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource IdeFg}"/>
     <Setter Property="Padding" Value="8,4"/>
     <Setter Property="CornerRadius" Value="2"/>
   </Style>
@@ -166,14 +222,14 @@
   </Style>
 
   <Style Selector="TextBox:pointerover">
-    <Setter Property="BorderBrush" Value="#6A6A6A"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource IdeThumbHover}"/>
   </Style>
 
   <!-- ComboBox styling -->
   <Style Selector="ComboBox">
-    <Setter Property="Background" Value="#3C3C3C"/>
-    <Setter Property="Foreground" Value="#CCCCCC"/>
-    <Setter Property="BorderBrush" Value="#5A5A5A"/>
+    <Setter Property="Background" Value="{DynamicResource IdeInputBg}"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource IdeInputBorder}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="8,4"/>
     <Setter Property="CornerRadius" Value="2"/>
@@ -185,22 +241,22 @@
 
   <!-- ListBox styling -->
   <Style Selector="ListBox">
-    <Setter Property="Background" Value="#252526"/>
-    <Setter Property="BorderBrush" Value="#3C3C3C"/>
+    <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource IdeBorder}"/>
   </Style>
 
   <Style Selector="ListBoxItem:selected">
-    <Setter Property="Background" Value="#094771"/>
+    <Setter Property="Background" Value="{DynamicResource IdeListSelected}"/>
   </Style>
 
   <Style Selector="ListBoxItem:pointerover">
-    <Setter Property="Background" Value="#2A2D2E"/>
+    <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
   </Style>
 
   <!-- Context Menu styling -->
   <Style Selector="ContextMenu">
-    <Setter Property="Background" Value="#252526"/>
-    <Setter Property="BorderBrush" Value="#454545"/>
+    <Setter Property="Background" Value="{DynamicResource IdeContextBg}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource IdeContextBorder}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="0"/>
     <Setter Property="CornerRadius" Value="2"/>
@@ -211,7 +267,7 @@
   </Style>
 
   <Style Selector="ContextMenu Separator">
-    <Setter Property="Background" Value="#454545"/>
+    <Setter Property="Background" Value="{DynamicResource IdeContextBorder}"/>
     <Setter Property="Height" Value="1"/>
     <Setter Property="Margin" Value="8,4"/>
   </Style>
@@ -222,24 +278,24 @@
   </Style>
 
   <Style Selector="ScrollBar /template/ Thumb">
-    <Setter Property="Background" Value="#424242"/>
+    <Setter Property="Background" Value="{DynamicResource IdeThumbBg}"/>
     <Setter Property="CornerRadius" Value="4"/>
   </Style>
 
   <Style Selector="ScrollBar /template/ Thumb:pointerover">
-    <Setter Property="Background" Value="#5A5A5A"/>
+    <Setter Property="Background" Value="{DynamicResource IdeThumbHover}"/>
   </Style>
 
   <!-- CheckBox styling -->
   <Style Selector="CheckBox">
-    <Setter Property="Foreground" Value="#CCCCCC"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
   </Style>
 
   <!-- Tooltip styling -->
   <Style Selector="ToolTip">
-    <Setter Property="Background" Value="#2D2D2D"/>
-    <Setter Property="Foreground" Value="#CCCCCC"/>
-    <Setter Property="BorderBrush" Value="#454545"/>
+    <Setter Property="Background" Value="{DynamicResource IdeMenuBg}"/>
+    <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource IdeContextBorder}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="8,4"/>
     <Setter Property="CornerRadius" Value="2"/>
@@ -247,23 +303,23 @@
 
   <!-- Expander styling -->
   <Style Selector="Expander">
-    <Setter Property="Background" Value="#252526"/>
+    <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
   </Style>
 
   <Style Selector="Expander /template/ ToggleButton">
-    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
   </Style>
 
   <!-- Progress bar styling -->
   <Style Selector="ProgressBar">
-    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
     <Setter Property="Foreground" Value="#0E639C"/>
     <Setter Property="CornerRadius" Value="2"/>
   </Style>
 
   <!-- Splitter styling -->
   <Style Selector="GridSplitter">
-    <Setter Property="Background" Value="#3C3C3C"/>
+    <Setter Property="Background" Value="{DynamicResource IdeBorder}"/>
   </Style>
 
   <Style Selector="GridSplitter:pointerover">

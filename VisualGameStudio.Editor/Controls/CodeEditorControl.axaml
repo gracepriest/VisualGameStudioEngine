@@ -25,8 +25,7 @@
                            VerticalScrollBarVisibility="Auto"
                            MinWidth="100"
                            MinHeight="100"
-                           Background="#1E1E1E"
-                           Foreground="#D4D4D4" />
+                           />
 
     <!-- Inline Find/Replace overlay - top-right of the editor -->
     <controls:InlineFindReplaceControl x:Name="InlineFindReplace"
@@ -39,7 +38,6 @@
     <controls:MinimapControl x:Name="Minimap"
                              Grid.Column="1"
                              Width="100"
-                             Background="#252526"
                              IsVisible="{Binding ShowMinimap, FallbackValue=True}"/>
   </Grid>
 
