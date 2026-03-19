@@ -271,7 +271,8 @@ namespace BasicLang.Debugger
             if (string.IsNullOrEmpty(sourcePath))
                 return CreateResponse(request, true);
 
-            // Clear existing breakpoints for this file
+            // Deactivate existing CLR breakpoints for this file before clearing
+            DeactivateBreakpointsForFile(sourcePath);
             _breakpointManager.ClearFile(sourcePath);
 
             var resultBreakpoints = new List<object>();
@@ -1297,6 +1298,31 @@ namespace BasicLang.Debugger
 
         /// <summary>
         /// Try to bind a single breakpoint entry to a CLR breakpoint using the loaded module.
+        /// Deactivate all CLR breakpoints for a given source file.
+        /// Called before ClearFile when the IDE removes breakpoints during debugging.
+        /// </summary>
+        private void DeactivateBreakpointsForFile(string filePath)
+        {
+            var allForFile = _breakpointManager.GetAllForFile(filePath);
+            foreach (var bp in allForFile)
+            {
+                if (bp.ClrBreakpoint is IntPtr bpPtr && bpPtr != IntPtr.Zero)
+                {
+                    try
+                    {
+                        // ICorDebugBreakpoint::Activate(false) at vtable slot 3
+                        var bpVtable = Marshal.ReadIntPtr(bpPtr);
+                        var activateSlot = Marshal.ReadIntPtr(bpVtable, 3 * IntPtr.Size);
+                        var activate = Marshal.GetDelegateForFunctionPointer<ActivateBreakpointDelegate>(activateSlot);
+                        activate(bpPtr, 0); // 0 = deactivate
+                        Marshal.Release(bpPtr);
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        /// <summary>
         /// Returns true if the breakpoint was successfully bound.
         /// </summary>
         private bool TryBindBreakpoint(ClrBreakpointEntry entry, int methodToken, int ilOffset, ICorDebugModule targetModule)
@@ -1353,10 +1379,11 @@ namespace BasicLang.Debugger
                         if (hr < 0)
                             return false;
 
-                        // Successfully bound!
+                        // Successfully bound! Store bpPtr so we can deactivate later
                         int actualLine = _sourceMapper?.FindNearestExecutableLine(entry.FilePath, entry.RequestedLine)
                             ?? entry.RequestedLine;
-                        _breakpointManager.MarkBound(entry.Id, actualLine, null);
+                        Marshal.AddRef(bpPtr); // prevent GC while stored
+                        _breakpointManager.MarkBound(entry.Id, actualLine, bpPtr);
                         _breakpointManager.MarkVerified(entry.Id);
                         return true;
                     }

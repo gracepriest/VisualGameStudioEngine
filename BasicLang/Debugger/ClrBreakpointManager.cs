@@ -101,6 +101,16 @@ namespace BasicLang.Debugger
                 string.Equals(bp.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>
+        /// Get ALL breakpoints for a file regardless of status (for deactivation before clearing)
+        /// </summary>
+        public IReadOnlyList<ClrBreakpointEntry> GetAllForFile(string filePath)
+        {
+            return _breakpoints.Values
+                .Where(bp => string.Equals(bp.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
         public void ClearAll() => _breakpoints.Clear();
     }
 }
