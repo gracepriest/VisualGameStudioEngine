@@ -309,6 +309,33 @@ public class DiffLine
 
     public string LeftBackground => Type == DiffLineType.Removed ? "#3A1E1E" : "Transparent";
     public string RightBackground => Type == DiffLineType.Added ? "#1E3A1E" : "Transparent";
+
+    /// <summary>Prefix character for unified diff view: +, -, or space</summary>
+    public string UnifiedPrefix => Type switch
+    {
+        DiffLineType.Added => "+",
+        DiffLineType.Removed => "-",
+        DiffLineType.Header => "@@",
+        _ => " "
+    };
+
+    /// <summary>Prefix color for unified diff view</summary>
+    public string UnifiedPrefixColor => Type switch
+    {
+        DiffLineType.Added => "#4EC9B0",
+        DiffLineType.Removed => "#F48771",
+        DiffLineType.Header => "#569CD6",
+        _ => "#606060"
+    };
+
+    /// <summary>Content text for unified diff view (shows the relevant side)</summary>
+    public string UnifiedContent => Type switch
+    {
+        DiffLineType.Added => RightContent,
+        DiffLineType.Removed => LeftContent,
+        DiffLineType.Header => LeftContent,
+        _ => LeftContent
+    };
 }
 
 public enum DiffLineType

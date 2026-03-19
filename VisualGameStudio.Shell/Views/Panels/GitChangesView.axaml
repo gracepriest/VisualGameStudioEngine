@@ -149,8 +149,10 @@
                     <DataTemplate>
                       <Border Background="#1E1E1E"
                               Padding="8,4"
-                              Margin="0,1,0,0">
-                        <Grid ColumnDefinitions="Auto,*,Auto">
+                              Margin="0,1,0,0"
+                              DoubleTapped="OnChangeItemDoubleTapped"
+                              Tag="{Binding}">
+                        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
                           <Border Grid.Column="0"
                                   Background="{Binding StatusColor}"
                                   CornerRadius="2"
@@ -168,6 +170,14 @@
                                      TextTrimming="CharacterEllipsis"
                                      ToolTip.Tip="{Binding FilePath}"/>
                           <Button Grid.Column="2"
+                                  Classes="toolbarButton"
+                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).ShowDiffCommand}"
+                                  CommandParameter="{Binding}"
+                                  ToolTip.Tip="Show Diff"
+                                  Width="20" Height="20">
+                            <TextBlock Text="≠" FontSize="12"/>
+                          </Button>
+                          <Button Grid.Column="3"
                                   Classes="toolbarButton"
                                   Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).UnstageFileCommand}"
                                   CommandParameter="{Binding}"
@@ -210,8 +220,10 @@
                     <DataTemplate>
                       <Border Background="#1E1E1E"
                               Padding="8,4"
-                              Margin="0,1,0,0">
-                        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                              Margin="0,1,0,0"
+                              DoubleTapped="OnChangeItemDoubleTapped"
+                              Tag="{Binding}">
+                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
                           <Border Grid.Column="0"
                                   Background="{Binding StatusColor}"
                                   CornerRadius="2"
@@ -230,13 +242,21 @@
                                      ToolTip.Tip="{Binding FilePath}"/>
                           <Button Grid.Column="2"
                                   Classes="toolbarButton"
+                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).ShowDiffCommand}"
+                                  CommandParameter="{Binding}"
+                                  ToolTip.Tip="Show Diff"
+                                  Width="20" Height="20">
+                            <TextBlock Text="≠" FontSize="12"/>
+                          </Button>
+                          <Button Grid.Column="3"
+                                  Classes="toolbarButton"
                                   Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).StageFileCommand}"
                                   CommandParameter="{Binding}"
                                   ToolTip.Tip="Stage"
                                   Width="20" Height="20">
                             <TextBlock Text="+" FontSize="12"/>
                           </Button>
-                          <Button Grid.Column="3"
+                          <Button Grid.Column="4"
                                   Classes="toolbarButton"
                                   Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).DiscardChangesCommand}"
                                   CommandParameter="{Binding}"

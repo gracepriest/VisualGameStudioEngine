@@ -167,6 +167,9 @@
                   <CheckBox Content="Auto close brackets"
                             IsChecked="{Binding AutoCloseBrackets}"
                             Margin="0,0,24,8"/>
+                  <CheckBox Content="Smooth scrolling"
+                            IsChecked="{Binding SmoothScrolling}"
+                            Margin="0,0,24,8"/>
                 </WrapPanel>
               </StackPanel>
             </Border>

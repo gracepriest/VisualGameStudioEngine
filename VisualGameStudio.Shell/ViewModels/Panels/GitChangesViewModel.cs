@@ -248,6 +248,20 @@ public partial class GitChangesViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Event raised when the user requests to view a diff for a changed file.
+    /// The view subscribes to this to show the DiffViewerView window.
+    /// </summary>
+    public event EventHandler<string>? ShowDiffRequested;
+
+    [RelayCommand]
+    private async Task ShowDiffAsync(GitChangeItem? item)
+    {
+        if (item == null) return;
+
+        ShowDiffRequested?.Invoke(this, item.FilePath);
+    }
+
     [RelayCommand]
     private async Task InitRepositoryAsync()
     {

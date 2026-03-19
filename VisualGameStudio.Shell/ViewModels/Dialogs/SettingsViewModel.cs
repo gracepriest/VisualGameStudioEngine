@@ -102,6 +102,9 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private bool _autoCloseBrackets = true;
 
+    [ObservableProperty]
+    private bool _smoothScrolling = true;
+
     // Theme Settings
     [ObservableProperty]
     private string _selectedTheme = "Dark";
@@ -239,6 +242,7 @@ public partial class SettingsViewModel : ViewModelBase
             MakeBool("Auto Indent", "Automatically indent new lines based on the previous line", "Editor", nameof(AutoIndent)),
             MakeBool("Bracket Matching", "Highlight matching brackets when the cursor is near one", "Editor", nameof(BracketMatching)),
             MakeBool("Auto Close Brackets", "Automatically insert closing brackets, quotes, and parentheses", "Editor", nameof(AutoCloseBrackets)),
+            MakeBool("Smooth Scrolling", "Animate scrolling for a smoother visual experience", "Editor", nameof(SmoothScrolling)),
 
             // IntelliSense
             MakeBool("Enable Auto Complete", "Show completion suggestions as you type", "IntelliSense", nameof(EnableAutoComplete)),
@@ -277,6 +281,7 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(AutoIndent) => AutoIndent,
         nameof(BracketMatching) => BracketMatching,
         nameof(AutoCloseBrackets) => AutoCloseBrackets,
+        nameof(SmoothScrolling) => SmoothScrolling,
         nameof(EnableAutoComplete) => EnableAutoComplete,
         nameof(ShowQuickInfo) => ShowQuickInfo,
         nameof(ShowSignatureHelp) => ShowSignatureHelp,
@@ -297,6 +302,7 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(AutoIndent): AutoIndent = value; break;
             case nameof(BracketMatching): BracketMatching = value; break;
             case nameof(AutoCloseBrackets): AutoCloseBrackets = value; break;
+            case nameof(SmoothScrolling): SmoothScrolling = value; break;
             case nameof(EnableAutoComplete): EnableAutoComplete = value; break;
             case nameof(ShowQuickInfo): ShowQuickInfo = value; break;
             case nameof(ShowSignatureHelp): ShowSignatureHelp = value; break;
@@ -395,6 +401,7 @@ public partial class SettingsViewModel : ViewModelBase
         AutoIndent = true;
         BracketMatching = true;
         AutoCloseBrackets = true;
+        SmoothScrolling = true;
         SelectedTheme = "Dark";
         EnableAutoComplete = true;
         ShowQuickInfo = true;
@@ -432,6 +439,7 @@ public partial class SettingsViewModel : ViewModelBase
                     AutoIndent = settings.AutoIndent;
                     BracketMatching = settings.BracketMatching;
                     AutoCloseBrackets = settings.AutoCloseBrackets;
+                    SmoothScrolling = settings.SmoothScrolling;
                     SelectedTheme = settings.SelectedTheme ?? SelectedTheme;
                     EnableAutoComplete = settings.EnableAutoComplete;
                     ShowQuickInfo = settings.ShowQuickInfo;
@@ -483,6 +491,7 @@ public partial class SettingsViewModel : ViewModelBase
                 AutoIndent = AutoIndent,
                 BracketMatching = BracketMatching,
                 AutoCloseBrackets = AutoCloseBrackets,
+                SmoothScrolling = SmoothScrolling,
                 SelectedTheme = SelectedTheme,
                 EnableAutoComplete = EnableAutoComplete,
                 ShowQuickInfo = ShowQuickInfo,
@@ -549,6 +558,7 @@ public class SettingsData
     public bool AutoIndent { get; set; } = true;
     public bool BracketMatching { get; set; } = true;
     public bool AutoCloseBrackets { get; set; } = true;
+    public bool SmoothScrolling { get; set; } = true;
     public string? SelectedTheme { get; set; }
     public bool EnableAutoComplete { get; set; } = true;
     public bool ShowQuickInfo { get; set; } = true;

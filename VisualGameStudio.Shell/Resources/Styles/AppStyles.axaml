@@ -58,6 +58,213 @@
     </ResourceDictionary>
   </Styles.Resources>
 
+  <!-- ========== HIGH CONTRAST THEME OVERRIDES ========== -->
+  <!-- These styles activate when ThemeManager adds the "highContrast" class to the window. -->
+
+  <Style Selector="Window.highContrast">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Style.Resources>
+      <SolidColorBrush x:Key="IdeBg" Color="#000000"/>
+      <SolidColorBrush x:Key="IdeFg" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="IdePanelBg" Color="#000000"/>
+      <SolidColorBrush x:Key="IdeMenuBg" Color="#000000"/>
+      <SolidColorBrush x:Key="IdeBorder" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="IdeHoverBg" Color="#1A1A2E"/>
+      <SolidColorBrush x:Key="IdeInputBg" Color="#000000"/>
+      <SolidColorBrush x:Key="IdeInputBorder" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="IdeSelectionBg" Color="#264F78"/>
+      <SolidColorBrush x:Key="IdeHeaderBg" Color="#1A1A1A"/>
+      <SolidColorBrush x:Key="IdeThumbBg" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="IdeThumbHover" Color="#FFFF00"/>
+      <SolidColorBrush x:Key="IdeContextBg" Color="#000000"/>
+      <SolidColorBrush x:Key="IdeContextBorder" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="IdeSecondaryBg" Color="#1A1A1A"/>
+      <SolidColorBrush x:Key="IdeSecondaryFg" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="IdeSecondaryBorder" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="IdeSecondaryHover" Color="#1A1A2E"/>
+      <SolidColorBrush x:Key="IdeListHover" Color="#1A1A2E"/>
+      <SolidColorBrush x:Key="IdeListSelected" Color="#264F78"/>
+      <SolidColorBrush x:Key="IdeFooterBg" Color="#000000"/>
+      <SolidColorBrush x:Key="IdeFooterBorder" Color="#FFFFFF"/>
+    </Style.Resources>
+  </Style>
+
+  <!-- High Contrast: Menu -->
+  <Style Selector="Window.highContrast Menu">
+    <Setter Property="Background" Value="#000000"/>
+  </Style>
+  <Style Selector="Window.highContrast MenuItem">
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast MenuItem:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="#1A1A2E"/>
+    <Setter Property="BorderBrush" Value="#FFFF00"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+
+  <!-- High Contrast: TreeView -->
+  <Style Selector="Window.highContrast TreeView">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast TreeViewItem">
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+
+  <!-- High Contrast: TabControl -->
+  <Style Selector="Window.highContrast TabControl">
+    <Setter Property="Background" Value="#000000"/>
+  </Style>
+  <Style Selector="Window.highContrast TabItem">
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast TabItem:selected">
+    <Setter Property="Foreground" Value="#FFFF00"/>
+  </Style>
+
+  <!-- High Contrast: Status bar -->
+  <Style Selector="Window.highContrast Border.statusBar">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="1,1,1,0"/>
+  </Style>
+
+  <!-- High Contrast: Buttons -->
+  <Style Selector="Window.highContrast Button">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+  <Style Selector="Window.highContrast Button:pointerover">
+    <Setter Property="Background" Value="#1A1A2E"/>
+    <Setter Property="BorderBrush" Value="#FFFF00"/>
+  </Style>
+  <Style Selector="Window.highContrast Button:focus-visible">
+    <Setter Property="BorderBrush" Value="#FFFF00"/>
+    <Setter Property="BorderThickness" Value="2"/>
+  </Style>
+  <Style Selector="Window.highContrast Button.primary">
+    <Setter Property="Background" Value="#000080"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+  <Style Selector="Window.highContrast Button.primary:pointerover">
+    <Setter Property="Background" Value="#0000CC"/>
+    <Setter Property="BorderBrush" Value="#FFFF00"/>
+  </Style>
+
+  <!-- High Contrast: TextBox with visible focus ring -->
+  <Style Selector="Window.highContrast TextBox">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CaretBrush" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast TextBox:focus">
+    <Setter Property="BorderBrush" Value="#FFFF00"/>
+    <Setter Property="BorderThickness" Value="2"/>
+  </Style>
+
+  <!-- High Contrast: ComboBox -->
+  <Style Selector="Window.highContrast ComboBox">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+  <Style Selector="Window.highContrast ComboBox:focus">
+    <Setter Property="BorderBrush" Value="#FFFF00"/>
+    <Setter Property="BorderThickness" Value="2"/>
+  </Style>
+
+  <!-- High Contrast: ListBox -->
+  <Style Selector="Window.highContrast ListBox">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast ListBoxItem">
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast ListBoxItem:selected">
+    <Setter Property="Background" Value="#264F78"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast ListBoxItem:pointerover">
+    <Setter Property="Background" Value="#1A1A2E"/>
+  </Style>
+
+  <!-- High Contrast: CheckBox -->
+  <Style Selector="Window.highContrast CheckBox">
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+
+  <!-- High Contrast: TextBlock (default text) -->
+  <Style Selector="Window.highContrast TextBlock">
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+
+  <!-- High Contrast: ContextMenu -->
+  <Style Selector="Window.highContrast ContextMenu">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+
+  <!-- High Contrast: ToolTip -->
+  <Style Selector="Window.highContrast ToolTip">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+
+  <!-- High Contrast: DataGrid -->
+  <Style Selector="Window.highContrast DataGrid">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="RowBackground" Value="#000000"/>
+  </Style>
+  <Style Selector="Window.highContrast DataGridColumnHeader">
+    <Setter Property="Background" Value="#1A1A1A"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <Setter Property="BorderBrush" Value="#FFFFFF"/>
+    <Setter Property="BorderThickness" Value="0,0,1,1"/>
+  </Style>
+
+  <!-- High Contrast: GridSplitter -->
+  <Style Selector="Window.highContrast GridSplitter">
+    <Setter Property="Background" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast GridSplitter:pointerover">
+    <Setter Property="Background" Value="#FFFF00"/>
+  </Style>
+
+  <!-- High Contrast: ScrollBar -->
+  <Style Selector="Window.highContrast ScrollBar /template/ Thumb">
+    <Setter Property="Background" Value="#FFFFFF"/>
+  </Style>
+  <Style Selector="Window.highContrast ScrollBar /template/ Thumb:pointerover">
+    <Setter Property="Background" Value="#FFFF00"/>
+  </Style>
+
+  <!-- High Contrast: ProgressBar -->
+  <Style Selector="Window.highContrast ProgressBar">
+    <Setter Property="Background" Value="#1A1A1A"/>
+    <Setter Property="Foreground" Value="#FFFF00"/>
+  </Style>
+
+  <!-- High Contrast: Expander -->
+  <Style Selector="Window.highContrast Expander">
+    <Setter Property="Background" Value="#000000"/>
+    <Setter Property="Foreground" Value="#FFFFFF"/>
+  </Style>
+
+  <!-- ========== END HIGH CONTRAST OVERRIDES ========== -->
+
   <!-- Window -->
   <Style Selector="Window">
     <Setter Property="Background" Value="{DynamicResource IdeBg}"/>

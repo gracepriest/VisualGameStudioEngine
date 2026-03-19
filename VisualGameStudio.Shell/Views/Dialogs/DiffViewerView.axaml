@@ -41,7 +41,7 @@
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
           <ToggleButton IsChecked="{Binding SideBySide}"
-                        ToolTip.Tip="Side by Side View"
+                        ToolTip.Tip="Toggle Side-by-Side / Unified View"
                         Width="28" Height="28"
                         Classes="toolbarButton">
             <TextBlock Text="|||" FontSize="10" FontWeight="Bold" Foreground="#CCCCCC"/>
@@ -51,7 +51,7 @@
       </Grid>
     </Border>
 
-    <!-- Column Headers -->
+    <!-- Column Headers (Side by Side only) -->
     <Border DockPanel.Dock="Top" Background="#252526" Padding="0,4"
             IsVisible="{Binding SideBySide}">
       <Grid ColumnDefinitions="*,*">
@@ -64,45 +64,84 @@
 
     <!-- Diff Content -->
     <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-      <!-- Side by Side View -->
-      <ItemsControl ItemsSource="{Binding DiffLines}" IsVisible="{Binding SideBySide}">
-        <ItemsControl.ItemTemplate>
-          <DataTemplate>
-            <Grid ColumnDefinitions="*,*" Background="{Binding BackgroundColor}">
-              <!-- Left Side -->
-              <Border Grid.Column="0" BorderBrush="#3C3C3C" BorderThickness="0,0,1,0"
-                      Background="{Binding LeftBackground}">
-                <Grid ColumnDefinitions="45,*">
+      <Panel>
+        <!-- Side by Side View -->
+        <ItemsControl ItemsSource="{Binding DiffLines}" IsVisible="{Binding SideBySide}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Grid ColumnDefinitions="*,*" Background="{Binding BackgroundColor}">
+                <!-- Left Side -->
+                <Border Grid.Column="0" BorderBrush="#3C3C3C" BorderThickness="0,0,1,0"
+                        Background="{Binding LeftBackground}">
+                  <Grid ColumnDefinitions="45,*">
+                    <Border Grid.Column="0" Background="#252526" Padding="4,0">
+                      <TextBlock Text="{Binding LeftLineNumberText}"
+                                 Foreground="#606060"
+                                 HorizontalAlignment="Right"
+                                 Classes="diffLine"/>
+                    </Border>
+                    <TextBlock Grid.Column="1" Text="{Binding LeftContent}"
+                               Foreground="#D4D4D4" Margin="8,0"
+                               Classes="diffLine"/>
+                  </Grid>
+                </Border>
+
+                <!-- Right Side -->
+                <Border Grid.Column="1" Background="{Binding RightBackground}">
+                  <Grid ColumnDefinitions="45,*">
+                    <Border Grid.Column="0" Background="#252526" Padding="4,0">
+                      <TextBlock Text="{Binding RightLineNumberText}"
+                                 Foreground="#606060"
+                                 HorizontalAlignment="Right"
+                                 Classes="diffLine"/>
+                    </Border>
+                    <TextBlock Grid.Column="1" Text="{Binding RightContent}"
+                               Foreground="#D4D4D4" Margin="8,0"
+                               Classes="diffLine"/>
+                  </Grid>
+                </Border>
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Unified Diff View -->
+        <ItemsControl ItemsSource="{Binding DiffLines}" IsVisible="{Binding !SideBySide}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Background="{Binding BackgroundColor}">
+                <Grid ColumnDefinitions="45,45,*">
+                  <!-- Left line number -->
                   <Border Grid.Column="0" Background="#252526" Padding="4,0">
                     <TextBlock Text="{Binding LeftLineNumberText}"
                                Foreground="#606060"
                                HorizontalAlignment="Right"
                                Classes="diffLine"/>
                   </Border>
-                  <TextBlock Grid.Column="1" Text="{Binding LeftContent}"
-                             Foreground="#D4D4D4" Margin="8,0"
-                             Classes="diffLine"/>
-                </Grid>
-              </Border>
-
-              <!-- Right Side -->
-              <Border Grid.Column="1" Background="{Binding RightBackground}">
-                <Grid ColumnDefinitions="45,*">
-                  <Border Grid.Column="0" Background="#252526" Padding="4,0">
+                  <!-- Right line number -->
+                  <Border Grid.Column="1" Background="#252526" Padding="4,0"
+                          BorderBrush="#3C3C3C" BorderThickness="0,0,1,0">
                     <TextBlock Text="{Binding RightLineNumberText}"
                                Foreground="#606060"
                                HorizontalAlignment="Right"
                                Classes="diffLine"/>
                   </Border>
-                  <TextBlock Grid.Column="1" Text="{Binding RightContent}"
-                             Foreground="#D4D4D4" Margin="8,0"
-                             Classes="diffLine"/>
+                  <!-- Content: show prefix marker and line content -->
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="4,0">
+                    <TextBlock Text="{Binding UnifiedPrefix}"
+                               Foreground="{Binding UnifiedPrefixColor}"
+                               Classes="diffLine"
+                               Width="14"/>
+                    <TextBlock Text="{Binding UnifiedContent}"
+                               Foreground="#D4D4D4"
+                               Classes="diffLine"/>
+                  </StackPanel>
                 </Grid>
               </Border>
-            </Grid>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Panel>
     </ScrollViewer>
   </DockPanel>
 </Window>

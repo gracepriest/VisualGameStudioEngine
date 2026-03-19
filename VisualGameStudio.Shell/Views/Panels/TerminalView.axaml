@@ -84,16 +84,102 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
-              <!-- New terminal button -->
-              <Button Classes="toolbarButton"
-                      Command="{Binding CreateNewSessionCommand}"
-                      ToolTip.Tip="New Terminal (Ctrl+Shift+`)"
-                      Margin="4,2,0,0"
-                      Padding="4,3"
-                      MinWidth="24" MinHeight="20">
-                <TextBlock Text="+" FontSize="14" Foreground="#89D185"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Button>
+              <!-- New terminal button + shell profile selector -->
+              <StackPanel Orientation="Horizontal" Margin="4,2,0,0" Spacing="0">
+                <!-- "+" button: creates new terminal with current default profile -->
+                <Button Classes="toolbarButton"
+                        Command="{Binding CreateNewSessionCommand}"
+                        ToolTip.Tip="New Terminal (Ctrl+Shift+`)"
+                        Padding="4,3"
+                        MinWidth="24" MinHeight="20">
+                  <TextBlock Text="+" FontSize="14" Foreground="#89D185"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Button>
+
+                <!-- Dropdown chevron to pick a specific shell profile -->
+                <Button Classes="toolbarButton"
+                        x:Name="ProfileDropdownButton"
+                        Click="OnProfileDropdownClick"
+                        ToolTip.Tip="Select Shell Profile"
+                        Padding="2,3"
+                        MinWidth="16" MinHeight="20">
+                  <TextBlock Text="&#x25BC;" FontSize="8" Foreground="#89D185"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Button>
+
+                <!-- Shell profile flyout popup -->
+                <Popup x:Name="ProfilePopup"
+                       PlacementTarget="{Binding #ProfileDropdownButton}"
+                       Placement="BottomEdgeAlignedLeft"
+                       IsOpen="{Binding IsProfileDropdownOpen, Mode=TwoWay}"
+                       IsLightDismissEnabled="True"
+                       MaxHeight="300">
+                  <Border Background="#252526"
+                          BorderBrush="#3C3C3C"
+                          BorderThickness="1"
+                          CornerRadius="4"
+                          Padding="2"
+                          MinWidth="200">
+                    <StackPanel>
+                      <!-- Header -->
+                      <TextBlock Text="Select Default Profile"
+                                 FontSize="11"
+                                 Foreground="#808080"
+                                 Margin="8,4,8,4"/>
+                      <Separator Background="#3C3C3C" Height="1" Margin="4,0"/>
+
+                      <!-- Profile list -->
+                      <ItemsControl ItemsSource="{Binding AvailableProfiles}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:ShellProfile">
+                            <Button Classes="toolbarButton"
+                                    Click="OnProfileItemClick"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Left"
+                                    Padding="8,6"
+                                    Margin="2,1"
+                                    CornerRadius="3">
+                              <StackPanel Orientation="Horizontal" Spacing="8">
+                                <!-- Profile icon badge -->
+                                <Border Background="#3C3C3C"
+                                        CornerRadius="2"
+                                        Padding="4,1"
+                                        MinWidth="32"
+                                        HorizontalAlignment="Center">
+                                  <TextBlock Text="{Binding Icon}"
+                                             FontSize="9"
+                                             Foreground="#569CD6"
+                                             HorizontalAlignment="Center"
+                                             VerticalAlignment="Center"/>
+                                </Border>
+                                <!-- Profile name -->
+                                <TextBlock Text="{Binding Name}"
+                                           FontSize="12"
+                                           Foreground="#CCCCCC"
+                                           VerticalAlignment="Center"/>
+                              </StackPanel>
+                            </Button>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+
+                      <Separator Background="#3C3C3C" Height="1" Margin="4,2"/>
+
+                      <!-- Current default indicator -->
+                      <StackPanel Orientation="Horizontal" Margin="8,4,8,6" Spacing="4">
+                        <TextBlock Text="Default:"
+                                   FontSize="10"
+                                   Foreground="#808080"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding SelectedProfile.Name}"
+                                   FontSize="10"
+                                   Foreground="#569CD6"
+                                   VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </Popup>
+              </StackPanel>
             </StackPanel>
           </ScrollViewer>
         </DockPanel>
@@ -128,18 +214,75 @@
         </Grid>
       </Border>
 
-      <!-- Output with ANSI color support -->
-      <ScrollViewer Background="#0C0C0C"
-                    HorizontalScrollBarVisibility="Auto"
-                    VerticalScrollBarVisibility="Auto"
-                    x:Name="OutputScroller">
-        <SelectableTextBlock FontFamily="Cascadia Code, Consolas, monospace"
-                             FontSize="13"
-                             Foreground="#CCCCCC"
-                             Padding="8"
-                             TextWrapping="NoWrap"
-                             x:Name="OutputTextBlock"/>
-      </ScrollViewer>
+      <!-- Output with ANSI color support + search overlay -->
+      <Grid>
+        <ScrollViewer Background="#0C0C0C"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      x:Name="OutputScroller">
+          <SelectableTextBlock FontFamily="Cascadia Code, Consolas, monospace"
+                               FontSize="13"
+                               Foreground="#CCCCCC"
+                               Padding="8"
+                               TextWrapping="NoWrap"
+                               x:Name="OutputTextBlock"/>
+        </ScrollViewer>
+
+        <!-- Search bar (Ctrl+F) -->
+        <Border x:Name="SearchBar"
+                IsVisible="False"
+                Background="#252526"
+                BorderBrush="#3C3C3C"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="6,4"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="8,8,24,0">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBox x:Name="SearchTextBox"
+                     Width="220"
+                     FontFamily="Cascadia Code, Consolas, monospace"
+                     FontSize="12"
+                     Background="#3C3C3C"
+                     Foreground="#CCCCCC"
+                     BorderThickness="1"
+                     BorderBrush="#555555"
+                     Watermark="Find in terminal..."
+                     Padding="4,3"/>
+            <TextBlock x:Name="SearchMatchCount"
+                       Text="No results"
+                       Foreground="#808080"
+                       FontSize="11"
+                       VerticalAlignment="Center"
+                       MinWidth="70"/>
+            <Button Classes="toolbarButton"
+                    x:Name="SearchPrevButton"
+                    Click="OnSearchPrevClick"
+                    ToolTip.Tip="Previous Match (Shift+Enter)"
+                    Padding="4,2"
+                    MinWidth="24" MinHeight="22">
+              <TextBlock Text="&#x25B2;" FontSize="10" Foreground="#CCCCCC"/>
+            </Button>
+            <Button Classes="toolbarButton"
+                    x:Name="SearchNextButton"
+                    Click="OnSearchNextClick"
+                    ToolTip.Tip="Next Match (Enter)"
+                    Padding="4,2"
+                    MinWidth="24" MinHeight="22">
+              <TextBlock Text="&#x25BC;" FontSize="10" Foreground="#CCCCCC"/>
+            </Button>
+            <Button Classes="toolbarButton"
+                    x:Name="SearchCloseButton"
+                    Click="OnSearchCloseClick"
+                    ToolTip.Tip="Close (Escape)"
+                    Padding="4,2"
+                    MinWidth="24" MinHeight="22">
+              <TextBlock Text="&#x00D7;" FontSize="14" Foreground="#808080"/>
+            </Button>
+          </StackPanel>
+        </Border>
+      </Grid>
     </DockPanel>
   </Border>
 </UserControl>

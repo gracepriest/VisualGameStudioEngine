@@ -36,6 +36,7 @@
                              VerticalScrollBarVisibility="Auto"
                              MinWidth="100"
                              MinHeight="100"
+                             DragDrop.AllowDrop="True"
                              />
 
       <!-- Inline Find/Replace overlay - top-right of the editor -->

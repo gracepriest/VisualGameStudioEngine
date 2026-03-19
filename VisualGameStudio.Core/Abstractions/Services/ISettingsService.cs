@@ -400,6 +400,7 @@ public static class SettingsKeys
     public const string TerminalFontSize = "Terminal.FontSize";
     public const string TerminalCursorStyle = "Terminal.CursorStyle";
     public const string TerminalShell = "Terminal.Shell";
+    public const string TerminalDefaultShell = "Terminal.DefaultShell";
     public const string GitAutoFetch = "Git.AutoFetch";
     public const string GitAutoFetchInterval = "Git.AutoFetchInterval";
     public const string GitConfirmSync = "Git.ConfirmSync";

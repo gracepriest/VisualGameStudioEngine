@@ -1377,6 +1377,9 @@ namespace BasicLang.Debugger
         [JsonPropertyName("command")]
         public string Command { get; set; } = string.Empty;
 
+        [JsonPropertyName("message")]
+        public string Message { get; set; }
+
         [JsonPropertyName("body")]
         public object? Body { get; set; }
     }

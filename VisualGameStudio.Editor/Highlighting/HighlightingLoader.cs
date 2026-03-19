@@ -11,6 +11,7 @@ public static class HighlightingLoader
     private static IHighlightingDefinition? _basicLangDefinition;
     private static IHighlightingDefinition? _darkDefinition;
     private static IHighlightingDefinition? _lightDefinition;
+    private static IHighlightingDefinition? _highContrastDefinition;
 
     public static void RegisterHighlighting()
     {
@@ -39,8 +40,14 @@ public static class HighlightingLoader
     /// <summary>
     /// Returns the appropriate highlighting definition for the current theme.
     /// </summary>
-    public static IHighlightingDefinition? GetDefinitionForTheme(bool isDark)
+    public static IHighlightingDefinition? GetDefinitionForTheme(bool isDark, bool isHighContrast = false)
     {
+        if (isHighContrast)
+        {
+            _highContrastDefinition ??= LoadDefinitionFromResource("VisualGameStudio.Editor.Highlighting.BasicLangHighContrast.xshd");
+            return _highContrastDefinition;
+        }
+
         if (isDark)
         {
             _darkDefinition ??= LoadDefinitionFromResource("VisualGameStudio.Editor.Highlighting.BasicLang.xshd");
@@ -56,9 +63,9 @@ public static class HighlightingLoader
     /// <summary>
     /// Re-registers the highlighting for the current theme. Call after theme switch.
     /// </summary>
-    public static void UpdateForTheme(bool isDark)
+    public static void UpdateForTheme(bool isDark, bool isHighContrast = false)
     {
-        var definition = GetDefinitionForTheme(isDark);
+        var definition = GetDefinitionForTheme(isDark, isHighContrast);
         if (definition != null)
         {
             HighlightingManager.Instance.RegisterHighlighting(

@@ -261,6 +261,9 @@ public partial class MainWindowViewModel : ViewModelBase
         // Handle error list navigation
         ErrorList.DiagnosticDoubleClicked += OnDiagnosticDoubleClicked;
 
+        // Handle output panel clickable error/warning navigation
+        OutputPanel.NavigateToSourceRequested += OnOutputLineNavigateToSource;
+
         // Handle breakpoint condition editing and visual updates
         Breakpoints.EditConditionRequested += OnEditBreakpointCondition;
         Breakpoints.EditFunctionConditionRequested += OnEditFunctionBreakpointCondition;
@@ -274,6 +277,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Wire up Find in Files navigation
         FindInFiles.SetNavigationCallback(OpenFileAtLine);
+
+        // Wire up Terminal file path link navigation
+        Terminal.FileNavigationRequested += OnTerminalFileNavigationRequested;
 
         // Subscribe to language service diagnostics for error highlighting
         _languageService.DiagnosticsReceived += OnDiagnosticsReceived;
@@ -311,6 +317,11 @@ public partial class MainWindowViewModel : ViewModelBase
     private void OpenFileAtLine(string filePath, int line)
     {
         _ = OpenFileAtLineAsync(filePath, line);
+    }
+
+    private void OnTerminalFileNavigationRequested(string filePath, int line, int column)
+    {
+        _ = OpenFileAndNavigateAsync(filePath, line, column);
     }
 
     private async Task OpenFileAtLineAsync(string filePath, int line)
@@ -404,6 +415,18 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 await OpenFileAndNavigateAsync(diagnostic.FilePath, diagnostic.Line, diagnostic.Column);
             }
+        }
+        catch (Exception)
+        {
+            // Ignore exceptions in event handler
+        }
+    }
+
+    private async void OnOutputLineNavigateToSource(object? sender, OutputLineNavigationEventArgs e)
+    {
+        try
+        {
+            await OpenFileAndNavigateAsync(e.FilePath, e.Line, e.Column);
         }
         catch (Exception)
         {

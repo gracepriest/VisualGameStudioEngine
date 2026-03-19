@@ -71,6 +71,7 @@ public partial class CodeEditorDocumentView : UserControl
             MainEditor.SignatureHelpRequested -= OnEditorSignatureHelp;
             MainEditor.DocumentHighlightRequested -= OnEditorDocumentHighlight;
             MainEditor.DocumentLinkClicked -= OnEditorDocumentLinkClicked;
+            MainEditor.FileDropped -= OnEditorFileDropped;
             MainEditor.EditorReady -= OnEditorReady;
             _editorEventsWired = false;
         }
@@ -166,6 +167,24 @@ public partial class CodeEditorDocumentView : UserControl
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[DocumentLink] Error handling link: {ex.Message}");
+        }
+    }
+
+    private void OnEditorFileDropped(object? s, Editor.Controls.FileDroppedEventArgs e)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(e.FilePath)) return;
+
+            var mainWindow = TopLevel.GetTopLevel(this) as Avalonia.Controls.Window;
+            if (mainWindow?.DataContext is MainWindowViewModel mainVm)
+            {
+                _ = mainVm.OpenFileFromLinkAsync(e.FilePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[FileDropped] Error opening file: {ex.Message}");
         }
     }
 
@@ -278,6 +297,7 @@ public partial class CodeEditorDocumentView : UserControl
                 MainEditor.SignatureHelpRequested += OnEditorSignatureHelp;
                 MainEditor.DocumentHighlightRequested += OnEditorDocumentHighlight;
                 MainEditor.DocumentLinkClicked += OnEditorDocumentLinkClicked;
+                MainEditor.FileDropped += OnEditorFileDropped;
 
                 _editorEventsWired = true;
 

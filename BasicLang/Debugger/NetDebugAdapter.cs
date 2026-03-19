@@ -42,6 +42,12 @@ namespace BasicLang.Debugger
         private int _nextScopeRef = 1;
         private int _nextFrameId = 1;
 
+        // Exception info — stored when OnExceptionThrown fires, returned by exceptionInfo request
+        private string _lastExceptionType;
+        private string _lastExceptionMessage;
+        private string _lastExceptionDescription;
+        private bool _lastExceptionIsUnhandled;
+
         private readonly object _writeLock = new();
 
         public NetDebugAdapter(Stream input, Stream output)
@@ -101,6 +107,7 @@ namespace BasicLang.Debugger
                     "stackTrace" => HandleStackTrace(message),
                     "scopes" => HandleScopes(message),
                     "variables" => HandleVariables(message),
+                    "setVariable" => HandleSetVariable(message),
                     "continue" => HandleContinue(message),
                     "next" => HandleNext(message),
                     "stepIn" => HandleStepIn(message),
@@ -108,6 +115,7 @@ namespace BasicLang.Debugger
                     "pause" => HandlePause(message),
                     "evaluate" => HandleEvaluate(message),
                     "setExceptionBreakpoints" => HandleSetExceptionBreakpoints(message),
+                    "exceptionInfo" => HandleExceptionInfo(message),
                     "disconnect" => HandleDisconnect(message),
                     _ => CreateResponse(message, true)
                 };
@@ -136,7 +144,7 @@ namespace BasicLang.Debugger
                 ["supportsLogPoints"] = true,
                 ["supportsEvaluateForHovers"] = true,
                 ["supportsExceptionInfoRequest"] = true,
-                ["supportsSetVariable"] = false,
+                ["supportsSetVariable"] = true,
                 ["supportsStepBack"] = false,
                 ["supportsRestartFrame"] = false,
                 ["supportsGotoTargetsRequest"] = false,
@@ -672,6 +680,322 @@ namespace BasicLang.Debugger
             return response;
         }
 
+        private DAPResponse HandleSetVariable(DAPMessage request)
+        {
+            var args = request.Arguments;
+            int varRef = args.TryGetProperty("variablesReference", out var refProp) ? refProp.GetInt32() : 0;
+            string varName = args.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : "";
+            string newValue = args.TryGetProperty("value", out var valProp) ? valProp.GetString() : "";
+
+            try
+            {
+                if (!_scopeReferences.TryGetValue(varRef, out var scopeInfo))
+                    return CreateSetVariableError(request, "Variable scope not found");
+
+                if (!_frameInfoMap.TryGetValue(scopeInfo.FrameId, out var frameInfo))
+                    return CreateSetVariableError(request, "Frame not found");
+
+                if (frameInfo.RawILFramePtr == IntPtr.Zero)
+                    return CreateSetVariableError(request, "No IL frame available for variable modification");
+
+                var ilFramePtr = frameInfo.RawILFramePtr;
+                var vtable = Marshal.ReadIntPtr(ilFramePtr);
+
+                // Determine variable index by name
+                int varIndex = -1;
+                int varCount = 0;
+
+                if (scopeInfo.Kind == ScopeKind.Locals)
+                {
+                    // Get local variable count and find by name using PDB info
+                    var enumLocalsSlot = Marshal.ReadIntPtr(vtable, 13 * IntPtr.Size);
+                    var enumLocals = Marshal.GetDelegateForFunctionPointer<EnumerateLocalVariablesDelegate>(enumLocalsSlot);
+                    int hr = enumLocals(ilFramePtr, out IntPtr valueEnumPtr);
+                    if (hr >= 0 && valueEnumPtr != IntPtr.Zero)
+                    {
+                        var enumVtable = Marshal.ReadIntPtr(valueEnumPtr);
+                        var getCountSlot = Marshal.ReadIntPtr(enumVtable, 6 * IntPtr.Size);
+                        var getCount = Marshal.GetDelegateForFunctionPointer<ValueEnumGetCountDelegate>(getCountSlot);
+                        getCount(valueEnumPtr, out uint count);
+                        varCount = (int)count;
+                        Marshal.Release(valueEnumPtr);
+                    }
+
+                    // Try PDB names first
+                    Dictionary<int, string> pdbNames = null;
+                    if (_sourceMapper != null)
+                        pdbNames = _sourceMapper.GetLocalVariableNames(frameInfo.FunctionToken);
+
+                    if (pdbNames != null)
+                    {
+                        foreach (var kvp in pdbNames)
+                        {
+                            if (string.Equals(kvp.Value, varName, StringComparison.Ordinal))
+                            {
+                                varIndex = kvp.Key;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Fall back to local_N naming
+                    if (varIndex < 0 && varName.StartsWith("local_") &&
+                        int.TryParse(varName.Substring(6), out int idx) && idx >= 0 && idx < varCount)
+                    {
+                        varIndex = idx;
+                    }
+                }
+                else // Arguments
+                {
+                    // Arguments are named arg_N
+                    if (varName.StartsWith("arg_") &&
+                        int.TryParse(varName.Substring(4), out int idx) && idx >= 0)
+                    {
+                        varIndex = idx;
+                    }
+                }
+
+                if (varIndex < 0)
+                    return CreateSetVariableError(request, $"Variable '{varName}' not found in current scope");
+
+                // Get the ICorDebugValue for this variable
+                IntPtr valuePtr = IntPtr.Zero;
+                if (scopeInfo.Kind == ScopeKind.Locals)
+                {
+                    var getLocalSlot = Marshal.ReadIntPtr(vtable, 14 * IntPtr.Size);
+                    var getLocal = Marshal.GetDelegateForFunctionPointer<GetLocalVariableDelegate>(getLocalSlot);
+                    int hr = getLocal(ilFramePtr, (uint)varIndex, out valuePtr);
+                    if (hr < 0 || valuePtr == IntPtr.Zero)
+                        return CreateSetVariableError(request, "Failed to access local variable");
+                }
+                else
+                {
+                    var getArgSlot = Marshal.ReadIntPtr(vtable, 16 * IntPtr.Size);
+                    var getArg = Marshal.GetDelegateForFunctionPointer<GetArgumentDelegate>(getArgSlot);
+                    int hr = getArg(ilFramePtr, (uint)varIndex, out valuePtr);
+                    if (hr < 0 || valuePtr == IntPtr.Zero)
+                        return CreateSetVariableError(request, "Failed to access argument variable");
+                }
+
+                try
+                {
+                    // Get the element type of the variable
+                    var valVtable = Marshal.ReadIntPtr(valuePtr);
+                    var getTypeSlot = Marshal.ReadIntPtr(valVtable, 3 * IntPtr.Size);
+                    var getType = Marshal.GetDelegateForFunctionPointer<ValueGetTypeDelegate>(getTypeSlot);
+                    getType(valuePtr, out int elementType);
+
+                    var getSizeSlot = Marshal.ReadIntPtr(valVtable, 4 * IntPtr.Size);
+                    var getSize = Marshal.GetDelegateForFunctionPointer<ValueGetSizeDelegate>(getSizeSlot);
+                    getSize(valuePtr, out uint size);
+
+                    string typeName = CorElementTypeToString(elementType);
+
+                    // Only support primitive types for v1
+                    if (!IsSupportedPrimitiveType(elementType))
+                        return CreateSetVariableError(request, $"Setting values of type '{typeName}' is not supported. Only primitive types (int, float, bool, char, byte) are supported.");
+
+                    // QI for ICorDebugGenericValue
+                    Guid iidGenericValue = new Guid("CC7BCAF8-8A68-11D2-983C-0000F808342D");
+                    int qiHr = Marshal.QueryInterface(valuePtr, ref iidGenericValue, out IntPtr genericPtr);
+                    if (qiHr < 0 || genericPtr == IntPtr.Zero)
+                        return CreateSetVariableError(request, "Cannot modify this variable (not a generic value)");
+
+                    try
+                    {
+                        // Parse the new value string into raw bytes
+                        IntPtr buffer = Marshal.AllocHGlobal((int)size);
+                        try
+                        {
+                            if (!TryParsePrimitiveValue(newValue, elementType, buffer, size))
+                                return CreateSetVariableError(request, $"Cannot parse '{newValue}' as {typeName}");
+
+                            // ICorDebugGenericValue::SetValue is slot 7 (IUnknown(3) + ICorDebugValue(3) + GetValue(0) + SetValue(1))
+                            var genVtable = Marshal.ReadIntPtr(genericPtr);
+                            var setValueSlot = Marshal.ReadIntPtr(genVtable, 7 * IntPtr.Size);
+                            var setValue = Marshal.GetDelegateForFunctionPointer<GenericValueSetValueDelegate>(setValueSlot);
+
+                            int hr2 = setValue(genericPtr, buffer);
+                            if (hr2 < 0)
+                                return CreateSetVariableError(request, $"Failed to set variable value (HRESULT: 0x{hr2:X8})");
+
+                            // Read back the value to confirm
+                            string confirmedValue = FormatPrimitiveValue(elementType, buffer, size);
+
+                            var response = CreateResponse(request, true);
+                            response.Body = new Dictionary<string, object>
+                            {
+                                ["value"] = confirmedValue,
+                                ["type"] = typeName,
+                                ["variablesReference"] = 0
+                            };
+                            return response;
+                        }
+                        finally
+                        {
+                            Marshal.FreeHGlobal(buffer);
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(genericPtr);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(valuePtr);
+                }
+            }
+            catch (Exception ex)
+            {
+                return CreateSetVariableError(request, $"Error setting variable: {ex.Message}");
+            }
+        }
+
+        private DAPResponse CreateSetVariableError(DAPMessage request, string message)
+        {
+            var response = CreateResponse(request, false);
+            response.Body = new Dictionary<string, object>
+            {
+                ["error"] = new Dictionary<string, object>
+                {
+                    ["id"] = 1,
+                    ["format"] = message
+                }
+            };
+            response.Message = message;
+            return response;
+        }
+
+        /// <summary>
+        /// Check if the CorElementType is a supported primitive type for SetVariable.
+        /// </summary>
+        private static bool IsSupportedPrimitiveType(int elementType)
+        {
+            return elementType switch
+            {
+                0x02 => true, // BOOLEAN
+                0x03 => true, // CHAR
+                0x04 => true, // I1 (SByte)
+                0x05 => true, // U1 (Byte)
+                0x06 => true, // I2 (Int16)
+                0x07 => true, // U2 (UInt16)
+                0x08 => true, // I4 (Int32)
+                0x09 => true, // U4 (UInt32)
+                0x0A => true, // I8 (Int64)
+                0x0B => true, // U8 (UInt64)
+                0x0C => true, // R4 (Single)
+                0x0D => true, // R8 (Double)
+                _ => false
+            };
+        }
+
+        /// <summary>
+        /// Parse a user-provided string value into raw bytes for a primitive CLR type.
+        /// Writes the parsed bytes directly into the provided buffer.
+        /// </summary>
+        private static bool TryParsePrimitiveValue(string text, int elementType, IntPtr buffer, uint size)
+        {
+            try
+            {
+                switch (elementType)
+                {
+                    case 0x02: // BOOLEAN
+                        {
+                            bool val;
+                            if (string.Equals(text, "true", StringComparison.OrdinalIgnoreCase) || text == "1")
+                                val = true;
+                            else if (string.Equals(text, "false", StringComparison.OrdinalIgnoreCase) || text == "0")
+                                val = false;
+                            else
+                                return false;
+                            Marshal.WriteByte(buffer, val ? (byte)1 : (byte)0);
+                            return true;
+                        }
+                    case 0x03: // CHAR
+                        {
+                            char val;
+                            if (text.Length == 1)
+                                val = text[0];
+                            else if (text.Length == 3 && text[0] == '\'' && text[2] == '\'')
+                                val = text[1];
+                            else
+                                return false;
+                            Marshal.WriteInt16(buffer, (short)val);
+                            return true;
+                        }
+                    case 0x04: // I1 (SByte)
+                        {
+                            if (!sbyte.TryParse(text, out sbyte val)) return false;
+                            Marshal.WriteByte(buffer, (byte)val);
+                            return true;
+                        }
+                    case 0x05: // U1 (Byte)
+                        {
+                            if (!byte.TryParse(text, out byte val)) return false;
+                            Marshal.WriteByte(buffer, val);
+                            return true;
+                        }
+                    case 0x06: // I2 (Int16)
+                        {
+                            if (!short.TryParse(text, out short val)) return false;
+                            Marshal.WriteInt16(buffer, val);
+                            return true;
+                        }
+                    case 0x07: // U2 (UInt16)
+                        {
+                            if (!ushort.TryParse(text, out ushort val)) return false;
+                            Marshal.WriteInt16(buffer, (short)val);
+                            return true;
+                        }
+                    case 0x08: // I4 (Int32)
+                        {
+                            if (!int.TryParse(text, out int val)) return false;
+                            Marshal.WriteInt32(buffer, val);
+                            return true;
+                        }
+                    case 0x09: // U4 (UInt32)
+                        {
+                            if (!uint.TryParse(text, out uint val)) return false;
+                            Marshal.WriteInt32(buffer, (int)val);
+                            return true;
+                        }
+                    case 0x0A: // I8 (Int64)
+                        {
+                            if (!long.TryParse(text, out long val)) return false;
+                            Marshal.WriteInt64(buffer, val);
+                            return true;
+                        }
+                    case 0x0B: // U8 (UInt64)
+                        {
+                            if (!ulong.TryParse(text, out ulong val)) return false;
+                            Marshal.WriteInt64(buffer, (long)val);
+                            return true;
+                        }
+                    case 0x0C: // R4 (Single)
+                        {
+                            if (!float.TryParse(text, out float val)) return false;
+                            float[] arr = new float[] { val };
+                            Marshal.Copy(arr, 0, buffer, 1);
+                            return true;
+                        }
+                    case 0x0D: // R8 (Double)
+                        {
+                            if (!double.TryParse(text, out double val)) return false;
+                            double[] arr = new double[] { val };
+                            Marshal.Copy(arr, 0, buffer, 1);
+                            return true;
+                        }
+                    default:
+                        return false;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private DAPResponse HandleContinue(DAPMessage request)
         {
             ClearDebugState();
@@ -861,6 +1185,196 @@ namespace BasicLang.Debugger
                 }).ToList()
             };
             return response;
+        }
+
+        private DAPResponse HandleExceptionInfo(DAPMessage request)
+        {
+            var response = CreateResponse(request, true);
+
+            // Determine breakMode based on whether the exception was unhandled
+            string breakMode = _lastExceptionIsUnhandled ? "unhandled" : "always";
+
+            // Build the details object with the full description
+            var details = new Dictionary<string, object>
+            {
+                ["message"] = _lastExceptionMessage ?? "",
+                ["typeName"] = _lastExceptionType ?? "Exception"
+            };
+
+            // Try to read stack trace from the current thread's exception object
+            string stackTrace = ReadExceptionStackTrace();
+            if (!string.IsNullOrEmpty(stackTrace))
+            {
+                details["stackTrace"] = stackTrace;
+            }
+
+            response.Body = new Dictionary<string, object>
+            {
+                ["exceptionId"] = _lastExceptionType ?? "Exception",
+                ["description"] = _lastExceptionMessage ?? _lastExceptionDescription ?? "An exception was thrown",
+                ["breakMode"] = breakMode,
+                ["details"] = details
+            };
+            return response;
+        }
+
+        /// <summary>
+        /// Attempt to read the StackTrace string from the current exception object on the thread.
+        /// Uses ICorDebugThread::GetCurrentException via raw vtable, then reads the _stackTraceString field.
+        /// </summary>
+        private string ReadExceptionStackTrace()
+        {
+            try
+            {
+                var thread = GetFirstThread();
+                if (thread == null) return null;
+
+                var threadPtr = Marshal.GetIUnknownForObject(thread);
+                try
+                {
+                    var vtable = Marshal.ReadIntPtr(threadPtr);
+
+                    // ICorDebugThread::GetCurrentException is slot 10 (IUnknown(3) + 7)
+                    var getCurrentExceptionSlot = Marshal.ReadIntPtr(vtable, 10 * IntPtr.Size);
+                    var getCurrentException = Marshal.GetDelegateForFunctionPointer<GetCurrentExceptionDelegate>(getCurrentExceptionSlot);
+                    int hr = getCurrentException(threadPtr, out IntPtr exValuePtr);
+                    if (hr < 0 || exValuePtr == IntPtr.Zero) return null;
+
+                    try
+                    {
+                        // Dereference the reference value to get the object
+                        Guid iidRefVal = new Guid("CC7BCAF9-8A68-11D2-983C-0000F808342D");
+                        int qiHr = Marshal.QueryInterface(exValuePtr, ref iidRefVal, out IntPtr refPtr);
+                        if (qiHr < 0 || refPtr == IntPtr.Zero) return null;
+
+                        try
+                        {
+                            var refObj = (ICorDebugReferenceValue)Marshal.GetObjectForIUnknown(refPtr);
+                            refObj.IsNull(out bool isNull);
+                            if (isNull) return null;
+
+                            refObj.Dereference(out ICorDebugValue actualValue);
+                            if (actualValue is not ICorDebugObjectValue objVal) return null;
+
+                            // Get the class and metadata to find _stackTraceString field
+                            objVal.GetClass(out ICorDebugClass cls);
+                            if (cls == null) return null;
+
+                            cls.GetModule(out ICorDebugModule module);
+                            cls.GetToken(out uint typeDefToken);
+                            if (module == null) return null;
+
+                            Guid imdImportGuid = new Guid("7DAC8207-D3AE-4C75-9B67-92801A497D44");
+                            module.GetMetaDataInterface(ref imdImportGuid, out object mdObj);
+                            if (mdObj is not IMetaDataImport mdImport) return null;
+
+                            return ReadStringField(mdImport, objVal, cls, typeDefToken, "_stackTraceString");
+                        }
+                        finally
+                        {
+                            Marshal.Release(refPtr);
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(exValuePtr);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(threadPtr);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Read a string field by name from an exception object, walking up the type hierarchy.
+        /// </summary>
+        private static string ReadStringField(IMetaDataImport mdImport, ICorDebugObjectValue objVal, ICorDebugClass cls, uint typeDefToken, string targetFieldName)
+        {
+            uint currentTypeDef = typeDefToken;
+
+            for (int depth = 0; depth < 10; depth++)
+            {
+                IntPtr hEnum = IntPtr.Zero;
+                try
+                {
+                    uint[] fieldTokens = new uint[32];
+                    while (true)
+                    {
+                        int hr = mdImport.EnumFields(ref hEnum, currentTypeDef, fieldTokens, (uint)fieldTokens.Length, out uint fetched);
+                        if (hr < 0 || fetched == 0) break;
+
+                        for (uint i = 0; i < fetched; i++)
+                        {
+                            uint fieldToken = fieldTokens[i];
+                            char[] fieldNameBuf = new char[256];
+                            hr = mdImport.GetFieldProps(
+                                fieldToken, out _, fieldNameBuf, (uint)fieldNameBuf.Length, out uint fieldNameLen,
+                                out _, out _, out _, out _, out _, out _);
+
+                            if (hr < 0 || fieldNameLen == 0) continue;
+
+                            string fieldName = new string(fieldNameBuf, 0, (int)(fieldNameLen - 1));
+                            if (fieldName == targetFieldName)
+                            {
+                                try
+                                {
+                                    objVal.GetFieldValue(cls, fieldToken, out ICorDebugValue fieldValue);
+                                    if (fieldValue == null) return null;
+
+                                    if (fieldValue is ICorDebugReferenceValue msgRef)
+                                    {
+                                        msgRef.IsNull(out bool isNull2);
+                                        if (isNull2) return null;
+                                        msgRef.Dereference(out ICorDebugValue derefVal);
+                                        if (derefVal is ICorDebugStringValue strVal)
+                                        {
+                                            strVal.GetLength(out uint strLen);
+                                            char[] strBuf = new char[strLen + 1];
+                                            strVal.GetString((uint)strBuf.Length, out _, strBuf);
+                                            return new string(strBuf, 0, (int)strLen);
+                                        }
+                                    }
+                                    else if (fieldValue is ICorDebugStringValue directStr)
+                                    {
+                                        directStr.GetLength(out uint strLen);
+                                        char[] strBuf = new char[strLen + 1];
+                                        directStr.GetString((uint)strBuf.Length, out _, strBuf);
+                                        return new string(strBuf, 0, (int)strLen);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+
+                        if (fetched < (uint)fieldTokens.Length) break;
+                    }
+                }
+                finally
+                {
+                    if (hEnum != IntPtr.Zero)
+                    {
+                        try { mdImport.CloseEnum(hEnum); } catch { }
+                    }
+                }
+
+                // Walk up to the base class
+                char[] baseNameBuf = new char[1024];
+                int hr2 = mdImport.GetTypeDefProps(currentTypeDef, baseNameBuf, (uint)baseNameBuf.Length, out _, out _, out uint extendsToken);
+                if (hr2 < 0 || extendsToken == 0) break;
+
+                if ((extendsToken & 0xFF000000) == 0x02000000)
+                    currentTypeDef = extendsToken;
+                else
+                    break;
+            }
+
+            return null;
         }
 
         private DAPResponse HandleDisconnect(DAPMessage request)
@@ -1179,6 +1693,26 @@ namespace BasicLang.Debugger
         {
             try
             {
+                // Store exception details for the exceptionInfo request
+                _lastExceptionType = e.ExceptionType ?? "Exception";
+                _lastExceptionDescription = e.ExceptionMessage ?? "Exception";
+                _lastExceptionIsUnhandled = e.IsUnhandled;
+
+                // Parse the raw exception message out of the description.
+                // ExceptionMessage comes formatted as "First-chance exception: TypeName: message"
+                // We want just the message portion for _lastExceptionMessage.
+                _lastExceptionMessage = e.ExceptionMessage;
+                if (!string.IsNullOrEmpty(e.ExceptionMessage) && !string.IsNullOrEmpty(e.ExceptionType))
+                {
+                    // Try to extract just the message after "TypeName: "
+                    string marker = e.ExceptionType + ": ";
+                    int idx = e.ExceptionMessage.IndexOf(marker, StringComparison.Ordinal);
+                    if (idx >= 0)
+                    {
+                        _lastExceptionMessage = e.ExceptionMessage.Substring(idx + marker.Length);
+                    }
+                }
+
                 // Check if we should break based on exception filters
                 bool shouldBreak = e.IsUnhandled
                     ? _exceptionFilterUncaught
@@ -1190,6 +1724,7 @@ namespace BasicLang.Debugger
                     {
                         ["reason"] = "exception",
                         ["description"] = e.ExceptionMessage ?? "Exception",
+                        ["text"] = _lastExceptionType,
                         ["threadId"] = e.ThreadId,
                         ["allThreadsStopped"] = true
                     });
@@ -2703,6 +3238,9 @@ namespace BasicLang.Debugger
 
         // Raw vtable call delegates for ICorDebug COM interop (bypasses QI issues on .NET Core)
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetCurrentExceptionDelegate(IntPtr self, out IntPtr ppExceptionObject);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int GetFunctionFromTokenDelegate(IntPtr self, uint methodDef, out IntPtr ppFunction);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -2780,5 +3318,8 @@ namespace BasicLang.Debugger
         // ICorDebugGenericValue: extends ICorDebugValue + GetValue(0), SetValue(1) → slots 6,7
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int GenericValueGetValueDelegate(IntPtr self, IntPtr pTo);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GenericValueSetValueDelegate(IntPtr self, IntPtr pFrom);
     }
 }

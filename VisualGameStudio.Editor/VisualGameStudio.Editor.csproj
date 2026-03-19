@@ -22,6 +22,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Highlighting\BasicLang.xshd" />
     <EmbeddedResource Include="Highlighting\BasicLangLight.xshd" />
+    <EmbeddedResource Include="Highlighting\BasicLangHighContrast.xshd" />
   </ItemGroup>
 
 </Project>

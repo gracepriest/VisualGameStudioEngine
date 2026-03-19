@@ -464,6 +464,8 @@ public class SettingsService : ISettingsService
                 new() { Key = SettingsKeys.ShowMinimap, Type = SettingsPropertyType.Boolean, Title = "Show Minimap", Default = true, Description = "Controls whether the minimap is shown." },
                 new() { Key = SettingsKeys.StickyScrollEnabled, Type = SettingsPropertyType.Boolean, Title = "Sticky Scroll", Default = true, Description = "Pin enclosing scope headers at the top of the editor when scrolling." },
                 new() { Key = SettingsKeys.BracketPairColorization, Type = SettingsPropertyType.Boolean, Title = "Bracket Pair Colorization", Default = true, Description = "Enable bracket pair colorization." },
+                new() { Key = SettingsKeys.SmoothScrolling, Type = SettingsPropertyType.Boolean, Title = "Smooth Scrolling", Default = true, Description = "Animate scrolling for a smoother visual experience." },
+                new() { Key = SettingsKeys.CursorBlinking, Type = SettingsPropertyType.String, Title = "Cursor Blinking", Default = "smooth", Enum = new List<object> { "blink", "smooth", "phase", "expand", "solid" }, Description = "Controls cursor blinking animation style." },
             }
         };
 
@@ -489,7 +491,8 @@ public class SettingsService : ISettingsService
             {
                 new() { Key = SettingsKeys.TerminalFontFamily, Type = SettingsPropertyType.String, Title = "Font Family", Default = "Consolas", Description = "Controls the font family." },
                 new() { Key = SettingsKeys.TerminalFontSize, Type = SettingsPropertyType.Integer, Title = "Font Size", Default = 14, Minimum = 6, Maximum = 72, Description = "Controls the font size." },
-                new() { Key = SettingsKeys.TerminalShell, Type = SettingsPropertyType.String, Title = "Default Shell", Default = "", Description = "The path of the shell to use." },
+                new() { Key = SettingsKeys.TerminalShell, Type = SettingsPropertyType.String, Title = "Shell Path", Default = "", Description = "The path of the shell to use (legacy)." },
+                new() { Key = SettingsKeys.TerminalDefaultShell, Type = SettingsPropertyType.String, Title = "Default Shell", Default = "", Description = "The default shell profile name (e.g., PowerShell 7, Git Bash, Command Prompt)." },
             }
         };
 

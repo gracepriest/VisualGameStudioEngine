@@ -2,6 +2,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Document;
@@ -59,6 +61,21 @@ public partial class CodeEditorControl : UserControl
     private string? _documentFilePath;
     private bool _isColumnSelectionMode;
 
+    // Smooth scrolling state
+    private bool _smoothScrollingEnabled = true;
+    private double _scrollTargetY;
+    private double _scrollCurrentY;
+    private double _scrollTargetX;
+    private double _scrollCurrentX;
+    private DispatcherTimer? _smoothScrollTimer;
+    private const double SmoothScrollDuration = 100.0; // milliseconds
+    private const double SmoothScrollInterval = 8.0;   // ~120fps timer tick
+    private const double SmoothScrollEpsilon = 0.5;    // snap threshold in pixels
+    private bool _isSmoothScrolling;
+
+    // Cursor fade animation state
+    private CursorFadeRenderer? _cursorFadeRenderer;
+
     private static readonly Dictionary<char, char> AutoClosePairs = new()
     {
         { '(', ')' }, { '[', ']' }, { '{', '}' }, { '"', '"' }, { '\'', '\'' }
@@ -97,6 +114,9 @@ public partial class CodeEditorControl : UserControl
 
     public static readonly StyledProperty<bool> BracketPairColorizationProperty =
         AvaloniaProperty.Register<CodeEditorControl, bool>(nameof(BracketPairColorization), defaultValue: true);
+
+    public static readonly StyledProperty<bool> SmoothScrollingProperty =
+        AvaloniaProperty.Register<CodeEditorControl, bool>(nameof(SmoothScrolling), defaultValue: true);
 
     public static readonly StyledProperty<double> EditorFontSizeProperty =
         AvaloniaProperty.Register<CodeEditorControl, double>(nameof(EditorFontSize), defaultValue: 14.0);
@@ -165,6 +185,16 @@ public partial class CodeEditorControl : UserControl
     {
         get => GetValue(StickyScrollEnabledProperty);
         set => SetValue(StickyScrollEnabledProperty, value);
+    }
+
+    /// <summary>
+    /// Gets or sets whether smooth scrolling is enabled.
+    /// When enabled, mouse wheel scrolling is animated with easing instead of jumping instantly.
+    /// </summary>
+    public bool SmoothScrolling
+    {
+        get => GetValue(SmoothScrollingProperty);
+        set => SetValue(SmoothScrollingProperty, value);
     }
 
     public double EditorFontSize
@@ -284,6 +314,7 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler<DocumentHighlightRequestEventArgs>? DocumentHighlightRequested;
     public event EventHandler<DocumentLinkClickedEventArgs>? DocumentLinkClicked;
     public event EventHandler? GoToLineRequested;
+    public event EventHandler<FileDroppedEventArgs>? FileDropped;
 
     /// <summary>
     /// Returns true if the editor is fully initialized and ready for use
@@ -438,6 +469,12 @@ public partial class CodeEditorControl : UserControl
         // Listen at the TextEditor level for margin clicks (with tunneling)
         _textEditor.AddHandler(PointerPressedEvent, OnEditorPointerPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
+        // Enable drag-and-drop for text movement and file drops
+        DragDrop.SetAllowDrop(_textEditor, true);
+        DragDrop.SetAllowDrop(_textEditor.TextArea, true);
+        _textEditor.AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        _textEditor.AddHandler(DragDrop.DropEvent, OnDrop);
+
         // Setup folding update timer (debounced)
         _foldingUpdateTimer = new System.Timers.Timer(500);
         _foldingUpdateTimer.Elapsed += (s, e) =>
@@ -454,6 +491,27 @@ public partial class CodeEditorControl : UserControl
         // Subscribe to pointer move for hover detection
         _textEditor.TextArea.PointerMoved += OnTextAreaPointerMoved;
         _textEditor.TextArea.PointerExited += OnTextAreaPointerExited;
+
+        // Setup smooth scrolling: intercept mouse wheel on the TextEditor
+        _textEditor.AddHandler(PointerWheelChangedEvent, OnEditorPointerWheelChanged,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel);
+
+        // Setup smooth scrolling timer
+        _smoothScrollTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(SmoothScrollInterval)
+        };
+        _smoothScrollTimer.Tick += OnSmoothScrollTick;
+
+        // Initialize scroll targets to current position
+        _scrollCurrentY = _textEditor.TextArea.TextView.ScrollOffset.Y;
+        _scrollCurrentX = _textEditor.TextArea.TextView.ScrollOffset.X;
+        _scrollTargetY = _scrollCurrentY;
+        _scrollTargetX = _scrollCurrentX;
+
+        // Setup cursor fade animation renderer
+        _cursorFadeRenderer = new CursorFadeRenderer(_textEditor);
+        _textEditor.TextArea.TextView.BackgroundRenderers.Add(_cursorFadeRenderer);
 
         // Mark as initialized and apply any pending document/text from binding
         _isInitialized = true;
@@ -1607,6 +1665,16 @@ public partial class CodeEditorControl : UserControl
             if (_stickyScroll != null)
             {
                 _stickyScroll.IsEnabled2 = change.GetNewValue<bool>();
+            }
+        }
+        else if (change.Property == SmoothScrollingProperty)
+        {
+            _smoothScrollingEnabled = change.GetNewValue<bool>();
+            if (!_smoothScrollingEnabled)
+            {
+                // Stop any in-progress animation
+                _smoothScrollTimer?.Stop();
+                _isSmoothScrolling = false;
             }
         }
     }
@@ -3521,6 +3589,372 @@ public partial class CodeEditorControl : UserControl
 
     #endregion
 
+    #region Drag and Drop
+
+    /// <summary>
+    /// Handles DragOver to provide visual feedback for text and file drops.
+    /// </summary>
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        try
+        {
+            if (e.Data.Contains(DataFormats.Files))
+            {
+                e.DragEffects = DragDropEffects.Copy;
+                e.Handled = true;
+            }
+            else if (e.Data.Contains(DataFormats.Text))
+            {
+                // Move caret to the position under the mouse to show drop target
+                var pos = GetDropPosition(e);
+                if (pos >= 0 && _textEditor != null)
+                {
+                    _textEditor.CaretOffset = pos;
+                    e.DragEffects = e.KeyModifiers.HasFlag(KeyModifiers.Control)
+                        ? DragDropEffects.Copy
+                        : DragDropEffects.Move;
+                    e.Handled = true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"DragOver error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles Drop for text movement and file opens.
+    /// </summary>
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        try
+        {
+            // Handle file drops (from Solution Explorer or file system)
+            if (e.Data.Contains(DataFormats.Files))
+            {
+                var files = e.Data.GetFiles();
+                if (files != null)
+                {
+                    foreach (var item in files)
+                    {
+                        var path = item.Path?.LocalPath;
+                        if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path))
+                        {
+                            FileDropped?.Invoke(this, new FileDroppedEventArgs(path));
+                        }
+                    }
+                }
+                e.Handled = true;
+                return;
+            }
+
+            // Handle text drops (drag-and-drop text movement within editor)
+            if (e.Data.Contains(DataFormats.Text) && _textEditor != null)
+            {
+                var text = e.Data.GetText();
+                if (string.IsNullOrEmpty(text)) return;
+
+                var dropOffset = GetDropPosition(e);
+                if (dropOffset < 0) return;
+
+                bool isCopy = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+                var document = _textEditor.Document;
+
+                // Get the current selection (source of the drag)
+                var selection = _textEditor.TextArea.Selection;
+                var hasSelection = !selection.IsEmpty;
+                var selSegment = hasSelection ? selection.SurroundingSegment : null;
+
+                if (hasSelection && selSegment != null && !isCopy)
+                {
+                    // Move operation: remove from source, insert at target
+                    // Adjust drop offset if it falls after the removed text
+                    int removeOffset = selSegment.Offset;
+                    int removeLength = selSegment.Length;
+
+                    // Don't drop inside the selection itself
+                    if (dropOffset >= removeOffset && dropOffset <= removeOffset + removeLength)
+                    {
+                        e.Handled = true;
+                        return;
+                    }
+
+                    document.BeginUpdate();
+                    try
+                    {
+                        // If dropping after the selection, adjust for removal
+                        if (dropOffset > removeOffset)
+                        {
+                            document.Remove(removeOffset, removeLength);
+                            dropOffset -= removeLength;
+                            document.Insert(dropOffset, text);
+                        }
+                        else
+                        {
+                            document.Insert(dropOffset, text);
+                            document.Remove(removeOffset + text.Length, removeLength);
+                        }
+
+                        // Select the moved text at its new location
+                        _textEditor.Select(dropOffset, text.Length);
+                    }
+                    finally
+                    {
+                        document.EndUpdate();
+                    }
+                }
+                else
+                {
+                    // Copy operation or external text: just insert
+                    document.Insert(dropOffset, text);
+                    _textEditor.Select(dropOffset, text.Length);
+                }
+
+                _textEditor.Focus();
+                e.Handled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Drop error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Gets the document offset at the mouse position during a drag-drop operation.
+    /// </summary>
+    private int GetDropPosition(DragEventArgs e)
+    {
+        if (_textEditor == null) return -1;
+
+        try
+        {
+            var textView = _textEditor.TextArea.TextView;
+            var pos = e.GetPosition(textView);
+            var textPos = textView.GetPositionFloor(pos + textView.ScrollOffset);
+            if (textPos.HasValue)
+            {
+                return _textEditor.Document.GetOffset(textPos.Value.Location);
+            }
+        }
+        catch (Exception)
+        {
+            // Position may be outside document bounds
+        }
+        return -1;
+    }
+
+    #endregion
+
+    #region Smooth Scrolling
+
+    /// <summary>
+    /// Handles mouse wheel events on the editor. When smooth scrolling is enabled,
+    /// the event is intercepted and an animated scroll is performed instead of the
+    /// default instant jump.
+    /// </summary>
+    private void OnEditorPointerWheelChanged(object? sender, PointerWheelEventArgs e)
+    {
+        if (!_smoothScrollingEnabled || _textEditor?.TextArea?.TextView == null)
+            return;
+
+        var textView = _textEditor.TextArea.TextView;
+        var lineHeight = textView.DefaultLineHeight;
+
+        // Standard scroll: 3 lines per wheel notch
+        double deltaY = -e.Delta.Y * lineHeight * 3;
+        double deltaX = -e.Delta.X * lineHeight * 3;
+
+        if (deltaY == 0 && deltaX == 0)
+            return;
+
+        // If not currently animating, sync targets from current actual position
+        if (!_isSmoothScrolling)
+        {
+            _scrollCurrentY = textView.ScrollOffset.Y;
+            _scrollCurrentX = textView.ScrollOffset.X;
+            _scrollTargetY = _scrollCurrentY;
+            _scrollTargetX = _scrollCurrentX;
+        }
+
+        // Accumulate target (allows quick successive scrolls to chain smoothly)
+        _scrollTargetY += deltaY;
+        _scrollTargetX += deltaX;
+
+        // Clamp targets to valid scroll range
+        var scrollViewer = _textEditor.FindDescendantOfType<ScrollViewer>();
+        if (scrollViewer != null)
+        {
+            var maxY = Math.Max(0, scrollViewer.Extent.Height - scrollViewer.Viewport.Height);
+            var maxX = Math.Max(0, scrollViewer.Extent.Width - scrollViewer.Viewport.Width);
+            _scrollTargetY = Math.Clamp(_scrollTargetY, 0, maxY);
+            _scrollTargetX = Math.Clamp(_scrollTargetX, 0, maxX);
+        }
+
+        // Start animation if not already running
+        if (!_isSmoothScrolling)
+        {
+            _isSmoothScrolling = true;
+            _smoothScrollTimer?.Start();
+        }
+
+        // Mark handled to prevent default scroll behavior
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Timer tick that interpolates the scroll offset toward the target using
+    /// an ease-out curve for a natural deceleration feel.
+    /// </summary>
+    private void OnSmoothScrollTick(object? sender, EventArgs e)
+    {
+        if (_textEditor?.TextArea?.TextView == null)
+        {
+            _smoothScrollTimer?.Stop();
+            _isSmoothScrolling = false;
+            return;
+        }
+
+        // Ease-out interpolation factor: lerp 25% of remaining distance each tick
+        // This gives a fast start that decelerates smoothly
+        const double lerpFactor = 0.25;
+
+        _scrollCurrentY += (_scrollTargetY - _scrollCurrentY) * lerpFactor;
+        _scrollCurrentX += (_scrollTargetX - _scrollCurrentX) * lerpFactor;
+
+        // Snap to target when close enough to avoid endless tiny adjustments
+        if (Math.Abs(_scrollTargetY - _scrollCurrentY) < SmoothScrollEpsilon)
+            _scrollCurrentY = _scrollTargetY;
+        if (Math.Abs(_scrollTargetX - _scrollCurrentX) < SmoothScrollEpsilon)
+            _scrollCurrentX = _scrollTargetX;
+
+        // Apply the interpolated offset
+        var scrollViewer = _textEditor.FindDescendantOfType<ScrollViewer>();
+        if (scrollViewer != null)
+            scrollViewer.Offset = new Vector(_scrollCurrentX, _scrollCurrentY);
+
+        // Stop the timer once we've reached the target
+        if (Math.Abs(_scrollTargetY - _scrollCurrentY) < SmoothScrollEpsilon &&
+            Math.Abs(_scrollTargetX - _scrollCurrentX) < SmoothScrollEpsilon)
+        {
+            _smoothScrollTimer?.Stop();
+            _isSmoothScrolling = false;
+        }
+    }
+
+    #endregion
+
+    #region Cursor Fade Animation
+
+    /// <summary>
+    /// A background renderer that draws a smooth-fading cursor overlay on the caret position.
+    /// Instead of the default hard on/off blink, the cursor opacity oscillates using a sine wave
+    /// for a gentle fade-in/fade-out effect (similar to VS Code's "smooth" cursor blink).
+    /// </summary>
+    private class CursorFadeRenderer : IBackgroundRenderer
+    {
+        private readonly TextEditor _editor;
+        private readonly DispatcherTimer _fadeTimer;
+        private double _phase; // 0..2*PI oscillation phase
+        private const double FadeCycleDuration = 1200.0; // full blink cycle in ms
+        private const double FadeTimerInterval = 16.0;   // ~60fps
+        private const double MinOpacity = 0.0;
+        private const double MaxOpacity = 1.0;
+        private DateTime _lastCaretMove;
+        private const double HoldVisibleMs = 600.0; // hold cursor fully visible after movement
+
+        public KnownLayer Layer => KnownLayer.Caret;
+
+        public CursorFadeRenderer(TextEditor editor)
+        {
+            _editor = editor;
+            _phase = 0;
+            _lastCaretMove = DateTime.UtcNow;
+
+            // Track caret movement to reset the blink cycle
+            editor.TextArea.Caret.PositionChanged += (_, _) =>
+            {
+                _phase = 0; // reset to fully visible
+                _lastCaretMove = DateTime.UtcNow;
+            };
+
+            _fadeTimer = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(FadeTimerInterval)
+            };
+            _fadeTimer.Tick += (_, _) =>
+            {
+                // Advance phase only after the hold-visible period
+                var elapsed = (DateTime.UtcNow - _lastCaretMove).TotalMilliseconds;
+                if (elapsed > HoldVisibleMs)
+                {
+                    _phase += (2 * Math.PI * FadeTimerInterval) / FadeCycleDuration;
+                    if (_phase > 2 * Math.PI)
+                        _phase -= 2 * Math.PI;
+                }
+                else
+                {
+                    _phase = 0;
+                }
+
+                // Request a redraw of the caret area
+                editor.TextArea.TextView.InvalidateLayer(KnownLayer.Caret);
+            };
+            _fadeTimer.Start();
+
+            // Hide the built-in caret so our fade renderer replaces it
+            editor.TextArea.Caret.CaretBrush = Brushes.Transparent;
+        }
+
+        public void Draw(TextView textView, DrawingContext drawingContext)
+        {
+            if (!textView.VisualLinesValid) return;
+
+            try
+            {
+                var caret = _editor.TextArea.Caret;
+                var caretOffset = _editor.Document.GetOffset(caret.Location);
+
+                // Find the visual line containing the caret
+                var visualLine = textView.GetVisualLine(caret.Line);
+                if (visualLine == null) return;
+
+                // Get position using relative offset from line start (same pattern as MultiCursorRenderer)
+                var relativeOffset = caretOffset - visualLine.FirstDocumentLine.Offset;
+                var pos = visualLine.GetVisualPosition(relativeOffset, VisualYPosition.LineTop);
+
+                // Calculate opacity from sine wave: cos gives 1 at phase=0 (fully visible)
+                double opacity = MinOpacity + (MaxOpacity - MinOpacity) *
+                                 (0.5 + 0.5 * Math.Cos(_phase));
+
+                // Draw the caret line (2px wide vertical bar)
+                var caretColor = EditorTheme.Foreground;
+                var brush = new SolidColorBrush(caretColor, opacity);
+
+                var rect = new Rect(
+                    pos.X - textView.ScrollOffset.X,
+                    pos.Y - textView.ScrollOffset.Y,
+                    2, // cursor width
+                    visualLine.Height
+                );
+
+                drawingContext.FillRectangle(brush, rect);
+            }
+            catch (Exception)
+            {
+                // Ignore rendering errors (e.g., during document changes)
+            }
+        }
+
+        public void Stop()
+        {
+            _fadeTimer.Stop();
+        }
+    }
+
+    #endregion
+
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnDetachedFromVisualTree(e);
@@ -3535,7 +3969,25 @@ public partial class CodeEditorControl : UserControl
         _hoverTimer?.Dispose();
         _hoverTimer = null;
 
+        _smoothScrollTimer?.Stop();
+        _smoothScrollTimer = null;
+
+        _cursorFadeRenderer?.Stop();
+
         _stickyScroll?.DetachEditor();
+    }
+}
+
+/// <summary>
+/// Event args for file drop operations on the editor
+/// </summary>
+public class FileDroppedEventArgs : EventArgs
+{
+    public string FilePath { get; }
+
+    public FileDroppedEventArgs(string filePath)
+    {
+        FilePath = filePath;
     }
 }
 

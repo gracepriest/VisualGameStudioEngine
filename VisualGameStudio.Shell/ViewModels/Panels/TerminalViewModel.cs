@@ -8,6 +8,207 @@ using VisualGameStudio.Core.Abstractions.ViewModels;
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
 /// <summary>
+/// Represents a detected shell that can be used in the terminal.
+/// </summary>
+public class ShellProfile
+{
+    /// <summary>
+    /// Display name shown in the dropdown (e.g., "PowerShell 7", "Git Bash").
+    /// </summary>
+    public string Name { get; init; } = "";
+
+    /// <summary>
+    /// Full path to the shell executable.
+    /// </summary>
+    public string Path { get; init; } = "";
+
+    /// <summary>
+    /// Optional arguments to pass when launching the shell.
+    /// </summary>
+    public string Arguments { get; init; } = "";
+
+    /// <summary>
+    /// Short icon/glyph hint for the UI.
+    /// </summary>
+    public string Icon { get; init; } = "\u25BA"; // default right-pointing triangle
+
+    public override string ToString() => Name;
+}
+
+/// <summary>
+/// Detects available shells on the current system.
+/// </summary>
+public static class ShellProfileDetector
+{
+    /// <summary>
+    /// Returns all shells available on this machine, ordered by preference.
+    /// </summary>
+    public static List<ShellProfile> DetectProfiles()
+    {
+        var profiles = new List<ShellProfile>();
+
+        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+        {
+            DetectWindowsShells(profiles);
+        }
+        else
+        {
+            DetectUnixShells(profiles);
+        }
+
+        return profiles;
+    }
+
+    private static void DetectWindowsShells(List<ShellProfile> profiles)
+    {
+        // PowerShell 7+ (pwsh.exe)
+        var pwsh7Paths = new[]
+        {
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe"),
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7-preview", "pwsh.exe"),
+        };
+
+        foreach (var p in pwsh7Paths)
+        {
+            if (File.Exists(p))
+            {
+                profiles.Add(new ShellProfile
+                {
+                    Name = "PowerShell 7",
+                    Path = p,
+                    Icon = "PS7"
+                });
+                break;
+            }
+        }
+
+        // Also check if pwsh is on PATH
+        if (!profiles.Any(p => p.Name == "PowerShell 7"))
+        {
+            var pwshOnPath = FindOnPath("pwsh.exe");
+            if (pwshOnPath != null)
+            {
+                profiles.Add(new ShellProfile
+                {
+                    Name = "PowerShell 7",
+                    Path = pwshOnPath,
+                    Icon = "PS7"
+                });
+            }
+        }
+
+        // Windows PowerShell (always available on Windows)
+        var winPowerShell = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell", "v1.0", "powershell.exe");
+        if (File.Exists(winPowerShell))
+        {
+            profiles.Add(new ShellProfile
+            {
+                Name = "Windows PowerShell",
+                Path = winPowerShell,
+                Icon = "PS"
+            });
+        }
+        else
+        {
+            // Fallback - powershell.exe should be on PATH
+            profiles.Add(new ShellProfile
+            {
+                Name = "Windows PowerShell",
+                Path = "powershell.exe",
+                Icon = "PS"
+            });
+        }
+
+        // Command Prompt (always available)
+        var cmdPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+        profiles.Add(new ShellProfile
+        {
+            Name = "Command Prompt",
+            Path = File.Exists(cmdPath) ? cmdPath : "cmd.exe",
+            Icon = "CMD"
+        });
+
+        // Git Bash
+        var gitBashPaths = new[]
+        {
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe"),
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Git", "bin", "bash.exe"),
+            @"C:\Git\bin\bash.exe",
+        };
+
+        foreach (var p in gitBashPaths)
+        {
+            if (File.Exists(p))
+            {
+                profiles.Add(new ShellProfile
+                {
+                    Name = "Git Bash",
+                    Path = p,
+                    Arguments = "--login -i",
+                    Icon = "GIT"
+                });
+                break;
+            }
+        }
+
+        // WSL (Windows Subsystem for Linux)
+        var wslPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "wsl.exe");
+        if (File.Exists(wslPath))
+        {
+            profiles.Add(new ShellProfile
+            {
+                Name = "WSL",
+                Path = wslPath,
+                Icon = "WSL"
+            });
+        }
+    }
+
+    private static void DetectUnixShells(List<ShellProfile> profiles)
+    {
+        var shells = new (string name, string path)[]
+        {
+            ("Bash", "/bin/bash"),
+            ("Zsh", "/bin/zsh"),
+            ("Fish", "/usr/bin/fish"),
+            ("sh", "/bin/sh"),
+        };
+
+        foreach (var (name, path) in shells)
+        {
+            if (File.Exists(path))
+            {
+                profiles.Add(new ShellProfile { Name = name, Path = path });
+            }
+        }
+    }
+
+    private static string? FindOnPath(string executable)
+    {
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(pathEnv)) return null;
+
+        var separator = Environment.OSVersion.Platform == PlatformID.Win32NT ? ';' : ':';
+        foreach (var dir in pathEnv.Split(separator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                var full = System.IO.Path.Combine(dir, executable);
+                if (File.Exists(full))
+                    return full;
+            }
+            catch
+            {
+                // skip invalid paths
+            }
+        }
+        return null;
+    }
+}
+
+/// <summary>
 /// Represents a single terminal session (shell process).
 /// </summary>
 public partial class TerminalSession : ObservableObject, IDisposable
@@ -46,23 +247,40 @@ public partial class TerminalSession : ObservableObject, IDisposable
         Id = _nextId++;
     }
 
-    public void Start(string workingDirectory)
+    /// <summary>
+    /// Start the terminal session using a specific shell profile.
+    /// </summary>
+    public void Start(string workingDirectory, ShellProfile? profile = null)
     {
         if (IsRunning) return;
 
         try
         {
-            var shell = Environment.OSVersion.Platform == PlatformID.Win32NT
-                ? "powershell.exe"
-                : "/bin/bash";
+            string shell;
+            string shellDisplayName;
+            string arguments = "";
 
-            var shellDisplayName = Environment.OSVersion.Platform == PlatformID.Win32NT
-                ? "PowerShell"
-                : "bash";
+            if (profile != null)
+            {
+                shell = profile.Path;
+                shellDisplayName = profile.Name;
+                arguments = profile.Arguments;
+            }
+            else
+            {
+                shell = Environment.OSVersion.Platform == PlatformID.Win32NT
+                    ? "powershell.exe"
+                    : "/bin/bash";
+
+                shellDisplayName = Environment.OSVersion.Platform == PlatformID.Win32NT
+                    ? "PowerShell"
+                    : "bash";
+            }
 
             var startInfo = new ProcessStartInfo
             {
                 FileName = shell,
+                Arguments = arguments,
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -233,6 +451,11 @@ public partial class TerminalSession : ObservableObject, IDisposable
 /// </summary>
 public partial class TerminalViewModel : ViewModelBase, IDisposable
 {
+    private static readonly string SettingsFilePath = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "VisualGameStudio",
+        "settings.json");
+
     /// <summary>
     /// Raised when new output text is appended on the active session.
     /// </summary>
@@ -261,6 +484,17 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private bool _isRunning;
 
+    [ObservableProperty]
+    private ShellProfile? _selectedProfile;
+
+    [ObservableProperty]
+    private bool _isProfileDropdownOpen;
+
+    /// <summary>
+    /// All detected shell profiles available on this machine.
+    /// </summary>
+    public ObservableCollection<ShellProfile> AvailableProfiles { get; } = new();
+
     public ObservableCollection<TerminalSession> Sessions { get; } = new();
 
     /// <summary>
@@ -268,9 +502,118 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     /// </summary>
     public event EventHandler? ActiveSessionSwitched;
 
+    /// <summary>
+    /// Raised when the user clicks a file path link in terminal output.
+    /// Parameters: filePath, line, column.
+    /// </summary>
+    public event Action<string, int, int>? FileNavigationRequested;
+
     public TerminalViewModel()
     {
         WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        DetectShellProfiles();
+        LoadDefaultShellPreference();
+    }
+
+    /// <summary>
+    /// Detects all available shells and populates AvailableProfiles.
+    /// </summary>
+    private void DetectShellProfiles()
+    {
+        var detected = ShellProfileDetector.DetectProfiles();
+        AvailableProfiles.Clear();
+        foreach (var profile in detected)
+        {
+            AvailableProfiles.Add(profile);
+        }
+    }
+
+    /// <summary>
+    /// Loads the user's default shell preference from settings.
+    /// Falls back to the first available profile.
+    /// </summary>
+    private void LoadDefaultShellPreference()
+    {
+        string? savedShell = null;
+
+        try
+        {
+            if (File.Exists(SettingsFilePath))
+            {
+                var json = File.ReadAllText(SettingsFilePath);
+                var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("Terminal.DefaultShell", out var prop))
+                {
+                    savedShell = prop.GetString();
+                }
+                else if (doc.RootElement.TryGetProperty("Terminal.Shell", out var prop2))
+                {
+                    savedShell = prop2.GetString();
+                }
+            }
+        }
+        catch
+        {
+            // Ignore read errors
+        }
+
+        if (!string.IsNullOrEmpty(savedShell))
+        {
+            // Try to match by name first, then by path
+            SelectedProfile = AvailableProfiles.FirstOrDefault(p =>
+                string.Equals(p.Name, savedShell, StringComparison.OrdinalIgnoreCase))
+                ?? AvailableProfiles.FirstOrDefault(p =>
+                    string.Equals(p.Path, savedShell, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Fall back to first profile
+        SelectedProfile ??= AvailableProfiles.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Saves the default shell preference to settings.
+    /// </summary>
+    private void SaveDefaultShellPreference()
+    {
+        if (SelectedProfile == null) return;
+
+        try
+        {
+            var settingsDir = System.IO.Path.GetDirectoryName(SettingsFilePath);
+            if (!string.IsNullOrEmpty(settingsDir))
+            {
+                Directory.CreateDirectory(settingsDir);
+            }
+
+            Dictionary<string, object>? settings = null;
+
+            if (File.Exists(SettingsFilePath))
+            {
+                var existingJson = File.ReadAllText(SettingsFilePath);
+                settings = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(existingJson);
+            }
+
+            settings ??= new Dictionary<string, object>();
+            settings["Terminal.DefaultShell"] = SelectedProfile.Name;
+
+            var json = System.Text.Json.JsonSerializer.Serialize(settings, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            File.WriteAllText(SettingsFilePath, json);
+        }
+        catch
+        {
+            // Ignore save errors
+        }
+    }
+
+    partial void OnSelectedProfileChanged(ShellProfile? value)
+    {
+        if (value != null)
+        {
+            SaveDefaultShellPreference();
+        }
     }
 
     public void SetWorkingDirectory(string path)
@@ -346,7 +689,7 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Creates a new terminal session and starts it.
+    /// Creates a new terminal session using the currently selected shell profile.
     /// </summary>
     [RelayCommand]
     private void CreateNewSession()
@@ -354,7 +697,33 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
         var session = new TerminalSession();
         Sessions.Add(session);
         ActiveSession = session;
-        session.Start(WorkingDirectory);
+        session.Start(WorkingDirectory, SelectedProfile);
+    }
+
+    /// <summary>
+    /// Creates a new terminal session with a specific shell profile.
+    /// </summary>
+    [RelayCommand]
+    private void CreateSessionWithProfile(ShellProfile? profile)
+    {
+        if (profile == null) return;
+
+        var session = new TerminalSession();
+        Sessions.Add(session);
+        ActiveSession = session;
+        session.Start(WorkingDirectory, profile);
+
+        IsProfileDropdownOpen = false;
+    }
+
+    /// <summary>
+    /// Sets the selected profile as default without creating a session.
+    /// </summary>
+    [RelayCommand]
+    private void SetDefaultProfile(ShellProfile? profile)
+    {
+        if (profile == null) return;
+        SelectedProfile = profile;
     }
 
     /// <summary>
@@ -369,7 +738,7 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
         }
         else if (!ActiveSession.IsRunning)
         {
-            ActiveSession.Start(WorkingDirectory);
+            ActiveSession.Start(WorkingDirectory, SelectedProfile);
         }
     }
 
@@ -431,6 +800,14 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     public void SendCommand(string command)
     {
         ActiveSession?.SendCommand(command);
+    }
+
+    /// <summary>
+    /// Called by the view when a file path link is clicked in terminal output.
+    /// </summary>
+    public void NavigateToFile(string filePath, int line, int column)
+    {
+        FileNavigationRequested?.Invoke(filePath, line, column);
     }
 
     public void Dispose()

@@ -7,6 +7,25 @@
              x:Class="VisualGameStudio.Shell.Views.Panels.OutputPanelView"
              x:DataType="vm:OutputPanelViewModel">
 
+  <UserControl.Styles>
+    <!-- Clickable output lines: underlined, hand cursor on hover -->
+    <Style Selector="ItemsControl TextBlock.clickable">
+      <Setter Property="TextDecorations" Value="Underline"/>
+      <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="ItemsControl TextBlock.clickable:pointerover">
+      <Setter Property="Opacity" Value="0.8"/>
+    </Style>
+    <!-- Error lines: red -->
+    <Style Selector="ItemsControl TextBlock.error">
+      <Setter Property="Foreground" Value="#F14C4C"/>
+    </Style>
+    <!-- Warning lines: yellow -->
+    <Style Selector="ItemsControl TextBlock.warning">
+      <Setter Property="Foreground" Value="#CCA700"/>
+    </Style>
+  </UserControl.Styles>
+
   <Border Classes="toolPanel">
     <DockPanel>
       <Border DockPanel.Dock="Top" Classes="panelHeader">
@@ -44,17 +63,29 @@
         </DockPanel>
       </Border>
 
-      <TextBox Text="{Binding OutputText}"
-               IsReadOnly="True"
-               AcceptsReturn="True"
-               TextWrapping="NoWrap"
-               FontFamily="Cascadia Code, Consolas, monospace"
-               FontSize="12"
-               Background="#1E1E1E"
-               Foreground="#CCCCCC"
-               BorderThickness="0"
-               ScrollViewer.HorizontalScrollBarVisibility="Auto"
-               ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+      <!-- Output lines with clickable error/warning entries -->
+      <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto"
+                    Background="#1E1E1E"
+                    x:Name="OutputScroller">
+        <ItemsControl ItemsSource="{Binding OutputLines}"
+                      Padding="4,2">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:OutputLine">
+              <TextBlock Text="{Binding Text}"
+                         FontFamily="Cascadia Code, Consolas, monospace"
+                         FontSize="12"
+                         Foreground="#CCCCCC"
+                         TextWrapping="NoWrap"
+                         Padding="2,1"
+                         Classes.clickable="{Binding IsClickable}"
+                         Classes.error="{Binding IsError}"
+                         Classes.warning="{Binding IsWarning}"
+                         PointerPressed="OnOutputLinePointerPressed"/>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
     </DockPanel>
   </Border>
 
