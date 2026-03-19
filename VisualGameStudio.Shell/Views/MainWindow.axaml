@@ -76,6 +76,13 @@
     <KeyBinding Gesture="Ctrl+Shift+W" Command="{Binding ToggleWhitespaceCommand}"/>
     <!-- Column Selection Mode -->
     <KeyBinding Gesture="Alt+Shift+Insert" Command="{Binding ToggleColumnSelectionModeCommand}"/>
+    <!-- Panel focus shortcuts (keyboard navigation) -->
+    <KeyBinding Gesture="Ctrl+D1" Command="{Binding FocusSolutionExplorerCommand}"/>
+    <KeyBinding Gesture="Ctrl+D2" Command="{Binding FocusEditorCommand}"/>
+    <KeyBinding Gesture="Ctrl+D3" Command="{Binding FocusOutputCommand}"/>
+    <KeyBinding Gesture="Ctrl+D4" Command="{Binding FocusTerminalCommand}"/>
+    <KeyBinding Gesture="Ctrl+D5" Command="{Binding FocusErrorListCommand}"/>
+    <KeyBinding Gesture="Ctrl+D0" Command="{Binding FocusVariablesCommand}"/>
   </Window.KeyBindings>
 
   <Design.DataContext>
@@ -85,7 +92,8 @@
   <Grid>
   <DockPanel>
     <!-- Menu Bar -->
-    <Menu DockPanel.Dock="Top" IsVisible="{Binding !IsZenMode}">
+    <Menu DockPanel.Dock="Top" IsVisible="{Binding !IsZenMode}"
+          AutomationProperties.Name="Main Menu">
       <MenuItem Header="_File">
         <MenuItem Header="_New Project..." Command="{Binding NewProjectCommand}" InputGesture="Ctrl+Shift+N"/>
         <Separator/>
@@ -224,16 +232,20 @@
     <!-- Toolbar -->
     <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="4" BorderThickness="0,0,0,1" BorderBrush="#3C3C3C" IsVisible="{Binding !IsZenMode}">
       <StackPanel Orientation="Horizontal" Spacing="4">
-        <Button Classes="toolbarButton" Command="{Binding NewProjectCommand}" ToolTip.Tip="New Project">
+        <Button Classes="toolbarButton" Command="{Binding NewProjectCommand}" ToolTip.Tip="New Project"
+                AutomationProperties.Name="New Project">
           <TextBlock Text="New" FontSize="12"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding OpenProjectCommand}" ToolTip.Tip="Open Project">
+        <Button Classes="toolbarButton" Command="{Binding OpenProjectCommand}" ToolTip.Tip="Open Project"
+                AutomationProperties.Name="Open Project">
           <TextBlock Text="Open" FontSize="12"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding SaveCommand}" ToolTip.Tip="Save">
+        <Button Classes="toolbarButton" Command="{Binding SaveCommand}" ToolTip.Tip="Save"
+                AutomationProperties.Name="Save">
           <TextBlock Text="Save" FontSize="12"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding SaveAllCommand}" ToolTip.Tip="Save All">
+        <Button Classes="toolbarButton" Command="{Binding SaveAllCommand}" ToolTip.Tip="Save All"
+                AutomationProperties.Name="Save All">
           <TextBlock Text="Save All" FontSize="12"/>
         </Button>
 
@@ -242,57 +254,79 @@
         <ComboBox ItemsSource="{Binding Configurations}"
                   SelectedItem="{Binding CurrentConfiguration}"
                   MinWidth="100"
-                  Margin="4,0"/>
+                  Margin="4,0"
+                  AutomationProperties.Name="Build Configuration"
+                  AutomationProperties.HelpText="Select build configuration such as Debug or Release"/>
 
-        <Button Classes="toolbarButton" Command="{Binding BuildCommand}" ToolTip.Tip="Build">
+        <Button Classes="toolbarButton" Command="{Binding BuildCommand}" ToolTip.Tip="Build"
+                AutomationProperties.Name="Build Project">
           <TextBlock Text="Build" FontSize="12"/>
         </Button>
 
         <Border Width="1" Background="#3C3C3C" Margin="4,2"/>
 
         <!-- Debug Toolbar -->
-        <Button Classes="toolbarButton" Command="{Binding StartDebuggingCommand}" ToolTip.Tip="Start Debugging (F5)" IsVisible="{Binding !IsDebugging}">
+        <Button Classes="toolbarButton" Command="{Binding StartDebuggingCommand}" ToolTip.Tip="Start Debugging (F5)" IsVisible="{Binding !IsDebugging}"
+                AutomationProperties.Name="Start Debugging"
+                AutomationProperties.HelpText="Start debugging the project, shortcut F5">
           <TextBlock Text="▶ Start" FontSize="12" Foreground="#89D185"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding ContinueCommand}" ToolTip.Tip="Continue (F5)" IsVisible="{Binding IsPaused}">
+        <Button Classes="toolbarButton" Command="{Binding ContinueCommand}" ToolTip.Tip="Continue (F5)" IsVisible="{Binding IsPaused}"
+                AutomationProperties.Name="Continue Debugging"
+                AutomationProperties.HelpText="Continue execution, shortcut F5">
           <TextBlock Text="▶ Continue" FontSize="12" Foreground="#89D185"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding PauseCommand}" ToolTip.Tip="Pause" IsVisible="{Binding IsDebugging}" IsEnabled="{Binding !IsPaused}">
+        <Button Classes="toolbarButton" Command="{Binding PauseCommand}" ToolTip.Tip="Pause" IsVisible="{Binding IsDebugging}" IsEnabled="{Binding !IsPaused}"
+                AutomationProperties.Name="Pause Debugging"
+                AutomationProperties.HelpText="Pause program execution">
           <TextBlock Text="⏸" FontSize="12" Foreground="#DCDCAA"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding StopDebuggingCommand}" ToolTip.Tip="Stop Debugging (Shift+F5)" IsVisible="{Binding IsDebugging}">
+        <Button Classes="toolbarButton" Command="{Binding StopDebuggingCommand}" ToolTip.Tip="Stop Debugging (Shift+F5)" IsVisible="{Binding IsDebugging}"
+                AutomationProperties.Name="Stop Debugging"
+                AutomationProperties.HelpText="Stop debugging the project, shortcut Shift+F5">
           <TextBlock Text="■" FontSize="12" Foreground="#E51400"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding RestartDebuggingCommand}" ToolTip.Tip="Restart Debugging (Ctrl+Shift+F5)" IsVisible="{Binding IsDebugging}">
+        <Button Classes="toolbarButton" Command="{Binding RestartDebuggingCommand}" ToolTip.Tip="Restart Debugging (Ctrl+Shift+F5)" IsVisible="{Binding IsDebugging}"
+                AutomationProperties.Name="Restart Debugging"
+                AutomationProperties.HelpText="Restart the debugging session, shortcut Ctrl+Shift+F5">
           <TextBlock Text="⟳" FontSize="14" Foreground="#89D185"/>
         </Button>
 
         <Border Width="1" Background="#3C3C3C" Margin="4,2" IsVisible="{Binding IsDebugging}"/>
 
-        <Button Classes="toolbarButton" Command="{Binding StepOverCommand}" ToolTip.Tip="Step Over (F10)" IsVisible="{Binding IsPaused}">
+        <Button Classes="toolbarButton" Command="{Binding StepOverCommand}" ToolTip.Tip="Step Over (F10)" IsVisible="{Binding IsPaused}"
+                AutomationProperties.Name="Step Over"
+                AutomationProperties.HelpText="Step over the current line, shortcut F10">
           <TextBlock Text="⤵" FontSize="14"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding StepIntoCommand}" ToolTip.Tip="Step Into (F11)" IsVisible="{Binding IsPaused}">
+        <Button Classes="toolbarButton" Command="{Binding StepIntoCommand}" ToolTip.Tip="Step Into (F11)" IsVisible="{Binding IsPaused}"
+                AutomationProperties.Name="Step Into"
+                AutomationProperties.HelpText="Step into the current function call, shortcut F11">
           <TextBlock Text="↓" FontSize="14"/>
         </Button>
-        <Button Classes="toolbarButton" Command="{Binding StepOutCommand}" ToolTip.Tip="Step Out (Shift+F11)" IsVisible="{Binding IsPaused}">
+        <Button Classes="toolbarButton" Command="{Binding StepOutCommand}" ToolTip.Tip="Step Out (Shift+F11)" IsVisible="{Binding IsPaused}"
+                AutomationProperties.Name="Step Out"
+                AutomationProperties.HelpText="Step out of the current function, shortcut Shift+F11">
           <TextBlock Text="↑" FontSize="14"/>
         </Button>
 
         <!-- Debug Status -->
-        <TextBlock Text="{Binding DebugStatusText}" Foreground="#DCDCAA" VerticalAlignment="Center" Margin="8,0" IsVisible="{Binding IsDebugging}"/>
+        <TextBlock Text="{Binding DebugStatusText}" Foreground="#DCDCAA" VerticalAlignment="Center" Margin="8,0" IsVisible="{Binding IsDebugging}"
+                   AutomationProperties.Name="Debug Status"/>
       </StackPanel>
     </Border>
 
     <!-- Status Bar -->
-    <Border DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}">
+    <Border DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}"
+            AutomationProperties.Name="Status Bar">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
         <!-- Status message -->
         <TextBlock Grid.Column="0"
                    Text="{Binding StatusText}"
                    VerticalAlignment="Center"
                    Margin="8,0"
-                   Foreground="White"/>
+                   Foreground="White"
+                   AutomationProperties.Name="Status Message"/>
 
         <!-- Git blame annotation for current line -->
         <TextBlock Grid.Column="1"

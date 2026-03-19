@@ -1,5 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Text.Json;
+using Avalonia;
+using Avalonia.Data.Converters;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.ViewModels;
@@ -28,29 +31,59 @@ public partial class SearchableSettingItem : ObservableObject
     /// <summary>Back-reference to the owning ViewModel so bindings can read/write the actual property.</summary>
     public SettingsViewModel Owner { get; init; } = null!;
 
+    /// <summary>The default value for this setting, used to detect modifications.</summary>
+    public object DefaultValue { get; init; } = "";
+
     // Convenience booleans for AXAML IsVisible bindings
     public bool IsCheckBox => ControlKind == SettingControlKind.CheckBox;
     public bool IsNumericUpDown => ControlKind == SettingControlKind.NumericUpDown;
     public bool IsComboBox => ControlKind == SettingControlKind.ComboBox;
+
+    /// <summary>True when the current value differs from the default value.</summary>
+    public bool IsModified => ControlKind switch
+    {
+        SettingControlKind.CheckBox => BoolValue != (bool)DefaultValue,
+        SettingControlKind.NumericUpDown => IntValue != (int)DefaultValue,
+        SettingControlKind.ComboBox => !string.Equals(StringValue, (string)DefaultValue, StringComparison.Ordinal),
+        _ => false
+    };
 
     // -- Proxy value properties so the flat list can bind without knowing the concrete property name --
 
     public bool BoolValue
     {
         get => Owner.GetBoolSetting(PropertyName);
-        set { Owner.SetBoolSetting(PropertyName, value); OnPropertyChanged(); }
+        set { Owner.SetBoolSetting(PropertyName, value); OnPropertyChanged(); OnPropertyChanged(nameof(IsModified)); }
     }
 
     public int IntValue
     {
         get => Owner.GetIntSetting(PropertyName);
-        set { Owner.SetIntSetting(PropertyName, value); OnPropertyChanged(); }
+        set { Owner.SetIntSetting(PropertyName, value); OnPropertyChanged(); OnPropertyChanged(nameof(IsModified)); }
     }
 
     public string StringValue
     {
         get => Owner.GetStringSetting(PropertyName);
-        set { Owner.SetStringSetting(PropertyName, value); OnPropertyChanged(); }
+        set { Owner.SetStringSetting(PropertyName, value); OnPropertyChanged(); OnPropertyChanged(nameof(IsModified)); }
+    }
+
+    /// <summary>Resets this setting to its default value.</summary>
+    [RelayCommand]
+    private void ResetToDefault()
+    {
+        switch (ControlKind)
+        {
+            case SettingControlKind.CheckBox:
+                BoolValue = (bool)DefaultValue;
+                break;
+            case SettingControlKind.NumericUpDown:
+                IntValue = (int)DefaultValue;
+                break;
+            case SettingControlKind.ComboBox:
+                StringValue = (string)DefaultValue;
+                break;
+        }
     }
 }
 
@@ -200,10 +233,22 @@ public partial class SettingsViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(query))
             return;
 
-        var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // Special filter: @modified shows only settings changed from defaults
+        bool filterModifiedOnly = false;
+        var cleanQuery = query;
+        if (query.Contains("@modified", StringComparison.OrdinalIgnoreCase))
+        {
+            filterModifiedOnly = true;
+            cleanQuery = query.Replace("@modified", "", StringComparison.OrdinalIgnoreCase).Trim();
+        }
+
+        var terms = cleanQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
         foreach (var item in _allSettings)
         {
+            if (filterModifiedOnly && !item.IsModified)
+                continue;
+
             bool matches = true;
             foreach (var term in terms)
             {
@@ -225,49 +270,49 @@ public partial class SettingsViewModel : ViewModelBase
         _allSettings = new List<SearchableSettingItem>
         {
             // Editor > Font
-            MakeCombo("Font Family", "Font family used in the code editor", "Editor", nameof(FontFamily), AvailableFonts),
-            MakeNumeric("Font Size", "Font size for the code editor (in points)", "Editor", nameof(FontSize), 8, 72),
+            MakeCombo("Font Family", "Font family used in the code editor", "Editor", nameof(FontFamily), AvailableFonts, "Cascadia Code"),
+            MakeNumeric("Font Size", "Font size for the code editor (in points)", "Editor", nameof(FontSize), 8, 72, defaultValue: 14),
 
             // Editor > Tabs
-            MakeNumeric("Tab Size", "Number of spaces per tab stop", "Editor", nameof(TabSize), 1, 16),
-            MakeBool("Convert Tabs to Spaces", "Insert spaces instead of tab characters when pressing Tab", "Editor", nameof(ConvertTabsToSpaces)),
+            MakeNumeric("Tab Size", "Number of spaces per tab stop", "Editor", nameof(TabSize), 1, 16, defaultValue: 4),
+            MakeBool("Convert Tabs to Spaces", "Insert spaces instead of tab characters when pressing Tab", "Editor", nameof(ConvertTabsToSpaces), true),
 
             // Editor > Display
-            MakeBool("Show Line Numbers", "Display line numbers in the editor gutter", "Editor", nameof(ShowLineNumbers)),
-            MakeBool("Highlight Current Line", "Highlight the line where the cursor is located", "Editor", nameof(HighlightCurrentLine)),
-            MakeBool("Show Whitespace", "Render whitespace characters (spaces, tabs) as visible dots", "Editor", nameof(ShowWhitespace)),
-            MakeBool("Word Wrap", "Wrap long lines to fit within the editor width", "Editor", nameof(WordWrap)),
+            MakeBool("Show Line Numbers", "Display line numbers in the editor gutter", "Editor", nameof(ShowLineNumbers), true),
+            MakeBool("Highlight Current Line", "Highlight the line where the cursor is located", "Editor", nameof(HighlightCurrentLine), true),
+            MakeBool("Show Whitespace", "Render whitespace characters (spaces, tabs) as visible dots", "Editor", nameof(ShowWhitespace), false),
+            MakeBool("Word Wrap", "Wrap long lines to fit within the editor width", "Editor", nameof(WordWrap), false),
 
             // Editor > Behavior
-            MakeBool("Auto Indent", "Automatically indent new lines based on the previous line", "Editor", nameof(AutoIndent)),
-            MakeBool("Bracket Matching", "Highlight matching brackets when the cursor is near one", "Editor", nameof(BracketMatching)),
-            MakeBool("Auto Close Brackets", "Automatically insert closing brackets, quotes, and parentheses", "Editor", nameof(AutoCloseBrackets)),
-            MakeBool("Smooth Scrolling", "Animate scrolling for a smoother visual experience", "Editor", nameof(SmoothScrolling)),
+            MakeBool("Auto Indent", "Automatically indent new lines based on the previous line", "Editor", nameof(AutoIndent), true),
+            MakeBool("Bracket Matching", "Highlight matching brackets when the cursor is near one", "Editor", nameof(BracketMatching), true),
+            MakeBool("Auto Close Brackets", "Automatically insert closing brackets, quotes, and parentheses", "Editor", nameof(AutoCloseBrackets), true),
+            MakeBool("Smooth Scrolling", "Animate scrolling for a smoother visual experience", "Editor", nameof(SmoothScrolling), true),
 
             // IntelliSense
-            MakeBool("Enable Auto Complete", "Show completion suggestions as you type", "IntelliSense", nameof(EnableAutoComplete)),
-            MakeBool("Show Quick Info", "Display type and documentation info on hover", "IntelliSense", nameof(ShowQuickInfo)),
-            MakeBool("Show Signature Help", "Show parameter info when typing function arguments", "IntelliSense", nameof(ShowSignatureHelp)),
-            MakeNumeric("Auto Complete Delay", "Delay in milliseconds before showing completions", "IntelliSense", nameof(AutoCompleteDelay), 0, 2000, 50),
+            MakeBool("Enable Auto Complete", "Show completion suggestions as you type", "IntelliSense", nameof(EnableAutoComplete), true),
+            MakeBool("Show Quick Info", "Display type and documentation info on hover", "IntelliSense", nameof(ShowQuickInfo), true),
+            MakeBool("Show Signature Help", "Show parameter info when typing function arguments", "IntelliSense", nameof(ShowSignatureHelp), true),
+            MakeNumeric("Auto Complete Delay", "Delay in milliseconds before showing completions", "IntelliSense", nameof(AutoCompleteDelay), 0, 2000, 50, defaultValue: 200),
 
             // Build
-            MakeBool("Save Before Build", "Automatically save all open files before building", "Build", nameof(SaveBeforeBuild)),
-            MakeBool("Show Build Output", "Show the build output panel when a build starts", "Build", nameof(ShowBuildOutput)),
-            MakeCombo("Default Configuration", "Default build configuration for new projects", "Build", nameof(DefaultConfiguration), Configurations),
+            MakeBool("Save Before Build", "Automatically save all open files before building", "Build", nameof(SaveBeforeBuild), true),
+            MakeBool("Show Build Output", "Show the build output panel when a build starts", "Build", nameof(ShowBuildOutput), true),
+            MakeCombo("Default Configuration", "Default build configuration for new projects", "Build", nameof(DefaultConfiguration), Configurations, "Debug"),
 
             // Appearance
-            MakeCombo("Color Theme", "Overall color theme for the IDE", "Appearance", nameof(SelectedTheme), AvailableThemes),
+            MakeCombo("Color Theme", "Overall color theme for the IDE", "Appearance", nameof(SelectedTheme), AvailableThemes, "Dark"),
         };
     }
 
-    private SearchableSettingItem MakeBool(string name, string desc, string category, string prop) =>
-        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.CheckBox, Owner = this };
+    private SearchableSettingItem MakeBool(string name, string desc, string category, string prop, bool defaultValue = true) =>
+        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.CheckBox, Owner = this, DefaultValue = defaultValue };
 
-    private SearchableSettingItem MakeNumeric(string name, string desc, string category, string prop, int min, int max, int inc = 1) =>
-        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.NumericUpDown, Minimum = min, Maximum = max, Increment = inc, Owner = this };
+    private SearchableSettingItem MakeNumeric(string name, string desc, string category, string prop, int min, int max, int inc = 1, int defaultValue = 0) =>
+        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.NumericUpDown, Minimum = min, Maximum = max, Increment = inc, Owner = this, DefaultValue = defaultValue };
 
-    private SearchableSettingItem MakeCombo(string name, string desc, string category, string prop, ObservableCollection<string> choices) =>
-        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.ComboBox, Choices = choices, Owner = this };
+    private SearchableSettingItem MakeCombo(string name, string desc, string category, string prop, ObservableCollection<string> choices, string defaultValue = "") =>
+        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.ComboBox, Choices = choices, Owner = this, DefaultValue = defaultValue };
 
     // -- Reflection-free property accessors for SearchableSettingItem proxies --
 
@@ -568,4 +613,25 @@ public class SettingsData
     public bool ShowBuildOutput { get; set; } = true;
     public string? DefaultConfiguration { get; set; }
     public Dictionary<string, string>? Shortcuts { get; set; }
+}
+
+/// <summary>
+/// Converts a boolean IsModified value to a Thickness for the left border indicator.
+/// Modified settings get a 3px blue left border; unmodified settings get no border.
+/// </summary>
+public class ModifiedBorderConverter : IValueConverter
+{
+    public static readonly ModifiedBorderConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is true)
+            return new Thickness(3, 0, 0, 0);
+        return new Thickness(0);
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
 }

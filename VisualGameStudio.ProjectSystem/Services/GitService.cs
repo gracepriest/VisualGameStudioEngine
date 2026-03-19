@@ -335,6 +335,52 @@ public class GitService : IGitService
         return "";
     }
 
+    public async Task<string> GetStagedDiffAsync(string filePath)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return "";
+
+        var relativePath = GetRelativePath(filePath);
+        var result = await RunGitCommandAsync($"diff --cached -- \"{relativePath}\"");
+
+        if (result.ExitCode == 0)
+        {
+            return result.Output;
+        }
+
+        return "";
+    }
+
+    public async Task<bool> StageHunkAsync(string filePath, string patchText)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandWithStdinAsync("apply --cached --unidiff-zero -", patchText);
+        if (result.ExitCode == 0)
+        {
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        return false;
+    }
+
+    public async Task<bool> UnstageHunkAsync(string filePath, string patchText)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandWithStdinAsync("apply --cached --reverse --unidiff-zero -", patchText);
+        if (result.ExitCode == 0)
+        {
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        return false;
+    }
+
     public async Task<IReadOnlyList<GitCommitInfo>> GetRecentCommitsAsync(int count = 20)
     {
         var commits = new List<GitCommitInfo>();
@@ -708,6 +754,37 @@ public class GitService : IGitService
     private async Task<(int ExitCode, string Output)> RunGitCommandAsync(string arguments, string? workingDirectory = null)
     {
         return await Task.Run(() => RunGitCommand(arguments, workingDirectory));
+    }
+
+    private async Task<(int ExitCode, string Output)> RunGitCommandWithStdinAsync(string arguments, string stdinContent, string? workingDirectory = null)
+    {
+        return await Task.Run(() =>
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = arguments,
+                WorkingDirectory = workingDirectory ?? _repositoryPath ?? Directory.GetCurrentDirectory(),
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(psi);
+            if (process == null)
+                return (-1, "Failed to start git process");
+
+            process.StandardInput.Write(stdinContent);
+            process.StandardInput.Close();
+
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            return (process.ExitCode, process.ExitCode == 0 ? output : error);
+        });
     }
 
     public async Task<bool> RenameBranchAsync(string oldName, string newName)

@@ -520,6 +520,12 @@ public partial class MainWindowViewModel : ViewModelBase
     public event EventHandler<NotificationEventArgs>? NotificationRequested;
 
     /// <summary>
+    /// Raised when a panel should receive keyboard focus.
+    /// The string argument is the panel identifier (e.g., "SolutionExplorer", "Editor", "Output").
+    /// </summary>
+    public event EventHandler<string>? FocusPanelRequested;
+
+    /// <summary>
     /// Shows a toast notification in the bottom-right corner of the IDE.
     /// </summary>
     /// <param name="message">The notification message text.</param>
@@ -2091,6 +2097,51 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         _dockFactory.ActivateTool("Terminal");
         Terminal.CreateNewSessionCommand.Execute(null);
+    }
+
+    // Panel focus commands (Ctrl+1 through Ctrl+5, Ctrl+0)
+    // These activate the panel AND request keyboard focus so users can navigate
+    // entirely by keyboard without needing to click into a panel.
+
+    [RelayCommand]
+    private void FocusSolutionExplorer()
+    {
+        _dockFactory.ActivateTool("SolutionExplorer");
+        FocusPanelRequested?.Invoke(this, "SolutionExplorer");
+    }
+
+    [RelayCommand]
+    private void FocusEditor()
+    {
+        FocusPanelRequested?.Invoke(this, "Editor");
+    }
+
+    [RelayCommand]
+    private void FocusOutput()
+    {
+        _dockFactory.ActivateTool("Output");
+        FocusPanelRequested?.Invoke(this, "Output");
+    }
+
+    [RelayCommand]
+    private void FocusTerminal()
+    {
+        _dockFactory.ActivateTool("Terminal");
+        FocusPanelRequested?.Invoke(this, "Terminal");
+    }
+
+    [RelayCommand]
+    private void FocusErrorList()
+    {
+        _dockFactory.ActivateTool("ErrorList");
+        FocusPanelRequested?.Invoke(this, "ErrorList");
+    }
+
+    [RelayCommand]
+    private void FocusVariables()
+    {
+        _dockFactory.ActivateTool("Variables");
+        FocusPanelRequested?.Invoke(this, "Variables");
     }
 
     /// <summary>

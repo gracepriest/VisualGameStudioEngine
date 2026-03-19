@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Text;
+using System.Text.RegularExpressions;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.Services;
@@ -9,6 +11,16 @@ namespace VisualGameStudio.Shell.ViewModels.Dialogs;
 public partial class DiffViewerViewModel : ViewModelBase
 {
     private readonly IGitService _gitService;
+
+    /// <summary>
+    /// The raw unified diff output from git, stored for hunk extraction.
+    /// </summary>
+    private string _rawDiff = "";
+
+    /// <summary>
+    /// Whether the diff is for staged changes (true) or unstaged changes (false).
+    /// </summary>
+    private bool _isStaged;
 
     [ObservableProperty]
     private string _leftTitle = "Original";
@@ -21,6 +33,9 @@ public partial class DiffViewerViewModel : ViewModelBase
 
     [ObservableProperty]
     private string _rightContent = "";
+
+    [ObservableProperty]
+    private ObservableCollection<DiffHunk> _hunks = new();
 
     [ObservableProperty]
     private ObservableCollection<DiffLine> _diffLines = new();
@@ -37,6 +52,15 @@ public partial class DiffViewerViewModel : ViewModelBase
     [ObservableProperty]
     private string _filePath = "";
 
+    [ObservableProperty]
+    private bool _canStageHunks;
+
+    [ObservableProperty]
+    private bool _canUnstageHunks;
+
+    [ObservableProperty]
+    private string? _hunkOperationStatus;
+
     public DiffViewerViewModel(IGitService gitService)
     {
         _gitService = gitService;
@@ -47,6 +71,9 @@ public partial class DiffViewerViewModel : ViewModelBase
         FilePath = filePath;
         RightTitle = Path.GetFileName(filePath);
         LeftTitle = $"{Path.GetFileName(filePath)} (HEAD)";
+        _isStaged = false;
+        CanStageHunks = true;
+        CanUnstageHunks = false;
 
         // Get current content
         if (File.Exists(filePath))
@@ -55,8 +82,30 @@ public partial class DiffViewerViewModel : ViewModelBase
         }
 
         // Get diff from git
-        var diff = await _gitService.GetDiffAsync(filePath);
-        ParseDiff(diff);
+        _rawDiff = await _gitService.GetDiffAsync(filePath);
+        ParseDiff(_rawDiff);
+        ParseHunks(_rawDiff);
+    }
+
+    public async Task LoadStagedDiffAsync(string filePath)
+    {
+        FilePath = filePath;
+        RightTitle = $"{Path.GetFileName(filePath)} (staged)";
+        LeftTitle = $"{Path.GetFileName(filePath)} (HEAD)";
+        _isStaged = true;
+        CanStageHunks = false;
+        CanUnstageHunks = true;
+
+        // Get current content
+        if (File.Exists(filePath))
+        {
+            RightContent = await File.ReadAllTextAsync(filePath);
+        }
+
+        // Get staged diff from git
+        _rawDiff = await _gitService.GetStagedDiffAsync(filePath);
+        ParseDiff(_rawDiff);
+        ParseHunks(_rawDiff);
     }
 
     public void LoadContents(string leftContent, string rightContent, string leftTitle = "Original", string rightTitle = "Modified")
@@ -65,8 +114,215 @@ public partial class DiffViewerViewModel : ViewModelBase
         RightContent = rightContent;
         LeftTitle = leftTitle;
         RightTitle = rightTitle;
+        CanStageHunks = false;
+        CanUnstageHunks = false;
 
         ComputeDiff();
+    }
+
+    /// <summary>
+    /// Extracts individual hunks from raw unified diff output. Each hunk can be
+    /// independently staged or unstaged via git apply --cached.
+    /// </summary>
+    private void ParseHunks(string diff)
+    {
+        Hunks.Clear();
+
+        if (string.IsNullOrEmpty(diff))
+            return;
+
+        var lines = diff.Split('\n');
+
+        // Extract the diff header (diff --git, index, ---, +++ lines)
+        var headerBuilder = new StringBuilder();
+        var i = 0;
+        while (i < lines.Length && !lines[i].StartsWith("@@"))
+        {
+            headerBuilder.AppendLine(lines[i]);
+            i++;
+        }
+        var diffHeader = headerBuilder.ToString();
+
+        // Now parse each hunk starting with @@
+        DiffHunk? currentHunk = null;
+        var hunkIndex = 0;
+        var hunkBodyBuilder = new StringBuilder();
+
+        for (; i < lines.Length; i++)
+        {
+            var line = lines[i];
+
+            if (line.StartsWith("@@"))
+            {
+                // Save the previous hunk
+                if (currentHunk != null)
+                {
+                    currentHunk.PatchText = diffHeader + hunkBodyBuilder.ToString();
+                    Hunks.Add(currentHunk);
+                }
+
+                // Start a new hunk
+                hunkIndex++;
+                var match = Regex.Match(line, @"@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@(.*)");
+                var startLine = match.Success ? int.Parse(match.Groups[3].Value) : 0;
+                var headerSuffix = match.Success ? match.Groups[5].Value.Trim() : "";
+
+                currentHunk = new DiffHunk
+                {
+                    Index = hunkIndex,
+                    HeaderLine = line,
+                    StartLine = startLine,
+                    Summary = string.IsNullOrEmpty(headerSuffix) ? $"Hunk {hunkIndex}" : headerSuffix,
+                    Lines = new ObservableCollection<DiffLine>()
+                };
+
+                hunkBodyBuilder.Clear();
+                hunkBodyBuilder.AppendLine(line);
+
+                // Parse line numbers for header display
+                if (match.Success)
+                {
+                    var oldStart = int.Parse(match.Groups[1].Value);
+                    var oldCount = match.Groups[2].Value.Length > 0 ? int.Parse(match.Groups[2].Value) : 1;
+                    var newStart = int.Parse(match.Groups[3].Value);
+                    var newCount = match.Groups[4].Value.Length > 0 ? int.Parse(match.Groups[4].Value) : 1;
+                    currentHunk.OldStart = oldStart;
+                    currentHunk.OldCount = oldCount;
+                    currentHunk.NewStart = newStart;
+                    currentHunk.NewCount = newCount;
+                }
+
+                // Add header as a DiffLine in the hunk
+                currentHunk.Lines.Add(new DiffLine
+                {
+                    LeftContent = line,
+                    RightContent = "",
+                    Type = DiffLineType.Header
+                });
+            }
+            else if (currentHunk != null)
+            {
+                hunkBodyBuilder.AppendLine(line);
+
+                if (line.StartsWith("-") && !line.StartsWith("---"))
+                {
+                    currentHunk.RemovedCount++;
+                    currentHunk.Lines.Add(new DiffLine
+                    {
+                        LeftContent = line.Substring(1),
+                        RightContent = "",
+                        Type = DiffLineType.Removed
+                    });
+                }
+                else if (line.StartsWith("+") && !line.StartsWith("+++"))
+                {
+                    currentHunk.AddedCount++;
+                    currentHunk.Lines.Add(new DiffLine
+                    {
+                        LeftContent = "",
+                        RightContent = line.Substring(1),
+                        Type = DiffLineType.Added
+                    });
+                }
+                else if (line.StartsWith(" "))
+                {
+                    currentHunk.Lines.Add(new DiffLine
+                    {
+                        LeftContent = line.Substring(1),
+                        RightContent = line.Substring(1),
+                        Type = DiffLineType.Unchanged
+                    });
+                }
+                else if (!string.IsNullOrEmpty(line) && !line.StartsWith("\\"))
+                {
+                    currentHunk.Lines.Add(new DiffLine
+                    {
+                        LeftContent = line,
+                        RightContent = line,
+                        Type = DiffLineType.Unchanged
+                    });
+                }
+            }
+        }
+
+        // Save the last hunk
+        if (currentHunk != null)
+        {
+            currentHunk.PatchText = diffHeader + hunkBodyBuilder.ToString();
+            Hunks.Add(currentHunk);
+        }
+    }
+
+    [RelayCommand]
+    private async Task StageHunkAsync(DiffHunk? hunk)
+    {
+        if (hunk == null || string.IsNullOrEmpty(hunk.PatchText))
+            return;
+
+        HunkOperationStatus = $"Staging hunk {hunk.Index}...";
+
+        var success = await _gitService.StageHunkAsync(FilePath, hunk.PatchText);
+
+        if (success)
+        {
+            HunkOperationStatus = $"Hunk {hunk.Index} staged successfully.";
+
+            // Reload the diff to reflect the changes
+            _rawDiff = await _gitService.GetDiffAsync(FilePath);
+            ParseDiff(_rawDiff);
+            ParseHunks(_rawDiff);
+        }
+        else
+        {
+            HunkOperationStatus = $"Failed to stage hunk {hunk.Index}.";
+        }
+    }
+
+    [RelayCommand]
+    private async Task UnstageHunkAsync(DiffHunk? hunk)
+    {
+        if (hunk == null || string.IsNullOrEmpty(hunk.PatchText))
+            return;
+
+        HunkOperationStatus = $"Unstaging hunk {hunk.Index}...";
+
+        var success = await _gitService.UnstageHunkAsync(FilePath, hunk.PatchText);
+
+        if (success)
+        {
+            HunkOperationStatus = $"Hunk {hunk.Index} unstaged successfully.";
+
+            // Reload the staged diff to reflect the changes
+            _rawDiff = await _gitService.GetStagedDiffAsync(FilePath);
+            ParseDiff(_rawDiff);
+            ParseHunks(_rawDiff);
+        }
+        else
+        {
+            HunkOperationStatus = $"Failed to unstage hunk {hunk.Index}.";
+        }
+    }
+
+    [RelayCommand]
+    private async Task StageAllHunksAsync()
+    {
+        await _gitService.StageFileAsync(FilePath);
+        HunkOperationStatus = "All hunks staged.";
+
+        _rawDiff = await _gitService.GetDiffAsync(FilePath);
+        ParseDiff(_rawDiff);
+        ParseHunks(_rawDiff);
+    }
+
+    [RelayCommand]
+    private async Task UnstageAllHunksAsync()
+    {
+        await _gitService.UnstageFileAsync(FilePath);
+        HunkOperationStatus = "All hunks unstaged.";
+
+        _rawDiff = await _gitService.GetStagedDiffAsync(FilePath);
+        ParseDiff(_rawDiff);
+        ParseHunks(_rawDiff);
     }
 
     private void ParseDiff(string diff)
@@ -103,7 +359,7 @@ public partial class DiffViewerViewModel : ViewModelBase
             if (line.StartsWith("@@"))
             {
                 // Parse hunk header: @@ -start,count +start,count @@
-                var match = System.Text.RegularExpressions.Regex.Match(line, @"@@ -(\d+),?\d* \+(\d+),?\d* @@");
+                var match = Regex.Match(line, @"@@ -(\d+),?\d* \+(\d+),?\d* @@");
                 if (match.Success)
                 {
                     leftLineNum = int.Parse(match.Groups[1].Value) - 1;
@@ -286,6 +542,57 @@ public partial class DiffViewerViewModel : ViewModelBase
     {
         SideBySide = !SideBySide;
     }
+}
+
+/// <summary>
+/// Represents a single hunk (contiguous group of changes) from a unified diff.
+/// Each hunk can be independently staged or unstaged.
+/// </summary>
+public class DiffHunk
+{
+    /// <summary>1-based hunk index within the diff</summary>
+    public int Index { get; set; }
+
+    /// <summary>The @@ header line</summary>
+    public string HeaderLine { get; set; } = "";
+
+    /// <summary>Starting line number in the new file</summary>
+    public int StartLine { get; set; }
+
+    /// <summary>Human-readable summary (from the @@ line suffix, or "Hunk N")</summary>
+    public string Summary { get; set; } = "";
+
+    /// <summary>Number of added lines in this hunk</summary>
+    public int AddedCount { get; set; }
+
+    /// <summary>Number of removed lines in this hunk</summary>
+    public int RemovedCount { get; set; }
+
+    /// <summary>Old file start line</summary>
+    public int OldStart { get; set; }
+
+    /// <summary>Old file line count</summary>
+    public int OldCount { get; set; }
+
+    /// <summary>New file start line</summary>
+    public int NewStart { get; set; }
+
+    /// <summary>New file line count</summary>
+    public int NewCount { get; set; }
+
+    /// <summary>The full patch text (diff header + this hunk) for git apply --cached</summary>
+    public string PatchText { get; set; } = "";
+
+    /// <summary>Diff lines within this hunk for display</summary>
+    public ObservableCollection<DiffLine> Lines { get; set; } = new();
+
+    /// <summary>Display text showing added/removed counts</summary>
+    public string ChangesSummary => $"+{AddedCount} -{RemovedCount}";
+
+    /// <summary>Display text for the hunk: "Lines N-M: summary"</summary>
+    public string DisplayText => NewCount > 1
+        ? $"Lines {NewStart}-{NewStart + NewCount - 1}: {Summary}"
+        : $"Line {NewStart}: {Summary}";
 }
 
 public class DiffLine

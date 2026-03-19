@@ -101,9 +101,14 @@ public interface IGitService
     Task DiscardChangesAsync(string filePath);
 
     /// <summary>
-    /// Gets the diff for a file
+    /// Gets the diff for a file (unstaged changes)
     /// </summary>
     Task<string> GetDiffAsync(string filePath);
+
+    /// <summary>
+    /// Gets the staged diff for a file (changes already in the index)
+    /// </summary>
+    Task<string> GetStagedDiffAsync(string filePath);
 
     /// <summary>
     /// Gets recent commits
@@ -289,6 +294,18 @@ public interface IGitService
     /// Gets line-level diff information for a file (compared to last commit)
     /// </summary>
     Task<IReadOnlyList<GitLineChange>> GetLineChangesAsync(string filePath);
+
+    /// <summary>
+    /// Stages a single hunk (patch fragment) from a file's diff.
+    /// The patchText must be a valid unified diff fragment with header.
+    /// </summary>
+    Task<bool> StageHunkAsync(string filePath, string patchText);
+
+    /// <summary>
+    /// Unstages a single hunk (patch fragment) from a file's staged diff.
+    /// The patchText must be a valid unified diff fragment with header.
+    /// </summary>
+    Task<bool> UnstageHunkAsync(string filePath, string patchText);
 
     /// <summary>
     /// Raised when an operation progresses

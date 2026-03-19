@@ -33,6 +33,14 @@
                     ToolTip.Tip="Clear">
               <TextBlock Text="Clear" FontSize="11"/>
             </Button>
+
+            <Button Classes="toolbarButton"
+                    Command="{Binding SplitTerminalCommand}"
+                    ToolTip.Tip="Split Terminal (Ctrl+Shift+5)"
+                    Margin="4,0,0,0">
+              <TextBlock Text="&#x2551;" FontSize="14" Foreground="#569CD6"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Button>
           </StackPanel>
 
           <!-- Tab bar (scrollable) -->
@@ -214,74 +222,130 @@
         </Grid>
       </Border>
 
-      <!-- Output with ANSI color support + search overlay -->
-      <Grid>
-        <ScrollViewer Background="#0C0C0C"
-                      HorizontalScrollBarVisibility="Auto"
-                      VerticalScrollBarVisibility="Auto"
-                      x:Name="OutputScroller">
-          <SelectableTextBlock FontFamily="Cascadia Code, Consolas, monospace"
-                               FontSize="13"
-                               Foreground="#CCCCCC"
-                               Padding="8"
-                               TextWrapping="NoWrap"
-                               x:Name="OutputTextBlock"/>
-        </ScrollViewer>
+      <!-- Output with ANSI color support + search overlay + split pane -->
+      <Grid x:Name="OutputGrid">
+        <!-- Single-pane and split-pane columns are configured dynamically in code-behind -->
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="0"/>
+          <ColumnDefinition Width="0"/>
+        </Grid.ColumnDefinitions>
 
-        <!-- Search bar (Ctrl+F) -->
-        <Border x:Name="SearchBar"
-                IsVisible="False"
-                Background="#252526"
-                BorderBrush="#3C3C3C"
-                BorderThickness="1"
-                CornerRadius="4"
-                Padding="6,4"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="8,8,24,0">
-          <StackPanel Orientation="Horizontal" Spacing="6">
-            <TextBox x:Name="SearchTextBox"
-                     Width="220"
-                     FontFamily="Cascadia Code, Consolas, monospace"
-                     FontSize="12"
-                     Background="#3C3C3C"
-                     Foreground="#CCCCCC"
-                     BorderThickness="1"
-                     BorderBrush="#555555"
-                     Watermark="Find in terminal..."
-                     Padding="4,3"/>
-            <TextBlock x:Name="SearchMatchCount"
-                       Text="No results"
-                       Foreground="#808080"
-                       FontSize="11"
-                       VerticalAlignment="Center"
-                       MinWidth="70"/>
-            <Button Classes="toolbarButton"
-                    x:Name="SearchPrevButton"
-                    Click="OnSearchPrevClick"
-                    ToolTip.Tip="Previous Match (Shift+Enter)"
-                    Padding="4,2"
-                    MinWidth="24" MinHeight="22">
-              <TextBlock Text="&#x25B2;" FontSize="10" Foreground="#CCCCCC"/>
-            </Button>
-            <Button Classes="toolbarButton"
-                    x:Name="SearchNextButton"
-                    Click="OnSearchNextClick"
-                    ToolTip.Tip="Next Match (Enter)"
-                    Padding="4,2"
-                    MinWidth="24" MinHeight="22">
-              <TextBlock Text="&#x25BC;" FontSize="10" Foreground="#CCCCCC"/>
-            </Button>
-            <Button Classes="toolbarButton"
-                    x:Name="SearchCloseButton"
-                    Click="OnSearchCloseClick"
-                    ToolTip.Tip="Close (Escape)"
-                    Padding="4,2"
-                    MinWidth="24" MinHeight="22">
-              <TextBlock Text="&#x00D7;" FontSize="14" Foreground="#808080"/>
-            </Button>
-          </StackPanel>
-        </Border>
+        <!-- Left pane (primary) -->
+        <Grid Grid.Column="0">
+          <Border x:Name="LeftPaneBorder"
+                  BorderThickness="0"
+                  BorderBrush="#569CD6"
+                  PointerPressed="OnLeftPanePointerPressed">
+            <ScrollViewer Background="#0C0C0C"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto"
+                          x:Name="OutputScroller">
+              <SelectableTextBlock FontFamily="Cascadia Code, Consolas, monospace"
+                                   FontSize="13"
+                                   Foreground="#CCCCCC"
+                                   Padding="8"
+                                   TextWrapping="NoWrap"
+                                   x:Name="OutputTextBlock"/>
+            </ScrollViewer>
+          </Border>
+
+          <!-- Search bar (Ctrl+F) -->
+          <Border x:Name="SearchBar"
+                  IsVisible="False"
+                  Background="#252526"
+                  BorderBrush="#3C3C3C"
+                  BorderThickness="1"
+                  CornerRadius="4"
+                  Padding="6,4"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Top"
+                  Margin="8,8,24,0">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBox x:Name="SearchTextBox"
+                       Width="220"
+                       FontFamily="Cascadia Code, Consolas, monospace"
+                       FontSize="12"
+                       Background="#3C3C3C"
+                       Foreground="#CCCCCC"
+                       BorderThickness="1"
+                       BorderBrush="#555555"
+                       Watermark="Find in terminal..."
+                       Padding="4,3"/>
+              <TextBlock x:Name="SearchMatchCount"
+                         Text="No results"
+                         Foreground="#808080"
+                         FontSize="11"
+                         VerticalAlignment="Center"
+                         MinWidth="70"/>
+              <Button Classes="toolbarButton"
+                      x:Name="SearchPrevButton"
+                      Click="OnSearchPrevClick"
+                      ToolTip.Tip="Previous Match (Shift+Enter)"
+                      Padding="4,2"
+                      MinWidth="24" MinHeight="22">
+                <TextBlock Text="&#x25B2;" FontSize="10" Foreground="#CCCCCC"/>
+              </Button>
+              <Button Classes="toolbarButton"
+                      x:Name="SearchNextButton"
+                      Click="OnSearchNextClick"
+                      ToolTip.Tip="Next Match (Enter)"
+                      Padding="4,2"
+                      MinWidth="24" MinHeight="22">
+                <TextBlock Text="&#x25BC;" FontSize="10" Foreground="#CCCCCC"/>
+              </Button>
+              <Button Classes="toolbarButton"
+                      x:Name="SearchCloseButton"
+                      Click="OnSearchCloseClick"
+                      ToolTip.Tip="Close (Escape)"
+                      Padding="4,2"
+                      MinWidth="24" MinHeight="22">
+                <TextBlock Text="&#x00D7;" FontSize="14" Foreground="#808080"/>
+              </Button>
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <!-- GridSplitter (visible only when split) -->
+        <GridSplitter Grid.Column="1"
+                      x:Name="PaneSplitter"
+                      Width="4"
+                      Background="#3C3C3C"
+                      IsVisible="False"
+                      ResizeDirection="Columns"/>
+
+        <!-- Right pane (split) -->
+        <Grid Grid.Column="2" x:Name="RightPaneGrid" IsVisible="False">
+          <Border x:Name="RightPaneBorder"
+                  BorderThickness="0"
+                  BorderBrush="#569CD6"
+                  PointerPressed="OnRightPanePointerPressed">
+            <ScrollViewer Background="#0C0C0C"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto"
+                          x:Name="SplitOutputScroller">
+              <SelectableTextBlock FontFamily="Cascadia Code, Consolas, monospace"
+                                   FontSize="13"
+                                   Foreground="#CCCCCC"
+                                   Padding="8"
+                                   TextWrapping="NoWrap"
+                                   x:Name="SplitOutputTextBlock"/>
+            </ScrollViewer>
+          </Border>
+
+          <!-- Close split pane button -->
+          <Button Classes="toolbarButton"
+                  Command="{Binding UnsplitTerminalCommand}"
+                  ToolTip.Tip="Close Split Pane"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Top"
+                  Margin="0,4,8,0"
+                  Padding="4,2"
+                  MinWidth="20" MinHeight="20">
+            <TextBlock Text="&#x00D7;" FontSize="12" Foreground="#808080"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Button>
+        </Grid>
       </Grid>
     </DockPanel>
   </Border>

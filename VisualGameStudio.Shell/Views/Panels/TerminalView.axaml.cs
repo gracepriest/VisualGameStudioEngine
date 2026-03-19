@@ -20,10 +20,25 @@ public partial class TerminalView : UserControl
     private TextBox? _searchTextBox;
     private TextBlock? _searchMatchCount;
 
+    // Split pane controls
+    private ScrollViewer? _splitOutputScroller;
+    private SelectableTextBlock? _splitOutputTextBlock;
+    private Grid? _rightPaneGrid;
+    private GridSplitter? _paneSplitter;
+    private ColumnDefinition? _splitterColumn;
+    private ColumnDefinition? _rightPaneColumn;
+    private Border? _leftPaneBorder;
+    private Border? _rightPaneBorder;
+
     /// <summary>
     /// Stateful ANSI parser that tracks color state across appended chunks.
     /// </summary>
     private AnsiParser _ansiParser = new();
+
+    /// <summary>
+    /// Separate ANSI parser for the split (right) pane.
+    /// </summary>
+    private AnsiParser _splitAnsiParser = new();
 
     // Search state
     private string _lastSearchQuery = "";
@@ -62,6 +77,22 @@ public partial class TerminalView : UserControl
         _searchMatchCount = this.FindControl<TextBlock>("SearchMatchCount");
         var inputBox = this.FindControl<TextBox>("InputBox");
 
+        // Split pane controls
+        _splitOutputScroller = this.FindControl<ScrollViewer>("SplitOutputScroller");
+        _splitOutputTextBlock = this.FindControl<SelectableTextBlock>("SplitOutputTextBlock");
+        _rightPaneGrid = this.FindControl<Grid>("RightPaneGrid");
+        _paneSplitter = this.FindControl<GridSplitter>("PaneSplitter");
+        _leftPaneBorder = this.FindControl<Border>("LeftPaneBorder");
+        _rightPaneBorder = this.FindControl<Border>("RightPaneBorder");
+
+        // Find column definitions by name
+        var outputGrid = this.FindControl<Grid>("OutputGrid");
+        if (outputGrid != null)
+        {
+            _splitterColumn = outputGrid.ColumnDefinitions[1];
+            _rightPaneColumn = outputGrid.ColumnDefinitions[2];
+        }
+
         if (inputBox != null)
         {
             inputBox.KeyDown += OnInputKeyDown;
@@ -73,7 +104,7 @@ public partial class TerminalView : UserControl
             _searchTextBox.GetObservable(TextBox.TextProperty).Subscribe(OnSearchTextChanged);
         }
 
-        // Handle Ctrl+F on the entire control
+        // Handle Ctrl+F and Ctrl+Shift+5 on the entire control
         KeyDown += OnTerminalKeyDown;
 
         if (DataContext is TerminalViewModel vm)
@@ -81,6 +112,9 @@ public partial class TerminalView : UserControl
             vm.OutputAppended += OnOutputAppended;
             vm.OutputCleared += OnOutputCleared;
             vm.ActiveSessionSwitched += OnActiveSessionSwitched;
+            vm.SplitOutputAppended += OnSplitOutputAppended;
+            vm.SplitOutputCleared += OnSplitOutputCleared;
+            vm.SplitStateChanged += OnSplitStateChanged;
             vm.Sessions.CollectionChanged += (_, _) => UpdateTabHighlights();
         }
     }
@@ -95,6 +129,16 @@ public partial class TerminalView : UserControl
         else if (e.Key == Key.Escape && _isSearchActive)
         {
             CloseSearchBar();
+            e.Handled = true;
+        }
+        // Ctrl+Shift+5 to split/unsplit terminal
+        else if (e.Key == Key.D5 && e.KeyModifiers.HasFlag(KeyModifiers.Control)
+                 && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            if (DataContext is TerminalViewModel vm)
+            {
+                vm.SplitTerminalCommand.Execute(null);
+            }
             e.Handled = true;
         }
     }
@@ -637,6 +681,237 @@ public partial class TerminalView : UserControl
         };
 
         _outputTextBlock!.Inlines!.Add(container);
+    }
+
+    // ──── Split pane event handlers ────
+
+    /// <summary>
+    /// Handles the split state changing (split or unsplit).
+    /// Shows/hides the right pane and GridSplitter, updates column widths.
+    /// </summary>
+    private void OnSplitStateChanged(object? sender, EventArgs e)
+    {
+        if (DataContext is not TerminalViewModel vm) return;
+
+        if (vm.IsSplit)
+        {
+            // Show the right pane and splitter
+            if (_splitterColumn != null)
+                _splitterColumn.Width = new GridLength(4, GridUnitType.Pixel);
+            if (_rightPaneColumn != null)
+                _rightPaneColumn.Width = new GridLength(1, GridUnitType.Star);
+            if (_paneSplitter != null)
+                _paneSplitter.IsVisible = true;
+            if (_rightPaneGrid != null)
+                _rightPaneGrid.IsVisible = true;
+
+            // Rebuild split pane output from the split session
+            RebuildSplitInlines();
+            UpdatePaneFocusBorders();
+        }
+        else
+        {
+            // Hide the right pane and splitter
+            if (_splitterColumn != null)
+                _splitterColumn.Width = new GridLength(0);
+            if (_rightPaneColumn != null)
+                _rightPaneColumn.Width = new GridLength(0);
+            if (_paneSplitter != null)
+                _paneSplitter.IsVisible = false;
+            if (_rightPaneGrid != null)
+                _rightPaneGrid.IsVisible = false;
+
+            // Clear split pane output
+            _splitOutputTextBlock?.Inlines?.Clear();
+            _splitAnsiParser.Reset();
+            UpdatePaneFocusBorders();
+        }
+    }
+
+    /// <summary>
+    /// Handles new output appended to the split (right pane) session.
+    /// </summary>
+    private void OnSplitOutputAppended(string text)
+    {
+        if (_splitOutputTextBlock == null || string.IsNullOrEmpty(text)) return;
+
+        _splitOutputTextBlock.Inlines ??= new InlineCollection();
+
+        var segments = _splitAnsiParser.Parse(text);
+        foreach (var segment in segments)
+        {
+            if (string.IsNullOrEmpty(segment.Text)) continue;
+
+            var linkSegments = TerminalLinkDetector.Detect(segment.Text);
+            if (linkSegments.Count == 0)
+            {
+                AddRunToBlock(_splitOutputTextBlock, segment.Text, segment.Foreground, segment.Bold);
+                continue;
+            }
+
+            foreach (var link in linkSegments)
+            {
+                if (link.IsLink)
+                    AddFileLinkToBlock(_splitOutputTextBlock, link, segment.Bold);
+                else
+                    AddRunToBlock(_splitOutputTextBlock, link.Text, segment.Foreground, segment.Bold);
+            }
+        }
+
+        _splitOutputScroller?.ScrollToEnd();
+    }
+
+    /// <summary>
+    /// Handles the split (right pane) session output being cleared.
+    /// </summary>
+    private void OnSplitOutputCleared()
+    {
+        _splitOutputTextBlock?.Inlines?.Clear();
+        _splitAnsiParser.Reset();
+    }
+
+    /// <summary>
+    /// Rebuilds inlines for the split pane from the split session's current output.
+    /// </summary>
+    private void RebuildSplitInlines()
+    {
+        if (_splitOutputTextBlock == null || DataContext is not TerminalViewModel vm) return;
+
+        _splitOutputTextBlock.Inlines?.Clear();
+        _splitOutputTextBlock.Inlines ??= new InlineCollection();
+        _splitAnsiParser.Reset();
+
+        var rawText = vm.SplitSession?.OutputText ?? "";
+        if (string.IsNullOrEmpty(rawText)) return;
+
+        var segments = _splitAnsiParser.Parse(rawText);
+        foreach (var segment in segments)
+        {
+            if (string.IsNullOrEmpty(segment.Text)) continue;
+
+            var linkSegments = TerminalLinkDetector.Detect(segment.Text);
+            if (linkSegments.Count == 0)
+            {
+                AddRunToBlock(_splitOutputTextBlock, segment.Text, segment.Foreground, segment.Bold);
+                continue;
+            }
+
+            foreach (var link in linkSegments)
+            {
+                if (link.IsLink)
+                    AddFileLinkToBlock(_splitOutputTextBlock, link, segment.Bold);
+                else
+                    AddRunToBlock(_splitOutputTextBlock, link.Text, segment.Foreground, segment.Bold);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds a plain text Run to a specific SelectableTextBlock.
+    /// </summary>
+    private void AddRunToBlock(SelectableTextBlock block, string text, IBrush? foreground, bool bold)
+    {
+        var run = new Run(text);
+        if (foreground != null)
+            run.Foreground = foreground;
+        if (bold)
+            run.FontWeight = FontWeight.Bold;
+        block.Inlines!.Add(run);
+    }
+
+    /// <summary>
+    /// Adds a clickable file path link to a specific SelectableTextBlock.
+    /// </summary>
+    private void AddFileLinkToBlock(SelectableTextBlock block, TerminalLinkDetector.LinkSegment link, bool bold)
+    {
+        var linkText = new TextBlock
+        {
+            Text = link.Text,
+            Foreground = LinkBrush,
+            TextDecorations = TextDecorations.Underline,
+            FontFamily = new FontFamily("Cascadia Code, Consolas, monospace"),
+            FontSize = 13,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Tag = link,
+        };
+
+        if (bold)
+            linkText.FontWeight = FontWeight.Bold;
+
+        linkText.PointerEntered += (s, _) =>
+        {
+            if (s is TextBlock tb) tb.Foreground = LinkHoverBrush;
+        };
+        linkText.PointerExited += (s, _) =>
+        {
+            if (s is TextBlock tb) tb.Foreground = LinkBrush;
+        };
+        linkText.PointerPressed += OnFileLinkPressed;
+
+        var container = new InlineUIContainer { Child = linkText };
+        block.Inlines!.Add(container);
+    }
+
+    /// <summary>
+    /// Sets focus to the left pane when it is clicked.
+    /// </summary>
+    private void OnLeftPanePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is TerminalViewModel vm && vm.IsSplit)
+        {
+            vm.FocusedPane = SplitPaneFocus.Left;
+            UpdatePaneFocusBorders();
+        }
+    }
+
+    /// <summary>
+    /// Sets focus to the right pane when it is clicked.
+    /// </summary>
+    private void OnRightPanePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is TerminalViewModel vm && vm.IsSplit)
+        {
+            vm.FocusedPane = SplitPaneFocus.Right;
+            UpdatePaneFocusBorders();
+        }
+    }
+
+    /// <summary>
+    /// Updates the border styling on left/right panes to indicate which is focused.
+    /// </summary>
+    private void UpdatePaneFocusBorders()
+    {
+        if (DataContext is not TerminalViewModel vm) return;
+
+        var activeBorder = new SolidColorBrush(Color.Parse("#569CD6"));
+        var inactiveBorder = Brushes.Transparent;
+
+        if (vm.IsSplit)
+        {
+            if (_leftPaneBorder != null)
+            {
+                _leftPaneBorder.BorderThickness = new Thickness(2, 2, 0, 2);
+                _leftPaneBorder.BorderBrush = vm.FocusedPane == SplitPaneFocus.Left ? activeBorder : inactiveBorder;
+            }
+            if (_rightPaneBorder != null)
+            {
+                _rightPaneBorder.BorderThickness = new Thickness(0, 2, 2, 2);
+                _rightPaneBorder.BorderBrush = vm.FocusedPane == SplitPaneFocus.Right ? activeBorder : inactiveBorder;
+            }
+        }
+        else
+        {
+            if (_leftPaneBorder != null)
+            {
+                _leftPaneBorder.BorderThickness = new Thickness(0);
+                _leftPaneBorder.BorderBrush = inactiveBorder;
+            }
+            if (_rightPaneBorder != null)
+            {
+                _rightPaneBorder.BorderThickness = new Thickness(0);
+                _rightPaneBorder.BorderBrush = inactiveBorder;
+            }
+        }
     }
 
     /// <summary>

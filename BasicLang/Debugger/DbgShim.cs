@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace BasicLang.Debugger
 {
@@ -35,6 +36,27 @@ namespace BasicLang.Debugger
             string szDebuggeeVersion,
             string szApplicationGroupId,
             [MarshalAs(UnmanagedType.Interface)] out object ppCordb);
+
+        [DllImport("dbgshim.dll", CallingConvention = CallingConvention.StdCall)]
+        public static extern int EnumerateCLRs(
+            int processId,
+            out IntPtr ppHandleArrayOut,
+            out IntPtr ppStringArrayOut,
+            out int pdwArrayLengthOut);
+
+        [DllImport("dbgshim.dll", CallingConvention = CallingConvention.StdCall)]
+        public static extern int CloseCLREnumeration(
+            IntPtr pHandleArray,
+            IntPtr pStringArray,
+            int dwArrayLength);
+
+        [DllImport("dbgshim.dll", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+        public static extern int CreateVersionStringFromModule(
+            int pidDebuggee,
+            string szModuleName,
+            [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pBuffer,
+            int cchBuffer,
+            out int pdwLength);
 
         /// <summary>
         /// Find and load dbgshim.dll. Returns true if found.

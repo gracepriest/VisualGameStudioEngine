@@ -37,8 +37,10 @@
       <ItemsControl ItemsSource="{Binding FilteredSettings}">
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="vm:SearchableSettingItem">
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="12" Margin="0,0,0,8">
-              <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Margin="0,0,0,8"
+                    BorderThickness="{Binding IsModified, Converter={x:Static vm:ModifiedBorderConverter.Instance}}"
+                    BorderBrush="#3794FF">
+              <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" Margin="12">
                 <!-- Setting name and category badge -->
                 <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
                   <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
@@ -64,8 +66,23 @@
                             IsVisible="{Binding IsComboBox}"/>
                 </Panel>
 
+                <!-- Reset button (visible only when modified) -->
+                <Button Grid.Row="0" Grid.Column="2"
+                        Content="Reset"
+                        Command="{Binding ResetToDefaultCommand}"
+                        IsVisible="{Binding IsModified}"
+                        FontSize="11"
+                        Padding="8,3"
+                        Margin="8,0,0,0"
+                        Background="Transparent"
+                        Foreground="#3794FF"
+                        BorderThickness="1"
+                        BorderBrush="#3794FF"
+                        CornerRadius="3"
+                        VerticalAlignment="Center"/>
+
                 <!-- Description -->
-                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
                            Text="{Binding Description}"
                            FontSize="12" Opacity="0.6" TextWrapping="Wrap"
                            Margin="0,4,0,0"/>

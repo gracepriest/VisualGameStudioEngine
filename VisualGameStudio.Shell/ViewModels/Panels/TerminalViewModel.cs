@@ -8,6 +8,15 @@ using VisualGameStudio.Core.Abstractions.ViewModels;
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
 /// <summary>
+/// Indicates which pane is currently focused in a split terminal layout.
+/// </summary>
+public enum SplitPaneFocus
+{
+    Left,
+    Right
+}
+
+/// <summary>
 /// Represents a detected shell that can be used in the terminal.
 /// </summary>
 public class ShellProfile
@@ -498,9 +507,44 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     public ObservableCollection<TerminalSession> Sessions { get; } = new();
 
     /// <summary>
+    /// Whether the terminal area is currently split into two panes.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isSplit;
+
+    /// <summary>
+    /// The session shown in the right (secondary) split pane.
+    /// When not split, this is null.
+    /// </summary>
+    [ObservableProperty]
+    private TerminalSession? _splitSession;
+
+    /// <summary>
+    /// Tracks which pane is currently focused: Left or Right.
+    /// Commands go to the focused pane's session.
+    /// </summary>
+    [ObservableProperty]
+    private SplitPaneFocus _focusedPane = SplitPaneFocus.Left;
+
+    /// <summary>
     /// Raised when the active session changes so the view can update scroll, etc.
     /// </summary>
     public event EventHandler? ActiveSessionSwitched;
+
+    /// <summary>
+    /// Raised when the split session output is appended.
+    /// </summary>
+    public event Action<string>? SplitOutputAppended;
+
+    /// <summary>
+    /// Raised when the split session output is cleared.
+    /// </summary>
+    public event Action? SplitOutputCleared;
+
+    /// <summary>
+    /// Raised when the split state changes (split/unsplit).
+    /// </summary>
+    public event EventHandler? SplitStateChanged;
 
     /// <summary>
     /// Raised when the user clicks a file path link in terminal output.
@@ -757,9 +801,10 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void SendInput()
     {
-        if (string.IsNullOrEmpty(InputText) || ActiveSession == null) return;
+        var target = FocusedSession;
+        if (string.IsNullOrEmpty(InputText) || target == null) return;
 
-        ActiveSession.SendCommand(InputText);
+        target.SendCommand(InputText);
         InputText = "";
     }
 
@@ -795,11 +840,98 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
+    /// Splits the terminal pane, creating a new session on the right side.
+    /// If already split, toggles back to single pane.
+    /// </summary>
+    [RelayCommand]
+    private void SplitTerminal()
+    {
+        if (IsSplit)
+        {
+            // Unsplit: close the split session and go back to single pane
+            UnsplitTerminal();
+            return;
+        }
+
+        // Create a new session for the right pane
+        var session = new TerminalSession();
+        Sessions.Add(session);
+        SplitSession = session;
+        session.Start(WorkingDirectory, SelectedProfile);
+
+        IsSplit = true;
+        FocusedPane = SplitPaneFocus.Right;
+        SplitStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Closes the split pane and returns to a single terminal view.
+    /// The split session remains in the sessions list as a tab.
+    /// </summary>
+    [RelayCommand]
+    private void UnsplitTerminal()
+    {
+        if (!IsSplit) return;
+
+        // Unsubscribe from split session events
+        if (SplitSession != null)
+        {
+            SplitSession.OutputAppended -= OnSplitOutputAppended;
+            SplitSession.OutputCleared -= OnSplitOutputCleared;
+        }
+
+        SplitSession = null;
+        IsSplit = false;
+        FocusedPane = SplitPaneFocus.Left;
+        SplitStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Sets the focused pane (left or right) so commands go to the correct session.
+    /// </summary>
+    [RelayCommand]
+    private void SetFocusedPane(SplitPaneFocus pane)
+    {
+        FocusedPane = pane;
+    }
+
+    partial void OnSplitSessionChanged(TerminalSession? oldValue, TerminalSession? newValue)
+    {
+        if (oldValue != null)
+        {
+            oldValue.OutputAppended -= OnSplitOutputAppended;
+            oldValue.OutputCleared -= OnSplitOutputCleared;
+        }
+
+        if (newValue != null)
+        {
+            newValue.OutputAppended += OnSplitOutputAppended;
+            newValue.OutputCleared += OnSplitOutputCleared;
+        }
+    }
+
+    private void OnSplitOutputAppended(string text)
+    {
+        SplitOutputAppended?.Invoke(text);
+    }
+
+    private void OnSplitOutputCleared()
+    {
+        SplitOutputCleared?.Invoke();
+    }
+
+    /// <summary>
+    /// Gets the session that should receive commands based on the focused pane.
+    /// </summary>
+    public TerminalSession? FocusedSession =>
+        IsSplit && FocusedPane == SplitPaneFocus.Right ? SplitSession : ActiveSession;
+
+    /// <summary>
     /// Sends a command to the active terminal session.
     /// </summary>
     public void SendCommand(string command)
     {
-        ActiveSession?.SendCommand(command);
+        FocusedSession?.SendCommand(command);
     }
 
     /// <summary>
