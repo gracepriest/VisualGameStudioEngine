@@ -865,32 +865,35 @@ namespace BasicLang.Debugger
 
         private DAPResponse HandleDisconnect(DAPMessage request)
         {
-            var args = request.Arguments;
-            bool terminateDebuggee = true; // default to terminate
-            if (args.ValueKind == System.Text.Json.JsonValueKind.Object &&
-                args.TryGetProperty("terminateDebuggee", out var termProp))
+            try
             {
-                terminateDebuggee = termProp.GetBoolean();
-            }
-
-            if (_process != null)
-            {
-                if (terminateDebuggee)
+                var args = request.Arguments;
+                bool terminateDebuggee = true; // default to terminate
+                if (args.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                    args.TryGetProperty("terminateDebuggee", out var termProp))
                 {
-                    // Terminate the debuggee process (kills it)
-                    _process.Terminate();
+                    terminateDebuggee = termProp.GetBoolean();
                 }
-                else
-                {
-                    // Detach and let the process continue running
-                    _process.Detach();
-                }
-                _process.Dispose();
-                _process = null;
-            }
 
-            _sourceMapper?.Dispose();
-            _sourceMapper = null;
+                if (_process != null)
+                {
+                    try
+                    {
+                        if (terminateDebuggee)
+                            _process.Terminate();
+                        else
+                            _process.Detach();
+                    }
+                    catch { }
+                    try { _process.Dispose(); } catch { }
+                    _process = null;
+                }
+
+                try { _sourceMapper?.Dispose(); } catch { }
+                _sourceMapper = null;
+                _breakpointManager?.ClearAll();
+            }
+            catch { }
             return CreateResponse(request, true);
         }
 
@@ -1318,6 +1321,8 @@ namespace BasicLang.Debugger
                         Marshal.Release(bpPtr);
                     }
                     catch { }
+                    // Clear the pointer so it's not released again during cleanup
+                    bp.ClrBreakpoint = null;
                 }
             }
         }
