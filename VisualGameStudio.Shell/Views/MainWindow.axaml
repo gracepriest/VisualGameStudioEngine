@@ -44,7 +44,7 @@
     <KeyBinding Gesture="Ctrl+Shift+M" Command="{Binding ExtractMethodCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+I" Command="{Binding InlineMethodCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+V" Command="{Binding IntroduceVariableCommand}"/>
-    <KeyBinding Gesture="Ctrl+Shift+S" Command="{Binding ChangeSignatureCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+OemMinus" Command="{Binding ChangeSignatureCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+E" Command="{Binding EncapsulateFieldCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+T" Command="{Binding MoveTypeToFileCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+X" Command="{Binding ExtractInterfaceCommand}"/>
@@ -110,7 +110,7 @@
         <MenuItem Header="_Extract Method..." Command="{Binding ExtractMethodCommand}" InputGesture="Ctrl+Shift+M"/>
         <MenuItem Header="_Inline Method..." Command="{Binding InlineMethodCommand}" InputGesture="Ctrl+Shift+I"/>
         <MenuItem Header="Introduce _Variable..." Command="{Binding IntroduceVariableCommand}" InputGesture="Ctrl+Shift+V"/>
-        <MenuItem Header="Change _Signature..." Command="{Binding ChangeSignatureCommand}" InputGesture="Ctrl+Shift+S"/>
+        <MenuItem Header="Change _Signature..." Command="{Binding ChangeSignatureCommand}" InputGesture="Ctrl+Shift+-"/>
         <MenuItem Header="_Encapsulate Field..." Command="{Binding EncapsulateFieldCommand}" InputGesture="Ctrl+Shift+E"/>
         <MenuItem Header="_Move Type to File..." Command="{Binding MoveTypeToFileCommand}" InputGesture="Ctrl+Shift+T"/>
         <MenuItem Header="E_xtract Interface..." Command="{Binding ExtractInterfaceCommand}" InputGesture="Ctrl+Shift+X"/>

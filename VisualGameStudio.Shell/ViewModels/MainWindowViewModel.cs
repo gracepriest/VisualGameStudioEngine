@@ -1944,6 +1944,12 @@ public partial class MainWindowViewModel : ViewModelBase
         _dockFactory.ActivateTool("FindInFiles");
     }
 
+    [RelayCommand]
+    private void ShowTerminal()
+    {
+        _dockFactory.ActivateTool("Terminal");
+    }
+
     /// <summary>
     /// Toggles Zen mode (distraction-free editing).
     /// Hides menu bar, toolbar, status bar, and side/bottom panels.

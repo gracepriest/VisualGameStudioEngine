@@ -119,7 +119,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("Edit", "Extract Method...", "Ctrl+Shift+M", () => vm.ExtractMethodCommand.Execute(null));
         AddCommand("Edit", "Inline Method...", "Ctrl+Shift+I", () => vm.InlineMethodCommand.Execute(null));
         AddCommand("Edit", "Introduce Variable...", "Ctrl+Shift+V", () => vm.IntroduceVariableCommand.Execute(null));
-        AddCommand("Edit", "Change Signature...", null, () => vm.ChangeSignatureCommand.Execute(null));
+        AddCommand("Edit", "Change Signature...", "Ctrl+Shift+-", () => vm.ChangeSignatureCommand.Execute(null));
         AddCommand("Edit", "Encapsulate Field...", null, () => vm.EncapsulateFieldCommand.Execute(null));
         AddCommand("Edit", "Extract Interface...", null, () => vm.ExtractInterfaceCommand.Execute(null));
         AddCommand("Edit", "Generate Constructor...", null, () => vm.GenerateConstructorCommand.Execute(null));
@@ -129,6 +129,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("View", "Solution Explorer", null, () => vm.ShowSolutionExplorerCommand.Execute(null));
         AddCommand("View", "Output", "Ctrl+Alt+O", () => vm.ShowOutputCommand.Execute(null));
         AddCommand("View", "Error List", "Ctrl+Alt+E", () => vm.ShowErrorListCommand.Execute(null));
+        AddCommand("View", "Terminal", null, () => vm.ShowTerminalCommand.Execute(null));
         AddCommand("View", "Find Results", null, () => vm.ShowFindResultsCommand.Execute(null));
         AddCommand("View", "Bookmarks", null, () => vm.ShowBookmarksCommand.Execute(null));
         AddCommand("View", "Toggle Column Selection Mode", "Alt+Shift+Insert", () => vm.ToggleColumnSelectionModeCommand.Execute(null));
@@ -142,7 +143,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         // Debug commands
         AddCommand("Debug", "Start Debugging", "F5", () => vm.StartDebuggingCommand.Execute(null));
         AddCommand("Debug", "Start Without Debugging", "Ctrl+F5", () => vm.StartWithoutDebuggingCommand.Execute(null));
-        AddCommand("Debug", "Run in External Console", "Ctrl+Shift+F5", () => vm.RunInExternalConsoleCommand.Execute(null));
+        AddCommand("Debug", "Run in External Console", null, () => vm.RunInExternalConsoleCommand.Execute(null));
         AddCommand("Debug", "Stop Debugging", "Shift+F5", () => vm.StopDebuggingCommand.Execute(null));
         AddCommand("Debug", "Restart Debugging", "Ctrl+Shift+F5", () => vm.RestartDebuggingCommand.Execute(null));
         AddCommand("Debug", "Continue", "F5", () => vm.ContinueCommand.Execute(null));
