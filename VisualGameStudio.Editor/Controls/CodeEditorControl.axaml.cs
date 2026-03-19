@@ -55,7 +55,6 @@ public partial class CodeEditorControl : UserControl
     private IReadOnlyList<DocumentLinkInfo>? _documentLinks;
     private InlineFindReplaceControl? _inlineFindReplace;
     private StickyScrollControl? _stickyScroll;
-    private PeekViewControl? _peekView;
     private bool _autoCloseBrackets = true;
     private BasicLangIndentationStrategy? _indentationStrategy;
     private ILanguageService? _languageService;
@@ -326,7 +325,6 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler? EditorReady;
     public event EventHandler? GoToDefinitionRequested;
     public event EventHandler? PeekDefinitionRequested;
-    public event EventHandler<PeekNavigateEventArgs>? PeekOpenInEditorRequested;
     public event EventHandler? FindAllReferencesRequested;
     public event EventHandler? RenameSymbolRequested;
     public event EventHandler? CodeActionsRequested;
@@ -374,71 +372,6 @@ public partial class CodeEditorControl : UserControl
         _documentFilePath = filePath;
     }
 
-    /// <summary>
-    /// Shows the inline peek view with a single definition.
-    /// </summary>
-    public async Task ShowPeekDefinitionAsync(string filePath, int line, int column)
-    {
-        if (_peekView != null)
-        {
-            _peekView.ApplyFontSettings(EditorFontSize, EditorFontFamily);
-            await _peekView.ShowAsync(filePath, line, column);
-            _peekView.Focus();
-        }
-    }
-
-    /// <summary>
-    /// Shows the inline peek view with multiple definition locations.
-    /// </summary>
-    public async Task ShowPeekDefinitionsAsync(List<PeekLocation> locations)
-    {
-        if (_peekView != null)
-        {
-            _peekView.ApplyFontSettings(EditorFontSize, EditorFontFamily);
-            await _peekView.ShowMultipleAsync(locations, PeekMode.Definition);
-            _peekView.Focus();
-        }
-    }
-
-    /// <summary>
-    /// Shows the inline peek view with reference locations.
-    /// </summary>
-    public async Task ShowPeekReferencesAsync(List<PeekLocation> locations)
-    {
-        if (_peekView != null)
-        {
-            _peekView.ApplyFontSettings(EditorFontSize, EditorFontFamily);
-            await _peekView.ShowMultipleAsync(locations, PeekMode.References);
-            _peekView.Focus();
-        }
-    }
-
-    /// <summary>
-    /// Shows the inline peek view with pre-loaded source code.
-    /// </summary>
-    public void ShowPeekWithCode(string filePath, int line, int column, string sourceCode)
-    {
-        if (_peekView != null)
-        {
-            _peekView.ApplyFontSettings(EditorFontSize, EditorFontFamily);
-            _peekView.ShowWithCode(filePath, line, column, sourceCode);
-            _peekView.Focus();
-        }
-    }
-
-    /// <summary>
-    /// Closes the inline peek view if it is visible.
-    /// </summary>
-    public void ClosePeekView()
-    {
-        _peekView?.Close();
-    }
-
-    /// <summary>
-    /// Returns true if the inline peek view is currently showing.
-    /// </summary>
-    public bool IsPeekViewVisible => _peekView?.IsPeekVisible ?? false;
-
     public CodeEditorControl()
     {
         InitializeComponent();
@@ -470,25 +403,6 @@ public partial class CodeEditorControl : UserControl
             _inlineFindReplace.CloseRequested += (_, _) =>
             {
                 _textEditor?.Focus();
-            };
-        }
-
-        // Initialize inline peek definition/references view
-        _peekView = this.FindControl<PeekViewControl>("PeekView");
-        if (_peekView != null)
-        {
-            _peekView.CloseRequested += (_, _) =>
-            {
-                _textEditor?.Focus();
-            };
-            _peekView.OpenInEditorRequested += (_, args) =>
-            {
-                PeekOpenInEditorRequested?.Invoke(this, args);
-                _textEditor?.Focus();
-            };
-            _peekView.FileNavigationRequested += (_, args) =>
-            {
-                PeekOpenInEditorRequested?.Invoke(this, args);
             };
         }
 
