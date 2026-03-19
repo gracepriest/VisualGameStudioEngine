@@ -19,6 +19,7 @@ public static class ServiceConfiguration
         services.AddSingleton<IEventAggregator, EventAggregator>();
 
         // Project System Services
+        services.AddSingleton<ISettingsService, SettingsService>();
         services.AddSingleton<IFileService, FileService>();
         services.AddSingleton<IOutputService, OutputService>();
         services.AddSingleton<IProjectService, ProjectService>();
@@ -34,7 +35,9 @@ public static class ServiceConfiguration
         services.AddSingleton<IAutoSaveService, AutoSaveService>();
         services.AddSingleton<IHotExitService, HotExitService>();
         services.AddSingleton<IFileWatcherService, FileWatcherService>();
-        services.AddSingleton<RecentProjectsService>();
+        services.AddSingleton<IRecentProjectsService, RecentProjectsService>();
+        services.AddSingleton<IExtensionService, ExtensionService>();
+        services.AddSingleton<FileSearchService>();
 
         // Shell Services
         services.AddSingleton<IDialogService, DialogService>();
