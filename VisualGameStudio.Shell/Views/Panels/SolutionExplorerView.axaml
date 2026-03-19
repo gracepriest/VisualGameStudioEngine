@@ -16,13 +16,15 @@
             <Button Classes="toolbarButton"
                     ToolTip.Tip="Add New File"
                     Command="{Binding AddNewFileCommand}"
-                    Width="24" Height="24">
+                    Width="24" Height="24"
+                    AutomationProperties.Name="Add New File">
               <TextBlock Text="+" FontSize="14" FontWeight="Bold"/>
             </Button>
             <Button Classes="toolbarButton"
                     ToolTip.Tip="Add New Folder"
                     Command="{Binding AddNewFolderCommand}"
-                    Width="24" Height="24">
+                    Width="24" Height="24"
+                    AutomationProperties.Name="Add New Folder">
               <TextBlock Text="📁" FontSize="12"/>
             </Button>
           </StackPanel>
@@ -33,7 +35,8 @@
                 ItemsSource="{Binding Nodes}"
                 SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
                 Background="Transparent"
-                DoubleTapped="OnTreeViewDoubleTapped">
+                DoubleTapped="OnTreeViewDoubleTapped"
+                AutomationProperties.Name="Solution Explorer Tree">
 
         <TreeView.ContextMenu>
           <ContextMenu>

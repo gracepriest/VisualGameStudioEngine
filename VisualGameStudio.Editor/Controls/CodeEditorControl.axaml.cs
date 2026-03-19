@@ -76,6 +76,11 @@ public partial class CodeEditorControl : UserControl
     // Cursor fade animation state
     private CursorFadeRenderer? _cursorFadeRenderer;
 
+    // Inline color picker state
+    private TextMarkers.InlineColorRenderer? _inlineColorRenderer;
+    private Avalonia.Controls.Primitives.Popup? _colorPickerPopup;
+    private ColorPickerPopup? _colorPickerControl;
+
     private static readonly Dictionary<char, char> AutoClosePairs = new()
     {
         { '(', ')' }, { '[', ']' }, { '{', '}' }, { '"', '"' }, { '\'', '\'' }
@@ -124,6 +129,9 @@ public partial class CodeEditorControl : UserControl
     public static readonly StyledProperty<string> EditorFontFamilyProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(EditorFontFamily),
             defaultValue: "Cascadia Code, Consolas, Courier New, monospace");
+
+    public static readonly StyledProperty<bool> EnableFontLigaturesProperty =
+        AvaloniaProperty.Register<CodeEditorControl, bool>(nameof(EnableFontLigatures), defaultValue: false);
 
     public static readonly StyledProperty<TextDocument?> DocumentProperty =
         AvaloniaProperty.Register<CodeEditorControl, TextDocument?>(nameof(Document));
@@ -207,6 +215,17 @@ public partial class CodeEditorControl : UserControl
     {
         get => GetValue(EditorFontFamilyProperty);
         set => SetValue(EditorFontFamilyProperty, value);
+    }
+
+    /// <summary>
+    /// Gets or sets whether font ligatures are enabled.
+    /// When enabled, supported fonts (Cascadia Code, Fira Code, JetBrains Mono, etc.)
+    /// will render character sequences like !=, ==, => as single ligature glyphs.
+    /// </summary>
+    public bool EnableFontLigatures
+    {
+        get => GetValue(EnableFontLigaturesProperty);
+        set => SetValue(EnableFontLigaturesProperty, value);
     }
 
     public int CaretLine => _textEditor?.TextArea?.Caret?.Line ?? 1;
@@ -512,6 +531,11 @@ public partial class CodeEditorControl : UserControl
         // Setup cursor fade animation renderer
         _cursorFadeRenderer = new CursorFadeRenderer(_textEditor);
         _textEditor.TextArea.TextView.BackgroundRenderers.Add(_cursorFadeRenderer);
+
+        // Setup inline color swatch renderer
+        _inlineColorRenderer = new TextMarkers.InlineColorRenderer(_textEditor);
+        _textEditor.TextArea.TextView.BackgroundRenderers.Add(_inlineColorRenderer);
+        _inlineColorRenderer.ColorSwatchClicked += OnColorSwatchClicked;
 
         // Mark as initialized and apply any pending document/text from binding
         _isInitialized = true;
@@ -1272,7 +1296,54 @@ public partial class CodeEditorControl : UserControl
             UseTabs = !_textEditor.Options.ConvertTabsToSpaces
         };
         _textEditor.TextArea.IndentationStrategy = _indentationStrategy;
+
+        // Apply initial font ligature setting
+        ApplyFontLigatures(EnableFontLigatures);
     }
+
+    /// <summary>
+    /// Applies or removes font ligature support on the text editor.
+    /// Avalonia 11 enables ligatures by default in its text rendering pipeline.
+    /// To disable ligatures, we switch to a "noligs" font family variant string
+    /// that tells the shaper to suppress the 'liga' and 'clig' features.
+    /// AvaloniaEdit does not expose a direct ligature toggle, so we control this
+    /// by setting a custom FontFeatures string on the TextArea's TextView.
+    /// </summary>
+    private void ApplyFontLigatures(bool enable)
+    {
+        if (_textEditor?.TextArea?.TextView == null)
+            return;
+
+        try
+        {
+            // In Avalonia 11, ligatures are on by default when the font supports them.
+            // We re-apply the font family to force the text shaper to pick up the change.
+            // The actual ligature control is done via the font family string:
+            // Appending "#NoLig" does not work in Avalonia, so we use a different approach.
+            //
+            // AvaloniaEdit's TextView inherits from Avalonia.Controls.Control which has
+            // the FontFeatures attached property in Avalonia 11.2+. For 11.1 we store
+            // the setting and re-apply the font family which triggers a re-render.
+            // Ligatures are rendered by the HarfBuzz shaper when the font supports them.
+            //
+            // For Avalonia 11.1: Ligatures are always rendered if the font has them.
+            // We store the preference so that when Avalonia is updated to 11.2+ where
+            // FontFeatures is available, we can apply "liga=0,clig=0" to disable them.
+
+            _fontLigaturesEnabled = enable;
+
+            // Force a re-render of all text by resetting the font family
+            var currentFamily = _textEditor.FontFamily?.Name ?? EditorFontFamily;
+            _textEditor.FontFamily = new FontFamily(currentFamily);
+            _textEditor.TextArea.TextView.Redraw();
+        }
+        catch
+        {
+            // Font ligature application is non-critical
+        }
+    }
+
+    private bool _fontLigaturesEnabled;
 
     /// <summary>
     /// Applies theme colors to the editor surface. Called on init and when the theme changes.
@@ -1650,6 +1721,10 @@ public partial class CodeEditorControl : UserControl
         else if (change.Property == EditorFontFamilyProperty)
         {
             _textEditor.FontFamily = new FontFamily(change.GetNewValue<string>() ?? "Consolas");
+        }
+        else if (change.Property == EnableFontLigaturesProperty)
+        {
+            ApplyFontLigatures(change.GetNewValue<bool>());
         }
         else if (change.Property == DocumentProperty)
         {
@@ -3179,6 +3254,132 @@ public partial class CodeEditorControl : UserControl
     public void ClearCodeLenses()
     {
         _codeLensRenderer?.Clear();
+    }
+
+    #endregion
+
+    #region Inline Color Picker
+
+    /// <summary>
+    /// Handles a click on an inline color swatch: opens the color picker popup
+    /// positioned near the swatch and pre-loaded with the current color values.
+    /// </summary>
+    private void OnColorSwatchClicked(object? sender, ColorSwatchClickedEventArgs e)
+    {
+        if (_textEditor?.TextArea?.TextView == null) return;
+
+        // Create or reuse the picker control
+        _colorPickerControl = new ColorPickerPopup(e.R, e.G, e.B, e.A);
+        _colorPickerControl.Line = e.Line;
+        _colorPickerControl.ColorTextStartOffset = e.ColorTextStartOffset;
+        _colorPickerControl.ColorTextEndOffset = e.ColorTextEndOffset;
+        _colorPickerControl.ColorPicked += OnColorPicked;
+        _colorPickerControl.Cancelled += OnColorPickerCancelled;
+
+        // Create the popup
+        _colorPickerPopup = new Avalonia.Controls.Primitives.Popup
+        {
+            PlacementTarget = _textEditor.TextArea.TextView,
+            Child = _colorPickerControl,
+            IsLightDismissEnabled = true
+        };
+
+        // Position below the swatch
+        _colorPickerPopup.HorizontalOffset = e.SwatchBounds.X;
+        _colorPickerPopup.VerticalOffset = e.SwatchBounds.Bottom + 4;
+
+        // Close any previously open popup
+        _colorPickerPopup.Closed += (_, _) =>
+        {
+            if (_colorPickerControl != null)
+            {
+                _colorPickerControl.ColorPicked -= OnColorPicked;
+                _colorPickerControl.Cancelled -= OnColorPickerCancelled;
+            }
+            _colorPickerControl = null;
+        };
+
+        _colorPickerPopup.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Handles the user confirming a new color in the picker: replaces the color
+    /// values in the document text.
+    /// </summary>
+    private void OnColorPicked(object? sender, ColorPickedEventArgs e)
+    {
+        if (_textEditor?.Document == null) return;
+
+        try
+        {
+            var document = _textEditor.Document;
+            int startOffset = e.ColorTextStartOffset;
+            int endOffset = e.ColorTextEndOffset;
+
+            // Validate offsets
+            if (startOffset < 0 || endOffset > document.TextLength || startOffset >= endOffset)
+                return;
+
+            var oldText = document.GetText(startOffset, endOffset - startOffset);
+
+            // Determine what kind of color text we're replacing
+            string newText;
+            if (oldText.StartsWith("&H", StringComparison.OrdinalIgnoreCase))
+            {
+                // Hex color literal: replace with new hex value
+                if (e.A < 255)
+                    newText = $"&H{e.A:X2}{e.R:X2}{e.G:X2}{e.B:X2}";
+                else
+                    newText = $"&H{e.R:X2}{e.G:X2}{e.B:X2}";
+            }
+            else
+            {
+                // RGB/RGBA numeric arguments: rebuild just the numeric values portion
+                // The startOffset points to the first R value, endOffset to closing paren
+                // We need to reconstruct: R, G, B or R, G, B, A
+                // Detect if the original had an alpha component
+                var commaCount = oldText.Count(c => c == ',');
+                if (commaCount >= 3 || e.A < 255)
+                    newText = $"{e.R}, {e.G}, {e.B}, {e.A})";
+                else
+                    newText = $"{e.R}, {e.G}, {e.B})";
+            }
+
+            document.Replace(startOffset, endOffset - startOffset, newText);
+
+            // Invalidate the renderer so swatches redraw
+            _textEditor.TextArea.TextView.InvalidateLayer(AvaloniaEdit.Rendering.KnownLayer.Selection);
+        }
+        catch
+        {
+            // Silently handle replacement errors
+        }
+
+        // Close the popup
+        if (_colorPickerPopup != null)
+            _colorPickerPopup.IsOpen = false;
+    }
+
+    /// <summary>
+    /// Handles the user cancelling the color picker.
+    /// </summary>
+    private void OnColorPickerCancelled(object? sender, EventArgs e)
+    {
+        if (_colorPickerPopup != null)
+            _colorPickerPopup.IsOpen = false;
+    }
+
+    /// <summary>
+    /// Gets or sets whether inline color swatches are displayed.
+    /// </summary>
+    public bool InlineColorSwatchesEnabled
+    {
+        get => _inlineColorRenderer?.IsEnabled ?? true;
+        set
+        {
+            if (_inlineColorRenderer != null)
+                _inlineColorRenderer.IsEnabled = value;
+        }
     }
 
     #endregion

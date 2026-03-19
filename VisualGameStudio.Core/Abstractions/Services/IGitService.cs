@@ -166,6 +166,11 @@ public interface IGitService
     Task<IReadOnlyList<GitCommitInfo>> GetFileHistoryAsync(string filePath, int maxCount = 50);
 
     /// <summary>
+    /// Gets the diff for a file at a specific commit (shows what changed in that commit)
+    /// </summary>
+    Task<string> GetFileDiffAtCommitAsync(string filePath, string commitHash);
+
+    /// <summary>
     /// Fetches from remote
     /// </summary>
     Task<bool> FetchAsync();

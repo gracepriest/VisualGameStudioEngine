@@ -177,6 +177,96 @@ public class DebugService : IDebugService
         }
     }
 
+    public async Task<bool> AttachToProcessAsync(int processId, Dictionary<string, IEnumerable<SourceBreakpoint>>? breakpoints = null, CancellationToken cancellationToken = default)
+    {
+        if (IsDebugging) return false;
+
+        try
+        {
+            SetState(DebugState.Initializing);
+            _cts = new CancellationTokenSource();
+
+            // Start the debug adapter process
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"\"{_compilerPath}\" --debug-adapter",
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardInputEncoding = Encoding.UTF8,
+                StandardOutputEncoding = Encoding.UTF8
+            };
+
+            _debugProcess = new Process { StartInfo = startInfo };
+            _debugProcess.ErrorDataReceived += (s, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    _outputService.WriteLine($"[DAP Error] {e.Data}", OutputCategory.Debug);
+                }
+            };
+
+            _debugProcess.Start();
+            _debugProcess.BeginErrorReadLine();
+
+            _writer = new StreamWriter(_debugProcess.StandardInput.BaseStream, new UTF8Encoding(false)) { AutoFlush = false };
+            _reader = new StreamReader(_debugProcess.StandardOutput.BaseStream, Encoding.UTF8);
+
+            _readTask = Task.Run(() => ReadMessagesAsync(_cts.Token), _cts.Token);
+
+            // Initialize
+            await SendRequestAsync("initialize", new
+            {
+                clientID = "visualgamestudio",
+                clientName = "Visual Game Studio",
+                adapterID = "basiclang",
+                pathFormat = "path",
+                linesStartAt1 = true,
+                columnsStartAt1 = true,
+                supportsVariableType = true,
+                supportsVariablePaging = false,
+                supportsRunInTerminalRequest = false
+            }, cancellationToken);
+
+            // Attach (instead of launch)
+            await SendRequestAsync("attach", new
+            {
+                processId = processId
+            }, cancellationToken);
+
+            // Set breakpoints AFTER attach but BEFORE configurationDone
+            if (breakpoints != null)
+            {
+                foreach (var kvp in breakpoints)
+                {
+                    var filePath = kvp.Key;
+                    var bps = kvp.Value.ToList();
+                    if (bps.Any())
+                    {
+                        _outputService.WriteLine($"Setting {bps.Count} breakpoint(s) in {Path.GetFileName(filePath)}", OutputCategory.Debug);
+                        await SetBreakpointsAsync(filePath, bps);
+                    }
+                }
+            }
+
+            // Configuration done
+            await SendRequestAsync("configurationDone", new { }, cancellationToken);
+
+            SetState(DebugState.Running);
+            _outputService.WriteLine($"Attached to process {processId}", OutputCategory.Debug);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteError($"Failed to attach to process: {ex.Message}", OutputCategory.Debug);
+            await StopDebuggingAsync();
+            return false;
+        }
+    }
+
     public async Task<bool> StartWithoutDebuggingAsync(DebugConfiguration config, CancellationToken cancellationToken = default)
     {
         if (IsDebugging) return false;

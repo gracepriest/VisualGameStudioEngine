@@ -12,7 +12,8 @@
       <Border DockPanel.Dock="Top" Classes="panelHeader">
         <Grid ColumnDefinitions="*,Auto">
           <TextBlock Grid.Column="0" Classes="panelTitle" Text="Call Stack"/>
-          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RefreshStackTraceCommand}" ToolTip.Tip="Refresh">
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RefreshStackTraceCommand}" ToolTip.Tip="Refresh"
+                  AutomationProperties.Name="Refresh Call Stack">
             <TextBlock Text="↻" FontSize="14"/>
           </Button>
         </Grid>
@@ -21,7 +22,8 @@
       <ListBox ItemsSource="{Binding StackFrames}"
                SelectedItem="{Binding SelectedFrame}"
                Background="Transparent"
-               Padding="4">
+               Padding="4"
+               AutomationProperties.Name="Call Stack Frames">
         <ListBox.ItemTemplate>
           <DataTemplate>
             <TextBlock Text="{Binding DisplayText}"

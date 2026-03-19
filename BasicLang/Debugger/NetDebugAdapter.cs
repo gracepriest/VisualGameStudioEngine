@@ -100,6 +100,7 @@ namespace BasicLang.Debugger
                 {
                     "initialize" => HandleInitialize(message),
                     "launch" => await HandleLaunchAsync(message),
+                    "attach" => await HandleAttachAsync(message),
                     "setBreakpoints" => HandleSetBreakpoints(message),
                     "setFunctionBreakpoints" => HandleSetFunctionBreakpoints(message),
                     "configurationDone" => HandleConfigurationDone(message),
@@ -200,6 +201,12 @@ namespace BasicLang.Debugger
                 launchArgs = argList.ToArray();
             }
 
+            // If processId is provided instead of program, delegate to attach
+            if (string.IsNullOrEmpty(exePath) && args.TryGetProperty("processId", out var pidProp))
+            {
+                return await HandleAttachAsync(request);
+            }
+
             if (string.IsNullOrEmpty(exePath))
             {
                 var response = CreateResponse(request, false);
@@ -247,6 +254,84 @@ namespace BasicLang.Debugger
                 });
                 var response = CreateResponse(request, false);
                 var errorMsg = _process?.LastError ?? "Failed to launch process or attach debugger.";
+                response.Body = new Dictionary<string, object>
+                {
+                    ["error"] = new Dictionary<string, object>
+                    {
+                        ["id"] = 2,
+                        ["format"] = errorMsg
+                    }
+                };
+                return response;
+            }
+
+            // Send initialized event — tells IDE it can send setBreakpoints
+            await SendEventAsync("initialized", null);
+
+            return CreateResponse(request, true);
+        }
+
+        private async Task<DAPResponse> HandleAttachAsync(DAPMessage request)
+        {
+            var args = request.Arguments;
+
+            // Extract attach parameters
+            int processId = 0;
+            if (args.TryGetProperty("processId", out var pidProp))
+            {
+                processId = pidProp.GetInt32();
+            }
+
+            if (processId <= 0)
+            {
+                var response = CreateResponse(request, false);
+                response.Body = new Dictionary<string, object>
+                {
+                    ["error"] = new Dictionary<string, object>
+                    {
+                        ["id"] = 1,
+                        ["format"] = "No processId specified in attach configuration"
+                    }
+                };
+                return response;
+            }
+
+            // Initialize source mapper (try to find PDB from the process main module)
+            _sourceMapper = new SourceMapper();
+            try
+            {
+                var targetProcess = System.Diagnostics.Process.GetProcessById(processId);
+                var mainModule = targetProcess.MainModule?.FileName;
+                if (mainModule != null)
+                {
+                    var pdbPath = Path.ChangeExtension(mainModule, ".pdb");
+                    if (File.Exists(pdbPath))
+                        _sourceMapper.LoadPdb(pdbPath);
+                }
+            }
+            catch { /* best-effort PDB loading */ }
+
+            // Create process and wire events
+            _process = new NetDebugProcess();
+            _process.BreakpointHit += OnBreakpointHit;
+            _process.StepCompleted += OnStepCompleted;
+            _process.ExceptionThrown += OnExceptionThrown;
+            _process.ModuleLoaded += OnModuleLoaded;
+            _process.ProcessExited += OnProcessExited;
+            _process.ThreadCreated += OnThreadCreated;
+            _process.ThreadExited += OnThreadExited;
+
+            // Attach ICorDebug to the running process
+            var attached = await _process.AttachAsync(processId);
+            if (!attached)
+            {
+                await SendEventAsync("output", new Dictionary<string, object>
+                {
+                    ["category"] = "stderr",
+                    ["output"] = $"Failed to attach debugger to process {processId}\nReason: {_process?.LastError ?? "Unknown error"}\n"
+                });
+                var response = CreateResponse(request, false);
+                var errorMsg = _process?.LastError ?? "Failed to attach to process.";
                 response.Body = new Dictionary<string, object>
                 {
                     ["error"] = new Dictionary<string, object>

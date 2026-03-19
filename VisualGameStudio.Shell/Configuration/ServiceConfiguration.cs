@@ -25,6 +25,7 @@ public static class ServiceConfiguration
         services.AddSingleton<IBuildService, BuildService>();
         services.AddSingleton<ILanguageService, LanguageService>();
         services.AddSingleton<IDebugService, DebugService>();
+        services.AddSingleton<ILaunchConfigurationService, LaunchConfigurationService>();
         services.AddSingleton<IGitService, GitService>();
         services.AddSingleton<IBookmarkService, BookmarkService>();
         services.AddSingleton<IRefactoringService, RefactoringService>();

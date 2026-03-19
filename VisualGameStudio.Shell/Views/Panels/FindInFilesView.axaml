@@ -23,12 +23,14 @@
                      Text="{Binding SearchText}"
                      Watermark="Search..."
                      Margin="0,0,4,0"
-                     KeyDown="OnSearchKeyDown"/>
+                     KeyDown="OnSearchKeyDown"
+                     AutomationProperties.Name="Find in Files Search Text"/>
             <Button Grid.Column="1"
                     Classes="toolbarButton"
                     Command="{Binding SearchCommand}"
                     IsEnabled="{Binding !IsSearching}"
-                    Width="60">
+                    Width="60"
+                    AutomationProperties.Name="Search in Files">
               <TextBlock Text="Search" FontSize="12"/>
             </Button>
           </Grid>
@@ -37,19 +39,22 @@
             <TextBox Grid.Column="0"
                      Text="{Binding ReplaceText}"
                      Watermark="Replace with..."
-                     Margin="0,0,4,0"/>
+                     Margin="0,0,4,0"
+                     AutomationProperties.Name="Replace Text"/>
             <Button Grid.Column="1"
                     Classes="toolbarButton"
                     Command="{Binding ReplaceAllCommand}"
                     IsEnabled="{Binding !IsSearching}"
-                    Width="60">
+                    Width="60"
+                    AutomationProperties.Name="Replace All in Files">
               <TextBlock Text="Replace" FontSize="12"/>
             </Button>
           </Grid>
 
           <Grid ColumnDefinitions="Auto,*">
             <TextBlock Grid.Column="0" Text="Files:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-            <TextBox Grid.Column="1" Text="{Binding FileFilter}" Watermark="*.bas;*.bl"/>
+            <TextBox Grid.Column="1" Text="{Binding FileFilter}" Watermark="*.bas;*.bl"
+                     AutomationProperties.Name="File Filter Pattern"/>
           </Grid>
 
           <StackPanel Orientation="Horizontal" Spacing="12">
@@ -81,7 +86,8 @@
       <TreeView ItemsSource="{Binding ResultGroups}"
                 SelectedItem="{Binding SelectedResult}"
                 DoubleTapped="OnResultDoubleTapped"
-                Background="Transparent">
+                Background="Transparent"
+                AutomationProperties.Name="Search Results Tree">
         <TreeView.ItemTemplate>
           <TreeDataTemplate ItemsSource="{Binding Results}">
             <StackPanel Orientation="Horizontal">

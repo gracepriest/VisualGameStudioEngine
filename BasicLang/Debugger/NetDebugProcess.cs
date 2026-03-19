@@ -187,6 +187,95 @@ namespace BasicLang.Debugger
             }
         }
 
+        /// <summary>
+        /// Attach to an already-running .NET process by PID.
+        /// Enumerates CLR runtimes via dbgshim, then attaches ICorDebug.
+        /// </summary>
+        public async Task<bool> AttachAsync(int processId)
+        {
+            // 1. Verify dbgshim.dll is available
+            if (!DbgShim.TryLoad())
+            {
+                LastError = "dbgshim.dll not found. Install Visual Studio 2022 or copy dbgshim.dll next to BasicLang.exe.";
+                return false;
+            }
+
+            // 2. Get a handle to the target process
+            try
+            {
+                _process = Process.GetProcessById(processId);
+            }
+            catch (Exception ex)
+            {
+                LastError = $"Cannot open process {processId}: {ex.Message}";
+                return false;
+            }
+
+            // 3. Enumerate CLR runtimes loaded in the process
+            int hr = DbgShim.EnumerateCLRs(processId, out IntPtr handleArray, out IntPtr stringArray, out int count);
+            if (hr < 0)
+            {
+                LastError = $"EnumerateCLRs failed with HRESULT 0x{hr:X8}. The process may not have a .NET runtime loaded.";
+                return false;
+            }
+
+            if (count == 0)
+            {
+                DbgShim.CloseCLREnumeration(handleArray, stringArray, count);
+                LastError = "No CLR runtimes found in the target process. Is it a .NET application?";
+                return false;
+            }
+
+            try
+            {
+                // Read the first module path from the string array (array of LPWSTR)
+                IntPtr firstStringPtr = Marshal.ReadIntPtr(stringArray);
+                string modulePath = Marshal.PtrToStringUni(firstStringPtr);
+
+                // 4. Create version string from the CLR module
+                var versionBuffer = new System.Text.StringBuilder(256);
+                hr = DbgShim.CreateVersionStringFromModule(processId, modulePath, versionBuffer, versionBuffer.Capacity, out int versionLength);
+                if (hr < 0)
+                {
+                    LastError = $"CreateVersionStringFromModule failed with HRESULT 0x{hr:X8}.";
+                    return false;
+                }
+                string versionString = versionBuffer.ToString();
+
+                // 5. Create ICorDebug from the version string
+                hr = DbgShim.CreateDebuggingInterfaceFromVersion3(
+                    /* iDebuggerVersion (CorDebugVersion_4_0) */ 4,
+                    versionString,
+                    null, // no application group
+                    out object pCordb);
+                if (hr < 0 || pCordb == null)
+                {
+                    LastError = $"CreateDebuggingInterfaceFromVersion3 failed with HRESULT 0x{hr:X8}.";
+                    return false;
+                }
+
+                // 6. Initialize and attach (same pattern as OnRuntimeStartup)
+                _corDebug = (ICorDebug)pCordb;
+                _corDebug.Initialize();
+                _corDebug.SetManagedHandler(new ManagedCallbackHandler(this));
+
+                _corDebug.DebugActiveProcess((uint)processId, false, out _corDebugProcess);
+                _attached = true;
+                _attachedEvent.Set();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LastError = $"ICorDebug attach failed: {ex.Message}";
+                return false;
+            }
+            finally
+            {
+                // Always clean up the enumeration
+                DbgShim.CloseCLREnumeration(handleArray, stringArray, count);
+            }
+        }
+
         // =====================================================================
         // Process control
         // =====================================================================

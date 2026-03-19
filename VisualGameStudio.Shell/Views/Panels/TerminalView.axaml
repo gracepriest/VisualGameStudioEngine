@@ -17,27 +17,31 @@
             <Button Classes="toolbarButton"
                     Command="{Binding StartCommand}"
                     ToolTip.Tip="Start Terminal"
-                    IsVisible="{Binding !IsRunning}">
+                    IsVisible="{Binding !IsRunning}"
+                    AutomationProperties.Name="Start Terminal">
               <TextBlock Text="&#x25B6;" FontSize="12" Foreground="#89D185"/>
             </Button>
 
             <Button Classes="toolbarButton"
                     Command="{Binding StopCommand}"
                     ToolTip.Tip="Stop Terminal"
-                    IsVisible="{Binding IsRunning}">
+                    IsVisible="{Binding IsRunning}"
+                    AutomationProperties.Name="Stop Terminal">
               <TextBlock Text="&#x25A0;" FontSize="12" Foreground="#E51400"/>
             </Button>
 
             <Button Classes="toolbarButton"
                     Command="{Binding ClearCommand}"
-                    ToolTip.Tip="Clear">
+                    ToolTip.Tip="Clear"
+                    AutomationProperties.Name="Clear Terminal Output">
               <TextBlock Text="Clear" FontSize="11"/>
             </Button>
 
             <Button Classes="toolbarButton"
                     Command="{Binding SplitTerminalCommand}"
                     ToolTip.Tip="Split Terminal (Ctrl+Shift+5)"
-                    Margin="4,0,0,0">
+                    Margin="4,0,0,0"
+                    AutomationProperties.Name="Split Terminal (Ctrl+Shift+5)">
               <TextBlock Text="&#x2551;" FontSize="14" Foreground="#569CD6"
                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Button>
@@ -99,7 +103,8 @@
                         Command="{Binding CreateNewSessionCommand}"
                         ToolTip.Tip="New Terminal (Ctrl+Shift+`)"
                         Padding="4,3"
-                        MinWidth="24" MinHeight="20">
+                        MinWidth="24" MinHeight="20"
+                        AutomationProperties.Name="New Terminal (Ctrl+Shift+`)">
                   <TextBlock Text="+" FontSize="14" Foreground="#89D185"
                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Button>
@@ -210,13 +215,15 @@
                    Background="#1E1E1E"
                    BorderThickness="0"
                    IsEnabled="{Binding IsRunning}"
-                   x:Name="InputBox"/>
+                   x:Name="InputBox"
+                   AutomationProperties.Name="Terminal Input"/>
 
           <Button Grid.Column="2"
                   Classes="toolbarButton"
                   Command="{Binding SendInputCommand}"
                   IsEnabled="{Binding IsRunning}"
-                  Margin="4,0,0,0">
+                  Margin="4,0,0,0"
+                  AutomationProperties.Name="Send Terminal Input">
             <TextBlock Text="Send" FontSize="11"/>
           </Button>
         </Grid>
@@ -246,7 +253,8 @@
                                    Foreground="#CCCCCC"
                                    Padding="8"
                                    TextWrapping="NoWrap"
-                                   x:Name="OutputTextBlock"/>
+                                   x:Name="OutputTextBlock"
+                                   AutomationProperties.Name="Terminal Output"/>
             </ScrollViewer>
           </Border>
 
@@ -271,7 +279,8 @@
                        BorderThickness="1"
                        BorderBrush="#555555"
                        Watermark="Find in terminal..."
-                       Padding="4,3"/>
+                       Padding="4,3"
+                       AutomationProperties.Name="Find in Terminal"/>
               <TextBlock x:Name="SearchMatchCount"
                          Text="No results"
                          Foreground="#808080"

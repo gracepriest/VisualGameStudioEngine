@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Data.Converters;
+using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.ViewModels;
@@ -106,6 +107,9 @@ public partial class SettingsViewModel : ViewModelBase
     private string _fontFamily = "Cascadia Code";
 
     [ObservableProperty]
+    private bool _fontLigatures;
+
+    [ObservableProperty]
     private int _fontSize = 14;
 
     [ObservableProperty]
@@ -175,19 +179,9 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private ObservableCollection<KeyboardShortcut> _shortcuts = new();
 
-    // Available Fonts
+    // Available Fonts - populated from system fonts at construction
     [ObservableProperty]
-    private ObservableCollection<string> _availableFonts = new()
-    {
-        "Cascadia Code",
-        "Consolas",
-        "Fira Code",
-        "JetBrains Mono",
-        "Source Code Pro",
-        "Monaco",
-        "Menlo",
-        "Courier New"
-    };
+    private ObservableCollection<string> _availableFonts = new();
 
     // Search
     [ObservableProperty]
@@ -209,9 +203,79 @@ public partial class SettingsViewModel : ViewModelBase
 
     public SettingsViewModel()
     {
+        PopulateAvailableFonts();
         InitializeShortcuts();
         LoadSettings();
         BuildSearchableSettings();
+    }
+
+    /// <summary>
+    /// Populates the AvailableFonts collection from system-installed font families.
+    /// Prioritizes well-known monospace/programming fonts at the top, then lists all remaining
+    /// system fonts alphabetically so users can pick any installed font.
+    /// </summary>
+    private void PopulateAvailableFonts()
+    {
+        // Well-known monospace / programming fonts to prioritize at the top
+        var priorityFonts = new[]
+        {
+            "Cascadia Code", "Cascadia Mono",
+            "Consolas",
+            "Fira Code",
+            "JetBrains Mono",
+            "Source Code Pro",
+            "Hack",
+            "Inconsolata",
+            "IBM Plex Mono",
+            "Ubuntu Mono",
+            "Roboto Mono",
+            "SF Mono",
+            "Monaco",
+            "Menlo",
+            "DejaVu Sans Mono",
+            "Courier New"
+        };
+
+        var systemFontNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var fontManager = FontManager.Current;
+            foreach (var family in fontManager.SystemFonts)
+            {
+                systemFontNames.Add(family.Name);
+            }
+        }
+        catch
+        {
+            // Fallback: if FontManager is unavailable, use the hardcoded list
+        }
+
+        AvailableFonts.Clear();
+
+        // Add priority fonts that are actually installed
+        foreach (var font in priorityFonts)
+        {
+            if (systemFontNames.Contains(font))
+            {
+                AvailableFonts.Add(font);
+                systemFontNames.Remove(font);
+            }
+        }
+
+        // Add remaining system fonts alphabetically
+        foreach (var font in systemFontNames.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
+            AvailableFonts.Add(font);
+        }
+
+        // If nothing was found, add the hardcoded fallbacks
+        if (AvailableFonts.Count == 0)
+        {
+            foreach (var font in priorityFonts)
+            {
+                AvailableFonts.Add(font);
+            }
+        }
     }
 
     partial void OnSearchTextChanged(string value)
@@ -272,6 +336,7 @@ public partial class SettingsViewModel : ViewModelBase
             // Editor > Font
             MakeCombo("Font Family", "Font family used in the code editor", "Editor", nameof(FontFamily), AvailableFonts, "Cascadia Code"),
             MakeNumeric("Font Size", "Font size for the code editor (in points)", "Editor", nameof(FontSize), 8, 72, defaultValue: 14),
+            MakeBool("Font Ligatures", "Enable font ligatures for supported fonts (e.g. Cascadia Code, Fira Code, JetBrains Mono). Renders character sequences like !=, ==, => as single glyphs.", "Editor", nameof(FontLigatures), false),
 
             // Editor > Tabs
             MakeNumeric("Tab Size", "Number of spaces per tab stop", "Editor", nameof(TabSize), 1, 16, defaultValue: 4),
@@ -318,6 +383,7 @@ public partial class SettingsViewModel : ViewModelBase
 
     internal bool GetBoolSetting(string prop) => prop switch
     {
+        nameof(FontLigatures) => FontLigatures,
         nameof(ConvertTabsToSpaces) => ConvertTabsToSpaces,
         nameof(ShowLineNumbers) => ShowLineNumbers,
         nameof(HighlightCurrentLine) => HighlightCurrentLine,
@@ -339,6 +405,7 @@ public partial class SettingsViewModel : ViewModelBase
     {
         switch (prop)
         {
+            case nameof(FontLigatures): FontLigatures = value; break;
             case nameof(ConvertTabsToSpaces): ConvertTabsToSpaces = value; break;
             case nameof(ShowLineNumbers): ShowLineNumbers = value; break;
             case nameof(HighlightCurrentLine): HighlightCurrentLine = value; break;
@@ -436,6 +503,7 @@ public partial class SettingsViewModel : ViewModelBase
     private void ResetToDefaults()
     {
         FontFamily = "Cascadia Code";
+        FontLigatures = false;
         FontSize = 14;
         TabSize = 4;
         ConvertTabsToSpaces = true;
@@ -474,6 +542,7 @@ public partial class SettingsViewModel : ViewModelBase
                 if (settings != null)
                 {
                     FontFamily = settings.FontFamily ?? FontFamily;
+                    FontLigatures = settings.FontLigatures;
                     FontSize = settings.FontSize > 0 ? settings.FontSize : FontSize;
                     TabSize = settings.TabSize > 0 ? settings.TabSize : TabSize;
                     ConvertTabsToSpaces = settings.ConvertTabsToSpaces;
@@ -526,6 +595,7 @@ public partial class SettingsViewModel : ViewModelBase
             var settings = new SettingsData
             {
                 FontFamily = FontFamily,
+                FontLigatures = FontLigatures,
                 FontSize = FontSize,
                 TabSize = TabSize,
                 ConvertTabsToSpaces = ConvertTabsToSpaces,
@@ -593,6 +663,7 @@ public class KeyboardShortcut : ObservableObject
 public class SettingsData
 {
     public string? FontFamily { get; set; }
+    public bool FontLigatures { get; set; }
     public int FontSize { get; set; }
     public int TabSize { get; set; }
     public bool ConvertTabsToSpaces { get; set; } = true;

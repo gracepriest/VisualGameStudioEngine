@@ -17,6 +17,7 @@
     <KeyBinding Gesture="Ctrl+F5" Command="{Binding StartWithoutDebuggingCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+F5" Command="{Binding RestartDebuggingCommand}"/>
     <KeyBinding Gesture="Shift+F5" Command="{Binding StopDebuggingCommand}"/>
+    <KeyBinding Gesture="Ctrl+Alt+P" Command="{Binding AttachToProcessCommand}"/>
     <KeyBinding Gesture="F9" Command="{Binding ToggleBreakpointCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+F9" Command="{Binding NewFunctionBreakpointCommand}"/>
     <KeyBinding Gesture="Ctrl+F10" Command="{Binding RunToCursorCommand}"/>
@@ -168,6 +169,13 @@
         <MenuItem Header="New Ter_minal" Command="{Binding CreateNewTerminalCommand}" InputGesture="Ctrl+Shift+OemTilde"/>
         <MenuItem Header="Find _Results" Command="{Binding ShowFindResultsCommand}"/>
         <Separator/>
+        <MenuItem Header="Focus Solution E_xplorer" Command="{Binding FocusSolutionExplorerCommand}" InputGesture="Ctrl+1"/>
+        <MenuItem Header="Focus _Editor" Command="{Binding FocusEditorCommand}" InputGesture="Ctrl+2"/>
+        <MenuItem Header="Focus _Output" Command="{Binding FocusOutputCommand}" InputGesture="Ctrl+3"/>
+        <MenuItem Header="Focus Ter_minal" Command="{Binding FocusTerminalCommand}" InputGesture="Ctrl+4"/>
+        <MenuItem Header="Focus Error _List" Command="{Binding FocusErrorListCommand}" InputGesture="Ctrl+5"/>
+        <MenuItem Header="Focus _Variables" Command="{Binding FocusVariablesCommand}" InputGesture="Ctrl+0"/>
+        <Separator/>
         <MenuItem Header="Show _Whitespace" Command="{Binding ToggleWhitespaceCommand}" InputGesture="Ctrl+Shift+W">
           <MenuItem.Icon>
             <CheckBox IsChecked="{Binding ShowWhitespace}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
@@ -202,6 +210,7 @@
         <MenuItem Header="Run in _External Console" Command="{Binding RunInExternalConsoleCommand}"/>
         <MenuItem Header="_Restart Debugging" Command="{Binding RestartDebuggingCommand}" InputGesture="Ctrl+Shift+F5" IsEnabled="{Binding IsDebugging}"/>
         <MenuItem Header="_Stop Debugging" Command="{Binding StopDebuggingCommand}" InputGesture="Shift+F5"/>
+        <MenuItem Header="_Attach to Process..." Command="{Binding AttachToProcessCommand}" InputGesture="Ctrl+Alt+P"/>
         <Separator/>
         <MenuItem Header="_Continue" Command="{Binding ContinueCommand}" InputGesture="F5" IsEnabled="{Binding IsPaused}"/>
         <MenuItem Header="Step _Over" Command="{Binding StepOverCommand}" InputGesture="F10" IsEnabled="{Binding IsPaused}"/>
@@ -214,6 +223,8 @@
         <MenuItem Header="Toggle _Breakpoint" Command="{Binding ToggleBreakpointCommand}" InputGesture="F9"/>
         <MenuItem Header="New _Function Breakpoint..." Command="{Binding NewFunctionBreakpointCommand}" InputGesture="Ctrl+Shift+F9"/>
         <MenuItem Header="_Exception Settings..." Command="{Binding ShowExceptionSettingsCommand}" InputGesture="Ctrl+Alt+X"/>
+        <Separator/>
+        <MenuItem Header="Edit _Launch Configuration..." Command="{Binding EditLaunchConfigurationCommand}"/>
         <Separator/>
         <MenuItem Header="_Windows">
           <MenuItem Header="_Breakpoints" Command="{Binding ShowBreakpointsCommand}" InputGesture="Ctrl+Alt+B"/>
@@ -230,7 +241,8 @@
     </Menu>
 
     <!-- Toolbar -->
-    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="4" BorderThickness="0,0,0,1" BorderBrush="#3C3C3C" IsVisible="{Binding !IsZenMode}">
+    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="4" BorderThickness="0,0,0,1" BorderBrush="#3C3C3C" IsVisible="{Binding !IsZenMode}"
+            AutomationProperties.Name="Main Toolbar">
       <StackPanel Orientation="Horizontal" Spacing="4">
         <Button Classes="toolbarButton" Command="{Binding NewProjectCommand}" ToolTip.Tip="New Project"
                 AutomationProperties.Name="New Project">
@@ -338,7 +350,8 @@
                    MaxWidth="400"
                    TextTrimming="CharacterEllipsis"
                    IsVisible="{Binding BlameAnnotationText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                   ToolTip.Tip="Git blame for current line"/>
+                   ToolTip.Tip="Git blame for current line"
+                   AutomationProperties.Name="Git Blame Annotation"/>
 
         <!-- Spacer -->
         <Border Grid.Column="2"/>
@@ -347,7 +360,9 @@
         <Border Grid.Column="3" Padding="6,0" Cursor="Hand"
                 Background="Transparent"
                 PointerPressed="OnDiagnosticCountsClicked"
-                ToolTip.Tip="Show Error List (Ctrl+Alt+E)">
+                ToolTip.Tip="Show Error List (Ctrl+Alt+E)"
+                AutomationProperties.Name="Diagnostic Counts"
+                AutomationProperties.HelpText="Show Error List (Ctrl+Alt+E)">
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
             <!-- Error count -->
             <StackPanel Orientation="Horizontal" Spacing="3">
@@ -386,13 +401,15 @@
                    Text="{Binding CurrentConfiguration}"
                    VerticalAlignment="Center"
                    Margin="8,0"
-                   Foreground="White"/>
+                   Foreground="White"
+                   AutomationProperties.Name="Build Configuration"/>
 
         <!-- Caret position -->
         <TextBlock Grid.Column="5"
                    VerticalAlignment="Center"
                    Margin="8,0"
-                   Foreground="White">
+                   Foreground="White"
+                   AutomationProperties.Name="Caret Position">
           <TextBlock.Text>
             <MultiBinding StringFormat="Ln {0}, Col {1}">
               <Binding Path="CaretLine"/>
@@ -404,7 +421,8 @@
         <!-- Indentation indicator (clickable) -->
         <Border Grid.Column="6" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
-                PointerPressed="OnIndentationClicked">
+                PointerPressed="OnIndentationClicked"
+                AutomationProperties.Name="Indentation Settings">
           <TextBlock Text="{Binding StatusBar.Indentation}"
                      VerticalAlignment="Center"
                      Margin="4,0"
@@ -415,7 +433,8 @@
         <!-- Encoding indicator (clickable) -->
         <Border Grid.Column="7" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
-                PointerPressed="OnEncodingClicked">
+                PointerPressed="OnEncodingClicked"
+                AutomationProperties.Name="File Encoding">
           <TextBlock Text="{Binding StatusBar.Encoding}"
                      VerticalAlignment="Center"
                      Margin="4,0"
@@ -426,7 +445,8 @@
         <!-- Line ending indicator (clickable) -->
         <Border Grid.Column="8" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
-                PointerPressed="OnLineEndingClicked">
+                PointerPressed="OnLineEndingClicked"
+                AutomationProperties.Name="Line Ending Style">
           <TextBlock Text="{Binding StatusBar.LineEnding}"
                      VerticalAlignment="Center"
                      Margin="4,0"
@@ -437,7 +457,8 @@
         <!-- Language mode indicator (clickable) -->
         <Border Grid.Column="9" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
-                PointerPressed="OnLanguageModeClicked">
+                PointerPressed="OnLanguageModeClicked"
+                AutomationProperties.Name="Language Mode">
           <TextBlock Text="{Binding StatusBar.LanguageMode}"
                      VerticalAlignment="Center"
                      Margin="4,0"
@@ -448,7 +469,8 @@
         <!-- Ctrl+Shift+P hint -->
         <Border Grid.Column="10" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
-                PointerPressed="OnCommandPaletteHintClicked">
+                PointerPressed="OnCommandPaletteHintClicked"
+                AutomationProperties.Name="Open Command Palette (Ctrl+Shift+P)">
           <TextBlock Text="Ctrl+Shift+P"
                      VerticalAlignment="Center"
                      Margin="4,0"
@@ -471,6 +493,7 @@
               Margin="0,0,20,40"
               MaxWidth="400"
               Spacing="5"
-              IsHitTestVisible="False"/>
+              IsHitTestVisible="False"
+              AutomationProperties.Name="Notifications"/>
   </Grid>
 </Window>

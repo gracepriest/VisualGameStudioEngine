@@ -670,7 +670,7 @@ public class GitService : IGitService
             return commits;
 
         var relativePath = GetRelativePath(filePath);
-        var result = await RunGitCommandAsync($"log -n {maxCount} --format=\"%H|%s|%an|%aI\" -- \"{relativePath}\"");
+        var result = await RunGitCommandAsync($"log --follow -n {maxCount} --format=\"%H|%s|%an|%aI\" -- \"{relativePath}\"");
 
         if (result.ExitCode == 0)
         {
@@ -692,6 +692,23 @@ public class GitService : IGitService
         }
 
         return commits;
+    }
+
+    public async Task<string> GetFileDiffAtCommitAsync(string filePath, string commitHash)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return "";
+
+        var relativePath = GetRelativePath(filePath);
+        var result = await RunGitCommandAsync($"diff \"{commitHash}~1\" \"{commitHash}\" -- \"{relativePath}\"");
+
+        if (result.ExitCode != 0)
+        {
+            // If this is the first commit for the file, diff against empty tree
+            result = await RunGitCommandAsync($"diff --root \"{commitHash}\" -- \"{relativePath}\"");
+        }
+
+        return result.ExitCode == 0 ? result.Output : "";
     }
 
     public async Task<bool> FetchAsync()

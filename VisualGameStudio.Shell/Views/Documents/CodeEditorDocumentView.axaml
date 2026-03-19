@@ -89,6 +89,8 @@
           <MenuItem Header="Introduce Field..." Click="OnIntroduceField" InputGesture="Ctrl+Alt+F"/>
           <Separator/>
           <MenuItem Header="Toggle Comment" Click="OnToggleComment" InputGesture="Ctrl+OemQuestion"/>
+          <Separator/>
+          <MenuItem Header="Show File History" Click="OnShowFileHistory"/>
         </ContextMenu>
       </editor:CodeEditorControl.ContextMenu>
     </editor:CodeEditorControl>

@@ -14,7 +14,8 @@
       <Border Classes="panelHeader">
         <Grid ColumnDefinitions="*,Auto">
           <TextBlock Grid.Column="0" Classes="panelTitle" Text="Function Breakpoints"/>
-          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RemoveAllFunctionBreakpointsCommand}" ToolTip.Tip="Remove All">
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RemoveAllFunctionBreakpointsCommand}" ToolTip.Tip="Remove All"
+                  AutomationProperties.Name="Remove All Function Breakpoints">
             <TextBlock Text="×" FontSize="16"/>
           </Button>
         </Grid>
@@ -28,7 +29,8 @@
                    Watermark="Function name..."
                    FontFamily="Cascadia Code, Consolas, monospace"
                    FontSize="12"
-                   Margin="0,0,4,0">
+                   Margin="0,0,4,0"
+                   AutomationProperties.Name="Function Breakpoint Name">
             <TextBox.KeyBindings>
               <KeyBinding Gesture="Enter" Command="{Binding AddFunctionBreakpointCommand}"/>
             </TextBox.KeyBindings>
@@ -37,7 +39,8 @@
                   Classes="toolbarButton"
                   Command="{Binding AddFunctionBreakpointCommand}"
                   ToolTip.Tip="Add Function Breakpoint"
-                  Padding="8,4">
+                  Padding="8,4"
+                  AutomationProperties.Name="Add Function Breakpoint">
             <TextBlock Text="+" FontSize="14" FontWeight="Bold"/>
           </Button>
         </Grid>
@@ -48,7 +51,8 @@
                SelectedItem="{Binding SelectedFunctionBreakpoint}"
                Background="Transparent"
                Padding="4"
-               MaxHeight="50">
+               MaxHeight="50"
+               AutomationProperties.Name="Function Breakpoints List">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:FunctionBreakpointItem">
             <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
@@ -115,13 +119,16 @@
       <Border Classes="panelHeader" Margin="0,4,0,0">
         <Grid ColumnDefinitions="*,Auto,Auto,Auto">
           <TextBlock Grid.Column="0" Classes="panelTitle" Text="Line Breakpoints"/>
-          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding EnableAllBreakpointsCommand}" ToolTip.Tip="Enable All">
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding EnableAllBreakpointsCommand}" ToolTip.Tip="Enable All"
+                  AutomationProperties.Name="Enable All Breakpoints">
             <TextBlock Text="●" Foreground="#E51400"/>
           </Button>
-          <Button Grid.Column="2" Classes="toolbarButton" Command="{Binding DisableAllBreakpointsCommand}" ToolTip.Tip="Disable All">
+          <Button Grid.Column="2" Classes="toolbarButton" Command="{Binding DisableAllBreakpointsCommand}" ToolTip.Tip="Disable All"
+                  AutomationProperties.Name="Disable All Breakpoints">
             <TextBlock Text="○" Foreground="#858585"/>
           </Button>
-          <Button Grid.Column="3" Classes="toolbarButton" Command="{Binding RemoveAllBreakpointsCommand}" ToolTip.Tip="Remove All">
+          <Button Grid.Column="3" Classes="toolbarButton" Command="{Binding RemoveAllBreakpointsCommand}" ToolTip.Tip="Remove All"
+                  AutomationProperties.Name="Remove All Breakpoints">
             <TextBlock Text="×" FontSize="16"/>
           </Button>
         </Grid>
@@ -132,7 +139,8 @@
                SelectedItem="{Binding SelectedBreakpoint}"
                Background="Transparent"
                Padding="4"
-               MaxHeight="50">
+               MaxHeight="50"
+               AutomationProperties.Name="Line Breakpoints List">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:BreakpointItem">
             <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">

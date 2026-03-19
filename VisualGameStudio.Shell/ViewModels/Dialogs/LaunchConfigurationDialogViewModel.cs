@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using VisualGameStudio.Core.Abstractions.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Dialogs;
 
@@ -15,6 +16,8 @@ public partial class LaunchConfigurationDialogViewModel : ObservableObject
     [ObservableProperty]
     private string _newConfigurationName = "";
 
+    private string? _activeConfigurationName;
+
     public LaunchConfigurationDialogViewModel()
     {
         // Default configuration
@@ -27,6 +30,68 @@ public partial class LaunchConfigurationDialogViewModel : ObservableObject
         });
 
         SelectedConfiguration = Configurations.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Initialize from a persisted LaunchConfigurationFile.
+    /// </summary>
+    public LaunchConfigurationDialogViewModel(LaunchConfigurationFile configFile)
+    {
+        _activeConfigurationName = configFile.ActiveConfiguration;
+
+        foreach (var entry in configFile.Configurations)
+        {
+            var item = new LaunchConfigurationItem
+            {
+                Name = entry.Name,
+                WorkingDirectory = entry.Cwd,
+                CommandLineArgs = entry.Args.Length > 0 ? string.Join(" ", entry.Args) : "",
+                EnvironmentVariablesText = string.Join("\n",
+                    entry.Env.Select(kv => $"{kv.Key}={kv.Value}")),
+                EnableDebugging = entry.EnableDebugging,
+                ExternalConsole = entry.ExternalConsole,
+                StopOnEntry = entry.StopOnEntry
+            };
+            Configurations.Add(item);
+        }
+
+        if (Configurations.Count == 0)
+        {
+            Configurations.Add(new LaunchConfigurationItem
+            {
+                Name = "Debug",
+                WorkingDirectory = "${ProjectDir}",
+                EnableDebugging = true
+            });
+        }
+
+        // Select the active configuration, or the first one
+        SelectedConfiguration = Configurations.FirstOrDefault(
+            c => c.Name.Equals(_activeConfigurationName, StringComparison.OrdinalIgnoreCase))
+            ?? Configurations.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Convert the current UI state back to a LaunchConfigurationFile for persistence.
+    /// </summary>
+    public LaunchConfigurationFile ToConfigurationFile()
+    {
+        return new LaunchConfigurationFile
+        {
+            ActiveConfiguration = SelectedConfiguration?.Name ?? Configurations.FirstOrDefault()?.Name,
+            Configurations = Configurations.Select(c => new LaunchConfigurationEntry
+            {
+                Name = c.Name,
+                Cwd = c.WorkingDirectory,
+                Args = string.IsNullOrWhiteSpace(c.CommandLineArgs)
+                    ? Array.Empty<string>()
+                    : SplitCommandLineArgs(c.CommandLineArgs),
+                Env = c.GetEnvironmentVariables(),
+                EnableDebugging = c.EnableDebugging,
+                ExternalConsole = c.ExternalConsole,
+                StopOnEntry = c.StopOnEntry
+            }).ToList()
+        };
     }
 
     public List<LaunchConfiguration> GetConfigurations()
@@ -104,6 +169,43 @@ public partial class LaunchConfigurationDialogViewModel : ObservableObject
 
         Configurations.Add(newConfig);
         SelectedConfiguration = newConfig;
+    }
+
+    /// <summary>
+    /// Splits a command line string into individual arguments, respecting quoted strings.
+    /// </summary>
+    private static string[] SplitCommandLineArgs(string commandLine)
+    {
+        var args = new List<string>();
+        var current = "";
+        var inQuotes = false;
+
+        for (int i = 0; i < commandLine.Length; i++)
+        {
+            var ch = commandLine[i];
+
+            if (ch == '"')
+            {
+                inQuotes = !inQuotes;
+            }
+            else if (ch == ' ' && !inQuotes)
+            {
+                if (current.Length > 0)
+                {
+                    args.Add(current);
+                    current = "";
+                }
+            }
+            else
+            {
+                current += ch;
+            }
+        }
+
+        if (current.Length > 0)
+            args.Add(current);
+
+        return args.ToArray();
     }
 }
 

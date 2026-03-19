@@ -13,14 +13,20 @@
         <DockPanel>
           <TextBlock Text="Error List" Classes="panelTitle" DockPanel.Dock="Left"/>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-            <CheckBox IsChecked="{Binding ShowErrors}" Content="Errors" FontSize="11"/>
-            <TextBlock Text="{Binding ErrorCount}" VerticalAlignment="Center" Foreground="#F14C4C"/>
+            <CheckBox IsChecked="{Binding ShowErrors}" Content="Errors" FontSize="11"
+                      AutomationProperties.Name="Show Errors"/>
+            <TextBlock Text="{Binding ErrorCount}" VerticalAlignment="Center" Foreground="#F14C4C"
+                       AutomationProperties.Name="Error Count"/>
 
-            <CheckBox IsChecked="{Binding ShowWarnings}" Content="Warnings" FontSize="11"/>
-            <TextBlock Text="{Binding WarningCount}" VerticalAlignment="Center" Foreground="#CCA700"/>
+            <CheckBox IsChecked="{Binding ShowWarnings}" Content="Warnings" FontSize="11"
+                      AutomationProperties.Name="Show Warnings"/>
+            <TextBlock Text="{Binding WarningCount}" VerticalAlignment="Center" Foreground="#CCA700"
+                       AutomationProperties.Name="Warning Count"/>
 
-            <CheckBox IsChecked="{Binding ShowMessages}" Content="Messages" FontSize="11"/>
-            <TextBlock Text="{Binding MessageCount}" VerticalAlignment="Center" Foreground="#3794FF"/>
+            <CheckBox IsChecked="{Binding ShowMessages}" Content="Messages" FontSize="11"
+                      AutomationProperties.Name="Show Messages"/>
+            <TextBlock Text="{Binding MessageCount}" VerticalAlignment="Center" Foreground="#3794FF"
+                       AutomationProperties.Name="Message Count"/>
           </StackPanel>
         </DockPanel>
       </Border>
@@ -36,7 +42,8 @@
                 GridLinesVisibility="Horizontal"
                 BorderThickness="0"
                 Background="#1E1E1E"
-                MinHeight="100">
+                MinHeight="100"
+                AutomationProperties.Name="Error List Grid">
 
         <DataGrid.Columns>
           <DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="80"/>

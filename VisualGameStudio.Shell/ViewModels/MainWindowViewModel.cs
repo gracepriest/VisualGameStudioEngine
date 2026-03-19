@@ -56,6 +56,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IRefactoringService _refactoringService;
     private readonly IProjectTemplateService _projectTemplateService;
     private readonly IGitService _gitService;
+    private readonly ILaunchConfigurationService _launchConfigurationService;
     private readonly IEventAggregator _eventAggregator;
     private readonly DockFactory _dockFactory;
 
@@ -186,6 +187,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IRefactoringService refactoringService,
         IProjectTemplateService projectTemplateService,
         IGitService gitService,
+        ILaunchConfigurationService launchConfigurationService,
         IEventAggregator eventAggregator,
         DockFactory dockFactory,
         SolutionExplorerViewModel solutionExplorer,
@@ -217,6 +219,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _refactoringService = refactoringService;
         _projectTemplateService = projectTemplateService;
         _gitService = gitService;
+        _launchConfigurationService = launchConfigurationService;
         _eventAggregator = eventAggregator;
         _dockFactory = dockFactory;
 
@@ -1633,10 +1636,39 @@ public partial class MainWindowViewModel : ViewModelBase
         OutputPanel.SelectedCategory = OutputCategory.Debug;
         OutputPanel.AppendOutput($"\n========== Debugging: {_debugTargetName} ==========\n");
 
+        // Load the active launch configuration for args/env/cwd
+        var launchEntry = await _launchConfigurationService.GetActiveConfigurationAsync(
+            _projectService.CurrentProject.ProjectDirectory);
+
+        var projectDir = _projectService.CurrentProject.ProjectDirectory;
+        var workingDir = projectDir;
+        var arguments = Array.Empty<string>();
+        var environment = new Dictionary<string, string>();
+        var stopOnEntry = false;
+
+        if (launchEntry != null)
+        {
+            // Resolve ${ProjectDir} placeholder
+            workingDir = string.IsNullOrWhiteSpace(launchEntry.Cwd)
+                ? projectDir
+                : launchEntry.Cwd.Replace("${ProjectDir}", projectDir);
+
+            if (launchEntry.Args.Length > 0)
+            {
+                arguments = launchEntry.Args;
+            }
+
+            environment = launchEntry.Env;
+            stopOnEntry = launchEntry.StopOnEntry;
+        }
+
         var config = new DebugConfiguration
         {
-            Program = buildResult.ExecutablePath,  // Pass compiled .exe, not .bas
-            WorkingDirectory = _projectService.CurrentProject.ProjectDirectory
+            Program = buildResult.ExecutablePath,
+            WorkingDirectory = workingDir,
+            Arguments = arguments,
+            Environment = environment,
+            StopOnEntry = stopOnEntry
         };
 
         // Collect all breakpoints to send to the debug adapter
@@ -1647,6 +1679,47 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             OutputPanel.AppendOutput("Failed to start debugger.\n");
             StatusText = "Debug failed";
+        }
+    }
+
+    [RelayCommand]
+    private async Task AttachToProcessAsync()
+    {
+        if (IsDebugging)
+        {
+            await _dialogService.ShowMessageAsync("Attach to Process",
+                "A debug session is already active. Stop the current session first.",
+                DialogButtons.Ok, DialogIcon.Information);
+            return;
+        }
+
+        if (App.MainWindow == null) return;
+
+        var vm = new ViewModels.Dialogs.AttachToProcessViewModel();
+        var dialog = new Views.Dialogs.AttachToProcessDialog(vm);
+
+        var result = await dialog.ShowDialog<int?>(App.MainWindow);
+        if (result == null || result.Value <= 0)
+            return;
+
+        int pid = result.Value;
+
+        OutputPanel.SelectedCategory = OutputCategory.Debug;
+        OutputPanel.AppendOutput($"\n========== Attaching to process {pid} ==========\n");
+        StatusText = $"Attaching to process {pid}...";
+
+        // Collect all breakpoints to send to the debug adapter
+        var breakpoints = Breakpoints.GetAllBreakpoints();
+
+        var success = await _debugService.AttachToProcessAsync(pid, breakpoints);
+        if (success)
+        {
+            StatusText = $"Attached to process {pid}";
+        }
+        else
+        {
+            OutputPanel.AppendOutput($"Failed to attach to process {pid}.\n");
+            StatusText = "Attach failed";
         }
     }
 
@@ -1730,6 +1803,37 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         {
             OutputPanel.AppendOutput($"Failed to launch external console: {ex.Message}\n");
+        }
+    }
+
+    [RelayCommand]
+    private async Task EditLaunchConfigurationAsync()
+    {
+        if (_projectService.CurrentProject == null)
+        {
+            await _dialogService.ShowMessageAsync("Launch Configuration",
+                "No project is open.", DialogButtons.Ok, DialogIcon.Information);
+            return;
+        }
+
+        var projectDir = _projectService.CurrentProject.ProjectDirectory;
+        var configFile = await _launchConfigurationService.LoadAsync(projectDir);
+
+        var viewModel = new Dialogs.LaunchConfigurationDialogViewModel(configFile);
+        var dialog = new Views.Dialogs.LaunchConfigurationDialog(viewModel);
+
+        var window = Avalonia.Application.Current?.ApplicationLifetime is
+            Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+            ? desktop.MainWindow : null;
+
+        if (window == null) return;
+
+        var result = await dialog.ShowDialog<bool?>(window);
+        if (result == true)
+        {
+            var updatedFile = viewModel.ToConfigurationFile();
+            await _launchConfigurationService.SaveAsync(projectDir, updatedFile);
+            StatusText = "Launch configuration saved.";
         }
     }
 

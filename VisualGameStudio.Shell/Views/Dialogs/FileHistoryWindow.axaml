@@ -1,0 +1,168 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="750" d:DesignHeight="500"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.FileHistoryWindow"
+        Title="File History"
+        Width="750" Height="500"
+        MinWidth="500" MinHeight="300"
+        WindowStartupLocation="CenterOwner"
+        Background="#1E1E1E">
+
+  <Window.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="DataGrid">
+      <Setter Property="Background" Value="#1E1E1E"/>
+      <Setter Property="RowBackground" Value="#1E1E1E"/>
+
+      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+      <Setter Property="HorizontalGridLinesBrush" Value="#2D2D2D"/>
+      <Setter Property="HeadersVisibility" Value="Column"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="DataGridColumnHeader">
+      <Setter Property="Background" Value="#2D2D2D"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Padding" Value="8,6"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="BorderThickness" Value="0,0,1,1"/>
+      <Setter Property="SeparatorBrush" Value="#3C3C3C"/>
+    </Style>
+    <Style Selector="DataGridRow">
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="DataGridRow:pointerover /template/ Rectangle#BackgroundRectangle">
+      <Setter Property="Fill" Value="#2A2D2E"/>
+    </Style>
+    <Style Selector="DataGridRow:selected /template/ Rectangle#BackgroundRectangle">
+      <Setter Property="Fill" Value="#094771"/>
+    </Style>
+    <Style Selector="DataGridCell">
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="Button.toolbar">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="Button.toolbar:pointerover">
+      <Setter Property="Background" Value="#4C4C4C"/>
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="#0E639C"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="Padding" Value="12,4"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="Button.primary:pointerover">
+      <Setter Property="Background" Value="#1177BB"/>
+    </Style>
+  </Window.Styles>
+
+  <DockPanel>
+    <!-- Header -->
+    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12,8">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <TextBlock Text="File History" FontWeight="SemiBold" FontSize="14" Foreground="#CCCCCC"/>
+          <TextBlock x:Name="FileNameText"
+                     Foreground="#808080" FontSize="12"
+                     VerticalAlignment="Center"/>
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+          <Button x:Name="ViewDiffButton"
+                  Content="View Diff"
+                  Classes="primary"
+                  Click="OnViewDiffClicked"
+                  IsEnabled="False"/>
+          <Button Content="Close"
+                  Classes="toolbar"
+                  Click="OnCloseClicked"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Loading indicator -->
+    <Border x:Name="LoadingPanel"
+            DockPanel.Dock="Top"
+            Background="#1E1E1E"
+            Padding="16"
+            IsVisible="False">
+      <TextBlock Text="Loading file history..."
+                 Foreground="#808080"
+                 FontSize="12"
+                 HorizontalAlignment="Center"/>
+    </Border>
+
+    <!-- Error message -->
+    <Border x:Name="ErrorPanel"
+            DockPanel.Dock="Top"
+            Background="#1E1E1E"
+            Padding="16"
+            IsVisible="False">
+      <TextBlock x:Name="ErrorText"
+                 Foreground="#F48771"
+                 FontSize="12"
+                 TextWrapping="Wrap"
+                 HorizontalAlignment="Center"/>
+    </Border>
+
+    <!-- Empty state -->
+    <Border x:Name="EmptyPanel"
+            DockPanel.Dock="Top"
+            Background="#1E1E1E"
+            Padding="32"
+            IsVisible="False">
+      <StackPanel HorizontalAlignment="Center" Spacing="8">
+        <TextBlock Text="No commit history found for this file."
+                   Foreground="#808080"
+                   FontSize="13"
+                   HorizontalAlignment="Center"/>
+        <TextBlock Text="The file may not be tracked by Git."
+                   Foreground="#606060"
+                   FontSize="11"
+                   HorizontalAlignment="Center"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Commit list -->
+    <DataGrid x:Name="CommitGrid"
+              AutoGenerateColumns="False"
+              CanUserReorderColumns="False"
+              CanUserResizeColumns="True"
+              CanUserSortColumns="False"
+              IsReadOnly="True"
+              SelectionMode="Single"
+              SelectionChanged="OnCommitSelectionChanged"
+              DoubleTapped="OnCommitDoubleTapped"
+              Margin="0">
+
+      <DataGrid.Columns>
+        <DataGridTextColumn Header="Hash" Width="80"
+                            Binding="{Binding ShortHash}"
+                            Foreground="#569CD6"
+                            FontFamily="Cascadia Code, Consolas, monospace"/>
+        <DataGridTextColumn Header="Author" Width="120"
+                            Binding="{Binding Author}"
+                            Foreground="#DCDCAA"/>
+        <DataGridTextColumn Header="Date" Width="120"
+                            Binding="{Binding RelativeDate}"
+                            Foreground="#808080"/>
+        <DataGridTextColumn Header="Message" Width="*"
+                            Binding="{Binding Message}"
+                            Foreground="#D4D4D4"/>
+      </DataGrid.Columns>
+    </DataGrid>
+  </DockPanel>
+</Window>

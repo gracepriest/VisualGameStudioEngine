@@ -23,7 +23,8 @@
             <Button Classes="toolbarButton"
                     ToolTip.Tip="Refresh"
                     Command="{Binding RefreshCommand}"
-                    Width="24" Height="24">
+                    Width="24" Height="24"
+                    AutomationProperties.Name="Refresh Git Changes">
               <TextBlock Text="↻" FontSize="12"/>
             </Button>
           </StackPanel>
@@ -55,7 +56,8 @@
                       SelectedItem="{Binding CurrentBranch}"
                       MinWidth="120"
                       MaxWidth="150"
-                      FontSize="11">
+                      FontSize="11"
+                      AutomationProperties.Name="Git Branch Selector">
               <ComboBox.ItemTemplate>
                 <DataTemplate>
                   <TextBlock Text="{Binding}"/>
@@ -67,7 +69,8 @@
                     Classes="toolbarButton"
                     ToolTip.Tip="Pull"
                     Command="{Binding PullCommand}"
-                    Width="28" Height="24">
+                    Width="28" Height="24"
+                    AutomationProperties.Name="Git Pull">
               <TextBlock Text="↓" FontSize="12"/>
             </Button>
 
@@ -75,7 +78,8 @@
                     Classes="toolbarButton"
                     ToolTip.Tip="Push"
                     Command="{Binding PushCommand}"
-                    Width="28" Height="24">
+                    Width="28" Height="24"
+                    AutomationProperties.Name="Git Push">
               <TextBlock Text="↑" FontSize="12"/>
             </Button>
 
@@ -83,7 +87,8 @@
                     Classes="toolbarButton"
                     ToolTip.Tip="New Branch"
                     Command="{Binding CreateBranchCommand}"
-                    Width="28" Height="24">
+                    Width="28" Height="24"
+                    AutomationProperties.Name="Create New Branch">
               <TextBlock Text="+" FontSize="12"/>
             </Button>
           </Grid>
@@ -116,11 +121,13 @@
                      AcceptsReturn="True"
                      TextWrapping="Wrap"
                      MinHeight="60"
-                     MaxHeight="100"/>
+                     MaxHeight="100"
+                     AutomationProperties.Name="Commit Message"/>
             <Button Content="Commit"
                     Command="{Binding CommitCommand}"
                     HorizontalAlignment="Stretch"
-                    IsEnabled="{Binding StagedChanges.Count}"/>
+                    IsEnabled="{Binding StagedChanges.Count}"
+                    AutomationProperties.Name="Commit Staged Changes"/>
           </StackPanel>
         </Border>
 
@@ -142,9 +149,11 @@
                           Command="{Binding UnstageAllCommand}"
                           Classes="toolbarButton"
                           FontSize="11"
-                          IsVisible="{Binding StagedChanges.Count}"/>
+                          IsVisible="{Binding StagedChanges.Count}"
+                          AutomationProperties.Name="Unstage All Changes"/>
                 </Border>
-                <ItemsControl ItemsSource="{Binding StagedChanges}">
+                <ItemsControl ItemsSource="{Binding StagedChanges}"
+                              AutomationProperties.Name="Staged Changes List">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
                       <Border Background="#1E1E1E"
@@ -213,9 +222,11 @@
                           Command="{Binding StageAllCommand}"
                           Classes="toolbarButton"
                           FontSize="11"
-                          IsVisible="{Binding UnstagedChanges.Count}"/>
+                          IsVisible="{Binding UnstagedChanges.Count}"
+                          AutomationProperties.Name="Stage All Changes"/>
                 </Border>
-                <ItemsControl ItemsSource="{Binding UnstagedChanges}">
+                <ItemsControl ItemsSource="{Binding UnstagedChanges}"
+                              AutomationProperties.Name="Unstaged Changes List">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
                       <Border Background="#1E1E1E"

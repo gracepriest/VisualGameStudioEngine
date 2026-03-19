@@ -1,0 +1,111 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="700" d:DesignHeight="500"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.AttachToProcessDialog"
+        x:DataType="vm:AttachToProcessViewModel"
+        Title="Attach to Process"
+        Width="700" Height="500"
+        WindowStartupLocation="CenterOwner"
+        Background="#252526">
+
+  <Window.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#555555"/>
+      <Setter Property="CaretBrush" Value="#FFFFFF"/>
+    </Style>
+    <Style Selector="TextBox:focus">
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#0E639C"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="Padding" Value="12,6"/>
+      <Setter Property="CornerRadius" Value="2"/>
+    </Style>
+    <Style Selector="Button:pointerover">
+      <Setter Property="Background" Value="#1177BB"/>
+    </Style>
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="#3C3C3C"/>
+    </Style>
+    <Style Selector="Button.secondary:pointerover">
+      <Setter Property="Background" Value="#4C4C4C"/>
+    </Style>
+    <Style Selector="DataGridColumnHeader">
+      <Setter Property="Background" Value="#2D2D2D"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="DataGridRow">
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="DataGridRow:pointerover /template/ Rectangle#BackgroundRectangle">
+      <Setter Property="Fill" Value="#2A2D2E"/>
+    </Style>
+    <Style Selector="DataGridRow:selected /template/ Rectangle#BackgroundRectangle">
+      <Setter Property="Fill" Value="#094771"/>
+    </Style>
+    <Style Selector="DataGridCell">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+  </Window.Styles>
+
+  <Grid Margin="16" RowDefinitions="Auto,Auto,*,Auto">
+    <!-- Header -->
+    <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
+      <TextBlock Text="Attach to Process" FontSize="16" FontWeight="SemiBold"/>
+      <TextBlock Text="Select a running process to attach the debugger."
+                 Foreground="#888888" FontSize="12"/>
+    </StackPanel>
+
+    <!-- Filter and Refresh -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+      <TextBox Grid.Column="0"
+               Text="{Binding FilterText}"
+               Watermark="Filter processes (name or PID)..."
+               Margin="0,0,8,0"/>
+      <Button Grid.Column="1" Content="Refresh" Command="{Binding RefreshCommand}" Classes="secondary" Padding="8,4"/>
+    </Grid>
+
+    <!-- Process List -->
+    <Border Grid.Row="2" Background="#1E1E1E" BorderBrush="#3C3C3C" BorderThickness="1" CornerRadius="4">
+      <DataGrid ItemsSource="{Binding FilteredProcesses}"
+                SelectedItem="{Binding SelectedProcess}"
+                AutoGenerateColumns="False"
+                CanUserReorderColumns="False"
+                CanUserResizeColumns="True"
+                CanUserSortColumns="True"
+                IsReadOnly="True"
+                GridLinesVisibility="Horizontal"
+                HeadersVisibility="Column"
+                SelectionMode="Single"
+                Background="Transparent"
+                BorderThickness="0">
+        <DataGrid.Columns>
+          <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="80"/>
+          <DataGridTextColumn Header="Process Name" Binding="{Binding Name}" Width="200"/>
+          <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
+          <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="80"/>
+        </DataGrid.Columns>
+      </DataGrid>
+    </Border>
+
+    <!-- Buttons -->
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,12,0,0">
+      <Button Content="Attach" Command="{Binding AttachCommand}" IsDefault="True"
+              IsEnabled="{Binding SelectedProcess, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+      <Button Content="Cancel" Command="{Binding CancelCommand}" Classes="secondary" IsCancel="True"/>
+    </StackPanel>
+  </Grid>
+
+</Window>

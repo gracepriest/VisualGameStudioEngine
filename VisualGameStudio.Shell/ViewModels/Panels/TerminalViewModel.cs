@@ -771,7 +771,7 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Start command - creates a new session if none exists, or starts the active one.
+    /// Start command - creates a new session if none exists, or starts the focused one.
     /// </summary>
     [RelayCommand]
     private void Start()
@@ -780,22 +780,26 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
         {
             CreateNewSession();
         }
-        else if (!ActiveSession.IsRunning)
+        else
         {
-            ActiveSession.Start(WorkingDirectory, SelectedProfile);
+            var target = FocusedSession;
+            if (target != null && !target.IsRunning)
+            {
+                target.Start(WorkingDirectory, SelectedProfile);
+            }
         }
     }
 
     [RelayCommand]
     private void Stop()
     {
-        ActiveSession?.Stop();
+        FocusedSession?.Stop();
     }
 
     [RelayCommand]
     private void Clear()
     {
-        ActiveSession?.Clear();
+        FocusedSession?.Clear();
     }
 
     [RelayCommand]
@@ -812,6 +816,12 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     private void CloseSession(TerminalSession? session)
     {
         if (session == null) return;
+
+        // If closing the split session, unsplit first
+        if (IsSplit && session == SplitSession)
+        {
+            UnsplitTerminal();
+        }
 
         session.Dispose();
         var idx = Sessions.IndexOf(session);

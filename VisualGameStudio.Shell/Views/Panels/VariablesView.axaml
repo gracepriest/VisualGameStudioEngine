@@ -13,7 +13,8 @@
       <Border DockPanel.Dock="Top" Classes="panelHeader">
         <Grid ColumnDefinitions="*,Auto">
           <TextBlock Grid.Column="0" Classes="panelTitle" Text="Variables"/>
-          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RefreshVariablesCommand}" ToolTip.Tip="Refresh">
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RefreshVariablesCommand}" ToolTip.Tip="Refresh"
+                  AutomationProperties.Name="Refresh Variables">
             <TextBlock Text="↻" FontSize="14"/>
           </Button>
         </Grid>
@@ -26,8 +27,10 @@
                    Text="{Binding NewWatchExpression}"
                    Watermark="Add watch expression..."
                    FontFamily="Cascadia Code, Consolas, monospace"
-                   FontSize="12"/>
-          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding AddWatchCommand}" Margin="4,0,0,0">
+                   FontSize="12"
+                   AutomationProperties.Name="Add Watch Expression"/>
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding AddWatchCommand}" Margin="4,0,0,0"
+                  AutomationProperties.Name="Add Watch">
             <TextBlock Text="+" FontSize="16"/>
           </Button>
         </Grid>
@@ -35,10 +38,11 @@
 
       <TabControl Background="Transparent">
         <!-- Locals Tab with TreeView for hierarchical display -->
-        <TabItem Header="Locals">
+        <TabItem Header="Locals" AutomationProperties.Name="Locals Tab">
           <TreeView ItemsSource="{Binding VariableTree}"
                     SelectedItem="{Binding SelectedVariable}"
-                    Background="#252526">
+                    Background="#252526"
+                    AutomationProperties.Name="Local Variables Tree">
             <TreeView.ItemTemplate>
               <TreeDataTemplate ItemsSource="{Binding Children}">
                 <Grid ColumnDefinitions="*,*,Auto" MinHeight="22">
@@ -77,8 +81,9 @@
         </TabItem>
 
         <!-- Flat List Tab (Alternative View) -->
-        <TabItem Header="Flat">
+        <TabItem Header="Flat" AutomationProperties.Name="Flat View Tab">
           <DataGrid ItemsSource="{Binding Variables}"
+                    AutomationProperties.Name="Variables Flat List"
                     AutoGenerateColumns="False"
                     CanUserResizeColumns="True"
                     CanUserSortColumns="False"
@@ -94,8 +99,9 @@
         </TabItem>
 
         <!-- Watch Tab -->
-        <TabItem Header="Watch">
+        <TabItem Header="Watch" AutomationProperties.Name="Watch Tab">
           <DataGrid ItemsSource="{Binding WatchExpressions}"
+                    AutomationProperties.Name="Watch Expressions List"
                     AutoGenerateColumns="False"
                     CanUserResizeColumns="True"
                     CanUserSortColumns="False"

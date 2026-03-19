@@ -48,7 +48,8 @@
                  Background="#1E1E1E"
                  BorderThickness="0"
                  Padding="8"
-                 Foreground="#D4D4D4"/>
+                 Foreground="#D4D4D4"
+                 AutomationProperties.Name="Immediate Window Output"/>
       </ScrollViewer>
     </Border>
 
@@ -73,7 +74,8 @@
                Background="Transparent"
                Padding="4,8"
                VerticalAlignment="Center"
-               KeyDown="OnInputKeyDown"/>
+               KeyDown="OnInputKeyDown"
+               AutomationProperties.Name="Immediate Window Input"/>
 
       <!-- Buttons -->
       <StackPanel Grid.Column="2"
@@ -82,10 +84,12 @@
                   Margin="4">
         <Button Content="Execute"
                 Command="{Binding ExecuteCommand}"
-                ToolTip.Tip="Execute expression (Enter)"/>
+                ToolTip.Tip="Execute expression (Enter)"
+                AutomationProperties.Name="Execute Expression"/>
         <Button Content="Clear"
                 Command="{Binding ClearCommand}"
-                ToolTip.Tip="Clear output"/>
+                ToolTip.Tip="Clear output"
+                AutomationProperties.Name="Clear Immediate Window"/>
       </StackPanel>
     </Grid>
   </Grid>

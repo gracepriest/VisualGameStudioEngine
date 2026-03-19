@@ -16,19 +16,22 @@
             <Button Command="{Binding GoToPreviousBookmarkCommand}"
                     ToolTip.Tip="Previous Bookmark (Ctrl+Shift+F2)"
                     Width="24" Height="24"
-                    Classes="toolbarButton">
+                    Classes="toolbarButton"
+                    AutomationProperties.Name="Previous Bookmark (Shift+F2)">
               <TextBlock Text="^" FontWeight="Bold" Foreground="#CCCCCC"/>
             </Button>
             <Button Command="{Binding GoToNextBookmarkCommand}"
                     ToolTip.Tip="Next Bookmark (F2)"
                     Width="24" Height="24"
-                    Classes="toolbarButton">
+                    Classes="toolbarButton"
+                    AutomationProperties.Name="Next Bookmark (F2)">
               <TextBlock Text="v" FontWeight="Bold" Foreground="#CCCCCC"/>
             </Button>
             <Button Command="{Binding ClearAllBookmarksCommand}"
                     ToolTip.Tip="Clear All Bookmarks"
                     Width="24" Height="24"
-                    Classes="toolbarButton">
+                    Classes="toolbarButton"
+                    AutomationProperties.Name="Clear All Bookmarks">
               <TextBlock Text="X" FontWeight="Bold" Foreground="#F48771"/>
             </Button>
           </StackPanel>
@@ -38,7 +41,8 @@
       <ListBox ItemsSource="{Binding Bookmarks}"
                SelectedItem="{Binding SelectedBookmark}"
                Background="Transparent"
-               DoubleTapped="OnListBoxDoubleTapped">
+               DoubleTapped="OnListBoxDoubleTapped"
+               AutomationProperties.Name="Bookmarks List">
         <ListBox.ItemTemplate>
           <DataTemplate>
             <Grid ColumnDefinitions="Auto,*,Auto" Margin="4,2">

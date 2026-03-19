@@ -7,6 +7,7 @@ using VisualGameStudio.Editor.Completion;
 using VisualGameStudio.Editor.Controls;
 using VisualGameStudio.Editor.Margins;
 using VisualGameStudio.Shell.ViewModels;
+using VisualGameStudio.Shell.ViewModels.Dialogs;
 using VisualGameStudio.Shell.ViewModels.Documents;
 using VisualGameStudio.Shell.Views.Controls;
 
@@ -323,6 +324,13 @@ public partial class CodeEditorDocumentView : UserControl
 
             // Wire up inline blame annotations
             vm.BlameAnnotationUpdated += OnBlameAnnotationUpdated;
+
+            // Apply editor settings (font family, size, ligatures, etc.)
+            ApplyEditorSettings();
+
+            // Subscribe to settings changes so editors update live
+            SettingsViewModel.SettingsChanged -= OnGlobalSettingsChanged;
+            SettingsViewModel.SettingsChanged += OnGlobalSettingsChanged;
         }
         }
         catch (Exception ex)
@@ -1449,6 +1457,34 @@ public partial class CodeEditorDocumentView : UserControl
         }
     }
 
+    private async void OnShowFileHistory(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is CodeEditorDocumentViewModel vm && !string.IsNullOrEmpty(vm.FilePath))
+        {
+            try
+            {
+                var historyWindow = new Dialogs.FileHistoryWindow();
+                var parentWindow = TopLevel.GetTopLevel(this) as Window;
+
+                // Load history before showing the dialog
+                await historyWindow.LoadHistoryAsync(vm.FilePath);
+
+                if (parentWindow != null)
+                {
+                    await historyWindow.ShowDialog(parentWindow);
+                }
+                else
+                {
+                    historyWindow.Show();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to show file history: {ex.Message}");
+            }
+        }
+    }
+
     #region Find/Replace
 
     private void OnFindNext(object? sender, EventArgs e)
@@ -1702,6 +1738,56 @@ public partial class CodeEditorDocumentView : UserControl
             // Invalid regex
             FindReplaceBar.MatchCountText = "Invalid pattern";
             _totalMatches = 0;
+        }
+    }
+
+    #endregion
+
+    #region Settings Application
+
+    private void OnGlobalSettingsChanged(object? sender, EventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => ApplyEditorSettings());
+    }
+
+    /// <summary>
+    /// Reads the current persisted settings and applies font family, font size,
+    /// and font ligatures to all editor instances in this view.
+    /// </summary>
+    private void ApplyEditorSettings()
+    {
+        try
+        {
+            var settings = SettingsViewModel.LoadCurrentSettings();
+
+            var editors = new[]
+            {
+                MainEditor,
+                this.FindControl<CodeEditorControl>("TopEditor"),
+                this.FindControl<CodeEditorControl>("BottomEditor"),
+                this.FindControl<CodeEditorControl>("LeftEditor"),
+                this.FindControl<CodeEditorControl>("RightEditor")
+            };
+
+            foreach (var editor in editors)
+            {
+                if (editor == null) continue;
+
+                if (!string.IsNullOrWhiteSpace(settings.FontFamily))
+                    editor.EditorFontFamily = settings.FontFamily;
+
+                if (settings.FontSize > 0)
+                    editor.EditorFontSize = settings.FontSize;
+
+                editor.EnableFontLigatures = settings.FontLigatures;
+
+                editor.ShowLineNumbers = settings.ShowLineNumbers;
+                editor.WordWrap = settings.WordWrap;
+            }
+        }
+        catch
+        {
+            // Settings application is non-critical
         }
     }
 

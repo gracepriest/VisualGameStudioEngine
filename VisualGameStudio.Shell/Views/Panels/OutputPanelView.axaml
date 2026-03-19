@@ -33,11 +33,14 @@
           <TextBlock Text="Output" Classes="panelTitle" DockPanel.Dock="Left"/>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="4">
             <Button Content="Build" Command="{Binding ShowBuildOutputCommand}"
-                    Padding="8,2" FontSize="11"/>
+                    Padding="8,2" FontSize="11"
+                    AutomationProperties.Name="Show Build Output"/>
             <Button Content="General" Command="{Binding ShowGeneralOutputCommand}"
-                    Padding="8,2" FontSize="11"/>
+                    Padding="8,2" FontSize="11"
+                    AutomationProperties.Name="Show General Output"/>
             <Button Content="Clear" Command="{Binding ClearCommand}"
-                    Padding="8,2" FontSize="11"/>
+                    Padding="8,2" FontSize="11"
+                    AutomationProperties.Name="Clear Output"/>
           </StackPanel>
         </DockPanel>
       </Border>
@@ -52,14 +55,16 @@
                   Content="Send"
                   Command="{Binding SendInputCommand}"
                   Padding="12,4"
-                  Margin="4,0,0,0"/>
+                  Margin="4,0,0,0"
+                  AutomationProperties.Name="Send Output Panel Input"/>
           <TextBox Text="{Binding InputText}"
                    Watermark="Type input and press Enter..."
                    FontFamily="Cascadia Code, Consolas, monospace"
                    FontSize="12"
                    Background="#1E1E1E"
                    Foreground="#CCCCCC"
-                   x:Name="InputTextBox"/>
+                   x:Name="InputTextBox"
+                   AutomationProperties.Name="Output Panel Input"/>
         </DockPanel>
       </Border>
 
@@ -69,7 +74,8 @@
                     Background="#1E1E1E"
                     x:Name="OutputScroller">
         <ItemsControl ItemsSource="{Binding OutputLines}"
-                      Padding="4,2">
+                      Padding="4,2"
+                      AutomationProperties.Name="Output Lines">
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:OutputLine">
               <TextBlock Text="{Binding Text}"

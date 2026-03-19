@@ -5,8 +5,11 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using VisualGameStudio.Shell.ViewModels;
 using VisualGameStudio.Shell.Views.Controls;
+using VisualGameStudio.Shell.Views.Panels;
+using VisualGameStudio.Shell.Views.Documents;
 
 namespace VisualGameStudio.Shell.Views;
 
@@ -62,6 +65,7 @@ public partial class MainWindow : Window
             _subscribedVm.DataTipResult -= OnDataTipResult;
             _subscribedVm.NotificationRequested -= OnNotificationRequested;
             _subscribedVm.PropertyChanged -= OnViewModelPropertyChanged;
+            _subscribedVm.FocusPanelRequested -= OnFocusPanelRequested;
             _subscribedVm = null;
         }
 
@@ -70,6 +74,7 @@ public partial class MainWindow : Window
             vm.DataTipResult += OnDataTipResult;
             vm.NotificationRequested += OnNotificationRequested;
             vm.PropertyChanged += OnViewModelPropertyChanged;
+            vm.FocusPanelRequested += OnFocusPanelRequested;
             _subscribedVm = vm;
         }
     }
@@ -297,6 +302,82 @@ public partial class MainWindow : Window
         if (DataContext is MainWindowViewModel vm)
         {
             vm.OpenCommandPaletteCommand.Execute(null);
+        }
+    }
+
+    private void OnFocusPanelRequested(object? sender, string panelName)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            switch (panelName)
+            {
+                case "SolutionExplorer":
+                    FocusFirstDescendant<SolutionExplorerView>();
+                    break;
+                case "Editor":
+                    FocusActiveEditor();
+                    break;
+                case "Output":
+                    FocusFirstDescendant<OutputPanelView>();
+                    break;
+                case "Terminal":
+                    FocusFirstDescendant<TerminalView>();
+                    break;
+                case "ErrorList":
+                    FocusFirstDescendant<ErrorListView>();
+                    break;
+                case "Variables":
+                    FocusFirstDescendant<VariablesView>();
+                    break;
+            }
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// Finds the first descendant of the given type in the visual tree and focuses
+    /// its first focusable child control (TreeView, DataGrid, TextBox, etc.).
+    /// </summary>
+    private void FocusFirstDescendant<T>() where T : UserControl
+    {
+        var panel = this.GetVisualDescendants().OfType<T>().FirstOrDefault();
+        if (panel == null) return;
+
+        // Try to focus the first interactive control inside the panel
+        var focusable = panel.GetVisualDescendants()
+            .OfType<Control>()
+            .FirstOrDefault(c => c.Focusable && c is not Panel);
+
+        if (focusable != null)
+        {
+            focusable.Focus();
+        }
+        else
+        {
+            // Fallback: focus the panel itself
+            panel.Focus();
+        }
+    }
+
+    /// <summary>
+    /// Focuses the active code editor's TextArea so the user can immediately type.
+    /// </summary>
+    private void FocusActiveEditor()
+    {
+        // Find the active CodeEditorDocumentView and focus its text editor
+        var editorViews = this.GetVisualDescendants().OfType<CodeEditorDocumentView>().ToList();
+
+        // The active editor is typically the one that is visible (IsEffectivelyVisible)
+        var activeEditor = editorViews.FirstOrDefault(v => v.IsEffectivelyVisible);
+        if (activeEditor == null) return;
+
+        // Find the AvaloniaEdit TextEditor inside the editor view and focus its TextArea
+        var textEditor = activeEditor.GetVisualDescendants()
+            .OfType<AvaloniaEdit.TextEditor>()
+            .FirstOrDefault();
+
+        if (textEditor?.TextArea != null)
+        {
+            textEditor.TextArea.Focus();
         }
     }
 }

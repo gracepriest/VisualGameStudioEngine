@@ -16,13 +16,15 @@
             <Button Classes="toolbarButton"
                     ToolTip.Tip="Refresh All"
                     Command="{Binding RefreshAllCommand}"
-                    Width="24" Height="24">
+                    Width="24" Height="24"
+                    AutomationProperties.Name="Refresh All Watch Expressions">
               <TextBlock Text="↻" FontSize="12"/>
             </Button>
             <Button Classes="toolbarButton"
                     ToolTip.Tip="Remove All"
                     Command="{Binding RemoveAllCommand}"
-                    Width="24" Height="24">
+                    Width="24" Height="24"
+                    AutomationProperties.Name="Remove All Watch Expressions">
               <TextBlock Text="🗑" FontSize="11"/>
             </Button>
           </StackPanel>
@@ -35,11 +37,13 @@
           <TextBox Grid.Column="0"
                    Text="{Binding NewExpression}"
                    Watermark="Add watch expression..."
-                   Margin="0,0,4,0"/>
+                   Margin="0,0,4,0"
+                   AutomationProperties.Name="New Watch Expression"/>
           <Button Grid.Column="1"
                   Classes="toolbarButton"
                   Command="{Binding AddWatchCommand}"
-                  Width="50">
+                  Width="50"
+                  AutomationProperties.Name="Add Watch Expression">
             <TextBlock Text="Add" FontSize="11"/>
           </Button>
         </Grid>
@@ -53,7 +57,8 @@
                 CanUserSortColumns="False"
                 HeadersVisibility="Column"
                 GridLinesVisibility="Horizontal"
-                Background="Transparent">
+                Background="Transparent"
+                AutomationProperties.Name="Watch Expressions Grid">
         <DataGrid.ContextMenu>
           <ContextMenu>
             <MenuItem Header="Copy Value" Command="{Binding CopyValueCommand}"/>

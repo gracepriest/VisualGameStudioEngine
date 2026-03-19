@@ -108,6 +108,23 @@ public partial class DiffViewerViewModel : ViewModelBase
         ParseHunks(_rawDiff);
     }
 
+    /// <summary>
+    /// Loads a pre-computed raw unified diff (e.g. from git diff commit~1..commit -- file).
+    /// No staging/unstaging is available for historical diffs.
+    /// </summary>
+    public void LoadFromRawDiff(string rawDiff, string filePath, string leftTitle = "Before", string rightTitle = "After")
+    {
+        FilePath = filePath;
+        LeftTitle = leftTitle;
+        RightTitle = rightTitle;
+        CanStageHunks = false;
+        CanUnstageHunks = false;
+        _rawDiff = rawDiff;
+
+        ParseDiff(rawDiff);
+        ParseHunks(rawDiff);
+    }
+
     public void LoadContents(string leftContent, string rightContent, string leftTitle = "Original", string rightTitle = "Modified")
     {
         LeftContent = leftContent;
@@ -147,6 +164,8 @@ public partial class DiffViewerViewModel : ViewModelBase
         DiffHunk? currentHunk = null;
         var hunkIndex = 0;
         var hunkBodyBuilder = new StringBuilder();
+        var leftLineNum = 0;
+        var rightLineNum = 0;
 
         for (; i < lines.Length; i++)
         {
@@ -199,6 +218,10 @@ public partial class DiffViewerViewModel : ViewModelBase
                     RightContent = "",
                     Type = DiffLineType.Header
                 });
+
+                // Initialize per-hunk line counters
+                leftLineNum = currentHunk.OldStart;
+                rightLineNum = currentHunk.NewStart;
             }
             else if (currentHunk != null)
             {
@@ -209,38 +232,50 @@ public partial class DiffViewerViewModel : ViewModelBase
                     currentHunk.RemovedCount++;
                     currentHunk.Lines.Add(new DiffLine
                     {
+                        LeftLineNumber = leftLineNum,
                         LeftContent = line.Substring(1),
                         RightContent = "",
                         Type = DiffLineType.Removed
                     });
+                    leftLineNum++;
                 }
                 else if (line.StartsWith("+") && !line.StartsWith("+++"))
                 {
                     currentHunk.AddedCount++;
                     currentHunk.Lines.Add(new DiffLine
                     {
+                        RightLineNumber = rightLineNum,
                         LeftContent = "",
                         RightContent = line.Substring(1),
                         Type = DiffLineType.Added
                     });
+                    rightLineNum++;
                 }
                 else if (line.StartsWith(" "))
                 {
                     currentHunk.Lines.Add(new DiffLine
                     {
+                        LeftLineNumber = leftLineNum,
+                        RightLineNumber = rightLineNum,
                         LeftContent = line.Substring(1),
                         RightContent = line.Substring(1),
                         Type = DiffLineType.Unchanged
                     });
+                    leftLineNum++;
+                    rightLineNum++;
                 }
                 else if (!string.IsNullOrEmpty(line) && !line.StartsWith("\\"))
                 {
                     currentHunk.Lines.Add(new DiffLine
                     {
+                        LeftLineNumber = leftLineNum,
+                        RightLineNumber = rightLineNum,
                         LeftContent = line,
                         RightContent = line,
                         Type = DiffLineType.Unchanged
                     });
+                    leftLineNum++;
+                    rightLineNum++;
                 }
             }
         }

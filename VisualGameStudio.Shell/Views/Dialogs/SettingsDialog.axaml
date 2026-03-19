@@ -122,6 +122,11 @@
                                  Minimum="8"
                                  Maximum="72"
                                  Width="80"/>
+
+                  <CheckBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4"
+                            Content="Enable font ligatures (for fonts like Cascadia Code, Fira Code, JetBrains Mono)"
+                            IsChecked="{Binding FontLigatures}"
+                            Margin="0,8,0,0"/>
                 </Grid>
               </StackPanel>
             </Border>

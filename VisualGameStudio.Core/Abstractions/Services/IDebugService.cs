@@ -46,6 +46,11 @@ public interface IDebugService : IDisposable
     Task<bool> StartDebuggingAsync(DebugConfiguration config, Dictionary<string, IEnumerable<SourceBreakpoint>> breakpoints, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Attach the debugger to an already-running process by PID
+    /// </summary>
+    Task<bool> AttachToProcessAsync(int processId, Dictionary<string, IEnumerable<SourceBreakpoint>>? breakpoints = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Start without debugging (run)
     /// </summary>
     Task<bool> StartWithoutDebuggingAsync(DebugConfiguration config, CancellationToken cancellationToken = default);
