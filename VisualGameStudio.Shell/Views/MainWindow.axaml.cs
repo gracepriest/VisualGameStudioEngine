@@ -284,6 +284,14 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnDiagnosticCountsClicked(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel vm)
+        {
+            vm.ShowErrorListCommand.Execute(null);
+        }
+    }
+
     private void OnCommandPaletteHintClicked(object? sender, PointerPressedEventArgs e)
     {
         if (DataContext is MainWindowViewModel vm)

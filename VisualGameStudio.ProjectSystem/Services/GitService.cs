@@ -563,6 +563,7 @@ public class GitService : IGitService
             var lines = result.Output.Split('\n');
             string? currentHash = null;
             string? author = null;
+            string? summary = null;
             DateTime? date = null;
             var lineNumber = 0;
 
@@ -579,6 +580,7 @@ public class GitService : IGitService
                             CommitHash = currentHash,
                             Author = author ?? "Unknown",
                             Date = date ?? DateTime.Now,
+                            Message = summary ?? "",
                             LineContent = line.Substring(1)
                         });
                     }
@@ -587,6 +589,9 @@ public class GitService : IGitService
                 {
                     var parts = line.Split(' ');
                     currentHash = parts[0];
+                    author = null;
+                    summary = null;
+                    date = null;
                     if (parts.Length > 2)
                         lineNumber = int.TryParse(parts[2], out var ln) ? ln : 0;
                 }
@@ -600,6 +605,10 @@ public class GitService : IGitService
                     {
                         date = DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime;
                     }
+                }
+                else if (line.StartsWith("summary "))
+                {
+                    summary = line.Substring(8);
                 }
             }
         }
@@ -1165,6 +1174,168 @@ public class GitService : IGitService
             return true;
         }
         return false;
+    }
+
+    public async Task<IReadOnlyList<GitLineChange>> GetLineChangesAsync(string filePath)
+    {
+        var changes = new List<GitLineChange>();
+
+        if (!_isGitRepository || _repositoryPath == null)
+            return changes;
+
+        var relativePath = GetRelativePath(filePath);
+
+        // Use git diff to get unified diff against HEAD
+        var result = await RunGitCommandAsync($"diff HEAD -- \"{relativePath}\"");
+
+        // If file is untracked, treat all lines as added
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+        {
+            // Check if file is untracked
+            var statusResult = await RunGitCommandAsync($"status --porcelain -- \"{relativePath}\"");
+            if (statusResult.ExitCode == 0 && statusResult.Output.TrimStart().StartsWith("??"))
+            {
+                // Untracked file: count lines and mark all as added
+                if (File.Exists(filePath))
+                {
+                    var lineCount = File.ReadAllLines(filePath).Length;
+                    if (lineCount > 0)
+                    {
+                        changes.Add(new GitLineChange
+                        {
+                            StartLine = 1,
+                            EndLine = lineCount,
+                            Kind = GitLineChangeKind.Added
+                        });
+                    }
+                }
+            }
+            return changes;
+        }
+
+        // Parse unified diff output
+        ParseUnifiedDiff(result.Output, changes);
+
+        return changes;
+    }
+
+    private void ParseUnifiedDiff(string diffOutput, List<GitLineChange> changes)
+    {
+        var lines = diffOutput.Split('\n');
+        var hunkHeaderRegex = new Regex(@"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@");
+
+        int i = 0;
+        while (i < lines.Length)
+        {
+            var match = hunkHeaderRegex.Match(lines[i]);
+            if (!match.Success)
+            {
+                i++;
+                continue;
+            }
+
+            var oldStart = int.Parse(match.Groups[1].Value);
+            var oldCount = match.Groups[2].Success ? int.Parse(match.Groups[2].Value) : 1;
+            var newStart = int.Parse(match.Groups[3].Value);
+            var newCount = match.Groups[4].Success ? int.Parse(match.Groups[4].Value) : 1;
+
+            i++;
+
+            // Track current position in old and new files
+            var newLine = newStart;
+            var oldLine = oldStart;
+
+            // Collect consecutive add/remove lines within this hunk
+            int addRunStart = -1;
+            int addRunCount = 0;
+            int removeRunStart = -1;
+            int removeRunCount = 0;
+
+            while (i < lines.Length && !lines[i].StartsWith("@@") && !lines[i].StartsWith("diff "))
+            {
+                var line = lines[i];
+
+                if (line.StartsWith("+"))
+                {
+                    // Added line
+                    if (addRunStart < 0) addRunStart = newLine;
+                    addRunCount++;
+                    newLine++;
+                }
+                else if (line.StartsWith("-"))
+                {
+                    // Removed line
+                    if (removeRunStart < 0) removeRunStart = oldLine;
+                    removeRunCount++;
+                    oldLine++;
+                }
+                else
+                {
+                    // Context line or empty - flush any pending runs
+                    FlushChangeRuns(changes, ref addRunStart, ref addRunCount, ref removeRunStart, ref removeRunCount, newLine);
+                    newLine++;
+                    oldLine++;
+                }
+                i++;
+            }
+
+            // Flush any remaining runs at end of hunk
+            FlushChangeRuns(changes, ref addRunStart, ref addRunCount, ref removeRunStart, ref removeRunCount, newLine);
+        }
+    }
+
+    private void FlushChangeRuns(List<GitLineChange> changes,
+        ref int addRunStart, ref int addRunCount,
+        ref int removeRunStart, ref int removeRunCount,
+        int currentNewLine)
+    {
+        if (removeRunCount > 0 && addRunCount > 0)
+        {
+            // Both removes and adds together = modification
+            changes.Add(new GitLineChange
+            {
+                StartLine = addRunStart,
+                EndLine = addRunStart + addRunCount - 1,
+                Kind = GitLineChangeKind.Modified
+            });
+
+            // If more lines were removed than added, there's also a deletion marker
+            if (removeRunCount > addRunCount)
+            {
+                changes.Add(new GitLineChange
+                {
+                    StartLine = addRunStart + addRunCount - 1,
+                    EndLine = addRunStart + addRunCount - 1,
+                    Kind = GitLineChangeKind.Deleted
+                });
+            }
+        }
+        else if (addRunCount > 0)
+        {
+            // Pure addition
+            changes.Add(new GitLineChange
+            {
+                StartLine = addRunStart,
+                EndLine = addRunStart + addRunCount - 1,
+                Kind = GitLineChangeKind.Added
+            });
+        }
+        else if (removeRunCount > 0)
+        {
+            // Pure deletion - show marker at the line where content was removed
+            var deleteLine = currentNewLine > 1 ? currentNewLine - 1 : 1;
+            changes.Add(new GitLineChange
+            {
+                StartLine = deleteLine,
+                EndLine = deleteLine,
+                Kind = GitLineChangeKind.Deleted
+            });
+        }
+
+        addRunStart = -1;
+        addRunCount = 0;
+        removeRunStart = -1;
+        removeRunCount = 0;
     }
 
     public async Task<string?> GetFileContentAtCommitAsync(string filePath, string commitHash)

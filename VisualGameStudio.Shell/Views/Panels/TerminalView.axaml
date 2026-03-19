@@ -9,33 +9,94 @@
 
   <Border Classes="toolPanel">
     <DockPanel>
+      <!-- Header with tab bar and toolbar -->
       <Border DockPanel.Dock="Top" Classes="panelHeader">
-        <Grid ColumnDefinitions="*,Auto,Auto,Auto">
-          <TextBlock Grid.Column="0" Classes="panelTitle" Text="{Binding Title}"/>
+        <DockPanel>
+          <!-- Right-side toolbar buttons -->
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0">
+            <Button Classes="toolbarButton"
+                    Command="{Binding StartCommand}"
+                    ToolTip.Tip="Start Terminal"
+                    IsVisible="{Binding !IsRunning}">
+              <TextBlock Text="&#x25B6;" FontSize="12" Foreground="#89D185"/>
+            </Button>
 
-          <Button Grid.Column="1"
-                  Classes="toolbarButton"
-                  Command="{Binding StartCommand}"
-                  ToolTip.Tip="Start Terminal"
-                  IsVisible="{Binding !IsRunning}">
-            <TextBlock Text="▶" FontSize="12" Foreground="#89D185"/>
-          </Button>
+            <Button Classes="toolbarButton"
+                    Command="{Binding StopCommand}"
+                    ToolTip.Tip="Stop Terminal"
+                    IsVisible="{Binding IsRunning}">
+              <TextBlock Text="&#x25A0;" FontSize="12" Foreground="#E51400"/>
+            </Button>
 
-          <Button Grid.Column="2"
-                  Classes="toolbarButton"
-                  Command="{Binding StopCommand}"
-                  ToolTip.Tip="Stop Terminal"
-                  IsVisible="{Binding IsRunning}">
-            <TextBlock Text="■" FontSize="12" Foreground="#E51400"/>
-          </Button>
+            <Button Classes="toolbarButton"
+                    Command="{Binding ClearCommand}"
+                    ToolTip.Tip="Clear">
+              <TextBlock Text="Clear" FontSize="11"/>
+            </Button>
+          </StackPanel>
 
-          <Button Grid.Column="3"
-                  Classes="toolbarButton"
-                  Command="{Binding ClearCommand}"
-                  ToolTip.Tip="Clear">
-            <TextBlock Text="Clear" FontSize="11"/>
-          </Button>
-        </Grid>
+          <!-- Tab bar (scrollable) -->
+          <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                        VerticalScrollBarVisibility="Disabled"
+                        Margin="0">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+              <!-- Terminal session tabs -->
+              <ItemsControl ItemsSource="{Binding Sessions}" x:Name="TabsItemsControl">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal" Spacing="1"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:TerminalSession" x:CompileBindings="False">
+                    <Border x:Name="TabBorder"
+                            Background="#2D2D2D"
+                            CornerRadius="4,4,0,0"
+                            Padding="6,3"
+                            Margin="1,2,0,0"
+                            Cursor="Hand"
+                            PointerPressed="OnTabPointerPressed">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <!-- Shell icon -->
+                        <TextBlock Text="&#x25BA;"
+                                   FontSize="9"
+                                   Foreground="#569CD6"
+                                   VerticalAlignment="Center"/>
+                        <!-- Tab title -->
+                        <TextBlock Text="{Binding TabTitle}"
+                                   FontSize="11"
+                                   Foreground="#CCCCCC"
+                                   VerticalAlignment="Center"/>
+                        <!-- Close button -->
+                        <Button Classes="toolbarButton"
+                                Click="OnCloseTabClick"
+                                ToolTip.Tip="Close Terminal"
+                                Padding="2"
+                                MinWidth="16" MinHeight="16"
+                                Width="16" Height="16"
+                                VerticalAlignment="Center">
+                          <TextBlock Text="&#x00D7;" FontSize="12" Foreground="#808080"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Button>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <!-- New terminal button -->
+              <Button Classes="toolbarButton"
+                      Command="{Binding CreateNewSessionCommand}"
+                      ToolTip.Tip="New Terminal (Ctrl+Shift+`)"
+                      Margin="4,2,0,0"
+                      Padding="4,3"
+                      MinWidth="24" MinHeight="20">
+                <TextBlock Text="+" FontSize="14" Foreground="#89D185"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Button>
+            </StackPanel>
+          </ScrollViewer>
+        </DockPanel>
       </Border>
 
       <!-- Input -->
@@ -67,17 +128,17 @@
         </Grid>
       </Border>
 
-      <!-- Output -->
+      <!-- Output with ANSI color support -->
       <ScrollViewer Background="#0C0C0C"
                     HorizontalScrollBarVisibility="Auto"
                     VerticalScrollBarVisibility="Auto"
                     x:Name="OutputScroller">
-        <TextBlock Text="{Binding OutputText}"
-                   FontFamily="Cascadia Code, Consolas, monospace"
-                   FontSize="13"
-                   Foreground="#CCCCCC"
-                   Padding="8"
-                   TextWrapping="NoWrap"/>
+        <SelectableTextBlock FontFamily="Cascadia Code, Consolas, monospace"
+                             FontSize="13"
+                             Foreground="#CCCCCC"
+                             Padding="8"
+                             TextWrapping="NoWrap"
+                             x:Name="OutputTextBlock"/>
       </ScrollViewer>
     </DockPanel>
   </Border>

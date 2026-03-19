@@ -381,6 +381,7 @@ public static class SettingsKeys
     public const string FormatOnPaste = "Editor.FormatOnPaste";
     public const string RenderWhitespace = "Editor.RenderWhitespace";
     public const string ShowMinimap = "Editor.ShowMinimap";
+    public const string StickyScrollEnabled = "Editor.StickyScrollEnabled";
     public const string MinimapSide = "Editor.MinimapSide";
     public const string LineHeight = "Editor.LineHeight";
     public const string CursorStyle = "Editor.CursorStyle";

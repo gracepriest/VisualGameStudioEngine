@@ -55,8 +55,14 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IBookmarkService _bookmarkService;
     private readonly IRefactoringService _refactoringService;
     private readonly IProjectTemplateService _projectTemplateService;
+    private readonly IGitService _gitService;
     private readonly IEventAggregator _eventAggregator;
     private readonly DockFactory _dockFactory;
+
+    /// <summary>
+    /// Cache of blame data per file path. Invalidated on file save.
+    /// </summary>
+    private readonly Dictionary<string, IReadOnlyList<GitBlameLine>> _blameCache = new(StringComparer.OrdinalIgnoreCase);
 
     [ObservableProperty]
     private IRootDock? _layout;
@@ -66,6 +72,13 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private string _statusText = "Ready";
+
+    /// <summary>
+    /// Blame annotation text for the current line, shown in status bar.
+    /// Example: "John Smith, 2 days ago — Fix login bug"
+    /// </summary>
+    [ObservableProperty]
+    private string _blameAnnotationText = "";
 
     /// <summary>
     /// Gets the current project name for breadcrumb display.
@@ -172,6 +185,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IBookmarkService bookmarkService,
         IRefactoringService refactoringService,
         IProjectTemplateService projectTemplateService,
+        IGitService gitService,
         IEventAggregator eventAggregator,
         DockFactory dockFactory,
         SolutionExplorerViewModel solutionExplorer,
@@ -202,6 +216,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _bookmarkService = bookmarkService;
         _refactoringService = refactoringService;
         _projectTemplateService = projectTemplateService;
+        _gitService = gitService;
         _eventAggregator = eventAggregator;
         _dockFactory = dockFactory;
 
@@ -276,6 +291,9 @@ public partial class MainWindowViewModel : ViewModelBase
             // Forward diagnostics to the error list
             ErrorList.UpdateDiagnostics(e.Diagnostics);
 
+            // Reset error cycling index when diagnostics change
+            _currentDiagnosticIndex = -1;
+
             // Forward to the specific document for error highlighting
             var uri = e.Uri ?? "";
             var filePath = uri.Replace("file:///", "").Replace("/", "\\");
@@ -327,6 +345,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
         _openDocuments.Remove(filePath);
 
+        // Remove blame cache for closed document
+        _blameCache.Remove(filePath);
+
         // Notify LSP that the document was closed
         if (_languageService.IsConnected &&
             (filePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
@@ -358,6 +379,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Update error list
         ErrorList.UpdateDiagnostics(result.Diagnostics);
+
+        // Reset error cycling index when diagnostics change
+        _currentDiagnosticIndex = -1;
     }
 
     private async void OnFileOpenRequested(object? sender, string filePath)
@@ -677,7 +701,8 @@ public partial class MainWindowViewModel : ViewModelBase
             var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
             {
                 FilePath = filePath,
-                LanguageService = _languageService
+                LanguageService = _languageService,
+                GitService = _gitService
             };
             document.SetContent(content);
 
@@ -690,6 +715,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 CaretLine = document.CaretLine;
                 CaretColumn = document.CaretColumn;
+                _ = UpdateBlameForCurrentLineAsync(document);
             };
             document.CaretPositionChanged += onCaretChanged;
 
@@ -1084,6 +1110,13 @@ public partial class MainWindowViewModel : ViewModelBase
             if (await activeDoc.SaveAsync())
             {
                 await NotifyLspDocumentSavedAsync(activeDoc);
+
+                // Invalidate blame cache for saved file and refresh
+                if (activeDoc.FilePath != null)
+                {
+                    _blameCache.Remove(activeDoc.FilePath);
+                    _ = UpdateBlameForCurrentLineAsync(activeDoc);
+                }
             }
         }
     }
@@ -1107,7 +1140,20 @@ public partial class MainWindowViewModel : ViewModelBase
             if (await doc.SaveAsync())
             {
                 await NotifyLspDocumentSavedAsync(doc);
+
+                // Invalidate blame cache for saved files
+                if (doc.FilePath != null)
+                {
+                    _blameCache.Remove(doc.FilePath);
+                }
             }
+        }
+
+        // Refresh blame for active document after saving all
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc != null)
+        {
+            _ = UpdateBlameForCurrentLineAsync(activeDoc);
         }
 
         if (_projectService.HasUnsavedChanges)
@@ -1932,6 +1978,73 @@ public partial class MainWindowViewModel : ViewModelBase
         _dockFactory.ActivateTool("ErrorList");
     }
 
+    /// <summary>
+    /// Tracks current position when cycling through diagnostics with F8/Shift+F8.
+    /// </summary>
+    private int _currentDiagnosticIndex = -1;
+
+    /// <summary>
+    /// Navigates to the next error/warning in the Error List (F8).
+    /// Wraps around to the first diagnostic after the last one.
+    /// </summary>
+    [RelayCommand]
+    private async Task GoToNextErrorAsync()
+    {
+        var diagnostics = ErrorList.Diagnostics;
+        if (diagnostics.Count == 0)
+        {
+            StatusText = "No errors or warnings";
+            return;
+        }
+
+        _currentDiagnosticIndex++;
+        if (_currentDiagnosticIndex >= diagnostics.Count)
+        {
+            _currentDiagnosticIndex = 0;
+        }
+
+        var diagnostic = diagnostics[_currentDiagnosticIndex];
+        ErrorList.SelectedDiagnostic = diagnostic;
+
+        if (diagnostic.FilePath != null)
+        {
+            await OpenFileAndNavigateAsync(diagnostic.FilePath, diagnostic.Line, diagnostic.Column);
+        }
+
+        StatusText = $"Error {_currentDiagnosticIndex + 1} of {diagnostics.Count}: {diagnostic.Message}";
+    }
+
+    /// <summary>
+    /// Navigates to the previous error/warning in the Error List (Shift+F8).
+    /// Wraps around to the last diagnostic before the first one.
+    /// </summary>
+    [RelayCommand]
+    private async Task GoToPreviousErrorAsync()
+    {
+        var diagnostics = ErrorList.Diagnostics;
+        if (diagnostics.Count == 0)
+        {
+            StatusText = "No errors or warnings";
+            return;
+        }
+
+        _currentDiagnosticIndex--;
+        if (_currentDiagnosticIndex < 0)
+        {
+            _currentDiagnosticIndex = diagnostics.Count - 1;
+        }
+
+        var diagnostic = diagnostics[_currentDiagnosticIndex];
+        ErrorList.SelectedDiagnostic = diagnostic;
+
+        if (diagnostic.FilePath != null)
+        {
+            await OpenFileAndNavigateAsync(diagnostic.FilePath, diagnostic.Line, diagnostic.Column);
+        }
+
+        StatusText = $"Error {_currentDiagnosticIndex + 1} of {diagnostics.Count}: {diagnostic.Message}";
+    }
+
     [RelayCommand]
     private void ShowSolutionExplorer()
     {
@@ -1948,6 +2061,13 @@ public partial class MainWindowViewModel : ViewModelBase
     private void ShowTerminal()
     {
         _dockFactory.ActivateTool("Terminal");
+    }
+
+    [RelayCommand]
+    private void CreateNewTerminal()
+    {
+        _dockFactory.ActivateTool("Terminal");
+        Terminal.CreateNewSessionCommand.Execute(null);
     }
 
     /// <summary>
@@ -4605,6 +4725,63 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         return completions;
+    }
+
+    #endregion
+
+    #region Git Blame Annotations
+
+    /// <summary>
+    /// Updates the inline blame annotation for the current caret line.
+    /// Fetches blame data from cache or git, then updates both the status bar
+    /// text and the inline annotation on the document.
+    /// </summary>
+    private async Task UpdateBlameForCurrentLineAsync(CodeEditorDocumentViewModel document)
+    {
+        try
+        {
+            if (document.FilePath == null || !_gitService.IsGitRepository)
+            {
+                BlameAnnotationText = "";
+                document.ClearBlameAnnotation();
+                return;
+            }
+
+            var filePath = document.FilePath;
+            var lineNumber = document.CaretLine;
+
+            // Try to get blame data from cache
+            if (!_blameCache.TryGetValue(filePath, out var blameLines))
+            {
+                // Fetch blame data asynchronously
+                blameLines = await _gitService.GetBlameAsync(filePath);
+                if (blameLines.Count > 0)
+                {
+                    _blameCache[filePath] = blameLines;
+                }
+            }
+
+            // Find the blame entry for the current line
+            var blameLine = blameLines.FirstOrDefault(b => b.LineNumber == lineNumber);
+            if (blameLine != null && !string.IsNullOrEmpty(blameLine.Author))
+            {
+                // Update status bar
+                BlameAnnotationText = blameLine.AnnotationText;
+
+                // Update inline annotation on the current line
+                document.UpdateBlameAnnotation(lineNumber, blameLine.AnnotationText);
+            }
+            else
+            {
+                BlameAnnotationText = "";
+                document.ClearBlameAnnotation();
+            }
+        }
+        catch
+        {
+            // Silently handle blame errors (file not tracked, etc.)
+            BlameAnnotationText = "";
+        }
     }
 
     #endregion

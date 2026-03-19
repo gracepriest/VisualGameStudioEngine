@@ -1,0 +1,11 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="VisualGameStudio.Editor.Controls.StickyScrollControl"
+             IsVisible="False">
+
+  <StackPanel x:Name="StickyPanel"
+              Background="#1E1E1E"
+              HorizontalAlignment="Stretch">
+  </StackPanel>
+
+</UserControl>

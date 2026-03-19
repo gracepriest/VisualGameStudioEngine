@@ -51,6 +51,8 @@ public partial class CodeEditorDocumentView : UserControl
         vm.RenameResultReceived -= OnRenameResultReceived;
         vm.SelectionRangeReceived -= OnSelectionRangeReceived;
         vm.SemanticTokensUpdated -= OnSemanticTokensUpdated;
+        vm.BlameAnnotationUpdated -= OnBlameAnnotationUpdated;
+        vm.DirtyChanged -= OnDirtyChangedForGitGutter;
     }
 
     private void UnsubscribeFromEditor()
@@ -228,6 +230,16 @@ public partial class CodeEditorDocumentView : UserControl
                 MainEditor.SetLanguageService(vm.LanguageService, vm.FilePath);
             }
 
+            // Initialize git gutter and load initial changes
+            if (MainEditor != null && vm.GitService != null && vm.FilePath != null)
+            {
+                MainEditor.InitializeGitGutter();
+                _ = LoadGitChangesAsync(vm);
+            }
+
+            // Wire up git gutter refresh on save
+            vm.DirtyChanged += OnDirtyChangedForGitGutter;
+
             // Wire up diagnostics (error highlighting)
             vm.DiagnosticsUpdated += OnDiagnosticsUpdated;
 
@@ -288,6 +300,9 @@ public partial class CodeEditorDocumentView : UserControl
             vm.DocumentHighlightResultReceived += OnDocumentHighlightResultReceived;
             vm.RenameResultReceived += OnRenameResultReceived;
             vm.SelectionRangeReceived += OnSelectionRangeReceived;
+
+            // Wire up inline blame annotations
+            vm.BlameAnnotationUpdated += OnBlameAnnotationUpdated;
         }
         }
         catch (Exception ex)
@@ -406,6 +421,21 @@ public partial class CodeEditorDocumentView : UserControl
                         Name = v.Name,
                         Value = v.Value
                     }));
+            }
+        });
+    }
+
+    private void OnBlameAnnotationUpdated(object? sender, (int LineNumber, string AnnotationText) e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (string.IsNullOrEmpty(e.AnnotationText) || e.LineNumber < 1)
+            {
+                MainEditor?.ClearInlineBlame();
+            }
+            else
+            {
+                MainEditor?.ShowInlineBlame(e.LineNumber, e.AnnotationText);
             }
         });
     }
@@ -541,6 +571,39 @@ public partial class CodeEditorDocumentView : UserControl
     /// Gets the breakpoint lines
     /// </summary>
     public HashSet<int> GetBreakpointLines() => _breakpointLines;
+
+    /// <summary>
+    /// Loads git line changes for the current file and updates the gutter.
+    /// </summary>
+    private async Task LoadGitChangesAsync(CodeEditorDocumentViewModel vm)
+    {
+        try
+        {
+            if (vm.GitService == null || string.IsNullOrEmpty(vm.FilePath) || !vm.GitService.IsGitRepository)
+                return;
+
+            var changes = await vm.GitService.GetLineChangesAsync(vm.FilePath);
+
+            // Must update UI on the UI thread
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                MainEditor?.SetGitChanges(changes);
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[GitGutter] Error loading changes: {ex.Message}");
+        }
+    }
+
+    private void OnDirtyChangedForGitGutter(object? sender, EventArgs e)
+    {
+        if (sender is CodeEditorDocumentViewModel vm && !vm.IsDirty)
+        {
+            // File was just saved - refresh git gutter
+            _ = LoadGitChangesAsync(vm);
+        }
+    }
 
     private void OnViewKeyDown(object? sender, KeyEventArgs e)
     {

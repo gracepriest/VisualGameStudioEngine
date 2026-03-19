@@ -462,6 +462,7 @@ public class SettingsService : ISettingsService
                 new() { Key = SettingsKeys.AutoSave, Type = SettingsPropertyType.String, Title = "Auto Save", Default = "off", Enum = new List<object> { "off", "afterDelay", "onFocusChange", "onWindowChange" }, Description = "Controls auto save behavior." },
                 new() { Key = SettingsKeys.AutoSaveDelay, Type = SettingsPropertyType.Integer, Title = "Auto Save Delay", Default = 1000, Minimum = 100, Description = "Auto save delay in milliseconds." },
                 new() { Key = SettingsKeys.ShowMinimap, Type = SettingsPropertyType.Boolean, Title = "Show Minimap", Default = true, Description = "Controls whether the minimap is shown." },
+                new() { Key = SettingsKeys.StickyScrollEnabled, Type = SettingsPropertyType.Boolean, Title = "Sticky Scroll", Default = true, Description = "Pin enclosing scope headers at the top of the editor when scrolling." },
                 new() { Key = SettingsKeys.BracketPairColorization, Type = SettingsPropertyType.Boolean, Title = "Bracket Pair Colorization", Default = true, Description = "Enable bracket pair colorization." },
             }
         };

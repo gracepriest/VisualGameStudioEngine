@@ -149,6 +149,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// </summary>
     public ILanguageService? LanguageService { get; set; }
 
+    /// <summary>
+    /// Git service for gutter change indicators
+    /// </summary>
+    public IGitService? GitService { get; set; }
+
     private string GetTitle()
     {
         var fileName = FilePath != null ? Path.GetFileName(FilePath) : "Untitled";
@@ -780,6 +785,32 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void ClearSemanticTokens()
     {
         SemanticTokensUpdated?.Invoke(this, Array.Empty<int>());
+    }
+
+    #endregion
+
+    #region Inline Blame Annotations
+
+    /// <summary>
+    /// Fired when the inline blame annotation for the current line should be updated.
+    /// The tuple contains (lineNumber, annotationText). If annotationText is empty, the annotation should be cleared.
+    /// </summary>
+    public event EventHandler<(int LineNumber, string AnnotationText)>? BlameAnnotationUpdated;
+
+    /// <summary>
+    /// Updates the inline blame annotation displayed at the specified line.
+    /// </summary>
+    public void UpdateBlameAnnotation(int lineNumber, string annotationText)
+    {
+        BlameAnnotationUpdated?.Invoke(this, (lineNumber, annotationText));
+    }
+
+    /// <summary>
+    /// Clears the inline blame annotation.
+    /// </summary>
+    public void ClearBlameAnnotation()
+    {
+        BlameAnnotationUpdated?.Invoke(this, (0, ""));
     }
 
     #endregion

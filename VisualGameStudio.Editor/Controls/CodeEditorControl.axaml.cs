@@ -26,6 +26,7 @@ public partial class CodeEditorControl : UserControl
     private FoldingManager? _foldingManager;
     private readonly BasicLangFoldingStrategy _foldingStrategy = new();
     private readonly BracketHighlighter _bracketHighlighter = new();
+    private readonly BracketPairColorizer _bracketPairColorizer = new();
     private TextMarkerService? _textMarkerService;
     private BookmarkMargin? _bookmarkMargin;
     private System.Timers.Timer? _foldingUpdateTimer;
@@ -39,6 +40,8 @@ public partial class CodeEditorControl : UserControl
     private bool _isInitialized = false;
     private CompletionWindow? _completionWindow;
     private BreakpointMargin? _breakpointMargin;
+    private GitGutterMargin? _gitGutterMargin;
+    private DiagnosticMargin? _diagnosticMargin;
     private bool _isUpdatingFoldings = false;
     private bool _isFoldingEnabled = true;
     private MinimapControl? _minimap;
@@ -49,6 +52,7 @@ public partial class CodeEditorControl : UserControl
     private int _lastHoverOffset = -1;
     private IReadOnlyList<DocumentLinkInfo>? _documentLinks;
     private InlineFindReplaceControl? _inlineFindReplace;
+    private StickyScrollControl? _stickyScroll;
     private bool _autoCloseBrackets = true;
     private BasicLangIndentationStrategy? _indentationStrategy;
     private ILanguageService? _languageService;
@@ -76,6 +80,9 @@ public partial class CodeEditorControl : UserControl
         set => _autoCloseBrackets = value;
     }
 
+    public static readonly StyledProperty<bool> StickyScrollEnabledProperty =
+        AvaloniaProperty.Register<CodeEditorControl, bool>(nameof(StickyScrollEnabled), defaultValue: true);
+
     public static readonly StyledProperty<string> TextProperty =
         AvaloniaProperty.Register<CodeEditorControl, string>(nameof(Text), defaultValue: "");
 
@@ -87,6 +94,9 @@ public partial class CodeEditorControl : UserControl
 
     public static readonly StyledProperty<bool> WordWrapProperty =
         AvaloniaProperty.Register<CodeEditorControl, bool>(nameof(WordWrap), defaultValue: false);
+
+    public static readonly StyledProperty<bool> BracketPairColorizationProperty =
+        AvaloniaProperty.Register<CodeEditorControl, bool>(nameof(BracketPairColorization), defaultValue: true);
 
     public static readonly StyledProperty<double> EditorFontSizeProperty =
         AvaloniaProperty.Register<CodeEditorControl, double>(nameof(EditorFontSize), defaultValue: 14.0);
@@ -130,6 +140,31 @@ public partial class CodeEditorControl : UserControl
     {
         get => GetValue(WordWrapProperty);
         set => SetValue(WordWrapProperty, value);
+    }
+
+    /// <summary>
+    /// Gets or sets whether bracket pair colorization is enabled.
+    /// When enabled, nested brackets are colored by depth (Gold, Violet, Cyan).
+    /// </summary>
+    public bool BracketPairColorization
+    {
+        get => GetValue(BracketPairColorizationProperty);
+        set
+        {
+            SetValue(BracketPairColorizationProperty, value);
+            _bracketPairColorizer.IsEnabled = value;
+            _textEditor?.TextArea?.TextView?.Redraw();
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets whether sticky scroll is enabled.
+    /// When enabled, enclosing scope headers are pinned at the top of the editor during scrolling.
+    /// </summary>
+    public bool StickyScrollEnabled
+    {
+        get => GetValue(StickyScrollEnabledProperty);
+        set => SetValue(StickyScrollEnabledProperty, value);
     }
 
     public double EditorFontSize
@@ -302,6 +337,14 @@ public partial class CodeEditorControl : UserControl
         _minimap = this.FindControl<MinimapControl>("Minimap");
         _minimap?.AttachEditor(_textEditor);
 
+        // Initialize sticky scroll
+        _stickyScroll = this.FindControl<StickyScrollControl>("StickyScroll");
+        if (_stickyScroll != null)
+        {
+            _stickyScroll.AttachEditor(_textEditor);
+            _stickyScroll.LineClicked += OnStickyScrollLineClicked;
+        }
+
         // Initialize inline find/replace overlay
         _inlineFindReplace = this.FindControl<InlineFindReplaceControl>("InlineFindReplace");
         _inlineFindReplace?.AttachToEditor(_textEditor);
@@ -353,8 +396,17 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.TextView.LineTransformers.Add(_textMarkerService);
         _textEditor.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
 
+        // Setup diagnostic gutter margin (error/warning/info icons)
+        _diagnosticMargin = new DiagnosticMargin(_textEditor);
+        _textEditor.TextArea.LeftMargins.Insert(0, _diagnosticMargin);
+
         // Setup bracket highlighter
         _textEditor.TextArea.TextView.LineTransformers.Add(_bracketHighlighter);
+
+        // Setup bracket pair colorization (colors nested brackets by depth)
+        _bracketPairColorizer.IsEnabled = BracketPairColorization;
+        _bracketPairColorizer.Invalidate(_textEditor.Document);
+        _textEditor.TextArea.TextView.LineTransformers.Add(_bracketPairColorizer);
 
         // Setup multi-cursor support
         _multiCursorManager = new MultiCursorManager(_textEditor);
@@ -1217,6 +1269,9 @@ public partial class CodeEditorControl : UserControl
 
         TextChanged?.Invoke(this, EventArgs.Empty);
 
+        // Rebuild bracket pair colorization depth map
+        _bracketPairColorizer.Invalidate(_textEditor.Document);
+
         // Restart folding update timer
         _foldingUpdateTimer?.Stop();
         _foldingUpdateTimer?.Start();
@@ -1545,6 +1600,13 @@ public partial class CodeEditorControl : UserControl
             {
                 ApplyDocument(newDoc);
                 _hasLoadedInitialText = true;  // Document has undo history, don't overwrite
+            }
+        }
+        else if (change.Property == StickyScrollEnabledProperty)
+        {
+            if (_stickyScroll != null)
+            {
+                _stickyScroll.IsEnabled2 = change.GetNewValue<bool>();
             }
         }
     }
@@ -2987,6 +3049,36 @@ public partial class CodeEditorControl : UserControl
 
     #endregion
 
+    #region Inline Blame Annotations
+
+    private TextMarkers.InlineBlameRenderer? _inlineBlameRenderer;
+
+    /// <summary>
+    /// Shows an inline git blame annotation after the end of the specified line.
+    /// </summary>
+    public void ShowInlineBlame(int lineNumber, string annotationText)
+    {
+        if (_textEditor?.TextArea?.TextView == null) return;
+
+        if (_inlineBlameRenderer == null)
+        {
+            _inlineBlameRenderer = new TextMarkers.InlineBlameRenderer(_textEditor);
+            _textEditor.TextArea.TextView.BackgroundRenderers.Add(_inlineBlameRenderer);
+        }
+
+        _inlineBlameRenderer.SetAnnotation(lineNumber, annotationText);
+    }
+
+    /// <summary>
+    /// Clears the inline blame annotation.
+    /// </summary>
+    public void ClearInlineBlame()
+    {
+        _inlineBlameRenderer?.Clear();
+    }
+
+    #endregion
+
     #region Code Lens
 
     private TextMarkers.CodeLensRenderer? _codeLensRenderer;
@@ -3141,10 +3233,13 @@ public partial class CodeEditorControl : UserControl
     {
         if (_textMarkerService == null || _textEditor == null) return;
 
+        // Materialize the enumerable so we can iterate twice (squiggles + gutter icons)
+        var diagnosticList = diagnostics as IList<DiagnosticItem> ?? diagnostics.ToList();
+
         // Clear existing markers
         _textMarkerService.Clear();
 
-        foreach (var diagnostic in diagnostics)
+        foreach (var diagnostic in diagnosticList)
         {
             try
             {
@@ -3184,6 +3279,9 @@ public partial class CodeEditorControl : UserControl
                 // Ignore invalid diagnostics
             }
         }
+
+        // Update diagnostic gutter margin icons
+        _diagnosticMargin?.UpdateDiagnostics(diagnosticList);
 
         _textEditor.TextArea.TextView.Redraw();
     }
@@ -3374,6 +3472,53 @@ public partial class CodeEditorControl : UserControl
         _textEditor.Focus();
     }
 
+    /// <summary>
+    /// Handles click on a sticky scroll header line to navigate to that line.
+    /// </summary>
+    private void OnStickyScrollLineClicked(object? sender, int lineNumber)
+    {
+        GoToLine(lineNumber);
+    }
+
+    #endregion
+
+    #region Git Gutter
+
+    /// <summary>
+    /// Initializes the git gutter margin (narrow colored bar showing added/modified/deleted lines).
+    /// Should be called once when the editor is ready.
+    /// </summary>
+    public void InitializeGitGutter()
+    {
+        if (_textEditor == null || _gitGutterMargin != null) return;
+
+        _gitGutterMargin = new GitGutterMargin(_textEditor);
+
+        // Insert at position 0 (leftmost, before bookmarks and breakpoints)
+        _textEditor.TextArea.LeftMargins.Insert(0, _gitGutterMargin);
+    }
+
+    /// <summary>
+    /// Updates the git gutter with the given line changes.
+    /// </summary>
+    public void SetGitChanges(IReadOnlyList<GitLineChange> changes)
+    {
+        if (_gitGutterMargin == null)
+            InitializeGitGutter();
+
+        _gitGutterMargin?.SetChanges(changes);
+        _textEditor?.TextArea.TextView.Redraw();
+    }
+
+    /// <summary>
+    /// Clears all git gutter indicators.
+    /// </summary>
+    public void ClearGitChanges()
+    {
+        _gitGutterMargin?.ClearChanges();
+        _textEditor?.TextArea.TextView.Redraw();
+    }
+
     #endregion
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -3389,6 +3534,8 @@ public partial class CodeEditorControl : UserControl
         _hoverTimer?.Stop();
         _hoverTimer?.Dispose();
         _hoverTimer = null;
+
+        _stickyScroll?.DetachEditor();
     }
 }
 

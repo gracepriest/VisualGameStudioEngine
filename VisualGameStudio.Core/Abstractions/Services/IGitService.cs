@@ -286,6 +286,11 @@ public interface IGitService
     Task<string?> GetFileContentAtCommitAsync(string filePath, string commitHash);
 
     /// <summary>
+    /// Gets line-level diff information for a file (compared to last commit)
+    /// </summary>
+    Task<IReadOnlyList<GitLineChange>> GetLineChangesAsync(string filePath);
+
+    /// <summary>
     /// Raised when an operation progresses
     /// </summary>
     event EventHandler<GitProgress>? Progress;
@@ -306,6 +311,20 @@ public class GitFileChange
     public string FileName => Path.GetFileName(FilePath);
     public GitFileStatus Status { get; set; }
     public bool IsStaged { get; set; }
+}
+
+public class GitLineChange
+{
+    public int StartLine { get; set; }
+    public int EndLine { get; set; }
+    public GitLineChangeKind Kind { get; set; }
+}
+
+public enum GitLineChangeKind
+{
+    Added,
+    Modified,
+    Deleted
 }
 
 public enum GitFileStatus
@@ -385,8 +404,38 @@ public class GitBlameLine
     public string ShortHash => CommitHash.Length >= 7 ? CommitHash[..7] : CommitHash;
     public string Author { get; set; } = "";
     public DateTime Date { get; set; }
+    public string Message { get; set; } = "";
     public string LineContent { get; set; } = "";
     public bool IsOriginal { get; set; }
+
+    /// <summary>
+    /// Returns a human-readable relative time string (e.g., "2 days ago").
+    /// </summary>
+    public string RelativeDate
+    {
+        get
+        {
+            var span = DateTime.Now - Date;
+            if (span.TotalMinutes < 1) return "just now";
+            if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes} minute{((int)span.TotalMinutes == 1 ? "" : "s")} ago";
+            if (span.TotalHours < 24) return $"{(int)span.TotalHours} hour{((int)span.TotalHours == 1 ? "" : "s")} ago";
+            if (span.TotalDays < 30) return $"{(int)span.TotalDays} day{((int)span.TotalDays == 1 ? "" : "s")} ago";
+            if (span.TotalDays < 365) return $"{(int)(span.TotalDays / 30)} month{((int)(span.TotalDays / 30) == 1 ? "" : "s")} ago";
+            return $"{(int)(span.TotalDays / 365)} year{((int)(span.TotalDays / 365) == 1 ? "" : "s")} ago";
+        }
+    }
+
+    /// <summary>
+    /// Formatted blame annotation string: "Author, time ago - message"
+    /// </summary>
+    public string AnnotationText
+    {
+        get
+        {
+            var msg = Message.Length > 50 ? Message[..47] + "..." : Message;
+            return $"{Author}, {RelativeDate} — {msg}";
+        }
+    }
 }
 
 public class GitRebaseResult
@@ -465,3 +514,4 @@ public class GitProgress
     public double? ProgressPercentage { get; set; }
     public string? Message { get; set; }
 }
+

@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:VisualGameStudio.Shell.ViewModels"
         xmlns:dock="using:Dock.Avalonia.Controls"
+        xmlns:local="using:VisualGameStudio.Shell.Converters"
         mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
         x:Class="VisualGameStudio.Shell.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -50,6 +51,9 @@
     <KeyBinding Gesture="Ctrl+Shift+X" Command="{Binding ExtractInterfaceCommand}"/>
     <KeyBinding Gesture="Ctrl+Shift+G" Command="{Binding GenerateConstructorCommand}"/>
     <KeyBinding Gesture="Ctrl+OemPeriod" Command="{Binding ImplementInterfaceCommand}"/>
+    <!-- Error navigation shortcuts -->
+    <KeyBinding Gesture="F8" Command="{Binding GoToNextErrorCommand}"/>
+    <KeyBinding Gesture="Shift+F8" Command="{Binding GoToPreviousErrorCommand}"/>
     <!-- Panel shortcuts -->
     <KeyBinding Gesture="Ctrl+Alt+B" Command="{Binding ShowBreakpointsCommand}"/>
     <KeyBinding Gesture="Ctrl+Alt+O" Command="{Binding ShowOutputCommand}"/>
@@ -59,6 +63,9 @@
     <KeyBinding Gesture="Ctrl+Alt+W" Command="{Binding ShowWatchCommand}"/>
     <KeyBinding Gesture="Ctrl+Alt+I" Command="{Binding ShowImmediateWindowCommand}"/>
     <KeyBinding Gesture="Ctrl+Alt+X" Command="{Binding ShowExceptionSettingsCommand}"/>
+    <!-- Terminal shortcuts -->
+    <KeyBinding Gesture="Ctrl+OemTilde" Command="{Binding ShowTerminalCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+OemTilde" Command="{Binding CreateNewTerminalCommand}"/>
     <!-- Command Palette -->
     <KeyBinding Gesture="Ctrl+Shift+P" Command="{Binding OpenCommandPaletteCommand}"/>
     <!-- Quick Open (File Search) -->
@@ -147,7 +154,10 @@
         <MenuItem Header="_Solution Explorer" Command="{Binding ShowSolutionExplorerCommand}"/>
         <MenuItem Header="_Output" Command="{Binding ShowOutputCommand}"/>
         <MenuItem Header="_Error List" Command="{Binding ShowErrorListCommand}"/>
-        <MenuItem Header="_Terminal" Command="{Binding ShowTerminalCommand}"/>
+        <MenuItem Header="_Next Error" Command="{Binding GoToNextErrorCommand}" InputGesture="F8"/>
+        <MenuItem Header="Pre_vious Error" Command="{Binding GoToPreviousErrorCommand}" InputGesture="Shift+F8"/>
+        <MenuItem Header="_Terminal" Command="{Binding ShowTerminalCommand}" InputGesture="Ctrl+OemTilde"/>
+        <MenuItem Header="New Ter_minal" Command="{Binding CreateNewTerminalCommand}" InputGesture="Ctrl+Shift+OemTilde"/>
         <MenuItem Header="Find _Results" Command="{Binding ShowFindResultsCommand}"/>
         <Separator/>
         <MenuItem Header="Show _Whitespace" Command="{Binding ToggleWhitespaceCommand}" InputGesture="Ctrl+Shift+W">
@@ -276,23 +286,76 @@
 
     <!-- Status Bar -->
     <Border DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}">
-      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
-        <!-- Status message (left-aligned, fills remaining space) -->
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+        <!-- Status message -->
         <TextBlock Grid.Column="0"
                    Text="{Binding StatusText}"
                    VerticalAlignment="Center"
                    Margin="8,0"
                    Foreground="White"/>
 
-        <!-- Build configuration -->
+        <!-- Git blame annotation for current line -->
         <TextBlock Grid.Column="1"
+                   Text="{Binding BlameAnnotationText}"
+                   VerticalAlignment="Center"
+                   Margin="12,0,8,0"
+                   Foreground="#808080"
+                   FontSize="11"
+                   MaxWidth="400"
+                   TextTrimming="CharacterEllipsis"
+                   IsVisible="{Binding BlameAnnotationText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   ToolTip.Tip="Git blame for current line"/>
+
+        <!-- Spacer -->
+        <Border Grid.Column="2"/>
+
+        <!-- Diagnostic counts (errors + warnings) - clickable to open Error List -->
+        <Border Grid.Column="3" Padding="6,0" Cursor="Hand"
+                Background="Transparent"
+                PointerPressed="OnDiagnosticCountsClicked"
+                ToolTip.Tip="Show Error List (Ctrl+Alt+E)">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
+            <!-- Error count -->
+            <StackPanel Orientation="Horizontal" Spacing="3">
+              <Border Width="14" Height="14" CornerRadius="7"
+                      Background="#E51400" VerticalAlignment="Center">
+                <TextBlock Text="x" Foreground="White" FontSize="9" FontWeight="Bold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Margin="0,-1,0,0"/>
+              </Border>
+              <TextBlock Text="{Binding ErrorList.ErrorCount}"
+                         Foreground="{Binding ErrorList.ErrorCount, Converter={x:Static local:DiagnosticCountColorConverter.ErrorInstance}}"
+                         VerticalAlignment="Center" FontSize="12"/>
+            </StackPanel>
+            <!-- Warning count -->
+            <StackPanel Orientation="Horizontal" Spacing="3">
+              <TextBlock Text="&#x26A0;" Foreground="#F0AD4E" FontSize="13"
+                         VerticalAlignment="Center" Margin="0,-1,0,0"/>
+              <TextBlock Text="{Binding ErrorList.WarningCount}"
+                         Foreground="{Binding ErrorList.WarningCount, Converter={x:Static local:DiagnosticCountColorConverter.WarningInstance}}"
+                         VerticalAlignment="Center" FontSize="12"/>
+            </StackPanel>
+            <!-- Info count (only visible when > 0) -->
+            <StackPanel Orientation="Horizontal" Spacing="3"
+                        IsVisible="{Binding ErrorList.MessageCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
+              <TextBlock Text="&#x2139;" Foreground="#58A6FF" FontSize="13"
+                         VerticalAlignment="Center" Margin="0,-1,0,0"/>
+              <TextBlock Text="{Binding ErrorList.MessageCount}"
+                         Foreground="#58A6FF"
+                         VerticalAlignment="Center" FontSize="12"/>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- Build configuration -->
+        <TextBlock Grid.Column="4"
                    Text="{Binding CurrentConfiguration}"
                    VerticalAlignment="Center"
                    Margin="8,0"
                    Foreground="White"/>
 
         <!-- Caret position -->
-        <TextBlock Grid.Column="2"
+        <TextBlock Grid.Column="5"
                    VerticalAlignment="Center"
                    Margin="8,0"
                    Foreground="White">
@@ -305,7 +368,7 @@
         </TextBlock>
 
         <!-- Indentation indicator (clickable) -->
-        <Border Grid.Column="3" Padding="4,0" Cursor="Hand"
+        <Border Grid.Column="6" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
                 PointerPressed="OnIndentationClicked">
           <TextBlock Text="{Binding StatusBar.Indentation}"
@@ -316,7 +379,7 @@
         </Border>
 
         <!-- Encoding indicator (clickable) -->
-        <Border Grid.Column="4" Padding="4,0" Cursor="Hand"
+        <Border Grid.Column="7" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
                 PointerPressed="OnEncodingClicked">
           <TextBlock Text="{Binding StatusBar.Encoding}"
@@ -327,7 +390,7 @@
         </Border>
 
         <!-- Line ending indicator (clickable) -->
-        <Border Grid.Column="5" Padding="4,0" Cursor="Hand"
+        <Border Grid.Column="8" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
                 PointerPressed="OnLineEndingClicked">
           <TextBlock Text="{Binding StatusBar.LineEnding}"
@@ -338,7 +401,7 @@
         </Border>
 
         <!-- Language mode indicator (clickable) -->
-        <Border Grid.Column="6" Padding="4,0" Cursor="Hand"
+        <Border Grid.Column="9" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
                 PointerPressed="OnLanguageModeClicked">
           <TextBlock Text="{Binding StatusBar.LanguageMode}"
@@ -349,7 +412,7 @@
         </Border>
 
         <!-- Ctrl+Shift+P hint -->
-        <Border Grid.Column="7" Padding="4,0" Cursor="Hand"
+        <Border Grid.Column="10" Padding="4,0" Cursor="Hand"
                 Background="Transparent"
                 PointerPressed="OnCommandPaletteHintClicked">
           <TextBlock Text="Ctrl+Shift+P"

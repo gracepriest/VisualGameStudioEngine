@@ -10,8 +10,74 @@
         Width="800" Height="600"
         WindowStartupLocation="CenterOwner">
 
-  <Grid RowDefinitions="*,Auto" Background="{DynamicResource IdeBg}">
-    <TabControl Grid.Row="0" Margin="16">
+  <Grid RowDefinitions="Auto,*,Auto" Background="{DynamicResource IdeBg}">
+
+    <!-- Search Bar -->
+    <Border Grid.Row="0" Margin="16,16,16,0" Padding="8" Background="{DynamicResource IdePanelBg}" CornerRadius="4">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Column="0" Text="&#x1F50D;" VerticalAlignment="Center" Margin="4,0,8,0" FontSize="14"/>
+        <TextBox Grid.Column="1"
+                 Text="{Binding SearchText, Mode=TwoWay}"
+                 Watermark="Search settings..."
+                 BorderThickness="0"
+                 Background="Transparent"/>
+        <Button Grid.Column="2"
+                Content="&#x2715;"
+                Command="{Binding ClearSearchCommand}"
+                IsVisible="{Binding IsSearchActive}"
+                Background="Transparent"
+                BorderThickness="0"
+                Padding="8,4"
+                VerticalAlignment="Center"/>
+      </Grid>
+    </Border>
+
+    <!-- Filtered Search Results (visible when searching) -->
+    <ScrollViewer Grid.Row="1" Margin="16" IsVisible="{Binding IsSearchActive}">
+      <ItemsControl ItemsSource="{Binding FilteredSettings}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:SearchableSettingItem">
+            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="12" Margin="0,0,0,8">
+              <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                <!-- Setting name and category badge -->
+                <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                  <Border Background="{DynamicResource IdeFooterBg}" CornerRadius="3" Padding="6,2">
+                    <TextBlock Text="{Binding Category}" FontSize="11" Opacity="0.7"/>
+                  </Border>
+                </StackPanel>
+
+                <!-- Control for the setting (only one visible based on ControlKind) -->
+                <Panel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center">
+                  <CheckBox IsChecked="{Binding BoolValue}"
+                            IsVisible="{Binding IsCheckBox}"
+                            Content=""/>
+                  <NumericUpDown Value="{Binding IntValue}"
+                                Minimum="{Binding Minimum}"
+                                Maximum="{Binding Maximum}"
+                                Increment="{Binding Increment}"
+                                Width="100"
+                                IsVisible="{Binding IsNumericUpDown}"/>
+                  <ComboBox ItemsSource="{Binding Choices}"
+                            SelectedItem="{Binding StringValue}"
+                            MinWidth="160"
+                            IsVisible="{Binding IsComboBox}"/>
+                </Panel>
+
+                <!-- Description -->
+                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                           Text="{Binding Description}"
+                           FontSize="12" Opacity="0.6" TextWrapping="Wrap"
+                           Margin="0,4,0,0"/>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <!-- Tabbed View (hidden when searching) -->
+    <TabControl Grid.Row="1" Margin="16" IsVisible="{Binding !IsSearchActive}">
       <!-- Editor Tab -->
       <TabItem Header="Editor">
         <ScrollViewer>
@@ -228,7 +294,7 @@
     </TabControl>
 
     <!-- Buttons -->
-    <Border Grid.Row="1"
+    <Border Grid.Row="2"
             Background="{DynamicResource IdeFooterBg}"
             Padding="16,12"
             BorderThickness="0,1,0,0"
