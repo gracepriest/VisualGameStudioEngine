@@ -1,0 +1,486 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:local="using:VisualGameStudio.Shell.Converters"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="600"
+             x:Class="VisualGameStudio.Shell.Views.Panels.ExtensionsView"
+             x:DataType="vm:ExtensionsViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+
+      <!-- Panel Header -->
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Text="Extensions" Classes="panelTitle"/>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Refresh"
+                    Command="{Binding RefreshCommand}"
+                    Width="24" Height="24"
+                    AutomationProperties.Name="Refresh Extensions">
+              <TextBlock Text="&#x21BB;" FontSize="14"/>
+            </Button>
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Open Extensions Folder"
+                    Command="{Binding OpenExtensionSettingsCommand}"
+                    Width="24" Height="24"
+                    AutomationProperties.Name="Open Extensions Folder">
+              <TextBlock Text="&#x2699;" FontSize="14"/>
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- Search Box -->
+      <Border DockPanel.Dock="Top" Padding="8,6" Background="#252526">
+        <Grid ColumnDefinitions="Auto,*">
+          <TextBlock Grid.Column="0"
+                     Text="&#x1F50D;"
+                     FontSize="14"
+                     VerticalAlignment="Center"
+                     Margin="0,0,6,0"
+                     Foreground="#808080"/>
+          <TextBox Grid.Column="1"
+                   Text="{Binding SearchQuery, Mode=TwoWay}"
+                   Watermark="Search Extensions in Marketplace..."
+                   Background="#3C3C3C"
+                   Foreground="#CCCCCC"
+                   BorderBrush="#555555"
+                   BorderThickness="1"
+                   CornerRadius="3"
+                   Padding="6,4"
+                   FontSize="13"
+                   AutomationProperties.Name="Search Extensions"/>
+        </Grid>
+      </Border>
+
+      <!-- Filter Buttons -->
+      <Border DockPanel.Dock="Top" Padding="8,4" Background="#252526"
+              BorderThickness="0,0,0,1" BorderBrush="#3C3C3C">
+        <StackPanel Orientation="Horizontal" Spacing="4">
+          <Button Content="Installed"
+                  Command="{Binding SetFilterCommand}"
+                  CommandParameter="Installed"
+                  Classes="filterButton"
+                  Classes.active="{Binding ActiveFilter, Converter={StaticResource StringEqualConverter}, ConverterParameter=Installed}"
+                  AutomationProperties.Name="Show Installed Extensions"/>
+          <Button Content="Popular"
+                  Command="{Binding SetFilterCommand}"
+                  CommandParameter="Popular"
+                  Classes="filterButton"
+                  Classes.active="{Binding ActiveFilter, Converter={StaticResource StringEqualConverter}, ConverterParameter=Popular}"
+                  AutomationProperties.Name="Show Popular Extensions"/>
+          <Button Content="Recommended"
+                  Command="{Binding SetFilterCommand}"
+                  CommandParameter="Recommended"
+                  Classes="filterButton"
+                  Classes.active="{Binding ActiveFilter, Converter={StaticResource StringEqualConverter}, ConverterParameter=Recommended}"
+                  AutomationProperties.Name="Show Recommended Extensions"/>
+        </StackPanel>
+      </Border>
+
+      <!-- Status / Loading -->
+      <Border DockPanel.Dock="Bottom" Padding="8,4" Background="#252526"
+              BorderThickness="0,1,0,0" BorderBrush="#3C3C3C"
+              IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <TextBlock Text="{Binding StatusMessage}"
+                   Foreground="#808080"
+                   FontSize="11"
+                   TextTrimming="CharacterEllipsis"/>
+      </Border>
+
+      <!-- Main Content Area -->
+      <Grid>
+        <!-- Loading Spinner Overlay -->
+        <Border IsVisible="{Binding IsSearching}"
+                Background="#80252526"
+                ZIndex="10">
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+            <ProgressBar IsIndeterminate="True" Width="120"/>
+            <TextBlock Text="Searching..." Foreground="#CCCCCC" FontSize="12"
+                       HorizontalAlignment="Center"/>
+          </StackPanel>
+        </Border>
+
+        <!-- Installing Overlay -->
+        <Border IsVisible="{Binding IsInstalling}"
+                Background="#80252526"
+                ZIndex="10">
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+            <ProgressBar IsIndeterminate="True" Width="120"/>
+            <TextBlock Text="Installing..." Foreground="#CCCCCC" FontSize="12"
+                       HorizontalAlignment="Center"/>
+          </StackPanel>
+        </Border>
+
+        <!-- Detail View (when an extension is selected) -->
+        <Border IsVisible="{Binding ShowDetail}"
+                Background="#1E1E1E">
+          <DockPanel>
+            <!-- Back button -->
+            <Border DockPanel.Dock="Top" Padding="8,6" Background="#252526"
+                    BorderThickness="0,0,0,1" BorderBrush="#3C3C3C">
+              <Button Content="&#x2190; Back"
+                      Command="{Binding BackToListCommand}"
+                      Background="Transparent"
+                      Foreground="#569CD6"
+                      BorderThickness="0"
+                      Cursor="Hand"
+                      Padding="4,2"
+                      FontSize="12"/>
+            </Border>
+
+            <!-- Extension Detail Header -->
+            <Border DockPanel.Dock="Top" Padding="12,10" Background="#252526">
+              <DockPanel>
+                <!-- Icon -->
+                <Border DockPanel.Dock="Left"
+                        Width="48" Height="48"
+                        CornerRadius="4"
+                        Background="#3C3C3C"
+                        Margin="0,0,12,0">
+                  <TextBlock Text="&#x1F9E9;"
+                             FontSize="24"
+                             HorizontalAlignment="Center"
+                             VerticalAlignment="Center"/>
+                </Border>
+
+                <!-- Info -->
+                <StackPanel Spacing="2">
+                  <TextBlock Text="{Binding SelectedExtension.DisplayName}"
+                             Foreground="#E0E0E0"
+                             FontSize="16"
+                             FontWeight="SemiBold"/>
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="{Binding SelectedExtension.Publisher}"
+                               Foreground="#808080" FontSize="12"/>
+                    <TextBlock Text="|" Foreground="#404040" FontSize="12"/>
+                    <TextBlock Text="{Binding SelectedExtension.Version}"
+                               Foreground="#808080" FontSize="12"/>
+                    <TextBlock Text="|" Foreground="#404040" FontSize="12"
+                               IsVisible="{Binding SelectedExtension.InstallCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"/>
+                    <TextBlock Foreground="#808080" FontSize="12"
+                               IsVisible="{Binding SelectedExtension.InstallCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
+                      <TextBlock.Text>
+                        <MultiBinding StringFormat="{}{0} installs">
+                          <Binding Path="SelectedExtension.FormattedInstallCount"/>
+                        </MultiBinding>
+                      </TextBlock.Text>
+                    </TextBlock>
+                  </StackPanel>
+                  <TextBlock Text="{Binding SelectedExtension.Description}"
+                             Foreground="#AAAAAA"
+                             FontSize="12"
+                             TextWrapping="Wrap"
+                             MaxLines="2"
+                             Margin="0,4,0,0"/>
+
+                  <!-- Action Buttons -->
+                  <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                    <Button Content="Install"
+                            Command="{Binding InstallCommand}"
+                            CommandParameter="{Binding SelectedExtension}"
+                            IsVisible="{Binding SelectedExtension.IsInstalled, Converter={x:Static BoolConverters.Not}}"
+                            Background="#388A34"
+                            Foreground="White"
+                            FontWeight="SemiBold"
+                            Padding="16,6"
+                            CornerRadius="3"
+                            FontSize="12"/>
+                    <Button Content="Uninstall"
+                            Command="{Binding UninstallCommand}"
+                            CommandParameter="{Binding SelectedExtension}"
+                            IsVisible="{Binding SelectedExtension.IsInstalled}"
+                            Background="Transparent"
+                            Foreground="#E51400"
+                            BorderBrush="#E51400"
+                            BorderThickness="1"
+                            Padding="12,6"
+                            CornerRadius="3"
+                            FontSize="12"/>
+                    <Button Content="Disable"
+                            Command="{Binding DisableCommand}"
+                            CommandParameter="{Binding SelectedExtension}"
+                            IsVisible="{Binding SelectedExtension.IsEnabled}"
+                            Background="Transparent"
+                            Foreground="#808080"
+                            BorderBrush="#555555"
+                            BorderThickness="1"
+                            Padding="12,6"
+                            CornerRadius="3"
+                            FontSize="12"/>
+                    <Button Content="Enable"
+                            Command="{Binding EnableCommand}"
+                            CommandParameter="{Binding SelectedExtension}"
+                            IsVisible="{Binding SelectedExtension.IsEnabled, Converter={x:Static BoolConverters.Not}}"
+                            Background="Transparent"
+                            Foreground="#569CD6"
+                            BorderBrush="#569CD6"
+                            BorderThickness="1"
+                            Padding="12,6"
+                            CornerRadius="3"
+                            FontSize="12"/>
+                  </StackPanel>
+                </StackPanel>
+              </DockPanel>
+            </Border>
+
+            <!-- Detail content -->
+            <ScrollViewer Padding="12,8">
+              <TextBlock Text="{Binding SelectedExtension.DetailMarkdown}"
+                         Foreground="#CCCCCC"
+                         FontSize="13"
+                         TextWrapping="Wrap"
+                         LineHeight="20"/>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+
+        <!-- List View (when no extension is selected) -->
+        <DockPanel IsVisible="{Binding !ShowDetail}">
+
+          <!-- "No extensions found" message -->
+          <Border IsVisible="{Binding !HasSearchResults}"
+                  DockPanel.Dock="Top"
+                  Padding="16">
+            <TextBlock Text="No extensions found."
+                       Foreground="#808080"
+                       FontSize="13"
+                       HorizontalAlignment="Center"/>
+          </Border>
+
+          <!-- Extension List: Show SearchResults when searching, InstalledExtensions otherwise -->
+          <ListBox ItemsSource="{Binding SearchResults}"
+                   SelectedItem="{Binding SelectedExtension}"
+                   Background="Transparent"
+                   IsVisible="{Binding ActiveFilter, Converter={StaticResource StringNotEqualConverter}, ConverterParameter=Installed}"
+                   AutomationProperties.Name="Marketplace Extensions">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ExtensionItemViewModel">
+                <Border Padding="8,6"
+                        Background="Transparent"
+                        CornerRadius="3"
+                        Margin="0,1">
+                  <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                    <!-- Icon -->
+                    <Border Grid.Column="0" Grid.RowSpan="2"
+                            Width="32" Height="32"
+                            CornerRadius="4"
+                            Background="#3C3C3C"
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Top">
+                      <TextBlock Text="&#x1F9E9;"
+                                 FontSize="16"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center"/>
+                    </Border>
+
+                    <!-- Name + Publisher + Version -->
+                    <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="{Binding DisplayName}"
+                                 Foreground="#E0E0E0"
+                                 FontSize="13"
+                                 FontWeight="SemiBold"
+                                 TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Text="{Binding Version}"
+                                 Foreground="#606060"
+                                 FontSize="11"
+                                 VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Install button / Installed badge -->
+                    <Panel Grid.Column="2" Grid.Row="0" VerticalAlignment="Center">
+                      <Button Content="Install"
+                              Command="{Binding $parent[ListBox].((vm:ExtensionsViewModel)DataContext).InstallCommand}"
+                              CommandParameter="{Binding}"
+                              IsVisible="{Binding !IsInstalled}"
+                              Background="#388A34"
+                              Foreground="White"
+                              FontSize="11"
+                              Padding="10,3"
+                              CornerRadius="3"
+                              MinHeight="0"/>
+                      <TextBlock Text="Installed"
+                                 IsVisible="{Binding IsInstalled}"
+                                 Foreground="#388A34"
+                                 FontSize="11"
+                                 VerticalAlignment="Center"/>
+                    </Panel>
+
+                    <!-- Description -->
+                    <TextBlock Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                               Text="{Binding Description}"
+                               Foreground="#808080"
+                               FontSize="11"
+                               TextTrimming="CharacterEllipsis"
+                               MaxLines="1"
+                               Margin="0,2,0,0"/>
+                  </Grid>
+
+                  <!-- Rating + Publisher Row -->
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+
+            <ListBox.Styles>
+              <Style Selector="ListBoxItem">
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Margin" Value="0"/>
+                <Setter Property="MinHeight" Value="0"/>
+              </Style>
+              <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                <Setter Property="Background" Value="#2A2D2E"/>
+              </Style>
+              <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                <Setter Property="Background" Value="#094771"/>
+              </Style>
+            </ListBox.Styles>
+          </ListBox>
+
+          <!-- Installed Extensions List -->
+          <ListBox ItemsSource="{Binding InstalledExtensions}"
+                   SelectedItem="{Binding SelectedExtension}"
+                   Background="Transparent"
+                   IsVisible="{Binding ActiveFilter, Converter={StaticResource StringEqualConverter}, ConverterParameter=Installed}"
+                   AutomationProperties.Name="Installed Extensions">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ExtensionItemViewModel">
+                <Border Padding="8,6"
+                        Background="Transparent"
+                        CornerRadius="3"
+                        Margin="0,1">
+                  <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                    <!-- Icon -->
+                    <Border Grid.Column="0" Grid.RowSpan="2"
+                            Width="32" Height="32"
+                            CornerRadius="4"
+                            Background="#3C3C3C"
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Top">
+                      <TextBlock Text="&#x1F9E9;"
+                                 FontSize="16"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center"/>
+                    </Border>
+
+                    <!-- Name + Version -->
+                    <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="{Binding DisplayName}"
+                                 Foreground="#E0E0E0"
+                                 FontSize="13"
+                                 FontWeight="SemiBold"
+                                 TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Text="{Binding Version}"
+                                 Foreground="#606060"
+                                 FontSize="11"
+                                 VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Enable/Disable + Uninstall -->
+                    <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="4"
+                                VerticalAlignment="Center">
+                      <Button ToolTip.Tip="Disable"
+                              Command="{Binding $parent[ListBox].((vm:ExtensionsViewModel)DataContext).DisableCommand}"
+                              CommandParameter="{Binding}"
+                              IsVisible="{Binding IsEnabled}"
+                              Background="Transparent"
+                              Foreground="#808080"
+                              BorderThickness="0"
+                              Padding="4,2"
+                              MinHeight="0"
+                              FontSize="11">
+                        <TextBlock Text="Disable" FontSize="11"/>
+                      </Button>
+                      <Button ToolTip.Tip="Enable"
+                              Command="{Binding $parent[ListBox].((vm:ExtensionsViewModel)DataContext).EnableCommand}"
+                              CommandParameter="{Binding}"
+                              IsVisible="{Binding !IsEnabled}"
+                              Background="Transparent"
+                              Foreground="#569CD6"
+                              BorderThickness="0"
+                              Padding="4,2"
+                              MinHeight="0"
+                              FontSize="11">
+                        <TextBlock Text="Enable" FontSize="11"/>
+                      </Button>
+                      <Button ToolTip.Tip="Uninstall"
+                              Command="{Binding $parent[ListBox].((vm:ExtensionsViewModel)DataContext).UninstallCommand}"
+                              CommandParameter="{Binding}"
+                              Background="Transparent"
+                              Foreground="#E51400"
+                              BorderThickness="0"
+                              Padding="4,2"
+                              MinHeight="0">
+                        <TextBlock Text="&#x2716;" FontSize="11"/>
+                      </Button>
+                    </StackPanel>
+
+                    <!-- Description + Status -->
+                    <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                                Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+                      <TextBlock Text="{Binding Description}"
+                                 Foreground="#808080"
+                                 FontSize="11"
+                                 TextTrimming="CharacterEllipsis"
+                                 MaxLines="1"/>
+                      <TextBlock Text="{Binding Status}"
+                                 Foreground="#E5A100"
+                                 FontSize="11"
+                                 IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                    </StackPanel>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+
+            <ListBox.Styles>
+              <Style Selector="ListBoxItem">
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Margin" Value="0"/>
+                <Setter Property="MinHeight" Value="0"/>
+              </Style>
+              <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                <Setter Property="Background" Value="#2A2D2E"/>
+              </Style>
+              <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                <Setter Property="Background" Value="#094771"/>
+              </Style>
+            </ListBox.Styles>
+          </ListBox>
+
+        </DockPanel>
+      </Grid>
+
+    </DockPanel>
+  </Border>
+
+  <UserControl.Resources>
+    <local:StringEqualConverter x:Key="StringEqualConverter"/>
+    <local:StringNotEqualConverter x:Key="StringNotEqualConverter"/>
+  </UserControl.Resources>
+
+  <UserControl.Styles>
+    <Style Selector="Button.filterButton">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#808080"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="CornerRadius" Value="3"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="MinHeight" Value="0"/>
+    </Style>
+    <Style Selector="Button.filterButton:pointerover">
+      <Setter Property="Background" Value="#2A2D2E"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="Button.filterButton.active">
+      <Setter Property="Background" Value="#094771"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+    </Style>
+  </UserControl.Styles>
+
+</UserControl>

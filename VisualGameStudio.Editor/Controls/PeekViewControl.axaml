@@ -1,0 +1,169 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:avalonEdit="https://github.com/avaloniaui/avaloniaedit"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="250"
+             x:Class="VisualGameStudio.Editor.Controls.PeekViewControl"
+             IsVisible="False">
+
+  <Border Background="#252526"
+          BorderThickness="0,3,0,0"
+          BorderBrush="#007ACC"
+          MinHeight="100"
+          MaxHeight="400">
+    <Grid RowDefinitions="Auto,*,Auto">
+
+      <!-- Header Bar -->
+      <Border Grid.Row="0"
+              Background="#2D2D2D"
+              Padding="6,3">
+        <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto">
+
+          <!-- Result navigation (prev/next) -->
+          <Button x:Name="PrevButton"
+                  Grid.Column="0"
+                  Click="OnPreviousResult"
+                  ToolTip.Tip="Previous Result"
+                  Background="Transparent"
+                  Padding="4,2"
+                  MinWidth="20" MinHeight="20"
+                  VerticalAlignment="Center"
+                  IsVisible="False">
+            <TextBlock Text="&#x25C0;" FontSize="10" Foreground="#CCCCCC"/>
+          </Button>
+          <Button x:Name="NextButton"
+                  Grid.Column="1"
+                  Click="OnNextResult"
+                  ToolTip.Tip="Next Result"
+                  Background="Transparent"
+                  Padding="4,2"
+                  MinWidth="20" MinHeight="20"
+                  VerticalAlignment="Center"
+                  IsVisible="False">
+            <TextBlock Text="&#x25B6;" FontSize="10" Foreground="#CCCCCC"/>
+          </Button>
+
+          <!-- Result counter -->
+          <TextBlock x:Name="ResultCounter"
+                     Grid.Column="2"
+                     Foreground="#808080"
+                     FontSize="11"
+                     VerticalAlignment="Center"
+                     Margin="4,0"
+                     IsVisible="False"/>
+
+          <!-- File path + line number -->
+          <StackPanel Grid.Column="3"
+                      Orientation="Horizontal"
+                      Spacing="6"
+                      Margin="4,0"
+                      VerticalAlignment="Center">
+            <TextBlock x:Name="FilePathText"
+                       Foreground="#DCDCAA"
+                       FontSize="12"
+                       Cursor="Hand"
+                       PointerPressed="OnFilePathClicked"
+                       ToolTip.Tip="Click to open in editor"/>
+            <TextBlock x:Name="LineInfoText"
+                       Foreground="#808080"
+                       FontSize="11"
+                       VerticalAlignment="Center"/>
+          </StackPanel>
+
+          <!-- Mode label (Definition / References) -->
+          <TextBlock x:Name="ModeLabel"
+                     Grid.Column="4"
+                     Foreground="#569CD6"
+                     FontSize="11"
+                     VerticalAlignment="Center"
+                     Margin="8,0"
+                     Text="Definition"/>
+
+          <!-- Open in editor button -->
+          <Button Grid.Column="5"
+                  Click="OnOpenInEditor"
+                  ToolTip.Tip="Open in Editor (Enter)"
+                  Background="Transparent"
+                  Padding="4,2"
+                  MinWidth="20" MinHeight="20"
+                  VerticalAlignment="Center">
+            <TextBlock Text="&#x2197;" FontSize="14" Foreground="#CCCCCC"/>
+          </Button>
+
+          <!-- Close button -->
+          <Button Grid.Column="6"
+                  Click="OnClose"
+                  ToolTip.Tip="Close (Escape)"
+                  Background="Transparent"
+                  Padding="4,2"
+                  MinWidth="20" MinHeight="20"
+                  VerticalAlignment="Center">
+            <TextBlock Text="&#x2715;" FontSize="12" Foreground="#CCCCCC"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Mini Editor (AvalonEdit instance, read-only) -->
+      <Border Grid.Row="1"
+              Background="#1E1E1E"
+              Margin="0,1,0,0">
+        <Grid>
+          <!-- Loading overlay -->
+          <Border x:Name="LoadingOverlay"
+                  Background="#1E1E1E"
+                  ZIndex="10"
+                  IsVisible="False">
+            <TextBlock Text="Loading definition..."
+                       Foreground="#808080"
+                       FontSize="12"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"/>
+          </Border>
+
+          <!-- Error overlay -->
+          <Border x:Name="ErrorOverlay"
+                  Background="#1E1E1E"
+                  ZIndex="10"
+                  IsVisible="False"
+                  Padding="16">
+            <TextBlock x:Name="ErrorText"
+                       Foreground="#F48771"
+                       FontSize="12"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"/>
+          </Border>
+
+          <!-- The mini AvalonEdit editor -->
+          <avalonEdit:TextEditor x:Name="PeekEditor"
+                                 FontFamily="Cascadia Code, Consolas, Courier New, monospace"
+                                 FontSize="12"
+                                 ShowLineNumbers="True"
+                                 WordWrap="False"
+                                 IsReadOnly="True"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Background="#1E1E1E"
+                                 Foreground="#D4D4D4"/>
+        </Grid>
+      </Border>
+
+      <!-- Footer with resize grip -->
+      <Border Grid.Row="2"
+              Background="#2D2D2D"
+              Height="4"
+              Cursor="SizeNS"
+              PointerPressed="OnResizeGripPressed"
+              PointerMoved="OnResizeGripMoved"
+              PointerReleased="OnResizeGripReleased">
+        <Border Background="#007ACC"
+                Height="2"
+                HorizontalAlignment="Center"
+                Width="30"
+                VerticalAlignment="Center"
+                CornerRadius="1"/>
+      </Border>
+    </Grid>
+  </Border>
+
+</UserControl>

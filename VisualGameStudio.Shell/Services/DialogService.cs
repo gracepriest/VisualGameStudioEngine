@@ -297,14 +297,24 @@ public class DialogService : IDialogService
 
     public async Task<int?> ShowGoToLineDialogAsync(int currentLine, int totalLines)
     {
+        var result = await ShowGoToLineColumnDialogAsync(currentLine, totalLines);
+        return result?.Line;
+    }
+
+    public async Task<GoToLineColumnResult?> ShowGoToLineColumnDialogAsync(int currentLine, int totalLines)
+    {
         var window = GetMainWindow();
         if (window == null) return null;
 
         var viewModel = new ViewModels.Dialogs.GoToLineDialogViewModel(currentLine, totalLines);
         var dialog = new Views.Dialogs.GoToLineDialog(viewModel);
 
-        var result = await dialog.ShowDialog<int?>(window);
-        return result;
+        var result = await dialog.ShowDialog<Views.Dialogs.GoToLineResult?>(window);
+        if (result != null)
+        {
+            return new GoToLineColumnResult { Line = result.Line, Column = result.Column };
+        }
+        return null;
     }
 
     public async Task<GoToSymbolResult?> ShowGoToSymbolDialogAsync(string sourceCode, string? filePath = null)

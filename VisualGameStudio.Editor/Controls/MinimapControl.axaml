@@ -4,20 +4,33 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="100" d:DesignHeight="400"
              x:Class="VisualGameStudio.Editor.Controls.MinimapControl"
-             Background="#1E1E1E"
-             Width="100">
+             Width="100"
+             ClipToBounds="True">
 
-  <Grid>
-    <!-- Code Preview Canvas -->
-    <Canvas x:Name="CodeCanvas"/>
+  <Panel>
+    <!-- Custom-rendered code overview (drawn in OnRender) -->
+    <Border x:Name="RenderSurface"
+            Background="#191919"
+            ClipToBounds="True"/>
 
-    <!-- Viewport Indicator -->
+    <!-- Viewport indicator overlay -->
     <Border x:Name="ViewportIndicator"
-            Background="#40FFFFFF"
-            BorderBrush="#808080"
-            BorderThickness="1"
+            Background="#66264F78"
+            BorderBrush="#40FFFFFF"
+            BorderThickness="0,1,0,1"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Top"
+            Height="40"
             IsHitTestVisible="False"/>
-  </Grid>
+
+    <!-- Hover highlight (brighter region under cursor) -->
+    <Border x:Name="HoverHighlight"
+            Background="#20FFFFFF"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Top"
+            Height="40"
+            IsHitTestVisible="False"
+            IsVisible="False"/>
+  </Panel>
+
 </UserControl>

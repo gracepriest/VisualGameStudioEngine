@@ -1,0 +1,537 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels"
+             xmlns:local="using:VisualGameStudio.Shell.Converters"
+             mc:Ignorable="d"
+             x:Class="VisualGameStudio.Shell.Views.Controls.StatusBarControl"
+             x:DataType="vm:StatusBarViewModel"
+             Height="22">
+
+  <UserControl.Styles>
+    <!-- Status bar item base style -->
+    <Style Selector="Button.statusItem">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="6,0"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Height" Value="22"/>
+      <Setter Property="MinWidth" Value="0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="CornerRadius" Value="0"/>
+    </Style>
+    <Style Selector="Button.statusItem:pointerover">
+      <Setter Property="Background" Value="#FFFFFF20"/>
+    </Style>
+    <Style Selector="Button.statusItem:pressed">
+      <Setter Property="Background" Value="#FFFFFF30"/>
+    </Style>
+
+    <!-- Status bar text style -->
+    <Style Selector="Button.statusItem TextBlock">
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- Separator -->
+    <Style Selector="Border.statusSeparator">
+      <Setter Property="Width" Value="1"/>
+      <Setter Property="Background" Value="#FFFFFF30"/>
+      <Setter Property="Margin" Value="0,4"/>
+    </Style>
+
+    <!-- Picker popup style -->
+    <Style Selector="Border.pickerPopup">
+      <Setter Property="Background" Value="#252526"/>
+      <Setter Property="BorderBrush" Value="#454545"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="3"/>
+      <Setter Property="Padding" Value="4"/>
+      <Setter Property="MinWidth" Value="200"/>
+    </Style>
+
+    <Style Selector="Button.pickerItem">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="CornerRadius" Value="3"/>
+    </Style>
+    <Style Selector="Button.pickerItem:pointerover">
+      <Setter Property="Background" Value="#094771"/>
+    </Style>
+    <Style Selector="Button.pickerItem TextBlock">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Style Selector="TextBlock.pickerHeader">
+      <Setter Property="Foreground" Value="#888888"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Margin" Value="8,4,8,2"/>
+    </Style>
+
+    <!-- Notification item -->
+    <Style Selector="Border.notificationItem">
+      <Setter Property="Background" Value="#2D2D30"/>
+      <Setter Property="CornerRadius" Value="3"/>
+      <Setter Property="Padding" Value="8,6"/>
+      <Setter Property="Margin" Value="2"/>
+    </Style>
+    <Style Selector="Border.notificationItem:pointerover">
+      <Setter Property="Background" Value="#383838"/>
+    </Style>
+  </UserControl.Styles>
+
+  <Panel>
+    <!-- Main status bar -->
+    <Border Name="StatusBarBorder"
+            Height="22">
+      <Border.Background>
+        <SolidColorBrush Color="#007ACC"/>
+      </Border.Background>
+
+      <DockPanel LastChildFill="True">
+
+        <!-- ═══ LEFT SIDE ═══ -->
+        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
+
+          <!-- 1. Branch indicator -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowBranchPickerCommand}"
+                  ToolTip.Tip="Current branch (click to switch)"
+                  IsVisible="{Binding IsGitRepository}"
+                  AutomationProperties.Name="Git Branch">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="&#xE0A0;" FontFamily="Segoe UI Symbol,Segoe MDL2 Assets" FontSize="12"
+                         VerticalAlignment="Center"/>
+              <TextBlock Text="{Binding BranchName}" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+
+          <!-- 2. Sync indicator -->
+          <Button Classes="statusItem"
+                  Command="{Binding SyncCommand}"
+                  ToolTip.Tip="Synchronize changes"
+                  IsVisible="{Binding IsGitRepository}"
+                  AutomationProperties.Name="Git Sync Status">
+            <StackPanel Orientation="Horizontal" Spacing="2">
+              <TextBlock Text="&#x2191;" FontSize="11" VerticalAlignment="Center"/>
+              <TextBlock Text="{Binding SyncUpCount}" FontSize="11" VerticalAlignment="Center"/>
+              <TextBlock Text="&#x2193;" FontSize="11" VerticalAlignment="Center" Margin="3,0,0,0"/>
+              <TextBlock Text="{Binding SyncDownCount}" FontSize="11" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+
+          <Border Classes="statusSeparator" IsVisible="{Binding IsGitRepository}"/>
+
+          <!-- 3. Error/Warning count -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowProblemsCommand}"
+                  ToolTip.Tip="Show Problems (Ctrl+Alt+E)"
+                  AutomationProperties.Name="Diagnostic Counts">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <!-- Errors -->
+              <StackPanel Orientation="Horizontal" Spacing="2">
+                <Border Width="13" Height="13" CornerRadius="7"
+                        Background="#E51400" VerticalAlignment="Center">
+                  <TextBlock Text="x" Foreground="White" FontSize="8" FontWeight="Bold"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                </Border>
+                <TextBlock Text="{Binding ErrorCount}" VerticalAlignment="Center"/>
+              </StackPanel>
+              <!-- Warnings -->
+              <StackPanel Orientation="Horizontal" Spacing="2">
+                <TextBlock Text="&#x26A0;" Foreground="#F0AD4E" FontSize="12"
+                           VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                <TextBlock Text="{Binding WarningCount}" VerticalAlignment="Center"/>
+              </StackPanel>
+            </StackPanel>
+          </Button>
+
+          <Border Classes="statusSeparator"/>
+
+          <!-- 4. Running tasks (spinner) -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowRunningTasksCommand}"
+                  ToolTip.Tip="{Binding RunningTaskName}"
+                  IsVisible="{Binding IsTaskRunning}"
+                  AutomationProperties.Name="Running Tasks">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Name="SpinnerText" Text="&#x21BB;" FontSize="13"
+                         VerticalAlignment="Center" Foreground="White">
+                <TextBlock.RenderTransform>
+                  <RotateTransform/>
+                </TextBlock.RenderTransform>
+              </TextBlock>
+              <TextBlock Text="{Binding RunningTaskName}" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+
+          <!-- 13. Debug status (contextual - orange background) -->
+          <Border IsVisible="{Binding IsDebugging}" Padding="8,0"
+                  Background="#CC6633" VerticalAlignment="Stretch">
+            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+              <TextBlock Text="&#x25B6;" Foreground="White" FontSize="10" VerticalAlignment="Center"/>
+              <TextBlock Text="Debugging:" Foreground="White" FontSize="12" VerticalAlignment="Center"/>
+              <TextBlock Text="{Binding DebugTarget}" Foreground="White" FontSize="12"
+                         VerticalAlignment="Center" MaxWidth="200" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+          </Border>
+
+          <!-- 14. Build status (contextual) -->
+          <Border IsVisible="{Binding ShowBuildStatus}" Padding="6,0" VerticalAlignment="Stretch">
+            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+              <TextBlock Text="&#x21BB;" FontSize="12" VerticalAlignment="Center"
+                         IsVisible="{Binding IsBuildRunning}" Foreground="White"/>
+              <TextBlock Text="&#x2713;" FontSize="13" VerticalAlignment="Center"
+                         IsVisible="{Binding BuildSucceeded}" Foreground="#89D185"/>
+              <TextBlock Text="{Binding BuildStatusText}" Foreground="White" FontSize="12"
+                         VerticalAlignment="Center"/>
+            </StackPanel>
+          </Border>
+
+        </StackPanel>
+
+        <!-- ═══ RIGHT SIDE ═══ -->
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+
+          <!-- 16. LSP status -->
+          <Button Classes="statusItem"
+                  Command="{Binding RestartLspCommand}"
+                  ToolTip.Tip="BasicLang LSP Server (click to restart)"
+                  AutomationProperties.Name="LSP Status">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <Ellipse Width="8" Height="8" VerticalAlignment="Center">
+                <Ellipse.Fill>
+                  <SolidColorBrush Color="{Binding IsLspRunning, Converter={x:Static local:StatusBarConverters.BoolToLspColorConverter}}"/>
+                </Ellipse.Fill>
+              </Ellipse>
+              <TextBlock Text="{Binding LspStatus, StringFormat='LSP: {0}'}" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+
+          <Border Classes="statusSeparator"/>
+
+          <!-- 12. Notifications (bell) -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowNotificationsCommand}"
+                  ToolTip.Tip="Notifications"
+                  AutomationProperties.Name="Notifications">
+            <Panel>
+              <TextBlock Text="&#x1F514;" FontSize="13" VerticalAlignment="Center"/>
+              <Border IsVisible="{Binding NotificationCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"
+                      Background="#E51400" CornerRadius="6" Width="12" Height="12"
+                      HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-2,-4,0">
+                <TextBlock Text="{Binding NotificationCount}" Foreground="White" FontSize="8"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+            </Panel>
+          </Button>
+
+          <Border Classes="statusSeparator"/>
+
+          <!-- 11. Feedback -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowFeedbackCommand}"
+                  ToolTip.Tip="Send Feedback"
+                  AutomationProperties.Name="Feedback">
+            <TextBlock Text="&#x263A;" FontSize="14" VerticalAlignment="Center"/>
+          </Button>
+
+          <Border Classes="statusSeparator"/>
+
+          <!-- 10. Language mode -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowLanguagePickerCommand}"
+                  ToolTip.Tip="Select Language Mode"
+                  AutomationProperties.Name="Language Mode">
+            <TextBlock Text="{Binding LanguageMode}" Foreground="#80CCFF" VerticalAlignment="Center"/>
+          </Button>
+
+          <Border Classes="statusSeparator"/>
+
+          <!-- 9. Line endings -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowLineEndingPickerCommand}"
+                  ToolTip.Tip="Select End of Line Sequence"
+                  AutomationProperties.Name="Line Ending">
+            <TextBlock Text="{Binding LineEnding}" VerticalAlignment="Center"/>
+          </Button>
+
+          <Border Classes="statusSeparator"/>
+
+          <!-- 8. Encoding -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowEncodingPickerCommand}"
+                  ToolTip.Tip="Select Encoding"
+                  AutomationProperties.Name="File Encoding">
+            <TextBlock Text="{Binding Encoding}" VerticalAlignment="Center"/>
+          </Button>
+
+          <Border Classes="statusSeparator"/>
+
+          <!-- 7. Indentation -->
+          <Button Classes="statusItem"
+                  Command="{Binding ShowIndentPickerCommand}"
+                  ToolTip.Tip="Select Indentation"
+                  AutomationProperties.Name="Indentation">
+            <TextBlock Text="{Binding Indentation}" VerticalAlignment="Center"/>
+          </Button>
+
+          <Border Classes="statusSeparator"/>
+
+          <!-- 6. Selection info (when text is selected) -->
+          <Button Classes="statusItem"
+                  IsVisible="{Binding HasSelection}"
+                  IsHitTestVisible="False"
+                  AutomationProperties.Name="Selection Info">
+            <TextBlock Text="{Binding SelectionInfo}" VerticalAlignment="Center" Foreground="#CCCCCC"/>
+          </Button>
+
+          <Border Classes="statusSeparator" IsVisible="{Binding HasSelection}"/>
+
+          <!-- 5. Cursor position -->
+          <Button Classes="statusItem"
+                  Command="{Binding GoToLineCommand}"
+                  ToolTip.Tip="Go to Line (Ctrl+G)"
+                  AutomationProperties.Name="Cursor Position">
+            <TextBlock VerticalAlignment="Center">
+              <TextBlock.Text>
+                <MultiBinding StringFormat="Ln {0}, Col {1}">
+                  <Binding Path="CursorLine"/>
+                  <Binding Path="CursorColumn"/>
+                </MultiBinding>
+              </TextBlock.Text>
+            </TextBlock>
+          </Button>
+
+        </StackPanel>
+
+        <!-- Spacer (fills remaining space) -->
+        <Border/>
+      </DockPanel>
+    </Border>
+
+    <!-- ═══ POPUP OVERLAYS (rendered above status bar) ═══ -->
+
+    <!-- Branch Picker Popup -->
+    <Popup IsOpen="{Binding IsBranchPickerOpen}"
+           Placement="Top" PlacementTarget="{Binding #StatusBarBorder}"
+           IsLightDismissEnabled="True"
+           HorizontalOffset="0" VerticalOffset="-4">
+      <Border Classes="pickerPopup" MaxHeight="300" MinWidth="250">
+        <DockPanel>
+          <TextBlock Classes="pickerHeader" DockPanel.Dock="Top" Text="Switch Branch"/>
+          <TextBox DockPanel.Dock="Top" Watermark="Search branches..."
+                   Text="{Binding BranchSearchText}" Margin="4"
+                   Background="#1E1E1E" Foreground="#CCCCCC" BorderBrush="#3C3C3C"
+                   FontSize="12"/>
+          <Button Classes="pickerItem" DockPanel.Dock="Bottom"
+                  Command="{Binding CreateNewBranchCommand}">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="+" FontWeight="Bold"/>
+              <TextBlock Text="Create New Branch..."/>
+            </StackPanel>
+          </Button>
+          <ScrollViewer MaxHeight="200">
+            <ItemsControl ItemsSource="{Binding Branches}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Button Classes="pickerItem"
+                          Command="{Binding $parent[UserControl].((vm:StatusBarViewModel)DataContext).SwitchBranchCommand}"
+                          CommandParameter="{Binding}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="&#xE0A0;" FontFamily="Segoe UI Symbol" FontSize="11"
+                                 VerticalAlignment="Center" Foreground="#569CD6"/>
+                      <TextBlock Text="{Binding}"/>
+                    </StackPanel>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Popup>
+
+    <!-- Indent Picker Popup -->
+    <Popup IsOpen="{Binding IsIndentPickerOpen}"
+           Placement="Top" PlacementTarget="{Binding #StatusBarBorder}"
+           IsLightDismissEnabled="True"
+           HorizontalOffset="600" VerticalOffset="-4">
+      <Border Classes="pickerPopup" MinWidth="200">
+        <StackPanel>
+          <TextBlock Classes="pickerHeader" Text="Indent Using Spaces"/>
+          <Button Classes="pickerItem" Command="{Binding SetIndentSpacesCommand}" CommandParameter="2">
+            <TextBlock Text="2"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetIndentSpacesCommand}" CommandParameter="4">
+            <TextBlock Text="4"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetIndentSpacesCommand}" CommandParameter="8">
+            <TextBlock Text="8"/>
+          </Button>
+
+          <Border Height="1" Background="#3C3C3C" Margin="4,4"/>
+
+          <TextBlock Classes="pickerHeader" Text="Indent Using Tabs"/>
+          <Button Classes="pickerItem" Command="{Binding SetIndentTabsCommand}" CommandParameter="2">
+            <TextBlock Text="2"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetIndentTabsCommand}" CommandParameter="4">
+            <TextBlock Text="4"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetIndentTabsCommand}" CommandParameter="8">
+            <TextBlock Text="8"/>
+          </Button>
+        </StackPanel>
+      </Border>
+    </Popup>
+
+    <!-- Encoding Picker Popup -->
+    <Popup IsOpen="{Binding IsEncodingPickerOpen}"
+           Placement="Top" PlacementTarget="{Binding #StatusBarBorder}"
+           IsLightDismissEnabled="True"
+           HorizontalOffset="500" VerticalOffset="-4">
+      <Border Classes="pickerPopup" MinWidth="220">
+        <StackPanel>
+          <TextBlock Classes="pickerHeader" Text="Select Encoding"/>
+          <Button Classes="pickerItem" Command="{Binding SetEncodingCommand}" CommandParameter="UTF-8">
+            <TextBlock Text="UTF-8"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetEncodingCommand}" CommandParameter="UTF-8 with BOM">
+            <TextBlock Text="UTF-8 with BOM"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetEncodingCommand}" CommandParameter="UTF-16 LE">
+            <TextBlock Text="UTF-16 LE"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetEncodingCommand}" CommandParameter="UTF-16 BE">
+            <TextBlock Text="UTF-16 BE"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetEncodingCommand}" CommandParameter="Windows-1252">
+            <TextBlock Text="Windows-1252 (Western European)"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetEncodingCommand}" CommandParameter="ASCII">
+            <TextBlock Text="ASCII"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetEncodingCommand}" CommandParameter="ISO-8859-1">
+            <TextBlock Text="ISO 8859-1 (Latin-1)"/>
+          </Button>
+        </StackPanel>
+      </Border>
+    </Popup>
+
+    <!-- Line Ending Picker Popup -->
+    <Popup IsOpen="{Binding IsLineEndingPickerOpen}"
+           Placement="Top" PlacementTarget="{Binding #StatusBarBorder}"
+           IsLightDismissEnabled="True"
+           HorizontalOffset="550" VerticalOffset="-4">
+      <Border Classes="pickerPopup" MinWidth="200">
+        <StackPanel>
+          <TextBlock Classes="pickerHeader" Text="Select End of Line Sequence"/>
+          <Button Classes="pickerItem" Command="{Binding SetLineEndingCommand}" CommandParameter="LF">
+            <TextBlock Text="LF (\n)"/>
+          </Button>
+          <Button Classes="pickerItem" Command="{Binding SetLineEndingCommand}" CommandParameter="CRLF">
+            <TextBlock Text="CRLF (\r\n)"/>
+          </Button>
+        </StackPanel>
+      </Border>
+    </Popup>
+
+    <!-- Language Mode Picker Popup -->
+    <Popup IsOpen="{Binding IsLanguagePickerOpen}"
+           Placement="Top" PlacementTarget="{Binding #StatusBarBorder}"
+           IsLightDismissEnabled="True"
+           HorizontalOffset="650" VerticalOffset="-4">
+      <Border Classes="pickerPopup" MaxHeight="350" MinWidth="250">
+        <DockPanel>
+          <TextBlock Classes="pickerHeader" DockPanel.Dock="Top" Text="Select Language Mode"/>
+          <TextBox DockPanel.Dock="Top" Watermark="Search languages..."
+                   Text="{Binding LanguageSearchText}" Margin="4"
+                   Background="#1E1E1E" Foreground="#CCCCCC" BorderBrush="#3C3C3C"
+                   FontSize="12"/>
+          <ScrollViewer MaxHeight="250">
+            <ItemsControl ItemsSource="{Binding AvailableLanguages}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Button Classes="pickerItem"
+                          Command="{Binding $parent[UserControl].((vm:StatusBarViewModel)DataContext).SetLanguageModeCommand}"
+                          CommandParameter="{Binding}">
+                    <TextBlock Text="{Binding}"/>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Popup>
+
+    <!-- Notification Center Popup -->
+    <Popup IsOpen="{Binding IsNotificationCenterOpen}"
+           Placement="Top" PlacementTarget="{Binding #StatusBarBorder}"
+           IsLightDismissEnabled="True"
+           HorizontalOffset="700" VerticalOffset="-4">
+      <Border Classes="pickerPopup" MaxHeight="400" MinWidth="350" MaxWidth="400">
+        <DockPanel>
+          <DockPanel DockPanel.Dock="Top" Margin="4,4,4,8">
+            <TextBlock Text="Notifications" Foreground="#CCCCCC" FontSize="13"
+                       FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <Button DockPanel.Dock="Right" Classes="pickerItem"
+                    Command="{Binding ClearAllNotificationsCommand}"
+                    HorizontalAlignment="Right" Padding="4,2">
+              <TextBlock Text="Clear All" FontSize="11" Foreground="#569CD6"/>
+            </Button>
+          </DockPanel>
+
+          <ScrollViewer MaxHeight="340">
+            <ItemsControl ItemsSource="{Binding Notifications}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:NotificationItem">
+                  <Border Classes="notificationItem">
+                    <DockPanel>
+                      <Button DockPanel.Dock="Right" Background="Transparent"
+                              BorderThickness="0" VerticalAlignment="Top" Padding="4,2"
+                              Cursor="Hand"
+                              Command="{Binding $parent[UserControl].((vm:StatusBarViewModel)DataContext).DismissNotificationCommand}"
+                              CommandParameter="{Binding}">
+                        <TextBlock Text="&#x2715;" Foreground="#888888" FontSize="11"/>
+                      </Button>
+
+                      <StackPanel Spacing="2">
+                        <DockPanel>
+                          <TextBlock Text="{Binding SeverityIcon}" FontSize="12"
+                                     VerticalAlignment="Center" Margin="0,0,6,0"/>
+                          <TextBlock Text="{Binding Source}" Foreground="#569CD6" FontSize="11"
+                                     VerticalAlignment="Center"/>
+                          <TextBlock DockPanel.Dock="Right" Text="{Binding TimeText}"
+                                     Foreground="#666666" FontSize="10"
+                                     HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <TextBlock Text="{Binding Message}" Foreground="#CCCCCC" FontSize="12"
+                                   TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </DockPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+
+          <!-- Empty state -->
+          <TextBlock Text="No notifications"
+                     Foreground="#666666" FontSize="12"
+                     HorizontalAlignment="Center" VerticalAlignment="Center"
+                     Margin="0,20"
+                     IsVisible="{Binding !Notifications.Count}"/>
+        </DockPanel>
+      </Border>
+    </Popup>
+
+  </Panel>
+</UserControl>

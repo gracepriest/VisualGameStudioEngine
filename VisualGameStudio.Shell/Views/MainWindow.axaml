@@ -84,6 +84,15 @@
     <KeyBinding Gesture="Ctrl+D4" Command="{Binding FocusTerminalCommand}"/>
     <KeyBinding Gesture="Ctrl+D5" Command="{Binding FocusErrorListCommand}"/>
     <KeyBinding Gesture="Ctrl+D0" Command="{Binding FocusVariablesCommand}"/>
+    <!-- Panel cycling (accessibility) -->
+    <KeyBinding Gesture="F6" Command="{Binding FocusNextPanelCommand}"/>
+    <KeyBinding Gesture="Shift+F6" Command="{Binding FocusPreviousPanelCommand}"/>
+    <!-- Keyboard shortcuts help -->
+    <KeyBinding Gesture="F1" Command="{Binding ShowKeyboardShortcutsCommand}"/>
+    <!-- IDE zoom -->
+    <KeyBinding Gesture="Ctrl+OemPlus" Command="{Binding ZoomInCommand}"/>
+    <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding ZoomOutCommand}"/>
+    <KeyBinding Gesture="Ctrl+D0" Command="{Binding ZoomResetCommand}"/>
   </Window.KeyBindings>
 
   <Design.DataContext>
@@ -91,7 +100,40 @@
   </Design.DataContext>
 
   <Grid>
+  <!-- Screen reader live regions (hidden, used by ScreenReaderService) -->
+  <TextBlock x:Name="LiveRegionPolite"
+             AutomationProperties.LiveSetting="Polite"
+             AutomationProperties.Name="Status announcements"
+             IsVisible="False"
+             Width="1" Height="1"/>
+  <TextBlock x:Name="LiveRegionAssertive"
+             AutomationProperties.LiveSetting="Assertive"
+             AutomationProperties.Name="Alert announcements"
+             IsVisible="False"
+             Width="1" Height="1"/>
+
   <DockPanel>
+    <!-- Skip Navigation (visible only on focus for keyboard users) -->
+    <Border DockPanel.Dock="Top" Height="0" ClipToBounds="True">
+      <StackPanel Orientation="Horizontal" Spacing="8" Margin="8,2">
+        <Button Content="Skip to Editor"
+                Command="{Binding FocusEditorCommand}"
+                Classes="skipNavLink"
+                AutomationProperties.Name="Skip to Code Editor"
+                Focusable="True"/>
+        <Button Content="Skip to Solution Explorer"
+                Command="{Binding FocusSolutionExplorerCommand}"
+                Classes="skipNavLink"
+                AutomationProperties.Name="Skip to Solution Explorer"
+                Focusable="True"/>
+        <Button Content="Skip to Terminal"
+                Command="{Binding FocusTerminalCommand}"
+                Classes="skipNavLink"
+                AutomationProperties.Name="Skip to Terminal"
+                Focusable="True"/>
+      </StackPanel>
+    </Border>
+
     <!-- Menu Bar -->
     <Menu DockPanel.Dock="Top" IsVisible="{Binding !IsZenMode}"
           AutomationProperties.Name="Main Menu">
@@ -418,66 +460,61 @@
           </TextBlock.Text>
         </TextBlock>
 
-        <!-- Indentation indicator (clickable) -->
-        <Border Grid.Column="6" Padding="4,0" Cursor="Hand"
-                Background="Transparent"
-                PointerPressed="OnIndentationClicked"
-                AutomationProperties.Name="Indentation Settings">
+        <!-- Indentation indicator (keyboard-focusable button) -->
+        <Button Grid.Column="6" Classes="statusBarButton"
+                Click="OnIndentationButtonClick"
+                AutomationProperties.Name="Indentation Settings"
+                AutomationProperties.HelpText="Click or press Enter to change indentation settings"
+                ToolTip.Tip="Click to change indentation settings (Tab to focus)">
           <TextBlock Text="{Binding StatusBar.Indentation}"
                      VerticalAlignment="Center"
-                     Margin="4,0"
-                     Foreground="#BBBBBB"
-                     ToolTip.Tip="Click to change indentation settings"/>
-        </Border>
+                     Foreground="#BBBBBB"/>
+        </Button>
 
-        <!-- Encoding indicator (clickable) -->
-        <Border Grid.Column="7" Padding="4,0" Cursor="Hand"
-                Background="Transparent"
-                PointerPressed="OnEncodingClicked"
-                AutomationProperties.Name="File Encoding">
+        <!-- Encoding indicator (keyboard-focusable button) -->
+        <Button Grid.Column="7" Classes="statusBarButton"
+                Click="OnEncodingButtonClick"
+                AutomationProperties.Name="File Encoding"
+                AutomationProperties.HelpText="Click or press Enter to change file encoding"
+                ToolTip.Tip="Click to change file encoding (Tab to focus)">
           <TextBlock Text="{Binding StatusBar.Encoding}"
                      VerticalAlignment="Center"
-                     Margin="4,0"
-                     Foreground="#BBBBBB"
-                     ToolTip.Tip="Click to change file encoding"/>
-        </Border>
+                     Foreground="#BBBBBB"/>
+        </Button>
 
-        <!-- Line ending indicator (clickable) -->
-        <Border Grid.Column="8" Padding="4,0" Cursor="Hand"
-                Background="Transparent"
-                PointerPressed="OnLineEndingClicked"
-                AutomationProperties.Name="Line Ending Style">
+        <!-- Line ending indicator (keyboard-focusable button) -->
+        <Button Grid.Column="8" Classes="statusBarButton"
+                Click="OnLineEndingButtonClick"
+                AutomationProperties.Name="Line Ending Style"
+                AutomationProperties.HelpText="Click or press Enter to change line ending style"
+                ToolTip.Tip="Click to change line ending style (Tab to focus)">
           <TextBlock Text="{Binding StatusBar.LineEnding}"
                      VerticalAlignment="Center"
-                     Margin="4,0"
-                     Foreground="#BBBBBB"
-                     ToolTip.Tip="Click to change line ending style"/>
-        </Border>
+                     Foreground="#BBBBBB"/>
+        </Button>
 
-        <!-- Language mode indicator (clickable) -->
-        <Border Grid.Column="9" Padding="4,0" Cursor="Hand"
-                Background="Transparent"
-                PointerPressed="OnLanguageModeClicked"
-                AutomationProperties.Name="Language Mode">
+        <!-- Language mode indicator (keyboard-focusable button) -->
+        <Button Grid.Column="9" Classes="statusBarButton"
+                Click="OnLanguageModeButtonClick"
+                AutomationProperties.Name="Language Mode"
+                AutomationProperties.HelpText="Current language mode"
+                ToolTip.Tip="Current language mode (Tab to focus)">
           <TextBlock Text="{Binding StatusBar.LanguageMode}"
                      VerticalAlignment="Center"
-                     Margin="4,0"
-                     Foreground="#569CD6"
-                     ToolTip.Tip="Current language mode"/>
-        </Border>
+                     Foreground="#569CD6"/>
+        </Button>
 
-        <!-- Ctrl+Shift+P hint -->
-        <Border Grid.Column="10" Padding="4,0" Cursor="Hand"
-                Background="Transparent"
-                PointerPressed="OnCommandPaletteHintClicked"
-                AutomationProperties.Name="Open Command Palette (Ctrl+Shift+P)">
+        <!-- Ctrl+Shift+P hint (keyboard-focusable button) -->
+        <Button Grid.Column="10" Classes="statusBarButton"
+                Command="{Binding OpenCommandPaletteCommand}"
+                AutomationProperties.Name="Open Command Palette (Ctrl+Shift+P)"
+                AutomationProperties.HelpText="Open the command palette"
+                ToolTip.Tip="Open Command Palette (Ctrl+Shift+P)">
           <TextBlock Text="Ctrl+Shift+P"
                      VerticalAlignment="Center"
-                     Margin="4,0"
                      Foreground="#606060"
-                     FontSize="11"
-                     ToolTip.Tip="Open Command Palette"/>
-        </Border>
+                     FontSize="11"/>
+        </Button>
       </Grid>
     </Border>
 
@@ -494,6 +531,7 @@
               MaxWidth="400"
               Spacing="5"
               IsHitTestVisible="False"
-              AutomationProperties.Name="Notifications"/>
+              AutomationProperties.Name="Notifications"
+              AutomationProperties.LiveSetting="Assertive"/>
   </Grid>
 </Window>

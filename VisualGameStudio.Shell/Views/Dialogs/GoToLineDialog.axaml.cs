@@ -18,6 +18,13 @@ public partial class GoToLineDialog : Window
                 LineNumberTextBox?.SelectAll();
             }, DispatcherPriority.Input);
         };
+
+        // Close on lost focus (like VS Code)
+        Deactivated += (s, e) =>
+        {
+            if (IsVisible)
+                Close(null);
+        };
     }
 
     public GoToLineDialog(GoToLineDialogViewModel viewModel) : this()
@@ -26,12 +33,27 @@ public partial class GoToLineDialog : Window
 
         viewModel.LineSelected += (s, e) =>
         {
-            Close(viewModel.ResultLine);
+            Close(new GoToLineResult(viewModel.ResultLine ?? 1, viewModel.ResultColumn ?? 1));
         };
 
         viewModel.Cancelled += (s, e) =>
         {
             Close(null);
         };
+    }
+}
+
+/// <summary>
+/// Result from the Go To Line dialog, supporting both line and column.
+/// </summary>
+public class GoToLineResult
+{
+    public int Line { get; }
+    public int Column { get; }
+
+    public GoToLineResult(int line, int column)
+    {
+        Line = line;
+        Column = column;
     }
 }

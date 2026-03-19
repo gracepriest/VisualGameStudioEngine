@@ -829,6 +829,83 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
     #endregion
 
+    #region Editor Action Requests (Toggle, Cursor, etc.)
+
+    public event EventHandler? ToggleBlockCommentRequested;
+    public event EventHandler? SelectAllRequested;
+    public event EventHandler? CopyLineUpRequested;
+    public event EventHandler? CopyLineDownRequested;
+    public event EventHandler? AddCursorAboveRequested;
+    public event EventHandler? AddCursorBelowRequested;
+    public event EventHandler? AddCursorsToLineEndsRequested;
+    public event EventHandler<bool>? ToggleMinimapRequested;
+    public event EventHandler<bool>? ToggleBreadcrumbsRequested;
+    public event EventHandler<bool>? ToggleStickyScrollRequested;
+    public event EventHandler<bool>? ToggleWordWrapRequested;
+    public event EventHandler? GoToBracketRequested;
+
+    public void RequestToggleBlockComment()
+    {
+        ToggleBlockCommentRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestSelectAll()
+    {
+        SelectAllRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestCopyLineUp()
+    {
+        CopyLineUpRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestCopyLineDown()
+    {
+        CopyLineDownRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestAddCursorAbove()
+    {
+        AddCursorAboveRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestAddCursorBelow()
+    {
+        AddCursorBelowRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestAddCursorsToLineEnds()
+    {
+        AddCursorsToLineEndsRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestToggleMinimap(bool show)
+    {
+        ToggleMinimapRequested?.Invoke(this, show);
+    }
+
+    public void RequestToggleBreadcrumbs(bool show)
+    {
+        ToggleBreadcrumbsRequested?.Invoke(this, show);
+    }
+
+    public void RequestToggleStickyScroll(bool show)
+    {
+        ToggleStickyScrollRequested?.Invoke(this, show);
+    }
+
+    public void RequestToggleWordWrap(bool wrap)
+    {
+        ToggleWordWrapRequested?.Invoke(this, wrap);
+    }
+
+    public void RequestGoToBracket()
+    {
+        GoToBracketRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    #endregion
+
     #region Execution Line
 
     public event EventHandler<int?>? ExecutionLineChanged;

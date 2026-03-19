@@ -7,30 +7,160 @@
              x:Class="VisualGameStudio.Shell.Views.Panels.SolutionExplorerView"
              x:DataType="vm:SolutionExplorerViewModel">
 
+  <UserControl.Resources>
+    <vm:HexColorToBrushConverter x:Key="HexToBrush"/>
+    <vm:GitStatusForegroundConverter x:Key="GitForeground"/>
+  </UserControl.Resources>
+
   <Border Classes="toolPanel">
     <DockPanel>
+
+      <!-- ── Header Toolbar ──────────────────────────────────── -->
       <Border DockPanel.Dock="Top" Classes="panelHeader">
         <Grid ColumnDefinitions="*,Auto">
-          <TextBlock Grid.Column="0" Text="Solution Explorer" Classes="panelTitle"/>
-          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+          <TextBlock Grid.Column="0" Text="EXPLORER" Classes="panelTitle"
+                     FontSize="11" FontWeight="SemiBold" Foreground="#BBBBBB"
+                     VerticalAlignment="Center" Margin="8,0,0,0"/>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="1">
+            <!-- New File (inline) -->
             <Button Classes="toolbarButton"
-                    ToolTip.Tip="Add New File"
-                    Command="{Binding AddNewFileCommand}"
-                    Width="24" Height="24"
-                    AutomationProperties.Name="Add New File">
-              <TextBlock Text="+" FontSize="14" FontWeight="Bold"/>
+                    ToolTip.Tip="New File..."
+                    Command="{Binding StartInlineNewFileCommand}"
+                    Width="22" Height="22"
+                    AutomationProperties.Name="New File">
+              <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Button>
+            <!-- New Folder (inline) -->
             <Button Classes="toolbarButton"
-                    ToolTip.Tip="Add New Folder"
-                    Command="{Binding AddNewFolderCommand}"
-                    Width="24" Height="24"
-                    AutomationProperties.Name="Add New Folder">
-              <TextBlock Text="📁" FontSize="12"/>
+                    ToolTip.Tip="New Folder..."
+                    Command="{Binding StartInlineNewFolderCommand}"
+                    Width="22" Height="22"
+                    AutomationProperties.Name="New Folder">
+              <TextBlock Text="&#xE8F4;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Button>
+            <!-- Collapse All -->
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Collapse All"
+                    Command="{Binding CollapseAllCommand}"
+                    Width="22" Height="22"
+                    AutomationProperties.Name="Collapse All">
+              <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Button>
+            <!-- Expand All -->
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Expand All"
+                    Command="{Binding ExpandAllCommand}"
+                    Width="22" Height="22"
+                    AutomationProperties.Name="Expand All">
+              <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Button>
+            <!-- Filter toggle -->
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Filter Files"
+                    Command="{Binding ToggleFilterCommand}"
+                    Width="22" Height="22"
+                    AutomationProperties.Name="Filter Files">
+              <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Button>
           </StackPanel>
         </Grid>
       </Border>
 
+      <!-- ── Filter Search Box ───────────────────────────────── -->
+      <Border DockPanel.Dock="Top"
+              IsVisible="{Binding IsFilterVisible}"
+              Padding="4,2" Background="#252526">
+        <TextBox x:Name="FilterTextBox"
+                 Text="{Binding FilterText, Mode=TwoWay}"
+                 Watermark="Filter files by name..."
+                 FontSize="12"
+                 Padding="4,2"
+                 Background="#3C3C3C"
+                 Foreground="#CCCCCC"
+                 BorderBrush="#3C3C3C"
+                 CornerRadius="2"
+                 AutomationProperties.Name="File Filter"/>
+      </Border>
+
+      <!-- ── Open Editors Section ────────────────────────────── -->
+      <Border DockPanel.Dock="Top"
+              IsVisible="{Binding OpenEditors.Count}"
+              Padding="0" Background="#1E1E1E">
+        <Expander IsExpanded="{Binding IsOpenEditorsExpanded}"
+                  Padding="0">
+          <Expander.Header>
+            <TextBlock Text="OPEN EDITORS" FontSize="11" FontWeight="SemiBold"
+                       Foreground="#BBBBBB" Margin="4,0"/>
+          </Expander.Header>
+          <ItemsControl ItemsSource="{Binding OpenEditors}" Margin="0">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="vm:OpenEditorItem">
+                <Border Padding="20,2,4,2"
+                        Background="Transparent"
+                        Cursor="Hand">
+                  <Border.Styles>
+                    <Style Selector="Border:pointerover">
+                      <Setter Property="Background" Value="#2A2D2E"/>
+                    </Style>
+                  </Border.Styles>
+                  <Grid ColumnDefinitions="Auto,*,Auto">
+                    <!-- Dirty indicator -->
+                    <Ellipse Grid.Column="0" Width="6" Height="6"
+                             Fill="#FFFFFF" Margin="0,0,6,0"
+                             VerticalAlignment="Center"
+                             IsVisible="{Binding IsDirty}"/>
+                    <!-- Title -->
+                    <TextBlock Grid.Column="1" Text="{Binding Title}"
+                               Foreground="#CCCCCC" FontSize="13"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                    <!-- Close button -->
+                    <Button Grid.Column="2" Classes="toolbarButton"
+                            Width="18" Height="18"
+                            Command="{Binding $parent[ItemsControl].((vm:SolutionExplorerViewModel)DataContext).CloseEditorCommand}"
+                            CommandParameter="{Binding}"
+                            ToolTip.Tip="Close">
+                      <TextBlock Text="x" FontSize="11"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                                 Foreground="#888888"/>
+                    </Button>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </Expander>
+      </Border>
+
+      <!-- ── Inline New Item TextBox ─────────────────────────── -->
+      <Border DockPanel.Dock="Top"
+              IsVisible="{Binding IsCreatingNew}"
+              Padding="20,2,4,2" Background="#252526">
+        <Grid ColumnDefinitions="Auto,*">
+          <TextBlock Grid.Column="0"
+                     Text="{Binding IsCreatingFolder, Converter={x:Static vm:NodeTypeIconConverter.Instance}}"
+                     FontSize="14" VerticalAlignment="Center" Margin="0,0,6,0"
+                     Foreground="#CCCCCC"/>
+          <TextBox Grid.Column="1"
+                   x:Name="NewItemTextBox"
+                   Text="{Binding NewItemName, Mode=TwoWay}"
+                   FontSize="13"
+                   Padding="2,1"
+                   Background="#3C3C3C"
+                   Foreground="#CCCCCC"
+                   BorderBrush="#007ACC"
+                   BorderThickness="1"
+                   CornerRadius="0"
+                   AutomationProperties.Name="New Item Name"/>
+        </Grid>
+      </Border>
+
+      <!-- ── Tree View ───────────────────────────────────────── -->
       <TreeView x:Name="SolutionTreeView"
                 ItemsSource="{Binding Nodes}"
                 SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
@@ -38,63 +168,214 @@
                 DoubleTapped="OnTreeViewDoubleTapped"
                 AutomationProperties.Name="Solution Explorer Tree">
 
+        <!-- ── Full Context Menu ──────────────────────────────── -->
         <TreeView.ContextMenu>
           <ContextMenu>
-            <MenuItem Header="Add">
-              <MenuItem Header="New File..." Command="{Binding #SolutionTreeView.DataContext.AddNewFileCommand}">
-                <MenuItem.Icon>
-                  <TextBlock Text="📄" FontSize="12"/>
-                </MenuItem.Icon>
-              </MenuItem>
-              <MenuItem Header="New Folder..." Command="{Binding #SolutionTreeView.DataContext.AddNewFolderCommand}">
-                <MenuItem.Icon>
-                  <TextBlock Text="📁" FontSize="12"/>
-                </MenuItem.Icon>
-              </MenuItem>
-              <Separator/>
-              <MenuItem Header="Existing File..." Command="{Binding #SolutionTreeView.DataContext.AddExistingFileCommand}">
-                <MenuItem.Icon>
-                  <TextBlock Text="📋" FontSize="12"/>
-                </MenuItem.Icon>
-              </MenuItem>
-            </MenuItem>
-            <Separator/>
-            <MenuItem Header="Open" Click="OnOpenMenuItemClick"/>
-            <Separator/>
-            <MenuItem Header="Rename" Command="{Binding #SolutionTreeView.DataContext.StartRenameCommand}" InputGesture="F2"/>
-            <MenuItem Header="Delete" Command="{Binding #SolutionTreeView.DataContext.DeleteCommand}" InputGesture="Delete">
+            <MenuItem Header="Open"
+                      Click="OnOpenMenuItemClick"
+                      InputGesture="Enter">
               <MenuItem.Icon>
-                <TextBlock Text="🗑" FontSize="12"/>
+                <TextBlock Text="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Open to the Side"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).OpenToSideCommand}"/>
+            <Separator/>
+            <MenuItem Header="Cut"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).CutCommand}"
+                      InputGesture="Ctrl+X">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE8C6;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Copy"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).CopyCommand}"
+                      InputGesture="Ctrl+C">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Paste"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).PasteCommand}"
+                      InputGesture="Ctrl+V">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE77F;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
               </MenuItem.Icon>
             </MenuItem>
             <Separator/>
-            <MenuItem Header="Open in Explorer" Command="{Binding #SolutionTreeView.DataContext.OpenInExplorerCommand}"/>
-            <MenuItem Header="Copy Path" Command="{Binding #SolutionTreeView.DataContext.CopyPathCommand}"/>
+            <MenuItem Header="Copy Path"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).CopyPathCommand}"/>
+            <MenuItem Header="Copy Relative Path"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).CopyRelativePathCommand}"/>
+            <Separator/>
+            <MenuItem Header="Rename"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).StartRenameCommand}"
+                      InputGesture="F2">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE8AC;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Delete"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).DeleteCommand}"
+                      InputGesture="Delete">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="New File..."
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).StartInlineNewFileCommand}">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="New Folder..."
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).StartInlineNewFolderCommand}">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE8F4;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Reveal in File Explorer"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).OpenInExplorerCommand}">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Open in Terminal"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).OpenInTerminalCommand}">
+              <MenuItem.Icon>
+                <TextBlock Text="&#xE756;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+              </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Find in Folder..."
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).FindInFolderCommand}"
+                      InputGesture="Ctrl+Shift+F"/>
+            <Separator/>
+            <MenuItem Header="Show File History"
+                      Command="{Binding #SolutionTreeView.((vm:SolutionExplorerViewModel)DataContext).ShowFileHistoryCommand}"/>
           </ContextMenu>
         </TreeView.ContextMenu>
 
+        <!-- ── Item Template ──────────────────────────────────── -->
         <TreeView.ItemTemplate>
           <TreeDataTemplate ItemsSource="{Binding Children}">
-            <Grid ColumnDefinitions="Auto,*,Auto" DoubleTapped="OnItemDoubleTapped">
-              <!-- Icon based on node type -->
-              <TextBlock Grid.Column="0"
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto"
+                  Height="22"
+                  DoubleTapped="OnItemDoubleTapped"
+                  Background="Transparent"
+                  Tag="{Binding}"
+                  PointerPressed="OnItemPointerPressed"
+                  PointerMoved="OnItemPointerMoved"
+                  PointerReleased="OnItemPointerReleased"
+                  DragDrop.AllowDrop="True">
+
+              <!-- File type color indicator -->
+              <Border Grid.Column="0" Width="3" Height="14"
+                      CornerRadius="1"
+                      VerticalAlignment="Center"
+                      Margin="0,0,4,0"
+                      IsVisible="{Binding IsFile}">
+                <Border.Background>
+                  <Binding Path="FullPath" Converter="{x:Static vm:FileExtensionIconConverter.Instance}">
+                    <Binding.FallbackValue>
+                      <SolidColorBrush Color="#9E9E9E"/>
+                    </Binding.FallbackValue>
+                  </Binding>
+                </Border.Background>
+              </Border>
+
+              <!-- Folder/Project icon -->
+              <TextBlock Grid.Column="1"
                          Text="{Binding NodeType, Converter={x:Static vm:NodeTypeIconConverter.Instance}}"
                          Margin="0,0,6,0"
-                         FontSize="14"
-                         VerticalAlignment="Center"/>
+                         FontSize="10"
+                         VerticalAlignment="Center"
+                         Foreground="#888888"
+                         IsVisible="{Binding !IsFile}"/>
 
-              <!-- Name (always visible - rename handled elsewhere) -->
-              <TextBlock Grid.Column="1"
+              <!-- Name -->
+              <TextBlock Grid.Column="2"
                          Text="{Binding Name}"
-                         Foreground="#CCCCCC"
-                         VerticalAlignment="Center"/>
+                         FontSize="13"
+                         VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
+                         Opacity="{Binding IsCut, Converter={x:Static BoolConverters.Not}}">
+                <TextBlock.Foreground>
+                  <Binding Path="GitStatus"
+                           Converter="{x:Static vm:GitStatusForegroundConverter.Instance}"/>
+                </TextBlock.Foreground>
+              </TextBlock>
+
+              <!-- Read-only lock icon -->
+              <TextBlock Grid.Column="3"
+                         Text="&#x1F512;"
+                         FontSize="10"
+                         VerticalAlignment="Center"
+                         Foreground="#888888"
+                         Margin="4,0,0,0"
+                         IsVisible="{Binding IsReadOnly}"
+                         ToolTip.Tip="Read-only"/>
+
+              <!-- Error dot -->
+              <Ellipse Grid.Column="4"
+                       Width="6" Height="6"
+                       Fill="#F44747"
+                       VerticalAlignment="Center"
+                       Margin="4,0,0,0"
+                       IsVisible="{Binding HasErrors}"
+                       ToolTip.Tip="Has errors"/>
+
+              <!-- Git decoration letter -->
+              <TextBlock Grid.Column="5"
+                         Text="{Binding GitDecorationText}"
+                         FontSize="11"
+                         FontWeight="Bold"
+                         VerticalAlignment="Center"
+                         Margin="6,0,2,0"
+                         ToolTip.Tip="{Binding GitStatus}">
+                <TextBlock.Foreground>
+                  <Binding Path="GitDecorationColor"
+                           Converter="{StaticResource HexToBrush}"/>
+                </TextBlock.Foreground>
+              </TextBlock>
             </Grid>
           </TreeDataTemplate>
         </TreeView.ItemTemplate>
 
         <TreeView.Styles>
+          <!-- Bind IsExpanded and IsVisible -->
           <Style Selector="TreeViewItem">
             <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+            <Setter Property="IsVisible" Value="{Binding IsVisible}"/>
+          </Style>
+
+          <!-- Tree indent guides: vertical dotted lines -->
+          <Style Selector="TreeViewItem /template/ Border#PART_LayoutRoot">
+            <Setter Property="BorderBrush" Value="#333333"/>
+          </Style>
+
+          <!-- Selected item highlight -->
+          <Style Selector="TreeViewItem:selected /template/ Border#PART_LayoutRoot">
+            <Setter Property="Background" Value="#094771"/>
+          </Style>
+
+          <!-- Hover highlight -->
+          <Style Selector="TreeViewItem:pointerover /template/ Border#PART_LayoutRoot">
+            <Setter Property="Background" Value="#2A2D2E"/>
+          </Style>
+
+          <!-- Selected + focused -->
+          <Style Selector="TreeViewItem:selected:focus /template/ Border#PART_LayoutRoot">
+            <Setter Property="Background" Value="#094771"/>
+          </Style>
+
+          <!-- Drop target highlight -->
+          <Style Selector="TreeViewItem">
+            <Style Selector="^ /template/ Border#PART_LayoutRoot">
+              <Setter Property="Padding" Value="0,1"/>
+            </Style>
           </Style>
         </TreeView.Styles>
       </TreeView>

@@ -742,6 +742,7 @@ namespace BasicLang.Compiler.IR
                     var savedBlock = _currentBlock;
 
                     _currentFunction = _module.CreateFunction(implFunctionName, new TypeInfo(method.ReturnType?.Name ?? "Void", TypeKind.Primitive));
+                    _currentFunction.SourceFilePath = _sourceFilePath;
 
                     // Add parameters
                     foreach (var param in method.Parameters)
@@ -947,6 +948,7 @@ namespace BasicLang.Compiler.IR
             var returnType = new TypeInfo("Void", TypeKind.Void);
 
             _currentFunction = _module.CreateFunction(constructorName, returnType);
+            _currentFunction.SourceFilePath = _sourceFilePath;
             _currentBlock = _currentFunction.CreateBlock("entry");
 
             // Add parameters
@@ -1002,6 +1004,7 @@ namespace BasicLang.Compiler.IR
                     : $"get_{node.Name}";
 
                 _currentFunction = _module.CreateFunction(getterName, propertyType);
+                _currentFunction.SourceFilePath = _sourceFilePath;
                 _currentBlock = _currentFunction.CreateBlock("entry");
 
                 node.Getter.Accept(this);
@@ -1021,6 +1024,7 @@ namespace BasicLang.Compiler.IR
 
                 var voidType = new TypeInfo("Void", TypeKind.Void);
                 _currentFunction = _module.CreateFunction(setterName, voidType);
+                _currentFunction.SourceFilePath = _sourceFilePath;
                 _currentBlock = _currentFunction.CreateBlock("entry");
 
                 // Add value parameter
@@ -1091,6 +1095,7 @@ namespace BasicLang.Compiler.IR
 
             // Set up lambda function context
             _currentFunction = lambdaFunc;
+            _currentFunction.SourceFilePath = _sourceFilePath;
             _currentBlock = lambdaFunc.EntryBlock;
             _locals.Clear();
 
@@ -1239,6 +1244,7 @@ namespace BasicLang.Compiler.IR
             var savedLocals = new Dictionary<string, IRAlloca>(_locals);
 
             _currentFunction = opFunc;
+            _currentFunction.SourceFilePath = _sourceFilePath;
             _currentBlock = opFunc.CreateBlock("entry");
             _locals.Clear();
 

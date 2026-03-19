@@ -1,0 +1,225 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:views="using:VisualGameStudio.Shell.Views.Panels"
+             mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.DebugConsoleView"
+             x:DataType="vm:DebugConsoleViewModel"
+             Background="#1E1E1E">
+
+  <UserControl.Styles>
+    <!-- Monospace font for all text in the console -->
+    <Style Selector="TextBlock.console-text">
+      <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#252526"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="CaretBrush" Value="#FFFFFF"/>
+      <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="TextBox:focus">
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="Button.toolbar-btn">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Padding" Value="6,2"/>
+      <Setter Property="MinWidth" Value="24"/>
+      <Setter Property="MinHeight" Value="20"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="FontSize" Value="11"/>
+    </Style>
+    <Style Selector="Button.toolbar-btn:pointerover">
+      <Setter Property="Background" Value="#3C3C3C"/>
+    </Style>
+    <Style Selector="ComboBox.filter-combo">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="MinHeight" Value="22"/>
+      <Setter Property="Padding" Value="6,2"/>
+    </Style>
+    <!-- Hover effect for copy button on entries -->
+    <Style Selector="Border.entry-row:pointerover Button.copy-btn">
+      <Setter Property="Opacity" Value="1"/>
+    </Style>
+    <Style Selector="Button.copy-btn">
+      <Setter Property="Opacity" Value="0"/>
+    </Style>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto">
+
+    <!-- Toolbar -->
+    <Border Grid.Row="0" Background="#252526" BorderBrush="#3C3C3C" BorderThickness="0,0,0,1"
+            Padding="4,2">
+      <StackPanel Orientation="Horizontal" Spacing="4">
+        <Button Classes="toolbar-btn"
+                Content="Clear"
+                Command="{Binding ClearCommand}"
+                ToolTip.Tip="Clear console (Ctrl+L)"
+                AutomationProperties.Name="Clear Debug Console"/>
+        <Separator Background="#3C3C3C" Width="1" Margin="4,2"/>
+        <ComboBox Classes="filter-combo"
+                  ItemsSource="{Binding FilterModes}"
+                  SelectedItem="{Binding FilterMode}"
+                  ToolTip.Tip="Filter entries"
+                  AutomationProperties.Name="Filter Mode"/>
+        <Separator Background="#3C3C3C" Width="1" Margin="4,2"/>
+        <CheckBox Content="Timestamps"
+                  IsChecked="{Binding ShowTimestamps}"
+                  Foreground="#CCCCCC"
+                  FontSize="11"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="Show timestamps on entries"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Output Area -->
+    <Border Grid.Row="1" Background="#1E1E1E">
+      <ScrollViewer x:Name="OutputScroller"
+                    HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto"
+                    Padding="4">
+        <ItemsControl x:Name="EntriesList" ItemsSource="{Binding Entries}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:DebugConsoleEntry">
+              <Border Classes="entry-row" Padding="2,1" Background="Transparent">
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                  <!-- Timestamp (optional) -->
+                  <TextBlock Grid.Column="0"
+                             Classes="console-text"
+                             Text="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss.fff} '}"
+                             Foreground="#6A6A6A"
+                             IsVisible="{Binding $parent[ItemsControl].((vm:DebugConsoleViewModel)DataContext).ShowTimestamps}"/>
+
+                  <!-- Entry type prefix (>, E, W, i) -->
+                  <TextBlock Grid.Column="1" Classes="console-text" Margin="0,0,4,0"
+                             Foreground="{Binding EntryType, Converter={x:Static views:DebugConsoleConverters.EntryTypeForeground}}"
+                             Text="{Binding EntryType, Converter={x:Static views:DebugConsoleConverters.EntryTypePrefix}}"/>
+
+                  <!-- Main content -->
+                  <StackPanel Grid.Column="2" Orientation="Vertical">
+                    <StackPanel Orientation="Horizontal">
+                      <!-- Expand button for expandable entries -->
+                      <Button IsVisible="{Binding IsExpandable}"
+                              Classes="toolbar-btn"
+                              Content="{Binding IsExpanded, Converter={x:Static views:DebugConsoleConverters.ExpanderGlyph}}"
+                              Command="{Binding $parent[ItemsControl].((vm:DebugConsoleViewModel)DataContext).ExpandEntryCommand}"
+                              CommandParameter="{Binding}"
+                              Padding="2,0"
+                              MinWidth="16"
+                              VerticalAlignment="Center"/>
+
+                      <!-- Main text, colored by entry type -->
+                      <TextBlock Classes="console-text"
+                                 Text="{Binding Text}"
+                                 Foreground="{Binding EntryType, Converter={x:Static views:DebugConsoleConverters.EntryTypeForeground}}"
+                                 TextWrapping="Wrap"
+                                 VerticalAlignment="Center"/>
+
+                      <!-- Type name for output entries (cyan) -->
+                      <TextBlock Classes="console-text"
+                                 Text="{Binding TypeName, StringFormat=' ({0})'}"
+                                 Foreground="#4EC9B0"
+                                 IsVisible="{Binding TypeName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                 VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Expanded children (nested properties) -->
+                    <ItemsControl ItemsSource="{Binding Children}"
+                                  IsVisible="{Binding IsExpanded}"
+                                  Margin="20,0,0,0">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:DebugConsoleEntry">
+                          <StackPanel Orientation="Horizontal" Margin="0,1">
+                            <TextBlock Classes="console-text"
+                                       Text="{Binding Text}"
+                                       Foreground="{Binding EntryType, Converter={x:Static views:DebugConsoleConverters.EntryTypeForeground}}"
+                                       TextWrapping="Wrap"/>
+                            <TextBlock Classes="console-text"
+                                       Text="{Binding TypeName, StringFormat=' ({0})'}"
+                                       Foreground="#4EC9B0"
+                                       IsVisible="{Binding TypeName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+
+                  <!-- Copy button (visible on hover) -->
+                  <Button Grid.Column="3"
+                          Classes="toolbar-btn copy-btn"
+                          Content="Copy"
+                          Command="{Binding $parent[ItemsControl].((vm:DebugConsoleViewModel)DataContext).CopyEntryCommand}"
+                          CommandParameter="{Binding}"
+                          FontSize="10"
+                          VerticalAlignment="Top"/>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Input Area -->
+    <Border Grid.Row="2" BorderBrush="#3C3C3C" BorderThickness="0,1,0,0" Background="#252526">
+    <Grid ColumnDefinitions="Auto,*">
+      <!-- Prompt -->
+      <TextBlock Grid.Column="0"
+                 Text=">"
+                 Foreground="#569CD6"
+                 FontFamily="Cascadia Code, Consolas, monospace"
+                 FontSize="12"
+                 FontWeight="Bold"
+                 VerticalAlignment="Center"
+                 Margin="8,0,4,0"
+                 AutomationProperties.Name="Debug Console Prompt"/>
+
+      <!-- Input TextBox with suggestions popup -->
+      <Panel Grid.Column="1">
+        <TextBox x:Name="InputTextBox"
+                 Text="{Binding InputText, Mode=TwoWay}"
+                 Watermark="Evaluate expression"
+                 BorderThickness="0"
+                 Background="Transparent"
+                 Padding="4,8"
+                 VerticalAlignment="Center"
+                 IsEnabled="{Binding IsPaused}"
+                 KeyDown="OnInputKeyDown"
+                 TextChanged="OnInputTextChanged"
+                 AutomationProperties.Name="Debug Console Input"/>
+
+        <!-- Auto-complete suggestions popup -->
+        <Popup x:Name="SuggestionsPopup"
+               IsOpen="{Binding IsSuggestionsVisible}"
+               PlacementTarget="{Binding #InputTextBox}"
+               Placement="Top"
+               IsLightDismissEnabled="True">
+          <Border Background="#252526" BorderBrush="#3C3C3C" BorderThickness="1"
+                  CornerRadius="2" MaxHeight="200" MinWidth="200">
+            <ListBox x:Name="SuggestionsList"
+                     ItemsSource="{Binding Suggestions}"
+                     SelectedIndex="{Binding SelectedSuggestionIndex}"
+                     Background="Transparent"
+                     Foreground="#CCCCCC"
+                     FontFamily="Cascadia Code, Consolas, monospace"
+                     FontSize="12"
+                     DoubleTapped="OnSuggestionDoubleTapped"
+                     AutomationProperties.Name="Auto-complete Suggestions"/>
+          </Border>
+        </Popup>
+      </Panel>
+    </Grid>
+    </Border>
+  </Grid>
+
+</UserControl>

@@ -1,9 +1,11 @@
 namespace VisualGameStudio.Core.Abstractions.Services;
 
 /// <summary>
-/// Manages IDE extensions/plugins.
+/// Manages IDE extensions/plugins with VS Code extension host support.
+/// Extensions are Node.js packages that run in a separate process (Extension Host)
+/// communicating with the IDE via JSON-RPC over stdin/stdout.
 /// </summary>
-public interface IExtensionService
+public interface IExtensionService : IDisposable
 {
     /// <summary>
     /// Gets all installed extensions.
@@ -21,9 +23,29 @@ public interface IExtensionService
     string ExtensionsDirectory { get; }
 
     /// <summary>
+    /// Whether the Node.js extension host process is running.
+    /// </summary>
+    bool IsExtensionHostRunning { get; }
+
+    /// <summary>
     /// Discovers and loads all extensions from the extensions directory.
     /// </summary>
     Task<IReadOnlyList<Extension>> DiscoverExtensionsAsync();
+
+    /// <summary>
+    /// Starts the extension host process and activates extensions that match startup events.
+    /// </summary>
+    Task StartExtensionHostAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stops the extension host process and deactivates all extensions.
+    /// </summary>
+    Task StopExtensionHostAsync();
+
+    /// <summary>
+    /// Restarts the extension host process.
+    /// </summary>
+    Task RestartExtensionHostAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Installs an extension from a file.
@@ -64,7 +86,13 @@ public interface IExtensionService
     Extension? GetExtension(string extensionId);
 
     /// <summary>
-    /// Activates an extension (loads and initializes it).
+    /// Gets the parsed manifest for an extension.
+    /// </summary>
+    /// <param name="extensionId">The extension ID.</param>
+    ExtensionManifest? GetExtensionManifest(string extensionId);
+
+    /// <summary>
+    /// Activates an extension (loads and initializes it in the extension host).
     /// </summary>
     /// <param name="extensionId">The extension ID.</param>
     Task<bool> ActivateAsync(string extensionId);
@@ -74,6 +102,19 @@ public interface IExtensionService
     /// </summary>
     /// <param name="extensionId">The extension ID.</param>
     Task<bool> DeactivateAsync(string extensionId);
+
+    /// <summary>
+    /// Executes a command contributed by an extension.
+    /// </summary>
+    /// <param name="commandId">The command identifier.</param>
+    /// <param name="args">Optional command arguments.</param>
+    Task<object?> ExecuteExtensionCommandAsync(string commandId, object?[]? args = null);
+
+    /// <summary>
+    /// Triggers activation for extensions matching a specific event.
+    /// </summary>
+    /// <param name="activationEvent">The activation event (e.g., "onLanguage:python", "onCommand:myExt.run").</param>
+    Task TriggerActivationEventAsync(string activationEvent);
 
     /// <summary>
     /// Checks for updates for all installed extensions.
@@ -116,6 +157,16 @@ public interface IExtensionService
     /// Raised when an extension is deactivated.
     /// </summary>
     event EventHandler<ExtensionEventArgs>? ExtensionDeactivated;
+
+    /// <summary>
+    /// Raised when the extension host process starts or stops.
+    /// </summary>
+    event EventHandler<bool>? ExtensionHostStateChanged;
+
+    /// <summary>
+    /// Raised when an extension sends a message to the IDE (e.g., showInformationMessage).
+    /// </summary>
+    event EventHandler<ExtensionMessageEventArgs>? ExtensionMessageReceived;
 }
 
 #region Extension Types
@@ -194,6 +245,11 @@ public class Extension
     /// Gets or sets whether the extension is active (loaded).
     /// </summary>
     public bool IsActive { get; set; }
+
+    /// <summary>
+    /// Gets or sets the current status of the extension.
+    /// </summary>
+    public ExtensionStatus Status { get; set; } = ExtensionStatus.Installed;
 
     /// <summary>
     /// Gets or sets whether this is a built-in extension.
@@ -530,6 +586,61 @@ public class ExtensionEventArgs : EventArgs
     {
         Extension = extension;
     }
+}
+
+/// <summary>
+/// Event args for messages from extensions (showInformationMessage, showErrorMessage, etc.).
+/// </summary>
+public class ExtensionMessageEventArgs : EventArgs
+{
+    /// <summary>
+    /// The extension that sent the message.
+    /// </summary>
+    public string ExtensionId { get; set; } = "";
+
+    /// <summary>
+    /// Message severity: "info", "warning", "error".
+    /// </summary>
+    public string Severity { get; set; } = "info";
+
+    /// <summary>
+    /// The message text.
+    /// </summary>
+    public string Message { get; set; } = "";
+
+    /// <summary>
+    /// Optional action buttons (e.g., "Yes", "No", "Retry").
+    /// </summary>
+    public List<string> Actions { get; set; } = new();
+
+    /// <summary>
+    /// Task completion source to return the selected action back to the extension.
+    /// </summary>
+    public TaskCompletionSource<string?>? ResponseSource { get; set; }
+}
+
+/// <summary>
+/// Status of an extension in its lifecycle.
+/// </summary>
+public enum ExtensionStatus
+{
+    /// <summary>Extension is installed but not loaded.</summary>
+    Installed,
+
+    /// <summary>Extension is currently being activated.</summary>
+    Activating,
+
+    /// <summary>Extension is active and running in the extension host.</summary>
+    Active,
+
+    /// <summary>Extension is disabled by the user.</summary>
+    Disabled,
+
+    /// <summary>Extension encountered an error during activation.</summary>
+    Error,
+
+    /// <summary>Extension is being deactivated.</summary>
+    Deactivating
 }
 
 #endregion

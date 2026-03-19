@@ -1,0 +1,274 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="300"
+             x:Class="VisualGameStudio.Shell.Views.Panels.ProblemsView"
+             x:DataType="vm:ProblemsViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <!-- Toolbar -->
+      <Border DockPanel.Dock="Top" Classes="panelHeader" Padding="4,2">
+        <DockPanel>
+          <!-- Title -->
+          <TextBlock Text="Problems" Classes="panelTitle" DockPanel.Dock="Left"
+                     VerticalAlignment="Center" Margin="4,0,8,0"/>
+
+          <!-- Right-side controls -->
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="4"
+                      DockPanel.Dock="Right">
+
+            <!-- File scope toggle -->
+            <ToggleButton IsChecked="{Binding IsFilterByCurrentFile}"
+                          ToolTip.Tip="Filter by current file"
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
+                          Background="Transparent" BorderThickness="0"
+                          AutomationProperties.Name="Filter by current file">
+              <StackPanel Orientation="Horizontal" Spacing="3">
+                <TextBlock Text="&#x1F4C4;" FontSize="12" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding IsFilterByCurrentFile, Converter={x:Static vm:ProblemsView_Converters.FileScopeTextConverter}}"
+                           VerticalAlignment="Center" FontSize="11"
+                           Foreground="#CCCCCC"/>
+              </StackPanel>
+            </ToggleButton>
+
+            <Border Width="1" Background="#3C3C3C" Margin="2,4"/>
+
+            <!-- Error toggle -->
+            <ToggleButton IsChecked="{Binding ShowErrors}"
+                          ToolTip.Tip="Toggle errors"
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
+                          Background="Transparent" BorderThickness="0"
+                          AutomationProperties.Name="Toggle Errors">
+              <StackPanel Orientation="Horizontal" Spacing="3">
+                <Border Width="14" Height="14" CornerRadius="7"
+                        Background="#F14C4C" VerticalAlignment="Center">
+                  <TextBlock Text="x" Foreground="White" FontSize="9" FontWeight="Bold"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"
+                             Margin="0,-1,0,0"/>
+                </Border>
+                <TextBlock Text="{Binding ErrorCount}"
+                           Foreground="#F14C4C" VerticalAlignment="Center" FontSize="12"
+                           MinWidth="14" TextAlignment="Center"/>
+              </StackPanel>
+            </ToggleButton>
+
+            <!-- Warning toggle -->
+            <ToggleButton IsChecked="{Binding ShowWarnings}"
+                          ToolTip.Tip="Toggle warnings"
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
+                          Background="Transparent" BorderThickness="0"
+                          AutomationProperties.Name="Toggle Warnings">
+              <StackPanel Orientation="Horizontal" Spacing="3">
+                <TextBlock Text="&#x26A0;" Foreground="#CCA700" FontSize="13"
+                           VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                <TextBlock Text="{Binding WarningCount}"
+                           Foreground="#CCA700" VerticalAlignment="Center" FontSize="12"
+                           MinWidth="14" TextAlignment="Center"/>
+              </StackPanel>
+            </ToggleButton>
+
+            <!-- Info toggle -->
+            <ToggleButton IsChecked="{Binding ShowInfo}"
+                          ToolTip.Tip="Toggle info"
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
+                          Background="Transparent" BorderThickness="0"
+                          AutomationProperties.Name="Toggle Info">
+              <StackPanel Orientation="Horizontal" Spacing="3">
+                <TextBlock Text="&#x2139;" Foreground="#3794FF" FontSize="13"
+                           VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                <TextBlock Text="{Binding InfoCount}"
+                           Foreground="#3794FF" VerticalAlignment="Center" FontSize="12"
+                           MinWidth="14" TextAlignment="Center"/>
+              </StackPanel>
+            </ToggleButton>
+
+            <Border Width="1" Background="#3C3C3C" Margin="2,4"/>
+
+            <!-- Group by file toggle -->
+            <ToggleButton IsChecked="{Binding IsGroupedByFile}"
+                          ToolTip.Tip="Group by file"
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
+                          Background="Transparent" BorderThickness="0"
+                          AutomationProperties.Name="Group by file">
+              <TextBlock Text="&#x1F4C1;" FontSize="12" VerticalAlignment="Center"/>
+            </ToggleButton>
+
+            <!-- Collapse All -->
+            <Button Command="{Binding CollapseAllCommand}"
+                    ToolTip.Tip="Collapse All"
+                    Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
+                    Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="Collapse All">
+              <TextBlock Text="&#x2796;" FontSize="10" VerticalAlignment="Center"/>
+            </Button>
+
+            <!-- Expand All -->
+            <Button Command="{Binding ExpandAllCommand}"
+                    ToolTip.Tip="Expand All"
+                    Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
+                    Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="Expand All">
+              <TextBlock Text="&#x2795;" FontSize="10" VerticalAlignment="Center"/>
+            </Button>
+          </StackPanel>
+
+          <!-- Filter input (takes remaining space) -->
+          <TextBox Text="{Binding FilterText}"
+                   Watermark="Filter (e.g., !info)"
+                   FontSize="12"
+                   Height="24"
+                   Margin="4,0"
+                   Padding="6,2"
+                   Background="#3C3C3C"
+                   BorderThickness="1"
+                   BorderBrush="#505050"
+                   CornerRadius="3"
+                   AutomationProperties.Name="Filter problems"/>
+        </DockPanel>
+      </Border>
+
+      <!-- Status bar at bottom -->
+      <Border DockPanel.Dock="Bottom" Background="#252526" Padding="8,2" MinHeight="20">
+        <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="#808080"
+                   VerticalAlignment="Center"
+                   AutomationProperties.Name="Problems Status"/>
+      </Border>
+
+      <!-- Main content area -->
+      <Panel>
+        <!-- Empty state (shown when no problems) -->
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                    IsVisible="{Binding !HasProblems}" Spacing="8">
+          <TextBlock Text="&#x2705;" FontSize="32" HorizontalAlignment="Center"
+                     Foreground="#3C9D3C"/>
+          <TextBlock Text="No problems detected" FontSize="14" Foreground="#808080"
+                     HorizontalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- Grouped view (when grouping by file is enabled) -->
+        <TreeView x:Name="ProblemsTreeView"
+                  ItemsSource="{Binding GroupedProblems}"
+                  IsVisible="{Binding IsGroupedByFile}"
+                  Background="#1E1E1E"
+                  BorderThickness="0"
+                  AutomationProperties.Name="Problems list grouped by file">
+          <TreeView.DataTemplates>
+            <TreeDataTemplate DataType="vm:ProblemFileGroupViewModel" ItemsSource="{Binding Problems}">
+              <!-- File group header -->
+              <Border Padding="2,3" Cursor="Hand">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="&#x25B6;" FontSize="9" VerticalAlignment="Center"
+                             Foreground="#808080"
+                             IsVisible="{Binding !IsExpanded}"/>
+                  <TextBlock Text="&#x25BC;" FontSize="9" VerticalAlignment="Center"
+                             Foreground="#808080"
+                             IsVisible="{Binding IsExpanded}"/>
+                  <TextBlock Text="&#x1F4C4;" FontSize="12" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" FontSize="12"
+                             Foreground="#CCCCCC" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding FilePath}" FontSize="11"
+                             Foreground="#606060" VerticalAlignment="Center"
+                             Margin="4,0,0,0" TextTrimming="CharacterEllipsis"
+                             MaxWidth="400"/>
+                  <Border Background="#37373D" CornerRadius="8" Padding="6,1" Margin="4,0,0,0"
+                          VerticalAlignment="Center">
+                    <TextBlock Text="{Binding ProblemCount}" FontSize="10"
+                               Foreground="#CCCCCC" TextAlignment="Center"
+                               MinWidth="14"/>
+                  </Border>
+                </StackPanel>
+              </Border>
+            </TreeDataTemplate>
+            <DataTemplate DataType="vm:ProblemItemViewModel">
+              <Border Padding="4,2" Cursor="Hand"
+                      Background="Transparent">
+                <Grid ColumnDefinitions="24,*,70,80,70">
+                  <!-- Severity icon -->
+                  <TextBlock Grid.Column="0"
+                             Text="{Binding SeverityIcon}" FontSize="13"
+                             Foreground="{Binding SeverityColor}"
+                             VerticalAlignment="Center"
+                             HorizontalAlignment="Center"/>
+                  <!-- Message -->
+                  <TextBlock Grid.Column="1"
+                             Text="{Binding Message}" FontSize="12"
+                             Foreground="#CCCCCC"
+                             VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"
+                             Margin="4,0"/>
+                  <!-- Code -->
+                  <TextBlock Grid.Column="2"
+                             Text="{Binding Code}" FontSize="11"
+                             Foreground="#808080"
+                             VerticalAlignment="Center"
+                             TextAlignment="Left"/>
+                  <!-- Source -->
+                  <TextBlock Grid.Column="3"
+                             Text="{Binding Source}" FontSize="11"
+                             Foreground="#808080"
+                             VerticalAlignment="Center"
+                             TextAlignment="Left"/>
+                  <!-- Line:Column -->
+                  <TextBlock Grid.Column="4" FontSize="11"
+                             Foreground="#808080"
+                             VerticalAlignment="Center"
+                             TextAlignment="Right"
+                             Margin="0,0,8,0">
+                    <TextBlock.Text>
+                      <MultiBinding StringFormat="{}{0}:{1}">
+                        <Binding Path="Line"/>
+                        <Binding Path="Column"/>
+                      </MultiBinding>
+                    </TextBlock.Text>
+                  </TextBlock>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </TreeView.DataTemplates>
+        </TreeView>
+
+        <!-- Flat DataGrid view (when grouping is disabled) -->
+        <DataGrid x:Name="ProblemsDataGrid"
+                  ItemsSource="{Binding FilteredProblems}"
+                  SelectedItem="{Binding SelectedProblem}"
+                  IsVisible="{Binding !IsGroupedByFile}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  CanUserResizeColumns="True"
+                  CanUserReorderColumns="True"
+                  CanUserSortColumns="True"
+                  GridLinesVisibility="None"
+                  BorderThickness="0"
+                  Background="#1E1E1E"
+                  RowBackground="#1E1E1E"
+                  MinHeight="100"
+                  AutomationProperties.Name="Problems List">
+
+          <DataGrid.Columns>
+            <DataGridTemplateColumn Header="" Width="30" CanUserSort="True" SortMemberPath="Severity">
+              <DataGridTemplateColumn.CellTemplate>
+                <DataTemplate x:DataType="vm:ProblemItemViewModel">
+                  <TextBlock Text="{Binding SeverityIcon}" FontSize="13"
+                             Foreground="{Binding SeverityColor}"
+                             VerticalAlignment="Center"
+                             HorizontalAlignment="Center"/>
+                </DataTemplate>
+              </DataGridTemplateColumn.CellTemplate>
+            </DataGridTemplateColumn>
+
+            <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*"/>
+            <DataGridTextColumn Header="Code" Binding="{Binding Code}" Width="80"/>
+            <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="80"/>
+            <DataGridTextColumn Header="File" Binding="{Binding FileName}" Width="120"/>
+            <DataGridTextColumn Header="Line" Binding="{Binding Line}" Width="50"/>
+            <DataGridTextColumn Header="Col" Binding="{Binding Column}" Width="50"/>
+          </DataGrid.Columns>
+        </DataGrid>
+      </Panel>
+    </DockPanel>
+  </Border>
+
+</UserControl>

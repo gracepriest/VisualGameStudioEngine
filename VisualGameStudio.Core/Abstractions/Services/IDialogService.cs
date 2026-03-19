@@ -12,8 +12,19 @@ public interface IDialogService
     Task<BreakpointConditionResult?> ShowBreakpointConditionDialogAsync(string location, string? condition, string? hitCount, string? logMessage);
     Task<List<ExceptionSettingResult>?> ShowExceptionSettingsDialogAsync(IEnumerable<ExceptionSettingResult>? currentSettings = null);
     Task<int?> ShowGoToLineDialogAsync(int currentLine, int totalLines);
+    /// <summary>
+    /// Shows a Go To Line dialog that supports line:column format.
+    /// Returns a GoToLineColumnResult with both line and column, or null if cancelled.
+    /// </summary>
+    Task<GoToLineColumnResult?> ShowGoToLineColumnDialogAsync(int currentLine, int totalLines);
     Task<GoToSymbolResult?> ShowGoToSymbolDialogAsync(string sourceCode, string? filePath = null);
     Task<int> ShowListSelectionAsync(string title, string prompt, IEnumerable<string> items);
+}
+
+public class GoToLineColumnResult
+{
+    public int Line { get; set; }
+    public int Column { get; set; }
 }
 
 public class GoToSymbolResult

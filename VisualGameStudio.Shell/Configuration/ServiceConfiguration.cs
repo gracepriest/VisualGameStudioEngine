@@ -31,6 +31,9 @@ public static class ServiceConfiguration
         services.AddSingleton<IRefactoringService, RefactoringService>();
         services.AddSingleton<ISnippetService, SnippetService>();
         services.AddSingleton<IProjectTemplateService, ProjectTemplateService>();
+        services.AddSingleton<IAutoSaveService, AutoSaveService>();
+        services.AddSingleton<IHotExitService, HotExitService>();
+        services.AddSingleton<IFileWatcherService, FileWatcherService>();
         services.AddSingleton<RecentProjectsService>();
 
         // Shell Services

@@ -24,28 +24,133 @@
     <Style Selector="ItemsControl TextBlock.warning">
       <Setter Property="Foreground" Value="#CCA700"/>
     </Style>
+    <!-- Toolbar button style -->
+    <Style Selector="Button.outputToolbar">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="4,2"/>
+      <Setter Property="MinWidth" Value="24"/>
+      <Setter Property="MinHeight" Value="20"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="FontSize" Value="11"/>
+    </Style>
+    <Style Selector="Button.outputToolbar:pointerover">
+      <Setter Property="Background" Value="#3C3C3C"/>
+    </Style>
+    <!-- Active toggle style -->
+    <Style Selector="Button.outputToolbarActive">
+      <Setter Property="Background" Value="#094771"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="4,2"/>
+      <Setter Property="MinWidth" Value="24"/>
+      <Setter Property="MinHeight" Value="20"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="FontSize" Value="11"/>
+    </Style>
   </UserControl.Styles>
 
   <Border Classes="toolPanel">
     <DockPanel>
+      <!-- Header / Toolbar -->
       <Border DockPanel.Dock="Top" Classes="panelHeader">
         <DockPanel>
-          <TextBlock Text="Output" Classes="panelTitle" DockPanel.Dock="Left"/>
-          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="4">
-            <Button Content="Build" Command="{Binding ShowBuildOutputCommand}"
-                    Padding="8,2" FontSize="11"
-                    AutomationProperties.Name="Show Build Output"/>
-            <Button Content="General" Command="{Binding ShowGeneralOutputCommand}"
-                    Padding="8,2" FontSize="11"
-                    AutomationProperties.Name="Show General Output"/>
-            <Button Content="Clear" Command="{Binding ClearCommand}"
-                    Padding="8,2" FontSize="11"
-                    AutomationProperties.Name="Clear Output"/>
+          <!-- Left side: Title + Channel selector -->
+          <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" Spacing="6" VerticalAlignment="Center">
+            <TextBlock Text="Output" Classes="panelTitle" VerticalAlignment="Center"/>
+
+            <!-- Channel dropdown selector -->
+            <ComboBox ItemsSource="{Binding Channels}"
+                      SelectedItem="{Binding ActiveChannel}"
+                      MinWidth="140"
+                      MaxWidth="200"
+                      FontSize="11"
+                      Padding="4,2"
+                      VerticalAlignment="Center"
+                      Background="#2D2D2D"
+                      BorderBrush="#3C3C3C"
+                      AutomationProperties.Name="Output Channel Selector"
+                      AutomationProperties.HelpText="Select which output channel to display">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:OutputChannelViewModel">
+                  <TextBlock Text="{Binding Name}" FontSize="11"/>
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+          </StackPanel>
+
+          <!-- Right side: Toolbar buttons -->
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="2" VerticalAlignment="Center">
+            <!-- Clear button -->
+            <Button Classes="outputToolbar"
+                    Command="{Binding ClearCommand}"
+                    ToolTip.Tip="Clear Output (this channel)"
+                    AutomationProperties.Name="Clear Output">
+              <TextBlock Text="&#xE894;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+            </Button>
+
+            <!-- Copy All button -->
+            <Button Classes="outputToolbar"
+                    Command="{Binding CopyAllCommand}"
+                    ToolTip.Tip="Copy All Output"
+                    AutomationProperties.Name="Copy All Output">
+              <TextBlock Text="Copy" FontSize="11" Foreground="#CCCCCC"/>
+            </Button>
+
+            <!-- Separator -->
+            <Border Width="1" Background="#3C3C3C" Margin="2,3" Height="16"/>
+
+            <!-- Word Wrap toggle -->
+            <Button Classes.outputToolbar="{Binding !WordWrap}"
+                    Classes.outputToolbarActive="{Binding WordWrap}"
+                    Command="{Binding ToggleWordWrapCommand}"
+                    ToolTip.Tip="Toggle Word Wrap"
+                    AutomationProperties.Name="Toggle Word Wrap">
+              <TextBlock Text="Wrap" FontSize="11" Foreground="#CCCCCC"/>
+            </Button>
+
+            <!-- Auto-scroll / Lock scroll toggle -->
+            <Button Classes.outputToolbar="{Binding AutoScroll}"
+                    Classes.outputToolbarActive="{Binding !AutoScroll}"
+                    Command="{Binding ToggleAutoScrollCommand}"
+                    ToolTip.Tip="{Binding AutoScroll, Converter={x:Static StringConverters.IsNullOrEmpty}, ConverterParameter='Scroll is locked. Click to enable auto-scroll', FallbackValue='Auto-scroll is on. Click to lock scroll position'}"
+                    AutomationProperties.Name="Toggle Auto-Scroll">
+              <TextBlock FontSize="11" Foreground="#CCCCCC">
+                <TextBlock.Text>
+                  <Binding Path="AutoScroll">
+                    <Binding.Converter>
+                      <x:Static Member="StringConverters.IsNullOrEmpty"/>
+                    </Binding.Converter>
+                  </Binding>
+                </TextBlock.Text>
+              </TextBlock>
+            </Button>
+            <Button Classes.outputToolbar="{Binding AutoScroll}"
+                    Classes.outputToolbarActive="{Binding !AutoScroll}"
+                    Command="{Binding ToggleAutoScrollCommand}"
+                    AutomationProperties.Name="Toggle Scroll Lock"
+                    x:Name="ScrollLockButton">
+              <StackPanel Orientation="Horizontal" Spacing="3">
+                <TextBlock Text="&#x1F512;" FontSize="10" IsVisible="{Binding !AutoScroll}"/>
+                <TextBlock Text="Scroll" FontSize="11" Foreground="#CCCCCC" IsVisible="{Binding !AutoScroll}"/>
+                <TextBlock Text="&#x2193;" FontSize="12" IsVisible="{Binding AutoScroll}"/>
+              </StackPanel>
+            </Button>
+
+            <!-- Separator -->
+            <Border Width="1" Background="#3C3C3C" Margin="2,3" Height="16"/>
+
+            <!-- Open in Editor -->
+            <Button Classes="outputToolbar"
+                    Command="{Binding OpenInEditorCommand}"
+                    ToolTip.Tip="Open Output in Editor"
+                    AutomationProperties.Name="Open Output in Editor">
+              <TextBlock Text="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
+            </Button>
           </StackPanel>
         </DockPanel>
       </Border>
 
-      <!-- Input area at the bottom -->
+      <!-- Input area at the bottom (visible when debugging) -->
       <Border DockPanel.Dock="Bottom"
               Background="#252526"
               Padding="4"
@@ -66,6 +171,22 @@
                    x:Name="InputTextBox"
                    AutomationProperties.Name="Output Panel Input"/>
         </DockPanel>
+      </Border>
+
+      <!-- Status bar at the bottom -->
+      <Border DockPanel.Dock="Bottom" Background="#252526" Padding="4,1" BorderThickness="0,1,0,0" BorderBrush="#3C3C3C">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="{Binding LineCount, StringFormat='Lines: {0}'}"
+                     FontSize="11"
+                     Foreground="#808080"
+                     VerticalAlignment="Center"
+                     AutomationProperties.Name="Output Line Count"/>
+          <TextBlock Text="{Binding ActiveChannel.Name, StringFormat='Channel: {0}'}"
+                     FontSize="11"
+                     Foreground="#808080"
+                     VerticalAlignment="Center"
+                     AutomationProperties.Name="Active Channel Name"/>
+        </StackPanel>
       </Border>
 
       <!-- Output lines with clickable error/warning entries -->

@@ -3,222 +3,450 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Documents"
-             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
              x:Class="VisualGameStudio.Shell.Views.Documents.WelcomeDocumentView"
              x:DataType="vm:WelcomeDocumentViewModel"
              Background="#1E1E1E">
 
-  <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-    <Grid ColumnDefinitions="*,*" Margin="40" MaxWidth="1200">
-      <!-- Left Column -->
-      <StackPanel Grid.Column="0" Spacing="20" Margin="0,0,20,0">
-        <!-- Header -->
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+    <Border HorizontalAlignment="Center" MaxWidth="900" Margin="40,30">
+
+      <!-- Header -->
+      <StackPanel Spacing="30">
         <StackPanel Spacing="4">
           <TextBlock Text="Visual Game Studio"
                      FontSize="36"
                      FontWeight="Light"
                      Foreground="#CCCCCC"/>
-          <TextBlock Text="BasicLang Development Environment"
-                     FontSize="16"
-                     Foreground="#808080"/>
-        </StackPanel>
-
-        <Border Height="1" Background="#3C3C3C" Margin="0,10"/>
-
-        <!-- Get Started -->
-        <StackPanel Spacing="16">
-          <TextBlock Text="Start"
-                     FontSize="20"
-                     FontWeight="SemiBold"
-                     Foreground="#CCCCCC"/>
-
-          <StackPanel Spacing="12">
-            <Button Command="{Binding NewProjectCommand}"
-                    Background="Transparent"
-                    BorderThickness="0"
-                    Padding="0"
-                    HorizontalContentAlignment="Left">
-              <StackPanel Orientation="Horizontal" Spacing="12">
-                <Border Background="#0E639C" CornerRadius="4" Width="40" Height="40">
-                  <TextBlock Text="+" FontSize="24" Foreground="White"
-                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <StackPanel VerticalAlignment="Center">
-                  <TextBlock Text="New Project" FontSize="14" Foreground="#3794FF"/>
-                  <TextBlock Text="Create a new BasicLang project" FontSize="12" Foreground="#808080"/>
-                </StackPanel>
-              </StackPanel>
-            </Button>
-
-            <Button Command="{Binding OpenProjectCommand}"
-                    Background="Transparent"
-                    BorderThickness="0"
-                    Padding="0"
-                    HorizontalContentAlignment="Left">
-              <StackPanel Orientation="Horizontal" Spacing="12">
-                <Border Background="#3C3C3C" CornerRadius="4" Width="40" Height="40">
-                  <TextBlock Text="📁" FontSize="20"
-                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <StackPanel VerticalAlignment="Center">
-                  <TextBlock Text="Open Project" FontSize="14" Foreground="#3794FF"/>
-                  <TextBlock Text="Open an existing project" FontSize="12" Foreground="#808080"/>
-                </StackPanel>
-              </StackPanel>
-            </Button>
-
-            <Button Command="{Binding OpenFileCommand}"
-                    Background="Transparent"
-                    BorderThickness="0"
-                    Padding="0"
-                    HorizontalContentAlignment="Left">
-              <StackPanel Orientation="Horizontal" Spacing="12">
-                <Border Background="#3C3C3C" CornerRadius="4" Width="40" Height="40">
-                  <TextBlock Text="📄" FontSize="20"
-                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <StackPanel VerticalAlignment="Center">
-                  <TextBlock Text="Open File" FontSize="14" Foreground="#3794FF"/>
-                  <TextBlock Text="Open a file without a project" FontSize="12" Foreground="#808080"/>
-                </StackPanel>
-              </StackPanel>
-            </Button>
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock Text="BasicLang Development Environment"
+                       FontSize="16"
+                       Foreground="#808080"/>
+            <TextBlock Text="{Binding VersionText}"
+                       FontSize="14"
+                       Foreground="#606060"
+                       VerticalAlignment="Center"/>
           </StackPanel>
         </StackPanel>
 
-        <Border Height="1" Background="#3C3C3C" Margin="0,10"/>
+        <!-- Two-Column Layout -->
+        <Grid ColumnDefinitions="3*,2*">
 
-        <!-- Keyboard Shortcuts -->
-        <StackPanel Spacing="12">
-          <TextBlock Text="Keyboard Shortcuts"
-                     FontSize="20"
-                     FontWeight="SemiBold"
-                     Foreground="#CCCCCC"/>
+          <!-- ═══════════════ Left Column (60%) ═══════════════ -->
+          <StackPanel Grid.Column="0" Spacing="24" Margin="0,0,24,0">
 
-          <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="Ctrl+Shift+N" Foreground="#CE9178" Margin="0,0,20,8"/>
-            <TextBlock Grid.Row="0" Grid.Column="1" Text="New Project" Foreground="#808080"/>
+            <!-- Recent Projects Section -->
+            <StackPanel Spacing="12">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0"
+                           Text="Recent"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Foreground="#CCCCCC"/>
+                <Button Grid.Column="1"
+                        Content="Clear All"
+                        Command="{Binding ClearRecentProjectsCommand}"
+                        FontSize="11"
+                        Foreground="#808080"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="4,2"
+                        Cursor="Hand"
+                        IsVisible="{Binding RecentProjects.Count}"/>
+              </Grid>
 
-            <TextBlock Grid.Row="1" Grid.Column="0" Text="Ctrl+Shift+O" Foreground="#CE9178" Margin="0,0,20,8"/>
-            <TextBlock Grid.Row="1" Grid.Column="1" Text="Open Project" Foreground="#808080"/>
+              <Border Height="1" Background="#333333"/>
 
-            <TextBlock Grid.Row="2" Grid.Column="0" Text="Ctrl+S" Foreground="#CE9178" Margin="0,0,20,8"/>
-            <TextBlock Grid.Row="2" Grid.Column="1" Text="Save" Foreground="#808080"/>
+              <!-- Recent Projects List -->
+              <ItemsControl ItemsSource="{Binding RecentProjects}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:RecentProjectItem">
+                    <Border Background="#252526"
+                            CornerRadius="4"
+                            Margin="0,0,0,4"
+                            Padding="0"
+                            Cursor="Hand"
+                            Name="RecentItemBorder">
+                      <Border.Styles>
+                        <Style Selector="Border#RecentItemBorder:pointerover">
+                          <Setter Property="Background" Value="#2A2D2E"/>
+                        </Style>
+                      </Border.Styles>
+                      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+                        <!-- Folder Icon -->
+                        <Border Grid.Column="0" Width="36" Height="36"
+                                Margin="10,8"
+                                Background="#333333" CornerRadius="4">
+                          <TextBlock Text="P"
+                                     FontSize="16" FontWeight="SemiBold"
+                                     Foreground="#569CD6"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"/>
+                        </Border>
 
-            <TextBlock Grid.Row="3" Grid.Column="0" Text="Ctrl+Shift+B" Foreground="#CE9178" Margin="0,0,20,8"/>
-            <TextBlock Grid.Row="3" Grid.Column="1" Text="Build Project" Foreground="#808080"/>
+                        <!-- Project Info (clickable) -->
+                        <Button Grid.Column="1"
+                                Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).OpenRecentProjectCommand}"
+                                CommandParameter="{Binding}"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="0,8,8,8"
+                                HorizontalContentAlignment="Left"
+                                VerticalContentAlignment="Center">
+                          <StackPanel>
+                            <TextBlock Text="{Binding Name}"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Foreground="#CCCCCC"/>
+                            <TextBlock Text="{Binding DirectoryPath}"
+                                       FontSize="11"
+                                       Foreground="#808080"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxWidth="350"/>
+                          </StackPanel>
+                        </Button>
 
-            <TextBlock Grid.Row="4" Grid.Column="0" Text="F5" Foreground="#CE9178" Margin="0,0,20,8"/>
-            <TextBlock Grid.Row="4" Grid.Column="1" Text="Start Debugging" Foreground="#808080"/>
+                        <!-- Time Ago -->
+                        <TextBlock Grid.Column="2"
+                                   Text="{Binding LastOpenedText}"
+                                   FontSize="11"
+                                   Foreground="#606060"
+                                   VerticalAlignment="Center"
+                                   Margin="4,0,8,0"/>
 
-            <TextBlock Grid.Row="5" Grid.Column="0" Text="F9" Foreground="#CE9178" Margin="0,0,20,8"/>
-            <TextBlock Grid.Row="5" Grid.Column="1" Text="Toggle Breakpoint" Foreground="#808080"/>
+                        <!-- Pin/Unpin Button -->
+                        <Button Grid.Column="3"
+                                Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).PinProjectCommand}"
+                                CommandParameter="{Binding}"
+                                ToolTip.Tip="{Binding IsPinned, Converter={x:Static BoolConverters.Not}, ConverterParameter='Unpin|Pin'}"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="4,2"
+                                VerticalAlignment="Center"
+                                Opacity="0.5"
+                                Name="PinButton">
+                          <Button.Styles>
+                            <Style Selector="Button#PinButton:pointerover">
+                              <Setter Property="Opacity" Value="1.0"/>
+                            </Style>
+                          </Button.Styles>
+                          <!-- Pin icon: filled for pinned, outline for unpinned -->
+                          <TextBlock FontSize="12"
+                                     Foreground="{Binding IsPinned, Converter={x:Static BoolConverters.Not}, ConverterParameter='#808080|#569CD6'}">
+                            <TextBlock.Text>
+                              <Binding Path="IsPinned">
+                                <Binding.Converter>
+                                  <x:Static Member="BoolConverters.Not"/>
+                                </Binding.Converter>
+                              </Binding>
+                            </TextBlock.Text>
+                          </TextBlock>
+                          <!-- Simplified: show a pushpin unicode character -->
+                          <ToolTip.Tip>
+                            <MultiBinding StringFormat="{}{0}">
+                              <Binding Path="IsPinned" />
+                            </MultiBinding>
+                          </ToolTip.Tip>
+                        </Button>
 
-            <TextBlock Grid.Row="6" Grid.Column="0" Text="Ctrl+F" Foreground="#CE9178" Margin="0,0,20,8"/>
-            <TextBlock Grid.Row="6" Grid.Column="1" Text="Find" Foreground="#808080"/>
+                        <!-- Remove Button -->
+                        <Button Grid.Column="4"
+                                Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).RemoveRecentProjectCommand}"
+                                CommandParameter="{Binding}"
+                                ToolTip.Tip="Remove from Recent"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="4,2"
+                                Margin="0,0,8,0"
+                                VerticalAlignment="Center"
+                                Opacity="0.3"
+                                Name="RemoveButton">
+                          <Button.Styles>
+                            <Style Selector="Button#RemoveButton:pointerover">
+                              <Setter Property="Opacity" Value="1.0"/>
+                            </Style>
+                          </Button.Styles>
+                          <TextBlock Text="x" FontSize="13" Foreground="#808080"/>
+                        </Button>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
 
-            <TextBlock Grid.Row="7" Grid.Column="0" Text="F12" Foreground="#CE9178" Margin="0,0,20,8"/>
-            <TextBlock Grid.Row="7" Grid.Column="1" Text="Go to Definition" Foreground="#808080"/>
-          </Grid>
-        </StackPanel>
-      </StackPanel>
+              <!-- Empty state -->
+              <TextBlock Text="No recent projects"
+                         Foreground="#606060"
+                         FontSize="13"
+                         IsVisible="{Binding !RecentProjects.Count}"
+                         Margin="0,8"/>
+            </StackPanel>
 
-      <!-- Right Column - Recent Projects -->
-      <StackPanel Grid.Column="1" Spacing="16" Margin="20,0,0,0">
-        <Grid ColumnDefinitions="*,Auto">
-          <TextBlock Grid.Column="0"
-                     Text="Recent Projects"
-                     FontSize="20"
-                     FontWeight="SemiBold"
-                     Foreground="#CCCCCC"/>
+            <!-- Walkthroughs Section -->
+            <StackPanel Spacing="12">
+              <TextBlock Text="Getting Started"
+                         FontSize="18"
+                         FontWeight="SemiBold"
+                         Foreground="#CCCCCC"/>
+              <Border Height="1" Background="#333333"/>
 
-          <Button Grid.Column="1"
-                  Content="Clear"
-                  Command="{Binding ClearRecentProjectsAsyncCommand}"
-                  Classes="toolbarButton"
-                  FontSize="11"
-                  IsVisible="{Binding RecentProjects.Count}"/>
+              <ItemsControl ItemsSource="{Binding WalkthroughItems}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:WalkthroughItem">
+                    <Border Background="#252526" CornerRadius="4"
+                            Margin="0,0,0,4" Padding="12,10">
+                      <Grid ColumnDefinitions="Auto,*">
+                        <Border Grid.Column="0"
+                                Width="22" Height="22"
+                                CornerRadius="11"
+                                BorderBrush="#555555"
+                                BorderThickness="1.5"
+                                Margin="0,0,12,0"
+                                VerticalAlignment="Center">
+                          <TextBlock Text=""
+                                     FontSize="12"
+                                     Foreground="#569CD6"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     IsVisible="{Binding IsCompleted}"/>
+                        </Border>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Title}"
+                                     FontSize="13"
+                                     Foreground="#CCCCCC"/>
+                          <TextBlock Text="{Binding Description}"
+                                     FontSize="11"
+                                     Foreground="#808080"
+                                     Margin="0,2,0,0"/>
+                        </StackPanel>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </StackPanel>
+
+          <!-- ═══════════════ Right Column (40%) ═══════════════ -->
+          <StackPanel Grid.Column="1" Spacing="24" Margin="24,0,0,0">
+
+            <!-- Start Section -->
+            <StackPanel Spacing="12">
+              <TextBlock Text="Start"
+                         FontSize="18"
+                         FontWeight="SemiBold"
+                         Foreground="#CCCCCC"/>
+              <Border Height="1" Background="#333333"/>
+
+              <StackPanel Spacing="8">
+                <!-- New Project -->
+                <Button Command="{Binding NewProjectCommand}"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="0"
+                        HorizontalContentAlignment="Stretch"
+                        Cursor="Hand">
+                  <Border Background="#252526" CornerRadius="6"
+                          Padding="14,12"
+                          Name="NewProjectCard">
+                    <Border.Styles>
+                      <Style Selector="Border#NewProjectCard:pointerover">
+                        <Setter Property="Background" Value="#2A2D2E"/>
+                      </Style>
+                    </Border.Styles>
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                      <Border Background="#0E639C" CornerRadius="6" Width="40" Height="40">
+                        <TextBlock Text="+" FontSize="24" Foreground="White"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Margin="0,-2,0,0"/>
+                      </Border>
+                      <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="New Project..." FontSize="14" Foreground="#3794FF"/>
+                        <TextBlock Text="Create a new BasicLang project" FontSize="11" Foreground="#808080"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </Button>
+
+                <!-- Open Project -->
+                <Button Command="{Binding OpenProjectCommand}"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="0"
+                        HorizontalContentAlignment="Stretch"
+                        Cursor="Hand">
+                  <Border Background="#252526" CornerRadius="6"
+                          Padding="14,12"
+                          Name="OpenProjectCard">
+                    <Border.Styles>
+                      <Style Selector="Border#OpenProjectCard:pointerover">
+                        <Setter Property="Background" Value="#2A2D2E"/>
+                      </Style>
+                    </Border.Styles>
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                      <Border Background="#3C3C3C" CornerRadius="6" Width="40" Height="40">
+                        <TextBlock Text="O" FontSize="20" FontWeight="Bold"
+                                   Foreground="#569CD6"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Border>
+                      <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Open Project..." FontSize="14" Foreground="#3794FF"/>
+                        <TextBlock Text="Open an existing .blproj file" FontSize="11" Foreground="#808080"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </Button>
+
+                <!-- Open File -->
+                <Button Command="{Binding OpenFileCommand}"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="0"
+                        HorizontalContentAlignment="Stretch"
+                        Cursor="Hand">
+                  <Border Background="#252526" CornerRadius="6"
+                          Padding="14,12"
+                          Name="OpenFileCard">
+                    <Border.Styles>
+                      <Style Selector="Border#OpenFileCard:pointerover">
+                        <Setter Property="Background" Value="#2A2D2E"/>
+                      </Style>
+                    </Border.Styles>
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                      <Border Background="#3C3C3C" CornerRadius="6" Width="40" Height="40">
+                        <TextBlock Text="F" FontSize="20" FontWeight="Bold"
+                                   Foreground="#569CD6"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Border>
+                      <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Open File..." FontSize="14" Foreground="#3794FF"/>
+                        <TextBlock Text="Open a file without a project" FontSize="11" Foreground="#808080"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </Button>
+
+                <!-- Clone Repository -->
+                <Button Command="{Binding CloneRepositoryCommand}"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Padding="0"
+                        HorizontalContentAlignment="Stretch"
+                        Cursor="Hand">
+                  <Border Background="#252526" CornerRadius="6"
+                          Padding="14,12"
+                          Name="CloneRepoCard">
+                    <Border.Styles>
+                      <Style Selector="Border#CloneRepoCard:pointerover">
+                        <Setter Property="Background" Value="#2A2D2E"/>
+                      </Style>
+                    </Border.Styles>
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                      <Border Background="#3C3C3C" CornerRadius="6" Width="40" Height="40">
+                        <TextBlock Text="G" FontSize="20" FontWeight="Bold"
+                                   Foreground="#569CD6"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Border>
+                      <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Clone Repository..." FontSize="14" Foreground="#3794FF"/>
+                        <TextBlock Text="Clone a Git repository" FontSize="11" Foreground="#808080"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </Button>
+              </StackPanel>
+            </StackPanel>
+
+            <!-- Learn Section -->
+            <StackPanel Spacing="12">
+              <TextBlock Text="Learn"
+                         FontSize="18"
+                         FontWeight="SemiBold"
+                         Foreground="#CCCCCC"/>
+              <Border Height="1" Background="#333333"/>
+
+              <ItemsControl ItemsSource="{Binding LearnLinks}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:LearnLink">
+                    <Button Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).OpenLearnLinkCommand}"
+                            CommandParameter="{Binding}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0,0,0,4"
+                            HorizontalContentAlignment="Stretch"
+                            Cursor="Hand">
+                      <Border Padding="8,6" CornerRadius="4"
+                              Name="LearnLinkBorder">
+                        <Border.Styles>
+                          <Style Selector="Border#LearnLinkBorder:pointerover">
+                            <Setter Property="Background" Value="#2A2D2E"/>
+                          </Style>
+                        </Border.Styles>
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                          <Border Width="26" Height="26"
+                                  Background="#333333" CornerRadius="4">
+                            <TextBlock Text="{Binding Icon}"
+                                       FontSize="13" FontWeight="Bold"
+                                       Foreground="#569CD6"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                          </Border>
+                          <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Title}"
+                                       FontSize="13" Foreground="#3794FF"/>
+                            <TextBlock Text="{Binding Description}"
+                                       FontSize="11" Foreground="#808080"/>
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+
+            <!-- Keyboard Shortcuts -->
+            <StackPanel Spacing="12">
+              <TextBlock Text="Keyboard Shortcuts"
+                         FontSize="18"
+                         FontWeight="SemiBold"
+                         Foreground="#CCCCCC"/>
+              <Border Height="1" Background="#333333"/>
+
+              <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Ctrl+Shift+N" Foreground="#CE9178" Margin="0,0,16,6"/>
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="New Project" Foreground="#808080"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Ctrl+Shift+O" Foreground="#CE9178" Margin="0,0,16,6"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="Open Project" Foreground="#808080"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Ctrl+Shift+B" Foreground="#CE9178" Margin="0,0,16,6"/>
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="Build Project" Foreground="#808080"/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="F5" Foreground="#CE9178" Margin="0,0,16,6"/>
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="Start Debugging" Foreground="#808080"/>
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="Ctrl+Shift+P" Foreground="#CE9178" Margin="0,0,16,6"/>
+                <TextBlock Grid.Row="4" Grid.Column="1" Text="Command Palette" Foreground="#808080"/>
+
+                <TextBlock Grid.Row="5" Grid.Column="0" Text="Ctrl+P" Foreground="#CE9178" Margin="0,0,16,6"/>
+                <TextBlock Grid.Row="5" Grid.Column="1" Text="Quick Open" Foreground="#808080"/>
+              </Grid>
+            </StackPanel>
+
+          </StackPanel>
         </Grid>
 
-        <ItemsControl ItemsSource="{Binding RecentProjects}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Background="#252526"
-                      CornerRadius="4"
-                      Margin="0,0,0,8"
-                      Padding="12">
-                <Grid ColumnDefinitions="*,Auto">
-                  <Button Grid.Column="0"
-                          Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).OpenRecentProjectCommand}"
-                          CommandParameter="{Binding}"
-                          Background="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          HorizontalContentAlignment="Left">
-                    <StackPanel>
-                      <TextBlock Text="{Binding Name}"
-                                 FontSize="14"
-                                 Foreground="#3794FF"/>
-                      <TextBlock Text="{Binding Directory}"
-                                 FontSize="11"
-                                 Foreground="#808080"
-                                 TextTrimming="CharacterEllipsis"
-                                 MaxWidth="300"/>
-                      <TextBlock Text="{Binding LastOpenedText}"
-                                 FontSize="10"
-                                 Foreground="#606060"
-                                 Margin="0,4,0,0"/>
-                    </StackPanel>
-                  </Button>
-
-                  <Button Grid.Column="1"
-                          Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).RemoveRecentProjectAsyncCommand}"
-                          CommandParameter="{Binding}"
-                          Classes="toolbarButton"
-                          ToolTip.Tip="Remove from list"
-                          VerticalAlignment="Top">
-                    <TextBlock Text="×" FontSize="14"/>
-                  </Button>
-                </Grid>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <TextBlock Text="No recent projects"
-                   Foreground="#606060"
-                   IsVisible="{Binding !RecentProjects.Count}"
-                   Margin="0,20,0,0"/>
-
-        <Border Height="1" Background="#3C3C3C" Margin="0,20"/>
-
-        <!-- About -->
-        <StackPanel Spacing="12">
-          <TextBlock Text="About BasicLang"
-                     FontSize="20"
-                     FontWeight="SemiBold"
-                     Foreground="#CCCCCC"/>
-
-          <TextBlock TextWrapping="Wrap"
-                     Foreground="#808080"
-                     LineHeight="22">
-            BasicLang is a modern BASIC-inspired programming language that combines the simplicity of
-            QuickBASIC with modern features like classes, generics, async/await, and LINQ.
-            It transpiles to multiple backends including C#, C++, LLVM IR, and MSIL.
-          </TextBlock>
-
-          <Border Background="#252526" CornerRadius="4" Padding="12" Margin="0,8,0,0">
-            <StackPanel Spacing="4">
-              <TextBlock Text="Features:" Foreground="#CCCCCC" FontWeight="SemiBold"/>
-              <TextBlock Text="• Syntax highlighting" Foreground="#808080"/>
-              <TextBlock Text="• IntelliSense auto-completion" Foreground="#808080"/>
-              <TextBlock Text="• Integrated debugger" Foreground="#808080"/>
-              <TextBlock Text="• Project management" Foreground="#808080"/>
-              <TextBlock Text="• Multiple build configurations" Foreground="#808080"/>
-            </StackPanel>
-          </Border>
-        </StackPanel>
+        <!-- Footer: Show welcome page checkbox -->
+        <Border Height="1" Background="#333333" Margin="0,10,0,0"/>
+        <CheckBox Content="Show welcome page on startup"
+                  IsChecked="{Binding ShowWelcomeOnStartup}"
+                  Foreground="#808080"
+                  FontSize="12"
+                  Margin="0,0,0,20"/>
       </StackPanel>
-    </Grid>
+    </Border>
   </ScrollViewer>
 </UserControl>

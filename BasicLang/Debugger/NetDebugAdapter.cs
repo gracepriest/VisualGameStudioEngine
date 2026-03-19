@@ -36,6 +36,12 @@ namespace BasicLang.Debugger
         private bool _exceptionFilterAll;
         private bool _exceptionFilterUncaught = true;
 
+        // Thread tracking — maps OS thread IDs to their last-known state
+        private readonly Dictionary<int, ThreadState> _threadStates = new();
+        private int _stoppedThreadId;    // which thread caused the last stop event
+        private int _focusedThreadId;    // which thread the IDE is currently inspecting
+        private readonly HashSet<int> _frozenThreads = new(); // threads that should not resume
+
         // Scope / frame tracking for variables requests
         private readonly Dictionary<int, ScopeInfo> _scopeReferences = new();
         private readonly Dictionary<int, FrameInfo> _frameInfoMap = new();
@@ -390,9 +396,19 @@ namespace BasicLang.Debugger
                     if (ilInfo.HasValue && _loadedModules.Count > 0)
                     {
                         actualLine = _sourceMapper.FindNearestExecutableLine(sourcePath, line);
-                        // Try to bind on the first user module (not system assemblies)
-                        var userModule = _loadedModules.Values.FirstOrDefault();
-                        verified = TryBindBreakpoint(entry, ilInfo.Value.methodToken, ilInfo.Value.ilOffset, userModule);
+                        // Try to bind on user modules (not system assemblies)
+                        foreach (var kvp in _loadedModules)
+                        {
+                            var modName = Path.GetFileName(kvp.Key);
+                            bool isSystem = modName.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
+                                modName.Equals("mscorlib.dll", StringComparison.OrdinalIgnoreCase) ||
+                                modName.Equals("netstandard.dll", StringComparison.OrdinalIgnoreCase);
+                            if (!isSystem && TryBindBreakpoint(entry, ilInfo.Value.methodToken, ilInfo.Value.ilOffset, kvp.Value))
+                            {
+                                verified = true;
+                                break;
+                            }
+                        }
                     }
 
                     resultBreakpoints.Add(new Dictionary<string, object>
@@ -434,13 +450,54 @@ namespace BasicLang.Debugger
         {
             var threadList = new List<object>();
 
-            // Always report thread ID 1 as the main thread
-            // The actual OS thread IDs are mapped internally
-            threadList.Add(new Dictionary<string, object>
+            // Enumerate all real managed threads from ICorDebugProcess
+            if (_process?.CorDebugProcess != null)
             {
-                ["id"] = 1,
-                ["name"] = "Main Thread"
-            });
+                try
+                {
+                    var threads = EnumerateAllThreads();
+                    bool firstThread = true;
+                    foreach (var (threadId, thread) in threads)
+                    {
+                        // Track the thread
+                        _threads[threadId] = thread;
+
+                        // Try to get thread debug state for status
+                        string status = "running";
+                        if (_threadStates.TryGetValue(threadId, out var ts))
+                            status = ts.ToString().ToLower();
+
+                        // First thread is typically the main thread
+                        string name = firstThread ? "Main Thread" : $"Worker Thread";
+                        firstThread = false;
+
+                        // Try to read thread name via ICorDebugThread2 or metadata
+                        string customName = TryGetThreadName(thread);
+                        if (!string.IsNullOrEmpty(customName))
+                            name = customName;
+
+                        threadList.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = threadId,
+                            ["name"] = $"{name} ({threadId})"
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[DAP] EnumerateThreads error: {ex.Message}");
+                }
+            }
+
+            // Fallback: if no threads enumerated, report at least thread 1
+            if (threadList.Count == 0)
+            {
+                threadList.Add(new Dictionary<string, object>
+                {
+                    ["id"] = 1,
+                    ["name"] = "Main Thread (1)"
+                });
+            }
 
             var response = CreateResponse(request, true);
             response.Body = new Dictionary<string, object>
@@ -466,7 +523,8 @@ namespace BasicLang.Debugger
             try
             {
                 // Try raw vtable walk of the thread's frames
-                ICorDebugThread thread = GetFirstThread();
+                // Use the requested thread, not just the first one
+                ICorDebugThread thread = GetThreadForId(threadId) ?? GetFirstThread();
 
                 if (thread != null)
                 {
@@ -1084,12 +1142,20 @@ namespace BasicLang.Debugger
         private DAPResponse HandleContinue(DAPMessage request)
         {
             ClearDebugState();
+
+            var args = request.Arguments;
+            int threadId = args.TryGetProperty("threadId", out var tidProp) ? tidProp.GetInt32() : 0;
+            bool singleThread = args.TryGetProperty("singleThread", out var stProp) && stProp.GetBoolean();
+
+            // Apply frozen thread states before continuing
+            ApplyFrozenThreadStates();
+
             RawContinueProcess();
 
             var response = CreateResponse(request, true);
             response.Body = new Dictionary<string, object>
             {
-                ["allThreadsContinued"] = true
+                ["allThreadsContinued"] = !singleThread
             };
             return response;
         }
@@ -1103,11 +1169,12 @@ namespace BasicLang.Debugger
 
             try
             {
-                // Use ICorDebugStepper for step over (skips P/Invoke automatically)
-                var thread = GetFirstThread();
+                // Use the requested thread, not just the first one
+                var thread = GetThreadForId(threadId) ?? GetFirstThread();
                 if (thread != null)
                 {
                     RawCreateStepperAndStep(thread, stepInto: false);
+                    ApplyFrozenThreadStates();
                     RawContinueProcess();
                 }
             }
@@ -1127,12 +1194,16 @@ namespace BasicLang.Debugger
         {
             ClearDebugState();
 
+            var args = request.Arguments;
+            int threadId = args.TryGetProperty("threadId", out var tidProp) ? tidProp.GetInt32() : 0;
+
             try
             {
-                var thread = GetFirstThread();
+                var thread = GetThreadForId(threadId) ?? GetFirstThread();
                 if (thread != null)
                 {
                     RawCreateStepperAndStep(thread, stepInto: true);
+                    ApplyFrozenThreadStates();
                     RawContinueProcess();
                 }
             }
@@ -1152,12 +1223,16 @@ namespace BasicLang.Debugger
         {
             ClearDebugState();
 
+            var args = request.Arguments;
+            int threadId = args.TryGetProperty("threadId", out var tidProp) ? tidProp.GetInt32() : 0;
+
             try
             {
-                var thread = GetFirstThread();
+                var thread = GetThreadForId(threadId) ?? GetFirstThread();
                 if (thread != null)
                 {
                     RawCreateStepperAndStepOut(thread);
+                    ApplyFrozenThreadStates();
                     RawContinueProcess();
                 }
             }
@@ -1178,9 +1253,21 @@ namespace BasicLang.Debugger
             _process?.Stop();
 
             // Determine which thread to report as stopped
-            int threadId = 1;
-            if (_process?.Threads.Count > 0)
+            int threadId = 0;
+            var args = request.Arguments;
+            if (args.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                args.TryGetProperty("threadId", out var tidProp))
+            {
+                threadId = tidProp.GetInt32();
+            }
+
+            // If no specific thread requested, pick the first one
+            if (threadId == 0 && _process?.Threads.Count > 0)
                 threadId = _process.Threads.Keys.First();
+            if (threadId == 0)
+                threadId = 1;
+
+            _stoppedThreadId = threadId;
 
             _ = Task.Run(async () =>
             {
@@ -2071,9 +2158,9 @@ namespace BasicLang.Debugger
         // =====================================================================
 
         /// <summary>
-        /// Map OS thread ID to DAP thread ID. We always use 1 for the main thread.
+        /// Map OS thread ID to DAP thread ID. Now uses the real OS thread ID directly.
         /// </summary>
-        private int MapToDapThreadId(int osThreadId) => 1;
+        private int MapToDapThreadId(int osThreadId) => osThreadId;
 
         /// <summary>
         /// Get the first available ICorDebugThread (for stepping/stack trace when threadId doesn't match)
@@ -2083,6 +2170,152 @@ namespace BasicLang.Debugger
             if (_process?.Threads.Count > 0)
                 return _process.Threads.Values.First();
             return null;
+        }
+
+        /// <summary>
+        /// Get a specific ICorDebugThread by its OS thread ID.
+        /// Falls back to searching the adapter's local thread dictionary,
+        /// then the process's tracked threads.
+        /// </summary>
+        private ICorDebugThread GetThreadForId(int threadId)
+        {
+            if (threadId <= 0)
+                return null;
+
+            // Check adapter-level tracking first
+            if (_threads.TryGetValue(threadId, out var thread))
+                return thread;
+
+            // Fall back to process-level tracking
+            if (_process?.Threads.TryGetValue(threadId, out var pThread) == true)
+                return pThread;
+
+            return null;
+        }
+
+        /// <summary>
+        /// Enumerate all managed threads from ICorDebugProcess via raw vtable calls.
+        /// Returns a list of (threadId, ICorDebugThread) pairs.
+        /// </summary>
+        private List<(int threadId, ICorDebugThread thread)> EnumerateAllThreads()
+        {
+            var result = new List<(int, ICorDebugThread)>();
+            if (_process?.CorDebugProcess == null)
+                return result;
+
+            try
+            {
+                var processPtr = Marshal.GetIUnknownForObject(_process.CorDebugProcess);
+                try
+                {
+                    var vtable = Marshal.ReadIntPtr(processPtr);
+                    // ICorDebugController::EnumerateThreads is slot 3+4=7
+                    var enumThreadsSlot = Marshal.ReadIntPtr(vtable, 7 * IntPtr.Size);
+                    var enumThreadsFn = Marshal.GetDelegateForFunctionPointer<EnumerateThreadsDelegate>(enumThreadsSlot);
+                    int hr = enumThreadsFn(processPtr, out IntPtr enumPtr);
+                    if (hr < 0 || enumPtr == IntPtr.Zero)
+                        return result;
+
+                    try
+                    {
+                        var enumVtable = Marshal.ReadIntPtr(enumPtr);
+                        // ICorDebugThreadEnum::GetCount is slot 6 (IUnknown(3) + Skip(0), Reset(1), Clone(2), GetCount(3))
+                        var getCountSlot = Marshal.ReadIntPtr(enumVtable, 6 * IntPtr.Size);
+                        var getCount = Marshal.GetDelegateForFunctionPointer<ThreadEnumGetCountDelegate>(getCountSlot);
+                        getCount(enumPtr, out uint count);
+
+                        // ICorDebugThreadEnum::Next is slot 7
+                        var nextSlot = Marshal.ReadIntPtr(enumVtable, 7 * IntPtr.Size);
+                        var nextFn = Marshal.GetDelegateForFunctionPointer<ThreadEnumNextDelegate>(nextSlot);
+
+                        for (uint i = 0; i < count; i++)
+                        {
+                            hr = nextFn(enumPtr, 1, out IntPtr threadPtr, out uint fetched);
+                            if (hr < 0 || fetched == 0 || threadPtr == IntPtr.Zero)
+                                break;
+
+                            try
+                            {
+                                var threadObj = (ICorDebugThread)Marshal.GetObjectForIUnknown(threadPtr);
+                                // Get thread ID via raw vtable
+                                var threadVtable = Marshal.ReadIntPtr(threadPtr);
+                                var getIdSlot = Marshal.ReadIntPtr(threadVtable, 4 * IntPtr.Size); // slot 3+1=4
+                                var getId = Marshal.GetDelegateForFunctionPointer<ThreadGetIDDelegate>(getIdSlot);
+                                getId(threadPtr, out uint threadId2);
+                                result.Add(((int)threadId2, threadObj));
+                            }
+                            catch
+                            {
+                                // Skip threads we can't read
+                            }
+                            finally
+                            {
+                                Marshal.Release(threadPtr);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(enumPtr);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(processPtr);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[DAP] EnumerateAllThreads error: {ex.Message}");
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Try to read a managed thread's name. .NET threads store their name
+        /// as a field on System.Threading.Thread, but ICorDebug doesn't expose it directly.
+        /// Returns null if the name can't be determined.
+        /// </summary>
+        private string TryGetThreadName(ICorDebugThread thread)
+        {
+            // ICorDebug doesn't expose managed thread names directly.
+            // A full implementation would need to eval Thread.CurrentThread.Name via ICorDebugEval.
+            // For now, return null and use the default naming.
+            return null;
+        }
+
+        /// <summary>
+        /// Apply frozen thread states before continuing.
+        /// Frozen threads are set to THREAD_SUSPEND so they don't run.
+        /// </summary>
+        private void ApplyFrozenThreadStates()
+        {
+            if (_frozenThreads.Count == 0 || _process?.CorDebugProcess == null)
+                return;
+
+            try
+            {
+                foreach (var frozenId in _frozenThreads)
+                {
+                    var thread = GetThreadForId(frozenId);
+                    if (thread != null)
+                    {
+                        try
+                        {
+                            thread.SetDebugState(CorDebugThreadState.THREAD_SUSPEND);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[DAP] Failed to freeze thread {frozenId}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[DAP] ApplyFrozenThreadStates error: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -3406,5 +3639,11 @@ namespace BasicLang.Debugger
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int GenericValueSetValueDelegate(IntPtr self, IntPtr pFrom);
+
+        // Thread enumeration delegates
+        private delegate int EnumerateThreadsDelegate(IntPtr self, out IntPtr ppThreads);
+        private delegate int ThreadEnumGetCountDelegate(IntPtr self, out uint pcelt);
+        private delegate int ThreadEnumNextDelegate(IntPtr self, uint celt, out IntPtr ppThreads, out uint pceltFetched);
+        private delegate int ThreadGetIDDelegate(IntPtr self, out uint pdwThreadId);
     }
 }

@@ -9,7 +9,14 @@ namespace VisualGameStudio.Editor.TextMarkers;
 /// <summary>
 /// Background renderer that highlights all search matches in the editor.
 /// Draws translucent rectangles behind matching text, with the current match
-/// highlighted in a different (brighter) color.
+/// highlighted in a brighter color with a border.
+///
+/// Supports:
+/// - Case-sensitive/insensitive search
+/// - Whole word matching
+/// - Regular expression search
+/// - Search within a selection range
+/// - Selection range visualization
 /// </summary>
 public class SearchHighlightRenderer : IBackgroundRenderer
 {
@@ -17,9 +24,16 @@ public class SearchHighlightRenderer : IBackgroundRenderer
     private readonly List<SearchMatch> _matches = new();
     private int _currentMatchIndex = -1;
 
-    private static readonly Color MatchColor = Color.Parse("#44FFD700");
-    private static readonly Color CurrentMatchColor = Color.Parse("#88FFD700");
-    private static readonly Color MatchBorderColor = Color.Parse("#66FFD700");
+    // VS Code-style match colors
+    private static readonly Color MatchBackground = Color.Parse("#515C6A");
+    private static readonly Color CurrentMatchBackground = Color.Parse("#613214");
+    private static readonly Color CurrentMatchBorder = Color.Parse("#F0A30A");
+    private static readonly Color SelectionRangeColor = Color.Parse("#1A3C5E6B");
+
+    // Selection range for "Find in Selection"
+    private bool _hasSelectionRange;
+    private int _selectionRangeStart;
+    private int _selectionRangeEnd;
 
     public SearchHighlightRenderer(TextDocument document)
     {
@@ -39,6 +53,27 @@ public class SearchHighlightRenderer : IBackgroundRenderer
     public int MatchCount => _matches.Count;
 
     /// <summary>
+    /// Sets the selection range for "Find in Selection" mode.
+    /// Only matches within this range will be found.
+    /// </summary>
+    public void SetSelectionRange(int start, int end)
+    {
+        _hasSelectionRange = true;
+        _selectionRangeStart = Math.Min(start, end);
+        _selectionRangeEnd = Math.Max(start, end);
+    }
+
+    /// <summary>
+    /// Clears the selection range, searching the entire document.
+    /// </summary>
+    public void ClearSelectionRange()
+    {
+        _hasSelectionRange = false;
+        _selectionRangeStart = 0;
+        _selectionRangeEnd = 0;
+    }
+
+    /// <summary>
     /// Updates the search highlights for the given search parameters.
     /// Returns the total number of matches found.
     /// </summary>
@@ -54,28 +89,41 @@ public class SearchHighlightRenderer : IBackgroundRenderer
         if (string.IsNullOrEmpty(text))
             return 0;
 
+        // Determine search bounds
+        var searchStart = _hasSelectionRange ? Math.Max(0, _selectionRangeStart) : 0;
+        var searchEnd = _hasSelectionRange ? Math.Min(text.Length, _selectionRangeEnd) : text.Length;
+
+        if (searchStart >= searchEnd)
+            return 0;
+
         try
         {
             if (useRegex)
             {
                 var options = matchCase ? RegexOptions.None : RegexOptions.IgnoreCase;
+                // Support multiline search with \n
+                options |= RegexOptions.Multiline;
                 var regex = new Regex(searchText, options);
-                foreach (Match match in regex.Matches(text))
+                var searchRegion = text.Substring(searchStart, searchEnd - searchStart);
+                foreach (Match match in regex.Matches(searchRegion))
                 {
                     if (match.Length > 0)
                     {
-                        _matches.Add(new SearchMatch(match.Index, match.Length));
+                        _matches.Add(new SearchMatch(searchStart + match.Index, match.Length));
                     }
                 }
             }
             else
             {
                 var comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-                var index = 0;
-                while (index < text.Length)
+                var index = searchStart;
+                while (index < searchEnd)
                 {
-                    var found = text.IndexOf(searchText, index, comparison);
-                    if (found < 0) break;
+                    var remaining = searchEnd - index;
+                    if (remaining < searchText.Length) break;
+
+                    var found = text.IndexOf(searchText, index, remaining, comparison);
+                    if (found < 0 || found + searchText.Length > searchEnd) break;
 
                     if (!wholeWord || IsWholeWord(text, found, searchText.Length))
                     {
@@ -100,6 +148,7 @@ public class SearchHighlightRenderer : IBackgroundRenderer
     {
         _matches.Clear();
         _currentMatchIndex = -1;
+        _hasSelectionRange = false;
     }
 
     /// <summary>
@@ -130,12 +179,21 @@ public class SearchHighlightRenderer : IBackgroundRenderer
 
     public void Draw(TextView textView, DrawingContext drawingContext)
     {
-        if (_matches.Count == 0 || !textView.VisualLinesValid)
+        if (!textView.VisualLinesValid)
             return;
 
-        var matchBrush = new SolidColorBrush(MatchColor);
-        var currentBrush = new SolidColorBrush(CurrentMatchColor);
-        var borderPen = new Pen(new SolidColorBrush(MatchBorderColor), 1);
+        // Draw selection range background if "Find in Selection" is active
+        if (_hasSelectionRange && _selectionRangeEnd > _selectionRangeStart)
+        {
+            DrawSelectionRange(textView, drawingContext);
+        }
+
+        if (_matches.Count == 0)
+            return;
+
+        var matchBrush = new SolidColorBrush(MatchBackground);
+        var currentBrush = new SolidColorBrush(CurrentMatchBackground);
+        var borderPen = new Pen(new SolidColorBrush(CurrentMatchBorder), 1.5);
 
         foreach (var visualLine in textView.VisualLines)
         {
@@ -161,12 +219,41 @@ public class SearchHighlightRenderer : IBackgroundRenderer
                 foreach (var rect in rects)
                 {
                     var highlightRect = new Rect(rect.X, rect.Y, rect.Width, rect.Height);
-                    drawingContext.FillRectangle(brush, highlightRect);
+
+                    // Draw rounded rectangle for a polished look
+                    drawingContext.FillRectangle(brush, highlightRect, 2);
+
                     if (isCurrent)
                     {
-                        drawingContext.DrawRectangle(borderPen, highlightRect);
+                        drawingContext.DrawRectangle(borderPen, highlightRect, 2);
                     }
                 }
+            }
+        }
+    }
+
+    private void DrawSelectionRange(TextView textView, DrawingContext drawingContext)
+    {
+        var rangeBrush = new SolidColorBrush(SelectionRangeColor);
+
+        foreach (var visualLine in textView.VisualLines)
+        {
+            var lineStart = visualLine.FirstDocumentLine.Offset;
+            var lineEnd = visualLine.LastDocumentLine.EndOffset;
+
+            // Check overlap with selection range
+            var overlapStart = Math.Max(lineStart, _selectionRangeStart);
+            var overlapEnd = Math.Min(lineEnd, _selectionRangeEnd);
+
+            if (overlapStart >= overlapEnd) continue;
+
+            var rects = BackgroundGeometryBuilder.GetRectsForSegment(
+                textView,
+                new SimpleSegment(overlapStart, overlapEnd - overlapStart));
+
+            foreach (var rect in rects)
+            {
+                drawingContext.FillRectangle(rangeBrush, new Rect(rect.X, rect.Y, rect.Width, rect.Height));
             }
         }
     }

@@ -150,17 +150,56 @@ public class SnippetDefinition
 
 /// <summary>
 /// Provides all built-in BasicLang snippets, matching the VS Code extension's snippet set.
+/// Also integrates with ISnippetService to include user-defined snippets.
 /// </summary>
 public static class SnippetProvider
 {
     private static readonly List<SnippetDefinition> _snippets = new();
+    private static readonly List<SnippetDefinition> _userSnippets = new();
 
     static SnippetProvider()
     {
         RegisterAll();
     }
 
-    public static IReadOnlyList<SnippetDefinition> Snippets => _snippets;
+    public static IReadOnlyList<SnippetDefinition> Snippets
+    {
+        get
+        {
+            var all = new List<SnippetDefinition>(_snippets);
+            all.AddRange(_userSnippets);
+            return all;
+        }
+    }
+
+    /// <summary>
+    /// Registers user snippets from the ISnippetService so they appear in
+    /// completion and Tab expansion alongside built-in snippets.
+    /// Call this when snippets change (e.g., after SnippetsChanged event).
+    /// </summary>
+    public static void LoadUserSnippets(IEnumerable<Core.Models.Snippet> userSnippets)
+    {
+        _userSnippets.Clear();
+        foreach (var s in userSnippets)
+        {
+            if (s.IsBuiltIn) continue; // Don't duplicate built-ins
+            _userSnippets.Add(new SnippetDefinition
+            {
+                Name = s.Name,
+                Prefixes = new[] { s.Prefix },
+                BodyLines = s.Body,
+                Description = s.Description
+            });
+        }
+    }
+
+    /// <summary>
+    /// Clears user snippets (e.g., when service is disposed).
+    /// </summary>
+    public static void ClearUserSnippets()
+    {
+        _userSnippets.Clear();
+    }
 
     /// <summary>
     /// Finds snippets whose prefix matches the given text (case-insensitive).
@@ -168,7 +207,7 @@ public static class SnippetProvider
     public static IEnumerable<SnippetDefinition> FindByPrefix(string prefix)
     {
         if (string.IsNullOrEmpty(prefix)) return Enumerable.Empty<SnippetDefinition>();
-        return _snippets.Where(s =>
+        return Snippets.Where(s =>
             s.Prefixes.Any(p => p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
     }
 
@@ -178,7 +217,7 @@ public static class SnippetProvider
     public static SnippetDefinition? FindExactMatch(string prefix)
     {
         if (string.IsNullOrEmpty(prefix)) return null;
-        return _snippets.FirstOrDefault(s =>
+        return Snippets.FirstOrDefault(s =>
             s.Prefixes.Any(p => string.Equals(p, prefix, StringComparison.OrdinalIgnoreCase)));
     }
 

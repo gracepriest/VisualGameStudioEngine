@@ -64,3 +64,43 @@ public class PositiveIntToBoolConverter : IValueConverter
         throw new NotSupportedException();
     }
 }
+
+/// <summary>
+/// Converters for the status bar indicators.
+/// </summary>
+public static class StatusBarConverters
+{
+    /// <summary>
+    /// Converts a boolean (IsLspRunning) to a Color for the LSP status dot.
+    /// Green when running, red when stopped.
+    /// </summary>
+    public static readonly IValueConverter BoolToLspColorConverter = new BoolToColorConverter(
+        Color.Parse("#89D185"),  // green - running
+        Color.Parse("#E51400")   // red - stopped
+    );
+}
+
+/// <summary>
+/// Converts a boolean to one of two Color values.
+/// </summary>
+public class BoolToColorConverter : IValueConverter
+{
+    private readonly Color _trueColor;
+    private readonly Color _falseColor;
+
+    public BoolToColorConverter(Color trueColor, Color falseColor)
+    {
+        _trueColor = trueColor;
+        _falseColor = falseColor;
+    }
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        return value is true ? _trueColor : _falseColor;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}

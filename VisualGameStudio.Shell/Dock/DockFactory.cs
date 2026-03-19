@@ -368,6 +368,15 @@ public class DockFactory : Factory
         return (_documentDock?.ActiveDockable as CodeEditorDocument)?.ViewModel;
     }
 
+    public void CloseActiveDocument()
+    {
+        var activeDockable = _documentDock?.ActiveDockable;
+        if (activeDockable != null)
+        {
+            CloseDockable(activeDockable);
+        }
+    }
+
     public IEnumerable<object> GetAllDocuments()
     {
         if (_documentDock?.VisibleDockables == null) return Enumerable.Empty<object>();

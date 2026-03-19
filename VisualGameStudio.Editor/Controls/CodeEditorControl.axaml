@@ -19,6 +19,7 @@
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
       </Grid.RowDefinitions>
 
       <!-- Sticky scroll headers pinned at top -->
@@ -46,6 +47,11 @@
                                           VerticalAlignment="Top"
                                           Margin="0,4,20,0"
                                           IsVisible="False"/>
+
+      <!-- Inline Peek Definition/References view -->
+      <controls:PeekViewControl x:Name="PeekView"
+                                 Grid.Row="2"
+                                 IsVisible="False"/>
     </Grid>
 
     <controls:MinimapControl x:Name="Minimap"

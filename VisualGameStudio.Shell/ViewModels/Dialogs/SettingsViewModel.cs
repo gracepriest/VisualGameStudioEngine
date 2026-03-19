@@ -6,15 +6,19 @@ using Avalonia.Data.Converters;
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
+using VisualGameStudio.ProjectSystem.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Dialogs;
 
 /// <summary>
 /// Represents a single setting entry that can be searched and displayed in a flat list.
+/// Supports User/Workspace scope display with badges and override indicators.
 /// </summary>
 public partial class SearchableSettingItem : ObservableObject
 {
+    public string Key { get; init; } = "";
     public string Name { get; init; } = "";
     public string Description { get; init; } = "";
     public string Category { get; init; } = "";
@@ -48,6 +52,18 @@ public partial class SearchableSettingItem : ObservableObject
         SettingControlKind.ComboBox => !string.Equals(StringValue, (string)DefaultValue, StringComparison.Ordinal),
         _ => false
     };
+
+    /// <summary>The scope where this setting is currently set (User, Workspace, or Default).</summary>
+    [ObservableProperty]
+    private string _scopeBadge = "";
+
+    /// <summary>Whether this setting is overridden in workspace settings.</summary>
+    [ObservableProperty]
+    private bool _isOverriddenInWorkspace;
+
+    /// <summary>Whether the setting is set in the current active scope.</summary>
+    [ObservableProperty]
+    private bool _isSetInCurrentScope;
 
     // -- Proxy value properties so the flat list can bind without knowing the concrete property name --
 
@@ -86,6 +102,23 @@ public partial class SearchableSettingItem : ObservableObject
                 break;
         }
     }
+
+    /// <summary>Updates scope badges from the settings service.</summary>
+    public void RefreshScopeBadges(SettingsService? service, SettingsScope activeScope)
+    {
+        if (service == null) return;
+
+        var scope = service.GetSettingScope(Key);
+        ScopeBadge = scope switch
+        {
+            SettingsScope.Workspace => "Workspace",
+            SettingsScope.User => "User",
+            _ => ""
+        };
+
+        IsOverriddenInWorkspace = activeScope == SettingsScope.User && service.IsOverriddenInWorkspace(Key);
+        IsSetInCurrentScope = service.IsModifiedInScope(Key, activeScope);
+    }
 }
 
 public enum SettingControlKind
@@ -97,12 +130,42 @@ public enum SettingControlKind
 
 public partial class SettingsViewModel : ViewModelBase
 {
-    private static readonly string SettingsPath = Path.Combine(
+    private static readonly string LegacySettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "VisualGameStudio",
         "settings.json");
 
-    // Editor Settings
+    private SettingsService? _settingsService;
+
+    // Current active scope for editing
+    [ObservableProperty]
+    private SettingsScope _activeScope = SettingsScope.User;
+
+    [ObservableProperty]
+    private bool _isUserScopeActive = true;
+
+    [ObservableProperty]
+    private bool _isWorkspaceScopeActive;
+
+    [ObservableProperty]
+    private bool _isJsonEditorActive;
+
+    [ObservableProperty]
+    private bool _hasWorkspace;
+
+    [ObservableProperty]
+    private string _jsonEditorContent = "{\n}";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _jsonValidationErrors = new();
+
+    [ObservableProperty]
+    private string _userSettingsPath = "";
+
+    [ObservableProperty]
+    private string _workspaceSettingsPath = "";
+
+    // Editor Settings (backed by ISettingsService for new settings, kept for legacy compat)
     [ObservableProperty]
     private string _fontFamily = "Cascadia Code";
 
@@ -175,6 +238,45 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private ObservableCollection<string> _configurations = new() { "Debug", "Release" };
 
+    // Format On Save
+    [ObservableProperty]
+    private bool _formatOnSave;
+
+    // Render Whitespace
+    [ObservableProperty]
+    private string _renderWhitespace = "none";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _renderWhitespaceOptions = new() { "none", "all", "boundary", "selection" };
+
+    // Word Wrap mode
+    [ObservableProperty]
+    private string _wordWrapMode = "off";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _wordWrapModes = new() { "off", "on", "wordWrapColumn" };
+
+    // Cursor Blinking
+    [ObservableProperty]
+    private string _cursorBlinking = "blink";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _cursorBlinkingOptions = new() { "blink", "smooth", "phase", "expand", "solid" };
+
+    // Auto Save
+    [ObservableProperty]
+    private string _autoSaveMode = "off";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _autoSaveModes = new() { "off", "afterDelay", "onFocusChange", "onWindowChange" };
+
+    // Compiler Backend
+    [ObservableProperty]
+    private string _compilerBackend = "CSharp";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _compilerBackends = new() { "CSharp", "MSIL", "LLVM", "CPP" };
+
     // Keyboard Shortcuts
     [ObservableProperty]
     private ObservableCollection<KeyboardShortcut> _shortcuts = new();
@@ -203,20 +305,45 @@ public partial class SettingsViewModel : ViewModelBase
 
     public SettingsViewModel()
     {
+        // Try to resolve SettingsService from DI
+        try
+        {
+            _settingsService = App.Services?.GetService(typeof(ISettingsService)) as SettingsService;
+        }
+        catch { }
+
         PopulateAvailableFonts();
         InitializeShortcuts();
         LoadSettings();
         BuildSearchableSettings();
+        UpdateScopePaths();
+    }
+
+    /// <summary>
+    /// Constructor for injection.
+    /// </summary>
+    public SettingsViewModel(SettingsService settingsService) : this()
+    {
+        _settingsService = settingsService;
+        LoadFromService();
+        UpdateScopePaths();
+    }
+
+    private void UpdateScopePaths()
+    {
+        if (_settingsService != null)
+        {
+            UserSettingsPath = _settingsService.UserSettingsPath;
+            WorkspaceSettingsPath = _settingsService.WorkspaceSettingsPath ?? "";
+            HasWorkspace = _settingsService.HasWorkspace;
+        }
     }
 
     /// <summary>
     /// Populates the AvailableFonts collection from system-installed font families.
-    /// Prioritizes well-known monospace/programming fonts at the top, then lists all remaining
-    /// system fonts alphabetically so users can pick any installed font.
     /// </summary>
     private void PopulateAvailableFonts()
     {
-        // Well-known monospace / programming fonts to prioritize at the top
         var priorityFonts = new[]
         {
             "Cascadia Code", "Cascadia Mono",
@@ -245,14 +372,10 @@ public partial class SettingsViewModel : ViewModelBase
                 systemFontNames.Add(family.Name);
             }
         }
-        catch
-        {
-            // Fallback: if FontManager is unavailable, use the hardcoded list
-        }
+        catch { }
 
         AvailableFonts.Clear();
 
-        // Add priority fonts that are actually installed
         foreach (var font in priorityFonts)
         {
             if (systemFontNames.Contains(font))
@@ -262,19 +385,15 @@ public partial class SettingsViewModel : ViewModelBase
             }
         }
 
-        // Add remaining system fonts alphabetically
         foreach (var font in systemFontNames.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
             AvailableFonts.Add(font);
         }
 
-        // If nothing was found, add the hardcoded fallbacks
         if (AvailableFonts.Count == 0)
         {
             foreach (var font in priorityFonts)
-            {
                 AvailableFonts.Add(font);
-            }
         }
     }
 
@@ -284,10 +403,134 @@ public partial class SettingsViewModel : ViewModelBase
         ApplySearchFilter(value);
     }
 
+    partial void OnActiveScopeChanged(SettingsScope value)
+    {
+        IsUserScopeActive = value == SettingsScope.User;
+        IsWorkspaceScopeActive = value == SettingsScope.Workspace;
+
+        // Reload settings for the new scope
+        LoadFromService();
+        RefreshAllScopeBadges();
+
+        // Update JSON editor if active
+        if (IsJsonEditorActive)
+        {
+            LoadJsonEditorContent();
+        }
+    }
+
+    [RelayCommand]
+    private void SwitchToUserScope()
+    {
+        ActiveScope = SettingsScope.User;
+    }
+
+    [RelayCommand]
+    private void SwitchToWorkspaceScope()
+    {
+        if (HasWorkspace)
+            ActiveScope = SettingsScope.Workspace;
+    }
+
+    [RelayCommand]
+    private void ToggleJsonEditor()
+    {
+        IsJsonEditorActive = !IsJsonEditorActive;
+        if (IsJsonEditorActive)
+        {
+            LoadJsonEditorContent();
+        }
+    }
+
     [RelayCommand]
     private void ClearSearch()
     {
         SearchText = "";
+    }
+
+    [RelayCommand]
+    private void SaveJsonEditor()
+    {
+        if (_settingsService != null)
+        {
+            _ = _settingsService.SetRawJsonAsync(JsonEditorContent, ActiveScope);
+            LoadFromService();
+            RefreshAllScopeBadges();
+        }
+    }
+
+    [RelayCommand]
+    private void ValidateJsonEditor()
+    {
+        JsonValidationErrors.Clear();
+        if (_settingsService == null) return;
+
+        try
+        {
+            // Try to parse
+            var stripped = StripJsonComments(JsonEditorContent);
+            JsonSerializer.Deserialize<Dictionary<string, object>>(stripped);
+
+            // Check for unknown keys
+            var unknownKeys = _settingsService.ValidateJson(JsonEditorContent);
+            foreach (var key in unknownKeys)
+            {
+                JsonValidationErrors.Add($"Unknown setting: \"{key}\"");
+            }
+
+            if (JsonValidationErrors.Count == 0)
+            {
+                JsonValidationErrors.Add("No issues found.");
+            }
+        }
+        catch (JsonException ex)
+        {
+            JsonValidationErrors.Add($"JSON parse error: {ex.Message}");
+        }
+    }
+
+    private void LoadJsonEditorContent()
+    {
+        if (_settingsService != null)
+        {
+            JsonEditorContent = _settingsService.GetRawJson(ActiveScope);
+        }
+    }
+
+    private static string StripJsonComments(string json)
+    {
+        var result = new System.Text.StringBuilder();
+        bool inString = false;
+        bool escaped = false;
+
+        for (int i = 0; i < json.Length; i++)
+        {
+            char c = json[i];
+
+            if (escaped) { result.Append(c); escaped = false; continue; }
+            if (c == '\\' && inString) { result.Append(c); escaped = true; continue; }
+            if (c == '"' && !escaped) { inString = !inString; result.Append(c); continue; }
+
+            if (!inString)
+            {
+                if (c == '/' && i + 1 < json.Length && json[i + 1] == '/')
+                {
+                    while (i < json.Length && json[i] != '\n') i++;
+                    if (i < json.Length) result.Append('\n');
+                    continue;
+                }
+                if (c == '/' && i + 1 < json.Length && json[i + 1] == '*')
+                {
+                    i += 2;
+                    while (i + 1 < json.Length && !(json[i] == '*' && json[i + 1] == '/')) i++;
+                    i += 1;
+                    continue;
+                }
+            }
+            result.Append(c);
+        }
+
+        return System.Text.RegularExpressions.Regex.Replace(result.ToString(), @",\s*([\}\]])", "$1");
     }
 
     private void ApplySearchFilter(string query)
@@ -297,7 +540,6 @@ public partial class SettingsViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(query))
             return;
 
-        // Special filter: @modified shows only settings changed from defaults
         bool filterModifiedOnly = false;
         var cleanQuery = query;
         if (query.Contains("@modified", StringComparison.OrdinalIgnoreCase))
@@ -318,7 +560,8 @@ public partial class SettingsViewModel : ViewModelBase
             {
                 if (!item.Name.Contains(term, StringComparison.OrdinalIgnoreCase) &&
                     !item.Description.Contains(term, StringComparison.OrdinalIgnoreCase) &&
-                    !item.Category.Contains(term, StringComparison.OrdinalIgnoreCase))
+                    !item.Category.Contains(term, StringComparison.OrdinalIgnoreCase) &&
+                    !item.Key.Contains(term, StringComparison.OrdinalIgnoreCase))
                 {
                     matches = false;
                     break;
@@ -334,50 +577,66 @@ public partial class SettingsViewModel : ViewModelBase
         _allSettings = new List<SearchableSettingItem>
         {
             // Editor > Font
-            MakeCombo("Font Family", "Font family used in the code editor", "Editor", nameof(FontFamily), AvailableFonts, "Cascadia Code"),
-            MakeNumeric("Font Size", "Font size for the code editor (in points)", "Editor", nameof(FontSize), 8, 72, defaultValue: 14),
-            MakeBool("Font Ligatures", "Enable font ligatures for supported fonts (e.g. Cascadia Code, Fira Code, JetBrains Mono). Renders character sequences like !=, ==, => as single glyphs.", "Editor", nameof(FontLigatures), false),
+            MakeCombo("editor.fontFamily", "Font Family", "Font family used in the code editor", "Editor", nameof(FontFamily), AvailableFonts, "Cascadia Code"),
+            MakeNumeric("editor.fontSize", "Font Size", "Font size for the code editor (in points)", "Editor", nameof(FontSize), 8, 72, defaultValue: 14),
+            MakeBool("editor.fontLigatures", "Font Ligatures", "Enable font ligatures for supported fonts (e.g. Cascadia Code, Fira Code, JetBrains Mono).", "Editor", nameof(FontLigatures), false),
 
             // Editor > Tabs
-            MakeNumeric("Tab Size", "Number of spaces per tab stop", "Editor", nameof(TabSize), 1, 16, defaultValue: 4),
-            MakeBool("Convert Tabs to Spaces", "Insert spaces instead of tab characters when pressing Tab", "Editor", nameof(ConvertTabsToSpaces), true),
+            MakeNumeric("editor.tabSize", "Tab Size", "Number of spaces per tab stop", "Editor", nameof(TabSize), 1, 16, defaultValue: 4),
+            MakeBool("editor.insertSpaces", "Convert Tabs to Spaces", "Insert spaces instead of tab characters when pressing Tab", "Editor", nameof(ConvertTabsToSpaces), true),
 
             // Editor > Display
-            MakeBool("Show Line Numbers", "Display line numbers in the editor gutter", "Editor", nameof(ShowLineNumbers), true),
-            MakeBool("Highlight Current Line", "Highlight the line where the cursor is located", "Editor", nameof(HighlightCurrentLine), true),
-            MakeBool("Show Whitespace", "Render whitespace characters (spaces, tabs) as visible dots", "Editor", nameof(ShowWhitespace), false),
-            MakeBool("Word Wrap", "Wrap long lines to fit within the editor width", "Editor", nameof(WordWrap), false),
+            MakeBool("editor.lineNumbers", "Show Line Numbers", "Display line numbers in the editor gutter", "Editor", nameof(ShowLineNumbers), true),
+            MakeBool("editor.highlightCurrentLine", "Highlight Current Line", "Highlight the line where the cursor is located", "Editor", nameof(HighlightCurrentLine), true),
+            MakeCombo("editor.renderWhitespace", "Render Whitespace", "Controls rendering of whitespace characters", "Editor", nameof(RenderWhitespace), RenderWhitespaceOptions, "none"),
+            MakeCombo("editor.wordWrap", "Word Wrap", "Controls how lines should wrap", "Editor", nameof(WordWrapMode), WordWrapModes, "off"),
 
             // Editor > Behavior
-            MakeBool("Auto Indent", "Automatically indent new lines based on the previous line", "Editor", nameof(AutoIndent), true),
-            MakeBool("Bracket Matching", "Highlight matching brackets when the cursor is near one", "Editor", nameof(BracketMatching), true),
-            MakeBool("Auto Close Brackets", "Automatically insert closing brackets, quotes, and parentheses", "Editor", nameof(AutoCloseBrackets), true),
-            MakeBool("Smooth Scrolling", "Animate scrolling for a smoother visual experience", "Editor", nameof(SmoothScrolling), true),
+            MakeBool("editor.autoIndent", "Auto Indent", "Automatically indent new lines based on the previous line", "Editor", nameof(AutoIndent), true),
+            MakeBool("editor.bracketPairColorization", "Bracket Matching", "Highlight matching brackets when the cursor is near one", "Editor", nameof(BracketMatching), true),
+            MakeBool("editor.autoClosingBrackets", "Auto Close Brackets", "Automatically insert closing brackets, quotes, and parentheses", "Editor", nameof(AutoCloseBrackets), true),
+            MakeBool("editor.smoothScrolling", "Smooth Scrolling", "Animate scrolling for a smoother visual experience", "Editor", nameof(SmoothScrolling), true),
+            MakeBool("editor.formatOnSave", "Format On Save", "Format a file on save", "Editor", nameof(FormatOnSave), false),
+            MakeCombo("editor.cursorBlinking", "Cursor Blinking", "Controls cursor blinking animation style", "Editor", nameof(CursorBlinking), CursorBlinkingOptions, "blink"),
 
             // IntelliSense
-            MakeBool("Enable Auto Complete", "Show completion suggestions as you type", "IntelliSense", nameof(EnableAutoComplete), true),
-            MakeBool("Show Quick Info", "Display type and documentation info on hover", "IntelliSense", nameof(ShowQuickInfo), true),
-            MakeBool("Show Signature Help", "Show parameter info when typing function arguments", "IntelliSense", nameof(ShowSignatureHelp), true),
-            MakeNumeric("Auto Complete Delay", "Delay in milliseconds before showing completions", "IntelliSense", nameof(AutoCompleteDelay), 0, 2000, 50, defaultValue: 200),
+            MakeBool("intellisense.autoComplete", "Enable Auto Complete", "Show completion suggestions as you type", "IntelliSense", nameof(EnableAutoComplete), true),
+            MakeBool("intellisense.quickInfo", "Show Quick Info", "Display type and documentation info on hover", "IntelliSense", nameof(ShowQuickInfo), true),
+            MakeBool("intellisense.signatureHelp", "Show Signature Help", "Show parameter info when typing function arguments", "IntelliSense", nameof(ShowSignatureHelp), true),
+            MakeNumeric("intellisense.delay", "Auto Complete Delay", "Delay in milliseconds before showing completions", "IntelliSense", nameof(AutoCompleteDelay), 0, 2000, 50, defaultValue: 200),
 
             // Build
-            MakeBool("Save Before Build", "Automatically save all open files before building", "Build", nameof(SaveBeforeBuild), true),
-            MakeBool("Show Build Output", "Show the build output panel when a build starts", "Build", nameof(ShowBuildOutput), true),
-            MakeCombo("Default Configuration", "Default build configuration for new projects", "Build", nameof(DefaultConfiguration), Configurations, "Debug"),
+            MakeBool("build.saveBeforeBuild", "Save Before Build", "Automatically save all open files before building", "Build", nameof(SaveBeforeBuild), true),
+            MakeBool("build.showOutput", "Show Build Output", "Show the build output panel when a build starts", "Build", nameof(ShowBuildOutput), true),
+            MakeCombo("build.defaultConfiguration", "Default Configuration", "Default build configuration for new projects", "Build", nameof(DefaultConfiguration), Configurations, "Debug"),
 
             // Appearance
-            MakeCombo("Color Theme", "Overall color theme for the IDE", "Appearance", nameof(SelectedTheme), AvailableThemes, "Dark"),
+            MakeCombo("workbench.colorTheme", "Color Theme", "Overall color theme for the IDE", "Appearance", nameof(SelectedTheme), AvailableThemes, "Dark"),
+
+            // Files
+            MakeCombo("files.autoSave", "Auto Save", "Controls auto save of editors", "Files", nameof(AutoSaveMode), AutoSaveModes, "off"),
+
+            // BasicLang
+            MakeCombo("basiclang.compiler.backend", "Compiler Backend", "The default compilation backend", "BasicLang", nameof(CompilerBackend), CompilerBackends, "CSharp"),
         };
     }
 
-    private SearchableSettingItem MakeBool(string name, string desc, string category, string prop, bool defaultValue = true) =>
-        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.CheckBox, Owner = this, DefaultValue = defaultValue };
+    private SearchableSettingItem MakeBool(string key, string name, string desc, string category, string prop, bool defaultValue = true) =>
+        new() { Key = key, Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.CheckBox, Owner = this, DefaultValue = defaultValue };
 
-    private SearchableSettingItem MakeNumeric(string name, string desc, string category, string prop, int min, int max, int inc = 1, int defaultValue = 0) =>
-        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.NumericUpDown, Minimum = min, Maximum = max, Increment = inc, Owner = this, DefaultValue = defaultValue };
+    private SearchableSettingItem MakeNumeric(string key, string name, string desc, string category, string prop, int min, int max, int inc = 1, int defaultValue = 0) =>
+        new() { Key = key, Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.NumericUpDown, Minimum = min, Maximum = max, Increment = inc, Owner = this, DefaultValue = defaultValue };
 
-    private SearchableSettingItem MakeCombo(string name, string desc, string category, string prop, ObservableCollection<string> choices, string defaultValue = "") =>
-        new() { Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.ComboBox, Choices = choices, Owner = this, DefaultValue = defaultValue };
+    private SearchableSettingItem MakeCombo(string key, string name, string desc, string category, string prop, ObservableCollection<string> choices, string defaultValue = "") =>
+        new() { Key = key, Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.ComboBox, Choices = choices, Owner = this, DefaultValue = defaultValue };
+
+    private void RefreshAllScopeBadges()
+    {
+        foreach (var item in _allSettings)
+        {
+            item.RefreshScopeBadges(_settingsService, ActiveScope);
+        }
+    }
 
     // -- Reflection-free property accessors for SearchableSettingItem proxies --
 
@@ -398,6 +657,7 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(ShowSignatureHelp) => ShowSignatureHelp,
         nameof(SaveBeforeBuild) => SaveBeforeBuild,
         nameof(ShowBuildOutput) => ShowBuildOutput,
+        nameof(FormatOnSave) => FormatOnSave,
         _ => false
     };
 
@@ -420,6 +680,7 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(ShowSignatureHelp): ShowSignatureHelp = value; break;
             case nameof(SaveBeforeBuild): SaveBeforeBuild = value; break;
             case nameof(ShowBuildOutput): ShowBuildOutput = value; break;
+            case nameof(FormatOnSave): FormatOnSave = value; break;
         }
     }
 
@@ -446,6 +707,11 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(FontFamily) => FontFamily,
         nameof(SelectedTheme) => SelectedTheme,
         nameof(DefaultConfiguration) => DefaultConfiguration,
+        nameof(RenderWhitespace) => RenderWhitespace,
+        nameof(WordWrapMode) => WordWrapMode,
+        nameof(CursorBlinking) => CursorBlinking,
+        nameof(AutoSaveMode) => AutoSaveMode,
+        nameof(CompilerBackend) => CompilerBackend,
         _ => ""
     };
 
@@ -456,6 +722,11 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(FontFamily): FontFamily = value; break;
             case nameof(SelectedTheme): SelectedTheme = value; break;
             case nameof(DefaultConfiguration): DefaultConfiguration = value; break;
+            case nameof(RenderWhitespace): RenderWhitespace = value; break;
+            case nameof(WordWrapMode): WordWrapMode = value; break;
+            case nameof(CursorBlinking): CursorBlinking = value; break;
+            case nameof(AutoSaveMode): AutoSaveMode = value; break;
+            case nameof(CompilerBackend): CompilerBackend = value; break;
         }
     }
 
@@ -487,6 +758,9 @@ public partial class SettingsViewModel : ViewModelBase
 
         // Apply theme change immediately
         ThemeManager.Apply(SelectedTheme);
+
+        // Push to ISettingsService
+        SaveToService();
 
         SettingsChanged?.Invoke(this, EventArgs.Empty);
         CloseDialog?.Invoke();
@@ -523,20 +797,113 @@ public partial class SettingsViewModel : ViewModelBase
         SaveBeforeBuild = true;
         ShowBuildOutput = true;
         DefaultConfiguration = "Debug";
+        FormatOnSave = false;
+        RenderWhitespace = "none";
+        WordWrapMode = "off";
+        CursorBlinking = "blink";
+        AutoSaveMode = "off";
+        CompilerBackend = "CSharp";
 
         foreach (var shortcut in Shortcuts)
         {
             shortcut.CurrentBinding = shortcut.DefaultBinding;
         }
+
+        if (_settingsService != null)
+        {
+            _settingsService.ResetAllToDefaults();
+        }
+    }
+
+    /// <summary>
+    /// Loads settings from ISettingsService into the ViewModel properties.
+    /// </summary>
+    private void LoadFromService()
+    {
+        if (_settingsService == null) return;
+
+        var scope = ActiveScope == SettingsScope.Workspace ? SettingsScope.Workspace : SettingsScope.Effective;
+
+        FontFamily = _settingsService.Get("editor.fontFamily", "Cascadia Code", scope);
+        FontLigatures = _settingsService.Get("editor.fontLigatures", false, scope);
+        FontSize = _settingsService.Get("editor.fontSize", 14, scope);
+        TabSize = _settingsService.Get("editor.tabSize", 4, scope);
+        ConvertTabsToSpaces = _settingsService.Get("editor.insertSpaces", true, scope);
+        ShowLineNumbers = _settingsService.Get("editor.lineNumbers", "on", scope) != "off";
+        HighlightCurrentLine = _settingsService.Get("editor.highlightCurrentLine", true, scope);
+        RenderWhitespace = _settingsService.Get("editor.renderWhitespace", "none", scope);
+        ShowWhitespace = RenderWhitespace != "none";
+        WordWrapMode = _settingsService.Get("editor.wordWrap", "off", scope);
+        WordWrap = WordWrapMode != "off";
+        AutoIndent = _settingsService.Get("editor.autoIndent", true, scope);
+        BracketMatching = _settingsService.Get("editor.bracketPairColorization", true, scope);
+        AutoCloseBrackets = _settingsService.Get("editor.autoClosingBrackets", "always", scope) != "never";
+        SmoothScrolling = _settingsService.Get("editor.smoothScrolling", true, scope);
+        FormatOnSave = _settingsService.Get("editor.formatOnSave", false, scope);
+        CursorBlinking = _settingsService.Get("editor.cursorBlinking", "blink", scope);
+        SelectedTheme = _settingsService.Get("workbench.colorTheme", "Dark", scope);
+        EnableAutoComplete = _settingsService.Get("intellisense.autoComplete", true, scope);
+        ShowQuickInfo = _settingsService.Get("intellisense.quickInfo", true, scope);
+        ShowSignatureHelp = _settingsService.Get("intellisense.signatureHelp", true, scope);
+        AutoCompleteDelay = _settingsService.Get("intellisense.delay", 200, scope);
+        SaveBeforeBuild = _settingsService.Get("build.saveBeforeBuild", true, scope);
+        ShowBuildOutput = _settingsService.Get("build.showOutput", true, scope);
+        DefaultConfiguration = _settingsService.Get("build.defaultConfiguration", "Debug", scope);
+        AutoSaveMode = _settingsService.Get("files.autoSave", "off", scope);
+        CompilerBackend = _settingsService.Get("basiclang.compiler.backend", "CSharp", scope);
+    }
+
+    /// <summary>
+    /// Pushes ViewModel properties to ISettingsService.
+    /// </summary>
+    private void SaveToService()
+    {
+        if (_settingsService == null) return;
+
+        var scope = ActiveScope;
+
+        _settingsService.Set("editor.fontFamily", FontFamily, scope);
+        _settingsService.Set("editor.fontLigatures", FontLigatures, scope);
+        _settingsService.Set("editor.fontSize", FontSize, scope);
+        _settingsService.Set("editor.tabSize", TabSize, scope);
+        _settingsService.Set("editor.insertSpaces", ConvertTabsToSpaces, scope);
+        _settingsService.Set("editor.lineNumbers", ShowLineNumbers ? "on" : "off", scope);
+        _settingsService.Set("editor.highlightCurrentLine", HighlightCurrentLine, scope);
+        _settingsService.Set("editor.renderWhitespace", RenderWhitespace, scope);
+        _settingsService.Set("editor.wordWrap", WordWrapMode, scope);
+        _settingsService.Set("editor.autoIndent", AutoIndent, scope);
+        _settingsService.Set("editor.bracketPairColorization", BracketMatching, scope);
+        _settingsService.Set("editor.autoClosingBrackets", AutoCloseBrackets ? "always" : "never", scope);
+        _settingsService.Set("editor.smoothScrolling", SmoothScrolling, scope);
+        _settingsService.Set("editor.formatOnSave", FormatOnSave, scope);
+        _settingsService.Set("editor.cursorBlinking", CursorBlinking, scope);
+        _settingsService.Set("workbench.colorTheme", SelectedTheme, scope);
+        _settingsService.Set("intellisense.autoComplete", EnableAutoComplete, scope);
+        _settingsService.Set("intellisense.quickInfo", ShowQuickInfo, scope);
+        _settingsService.Set("intellisense.signatureHelp", ShowSignatureHelp, scope);
+        _settingsService.Set("intellisense.delay", AutoCompleteDelay, scope);
+        _settingsService.Set("build.saveBeforeBuild", SaveBeforeBuild, scope);
+        _settingsService.Set("build.showOutput", ShowBuildOutput, scope);
+        _settingsService.Set("build.defaultConfiguration", DefaultConfiguration, scope);
+        _settingsService.Set("files.autoSave", AutoSaveMode, scope);
+        _settingsService.Set("basiclang.compiler.backend", CompilerBackend, scope);
     }
 
     private void LoadSettings()
     {
+        // First try ISettingsService
+        if (_settingsService != null)
+        {
+            LoadFromService();
+            return;
+        }
+
+        // Legacy: load from old settings file
         try
         {
-            if (File.Exists(SettingsPath))
+            if (File.Exists(LegacySettingsPath))
             {
-                var json = File.ReadAllText(SettingsPath);
+                var json = File.ReadAllText(LegacySettingsPath);
                 var settings = JsonSerializer.Deserialize<SettingsData>(json);
 
                 if (settings != null)
@@ -586,7 +953,8 @@ public partial class SettingsViewModel : ViewModelBase
     {
         try
         {
-            var dir = Path.GetDirectoryName(SettingsPath);
+            // Save to legacy location for backward compatibility
+            var dir = Path.GetDirectoryName(LegacySettingsPath);
             if (!string.IsNullOrEmpty(dir))
             {
                 Directory.CreateDirectory(dir);
@@ -619,7 +987,7 @@ public partial class SettingsViewModel : ViewModelBase
             };
 
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(SettingsPath, json);
+            File.WriteAllText(LegacySettingsPath, json);
         }
         catch
         {
@@ -631,9 +999,9 @@ public partial class SettingsViewModel : ViewModelBase
     {
         try
         {
-            if (File.Exists(SettingsPath))
+            if (File.Exists(LegacySettingsPath))
             {
-                var json = File.ReadAllText(SettingsPath);
+                var json = File.ReadAllText(LegacySettingsPath);
                 return JsonSerializer.Deserialize<SettingsData>(json) ?? new SettingsData();
             }
         }
@@ -699,6 +1067,24 @@ public class ModifiedBorderConverter : IValueConverter
         if (value is true)
             return new Thickness(3, 0, 0, 0);
         return new Thickness(0);
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
+
+/// <summary>
+/// Converts a scope badge string to visibility. Non-empty = visible.
+/// </summary>
+public class ScopeBadgeVisibilityConverter : IValueConverter
+{
+    public static readonly ScopeBadgeVisibilityConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        return value is string s && !string.IsNullOrEmpty(s);
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

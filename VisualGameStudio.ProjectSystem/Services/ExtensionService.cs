@@ -6,7 +6,9 @@ using VisualGameStudio.Core.Abstractions.Services;
 namespace VisualGameStudio.ProjectSystem.Services;
 
 /// <summary>
-/// Manages IDE extensions/plugins.
+/// Manages IDE extensions with VS Code extension host support.
+/// Handles discovery, installation, and lifecycle of extensions that run
+/// in a Node.js subprocess communicating via JSON-RPC.
 /// </summary>
 public class ExtensionService : IExtensionService
 {
@@ -20,12 +22,17 @@ public class ExtensionService : IExtensionService
 
     private readonly List<Extension> _extensions = new();
     private readonly Dictionary<string, bool> _enabledState = new();
+    private readonly Dictionary<string, List<string>> _extensionCommands = new();
     private readonly string _extensionsDir;
     private readonly string _stateFile;
     private readonly HttpClient _httpClient;
+    private readonly IOutputService _outputService;
+    private ExtensionHost? _extensionHost;
+    private bool _disposed;
 
-    public ExtensionService()
+    public ExtensionService(IOutputService outputService)
     {
+        _outputService = outputService;
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         _extensionsDir = Path.Combine(appData, "VisualGameStudio", "extensions");
         _stateFile = Path.Combine(appData, "VisualGameStudio", "extensions-state.json");
@@ -41,12 +48,18 @@ public class ExtensionService : IExtensionService
 
     public string ExtensionsDirectory => _extensionsDir;
 
+    public bool IsExtensionHostRunning => _extensionHost?.IsRunning ?? false;
+
     public event EventHandler<ExtensionEventArgs>? ExtensionInstalled;
     public event EventHandler<ExtensionEventArgs>? ExtensionUninstalled;
     public event EventHandler<ExtensionEventArgs>? ExtensionEnabled;
     public event EventHandler<ExtensionEventArgs>? ExtensionDisabled;
     public event EventHandler<ExtensionEventArgs>? ExtensionActivated;
     public event EventHandler<ExtensionEventArgs>? ExtensionDeactivated;
+    public event EventHandler<bool>? ExtensionHostStateChanged;
+    public event EventHandler<ExtensionMessageEventArgs>? ExtensionMessageReceived;
+
+    #region Discovery
 
     public async Task<IReadOnlyList<Extension>> DiscoverExtensionsAsync()
     {
@@ -70,19 +83,79 @@ public class ExtensionService : IExtensionService
                         if (_enabledState.TryGetValue(extension.Id, out var enabled))
                         {
                             extension.IsEnabled = enabled;
+                            extension.Status = enabled ? ExtensionStatus.Installed : ExtensionStatus.Disabled;
                         }
                         _extensions.Add(extension);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Skip invalid extensions
+                    _outputService.WriteError($"[Extensions] Failed to load extension from {dir}: {ex.Message}", OutputCategory.General);
                 }
             }
         }
 
+        _outputService.WriteLine($"[Extensions] Discovered {_extensions.Count} extension(s).", OutputCategory.General);
         return _extensions;
     }
+
+    #endregion
+
+    #region Extension Host Lifecycle
+
+    public async Task StartExtensionHostAsync(CancellationToken cancellationToken = default)
+    {
+        if (_extensionHost?.IsRunning == true) return;
+
+        // Find the extension host script
+        var scriptPath = FindExtensionHostScript();
+        if (scriptPath == null)
+        {
+            _outputService.WriteError("[Extensions] ExtensionHostMain.js not found.", OutputCategory.General);
+            return;
+        }
+
+        _extensionHost = new ExtensionHost(_outputService, scriptPath);
+        _extensionHost.StateChanged += (s, running) => ExtensionHostStateChanged?.Invoke(this, running);
+        _extensionHost.MessageReceived += (s, args) => ExtensionMessageReceived?.Invoke(this, args);
+        _extensionHost.CommandRegistered += OnCommandRegistered;
+        _extensionHost.HostCrashed += OnHostCrashed;
+
+        await _extensionHost.StartAsync(cancellationToken);
+
+        if (_extensionHost.IsRunning)
+        {
+            // Auto-activate extensions with '*' activation event
+            await ActivateStartupExtensionsAsync(cancellationToken);
+        }
+    }
+
+    public async Task StopExtensionHostAsync()
+    {
+        if (_extensionHost == null) return;
+
+        // Deactivate all active extensions
+        foreach (var ext in _extensions.Where(e => e.IsActive).ToList())
+        {
+            ext.IsActive = false;
+            ext.Status = ExtensionStatus.Installed;
+        }
+
+        await _extensionHost.StopAsync();
+        _extensionHost.Dispose();
+        _extensionHost = null;
+    }
+
+    public async Task RestartExtensionHostAsync(CancellationToken cancellationToken = default)
+    {
+        _outputService.WriteLine("[Extensions] Restarting extension host...", OutputCategory.General);
+        await StopExtensionHostAsync();
+        await StartExtensionHostAsync(cancellationToken);
+    }
+
+    #endregion
+
+    #region Installation
 
     public async Task<ExtensionInstallResult> InstallFromFileAsync(string packagePath, CancellationToken cancellationToken = default)
     {
@@ -154,7 +227,20 @@ public class ExtensionService : IExtensionService
                     ExtensionInstalled?.Invoke(this, new ExtensionEventArgs(ext));
                     SaveState();
 
-                    return new ExtensionInstallResult { Success = true, Extension = ext };
+                    _outputService.WriteLine($"[Extensions] Installed: {ext.Name} ({ext.Id} v{ext.Version})", OutputCategory.General);
+
+                    // If the host is running and extension has '*' activation, activate immediately
+                    if (_extensionHost?.IsRunning == true && ext.ActivationEvents.Contains("*"))
+                    {
+                        await ActivateAsync(ext.Id);
+                    }
+
+                    return new ExtensionInstallResult
+                    {
+                        Success = true,
+                        Extension = ext,
+                        RequiresRestart = ext.Manifest?.Main != null && _extensionHost?.IsRunning != true
+                    };
                 }
 
                 return new ExtensionInstallResult { Success = false, Error = "Failed to load installed extension" };
@@ -217,6 +303,12 @@ public class ExtensionService : IExtensionService
 
         try
         {
+            // Deactivate first if active
+            if (extension.IsActive && _extensionHost?.IsRunning == true)
+            {
+                _ = _extensionHost.DeactivateExtensionAsync(extensionId);
+            }
+
             if (Directory.Exists(extension.InstallPath))
             {
                 Directory.Delete(extension.InstallPath, true);
@@ -224,16 +316,23 @@ public class ExtensionService : IExtensionService
 
             _extensions.Remove(extension);
             _enabledState.Remove(extensionId);
+            _extensionCommands.Remove(extensionId);
             SaveState();
 
+            _outputService.WriteLine($"[Extensions] Uninstalled: {extension.Name} ({extensionId})", OutputCategory.General);
             ExtensionUninstalled?.Invoke(this, new ExtensionEventArgs(extension));
             return Task.FromResult(true);
         }
-        catch
+        catch (Exception ex)
         {
+            _outputService.WriteError($"[Extensions] Uninstall failed: {ex.Message}", OutputCategory.General);
             return Task.FromResult(false);
         }
     }
+
+    #endregion
+
+    #region Enable / Disable
 
     public Task<bool> EnableAsync(string extensionId)
     {
@@ -244,6 +343,7 @@ public class ExtensionService : IExtensionService
         }
 
         extension.IsEnabled = true;
+        extension.Status = ExtensionStatus.Installed;
         _enabledState[extensionId] = true;
         SaveState();
 
@@ -259,7 +359,15 @@ public class ExtensionService : IExtensionService
             return Task.FromResult(false);
         }
 
+        // Deactivate if currently active
+        if (extension.IsActive && _extensionHost?.IsRunning == true)
+        {
+            _ = _extensionHost.DeactivateExtensionAsync(extensionId);
+        }
+
         extension.IsEnabled = false;
+        extension.IsActive = false;
+        extension.Status = ExtensionStatus.Disabled;
         _enabledState[extensionId] = false;
         SaveState();
 
@@ -267,47 +375,126 @@ public class ExtensionService : IExtensionService
         return Task.FromResult(true);
     }
 
+    #endregion
+
+    #region Activation / Deactivation
+
     public Extension? GetExtension(string extensionId)
     {
         return _extensions.FirstOrDefault(e => e.Id == extensionId);
     }
 
-    public Task<bool> ActivateAsync(string extensionId)
+    public ExtensionManifest? GetExtensionManifest(string extensionId)
+    {
+        return _extensions.FirstOrDefault(e => e.Id == extensionId)?.Manifest;
+    }
+
+    public async Task<bool> ActivateAsync(string extensionId)
     {
         var extension = _extensions.FirstOrDefault(e => e.Id == extensionId);
         if (extension == null || !extension.IsEnabled)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
         if (extension.IsActive)
         {
-            return Task.FromResult(true);
+            return true;
         }
 
-        // Load extension contributions (grammars, themes, etc.)
+        extension.Status = ExtensionStatus.Activating;
+
+        // Load declarative contributions (grammars, themes, snippets, etc.) regardless of host
         LoadContributions(extension);
 
+        // If the extension has a JS entry point, activate it in the extension host
+        if (!string.IsNullOrEmpty(extension.Manifest?.Main))
+        {
+            if (_extensionHost?.IsRunning != true)
+            {
+                _outputService.WriteError($"[Extensions] Cannot activate {extensionId}: Extension host not running.", OutputCategory.General);
+                extension.Status = ExtensionStatus.Error;
+                return false;
+            }
+
+            var success = await _extensionHost.ActivateExtensionAsync(
+                extensionId,
+                extension.InstallPath,
+                extension.Manifest.Main);
+
+            if (!success)
+            {
+                extension.Status = ExtensionStatus.Error;
+                return false;
+            }
+        }
+
         extension.IsActive = true;
+        extension.Status = ExtensionStatus.Active;
         ExtensionActivated?.Invoke(this, new ExtensionEventArgs(extension));
-        return Task.FromResult(true);
+        _outputService.WriteLine($"[Extensions] Activated: {extension.Name} ({extensionId})", OutputCategory.General);
+        return true;
     }
 
-    public Task<bool> DeactivateAsync(string extensionId)
+    public async Task<bool> DeactivateAsync(string extensionId)
     {
         var extension = _extensions.FirstOrDefault(e => e.Id == extensionId);
         if (extension == null || !extension.IsActive)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        // Unload extension contributions
+        extension.Status = ExtensionStatus.Deactivating;
+
+        // Deactivate in extension host if it has a JS entry
+        if (!string.IsNullOrEmpty(extension.Manifest?.Main) && _extensionHost?.IsRunning == true)
+        {
+            await _extensionHost.DeactivateExtensionAsync(extensionId);
+        }
+
+        // Unload declarative contributions
         UnloadContributions(extension);
 
         extension.IsActive = false;
+        extension.Status = ExtensionStatus.Installed;
         ExtensionDeactivated?.Invoke(this, new ExtensionEventArgs(extension));
-        return Task.FromResult(true);
+        _outputService.WriteLine($"[Extensions] Deactivated: {extension.Name} ({extensionId})", OutputCategory.General);
+        return true;
     }
+
+    public async Task<object?> ExecuteExtensionCommandAsync(string commandId, object?[]? args = null)
+    {
+        if (_extensionHost?.IsRunning != true)
+        {
+            throw new InvalidOperationException("Extension host is not running.");
+        }
+
+        return await _extensionHost.ExecuteCommandAsync(commandId, args);
+    }
+
+    public async Task TriggerActivationEventAsync(string activationEvent)
+    {
+        // Find extensions that should be activated by this event
+        foreach (var ext in _extensions.Where(e => e.IsEnabled && !e.IsActive))
+        {
+            if (ext.ActivationEvents.Contains(activationEvent) ||
+                ext.ActivationEvents.Contains("*"))
+            {
+                await ActivateAsync(ext.Id);
+            }
+        }
+
+        // Also forward to the extension host for extensions that are already active
+        // but may need to respond to the event
+        if (_extensionHost?.IsRunning == true)
+        {
+            await _extensionHost.FireActivationEventAsync(activationEvent);
+        }
+    }
+
+    #endregion
+
+    #region Updates
 
     public Task<IReadOnlyList<ExtensionUpdate>> CheckForUpdatesAsync(CancellationToken cancellationToken = default)
     {
@@ -329,7 +516,60 @@ public class ExtensionService : IExtensionService
         return new ExtensionInstallResult { Success = false, Error = "Update not implemented" };
     }
 
+    #endregion
+
     #region Private Methods
+
+    private async Task ActivateStartupExtensionsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var ext in _extensions.Where(e => e.IsEnabled && !e.IsActive).ToList())
+        {
+            if (ext.ActivationEvents.Contains("*") ||
+                ext.ActivationEvents.Count == 0) // No activation events = activate on startup
+            {
+                try
+                {
+                    await ActivateAsync(ext.Id);
+                }
+                catch (Exception ex)
+                {
+                    _outputService.WriteError($"[Extensions] Failed to auto-activate {ext.Id}: {ex.Message}", OutputCategory.General);
+                }
+            }
+        }
+    }
+
+    private void OnCommandRegistered(object? sender, ExtensionCommandRegisteredArgs args)
+    {
+        if (!_extensionCommands.ContainsKey(args.ExtensionId))
+        {
+            _extensionCommands[args.ExtensionId] = new List<string>();
+        }
+        _extensionCommands[args.ExtensionId].Add(args.CommandId);
+    }
+
+    private async void OnHostCrashed(object? sender, EventArgs e)
+    {
+        _outputService.WriteError("[Extensions] Extension host crashed. Attempting restart in 5 seconds...", OutputCategory.General);
+
+        // Mark all extensions as inactive
+        foreach (var ext in _extensions.Where(e => e.IsActive))
+        {
+            ext.IsActive = false;
+            ext.Status = ExtensionStatus.Installed;
+        }
+
+        await Task.Delay(5000);
+
+        try
+        {
+            await StartExtensionHostAsync();
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteError($"[Extensions] Failed to restart extension host: {ex.Message}", OutputCategory.General);
+        }
+    }
 
     private async Task<Extension?> LoadExtensionFromDirectoryAsync(string directory)
     {
@@ -360,7 +600,8 @@ public class ExtensionService : IExtensionService
             InstallPath = directory,
             Manifest = manifest,
             ActivationEvents = manifest.ActivationEvents,
-            IsEnabled = true
+            IsEnabled = true,
+            Status = ExtensionStatus.Installed
         };
 
         if (!string.IsNullOrEmpty(manifest.Icon))
@@ -373,7 +614,7 @@ public class ExtensionService : IExtensionService
             extension.Repository = manifest.Repository.Url;
         }
 
-        // Load contributions
+        // Load contributions from manifest
         if (manifest.Contributes != null)
         {
             extension.Contributions = manifest.Contributes;
@@ -384,13 +625,44 @@ public class ExtensionService : IExtensionService
 
     private void LoadContributions(Extension extension)
     {
-        // Load grammars, themes, snippets, etc.
-        // This would integrate with TextMateService, theme service, etc.
+        // Declarative contributions are loaded by the IDE directly:
+        // - Grammars are forwarded to the TextMateService
+        // - Themes are forwarded to the ThemeManager
+        // - Snippets are forwarded to the SnippetService
+        // - Keybindings are forwarded to the KeybindingService
+        // - Configuration defaults are applied to SettingsService
+        // The actual forwarding is handled by higher-level code (e.g., Shell)
+        // that subscribes to ExtensionActivated events.
     }
 
     private void UnloadContributions(Extension extension)
     {
-        // Unload grammars, themes, snippets, etc.
+        // Reverse of LoadContributions - handled by Shell via ExtensionDeactivated event
+    }
+
+    private string? FindExtensionHostScript()
+    {
+        // Check alongside the application executable
+        var baseDir = AppContext.BaseDirectory;
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "ExtensionHostMain.js"),
+            Path.Combine(baseDir, "Services", "ExtensionHostMain.js"),
+            // Development paths
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "VisualGameStudio.ProjectSystem", "Services", "ExtensionHostMain.js")),
+            // Relative to extensions dir
+            Path.Combine(Path.GetDirectoryName(_extensionsDir) ?? "", "ExtensionHostMain.js"),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private void LoadState()
@@ -426,7 +698,21 @@ public class ExtensionService : IExtensionService
                 Directory.CreateDirectory(dir);
             }
 
-            var json = JsonSerializer.Serialize(_enabledState, JsonOptions);
+            // Save both enabled/disabled state
+            var state = new Dictionary<string, bool>();
+            foreach (var ext in _extensions)
+            {
+                state[ext.Id] = ext.IsEnabled;
+            }
+            foreach (var kvp in _enabledState)
+            {
+                if (!state.ContainsKey(kvp.Key))
+                {
+                    state[kvp.Key] = kvp.Value;
+                }
+            }
+
+            var json = JsonSerializer.Serialize(state, JsonOptions);
             File.WriteAllText(_stateFile, json);
         }
         catch
@@ -448,6 +734,15 @@ public class ExtensionService : IExtensionService
         {
             CopyDirectory(dir, Path.Combine(destination, Path.GetFileName(dir)));
         }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        _extensionHost?.Dispose();
+        _httpClient.Dispose();
     }
 
     #endregion

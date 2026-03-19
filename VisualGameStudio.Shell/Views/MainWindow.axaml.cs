@@ -6,6 +6,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using VisualGameStudio.Shell.Services;
 using VisualGameStudio.Shell.ViewModels;
 using VisualGameStudio.Shell.Views.Controls;
 using VisualGameStudio.Shell.Views.Panels;
@@ -41,6 +42,14 @@ public partial class MainWindow : Window
         };
 
         _notificationArea = this.FindControl<StackPanel>("NotificationArea");
+
+        // Initialize screen reader live regions
+        var politeRegion = this.FindControl<TextBlock>("LiveRegionPolite");
+        var assertiveRegion = this.FindControl<TextBlock>("LiveRegionAssertive");
+        if (politeRegion != null && assertiveRegion != null)
+        {
+            ScreenReaderService.Instance.Initialize(politeRegion, assertiveRegion);
+        }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -256,8 +265,8 @@ public partial class MainWindow : Window
         }
     }
 
-    // Status bar click handlers
-    private void OnIndentationClicked(object? sender, PointerPressedEventArgs e)
+    // Status bar click handlers (Button.Click for keyboard accessibility)
+    private void OnIndentationButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is MainWindowViewModel vm)
         {
@@ -265,7 +274,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnEncodingClicked(object? sender, PointerPressedEventArgs e)
+    private void OnEncodingButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is MainWindowViewModel vm)
         {
@@ -273,7 +282,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnLineEndingClicked(object? sender, PointerPressedEventArgs e)
+    private void OnLineEndingButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is MainWindowViewModel vm)
         {
@@ -281,7 +290,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnLanguageModeClicked(object? sender, PointerPressedEventArgs e)
+    private void OnLanguageModeButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is MainWindowViewModel vm)
         {
@@ -294,14 +303,6 @@ public partial class MainWindow : Window
         if (DataContext is MainWindowViewModel vm)
         {
             vm.ShowErrorListCommand.Execute(null);
-        }
-    }
-
-    private void OnCommandPaletteHintClicked(object? sender, PointerPressedEventArgs e)
-    {
-        if (DataContext is MainWindowViewModel vm)
-        {
-            vm.OpenCommandPaletteCommand.Execute(null);
         }
     }
 

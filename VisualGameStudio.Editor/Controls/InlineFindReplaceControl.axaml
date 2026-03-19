@@ -2,7 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="72"
+             mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="100"
              x:Class="VisualGameStudio.Editor.Controls.InlineFindReplaceControl"
              MaxWidth="460"
              MinWidth="320">
@@ -25,6 +25,26 @@
     <Style Selector="TextBox.searchBox.hasError">
       <Setter Property="BorderBrush" Value="#F44747"/>
     </Style>
+    <Style Selector="TextBox.searchBoxMultiline">
+      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="CaretBrush" Value="#CCCCCC"/>
+      <Setter Property="MinHeight" Value="26"/>
+      <Setter Property="MaxHeight" Value="120"/>
+      <Setter Property="Padding" Value="6,3"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontFamily" Value="Segoe UI, sans-serif"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="AcceptsReturn" Value="False"/>
+      <Setter Property="TextWrapping" Value="NoWrap"/>
+    </Style>
+    <Style Selector="TextBox.searchBoxMultiline:focus">
+      <Setter Property="BorderBrush" Value="#007ACC"/>
+    </Style>
+    <Style Selector="TextBox.searchBoxMultiline.hasError">
+      <Setter Property="BorderBrush" Value="#F44747"/>
+    </Style>
     <Style Selector="Button.iconBtn">
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="Foreground" Value="#CCCCCC"/>
@@ -41,6 +61,9 @@
     </Style>
     <Style Selector="Button.iconBtn:pressed /template/ ContentPresenter">
       <Setter Property="Background" Value="#505050"/>
+    </Style>
+    <Style Selector="Button.iconBtn:disabled /template/ ContentPresenter">
+      <Setter Property="Opacity" Value="0.4"/>
     </Style>
     <Style Selector="ToggleButton.toggleBtn">
       <Setter Property="Background" Value="Transparent"/>
@@ -71,14 +94,14 @@
   </UserControl.Styles>
 
   <Border Background="#252526"
-          BorderBrush="#3C3C3C"
+          BorderBrush="#454545"
           BorderThickness="1"
           CornerRadius="0,0,4,4"
           Padding="6,4"
           BoxShadow="0 2 8 0 #40000000">
     <Grid RowDefinitions="Auto,Auto">
       <!-- Find Row -->
-      <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,2,0,2">
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,2,0,2">
         <!-- Toggle Replace Chevron -->
         <Button Grid.Column="0"
                 Classes="iconBtn"
@@ -87,17 +110,17 @@
                 Width="20" Height="26"
                 Margin="0,0,2,0">
           <Panel>
-            <TextBlock x:Name="ChevronRight" Text=">" FontFamily="Consolas" FontSize="12" IsVisible="True"
-                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            <TextBlock x:Name="ChevronDown" Text="v" FontFamily="Consolas" FontSize="10" IsVisible="False"
-                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <TextBlock x:Name="ChevronRight" Text="&#xE76C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10" IsVisible="True"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#CCCCCC"/>
+            <TextBlock x:Name="ChevronDown" Text="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10" IsVisible="False"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#CCCCCC"/>
           </Panel>
         </Button>
 
         <!-- Search TextBox -->
         <TextBox Grid.Column="1"
                  x:Name="SearchTextBox"
-                 Classes="searchBox"
+                 Classes="searchBoxMultiline"
                  Watermark="Find"
                  KeyDown="OnSearchKeyDown"
                  TextChanged="OnSearchTextChanged"/>
@@ -113,7 +136,7 @@
                    IsVisible="False"
                    Margin="6,0,4,0"/>
 
-        <!-- Match Case Toggle -->
+        <!-- Match Case Toggle (Aa) -->
         <ToggleButton Grid.Column="3"
                       x:Name="MatchCaseToggle"
                       Classes="toggleBtn"
@@ -138,7 +161,7 @@
           </TextBlock>
         </ToggleButton>
 
-        <!-- Regex Toggle -->
+        <!-- Regex Toggle (.*) -->
         <ToggleButton Grid.Column="5"
                       x:Name="RegexToggle"
                       Classes="toggleBtn"
@@ -147,37 +170,58 @@
                       Margin="1,0"
                       Click="OnOptionChanged"/>
 
-        <!-- Find Previous -->
-        <Button Grid.Column="6"
+        <!-- Find in Selection Toggle -->
+        <ToggleButton Grid.Column="6"
+                      x:Name="FindInSelectionToggle"
+                      Classes="toggleBtn"
+                      ToolTip.Tip="Find in Selection (Alt+L)"
+                      Margin="1,0"
+                      Click="OnFindInSelectionChanged">
+          <TextBlock Text="&#xE14C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </ToggleButton>
+
+        <!-- Find Previous (up arrow) -->
+        <Button Grid.Column="7"
                 Classes="iconBtn"
                 Click="OnFindPrevious"
                 ToolTip.Tip="Previous Match (Shift+Enter)"
                 Margin="4,0,0,0">
-          <TextBlock Text="^" FontFamily="Consolas" FontSize="14" FontWeight="Bold"/>
+          <TextBlock Text="&#xE70E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"/>
         </Button>
 
-        <!-- Find Next -->
-        <Button Grid.Column="7"
+        <!-- Find Next (down arrow) -->
+        <Button Grid.Column="8"
                 Classes="iconBtn"
                 Click="OnFindNext"
                 ToolTip.Tip="Next Match (Enter)">
-          <TextBlock Text="v" FontFamily="Consolas" FontSize="14" FontWeight="Bold"/>
+          <TextBlock Text="&#xE70D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"/>
         </Button>
 
-        <!-- Close -->
-        <Button Grid.Column="8"
+        <!-- Select All Matches -->
+        <Button Grid.Column="9"
+                x:Name="SelectAllMatchesBtn"
+                Classes="iconBtn"
+                Click="OnSelectAllMatches"
+                ToolTip.Tip="Select All Matches (Alt+Enter)"
+                Margin="1,0">
+          <TextBlock Text="&#xE1D3;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"/>
+        </Button>
+
+        <!-- Close (x) -->
+        <Button Grid.Column="10"
                 Classes="iconBtn"
                 Click="OnClose"
                 ToolTip.Tip="Close (Escape)"
                 Margin="4,0,0,0">
-          <TextBlock Text="x" FontFamily="Consolas" FontSize="13"/>
+          <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"/>
         </Button>
       </Grid>
 
       <!-- Replace Row -->
       <Grid Grid.Row="1"
             x:Name="ReplaceRow"
-            ColumnDefinitions="Auto,*,Auto,Auto"
+            ColumnDefinitions="Auto,*,Auto,Auto,Auto"
             IsVisible="False"
             Margin="0,2,0,2">
         <!-- Spacer to align with search box -->
@@ -186,29 +230,45 @@
         <!-- Replace TextBox -->
         <TextBox Grid.Column="1"
                  x:Name="ReplaceTextBox"
-                 Classes="searchBox"
+                 Classes="searchBoxMultiline"
                  Watermark="Replace"
                  KeyDown="OnReplaceKeyDown"/>
 
+        <!-- Preserve Case Toggle -->
+        <ToggleButton Grid.Column="2"
+                      x:Name="PreserveCaseToggle"
+                      Classes="toggleBtn"
+                      ToolTip.Tip="Preserve Case (Alt+P)"
+                      Margin="4,0,1,0"
+                      Click="OnOptionChanged">
+          <TextBlock Text="AB" FontFamily="Consolas" FontSize="10" FontWeight="Bold">
+            <TextBlock.TextDecorations>
+              <TextDecorationCollection>
+                <TextDecoration Location="Strikethrough"/>
+              </TextDecorationCollection>
+            </TextBlock.TextDecorations>
+          </TextBlock>
+        </ToggleButton>
+
         <!-- Replace Single -->
-        <Button Grid.Column="2"
+        <Button Grid.Column="3"
                 Classes="iconBtn"
                 Click="OnReplaceSingle"
                 ToolTip.Tip="Replace (Ctrl+Shift+1)"
                 Width="30"
-                Margin="4,0,0,0">
-          <TextBlock Text="R" FontFamily="Consolas" FontSize="12" FontWeight="Bold"
+                Margin="1,0">
+          <TextBlock Text="&#xE13E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
                      ToolTip.Tip="Replace"/>
         </Button>
 
         <!-- Replace All -->
-        <Button Grid.Column="3"
+        <Button Grid.Column="4"
                 Classes="iconBtn"
                 Click="OnReplaceAll"
                 ToolTip.Tip="Replace All (Ctrl+Alt+Enter)"
                 Width="30"
                 Margin="1,0">
-          <TextBlock Text="Ra" FontFamily="Consolas" FontSize="11" FontWeight="Bold"
+          <TextBlock Text="&#xE1CE;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
                      ToolTip.Tip="Replace All"/>
         </Button>
       </Grid>
