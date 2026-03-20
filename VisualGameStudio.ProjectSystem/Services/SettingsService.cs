@@ -929,6 +929,8 @@ public class SettingsService : ISettingsService, IDisposable
                 Prop("terminal.integrated.cursorStyle", SettingsPropertyType.String, "Cursor Style", "block", "Controls the style of terminal cursor.",
                     enumVals: new[] { "block", "underline", "line" }),
                 Prop("terminal.integrated.defaultProfile", SettingsPropertyType.String, "Default Profile", "", "The default terminal profile."),
+                Prop("terminal.integrated.defaultProfile.windows", SettingsPropertyType.String, "Default Profile (Windows)", "", "The default terminal profile on Windows."),
+                Prop("terminal.integrated.defaultProfile.linux", SettingsPropertyType.String, "Default Profile (Linux)", "", "The default terminal profile on Linux."),
             }
         });
 

@@ -7,6 +7,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.VisualTree;
+using VisualGameStudio.ProjectSystem.Services;
 using VisualGameStudio.Shell.Services;
 using VisualGameStudio.Shell.ViewModels.Panels;
 

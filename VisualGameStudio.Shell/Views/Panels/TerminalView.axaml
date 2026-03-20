@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:svc="using:VisualGameStudio.ProjectSystem.Services"
              mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="300"
              x:Class="VisualGameStudio.Shell.Views.Panels.TerminalView"
              x:DataType="vm:TerminalViewModel">
@@ -144,7 +145,7 @@
                       <!-- Profile list -->
                       <ItemsControl ItemsSource="{Binding AvailableProfiles}">
                         <ItemsControl.ItemTemplate>
-                          <DataTemplate x:DataType="vm:ShellProfile">
+                          <DataTemplate x:DataType="svc:ShellProfile">
                             <Button Classes="toolbarButton"
                                     Click="OnProfileItemClick"
                                     HorizontalAlignment="Stretch"

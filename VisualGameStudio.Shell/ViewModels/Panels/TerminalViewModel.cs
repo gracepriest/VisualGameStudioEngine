@@ -4,6 +4,7 @@ using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.ViewModels;
+using VisualGameStudio.ProjectSystem.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
@@ -14,207 +15,6 @@ public enum SplitPaneFocus
 {
     Left,
     Right
-}
-
-/// <summary>
-/// Represents a detected shell that can be used in the terminal.
-/// </summary>
-public class ShellProfile
-{
-    /// <summary>
-    /// Display name shown in the dropdown (e.g., "PowerShell 7", "Git Bash").
-    /// </summary>
-    public string Name { get; init; } = "";
-
-    /// <summary>
-    /// Full path to the shell executable.
-    /// </summary>
-    public string Path { get; init; } = "";
-
-    /// <summary>
-    /// Optional arguments to pass when launching the shell.
-    /// </summary>
-    public string Arguments { get; init; } = "";
-
-    /// <summary>
-    /// Short icon/glyph hint for the UI.
-    /// </summary>
-    public string Icon { get; init; } = "\u25BA"; // default right-pointing triangle
-
-    public override string ToString() => Name;
-}
-
-/// <summary>
-/// Detects available shells on the current system.
-/// </summary>
-public static class ShellProfileDetector
-{
-    /// <summary>
-    /// Returns all shells available on this machine, ordered by preference.
-    /// </summary>
-    public static List<ShellProfile> DetectProfiles()
-    {
-        var profiles = new List<ShellProfile>();
-
-        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
-        {
-            DetectWindowsShells(profiles);
-        }
-        else
-        {
-            DetectUnixShells(profiles);
-        }
-
-        return profiles;
-    }
-
-    private static void DetectWindowsShells(List<ShellProfile> profiles)
-    {
-        // PowerShell 7+ (pwsh.exe)
-        var pwsh7Paths = new[]
-        {
-            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe"),
-            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7-preview", "pwsh.exe"),
-        };
-
-        foreach (var p in pwsh7Paths)
-        {
-            if (File.Exists(p))
-            {
-                profiles.Add(new ShellProfile
-                {
-                    Name = "PowerShell 7",
-                    Path = p,
-                    Icon = "PS7"
-                });
-                break;
-            }
-        }
-
-        // Also check if pwsh is on PATH
-        if (!profiles.Any(p => p.Name == "PowerShell 7"))
-        {
-            var pwshOnPath = FindOnPath("pwsh.exe");
-            if (pwshOnPath != null)
-            {
-                profiles.Add(new ShellProfile
-                {
-                    Name = "PowerShell 7",
-                    Path = pwshOnPath,
-                    Icon = "PS7"
-                });
-            }
-        }
-
-        // Windows PowerShell (always available on Windows)
-        var winPowerShell = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "WindowsPowerShell", "v1.0", "powershell.exe");
-        if (File.Exists(winPowerShell))
-        {
-            profiles.Add(new ShellProfile
-            {
-                Name = "Windows PowerShell",
-                Path = winPowerShell,
-                Icon = "PS"
-            });
-        }
-        else
-        {
-            // Fallback - powershell.exe should be on PATH
-            profiles.Add(new ShellProfile
-            {
-                Name = "Windows PowerShell",
-                Path = "powershell.exe",
-                Icon = "PS"
-            });
-        }
-
-        // Command Prompt (always available)
-        var cmdPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
-        profiles.Add(new ShellProfile
-        {
-            Name = "Command Prompt",
-            Path = File.Exists(cmdPath) ? cmdPath : "cmd.exe",
-            Icon = "CMD"
-        });
-
-        // Git Bash
-        var gitBashPaths = new[]
-        {
-            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe"),
-            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Git", "bin", "bash.exe"),
-            @"C:\Git\bin\bash.exe",
-        };
-
-        foreach (var p in gitBashPaths)
-        {
-            if (File.Exists(p))
-            {
-                profiles.Add(new ShellProfile
-                {
-                    Name = "Git Bash",
-                    Path = p,
-                    Arguments = "--login -i",
-                    Icon = "GIT"
-                });
-                break;
-            }
-        }
-
-        // WSL (Windows Subsystem for Linux)
-        var wslPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "wsl.exe");
-        if (File.Exists(wslPath))
-        {
-            profiles.Add(new ShellProfile
-            {
-                Name = "WSL",
-                Path = wslPath,
-                Icon = "WSL"
-            });
-        }
-    }
-
-    private static void DetectUnixShells(List<ShellProfile> profiles)
-    {
-        var shells = new (string name, string path)[]
-        {
-            ("Bash", "/bin/bash"),
-            ("Zsh", "/bin/zsh"),
-            ("Fish", "/usr/bin/fish"),
-            ("sh", "/bin/sh"),
-        };
-
-        foreach (var (name, path) in shells)
-        {
-            if (File.Exists(path))
-            {
-                profiles.Add(new ShellProfile { Name = name, Path = path });
-            }
-        }
-    }
-
-    private static string? FindOnPath(string executable)
-    {
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(pathEnv)) return null;
-
-        var separator = Environment.OSVersion.Platform == PlatformID.Win32NT ? ';' : ':';
-        foreach (var dir in pathEnv.Split(separator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            try
-            {
-                var full = System.IO.Path.Combine(dir, executable);
-                if (File.Exists(full))
-                    return full;
-            }
-            catch
-            {
-                // skip invalid paths
-            }
-        }
-        return null;
-    }
 }
 
 /// <summary>
@@ -724,6 +524,8 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
 
     /// <summary>
     /// Loads the user's default shell preference from settings.
+    /// Checks platform-specific key (terminal.integrated.defaultProfile.windows),
+    /// generic key (Terminal.DefaultShell), and legacy key (Terminal.Shell).
     /// Falls back to the first available profile.
     /// </summary>
     private void LoadDefaultShellPreference()
@@ -736,13 +538,34 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
             {
                 var json = File.ReadAllText(SettingsFilePath);
                 var doc = System.Text.Json.JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("Terminal.DefaultShell", out var prop))
+
+                // Try platform-specific key first (VS Code compatible)
+                var platformKey = Environment.OSVersion.Platform == PlatformID.Win32NT
+                    ? "terminal.integrated.defaultProfile.windows"
+                    : "terminal.integrated.defaultProfile.linux";
+
+                if (doc.RootElement.TryGetProperty(platformKey, out var platformProp))
                 {
-                    savedShell = prop.GetString();
+                    savedShell = platformProp.GetString();
                 }
-                else if (doc.RootElement.TryGetProperty("Terminal.Shell", out var prop2))
+
+                // Fall back to generic keys
+                if (string.IsNullOrEmpty(savedShell) &&
+                    doc.RootElement.TryGetProperty("terminal.integrated.defaultProfile", out var genericProp))
                 {
-                    savedShell = prop2.GetString();
+                    savedShell = genericProp.GetString();
+                }
+
+                if (string.IsNullOrEmpty(savedShell) &&
+                    doc.RootElement.TryGetProperty("Terminal.DefaultShell", out var legacyProp))
+                {
+                    savedShell = legacyProp.GetString();
+                }
+
+                if (string.IsNullOrEmpty(savedShell) &&
+                    doc.RootElement.TryGetProperty("Terminal.Shell", out var oldProp))
+                {
+                    savedShell = oldProp.GetString();
                 }
             }
         }
@@ -789,6 +612,12 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
 
             settings ??= new Dictionary<string, object>();
             settings["Terminal.DefaultShell"] = SelectedProfile.Name;
+
+            // Also write VS Code-compatible platform-specific key
+            var platformKey = Environment.OSVersion.Platform == PlatformID.Win32NT
+                ? "terminal.integrated.defaultProfile.windows"
+                : "terminal.integrated.defaultProfile.linux";
+            settings[platformKey] = SelectedProfile.Name;
 
             var json = System.Text.Json.JsonSerializer.Serialize(settings, new System.Text.Json.JsonSerializerOptions
             {
