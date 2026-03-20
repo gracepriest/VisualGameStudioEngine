@@ -55,6 +55,36 @@ public class BreakpointMargin : AbstractMargin
 
     public event EventHandler<int>? BreakpointToggled;
 
+    /// <summary>
+    /// Raised when the user right-clicks the margin to add a conditional breakpoint.
+    /// The int parameter is the line number.
+    /// </summary>
+    public event EventHandler<int>? ConditionalBreakpointRequested;
+
+    /// <summary>
+    /// Raised when the user right-clicks the margin to add a logpoint.
+    /// The int parameter is the line number.
+    /// </summary>
+    public event EventHandler<int>? LogpointRequested;
+
+    /// <summary>
+    /// Raised when the user right-clicks an existing breakpoint to edit it.
+    /// The int parameter is the line number.
+    /// </summary>
+    public event EventHandler<int>? EditBreakpointRequested;
+
+    /// <summary>
+    /// Raised when the user right-clicks an existing breakpoint to remove it.
+    /// The int parameter is the line number.
+    /// </summary>
+    public event EventHandler<int>? RemoveBreakpointRequested;
+
+    /// <summary>
+    /// Raised when the user right-clicks to toggle enable/disable on a breakpoint.
+    /// The int parameter is the line number.
+    /// </summary>
+    public event EventHandler<int>? ToggleEnableBreakpointRequested;
+
     public BreakpointMargin(TextEditor editor, HashSet<int>? initialBreakpoints = null)
     {
         _editor = editor;
@@ -115,18 +145,61 @@ public class BreakpointMargin : AbstractMargin
         base.OnPointerPressed(e);
 
         var point = e.GetCurrentPoint(this);
+        var textView = _editor.TextArea.TextView;
+        var visualLine = textView.GetVisualLineFromVisualTop(point.Position.Y + textView.ScrollOffset.Y);
+
+        if (visualLine == null) return;
+
+        var lineNumber = visualLine.FirstDocumentLine.LineNumber;
+
         if (point.Properties.IsLeftButtonPressed)
         {
-            var textView = _editor.TextArea.TextView;
-            var visualLine = textView.GetVisualLineFromVisualTop(point.Position.Y + textView.ScrollOffset.Y);
-
-            if (visualLine != null)
-            {
-                var lineNumber = visualLine.FirstDocumentLine.LineNumber;
-                BreakpointToggled?.Invoke(this, lineNumber);
-                e.Handled = true;
-            }
+            BreakpointToggled?.Invoke(this, lineNumber);
+            e.Handled = true;
         }
+        else if (point.Properties.IsRightButtonPressed)
+        {
+            ShowBreakpointContextMenu(lineNumber, e);
+            e.Handled = true;
+        }
+    }
+
+    private void ShowBreakpointContextMenu(int lineNumber, PointerPressedEventArgs e)
+    {
+        var hasBreakpoint = _breakpoints.ContainsKey(lineNumber);
+        var menu = new ContextMenu();
+
+        if (hasBreakpoint)
+        {
+            var info = _breakpoints[lineNumber];
+
+            var editItem = new MenuItem { Header = "Edit Breakpoint..." };
+            editItem.Click += (s, _) => EditBreakpointRequested?.Invoke(this, lineNumber);
+            menu.Items.Add(editItem);
+
+            menu.Items.Add(new Separator());
+
+            var toggleLabel = info.IsEnabled ? "Disable Breakpoint" : "Enable Breakpoint";
+            var toggleItem = new MenuItem { Header = toggleLabel };
+            toggleItem.Click += (s, _) => ToggleEnableBreakpointRequested?.Invoke(this, lineNumber);
+            menu.Items.Add(toggleItem);
+
+            var removeItem = new MenuItem { Header = "Remove Breakpoint" };
+            removeItem.Click += (s, _) => RemoveBreakpointRequested?.Invoke(this, lineNumber);
+            menu.Items.Add(removeItem);
+
+            menu.Items.Add(new Separator());
+        }
+
+        var addCondItem = new MenuItem { Header = "Add Conditional Breakpoint..." };
+        addCondItem.Click += (s, _) => ConditionalBreakpointRequested?.Invoke(this, lineNumber);
+        menu.Items.Add(addCondItem);
+
+        var addLogItem = new MenuItem { Header = "Add Logpoint..." };
+        addLogItem.Click += (s, _) => LogpointRequested?.Invoke(this, lineNumber);
+        menu.Items.Add(addLogItem);
+
+        menu.Open(this);
     }
 
     public override void Render(DrawingContext context)

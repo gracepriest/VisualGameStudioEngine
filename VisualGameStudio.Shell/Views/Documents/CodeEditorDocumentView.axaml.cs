@@ -567,6 +567,18 @@ public partial class CodeEditorDocumentView : UserControl
             // Notify the ViewModel so breakpoint is registered with debugger
             vm.OnBreakpointToggled(line);
         });
+
+        // Wire gutter context menu events
+        MainEditor.ConditionalBreakpointRequested += (s, line) =>
+            vm.OnConditionalBreakpointRequested(line);
+        MainEditor.LogpointRequested += (s, line) =>
+            vm.OnLogpointRequested(line);
+        MainEditor.EditBreakpointRequested += (s, line) =>
+            vm.OnEditBreakpointRequested(line);
+        MainEditor.RemoveBreakpointRequested += (s, line) =>
+            vm.OnRemoveBreakpointRequested(line);
+        MainEditor.ToggleEnableBreakpointRequested += (s, line) =>
+            vm.OnToggleEnableBreakpointRequested(line);
     }
 
     /// <summary>
@@ -1174,6 +1186,14 @@ public partial class CodeEditorDocumentView : UserControl
         if (DataContext is CodeEditorDocumentViewModel vm)
         {
             vm.RequestFindAllReferences();
+        }
+    }
+
+    private void OnShowCallHierarchy(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is CodeEditorDocumentViewModel vm)
+        {
+            vm.RequestShowCallHierarchy();
         }
     }
 

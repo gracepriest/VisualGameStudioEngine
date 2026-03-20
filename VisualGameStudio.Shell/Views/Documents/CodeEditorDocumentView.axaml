@@ -51,6 +51,7 @@
           <MenuItem Header="Go to Definition" Click="OnGoToDefinition" InputGesture="F12"/>
           <MenuItem Header="Peek Definition" Click="OnPeekDefinition" InputGesture="Alt+F12"/>
           <MenuItem Header="Find All References" Click="OnFindAllReferences" InputGesture="Shift+F12"/>
+          <MenuItem Header="Show Call Hierarchy" Click="OnShowCallHierarchy"/>
           <Separator/>
           <MenuItem Header="Surround With..." Click="OnSurroundWith"/>
           <Separator/>

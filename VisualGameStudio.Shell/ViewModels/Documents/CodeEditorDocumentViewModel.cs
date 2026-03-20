@@ -75,6 +75,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler? ReplaceRequested;
     public event EventHandler? GoToDefinitionRequested;
     public event EventHandler? FindAllReferencesRequested;
+    public event EventHandler? ShowCallHierarchyRequested;
     public event EventHandler? ToggleCommentRequested;
     public event EventHandler<bool>? ToggleWhitespaceRequested;
     public event EventHandler<bool>? ToggleColumnSelectionRequested;
@@ -118,6 +119,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler? SurroundWithRequested;
     public event EventHandler? PeekDefinitionRequested;
     public event EventHandler<int>? BreakpointToggled;
+    public event EventHandler<int>? ConditionalBreakpointRequested;
+    public event EventHandler<int>? LogpointRequested;
+    public event EventHandler<int>? EditBreakpointRequested;
+    public event EventHandler<int>? RemoveBreakpointRequested;
+    public event EventHandler<int>? ToggleEnableBreakpointRequested;
     public event EventHandler? FormatDocumentRequested;
     public event EventHandler<OnTypeFormattingRequestEventArgs>? OnTypeFormattingRequested;
     public event EventHandler? CodeActionsRequested;
@@ -230,6 +236,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void RequestFindAllReferences()
     {
         FindAllReferencesRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestShowCallHierarchy()
+    {
+        ShowCallHierarchyRequested?.Invoke(this, EventArgs.Empty);
     }
 
     public void RequestToggleComment()
@@ -531,6 +542,12 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     {
         BreakpointToggled?.Invoke(this, line);
     }
+
+    public void OnConditionalBreakpointRequested(int line) => ConditionalBreakpointRequested?.Invoke(this, line);
+    public void OnLogpointRequested(int line) => LogpointRequested?.Invoke(this, line);
+    public void OnEditBreakpointRequested(int line) => EditBreakpointRequested?.Invoke(this, line);
+    public void OnRemoveBreakpointRequested(int line) => RemoveBreakpointRequested?.Invoke(this, line);
+    public void OnToggleEnableBreakpointRequested(int line) => ToggleEnableBreakpointRequested?.Invoke(this, line);
 
     public void RequestAddToWatch(string expression)
     {

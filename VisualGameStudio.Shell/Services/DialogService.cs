@@ -240,12 +240,12 @@ public class DialogService : IDialogService
         return result;
     }
 
-    public async Task<BreakpointConditionResult?> ShowBreakpointConditionDialogAsync(string location, string? condition, string? hitCount, string? logMessage)
+    public async Task<BreakpointConditionResult?> ShowBreakpointConditionDialogAsync(string location, string? condition, string? hitCount, string? logMessage, string? initialMode = null)
     {
         var window = GetMainWindow();
         if (window == null) return null;
 
-        var viewModel = new ViewModels.Dialogs.BreakpointConditionDialogViewModel(location, condition, hitCount, logMessage);
+        var viewModel = new ViewModels.Dialogs.BreakpointConditionDialogViewModel(location, condition, hitCount, logMessage, initialMode);
         var dialog = new Views.Dialogs.BreakpointConditionDialog(viewModel);
 
         var result = await dialog.ShowDialog<ViewModels.Dialogs.BreakpointConditionDialogViewModel?>(window);

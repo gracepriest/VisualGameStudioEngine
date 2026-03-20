@@ -9,7 +9,7 @@ public interface IDialogService
     Task<DialogResult> ShowMessageAsync(string title, string message, DialogButtons buttons = DialogButtons.Ok, DialogIcon icon = DialogIcon.Information);
     Task<string?> ShowInputDialogAsync(string title, string prompt, string defaultValue = "");
     Task<string?> ShowFunctionBreakpointDialogAsync();
-    Task<BreakpointConditionResult?> ShowBreakpointConditionDialogAsync(string location, string? condition, string? hitCount, string? logMessage);
+    Task<BreakpointConditionResult?> ShowBreakpointConditionDialogAsync(string location, string? condition, string? hitCount, string? logMessage, string? initialMode = null);
     Task<List<ExceptionSettingResult>?> ShowExceptionSettingsDialogAsync(IEnumerable<ExceptionSettingResult>? currentSettings = null);
     Task<int?> ShowGoToLineDialogAsync(int currentLine, int totalLines);
     /// <summary>

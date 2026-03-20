@@ -65,7 +65,7 @@ public partial class BreakpointConditionDialogViewModel : ViewModelBase
     {
     }
 
-    public BreakpointConditionDialogViewModel(string location, string? condition, string? hitCount, string? logMessage)
+    public BreakpointConditionDialogViewModel(string location, string? condition, string? hitCount, string? logMessage, string? initialMode = null)
     {
         Location = location;
         Condition = condition ?? "";
@@ -73,7 +73,26 @@ public partial class BreakpointConditionDialogViewModel : ViewModelBase
         LogMessage = logMessage ?? "";
 
         // Determine which tab to show initially
-        if (!string.IsNullOrEmpty(logMessage))
+        // initialMode can override: "conditional", "hitcount", "logpoint"
+        if (initialMode == "logpoint")
+        {
+            IsLogMessage = true;
+            IsConditionalExpression = false;
+            IsHitCount = false;
+        }
+        else if (initialMode == "hitcount")
+        {
+            IsHitCount = true;
+            IsConditionalExpression = false;
+            IsLogMessage = false;
+        }
+        else if (initialMode == "conditional")
+        {
+            IsConditionalExpression = true;
+            IsHitCount = false;
+            IsLogMessage = false;
+        }
+        else if (!string.IsNullOrEmpty(logMessage))
         {
             IsLogMessage = true;
             IsConditionalExpression = false;

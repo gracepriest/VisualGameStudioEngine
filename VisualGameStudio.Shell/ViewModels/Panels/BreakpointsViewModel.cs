@@ -886,7 +886,20 @@ public partial class BreakpointItem : ObservableObject
     [ObservableProperty]
     private string? _message;
 
-    public string DisplayText => $"{FileName}:{Line}" + (Condition != null ? $" (when: {Condition})" : "");
+    public string DisplayText
+    {
+        get
+        {
+            var text = $"{FileName}:{Line}";
+            if (!string.IsNullOrEmpty(LogMessage))
+                text += $" (log: {LogMessage})";
+            else if (!string.IsNullOrEmpty(HitCondition))
+                text += $" (hit: {HitCondition})";
+            else if (!string.IsNullOrEmpty(Condition))
+                text += $" (when: {Condition})";
+            return text;
+        }
+    }
 }
 
 public partial class FunctionBreakpointItem : ObservableObject
