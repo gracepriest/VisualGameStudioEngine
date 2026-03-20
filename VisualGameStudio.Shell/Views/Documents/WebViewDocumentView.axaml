@@ -1,0 +1,99 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+             x:Class="VisualGameStudio.Shell.Views.Documents.WebViewDocumentView"
+             Background="#1E1E1E">
+
+  <Grid RowDefinitions="Auto,*">
+
+    <!-- Header bar with extension info -->
+    <Border Grid.Row="0"
+            Background="#252526"
+            Padding="12,8"
+            BorderBrush="#333333"
+            BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+          <Border Background="#0E639C" CornerRadius="3" Padding="6,2">
+            <TextBlock Text="WebView"
+                       FontSize="11"
+                       Foreground="White"
+                       VerticalAlignment="Center"/>
+          </Border>
+          <TextBlock Text="{Binding Title}"
+                     FontSize="13"
+                     Foreground="#CCCCCC"
+                     VerticalAlignment="Center"/>
+          <TextBlock Text="{Binding ViewType, StringFormat='({0})'}"
+                     FontSize="11"
+                     Foreground="#808080"
+                     VerticalAlignment="Center"/>
+        </StackPanel>
+        <TextBlock Grid.Column="1"
+                   Text="{Binding ExtensionId}"
+                   FontSize="11"
+                   Foreground="#606060"
+                   VerticalAlignment="Center"/>
+      </Grid>
+    </Border>
+
+    <!-- Content area -->
+    <Grid Grid.Row="1">
+
+      <!-- Empty state when no HTML content -->
+      <StackPanel HorizontalAlignment="Center"
+                  VerticalAlignment="Center"
+                  Spacing="8"
+                  IsVisible="{Binding HtmlContent, Converter={x:Static StringConverters.IsNullOrEmpty}}">
+        <TextBlock Text="Waiting for content..."
+                   FontSize="16"
+                   Foreground="#808080"
+                   HorizontalAlignment="Center"/>
+        <TextBlock Text="The extension has not provided HTML content yet."
+                   FontSize="12"
+                   Foreground="#606060"
+                   HorizontalAlignment="Center"/>
+      </StackPanel>
+
+      <!-- HTML source viewer -->
+      <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto"
+                    IsVisible="{Binding HtmlContent, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <Border Margin="8">
+          <StackPanel Spacing="8">
+            <!-- Info banner -->
+            <Border Background="#2A2D2E" CornerRadius="4" Padding="10,8">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="i"
+                           FontSize="14"
+                           FontWeight="Bold"
+                           Foreground="#569CD6"
+                           VerticalAlignment="Center"/>
+                <TextBlock Text="HTML source view - full rendering requires a browser component (e.g., CefNet or WebView2)."
+                           FontSize="12"
+                           Foreground="#808080"
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"/>
+              </StackPanel>
+            </Border>
+
+            <!-- HTML source display -->
+            <Border Background="#1E1E1E"
+                    BorderBrush="#333333"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="12">
+              <SelectableTextBlock Text="{Binding HtmlContent}"
+                                   FontFamily="Cascadia Code,Consolas,Courier New,monospace"
+                                   FontSize="13"
+                                   Foreground="#D4D4D4"
+                                   TextWrapping="Wrap"/>
+            </Border>
+          </StackPanel>
+        </Border>
+      </ScrollViewer>
+    </Grid>
+  </Grid>
+</UserControl>

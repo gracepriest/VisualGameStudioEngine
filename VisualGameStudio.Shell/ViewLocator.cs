@@ -35,7 +35,10 @@ public class ViewLocator : IDataTemplate
             ProblemsTool tool => new ProblemsView { DataContext = tool.ViewModel },
             DebugConsoleTool tool => new DebugConsoleView { DataContext = tool.ViewModel },
             ThreadsTool tool => new ThreadsView { DataContext = tool.ViewModel },
+            TimelineTool tool => new TimelineView { DataContext = tool.ViewModel },
+            CallHierarchyTool tool => new CallHierarchyView { DataContext = tool.ViewModel },
             CodeEditorDocument doc => new CodeEditorDocumentView { DataContext = doc.ViewModel },
+            WebViewDocument doc => new WebViewDocumentView { DataContext = doc.ViewModel },
             WelcomeDocument => new WelcomeDocumentView(),
             _ => CreateDefault(data)
         };
@@ -77,7 +80,10 @@ public class ViewLocator : IDataTemplate
             or ProblemsTool
             or DebugConsoleTool
             or ThreadsTool
+            or TimelineTool
+            or CallHierarchyTool
             or CodeEditorDocument
+            or WebViewDocument
             or WelcomeDocument;
     }
 }
