@@ -5,7 +5,7 @@
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Documents"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
              x:Class="VisualGameStudio.Shell.Views.Documents.WelcomeDocumentView"
-             x:DataType="vm:WelcomeDocumentViewModel"
+             
              Background="#1E1E1E">
 
   <ScrollViewer HorizontalScrollBarVisibility="Disabled"
@@ -61,7 +61,7 @@
               <!-- Recent Projects List -->
               <ItemsControl ItemsSource="{Binding RecentProjects}">
                 <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:RecentProjectItem">
+                  <DataTemplate >
                     <Border Background="#252526"
                             CornerRadius="4"
                             Margin="0,0,0,4"
@@ -193,7 +193,7 @@
 
               <ItemsControl ItemsSource="{Binding WalkthroughItems}">
                 <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:WalkthroughItem">
+                  <DataTemplate >
                     <Border Background="#252526" CornerRadius="4"
                             Margin="0,0,0,4" Padding="12,10">
                       <Grid ColumnDefinitions="Auto,*">
@@ -368,7 +368,7 @@
 
               <ItemsControl ItemsSource="{Binding LearnLinks}">
                 <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:LearnLink">
+                  <DataTemplate >
                     <Button Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).OpenLearnLinkCommand}"
                             CommandParameter="{Binding}"
                             Background="Transparent"
