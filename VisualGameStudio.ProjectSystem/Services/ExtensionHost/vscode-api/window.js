@@ -575,6 +575,15 @@ function createWindowApi(rpc, extensionId) {
             const reg = _webviewViewProviders.get(viewId);
             return reg ? reg.provider : undefined;
         },
+
+        // Tab groups API — minimal stub for extensions that check open tabs
+        tabGroups: {
+            all: [],
+            activeTabGroup: { tabs: [], isActive: true, viewColumn: 1 },
+            onDidChangeTabGroups: _onDidChangeActiveTextEditor.event,
+            onDidChangeTabs: _onDidChangeActiveTextEditor.event,
+            close: () => Promise.resolve(true),
+        },
     };
 }
 

@@ -141,6 +141,23 @@ function createEnvApi(rpc) {
 
         /** Enum for log level. */
         LogLevel,
+
+        /**
+         * Creates a telemetry logger — stub that discards all telemetry.
+         */
+        createTelemetryLogger(sender, options) {
+            const noop = () => {};
+            const _onDidChangeEnableStates = new EventEmitter();
+            return {
+                logUsage: noop,
+                logError: noop,
+                logEvent: noop,
+                isUsageEnabled: false,
+                isErrorsEnabled: false,
+                onDidChangeEnableStates: _onDidChangeEnableStates.event,
+                dispose: noop,
+            };
+        },
     };
 }
 

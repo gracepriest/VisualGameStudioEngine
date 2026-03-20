@@ -239,6 +239,7 @@ function createVscodeApi(extensionId, extensionPath, rpc, documentManager, provi
     const extensions = {
         getExtension: null,   // Will be wired by main.js after all facades are created
         all: [],              // Will be replaced with a Proxy by main.js
+        allAcrossExtensionHosts: [],  // VS Code internal API used by some extensions
         onDidChange: extensionsChangeEmitter.event,
         _fireDidChange() { extensionsChangeEmitter.fire(undefined); },
     };
@@ -267,6 +268,39 @@ function createVscodeApi(extensionId, extensionPath, rpc, documentManager, provi
 
         // ExtensionMode is always present
         ExtensionMode,
+
+        // Version — vscode-languageclient validates this
+        version: '1.95.0',
+
+        // Localization API (vscode.l10n)
+        l10n: {
+            t(messageOrOptions, ...args) {
+                // Simple passthrough — returns the message as-is (no translation)
+                let message = typeof messageOrOptions === 'string'
+                    ? messageOrOptions
+                    : messageOrOptions.message;
+                // Simple {0}, {1} substitution
+                if (args.length > 0) {
+                    for (let i = 0; i < args.length; i++) {
+                        message = message.replace(`{${i}}`, String(args[i]));
+                    }
+                } else if (typeof messageOrOptions === 'object' && messageOrOptions.args) {
+                    const a = messageOrOptions.args;
+                    if (Array.isArray(a)) {
+                        for (let i = 0; i < a.length; i++) {
+                            message = message.replace(`{${i}}`, String(a[i]));
+                        }
+                    } else {
+                        for (const [key, val] of Object.entries(a)) {
+                            message = message.replace(`{${key}}`, String(val));
+                        }
+                    }
+                }
+                return message;
+            },
+            bundle: undefined,
+            uri: undefined,
+        },
     };
 
     return vscode;

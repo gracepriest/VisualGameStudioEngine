@@ -197,6 +197,17 @@ function createWorkspaceApi(rpc, documentManager) {
             return documentManager.allDocuments;
         },
 
+        /** Notebook documents — empty array, no notebook support yet. */
+        get notebookDocuments() {
+            return [];
+        },
+
+        /** Notebook events — stubs */
+        onDidOpenNotebookDocument: _onDidChangeConfiguration.event,
+        onDidCloseNotebookDocument: _onDidChangeConfiguration.event,
+        onDidChangeNotebookDocument: _onDidChangeConfiguration.event,
+        onDidSaveNotebookDocument: _onDidChangeConfiguration.event,
+
         /**
          * Open a text document.
          * @param {string|object} uriOrOptions - URI string, Uri object, or {content, language}.
