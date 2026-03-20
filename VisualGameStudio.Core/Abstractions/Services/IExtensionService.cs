@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace VisualGameStudio.Core.Abstractions.Services;
 
 /// <summary>
@@ -109,6 +111,66 @@ public interface IExtensionService : IDisposable
     /// <param name="commandId">The command identifier.</param>
     /// <param name="args">Optional command arguments.</param>
     Task<object?> ExecuteExtensionCommandAsync(string commandId, object?[]? args = null);
+
+    /// <summary>
+    /// Requests completion items from extension providers for the given document position.
+    /// </summary>
+    Task<JsonElement?> RequestCompletionAsync(string uri, int line, int character, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Requests hover information from extension providers for the given document position.
+    /// </summary>
+    Task<JsonElement?> RequestHoverAsync(string uri, int line, int character, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Requests go-to-definition from extension providers for the given document position.
+    /// </summary>
+    Task<JsonElement?> RequestDefinitionAsync(string uri, int line, int character, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Requests find-references from extension providers for the given document position.
+    /// </summary>
+    Task<JsonElement?> RequestReferencesAsync(string uri, int line, int character, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Requests document formatting from extension providers.
+    /// </summary>
+    Task<JsonElement?> RequestFormattingAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Requests document symbols from extension providers.
+    /// </summary>
+    Task<JsonElement?> RequestDocumentSymbolsAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks whether any extension has registered providers for the given language.
+    /// </summary>
+    bool HasExtensionProviders(string languageId);
+
+    /// <summary>
+    /// Notifies extension providers that a document was opened.
+    /// </summary>
+    Task NotifyDocumentOpenedAsync(string uri, string languageId, int version, string text, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Notifies extension providers that a document was changed.
+    /// </summary>
+    Task NotifyDocumentChangedAsync(string uri, int version, string text, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Notifies extension providers that a document was closed.
+    /// </summary>
+    Task NotifyDocumentClosedAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Notifies extension providers that a document was saved.
+    /// </summary>
+    Task NotifyDocumentSavedAsync(string uri, string? text = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Raised when an extension publishes diagnostics for a document.
+    /// </summary>
+    event EventHandler<ExtensionDiagnosticsEventArgs>? ExtensionDiagnosticsReceived;
 
     /// <summary>
     /// Triggers activation for extensions matching a specific event.
@@ -754,6 +816,16 @@ public class ExtensionContributionsLoadedEventArgs : EventArgs
     {
         Extension = extension;
     }
+}
+
+/// <summary>
+/// Event args for extension diagnostics published for a document.
+/// </summary>
+public class ExtensionDiagnosticsEventArgs : EventArgs
+{
+    public string Uri { get; set; } = "";
+    public JsonElement Diagnostics { get; set; }
+    public string CollectionName { get; set; } = "";
 }
 
 /// <summary>

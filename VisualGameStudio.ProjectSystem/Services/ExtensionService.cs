@@ -38,6 +38,8 @@ public class ExtensionService : IExtensionService
     private readonly List<ContributedKeybinding> _contributedKeybindings = new();
     // Contributed menu items from package.json (menuId -> list of items)
     private readonly Dictionary<string, List<ContributedMenuItem>> _contributedMenuItems = new();
+    // Track languages that have extension providers registered
+    private readonly HashSet<string> _extensionProviderLanguages = new();
 
     private readonly string _extensionsDir;
     private readonly string _stateFile;
@@ -95,6 +97,7 @@ public class ExtensionService : IExtensionService
     public event EventHandler<bool>? ExtensionHostStateChanged;
     public event EventHandler<ExtensionMessageEventArgs>? ExtensionMessageReceived;
     public event EventHandler<ExtensionContributionsLoadedEventArgs>? ContributionsLoaded;
+    public event EventHandler<ExtensionDiagnosticsEventArgs>? ExtensionDiagnosticsReceived;
 
     #region Discovery
 
@@ -163,7 +166,7 @@ public class ExtensionService : IExtensionService
         var scriptPath = FindExtensionHostScript();
         if (scriptPath == null)
         {
-            _outputService.WriteError("[Extensions] ExtensionHostMain.js not found.", OutputCategory.General);
+            _outputService.WriteError("[Extensions] Extension host script (ExtensionHost/main.js) not found.", OutputCategory.General);
             return;
         }
 
@@ -172,6 +175,41 @@ public class ExtensionService : IExtensionService
         _extensionHost.MessageReceived += (s, args) => ExtensionMessageReceived?.Invoke(this, args);
         _extensionHost.CommandRegistered += OnCommandRegistered;
         _extensionHost.HostCrashed += OnHostCrashed;
+        _extensionHost.DiagnosticsReceived += (s, e) => ExtensionDiagnosticsReceived?.Invoke(this, e);
+        _extensionHost.ProviderRegistered += (s, e) =>
+        {
+            // Extract language IDs from selector and add to tracking set
+            if (!string.IsNullOrEmpty(e.SelectorJson))
+            {
+                try
+                {
+                    var doc = JsonDocument.Parse(e.SelectorJson);
+                    if (doc.RootElement.TryGetProperty("language", out var langProp))
+                    {
+                        var lang = langProp.GetString();
+                        if (!string.IsNullOrEmpty(lang))
+                        {
+                            _extensionProviderLanguages.Add(lang);
+                        }
+                    }
+                    else if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in doc.RootElement.EnumerateArray())
+                        {
+                            if (item.TryGetProperty("language", out var itemLang))
+                            {
+                                var lang = itemLang.GetString();
+                                if (!string.IsNullOrEmpty(lang))
+                                {
+                                    _extensionProviderLanguages.Add(lang);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+        };
 
         await _extensionHost.StartAsync(cancellationToken);
 
@@ -555,6 +593,72 @@ public class ExtensionService : IExtensionService
 
         return await _extensionHost.ExecuteCommandAsync(commandId, args);
     }
+
+    #region Extension Provider Methods
+
+    public bool HasExtensionProviders(string languageId) => _extensionProviderLanguages.Contains(languageId);
+
+    public async Task<JsonElement?> RequestCompletionAsync(string uri, int line, int character, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return null;
+        return await _extensionHost.RequestCompletionAsync(uri, line, character, ct);
+    }
+
+    public async Task<JsonElement?> RequestHoverAsync(string uri, int line, int character, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return null;
+        return await _extensionHost.RequestHoverAsync(uri, line, character, ct);
+    }
+
+    public async Task<JsonElement?> RequestDefinitionAsync(string uri, int line, int character, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return null;
+        return await _extensionHost.RequestDefinitionAsync(uri, line, character, ct);
+    }
+
+    public async Task<JsonElement?> RequestReferencesAsync(string uri, int line, int character, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return null;
+        return await _extensionHost.RequestReferencesAsync(uri, line, character, ct);
+    }
+
+    public async Task<JsonElement?> RequestFormattingAsync(string uri, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return null;
+        return await _extensionHost.RequestFormattingAsync(uri, ct);
+    }
+
+    public async Task<JsonElement?> RequestDocumentSymbolsAsync(string uri, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return null;
+        return await _extensionHost.RequestDocumentSymbolsAsync(uri, ct);
+    }
+
+    public async Task NotifyDocumentOpenedAsync(string uri, string languageId, int version, string text, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return;
+        await _extensionHost.NotifyDocumentOpenedAsync(uri, languageId, version, text, ct);
+    }
+
+    public async Task NotifyDocumentChangedAsync(string uri, int version, string text, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return;
+        await _extensionHost.NotifyDocumentChangedAsync(uri, version, text, ct);
+    }
+
+    public async Task NotifyDocumentClosedAsync(string uri, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return;
+        await _extensionHost.NotifyDocumentClosedAsync(uri, ct);
+    }
+
+    public async Task NotifyDocumentSavedAsync(string uri, string? text = null, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return;
+        await _extensionHost.NotifyDocumentSavedAsync(uri, text, ct);
+    }
+
+    #endregion
 
     public async Task TriggerActivationEventAsync(string activationEvent)
     {
@@ -1100,12 +1204,15 @@ public class ExtensionService : IExtensionService
         var baseDir = AppContext.BaseDirectory;
         var candidates = new[]
         {
+            Path.Combine(baseDir, "ExtensionHost", "main.js"),
+            Path.Combine(baseDir, "Services", "ExtensionHost", "main.js"),
+            // Development paths
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "VisualGameStudio.ProjectSystem", "Services", "ExtensionHost", "main.js")),
+            // Relative to extensions dir
+            Path.Combine(Path.GetDirectoryName(_extensionsDir) ?? "", "ExtensionHost", "main.js"),
+            // Legacy paths (fallback)
             Path.Combine(baseDir, "ExtensionHostMain.js"),
             Path.Combine(baseDir, "Services", "ExtensionHostMain.js"),
-            // Development paths
-            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "VisualGameStudio.ProjectSystem", "Services", "ExtensionHostMain.js")),
-            // Relative to extensions dir
-            Path.Combine(Path.GetDirectoryName(_extensionsDir) ?? "", "ExtensionHostMain.js"),
         };
 
         foreach (var candidate in candidates)

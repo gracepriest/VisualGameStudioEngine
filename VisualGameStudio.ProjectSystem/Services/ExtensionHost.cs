@@ -22,6 +22,10 @@ public class ExtensionHost : IDisposable
     private readonly object _lock = new();
     private bool _disposed;
 
+    private int _restartAttempts;
+    private readonly List<(string extensionId, string extensionPath)> _activeExtensions = new();
+    private const int MaxRestartDelayMs = 30000;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -78,6 +82,36 @@ public class ExtensionHost : IDisposable
     /// Raised when an extension registers a hover provider.
     /// </summary>
     public event EventHandler<HoverProviderRegisteredArgs>? HoverProviderRegistered;
+
+    /// <summary>
+    /// Raised when an extension publishes diagnostics.
+    /// </summary>
+    public event EventHandler<ExtensionDiagnosticsEventArgs>? DiagnosticsReceived;
+
+    /// <summary>
+    /// Raised when an extension registers a language provider.
+    /// </summary>
+    public event EventHandler<ProviderRegisteredEventArgs>? ProviderRegistered;
+
+    /// <summary>
+    /// Raised when an extension creates a tree view.
+    /// </summary>
+    public event EventHandler<TreeViewEventArgs>? TreeViewCreated;
+
+    /// <summary>
+    /// Raised when an extension requests a tree view refresh.
+    /// </summary>
+    public event EventHandler<TreeViewEventArgs>? TreeViewRefreshRequested;
+
+    /// <summary>
+    /// Raised when an extension creates a webview panel.
+    /// </summary>
+    public event EventHandler<WebViewEventArgs>? WebViewCreated;
+
+    /// <summary>
+    /// Raised when an extension updates webview HTML content.
+    /// </summary>
+    public event EventHandler<WebViewHtmlEventArgs>? WebViewHtmlChanged;
 
     public ExtensionHost(IOutputService outputService, string extensionHostScriptPath)
     {
@@ -146,15 +180,21 @@ public class ExtensionHost : IDisposable
             _rpc = new JsonRpc(handler);
 
             // Register methods the extension host can call back into the IDE
-            _rpc.AddLocalRpcMethod("host/registerCommand", new Action<string, string>(OnRegisterCommand));
-            _rpc.AddLocalRpcMethod("host/showMessage", new Func<string, string, string, string[]?, Task<string?>>(OnShowMessageAsync));
-            _rpc.AddLocalRpcMethod("host/createOutputChannel", new Action<string, string>(OnCreateOutputChannel));
-            _rpc.AddLocalRpcMethod("host/outputChannelAppend", new Action<string, string>(OnOutputChannelAppend));
-            _rpc.AddLocalRpcMethod("host/outputChannelAppendLine", new Action<string, string>(OnOutputChannelAppendLine));
-            _rpc.AddLocalRpcMethod("host/setStatusBarItem", new Action<string, string, string?, string?>(OnSetStatusBarItem));
-            _rpc.AddLocalRpcMethod("host/registerCompletionProvider", new Action<string, string, string[]?>(OnRegisterCompletionProvider));
-            _rpc.AddLocalRpcMethod("host/registerHoverProvider", new Action<string, string>(OnRegisterHoverProvider));
-            _rpc.AddLocalRpcMethod("host/log", new Action<string, string>(OnLog));
+            _rpc.AddLocalRpcMethod("registerCommand", new Action<string, string>(OnRegisterCommand));
+            _rpc.AddLocalRpcMethod("window/showMessage", new Func<string, string, string, string[]?, Task<string?>>(OnShowMessageAsync));
+            _rpc.AddLocalRpcMethod("outputChannel/create", new Action<string, string>(OnCreateOutputChannel));
+            _rpc.AddLocalRpcMethod("outputChannel/append", new Action<string, string>(OnOutputChannelAppend));
+            _rpc.AddLocalRpcMethod("statusBar/update", new Action<string, string, string?, string?>(OnSetStatusBarItem));
+            _rpc.AddLocalRpcMethod("languages/registerProvider", new Action<string, string, string?, string?>(OnRegisterProvider));
+            _rpc.AddLocalRpcMethod("languages/publishDiagnostics", new Action<string, JsonElement, string?>(OnPublishDiagnostics));
+            _rpc.AddLocalRpcMethod("treeView/create", new Action<string, string, string?>(OnTreeViewCreate));
+            _rpc.AddLocalRpcMethod("treeView/refresh", new Action<string, string?>(OnTreeViewRefresh));
+            _rpc.AddLocalRpcMethod("webview/create", new Action<string, string, string, string?>(OnWebviewCreate));
+            _rpc.AddLocalRpcMethod("webview/setHtml", new Action<string, string>(OnWebviewSetHtml));
+            _rpc.AddLocalRpcMethod("workspace/applyEdit", new Func<JsonElement, Task<bool>>(OnApplyEditAsync));
+            _rpc.AddLocalRpcMethod("extensionActivated", new Action<string>(OnExtensionActivated));
+            _rpc.AddLocalRpcMethod("log", new Action<string, string>(OnLog));
+            _rpc.AddLocalRpcMethod("ready", new Action(OnReady));
 
             _rpc.StartListening();
 
@@ -217,6 +257,12 @@ public class ExtensionHost : IDisposable
                 "activateExtension",
                 new object[] { extensionId, extensionPath, mainEntry ?? "" },
                 cancellationToken);
+
+            if (result)
+            {
+                _activeExtensions.Add((extensionId, extensionPath));
+            }
+
             return result;
         }
         catch (Exception ex)
@@ -239,6 +285,12 @@ public class ExtensionHost : IDisposable
                 "deactivateExtension",
                 new object[] { extensionId },
                 cancellationToken);
+
+            if (result)
+            {
+                _activeExtensions.RemoveAll(x => x.extensionId == extensionId);
+            }
+
             return result;
         }
         catch (Exception ex)
@@ -333,47 +385,124 @@ public class ExtensionHost : IDisposable
         }
     }
 
+    #region Document Sync Methods
+
     /// <summary>
     /// Notifies the extension host that a document was opened.
     /// </summary>
-    public async Task NotifyDocumentOpenedAsync(string uri, string languageId, string text, CancellationToken cancellationToken = default)
+    public async Task NotifyDocumentOpenedAsync(string uri, string languageId, int version, string text, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-
-        try
-        {
-            await _rpc.NotifyAsync("documentOpened", new object[] { uri, languageId, text });
-        }
+        try { await _rpc.NotifyAsync("textDocument/didOpen", new { uri, languageId, version, text }); }
         catch { }
     }
 
     /// <summary>
     /// Notifies the extension host that a document was changed.
     /// </summary>
-    public async Task NotifyDocumentChangedAsync(string uri, string text, int version, CancellationToken cancellationToken = default)
+    public async Task NotifyDocumentChangedAsync(string uri, int version, string text, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-
-        try
-        {
-            await _rpc.NotifyAsync("documentChanged", new object[] { uri, text, version });
-        }
+        try { await _rpc.NotifyAsync("textDocument/didChange", new { uri, version, text }); }
         catch { }
     }
 
     /// <summary>
     /// Notifies the extension host that a document was closed.
     /// </summary>
-    public async Task NotifyDocumentClosedAsync(string uri, CancellationToken cancellationToken = default)
+    public async Task NotifyDocumentClosedAsync(string uri, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-
-        try
-        {
-            await _rpc.NotifyAsync("documentClosed", new object[] { uri });
-        }
+        try { await _rpc.NotifyAsync("textDocument/didClose", new { uri }); }
         catch { }
     }
+
+    /// <summary>
+    /// Notifies the extension host that a document was saved.
+    /// </summary>
+    public async Task NotifyDocumentSavedAsync(string uri, string? text = null, CancellationToken ct = default)
+    {
+        if (!IsRunning || _rpc == null) return;
+        try { await _rpc.NotifyAsync("textDocument/didSave", new { uri, text }); }
+        catch { }
+    }
+
+    /// <summary>
+    /// Notifies the extension host that configuration changed.
+    /// </summary>
+    public async Task NotifyConfigurationChangedAsync(object settings, CancellationToken ct = default)
+    {
+        if (!IsRunning || _rpc == null) return;
+        try { await _rpc.NotifyAsync("workspace/didChangeConfiguration", new { settings }); }
+        catch { }
+    }
+
+    /// <summary>
+    /// Notifies the extension host that the active editor changed.
+    /// </summary>
+    public async Task NotifyActiveEditorChangedAsync(string? uri, string? languageId, CancellationToken ct = default)
+    {
+        if (!IsRunning || _rpc == null) return;
+        try { await _rpc.NotifyAsync("activeEditor/didChange", new { uri, languageId }); }
+        catch { }
+    }
+
+    #endregion
+
+    #region Provider Request Methods
+
+    /// <summary>
+    /// Sends a generic provider request to the extension host.
+    /// </summary>
+    public async Task<JsonElement?> RequestProviderAsync(string method, object parameters, CancellationToken ct = default)
+    {
+        if (!IsRunning || _rpc == null) return null;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(method, new[] { parameters }, cts.Token);
+        }
+        catch { return null; }
+    }
+
+    public Task<JsonElement?> RequestCompletionAsync(string uri, int line, int character, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/completion", new { uri, position = new { line, character } }, ct);
+
+    public Task<JsonElement?> RequestHoverAsync(string uri, int line, int character, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/hover", new { uri, position = new { line, character } }, ct);
+
+    public Task<JsonElement?> RequestDefinitionAsync(string uri, int line, int character, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/definition", new { uri, position = new { line, character } }, ct);
+
+    public Task<JsonElement?> RequestReferencesAsync(string uri, int line, int character, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/references", new { uri, position = new { line, character } }, ct);
+
+    public Task<JsonElement?> RequestFormattingAsync(string uri, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/formatting", new { uri }, ct);
+
+    public Task<JsonElement?> RequestCodeActionsAsync(string uri, int startLine, int startChar, int endLine, int endChar, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/codeAction", new { uri, range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
+
+    public Task<JsonElement?> RequestDocumentSymbolsAsync(string uri, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/documentSymbol", new { uri }, ct);
+
+    public Task<JsonElement?> RequestSignatureHelpAsync(string uri, int line, int character, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/signatureHelp", new { uri, position = new { line, character } }, ct);
+
+    public Task<JsonElement?> RequestRenameAsync(string uri, int line, int character, string newName, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/rename", new { uri, position = new { line, character }, newName }, ct);
+
+    public Task<JsonElement?> RequestFoldingRangesAsync(string uri, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/foldingRange", new { uri }, ct);
+
+    public Task<JsonElement?> RequestInlayHintsAsync(string uri, int startLine, int startChar, int endLine, int endChar, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/inlayHint", new { uri, range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
+
+    public Task<JsonElement?> RequestSemanticTokensAsync(string uri, CancellationToken ct = default)
+        => RequestProviderAsync("textDocument/semanticTokens", new { uri }, ct);
+
+    #endregion
 
     /// <summary>
     /// Notifies the extension host of the current workspace folder.
@@ -454,16 +583,6 @@ public class ExtensionHost : IDisposable
         });
     }
 
-    private void OnOutputChannelAppendLine(string channelName, string text)
-    {
-        OutputChannelMessage?.Invoke(this, new OutputChannelMessageArgs
-        {
-            ChannelName = channelName,
-            Text = text,
-            AppendLine = true
-        });
-    }
-
     private void OnSetStatusBarItem(string extensionId, string text, string? tooltip, string? command)
     {
         StatusBarItemChanged?.Invoke(this, new StatusBarItemArgs
@@ -475,25 +594,78 @@ public class ExtensionHost : IDisposable
         });
     }
 
-    private void OnRegisterCompletionProvider(string extensionId, string languageId, string[]? triggerCharacters)
+    private void OnRegisterProvider(string extensionId, string type, string? selectorJson, string? metadataJson)
     {
-        _outputService.WriteLine($"[ExtensionHost] Completion provider registered for {languageId} (by {extensionId})", OutputCategory.General);
-        CompletionProviderRegistered?.Invoke(this, new CompletionProviderRegisteredArgs
+        _outputService.WriteLine($"[ExtensionHost] Provider registered: {type} (by {extensionId})", OutputCategory.General);
+        ProviderRegistered?.Invoke(this, new ProviderRegisteredEventArgs
         {
             ExtensionId = extensionId,
-            LanguageId = languageId,
-            TriggerCharacters = triggerCharacters?.ToList() ?? new List<string>()
+            Type = type,
+            SelectorJson = selectorJson,
+            MetadataJson = metadataJson
         });
     }
 
-    private void OnRegisterHoverProvider(string extensionId, string languageId)
+    private void OnPublishDiagnostics(string uri, JsonElement diagnostics, string? collectionName)
     {
-        _outputService.WriteLine($"[ExtensionHost] Hover provider registered for {languageId} (by {extensionId})", OutputCategory.General);
-        HoverProviderRegistered?.Invoke(this, new HoverProviderRegisteredArgs
+        DiagnosticsReceived?.Invoke(this, new ExtensionDiagnosticsEventArgs
+        {
+            Uri = uri,
+            Diagnostics = diagnostics,
+            CollectionName = collectionName ?? ""
+        });
+    }
+
+    private void OnTreeViewCreate(string extensionId, string viewId, string? title)
+    {
+        _outputService.WriteLine($"[ExtensionHost] Tree view created: {viewId} (by {extensionId})", OutputCategory.General);
+        TreeViewCreated?.Invoke(this, new TreeViewEventArgs
         {
             ExtensionId = extensionId,
-            LanguageId = languageId
+            ViewId = viewId,
+            Title = title
         });
+    }
+
+    private void OnTreeViewRefresh(string viewId, string? element)
+    {
+        TreeViewRefreshRequested?.Invoke(this, new TreeViewEventArgs
+        {
+            ViewId = viewId,
+            Element = element
+        });
+    }
+
+    private void OnWebviewCreate(string extensionId, string panelId, string viewType, string? title)
+    {
+        _outputService.WriteLine($"[ExtensionHost] Webview created: {panelId} ({viewType}) (by {extensionId})", OutputCategory.General);
+        WebViewCreated?.Invoke(this, new WebViewEventArgs
+        {
+            ExtensionId = extensionId,
+            PanelId = panelId,
+            ViewType = viewType,
+            Title = title
+        });
+    }
+
+    private void OnWebviewSetHtml(string panelId, string html)
+    {
+        WebViewHtmlChanged?.Invoke(this, new WebViewHtmlEventArgs
+        {
+            PanelId = panelId,
+            Html = html
+        });
+    }
+
+    private async Task<bool> OnApplyEditAsync(JsonElement edit)
+    {
+        _outputService.WriteLine("[ExtensionHost] workspace/applyEdit requested.", OutputCategory.General);
+        return true; // TODO: apply workspace edit to IDE
+    }
+
+    private void OnExtensionActivated(string extensionId)
+    {
+        _outputService.WriteLine($"[ExtensionHost] Extension activated: {extensionId}", OutputCategory.General);
     }
 
     private void OnLog(string level, string message)
@@ -501,11 +673,16 @@ public class ExtensionHost : IDisposable
         _outputService.WriteLine($"[ExtensionHost] [{level}] {message}", OutputCategory.General);
     }
 
+    private void OnReady()
+    {
+        _outputService.WriteLine("[ExtensionHost] Host ready.", OutputCategory.General);
+    }
+
     #endregion
 
     #region Private Helpers
 
-    private void OnHostProcessExited(object? sender, EventArgs e)
+    private async void OnHostProcessExited(object? sender, EventArgs e)
     {
         if (!IsRunning) return; // Expected shutdown
 
@@ -515,6 +692,25 @@ public class ExtensionHost : IDisposable
         IsRunning = false;
         StateChanged?.Invoke(this, false);
         HostCrashed?.Invoke(this, EventArgs.Empty);
+
+        // Auto-restart with exponential backoff
+        var delay = Math.Min((int)Math.Pow(2, _restartAttempts) * 2000, MaxRestartDelayMs);
+        _restartAttempts++;
+        _outputService.WriteLine($"[ExtensionHost] Restarting in {delay}ms (attempt {_restartAttempts})...", OutputCategory.General);
+        await Task.Delay(delay);
+        try
+        {
+            await StartAsync();
+            // Re-activate previously active extensions
+            foreach (var (extId, extPath) in _activeExtensions.ToList())
+            {
+                await ActivateExtensionAsync(extId, extPath, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteError($"[ExtensionHost] Restart failed: {ex.Message}", OutputCategory.General);
+        }
     }
 
     private async Task RunHeartbeatAsync(CancellationToken cancellationToken)
@@ -530,6 +726,9 @@ public class ExtensionHost : IDisposable
                     using var hbCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                     using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hbCts.Token);
                     await _rpc.InvokeWithCancellationAsync<bool>("heartbeat", cancellationToken: linked.Token);
+
+                    // Successful heartbeat — reset restart backoff
+                    _restartAttempts = 0;
                 }
             }
             catch (OperationCanceledException)
@@ -704,6 +903,48 @@ public class HoverProviderRegisteredArgs : EventArgs
 {
     public string ExtensionId { get; set; } = "";
     public string LanguageId { get; set; } = "";
+}
+
+/// <summary>
+/// Event args for provider registration.
+/// </summary>
+public class ProviderRegisteredEventArgs : EventArgs
+{
+    public string ExtensionId { get; set; } = "";
+    public string Type { get; set; } = "";
+    public string? SelectorJson { get; set; }
+    public string? MetadataJson { get; set; }
+}
+
+/// <summary>
+/// Event args for tree view operations.
+/// </summary>
+public class TreeViewEventArgs : EventArgs
+{
+    public string ExtensionId { get; set; } = "";
+    public string ViewId { get; set; } = "";
+    public string? Title { get; set; }
+    public string? Element { get; set; }
+}
+
+/// <summary>
+/// Event args for webview creation.
+/// </summary>
+public class WebViewEventArgs : EventArgs
+{
+    public string ExtensionId { get; set; } = "";
+    public string PanelId { get; set; } = "";
+    public string ViewType { get; set; } = "";
+    public string? Title { get; set; }
+}
+
+/// <summary>
+/// Event args for webview HTML content changes.
+/// </summary>
+public class WebViewHtmlEventArgs : EventArgs
+{
+    public string PanelId { get; set; } = "";
+    public string Html { get; set; } = "";
 }
 
 #endregion
