@@ -1280,6 +1280,78 @@ class Task {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Missing types needed by vscode-languageclient
+// ────────────────────────────────────────────────────────────────
+
+class CancellationError extends Error {
+    constructor() {
+        super('Cancelled');
+        this.name = 'CancellationError';
+    }
+}
+
+class CallHierarchyItem {
+    constructor(kind, name, detail, uri, range, selectionRange) {
+        this.kind = kind;
+        this.name = name;
+        this.detail = detail;
+        this.uri = uri;
+        this.range = range;
+        this.selectionRange = selectionRange;
+        this.tags = undefined;
+    }
+}
+
+class TypeHierarchyItem {
+    constructor(kind, name, detail, uri, range, selectionRange) {
+        this.kind = kind;
+        this.name = name;
+        this.detail = detail;
+        this.uri = uri;
+        this.range = range;
+        this.selectionRange = selectionRange;
+        this.tags = undefined;
+    }
+}
+
+class DocumentHighlight {
+    constructor(range, kind) {
+        this.range = range;
+        this.kind = kind || DocumentHighlightKind.Text;
+    }
+}
+
+class LinkedEditingRanges {
+    constructor(ranges, wordPattern) {
+        this.ranges = ranges;
+        this.wordPattern = wordPattern;
+    }
+}
+
+class EvaluatableExpression {
+    constructor(range, expression) {
+        this.range = range;
+        this.expression = expression;
+    }
+}
+
+class InlineValueText {
+    constructor(range, text) { this.range = range; this.text = text; }
+}
+
+class InlineValueVariableLookup {
+    constructor(range, variableName, caseSensitiveLookup) {
+        this.range = range;
+        this.variableName = variableName;
+        this.caseSensitiveLookup = caseSensitiveLookup !== false;
+    }
+}
+
+class InlineValueEvaluatableExpression {
+    constructor(range, expression) { this.range = range; this.expression = expression; }
+}
+
+// ────────────────────────────────────────────────────────────────
 // Exports
 // ────────────────────────────────────────────────────────────────
 
@@ -1366,4 +1438,15 @@ module.exports = {
     ProcessExecution,
     TaskGroup,
     Task,
+
+    // Types needed by vscode-languageclient
+    CancellationError,
+    CallHierarchyItem,
+    TypeHierarchyItem,
+    DocumentHighlight,
+    LinkedEditingRanges,
+    EvaluatableExpression,
+    InlineValueText,
+    InlineValueVariableLookup,
+    InlineValueEvaluatableExpression,
 };
