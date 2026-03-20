@@ -173,13 +173,27 @@
                          Cursor="Hand"
                          DoubleTapped="OnBreakpointDoubleTapped"/>
               <Panel Grid.Column="2" Margin="4,0">
+                <!-- Normal breakpoint: red circle -->
                 <Ellipse Width="8" Height="8"
                          Fill="#E51400"
                          IsVisible="{Binding IsEnabled}"/>
-                <!-- Yellow diamond for conditional breakpoints -->
+                <!-- Conditional breakpoint: orange circle -->
                 <Ellipse Width="8" Height="8"
                          Fill="#FFA500"
                          IsVisible="{Binding Condition, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                <!-- Hit count breakpoint: orange circle -->
+                <Ellipse Width="8" Height="8"
+                         Fill="#FFA500"
+                         IsVisible="{Binding HitCondition, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                <!-- Logpoint: diamond shape (rotated square) -->
+                <Border Width="7" Height="7"
+                        Background="#E51400"
+                        CornerRadius="1"
+                        IsVisible="{Binding LogMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                  <Border.RenderTransform>
+                    <RotateTransform Angle="45"/>
+                  </Border.RenderTransform>
+                </Border>
               </Panel>
               <Button Grid.Column="3"
                       Classes="toolbarButton"
@@ -196,6 +210,86 @@
                       ToolTip.Tip="Remove"
                       Padding="2">
                 <TextBlock Text="×" FontSize="12"/>
+              </Button>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+      <!-- Data Breakpoints Header -->
+      <Border Classes="panelHeader" Margin="0,4,0,0">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Classes="panelTitle" Text="Data Breakpoints"/>
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RemoveAllDataBreakpointsCommand}" ToolTip.Tip="Remove All"
+                  AutomationProperties.Name="Remove All Data Breakpoints">
+            <TextBlock Text="x" FontSize="16"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Data Breakpoints List -->
+      <ListBox ItemsSource="{Binding DataBreakpoints}"
+               SelectedItem="{Binding SelectedDataBreakpoint}"
+               Background="Transparent"
+               Padding="4"
+               MaxHeight="50"
+               AutomationProperties.Name="Data Breakpoints List">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:DataBreakpointItem">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+              <Grid.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Enable"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleDataBreakpointCommand}"
+                            CommandParameter="{Binding}"
+                            IsVisible="{Binding !IsEnabled}"/>
+                  <MenuItem Header="Disable"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleDataBreakpointCommand}"
+                            CommandParameter="{Binding}"
+                            IsVisible="{Binding IsEnabled}"/>
+                  <MenuItem Header="Remove"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.RemoveDataBreakpointCommand}"
+                            CommandParameter="{Binding}"/>
+                </ContextMenu>
+              </Grid.ContextMenu>
+              <CheckBox Grid.Column="0"
+                        IsChecked="{Binding IsEnabled}"
+                        Margin="0,0,8,0"
+                        Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleDataBreakpointCommand}"
+                        CommandParameter="{Binding}"/>
+              <Panel Grid.Column="1" Margin="0,0,6,0" VerticalAlignment="Center">
+                <!-- Eye icon for data breakpoints -->
+                <TextBlock Text="&#x1F441;"
+                           FontSize="12"
+                           IsVisible="{Binding IsEnabled}"
+                           VerticalAlignment="Center"/>
+                <TextBlock Text="&#x1F441;"
+                           FontSize="12"
+                           Opacity="0.3"
+                           IsVisible="{Binding !IsEnabled}"
+                           VerticalAlignment="Center"/>
+              </Panel>
+              <TextBlock Grid.Column="2"
+                         Text="{Binding DisplayText}"
+                         Foreground="#CCCCCC"
+                         FontFamily="Cascadia Code, Consolas, monospace"
+                         FontSize="12"
+                         VerticalAlignment="Center"
+                         IsEnabled="{Binding IsEnabled}"/>
+              <Panel Grid.Column="3" Margin="4,0">
+                <TextBlock Text="W"
+                           Foreground="#D7BA7D"
+                           FontSize="10"
+                           FontWeight="Bold"
+                           IsVisible="{Binding IsEnabled}"
+                           ToolTip.Tip="Data Breakpoint (Watchpoint)"/>
+              </Panel>
+              <Button Grid.Column="4"
+                      Classes="toolbarButton"
+                      Command="{ReflectionBinding $parent[ListBox].DataContext.RemoveDataBreakpointCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="Remove"
+                      Padding="2">
+                <TextBlock Text="x" FontSize="12"/>
               </Button>
             </Grid>
           </DataTemplate>

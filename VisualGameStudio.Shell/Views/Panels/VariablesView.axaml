@@ -20,6 +20,15 @@
         </Grid>
       </Border>
 
+      <!-- Data breakpoint status -->
+      <Border DockPanel.Dock="Bottom" Background="#1E1E1E" Padding="4,2"
+              IsVisible="{Binding DataBreakpointStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+        <TextBlock Text="{Binding DataBreakpointStatusMessage}"
+                   Foreground="#D7BA7D"
+                   FontSize="11"
+                   TextTrimming="CharacterEllipsis"/>
+      </Border>
+
       <!-- Watch input -->
       <Border DockPanel.Dock="Bottom" Background="#2D2D2D" Padding="4">
         <Grid ColumnDefinitions="*,Auto">
@@ -46,6 +55,31 @@
             <TreeView.ItemTemplate>
               <TreeDataTemplate ItemsSource="{Binding Children}">
                 <Grid ColumnDefinitions="*,*,Auto" MinHeight="22">
+                  <Grid.ContextMenu>
+                    <ContextMenu>
+                      <MenuItem Header="Break on Value Change"
+                                Command="{ReflectionBinding $parent[TreeView].DataContext.BreakOnValueChangeCommand}"
+                                CommandParameter="{Binding}"
+                                IsVisible="{Binding !IsScope}"/>
+                      <MenuItem Header="Break on Read"
+                                Command="{ReflectionBinding $parent[TreeView].DataContext.BreakOnReadCommand}"
+                                CommandParameter="{Binding}"
+                                IsVisible="{Binding !IsScope}"/>
+                      <MenuItem Header="Break on Access (Read/Write)"
+                                Command="{ReflectionBinding $parent[TreeView].DataContext.BreakOnAccessCommand}"
+                                CommandParameter="{Binding}"
+                                IsVisible="{Binding !IsScope}"/>
+                      <Separator IsVisible="{Binding !IsScope}"/>
+                      <MenuItem Header="Copy Value"
+                                Command="{ReflectionBinding $parent[TreeView].DataContext.CopyValueCommand}"
+                                CommandParameter="{Binding}"
+                                IsVisible="{Binding !IsScope}"/>
+                      <MenuItem Header="Add to Watch"
+                                Command="{ReflectionBinding $parent[TreeView].DataContext.AddVariableToWatchCommand}"
+                                CommandParameter="{Binding}"
+                                IsVisible="{Binding !IsScope}"/>
+                    </ContextMenu>
+                  </Grid.ContextMenu>
                   <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="0,2">
                     <TextBlock Text="{Binding DisplayName}"
                                Foreground="{Binding IsScope, Converter={x:Static views:VariablesView.ScopeColorConverter}}"

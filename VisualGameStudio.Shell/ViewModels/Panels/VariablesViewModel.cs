@@ -9,6 +9,7 @@ namespace VisualGameStudio.Shell.ViewModels.Panels;
 public partial class VariablesViewModel : Tool
 {
     private readonly IDebugService _debugService;
+    private readonly BreakpointsViewModel _breakpointsViewModel;
     private int _currentFrameId;
 
     [ObservableProperty]
@@ -26,9 +27,13 @@ public partial class VariablesViewModel : Tool
     [ObservableProperty]
     private VariableTreeItem? _selectedVariable;
 
-    public VariablesViewModel(IDebugService debugService)
+    [ObservableProperty]
+    private string? _dataBreakpointStatusMessage;
+
+    public VariablesViewModel(IDebugService debugService, BreakpointsViewModel breakpointsViewModel)
     {
         _debugService = debugService;
+        _breakpointsViewModel = breakpointsViewModel;
         Id = "Variables";
         Title = "Variables";
 
@@ -214,6 +219,126 @@ public partial class VariablesViewModel : Tool
     private void RemoveWatch(WatchItem watch)
     {
         WatchExpressions.Remove(watch);
+    }
+
+    [RelayCommand]
+    private void CopyValue(VariableTreeItem? variable)
+    {
+        if (variable == null || string.IsNullOrEmpty(variable.Value)) return;
+        _ = CopyToClipboardAsync(variable.Value);
+    }
+
+    private static async Task CopyToClipboardAsync(string text)
+    {
+        try
+        {
+            var clipboard = Avalonia.Application.Current?.ApplicationLifetime is
+                Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+                ? desktop.MainWindow?.Clipboard : null;
+            if (clipboard != null)
+                await clipboard.SetTextAsync(text);
+        }
+        catch { /* clipboard not available */ }
+    }
+
+    [RelayCommand]
+    private void AddVariableToWatch(VariableTreeItem? variable)
+    {
+        if (variable == null || variable.IsScope) return;
+        NewWatchExpression = variable.Name;
+        _ = AddWatchAsync();
+    }
+
+    [RelayCommand]
+    private async Task BreakOnValueChangeAsync(VariableTreeItem? variable)
+    {
+        if (variable == null || variable.IsScope || variable.VariablesReference < 0) return;
+        await SetDataBreakpointForVariableAsync(variable, "write");
+    }
+
+    [RelayCommand]
+    private async Task BreakOnReadAsync(VariableTreeItem? variable)
+    {
+        if (variable == null || variable.IsScope) return;
+        await SetDataBreakpointForVariableAsync(variable, "read");
+    }
+
+    [RelayCommand]
+    private async Task BreakOnAccessAsync(VariableTreeItem? variable)
+    {
+        if (variable == null || variable.IsScope) return;
+        await SetDataBreakpointForVariableAsync(variable, "readWrite");
+    }
+
+    private async Task SetDataBreakpointForVariableAsync(VariableTreeItem variable, string accessType)
+    {
+        if (_debugService.State != DebugState.Paused)
+        {
+            DataBreakpointStatusMessage = "Data breakpoints require an active debug session (paused).";
+            return;
+        }
+
+        try
+        {
+            // Find the parent scope's variablesReference for this variable
+            int parentRef = FindParentVariablesReference(variable);
+            if (parentRef <= 0)
+            {
+                DataBreakpointStatusMessage = $"Cannot find variables reference for '{variable.Name}'.";
+                return;
+            }
+
+            // Ask the debug adapter if this variable supports data breakpoints
+            var info = await _debugService.GetDataBreakpointInfoAsync(parentRef, variable.Name);
+            if (info == null)
+            {
+                DataBreakpointStatusMessage = $"'{variable.Name}' does not support data breakpoints.";
+                return;
+            }
+
+            // Check if the requested access type is supported
+            if (info.AccessTypes.Count > 0 && !info.AccessTypes.Contains(accessType))
+            {
+                // Fall back to the first supported access type
+                accessType = info.AccessTypes[0];
+            }
+
+            // Add the data breakpoint via the breakpoints panel
+            await _breakpointsViewModel.AddDataBreakpointAsync(
+                info.DataId,
+                variable.Name,
+                accessType);
+
+            DataBreakpointStatusMessage = $"Data breakpoint set on '{variable.Name}' ({accessType}).";
+        }
+        catch (Exception ex)
+        {
+            DataBreakpointStatusMessage = $"Failed to set data breakpoint: {ex.Message}";
+        }
+    }
+
+    private int FindParentVariablesReference(VariableTreeItem target)
+    {
+        // Search the tree for the parent scope/variable that contains this variable
+        foreach (var scope in VariableTree)
+        {
+            var result = FindParentRefRecursive(scope, target);
+            if (result > 0) return result;
+        }
+        return 0;
+    }
+
+    private int FindParentRefRecursive(VariableTreeItem parent, VariableTreeItem target)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (ReferenceEquals(child, target))
+                return parent.VariablesReference;
+
+            var result = FindParentRefRecursive(child, target);
+            if (result > 0) return result;
+        }
+        return 0;
     }
 }
 
