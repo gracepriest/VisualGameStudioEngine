@@ -2,7 +2,6 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Documents"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
              x:Class="VisualGameStudio.Shell.Views.Documents.WelcomeDocumentView"
              
@@ -87,7 +86,7 @@
 
                         <!-- Project Info (clickable) -->
                         <Button Grid.Column="1"
-                                Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).OpenRecentProjectCommand}"
+                                Command="{Binding $parent[ItemsControl].DataContext.OpenRecentProjectCommand}"
                                 CommandParameter="{Binding}"
                                 Background="Transparent"
                                 BorderThickness="0"
@@ -117,7 +116,7 @@
 
                         <!-- Pin/Unpin Button -->
                         <Button Grid.Column="3"
-                                Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).PinProjectCommand}"
+                                Command="{Binding $parent[ItemsControl].DataContext.PinProjectCommand}"
                                 CommandParameter="{Binding}"
                                 Background="Transparent"
                                 BorderThickness="0"
@@ -152,7 +151,7 @@
 
                         <!-- Remove Button -->
                         <Button Grid.Column="4"
-                                Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).RemoveRecentProjectCommand}"
+                                Command="{Binding $parent[ItemsControl].DataContext.RemoveRecentProjectCommand}"
                                 CommandParameter="{Binding}"
                                 ToolTip.Tip="Remove from Recent"
                                 Background="Transparent"
@@ -369,7 +368,7 @@
               <ItemsControl ItemsSource="{Binding LearnLinks}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate >
-                    <Button Command="{Binding $parent[ItemsControl].((vm:WelcomeDocumentViewModel)DataContext).OpenLearnLinkCommand}"
+                    <Button Command="{Binding $parent[ItemsControl].DataContext.OpenLearnLinkCommand}"
                             CommandParameter="{Binding}"
                             Background="Transparent"
                             BorderThickness="0"
