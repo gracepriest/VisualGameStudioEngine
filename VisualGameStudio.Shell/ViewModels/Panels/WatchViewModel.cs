@@ -43,14 +43,22 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            if (e.NewState == DebugState.Paused)
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
             {
-                await RefreshAllAsync();
-            }
-            else if (e.NewState == DebugState.Stopped)
-            {
-                ClearValues();
-            }
+                if (e.NewState == DebugState.Paused)
+                {
+                    await RefreshAllAsync();
+                }
+                else if (e.NewState == DebugState.Stopped)
+                {
+                    ClearValues();
+                }
+                else if (e.NewState == DebugState.NotStarted)
+                {
+                    // Session fully ended — show "Not available"
+                    MarkAllNotAvailable();
+                }
+            });
         }
         catch (Exception)
         {
@@ -62,7 +70,10 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            await RefreshAllAsync();
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                await RefreshAllAsync();
+            });
         }
         catch (Exception)
         {
@@ -92,6 +103,12 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
         {
             await EvaluateItemAsync(item);
         }
+        else
+        {
+            item.Value = "Not available";
+            item.Type = "";
+            item.HasError = true;
+        }
     }
 
     [RelayCommand]
@@ -116,6 +133,12 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
         {
             await EvaluateItemAsync(item);
         }
+        else
+        {
+            item.Value = "Not available";
+            item.Type = "";
+            item.HasError = true;
+        }
     }
 
     [RelayCommand]
@@ -132,6 +155,7 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
         WatchItems.Clear();
         if (editableItem != null)
         {
+            editableItem.Expression = "";
             WatchItems.Add(editableItem);
         }
         else
@@ -185,14 +209,50 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
     {
         if (SelectedItem != null && !SelectedItem.IsEditable)
         {
-            SelectedItem.IsEditable = true;
+            SelectedItem.IsEditing = true;
         }
+    }
+
+    /// <summary>
+    /// Called when the user finishes editing a watch expression inline.
+    /// If the expression is empty, remove the watch. Otherwise, re-evaluate.
+    /// </summary>
+    [RelayCommand]
+    private async Task CommitEditAsync(WatchPanelItem? item)
+    {
+        if (item == null) return;
+
+        item.IsEditing = false;
+
+        if (string.IsNullOrWhiteSpace(item.Expression))
+        {
+            // Empty expression on a non-placeholder item: remove it
+            if (!item.IsEditable)
+            {
+                WatchItems.Remove(item);
+            }
+            return;
+        }
+
+        // If this was the placeholder row, convert it to a real watch and add a new placeholder
+        if (item.IsEditable)
+        {
+            item.IsEditable = false;
+            WatchItems.Add(new WatchPanelItem { Expression = "", IsEditable = true });
+        }
+
+        // Evaluate the expression
+        await EvaluateItemAsync(item);
     }
 
     [RelayCommand]
     private async Task RefreshAllAsync()
     {
-        if (!_debugService.IsDebugging) return;
+        if (!_debugService.IsDebugging)
+        {
+            MarkAllNotAvailable();
+            return;
+        }
 
         foreach (var item in WatchItems.Where(w => !w.IsEditable && !string.IsNullOrEmpty(w.Expression)))
         {
@@ -219,7 +279,7 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
     {
         if (!_debugService.IsDebugging)
         {
-            item.Value = "<not available>";
+            item.Value = "Not available";
             item.Type = "";
             item.HasError = true;
             return;
@@ -227,23 +287,37 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
 
         try
         {
-            var result = await _debugService.EvaluateAsync(item.Expression);
+            var result = await _debugService.EvaluateAsync(item.Expression, context: "watch");
             if (result != null)
             {
-                item.Value = result.Result ?? "<null>";
-                item.Type = result.Type ?? "";
-                item.HasError = false;
+                var value = result.Result ?? "";
+                // Detect error responses from the debug adapter
+                if (value.StartsWith("<error") || value.StartsWith("<'") || value.StartsWith("<member") || value.StartsWith("<no frame"))
+                {
+                    item.Value = value;
+                    item.Type = result.Type ?? "";
+                    item.HasError = true;
+                }
+                else
+                {
+                    item.Value = string.IsNullOrEmpty(value) ? "<null>" : value;
+                    item.Type = result.Type ?? "";
+                    item.HasError = false;
+
+                    // Store variablesReference for expandable values
+                    item.VariablesReference = result.VariablesReference;
+                }
             }
             else
             {
-                item.Value = "<error>";
+                item.Value = "Error: no response";
                 item.Type = "";
                 item.HasError = true;
             }
         }
         catch (Exception ex)
         {
-            item.Value = $"<error: {ex.Message}>";
+            item.Value = $"Error: {ex.Message}";
             item.Type = "";
             item.HasError = true;
         }
@@ -256,6 +330,16 @@ public partial class WatchViewModel : ViewModelBase, IDisposable
             item.Value = "";
             item.Type = "";
             item.HasError = false;
+        }
+    }
+
+    private void MarkAllNotAvailable()
+    {
+        foreach (var item in WatchItems.Where(w => !w.IsEditable && !string.IsNullOrEmpty(w.Expression)))
+        {
+            item.Value = "Not available";
+            item.Type = "";
+            item.HasError = true;
         }
     }
 }
@@ -277,11 +361,25 @@ public partial class WatchPanelItem : ObservableObject
     [ObservableProperty]
     private bool _isEditable;
 
+    /// <summary>
+    /// True when the user is actively editing this expression inline (distinct from IsEditable
+    /// which marks the placeholder row at the bottom of the watch list).
+    /// </summary>
+    [ObservableProperty]
+    private bool _isEditing;
+
     [ObservableProperty]
     private bool _isExpanded;
 
     [ObservableProperty]
     private ObservableCollection<WatchPanelItem> _children = new();
+
+    /// <summary>
+    /// DAP variables reference for expandable values (objects, arrays).
+    /// Non-zero means the value can be expanded to show children.
+    /// </summary>
+    [ObservableProperty]
+    private int _variablesReference;
 }
 
 public class WatchErrorColorConverter : IValueConverter

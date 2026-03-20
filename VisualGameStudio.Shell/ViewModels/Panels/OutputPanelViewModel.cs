@@ -219,6 +219,18 @@ public partial class OutputPanelViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private void ShowDebugOutput()
+    {
+        SelectedCategory = OutputCategory.Debug;
+    }
+
+    [RelayCommand]
+    private void ShowLspOutput()
+    {
+        SelectedCategory = OutputCategory.LanguageServer;
+    }
+
+    [RelayCommand]
     private async Task SendInput()
     {
         if (!string.IsNullOrEmpty(InputText) && IsInputEnabled)

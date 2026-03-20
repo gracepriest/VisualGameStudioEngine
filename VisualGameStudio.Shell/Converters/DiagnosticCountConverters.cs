@@ -104,3 +104,37 @@ public class BoolToColorConverter : IValueConverter
         throw new NotSupportedException();
     }
 }
+
+/// <summary>
+/// Converts a boolean to one of two IBrush values.
+/// Used to change status bar color during debugging (orange) vs normal (blue).
+/// </summary>
+public class BoolToBrushConverter : IValueConverter
+{
+    private readonly IBrush _trueBrush;
+    private readonly IBrush _falseBrush;
+
+    public BoolToBrushConverter(IBrush trueBrush, IBrush falseBrush)
+    {
+        _trueBrush = trueBrush;
+        _falseBrush = falseBrush;
+    }
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        return value is true ? _trueBrush : _falseBrush;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Status bar background: orange when debugging, VS Code blue otherwise.
+    /// </summary>
+    public static readonly BoolToBrushConverter DebugStatusBarInstance = new(
+        new SolidColorBrush(Color.Parse("#CC6800")),  // orange - debugging
+        new SolidColorBrush(Color.Parse("#007ACC"))    // blue - normal
+    );
+}

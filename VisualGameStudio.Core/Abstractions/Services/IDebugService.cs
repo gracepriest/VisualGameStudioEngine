@@ -144,9 +144,10 @@ public interface IDebugService : IDisposable
     Task<IReadOnlyList<VariableInfo>> GetVariablesAsync(int variablesReference);
 
     /// <summary>
-    /// Evaluate an expression in the current context
+    /// Evaluate an expression in the current context.
+    /// Context can be "watch", "repl", or "hover".
     /// </summary>
-    Task<EvaluateResult> EvaluateAsync(string expression, int? frameId = null);
+    Task<EvaluateResult> EvaluateAsync(string expression, int? frameId = null, string? context = null);
 
     /// <summary>
     /// Set data breakpoints (break on variable access)

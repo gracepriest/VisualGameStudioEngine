@@ -35,6 +35,12 @@
             <Button Content="Build" Command="{Binding ShowBuildOutputCommand}"
                     Padding="8,2" FontSize="11"
                     AutomationProperties.Name="Show Build Output"/>
+            <Button Content="Debug" Command="{Binding ShowDebugOutputCommand}"
+                    Padding="8,2" FontSize="11"
+                    AutomationProperties.Name="Show Debug Output"/>
+            <Button Content="LSP" Command="{Binding ShowLspOutputCommand}"
+                    Padding="8,2" FontSize="11"
+                    AutomationProperties.Name="Show LSP Output"/>
             <Button Content="General" Command="{Binding ShowGeneralOutputCommand}"
                     Padding="8,2" FontSize="11"
                     AutomationProperties.Name="Show General Output"/>

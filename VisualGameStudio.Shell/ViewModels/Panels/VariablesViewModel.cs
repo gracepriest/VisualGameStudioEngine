@@ -171,7 +171,7 @@ public partial class VariablesViewModel : Tool
         {
             try
             {
-                var result = await _debugService.EvaluateAsync(watch.Expression, frameId);
+                var result = await _debugService.EvaluateAsync(watch.Expression, frameId, context: "watch");
                 watch.Value = result.Result;
                 watch.Type = result.Type ?? "";
             }
@@ -203,7 +203,7 @@ public partial class VariablesViewModel : Tool
             var frames = await _debugService.GetStackTraceAsync();
             if (frames.Any())
             {
-                var result = await _debugService.EvaluateAsync(watch.Expression, frames[0].Id);
+                var result = await _debugService.EvaluateAsync(watch.Expression, frames[0].Id, context: "watch");
                 watch.Value = result.Result;
                 watch.Type = result.Type ?? "";
             }

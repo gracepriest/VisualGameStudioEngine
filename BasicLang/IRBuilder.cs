@@ -463,6 +463,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(TupleDeconstructionNode node)
         {
+            TrackSourceLine(node);
             // Evaluate the tuple expression
             node.Initializer.Accept(this);
             var tupleValue = _expressionResult;
@@ -506,6 +507,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ConstantDeclarationNode node)
         {
+            TrackSourceLine(node);
             // Store constants as global variables with IsConst = true
             if (node.Value != null)
             {
@@ -943,6 +945,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ConstructorNode node)
         {
+            TrackSourceLine(node);
             // Generate constructor as a special method
             var constructorName = _currentClassName != null ? $"{_currentClassName}__ctor" : "Constructor";
             var returnType = new TypeInfo("Void", TypeKind.Void);
@@ -1339,6 +1342,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(RaiseEventStatementNode node)
         {
+            TrackSourceLine(node);
             // Evaluate arguments
             var args = new List<IRValue>();
             foreach (var arg in node.Arguments)
@@ -1362,6 +1366,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(AddHandlerStatementNode node)
         {
+            TrackSourceLine(node);
             // Evaluate event and handler expressions
             node.EventExpression?.Accept(this);
             var eventExpr = _expressionResult;
@@ -1382,6 +1387,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(RemoveHandlerStatementNode node)
         {
+            TrackSourceLine(node);
             // Evaluate event and handler expressions
             node.EventExpression?.Accept(this);
             var eventExpr = _expressionResult;
@@ -1499,6 +1505,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(AwaitExpressionNode node)
         {
+            TrackSourceLine(node);
             IRValue taskExpr;
 
             // Special handling for CallExpressionNode - don't emit it separately
@@ -1547,6 +1554,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(YieldStatementNode node)
         {
+            TrackSourceLine(node);
             if (node.IsBreak)
             {
                 // Yield Break - generate IRYield with IsBreak = true
@@ -1565,6 +1573,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(LinqQueryExpressionNode node)
         {
+            TrackSourceLine(node);
             // LINQ queries are converted to method chain calls
             // Store the query as a special IR node for code generation
             IRValue result = null;
@@ -1745,9 +1754,10 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(InlineCodeNode node)
         {
+            TrackSourceLine(node);
             // Create an inline code instruction that the code generator will handle
             var inlineInstr = new IRInlineCode(node.Language, node.Code);
-            _currentBlock.AddInstruction(inlineInstr);
+            EmitInstruction(inlineInstr);
         }
 
         // ====================================================================
@@ -1819,6 +1829,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(DeclareNode node)
         {
+            TrackSourceLine(node);
             // Create an extern declaration in the IR module
             var externDecl = new IRExternDeclaration
             {
@@ -2312,6 +2323,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(WithStatementNode node)
         {
+            TrackSourceLine(node);
             // Evaluate the With object expression
             node.Object.Accept(this);
             var withObject = _expressionResult;
@@ -2551,6 +2563,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ThrowStatementNode node)
         {
+            TrackSourceLine(node);
             EmitInstruction(new IRComment("Throw exception"));
             if (node.Exception != null)
             {
@@ -2576,6 +2589,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ExitStatementNode node)
         {
+            TrackSourceLine(node);
             switch (node.Kind)
             {
                 case ExitKind.For:

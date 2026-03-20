@@ -61,7 +61,9 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IHotExitService _hotExitService;
     private readonly IFileWatcherService _fileWatcherService;
     private readonly ISettingsService? _settingsService;
+    private readonly IRecentProjectsService _recentProjectsService;
     private readonly IEventAggregator _eventAggregator;
+    private readonly IOutputService _outputService;
     private readonly DockFactory _dockFactory;
 
     /// <summary>
@@ -174,7 +176,14 @@ public partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Recent projects list for the Open Recent submenu.</summary>
     [ObservableProperty]
-    private ObservableCollection<string> _recentProjects = new();
+    private ObservableCollection<RecentProjectInfo> _recentProjects = new();
+
+    /// <summary>Whether there are any recent projects to display.</summary>
+    public bool HasRecentProjects => RecentProjects.Count > 0;
+
+    /// <summary>Menu items for the Open Recent submenu, built from RecentProjects plus a separator and Clear.</summary>
+    [ObservableProperty]
+    private ObservableCollection<RecentProjectMenuItem> _recentProjectMenuItems = new();
 
     /// <summary>
     /// Tracks the executable name being debugged, for status bar display.
@@ -241,7 +250,9 @@ public partial class MainWindowViewModel : ViewModelBase
         IHotExitService hotExitService,
         IFileWatcherService fileWatcherService,
         ISettingsService settingsService,
+        IRecentProjectsService recentProjectsService,
         IEventAggregator eventAggregator,
+        IOutputService outputService,
         DockFactory dockFactory,
         SolutionExplorerViewModel solutionExplorer,
         OutputPanelViewModel outputPanel,
@@ -277,7 +288,9 @@ public partial class MainWindowViewModel : ViewModelBase
         _hotExitService = hotExitService;
         _fileWatcherService = fileWatcherService;
         _settingsService = settingsService;
+        _recentProjectsService = recentProjectsService;
         _eventAggregator = eventAggregator;
+        _outputService = outputService;
         _dockFactory = dockFactory;
 
         SolutionExplorer = solutionExplorer;
@@ -346,6 +359,79 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Start language service
         _ = _languageService.StartAsync();
+
+        // Load recent projects and subscribe to changes
+        _recentProjectsService.RecentProjectsChanged += OnRecentProjectsChanged;
+        _ = LoadRecentProjectsAsync();
+    }
+
+    private async Task LoadRecentProjectsAsync()
+    {
+        try
+        {
+            await _recentProjectsService.LoadAsync();
+            RefreshRecentProjects();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to load recent projects: {ex.Message}");
+        }
+    }
+
+    private void RefreshRecentProjects()
+    {
+        var projects = _recentProjectsService.GetRecentProjects();
+        RecentProjects.Clear();
+        foreach (var p in projects)
+        {
+            RecentProjects.Add(p);
+        }
+        OnPropertyChanged(nameof(HasRecentProjects));
+        RebuildRecentProjectMenuItems();
+    }
+
+    private void RebuildRecentProjectMenuItems()
+    {
+        RecentProjectMenuItems.Clear();
+        if (RecentProjects.Count == 0)
+        {
+            RecentProjectMenuItems.Add(new RecentProjectMenuItem
+            {
+                Header = "(No recent projects)",
+                IsEnabled = false
+            });
+        }
+        else
+        {
+            foreach (var p in RecentProjects)
+            {
+                RecentProjectMenuItems.Add(new RecentProjectMenuItem
+                {
+                    Header = p.Name,
+                    ToolTip = p.Path,
+                    FilePath = p.Path,
+                    Command = OpenRecentProjectCommand,
+                    CommandParameter = p.Path,
+                    IsEnabled = true
+                });
+            }
+        }
+        RecentProjectMenuItems.Add(new RecentProjectMenuItem
+        {
+            Header = "---",
+            IsEnabled = false
+        });
+        RecentProjectMenuItems.Add(new RecentProjectMenuItem
+        {
+            Header = "Clear Recent Projects",
+            Command = ClearRecentProjectsCommand,
+            IsEnabled = true
+        });
+    }
+
+    private void OnRecentProjectsChanged(object? sender, EventArgs e)
+    {
+        RefreshRecentProjects();
     }
 
     private void OnDiagnosticsReceived(object? sender, DiagnosticsEventArgs e)
@@ -400,6 +486,27 @@ public partial class MainWindowViewModel : ViewModelBase
         Title = $"{e.Project.Name} - Visual Game Studio";
         StatusText = $"Project loaded: {e.Project.Name}";
 
+        // Track this project in recent projects
+        var projectPath = Path.Combine(e.Project.ProjectDirectory, e.Project.Name + ".blproj");
+        if (File.Exists(projectPath))
+        {
+            _recentProjectsService.AddRecentProject(projectPath, e.Project.Name);
+        }
+        else
+        {
+            // Try to find the actual .blproj file in the project directory
+            var blprojFiles = Directory.GetFiles(e.Project.ProjectDirectory, "*.blproj", SearchOption.TopDirectoryOnly);
+            if (blprojFiles.Length > 0)
+            {
+                _recentProjectsService.AddRecentProject(blprojFiles[0], e.Project.Name);
+            }
+            else
+            {
+                // Use the project directory as a fallback
+                _recentProjectsService.AddRecentProject(e.Project.ProjectDirectory, e.Project.Name);
+            }
+        }
+
         // Load persisted breakpoints
         Breakpoints.SetProjectDirectory(e.Project.ProjectDirectory);
         await Breakpoints.LoadBreakpointsAsync();
@@ -437,15 +544,28 @@ public partial class MainWindowViewModel : ViewModelBase
     private void OnBuildCompleted(object? sender, BuildCompletedEventArgs e)
     {
         var result = e.Result;
+        var statusMessage = result.Success
+            ? $"Build succeeded - {result.Duration.TotalSeconds:F1}s"
+            : $"Build failed - {result.ErrorCount} error(s), {result.WarningCount} warning(s)";
+
+        StatusText = statusMessage;
+
+        // Update status bar build indicator (auto-fades after 5 seconds)
+        StatusBar.SetBuildCompleted(result.Success, statusMessage);
+
+        // Update status bar diagnostic counts
+        StatusBar.UpdateDiagnostics(result.ErrorCount, result.WarningCount, 0);
+
         if (result.Success)
         {
-            StatusText = $"Build succeeded - {result.Duration.TotalSeconds:F1}s";
             ShowNotification($"Build succeeded - {result.Duration.TotalSeconds:F1}s", "info");
         }
         else
         {
-            StatusText = $"Build failed - {result.ErrorCount} error(s), {result.WarningCount} warning(s)";
             ShowNotification($"Build failed: {result.ErrorCount} error(s), {result.WarningCount} warning(s)", "error");
+
+            // Show the Error List panel when the build has errors
+            _dockFactory.ActivateTool("ErrorList");
         }
 
         // Update error list
@@ -607,7 +727,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            var result = await _debugService.EvaluateAsync(e.Expression, _currentFrameId);
+            var result = await _debugService.EvaluateAsync(e.Expression, _currentFrameId, context: "hover");
             if (result != null && !result.Result.StartsWith("Error:"))
             {
                 DataTipResult?.Invoke(this, new DataTipResultEventArgs(
@@ -1269,7 +1389,14 @@ public partial class MainWindowViewModel : ViewModelBase
         // Save all before building
         await SaveAllAsync();
 
+        // Switch output panel to Build channel and show it
+        OutputPanel.SelectedCategory = OutputCategory.Build;
+        _dockFactory.ActivateTool("Output");
+
+        // Update status bar with build-in-progress indicator
+        StatusBar.SetBuildStarted();
         StatusText = "Building...";
+
         await _buildService.BuildProjectAsync(_projectService.CurrentProject);
     }
 
@@ -1280,6 +1407,12 @@ public partial class MainWindowViewModel : ViewModelBase
         if (_buildService.IsBuilding) return;
 
         await SaveAllAsync();
+
+        // Switch output panel to Build channel and show it
+        OutputPanel.SelectedCategory = OutputCategory.Build;
+        _dockFactory.ActivateTool("Output");
+
+        StatusBar.SetBuildStarted();
         StatusText = "Rebuilding...";
         await _buildService.RebuildProjectAsync(_projectService.CurrentProject);
     }
@@ -1364,6 +1497,9 @@ public partial class MainWindowViewModel : ViewModelBase
             DebugState.Stopped => "Stopped",
             _ => ""
         };
+
+        // Update status bar debug state (changes color and shows debug target)
+        StatusBar.UpdateDebugState(IsDebugging, _debugTargetName);
 
         if (e.NewState == DebugState.Stopped)
         {
@@ -1648,10 +1784,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void OnDebugOutput(object? sender, DebugOutputEventArgs e)
     {
-        Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            OutputPanel.AppendOutput(e.Output);
-        });
+        // Route program stdout/stderr through the output service so it is
+        // stored in the Debug category and respects category filtering.
+        _outputService.Write(e.Output, OutputCategory.Debug);
     }
 
     // Debug commands
@@ -1665,11 +1800,25 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        if (IsDebugging) return;
+        // If already debugging, F5 should continue execution when paused
+        if (IsDebugging)
+        {
+            if (IsPaused)
+            {
+                await ContinueAsync();
+            }
+            return;
+        }
 
         // Build first
         await SaveAllAsync();
+
+        // Show build progress in output panel
+        OutputPanel.SelectedCategory = OutputCategory.Build;
+        _dockFactory.ActivateTool("Output");
+        StatusBar.SetBuildStarted();
         StatusText = "Building before debug...";
+
         var buildResult = await _buildService.BuildProjectAsync(_projectService.CurrentProject);
 
         if (!buildResult.Success)
@@ -1787,6 +1936,10 @@ public partial class MainWindowViewModel : ViewModelBase
         if (IsDebugging) return;
 
         await SaveAllAsync();
+        OutputPanel.SelectedCategory = OutputCategory.Build;
+        _dockFactory.ActivateTool("Output");
+        StatusBar.SetBuildStarted();
+        StatusText = "Building...";
         var buildResult = await _buildService.BuildProjectAsync(_projectService.CurrentProject);
         if (!buildResult.Success) return;
 
@@ -1819,6 +1972,10 @@ public partial class MainWindowViewModel : ViewModelBase
         if (_projectService.CurrentProject == null) return;
 
         await SaveAllAsync();
+        OutputPanel.SelectedCategory = OutputCategory.Build;
+        _dockFactory.ActivateTool("Output");
+        StatusBar.SetBuildStarted();
+        StatusText = "Building...";
         var buildResult = await _buildService.BuildProjectAsync(_projectService.CurrentProject);
         if (!buildResult.Success) return;
 
@@ -4470,7 +4627,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void ClearRecentProjects()
     {
-        RecentProjects.Clear();
+        _recentProjectsService.ClearRecentProjects();
         StatusText = "Recent projects cleared";
     }
 
@@ -5707,4 +5864,17 @@ public class NotificationEventArgs : EventArgs
         Message = message;
         Severity = severity;
     }
+}
+
+/// <summary>
+/// View model for a single item in the Open Recent submenu.
+/// </summary>
+public class RecentProjectMenuItem
+{
+    public string Header { get; set; } = "";
+    public string? ToolTip { get; set; }
+    public string? FilePath { get; set; }
+    public System.Windows.Input.ICommand? Command { get; set; }
+    public object? CommandParameter { get; set; }
+    public bool IsEnabled { get; set; } = true;
 }

@@ -30,7 +30,7 @@
                              Grid.Row="1"
                              FontFamily="Cascadia Code, Consolas, Courier New, monospace"
                              FontSize="14"
-                             ShowLineNumbers="True"
+                             ShowLineNumbers="False"
                              WordWrap="False"
                              HorizontalScrollBarVisibility="Auto"
                              VerticalScrollBarVisibility="Auto"

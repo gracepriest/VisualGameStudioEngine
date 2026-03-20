@@ -24,7 +24,7 @@ namespace BasicLang.Debugger
         public DapVariable InspectValue(object corDebugValue, string name)
         {
             if (corDebugValue == null)
-                return MakeVariable(name, "null", "Object", 0);
+                return MakeVariable(name, "Nothing", "Object", 0);
 
             try
             {
@@ -188,17 +188,17 @@ namespace BasicLang.Debugger
             {
                 int hr = refVal.IsNull(out bool isNull);
                 if (hr < 0 || isNull)
-                    return MakeVariable(name, "null", "Object", 0);
+                    return MakeVariable(name, "Nothing", "Object", 0);
 
                 hr = refVal.Dereference(out ICorDebugValue derefed);
                 if (hr < 0 || derefed == null)
-                    return MakeVariable(name, "<null ref>", "Object", 0);
+                    return MakeVariable(name, "Nothing", "Object", 0);
 
                 return InspectValue(derefed, name);
             }
             catch
             {
-                return MakeVariable(name, "null", "Object", 0);
+                return MakeVariable(name, "Nothing", "Object", 0);
             }
         }
 
@@ -271,7 +271,12 @@ namespace BasicLang.Debugger
                     return MakeVariable(name, "<unreadable string>", "String", 0);
 
                 string value = new string(buffer, 0, (int)fetched);
-                return MakeVariable(name, $"\"{EscapeString(value)}\"", "String", 0);
+                string escaped = EscapeString(value);
+                // Truncate long strings to ~100 chars for preview
+                string preview = escaped.Length > 100
+                    ? escaped.Substring(0, 100) + "..."
+                    : escaped;
+                return MakeVariable(name, $"\"{preview}\"", "String", 0);
             }
             catch (Exception ex)
             {
@@ -285,14 +290,16 @@ namespace BasicLang.Debugger
             {
                 arrayVal.GetCount(out uint count);
                 arrayVal.GetElementType(out CorElementType elemType);
-                string typeName = $"{CorElementTypeToTypeName(elemType)}[{count}]";
+                string elemTypeName = CorElementTypeToTypeName(elemType);
+                // BasicLang-style array type: Integer(5), String(3), etc.
+                string typeName = $"{elemTypeName}({count})";
 
                 if (count == 0)
-                    return MakeVariable(name, $"Array (0 elements)", typeName, 0);
+                    return MakeVariable(name, $"{elemTypeName}(0)", typeName, 0);
 
                 // Register for child fetch
                 int refId = RegisterReference(arrayVal);
-                return MakeVariable(name, $"Array ({count} elements)", typeName, refId);
+                return MakeVariable(name, $"{elemTypeName}({count})", typeName, refId);
             }
             catch (Exception ex)
             {
@@ -323,6 +330,9 @@ namespace BasicLang.Debugger
                 {
                     // Class name resolution is best-effort
                 }
+
+                // Map CLR type names to BasicLang equivalents
+                typeName = MapToBasicLangTypeName(typeName);
 
                 int refId = RegisterReference(objectVal);
                 return MakeVariable(name, $"{{{typeName}}}", typeName, refId);
@@ -495,7 +505,7 @@ namespace BasicLang.Debugger
                 return elemType switch
                 {
                     CorElementType.ELEMENT_TYPE_BOOLEAN =>
-                        (bytes.Length > 0 && bytes[0] != 0).ToString(),
+                        (bytes.Length > 0 && bytes[0] != 0) ? "True" : "False",
 
                     CorElementType.ELEMENT_TYPE_CHAR =>
                         bytes.Length >= 2
@@ -561,12 +571,12 @@ namespace BasicLang.Debugger
             CorElementType.ELEMENT_TYPE_CHAR      => "Char",
             CorElementType.ELEMENT_TYPE_I1        => "SByte",
             CorElementType.ELEMENT_TYPE_U1        => "Byte",
-            CorElementType.ELEMENT_TYPE_I2        => "Int16",
-            CorElementType.ELEMENT_TYPE_U2        => "UInt16",
-            CorElementType.ELEMENT_TYPE_I4        => "Int32",
-            CorElementType.ELEMENT_TYPE_U4        => "UInt32",
-            CorElementType.ELEMENT_TYPE_I8        => "Int64",
-            CorElementType.ELEMENT_TYPE_U8        => "UInt64",
+            CorElementType.ELEMENT_TYPE_I2        => "Short",
+            CorElementType.ELEMENT_TYPE_U2        => "UShort",
+            CorElementType.ELEMENT_TYPE_I4        => "Integer",
+            CorElementType.ELEMENT_TYPE_U4        => "UInteger",
+            CorElementType.ELEMENT_TYPE_I8        => "Long",
+            CorElementType.ELEMENT_TYPE_U8        => "ULong",
             CorElementType.ELEMENT_TYPE_R4        => "Single",
             CorElementType.ELEMENT_TYPE_R8        => "Double",
             CorElementType.ELEMENT_TYPE_I         => "IntPtr",
@@ -577,6 +587,53 @@ namespace BasicLang.Debugger
             CorElementType.ELEMENT_TYPE_OBJECT    => "Object",
             _                                     => elemType.ToString()
         };
+
+        /// <summary>
+        /// Maps a CLR type name (from metadata) to the corresponding BasicLang type name.
+        /// Falls back to the original name if no mapping exists.
+        /// </summary>
+        private static string MapToBasicLangTypeName(string clrTypeName)
+        {
+            if (string.IsNullOrEmpty(clrTypeName))
+                return "Object";
+
+            return clrTypeName switch
+            {
+                "Int32" => "Integer",
+                "Int16" => "Short",
+                "Int64" => "Long",
+                "UInt32" => "UInteger",
+                "UInt16" => "UShort",
+                "UInt64" => "ULong",
+                "Single" => "Single",
+                "Double" => "Double",
+                "Boolean" => "Boolean",
+                "String" => "String",
+                "Char" => "Char",
+                "Byte" => "Byte",
+                "SByte" => "SByte",
+                "Decimal" => "Decimal",
+                "Object" => "Object",
+                "Void" => "Void",
+                "System.Int32" => "Integer",
+                "System.Int16" => "Short",
+                "System.Int64" => "Long",
+                "System.UInt32" => "UInteger",
+                "System.UInt16" => "UShort",
+                "System.UInt64" => "ULong",
+                "System.Single" => "Single",
+                "System.Double" => "Double",
+                "System.Boolean" => "Boolean",
+                "System.String" => "String",
+                "System.Char" => "Char",
+                "System.Byte" => "Byte",
+                "System.SByte" => "SByte",
+                "System.Decimal" => "Decimal",
+                "System.Object" => "Object",
+                "System.Void" => "Void",
+                _ => clrTypeName
+            };
+        }
 
         // -------------------------------------------------------------------------
         // Metadata helpers

@@ -54,6 +54,13 @@ namespace BasicLang.Debugger
         private string _lastExceptionDescription;
         private bool _lastExceptionIsUnhandled;
 
+        // Launch configuration — stored for restart support
+        private string _launchExePath;
+        private string _launchCwd;
+        private string[] _launchArgs;
+        private JsonElement _lastLaunchArguments;
+        private bool _wasLaunch; // true = launch, false = attach
+
         private readonly object _writeLock = new();
 
         public NetDebugAdapter(Stream input, Stream output)
@@ -124,6 +131,7 @@ namespace BasicLang.Debugger
                     "setExceptionBreakpoints" => HandleSetExceptionBreakpoints(message),
                     "exceptionInfo" => HandleExceptionInfo(message),
                     "disconnect" => HandleDisconnect(message),
+                    "restart" => await HandleRestartAsync(message),
                     _ => CreateResponse(message, true)
                 };
 
@@ -176,7 +184,8 @@ namespace BasicLang.Debugger
                 ["supportsValueFormattingOptions"] = false,
                 ["supportTerminateDebuggee"] = true,
                 ["supportsDelayedStackTraceLoading"] = false,
-                ["supportsLoadedSourcesRequest"] = false
+                ["supportsLoadedSourcesRequest"] = false,
+                ["supportsRestartRequest"] = true
             };
             return response;
         }
@@ -230,6 +239,13 @@ namespace BasicLang.Debugger
             // Default working directory to exe directory
             if (string.IsNullOrEmpty(cwd))
                 cwd = Path.GetDirectoryName(exePath);
+
+            // Store launch config for restart support
+            _launchExePath = exePath;
+            _launchCwd = cwd;
+            _launchArgs = launchArgs;
+            _lastLaunchArguments = args;
+            _wasLaunch = true;
 
             // Find and load matching PDB
             var pdbPath = Path.ChangeExtension(exePath, ".pdb");
@@ -369,6 +385,10 @@ namespace BasicLang.Debugger
 
             if (string.IsNullOrEmpty(sourcePath))
                 return CreateResponse(request, true);
+
+            // Normalize the path for consistent matching with PDB data
+            sourcePath = sourcePath.Replace('/', Path.DirectorySeparatorChar);
+            try { sourcePath = Path.GetFullPath(sourcePath); } catch { }
 
             // Deactivate existing CLR breakpoints for this file before clearing
             DeactivateBreakpointsForFile(sourcePath);
@@ -603,6 +623,8 @@ namespace BasicLang.Debugger
                                 string sourceFile = null;
                                 int sourceLine = 0;
                                 int sourceColumn = 1;
+                                bool isUserFrame = false;
+                                string presentationHint = null;
 
                                 // Map IL offset to source location via PDB
                                 var location = _sourceMapper?.GetSourceLocation((int)functionToken, (int)ilOffset);
@@ -611,7 +633,39 @@ namespace BasicLang.Debugger
                                     sourceFile = location.Value.file;
                                     sourceLine = location.Value.line;
                                     sourceColumn = location.Value.column;
-                                    frameName = Path.GetFileNameWithoutExtension(sourceFile) ?? frameName;
+                                    isUserFrame = sourceFile.EndsWith(".bas", StringComparison.OrdinalIgnoreCase);
+                                }
+
+                                if (isUserFrame)
+                                {
+                                    // Try to get the real method name from metadata
+                                    string methodName = GetMethodNameFromMetadata((int)functionToken);
+                                    if (!string.IsNullOrEmpty(methodName))
+                                    {
+                                        // Map C# generated names back to BasicLang names
+                                        frameName = MapToBasicLangName(methodName);
+                                    }
+                                    else
+                                    {
+                                        frameName = Path.GetFileNameWithoutExtension(sourceFile) ?? frameName;
+                                    }
+
+                                    // Try to append parameter values
+                                    string paramStr = GetFrameParameterValues(ilFramePtr, (int)functionToken);
+                                    if (!string.IsNullOrEmpty(paramStr))
+                                    {
+                                        frameName = $"{frameName}({paramStr})";
+                                    }
+                                }
+                                else
+                                {
+                                    // Non-user frame — mark as external code
+                                    string methodName = GetMethodNameFromMetadata((int)functionToken);
+                                    if (!string.IsNullOrEmpty(methodName))
+                                        frameName = $"[External Code] {methodName}";
+                                    else
+                                        frameName = "[External Code]";
+                                    presentationHint = "subtle";
                                 }
 
                                 var frameDict = new Dictionary<string, object>
@@ -621,6 +675,11 @@ namespace BasicLang.Debugger
                                     ["line"] = sourceLine,
                                     ["column"] = sourceColumn
                                 };
+
+                                if (presentationHint != null)
+                                {
+                                    frameDict["presentationHint"] = presentationHint;
+                                }
 
                                 if (sourceFile != null)
                                 {
@@ -1285,45 +1344,152 @@ namespace BasicLang.Debugger
         private DAPResponse HandleEvaluate(DAPMessage request)
         {
             var args = request.Arguments;
-            string expression = args.TryGetProperty("expression", out var exprProp) ? exprProp.GetString() : "";
+            string expression = args.TryGetProperty("expression", out var exprProp) ? exprProp.GetString() ?? "" : "";
             int frameId = args.TryGetProperty("frameId", out var frameProp) ? frameProp.GetInt32() : 0;
+            string context = args.TryGetProperty("context", out var ctxProp) ? ctxProp.GetString() ?? "watch" : "watch";
+
+            // Empty expression: return empty result
+            if (string.IsNullOrWhiteSpace(expression))
+            {
+                var emptyResp = CreateResponse(request, true);
+                emptyResp.Body = new Dictionary<string, object>
+                {
+                    ["result"] = "",
+                    ["type"] = "",
+                    ["variablesReference"] = 0
+                };
+                return emptyResp;
+            }
 
             string resultValue = "<not available>";
+            string resultType = "";
             int resultRef = 0;
 
             try
             {
-                if (_frameInfoMap.TryGetValue(frameId, out var frameInfo) && frameInfo.ManagedFrame != null)
+                if (_frameInfoMap.TryGetValue(frameId, out var frameInfo))
                 {
-                    // Search locals for a matching variable name
-                    var locals = _variableInspector.GetLocals(frameInfo.ManagedFrame);
-                    var match = locals.FirstOrDefault(v =>
-                        string.Equals(v.Name, expression, StringComparison.OrdinalIgnoreCase));
+                    // Split expression on dots to support member access (e.g., "name.Length")
+                    var parts = expression.Split('.');
+                    string rootName = parts[0].Trim();
 
-                    if (match == null)
+                    // Gather all visible variables from the current frame
+                    var allVars = new List<DapVariable>();
+
+                    // Strategy 1: Managed COM interface
+                    if (frameInfo.ManagedFrame != null)
                     {
-                        // Try arguments
+                        var locals = _variableInspector.GetLocals(frameInfo.ManagedFrame);
+                        if (_sourceMapper != null)
+                            ApplyPdbLocalNames(locals, frameInfo.FunctionToken);
+                        allVars.AddRange(locals);
+
                         var arguments = _variableInspector.GetArguments(frameInfo.ManagedFrame);
-                        match = arguments.FirstOrDefault(v =>
-                            string.Equals(v.Name, expression, StringComparison.OrdinalIgnoreCase));
+                        allVars.AddRange(arguments);
+                    }
+
+                    // Strategy 2: Raw vtable fallback (when managed COM cast failed)
+                    if (allVars.Count == 0 && frameInfo.RawILFramePtr != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            var locals = ReadLocalsViaRawVtable(frameInfo);
+                            if (locals != null) allVars.AddRange(locals);
+
+                            var arguments = ReadArgumentsViaRawVtable(frameInfo);
+                            if (arguments != null) allVars.AddRange(arguments);
+                        }
+                        catch
+                        {
+                            // Raw vtable fallback is best-effort
+                        }
+                    }
+
+                    // Find the root variable
+                    DapVariable match = allVars.FirstOrDefault(v =>
+                        string.Equals(v.Name, rootName, StringComparison.OrdinalIgnoreCase));
+
+                    // Walk the member chain for dotted expressions (e.g., "person.Name.Length")
+                    if (match != null && parts.Length > 1)
+                    {
+                        for (int i = 1; i < parts.Length; i++)
+                        {
+                            string memberName = parts[i].Trim();
+                            if (string.IsNullOrEmpty(memberName))
+                            {
+                                match = null;
+                                break;
+                            }
+
+                            if (match.VariablesReference > 0)
+                            {
+                                var children = _variableInspector.GetChildren(match.VariablesReference);
+                                var childMatch = children.FirstOrDefault(c =>
+                                    string.Equals(c.Name, memberName, StringComparison.OrdinalIgnoreCase));
+
+                                if (childMatch != null)
+                                {
+                                    match = childMatch;
+                                }
+                                else
+                                {
+                                    // Member not found in children
+                                    resultValue = $"<member '{memberName}' not found on '{match.Type}'>";
+                                    resultType = "";
+                                    match = null;
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                // Primitive type has no expandable children
+                                resultValue = $"<'{match.Type}' has no member '{memberName}'>";
+                                resultType = "";
+                                match = null;
+                                break;
+                            }
+                        }
                     }
 
                     if (match != null)
                     {
                         resultValue = match.Value;
+                        resultType = match.Type ?? "";
                         resultRef = match.VariablesReference;
                     }
+                    else if (allVars.Count > 0 && resultValue == "<not available>")
+                    {
+                        // Variable not found in scope — tailor message by context
+                        if (context == "hover")
+                        {
+                            // For hover: return empty so no tooltip appears for non-variables
+                            resultValue = "";
+                            resultType = "";
+                        }
+                        else
+                        {
+                            resultValue = $"<'{rootName}' is not in scope>";
+                            resultType = "";
+                        }
+                    }
+                }
+                else
+                {
+                    resultValue = "<no frame available>";
+                    resultType = "";
                 }
             }
             catch (Exception ex)
             {
                 resultValue = $"<error: {ex.Message}>";
+                resultType = "Error";
             }
 
             var response = CreateResponse(request, true);
             response.Body = new Dictionary<string, object>
             {
                 ["result"] = resultValue,
+                ["type"] = resultType,
                 ["variablesReference"] = resultRef
             };
             return response;
@@ -1547,6 +1713,83 @@ namespace BasicLang.Debugger
             }
 
             return null;
+        }
+
+        private async Task<DAPResponse> HandleRestartAsync(DAPMessage request)
+        {
+            // 1. Stop the current process and clean up
+            try
+            {
+                if (_process != null)
+                {
+                    try { _process.Terminate(); } catch { }
+                    try { _process.Dispose(); } catch { }
+                    _process = null;
+                }
+
+                _threads.Clear();
+                _threadStates.Clear();
+                _frozenThreads.Clear();
+                _frameInfoMap.Clear();
+                _scopeReferences.Clear();
+                _loadedModules.Clear();
+                _nextFrameId = 1;
+                _nextScopeRef = 1;
+            }
+            catch { }
+
+            // 2. Re-launch if we have stored launch config
+            if (_wasLaunch && !string.IsNullOrEmpty(_launchExePath))
+            {
+                // Dispose old source mapper and create fresh one
+                try { _sourceMapper?.Dispose(); } catch { }
+                var pdbPath = Path.ChangeExtension(_launchExePath, ".pdb");
+                _sourceMapper = new SourceMapper();
+                if (File.Exists(pdbPath))
+                    _sourceMapper.LoadPdb(pdbPath);
+
+                _breakpointManager?.ClearAll();
+                _breakpointManager = new ClrBreakpointManager();
+
+                // Create new process and wire events
+                _process = new NetDebugProcess();
+                _process.BreakpointHit += OnBreakpointHit;
+                _process.StepCompleted += OnStepCompleted;
+                _process.ExceptionThrown += OnExceptionThrown;
+                _process.ModuleLoaded += OnModuleLoaded;
+                _process.ProcessExited += OnProcessExited;
+                _process.ThreadCreated += OnThreadCreated;
+                _process.ThreadExited += OnThreadExited;
+
+                var launched = await _process.LaunchAsync(_launchExePath, _launchCwd, _launchArgs);
+                if (launched)
+                {
+                    // Send initialized event so the IDE re-sends breakpoints
+                    await SendEventAsync("initialized", new Dictionary<string, object>());
+                    return CreateResponse(request, true);
+                }
+                else
+                {
+                    await SendEventAsync("output", new Dictionary<string, object>
+                    {
+                        ["category"] = "stderr",
+                        ["output"] = $"Restart failed: {_process?.LastError ?? "Unknown error"}\n"
+                    });
+                    var response = CreateResponse(request, false);
+                    response.Body = new Dictionary<string, object>
+                    {
+                        ["error"] = new Dictionary<string, object>
+                        {
+                            ["id"] = 1,
+                            ["format"] = _process?.LastError ?? "Failed to restart debug session"
+                        }
+                    };
+                    return response;
+                }
+            }
+
+            // Fallback: just acknowledge the request (IDE will re-launch)
+            return CreateResponse(request, true);
         }
 
         private DAPResponse HandleDisconnect(DAPMessage request)
@@ -1892,13 +2135,27 @@ namespace BasicLang.Debugger
 
                 if (shouldBreak)
                 {
+                    // Build a clear description: "ExceptionType: message"
+                    string description = _lastExceptionType ?? "Exception";
+                    if (!string.IsNullOrEmpty(_lastExceptionMessage))
+                        description = $"{description}: {_lastExceptionMessage}";
+
+                    string prefix = e.IsUnhandled ? "Unhandled exception" : "Exception";
+
                     await SendEventAsync("stopped", new Dictionary<string, object>
                     {
                         ["reason"] = "exception",
-                        ["description"] = e.ExceptionMessage ?? "Exception",
+                        ["description"] = $"{prefix}: {description}",
                         ["text"] = _lastExceptionType,
                         ["threadId"] = e.ThreadId,
                         ["allThreadsStopped"] = true
+                    });
+
+                    // Also output to console for visibility
+                    await SendEventAsync("output", new Dictionary<string, object>
+                    {
+                        ["category"] = "stderr",
+                        ["output"] = $"{prefix}: {description}\n"
                     });
                 }
                 else
@@ -2391,6 +2648,142 @@ namespace BasicLang.Debugger
         {
             var loc = _sourceMapper?.GetSourceLocation(methodToken, ilOffset);
             return loc != null && loc.Value.file.EndsWith(".bas", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Resolve a method token to its full name (TypeName.MethodName) using IMetaDataImport.
+        /// Walks the loaded modules to find the one that owns this token.
+        /// Returns null if metadata is not available.
+        /// </summary>
+        private string GetMethodNameFromMetadata(int methodToken)
+        {
+            try
+            {
+                foreach (var module in _loadedModules.Values)
+                {
+                    try
+                    {
+                        Guid imdImportGuid = new Guid("7DAC8207-D3AE-4C75-9B67-92801A497D44");
+                        module.GetMetaDataInterface(ref imdImportGuid, out object mdObj);
+                        if (mdObj is not IMetaDataImport mdImport) continue;
+
+                        char[] methodNameBuf = new char[512];
+                        int hr = mdImport.GetMethodProps(
+                            (uint)methodToken,
+                            out uint classToken,
+                            methodNameBuf,
+                            (uint)methodNameBuf.Length,
+                            out uint methodNameLen,
+                            out _, out _, out _, out _, out _);
+                        if (hr < 0 || methodNameLen == 0) continue;
+
+                        string methodName = new string(methodNameBuf, 0, (int)methodNameLen - 1);
+
+                        if (classToken != 0)
+                        {
+                            char[] typeNameBuf = new char[512];
+                            hr = mdImport.GetTypeDefProps(
+                                classToken, typeNameBuf, (uint)typeNameBuf.Length,
+                                out uint typeNameLen, out _, out _);
+                            if (hr >= 0 && typeNameLen > 0)
+                            {
+                                string typeName = new string(typeNameBuf, 0, (int)typeNameLen - 1);
+                                return $"{typeName}.{methodName}";
+                            }
+                        }
+                        return methodName;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// Maps C#-generated method names back to BasicLang-friendly names.
+        /// </summary>
+        private static string MapToBasicLangName(string fullName)
+        {
+            if (string.IsNullOrEmpty(fullName)) return fullName;
+
+            // Compiler-generated closure classes
+            if (fullName.Contains("<>c__DisplayClass") || fullName.Contains("<>c"))
+                return "[Closure]";
+
+            // .ctor -> New
+            if (fullName.EndsWith(".ctor", StringComparison.Ordinal))
+            {
+                int lastDot = fullName.Length - 5 - 1;
+                if (lastDot >= 0)
+                {
+                    int prevDot = fullName.LastIndexOf('.', lastDot);
+                    if (prevDot >= 0)
+                        return fullName.Substring(prevDot + 1, lastDot - prevDot) + ".New";
+                }
+                return "New";
+            }
+
+            // .cctor -> [Static Init]
+            if (fullName.EndsWith(".cctor", StringComparison.Ordinal))
+                return "[Static Init]";
+
+            int dotIndex = fullName.IndexOf('.');
+            if (dotIndex > 0 && dotIndex < fullName.Length - 1)
+            {
+                string typePart = fullName.Substring(0, dotIndex);
+                string methodPart = fullName.Substring(dotIndex + 1);
+
+                // Strip "Program" wrapper (module-level code)
+                if (typePart.Equals("Program", StringComparison.OrdinalIgnoreCase))
+                    return methodPart;
+
+                // Strip namespace prefix
+                int lastNamespaceDot = typePart.LastIndexOf('.');
+                if (lastNamespaceDot >= 0)
+                    typePart = typePart.Substring(lastNamespaceDot + 1);
+
+                return $"{typePart}.{methodPart}";
+            }
+            return fullName;
+        }
+
+        /// <summary>
+        /// Attempts to read parameter values for a stack frame to display in the call stack.
+        /// </summary>
+        private string GetFrameParameterValues(IntPtr ilFramePtr, int functionToken)
+        {
+            try
+            {
+                if (ilFramePtr == IntPtr.Zero || _variableInspector == null) return null;
+
+                ICorDebugILFrame ilFrame;
+                try { ilFrame = (ICorDebugILFrame)Marshal.GetObjectForIUnknown(ilFramePtr); }
+                catch { return null; }
+
+                var args = _variableInspector.GetArguments(ilFrame);
+                if (args == null || args.Count == 0) return null;
+
+                var paramNames = _sourceMapper?.GetParameterNames(functionToken, null)
+                                 ?? new Dictionary<int, string>();
+
+                var parts = new List<string>();
+                for (int i = 0; i < args.Count && i < 4; i++)
+                {
+                    var arg = args[i];
+                    string name = paramNames.TryGetValue(i, out var pName) ? pName : arg.Name;
+                    if (name == "this") continue;
+
+                    string value = arg.Value ?? "?";
+                    if (value.Length > 20) value = value.Substring(0, 17) + "...";
+                    parts.Add($"{name}={value}");
+                }
+
+                if (parts.Count == 0) return null;
+                if (args.Count > 4) parts.Add("...");
+                return string.Join(", ", parts);
+            }
+            catch { return null; }
         }
 
         /// <summary>
@@ -3645,5 +4038,6 @@ namespace BasicLang.Debugger
         private delegate int ThreadEnumGetCountDelegate(IntPtr self, out uint pcelt);
         private delegate int ThreadEnumNextDelegate(IntPtr self, uint celt, out IntPtr ppThreads, out uint pceltFetched);
         private delegate int ThreadGetIDDelegate(IntPtr self, out uint pdwThreadId);
+
     }
 }

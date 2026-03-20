@@ -7,7 +7,7 @@ using VisualGameStudio.Core.Abstractions.ViewModels;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
-public partial class ImmediateWindowViewModel : ViewModelBase
+public partial class ImmediateWindowViewModel : ViewModelBase, IDisposable
 {
     private readonly IDebugService _debugService;
     private readonly StringBuilder _outputBuffer = new();
@@ -23,15 +23,31 @@ public partial class ImmediateWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isEnabled = true;
 
+    /// <summary>
+    /// Prompt string displayed before the input. Shows ">" when debugging is paused,
+    /// "[running]" when running, or "[no debug]" otherwise.
+    /// </summary>
+    [ObservableProperty]
+    private string _prompt = ">";
+
     public ImmediateWindowViewModel(IDebugService debugService)
     {
         _debugService = debugService;
         _debugService.StateChanged += OnDebugStateChanged;
+        _debugService.Stopped += OnDebugStopped;
 
         // Add welcome message
         AppendOutput("Immediate Window - Enter expressions to evaluate during debugging.\n");
-        AppendOutput("Type '?' followed by an expression to evaluate (e.g., ?x + 1)\n");
-        AppendOutput("Type 'clear' to clear the window.\n\n");
+        AppendOutput("Type an expression to evaluate (e.g., x + 1, name.Length)\n");
+        AppendOutput("Type 'clear' to clear, 'help' for more commands.\n\n");
+
+        UpdatePrompt();
+    }
+
+    public void Dispose()
+    {
+        _debugService.StateChanged -= OnDebugStateChanged;
+        _debugService.Stopped -= OnDebugStopped;
     }
 
     private void OnDebugStateChanged(object? sender, DebugStateChangedEventArgs e)
@@ -40,7 +56,7 @@ public partial class ImmediateWindowViewModel : ViewModelBase
         {
             if (e.NewState == DebugState.Paused)
             {
-                AppendOutput("[Debugger paused]\n");
+                AppendOutput("[Debugger paused - ready for expressions]\n");
             }
             else if (e.NewState == DebugState.Running)
             {
@@ -50,7 +66,33 @@ public partial class ImmediateWindowViewModel : ViewModelBase
             {
                 AppendOutput("[Debug session ended]\n");
             }
+
+            UpdatePrompt();
         });
+    }
+
+    private void OnDebugStopped(object? sender, StoppedEventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            UpdatePrompt();
+        });
+    }
+
+    private void UpdatePrompt()
+    {
+        if (!_debugService.IsDebugging)
+        {
+            Prompt = "[no debug] >";
+        }
+        else if (_debugService.State == DebugState.Paused)
+        {
+            Prompt = ">";
+        }
+        else
+        {
+            Prompt = "[running] >";
+        }
     }
 
     public void AppendOutput(string text)
@@ -77,19 +119,21 @@ public partial class ImmediateWindowViewModel : ViewModelBase
         InputText = "";
 
         // Handle special commands
-        if (input.Equals("clear", StringComparison.OrdinalIgnoreCase))
+        if (input.Equals("clear", StringComparison.OrdinalIgnoreCase) ||
+            input.Equals(".cls", StringComparison.OrdinalIgnoreCase))
         {
             Clear();
             return;
         }
 
-        if (input.Equals("help", StringComparison.OrdinalIgnoreCase))
+        if (input.Equals("help", StringComparison.OrdinalIgnoreCase) ||
+            input.Equals("?", StringComparison.Ordinal))
         {
             ShowHelp();
             return;
         }
 
-        // Show the command in output
+        // Show the command in output with prompt
         AppendOutput($"> {input}\n");
 
         // Check if we're debugging
@@ -105,16 +149,36 @@ public partial class ImmediateWindowViewModel : ViewModelBase
             return;
         }
 
-        // Remove leading ? if present
+        // Remove leading ? if present (common convention)
         var expression = input.StartsWith("?") ? input.Substring(1).Trim() : input;
+
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            AppendOutput("(empty expression)\n\n");
+            return;
+        }
 
         try
         {
-            var result = await _debugService.EvaluateAsync(expression);
+            // Use "repl" context for immediate window evaluations
+            var result = await _debugService.EvaluateAsync(expression, context: "repl");
             if (result != null)
             {
-                var typeInfo = !string.IsNullOrEmpty(result.Type) ? $" ({result.Type})" : "";
-                AppendOutput($"{result.Result}{typeInfo}\n\n");
+                var value = result.Result ?? "";
+                // Detect error results from the adapter
+                if (value.StartsWith("<error") || value.StartsWith("<'") || value.StartsWith("<member") || value.StartsWith("<no frame"))
+                {
+                    AppendOutput($"Error: {value}\n\n");
+                }
+                else if (string.IsNullOrEmpty(value))
+                {
+                    AppendOutput("(no result)\n\n");
+                }
+                else
+                {
+                    var typeInfo = !string.IsNullOrEmpty(result.Type) ? $" [{result.Type}]" : "";
+                    AppendOutput($"{value}{typeInfo}\n\n");
+                }
             }
             else
             {
@@ -176,15 +240,18 @@ public partial class ImmediateWindowViewModel : ViewModelBase
         AppendOutput(@"
 Immediate Window Commands:
 --------------------------
-?<expression>  - Evaluate an expression (e.g., ?x + 1)
-<expression>   - Same as above, ? is optional
-clear          - Clear the window
-help           - Show this help message
+<expression>   - Evaluate an expression (e.g., x + 1)
+?<expression>  - Same as above, ? prefix is optional
+variable       - Show value of a variable (e.g., counter)
+var.member     - Access member (e.g., name.Length, person.Age)
+clear / .cls   - Clear the window
+help / ?       - Show this help message
 
 Examples:
-  ?counter           - Show value of 'counter' variable
-  ?x + y             - Evaluate expression
-  ?CalculateSum(5)   - Call a function
+  counter           - Show value of 'counter' variable
+  x + y             - Not yet supported (simple variable lookup only)
+  name.Length        - Access member of an object
+  person.Name       - Access field/property of an object
 
 Note: Expressions can only be evaluated when the debugger is paused.
 

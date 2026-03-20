@@ -846,13 +846,13 @@ public class DebugService : IDebugService
         }
     }
 
-    public async Task<EvaluateResult> EvaluateAsync(string expression, int? frameId = null)
+    public async Task<EvaluateResult> EvaluateAsync(string expression, int? frameId = null, string? context = null)
     {
         if (_writer == null) return new EvaluateResult { Result = "Error: Not debugging" };
 
         try
         {
-            var args = new Dictionary<string, object> { ["expression"] = expression, ["context"] = "watch" };
+            var args = new Dictionary<string, object> { ["expression"] = expression, ["context"] = context ?? "watch" };
             if (frameId.HasValue) args["frameId"] = frameId.Value;
 
             var result = await SendRequestAsync("evaluate", args);

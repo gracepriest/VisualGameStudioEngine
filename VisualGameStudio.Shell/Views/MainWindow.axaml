@@ -142,6 +142,16 @@
         <Separator/>
         <MenuItem Header="_Open Project..." Command="{Binding OpenProjectCommand}" InputGesture="Ctrl+Shift+O"/>
         <MenuItem Header="Open _File..." Command="{Binding OpenFileCommand}" InputGesture="Ctrl+O"/>
+        <MenuItem Header="Open _Recent" ItemsSource="{Binding RecentProjectMenuItems}">
+          <MenuItem.Styles>
+            <Style Selector="MenuItem">
+              <Setter Property="Header" Value="{Binding Header}"/>
+              <Setter Property="Command" Value="{Binding Command}"/>
+              <Setter Property="CommandParameter" Value="{Binding CommandParameter}"/>
+              <Setter Property="IsEnabled" Value="{Binding IsEnabled}"/>
+            </Style>
+          </MenuItem.Styles>
+        </MenuItem>
         <Separator/>
         <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGesture="Ctrl+S"/>
         <MenuItem Header="Save _All" Command="{Binding SaveAllCommand}" InputGesture="Ctrl+Shift+S"/>
@@ -370,8 +380,9 @@
       </StackPanel>
     </Border>
 
-    <!-- Status Bar -->
+    <!-- Status Bar (orange during debug, blue normally) -->
     <Border DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}"
+            Background="{Binding IsDebugging, Converter={x:Static local:BoolToBrushConverter.DebugStatusBarInstance}}"
             AutomationProperties.Name="Status Bar">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
         <!-- Status message -->

@@ -60,6 +60,8 @@ public partial class CodeEditorControl : UserControl
     private ILanguageService? _languageService;
     private string? _documentFilePath;
     private bool _isColumnSelectionMode;
+    private CurrentLineNumberMargin? _currentLineNumberMargin;
+    private TextMarkers.SelectionOccurrenceHighlighter? _selectionOccurrenceHighlighter;
 
     // Smooth scrolling state
     private bool _smoothScrollingEnabled = true;
@@ -472,10 +474,19 @@ public partial class CodeEditorControl : UserControl
         // Configure editor appearance
         ConfigureEditor();
 
+        // Setup custom line number margin with current-line highlighting
+        SetupCurrentLineNumberMargin();
+
+        // Setup selection occurrence highlighter (highlights all matches of selected text)
+        _selectionOccurrenceHighlighter = new TextMarkers.SelectionOccurrenceHighlighter(_textEditor);
+        _textEditor.TextArea.TextView.BackgroundRenderers.Add(_selectionOccurrenceHighlighter);
+
         // Subscribe to text changes
         _textEditor.TextChanged += OnEditorTextChanged;
         _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChanged;
         _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForBrackets;
+        _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForLineNumbers;
+        _textEditor.TextArea.SelectionChanged += OnSelectionChangedForOccurrences;
 
         // Subscribe to input events for multi-cursor
         _textEditor.TextArea.PointerPressed += OnTextAreaPointerPressed;
@@ -1106,6 +1117,16 @@ public partial class CodeEditorControl : UserControl
             return;
         }
 
+        // Handle Enter to auto-insert End blocks (Sub/End Sub, etc.)
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
+        {
+            // Schedule after the default Enter handling (which inserts newline and applies indentation)
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                TryAutoInsertEndBlock();
+            }, Avalonia.Threading.DispatcherPriority.Background);
+        }
+
         // Handle Backspace to delete empty auto-close pairs
         if (e.Key == Key.Back && e.KeyModifiers == KeyModifiers.None && _autoCloseBrackets)
         {
@@ -1374,6 +1395,9 @@ public partial class CodeEditorControl : UserControl
         {
             ApplyEditorThemeColors();
 
+            // Update custom line number margin colors
+            _currentLineNumberMargin?.UpdateThemeColors();
+
             // Re-apply syntax highlighting with theme-appropriate colors
             var highlighting = HighlightingManager.Instance.GetDefinition("BasicLang");
             if (highlighting != null)
@@ -1418,6 +1442,58 @@ public partial class CodeEditorControl : UserControl
     {
         _bracketHighlighter.UpdateBracketHighlight(_textEditor.Document, _textEditor.CaretOffset);
         _textEditor.TextArea.TextView.Redraw();
+    }
+
+    private void OnCaretPositionChangedForLineNumbers(object? sender, EventArgs e)
+    {
+        _currentLineNumberMargin?.InvalidateLineNumbers();
+    }
+
+    private void OnSelectionChangedForOccurrences(object? sender, EventArgs e)
+    {
+        if (_selectionOccurrenceHighlighter != null)
+        {
+            _selectionOccurrenceHighlighter.UpdateSelection();
+            _textEditor?.TextArea?.TextView?.InvalidateLayer(AvaloniaEdit.Rendering.KnownLayer.Selection);
+        }
+    }
+
+    /// <summary>
+    /// Replaces the built-in line number margin with a custom one that highlights the current line number.
+    /// </summary>
+    private void SetupCurrentLineNumberMargin()
+    {
+        if (_textEditor?.TextArea == null) return;
+
+        // Remove the built-in LineNumberMargin
+        var margins = _textEditor.TextArea.LeftMargins;
+        for (int i = margins.Count - 1; i >= 0; i--)
+        {
+            if (margins[i].GetType().Name == "LineNumberMargin")
+            {
+                margins.RemoveAt(i);
+            }
+        }
+
+        // Add our custom margin that highlights the current line number
+        _currentLineNumberMargin = new CurrentLineNumberMargin(_textEditor)
+        {
+            FontFamily = _textEditor.FontFamily,
+            FontSize = _textEditor.FontSize - 1, // slightly smaller
+        };
+        _currentLineNumberMargin.UpdateThemeColors();
+
+        // Insert after diagnostic margin (index 0) so it appears where line numbers normally go
+        var insertIndex = 0;
+        for (int i = 0; i < margins.Count; i++)
+        {
+            if (margins[i] is DiagnosticMargin)
+            {
+                insertIndex = i + 1;
+                break;
+            }
+        }
+        margins.Insert(insertIndex, _currentLineNumberMargin);
     }
 
     private void UpdateFoldings()
@@ -1708,7 +1784,15 @@ public partial class CodeEditorControl : UserControl
         }
         else if (change.Property == ShowLineNumbersProperty)
         {
-            _textEditor.ShowLineNumbers = change.GetNewValue<bool>();
+            // Toggle our custom line number margin visibility instead of the built-in one
+            if (_currentLineNumberMargin != null)
+            {
+                _currentLineNumberMargin.IsVisible = change.GetNewValue<bool>();
+            }
+            else
+            {
+                _textEditor.ShowLineNumbers = change.GetNewValue<bool>();
+            }
         }
         else if (change.Property == WordWrapProperty)
         {
@@ -3162,6 +3246,12 @@ public partial class CodeEditorControl : UserControl
 
     #endregion
 
+    #region Execution Line Highlight
+
+    private TextMarkers.ExecutionLineRenderer? _executionLineRenderer;
+
+    #endregion
+
     #region Inline Debug Values
 
     private TextMarkers.InlineDebugValueRenderer? _inlineDebugValueRenderer;
@@ -3672,6 +3762,128 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.Caret.Column = indent.Length + 1;
     }
 
+    /// <summary>
+    /// Auto-inserts the corresponding End block (End Sub, End Function, etc.) when Enter is pressed
+    /// after a block-opening keyword. The cursor stays on the blank indented line between the opener and closer.
+    /// </summary>
+    private void TryAutoInsertEndBlock()
+    {
+        if (_textEditor?.Document == null) return;
+
+        var doc = _textEditor.Document;
+        var caretLine = _textEditor.TextArea.Caret.Line;
+        if (caretLine < 2) return;
+
+        // The line ABOVE the cursor is the one the user just pressed Enter on
+        var prevDocLine = doc.GetLineByNumber(caretLine - 1);
+        var prevLineText = doc.GetText(prevDocLine.Offset, prevDocLine.Length);
+        var trimmedPrev = prevLineText.TrimStart();
+
+        // Determine if the previous line opens a block that needs an End
+        var endKeyword = GetAutoEndKeyword(trimmedPrev);
+        if (endKeyword == null) return;
+
+        // Check if the end block already exists on the next line (avoid duplicates)
+        if (caretLine < doc.LineCount)
+        {
+            var nextDocLine = doc.GetLineByNumber(caretLine + 1);
+            var nextLineText = doc.GetText(nextDocLine.Offset, nextDocLine.Length).TrimStart();
+            if (nextLineText.StartsWith(endKeyword, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+        // Also check the current line (caret might be on a non-empty line)
+        var currentDocLine = doc.GetLineByNumber(caretLine);
+        var currentLineText = doc.GetText(currentDocLine.Offset, currentDocLine.Length).TrimStart();
+        if (currentLineText.StartsWith(endKeyword, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // Get the indentation of the opening line
+        var openIndent = Completion.SmartIndentHandler.GetLineIndent(prevLineText);
+
+        // Save the current caret position
+        var savedOffset = _textEditor.CaretOffset;
+
+        // Insert a new line with the End keyword at the same indent level as the opener
+        var endLine = Environment.NewLine + openIndent + endKeyword;
+        doc.Insert(currentDocLine.EndOffset, endLine);
+
+        // Restore caret to the blank indented line between opener and closer
+        _textEditor.CaretOffset = savedOffset;
+    }
+
+    /// <summary>
+    /// Returns the End keyword to auto-insert for the given line, or null if no auto-insert is needed.
+    /// </summary>
+    private static string? GetAutoEndKeyword(string trimmedLine)
+    {
+        var lower = trimmedLine.ToLowerInvariant();
+
+        // Remove access modifiers for matching
+        var stripped = System.Text.RegularExpressions.Regex.Replace(lower,
+            @"^(public|private|protected|friend|shared|overridable|overrides|mustoverride|notoverridable|static)\s+", "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        // Strip again in case there were two (e.g., "Public Shared")
+        stripped = System.Text.RegularExpressions.Regex.Replace(stripped,
+            @"^(public|private|protected|friend|shared|overridable|overrides|mustoverride|notoverridable|static)\s+", "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        if (stripped.StartsWith("sub ") || stripped == "sub")
+            return "End Sub";
+        if (stripped.StartsWith("function ") || stripped == "function")
+            return "End Function";
+        if (stripped.StartsWith("class ") || stripped == "class")
+            return "End Class";
+        if (stripped.StartsWith("module ") || stripped == "module")
+            return "End Module";
+        if (stripped.StartsWith("namespace ") || stripped == "namespace")
+            return "End Namespace";
+        if (stripped.StartsWith("structure ") || stripped == "structure")
+            return "End Structure";
+        if (stripped.StartsWith("interface ") || stripped == "interface")
+            return "End Interface";
+        if (stripped.StartsWith("enum ") || stripped == "enum")
+            return "End Enum";
+        if (stripped.StartsWith("property ") || stripped == "property")
+            return "End Property";
+        if (stripped.StartsWith("type ") || stripped == "type")
+            return "End Type";
+        if (stripped.StartsWith("select "))
+            return "End Select";
+        if (stripped.StartsWith("try"))
+            return "End Try";
+        if (stripped.StartsWith("with ") || stripped == "with")
+            return "End With";
+
+        // If...Then (multi-line only - not single-line If)
+        if (stripped.StartsWith("if ") && stripped.EndsWith("then") && !HasCodeAfterThen(trimmedLine))
+            return "End If";
+
+        // For loops
+        if (stripped.StartsWith("for each ") || stripped.StartsWith("for "))
+            return "Next";
+
+        // While loops
+        if (stripped.StartsWith("while ") || stripped == "while")
+            return "End While";
+
+        // Do loops
+        if (stripped.StartsWith("do ") || stripped == "do")
+            return "Loop";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns true if there is code after "Then" on the same line (single-line If).
+    /// </summary>
+    private static bool HasCodeAfterThen(string line)
+    {
+        var thenIndex = line.LastIndexOf("Then", StringComparison.OrdinalIgnoreCase);
+        if (thenIndex < 0) return false;
+        var afterThen = line.Substring(thenIndex + 4).TrimStart();
+        return !string.IsNullOrEmpty(afterThen) && !afterThen.StartsWith("'");
+    }
+
     #endregion
 
     #region Breakpoints
@@ -3719,6 +3931,18 @@ public partial class CodeEditorControl : UserControl
     public void SetCurrentExecutionLine(int? line)
     {
         _breakpointMargin?.SetCurrentLine(line);
+
+        // Highlight the execution line background (yellow overlay)
+        if (_textEditor?.TextArea?.TextView != null)
+        {
+            if (_executionLineRenderer == null)
+            {
+                _executionLineRenderer = new TextMarkers.ExecutionLineRenderer(_textEditor);
+                _textEditor.TextArea.TextView.BackgroundRenderers.Add(_executionLineRenderer);
+            }
+            _executionLineRenderer.SetExecutionLine(line);
+        }
+
         _textEditor?.TextArea.TextView.Redraw();
 
         // Also scroll to the line if set

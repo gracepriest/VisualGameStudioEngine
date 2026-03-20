@@ -232,7 +232,7 @@ public partial class DebugConsoleViewModel : ViewModelBase, IDisposable
         // Evaluate the expression
         try
         {
-            var result = await _debugService.EvaluateAsync(input);
+            var result = await _debugService.EvaluateAsync(input, context: "repl");
             if (result != null)
             {
                 var entry = new DebugConsoleEntry

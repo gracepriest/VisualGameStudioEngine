@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using BasicLang.Compiler.AST;
@@ -1358,6 +1359,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             Indent();
 
             // Declare locals (ONLY real locals; no compiler temps)
+            // Use #line hidden so the PDB doesn't map these to the temp .cs file
+            if (function.LocalVariables.Count > 0)
+                EmitLineHidden();
             var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var localVar in function.LocalVariables)
             {
@@ -1383,7 +1387,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             if (function.LocalVariables.Count > 0)
+            {
+                _output.AppendLine("#line default");
+                _lastEmittedSourceLine = -1;
+                _lastEmittedSourceFile = null;
                 WriteLine();
+            }
 
             // Body - use structured control flow generation
             _processedBlocks = new HashSet<BasicBlock>();
@@ -1391,6 +1400,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (function.EntryBlock != null)
                 GenerateStructuredBlock(function.EntryBlock);
 
+            EmitLineHidden();
             Unindent();
             WriteLine("}");
 
@@ -1642,6 +1652,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Handle the terminator instruction with structured control flow
             var terminator = block.Instructions.LastOrDefault();
 
+            // Emit #line for the terminator (control-flow statements like If, While, Select)
+            if (terminator is IRInstruction termInstr && termInstr.SourceLine > 0)
+            {
+                EmitLineDirective(termInstr.SourceLine, _currentFunction?.SourceFilePath);
+            }
+
             if (terminator is IRConditionalBranch condBranch)
             {
                 HandleConditionalBranch(condBranch);
@@ -1664,7 +1680,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private void EmitLineDirective(int sourceLine, string sourceFile)
         {
             if (sourceLine <= 0 || string.IsNullOrEmpty(sourceFile)) return;
-            if (sourceLine == _lastEmittedSourceLine && sourceFile == _lastEmittedSourceFile) return;
+            // Normalize the path to use consistent separators (backslash on Windows)
+            sourceFile = sourceFile.Replace('/', Path.DirectorySeparatorChar);
+            if (sourceLine == _lastEmittedSourceLine && string.Equals(sourceFile, _lastEmittedSourceFile, StringComparison.OrdinalIgnoreCase)) return;
 
             _lastEmittedSourceLine = sourceLine;
             _lastEmittedSourceFile = sourceFile;

@@ -57,6 +57,7 @@ public sealed class SourceMapper : IDisposable
     /// </summary>
     public (int methodToken, int ilOffset)? GetILOffsetForLine(string basFilePath, int line)
     {
+        basFilePath = NormalizePath(basFilePath);
         if (!_sequencePointsByFile.TryGetValue(basFilePath, out var entries))
             return null;
 
@@ -104,6 +105,7 @@ public sealed class SourceMapper : IDisposable
     /// </summary>
     public int FindNearestExecutableLine(string basFilePath, int line)
     {
+        basFilePath = NormalizePath(basFilePath);
         if (!_sequencePointsByFile.TryGetValue(basFilePath, out var entries))
             return line;
 
@@ -125,6 +127,7 @@ public sealed class SourceMapper : IDisposable
     /// </summary>
     public (int methodToken, int ilOffset, int line)? GetNextExecutableLine(string basFilePath, int currentLine, int currentMethodToken)
     {
+        basFilePath = NormalizePath(basFilePath);
         if (!_sequencePointsByMethod.TryGetValue(currentMethodToken, out var sps))
             return null;
 
@@ -372,6 +375,9 @@ public sealed class SourceMapper : IDisposable
                     filePath = _pdbReader.GetString(spDoc.Name);
                 }
 
+                // Normalize the file path for consistent matching
+                filePath = NormalizePath(filePath);
+
                 var entry = new SequencePointEntry
                 {
                     FilePath = filePath,
@@ -473,6 +479,26 @@ public sealed class SourceMapper : IDisposable
             return true;
         char next = text[functionName.Length];
         return next == '(' || char.IsWhiteSpace(next);
+    }
+
+    /// <summary>
+    /// Normalizes a file path by converting forward slashes to backslashes (on Windows)
+    /// and using the full path form. This ensures consistent matching between #line
+    /// directive paths and PDB document paths.
+    /// </summary>
+    private static string NormalizePath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        // Normalize slashes to the OS convention
+        path = path.Replace('/', Path.DirectorySeparatorChar);
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return path;
+        }
     }
 
     private sealed class SequencePointEntry
