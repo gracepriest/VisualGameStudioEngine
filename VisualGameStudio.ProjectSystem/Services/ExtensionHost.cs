@@ -504,6 +504,47 @@ public class ExtensionHost : IDisposable
 
     #endregion
 
+    #region Tree View Request Methods
+
+    /// <summary>
+    /// Requests children of a tree view element from the extension host.
+    /// Pass null for element to get root-level children.
+    /// </summary>
+    public async Task<JsonElement?> RequestTreeChildrenAsync(string viewId, string? element, CancellationToken ct = default)
+    {
+        if (!IsRunning || _rpc == null) return null;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+                "treeView/getChildren",
+                new object?[] { viewId, element },
+                cts.Token);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Requests the tree item representation for a given element from the extension host.
+    /// </summary>
+    public async Task<JsonElement?> RequestTreeItemAsync(string viewId, string element, CancellationToken ct = default)
+    {
+        if (!IsRunning || _rpc == null) return null;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+                "treeView/getTreeItem",
+                new object[] { viewId, element },
+                cts.Token);
+        }
+        catch { return null; }
+    }
+
+    #endregion
+
     /// <summary>
     /// Notifies the extension host of the current workspace folder.
     /// </summary>

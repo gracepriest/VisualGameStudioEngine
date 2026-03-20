@@ -86,6 +86,11 @@ public partial class MainWindowViewModel : ViewModelBase
     public IReadOnlyDictionary<string, TreeViewPanelViewModel> ExtensionTreeViews => _extensionTreeViews;
 
     /// <summary>
+    /// Tracks extension-contributed webview panels by panelId.
+    /// </summary>
+    private readonly Dictionary<string, WebViewDocumentViewModel> _extensionWebViews = new();
+
+    /// <summary>
     /// Tracks cursor position history for Back/Forward navigation (Alt+Left/Right).
     /// </summary>
     private readonly Services.NavigationHistoryService _navigationHistory = new();
@@ -397,7 +402,7 @@ public partial class MainWindowViewModel : ViewModelBase
         Timeline = timeline;
 
         // Setup dock layout
-        _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks, threads: threads, timeline: timeline);
+        _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks, threads: threads, timeline: timeline, callHierarchy: CallHierarchy);
         Layout = _dockFactory.CreateLayout();
         _dockFactory.InitLayout(Layout);
 
@@ -467,6 +472,10 @@ public partial class MainWindowViewModel : ViewModelBase
         // Subscribe to extension tree view creation and refresh
         _extensionService.TreeViewCreated += OnExtensionTreeViewCreated;
         _extensionService.TreeViewRefreshRequested += OnExtensionTreeViewRefreshRequested;
+
+        // Subscribe to extension webview panel creation and HTML updates
+        _extensionService.WebViewCreated += OnExtensionWebViewCreated;
+        _extensionService.WebViewHtmlChanged += OnExtensionWebViewHtmlChanged;
 
         // Load accessibility and zoom settings
         if (_settingsService != null)
@@ -539,6 +548,31 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 System.Diagnostics.Debug.WriteLine($"[TreeView] Refresh failed for {e.ViewId}: {ex.Message}");
             }
+        }
+    }
+
+    private void OnExtensionWebViewCreated(object? sender, WebViewCreatedEventArgs e)
+    {
+        if (_extensionWebViews.ContainsKey(e.PanelId)) return;
+
+        var viewModel = new WebViewDocumentViewModel(e.PanelId, e.ViewType, e.ExtensionId, e.Title);
+        _extensionWebViews[e.PanelId] = viewModel;
+
+        // Add as a document tab in the dock
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _dockFactory.AddWebViewDocument(viewModel);
+        });
+    }
+
+    private void OnExtensionWebViewHtmlChanged(object? sender, WebViewHtmlChangedEventArgs e)
+    {
+        if (_extensionWebViews.TryGetValue(e.PanelId, out var viewModel))
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                viewModel.SetHtmlContent(e.Html);
+            });
         }
     }
 
@@ -773,6 +807,44 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    private async void OnTimelineDiffRequested(object? sender, TimelineItemViewModel item)
+    {
+        try
+        {
+            // Get the file content at the selected commit
+            var oldContent = await _gitService.GetFileContentAtCommitAsync(item.FilePath, item.CommitHash);
+            if (oldContent == null)
+            {
+                StatusText = $"Could not retrieve file at commit {item.ShortHash}";
+                return;
+            }
+
+            // Get current file content
+            string currentContent;
+            if (_openDocuments.TryGetValue(item.FilePath, out var openDoc))
+            {
+                currentContent = openDoc.Text ?? "";
+            }
+            else
+            {
+                currentContent = await _fileService.ReadFileAsync(item.FilePath);
+            }
+
+            var fileName = Path.GetFileName(item.FilePath);
+            var diffVm = new Dialogs.DiffViewerViewModel(_gitService);
+            diffVm.LoadContents(oldContent, currentContent,
+                $"{fileName} ({item.ShortHash})",
+                $"{fileName} (Current)");
+
+            CompareViewRequested?.Invoke(this, diffVm);
+            StatusText = $"Comparing {fileName} at {item.ShortHash} with current version";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to open diff: {ex.Message}";
+        }
+    }
+
     private void OnProjectClosed(object? sender, ProjectEventArgs e)
     {
         // Keep solution title if a solution is still open
@@ -899,6 +971,45 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             // Ignore exceptions in event handler
         }
+    }
+
+    private async Task HandleGutterConditionalBreakpointAsync(string filePath, int line, string mode)
+    {
+        try
+        {
+            var existing = Breakpoints.GetBreakpointsForFile(filePath).FirstOrDefault(b => b.Line == line);
+            if (existing == null)
+            {
+                Breakpoints.AddBreakpoint(filePath, line);
+                existing = Breakpoints.GetBreakpointsForFile(filePath).FirstOrDefault(b => b.Line == line);
+                if (existing == null) return;
+            }
+            var location = $"{Path.GetFileName(filePath)}:{line}";
+            var result = await _dialogService.ShowBreakpointConditionDialogAsync(
+                location,
+                existing.Condition,
+                existing.HitCondition,
+                existing.LogMessage,
+                mode);
+            if (result != null && result.DialogResult)
+                Breakpoints.UpdateBreakpointCondition(existing, result.Condition, result.HitCount, result.LogMessage);
+        }
+        catch (Exception) { }
+    }
+
+    private async Task HandleGutterEditBreakpointAsync(string filePath, int line)
+    {
+        try
+        {
+            var existing = Breakpoints.GetBreakpointsForFile(filePath).FirstOrDefault(b => b.Line == line);
+            if (existing == null) return;
+            var location = $"{Path.GetFileName(filePath)}:{line}";
+            var result = await _dialogService.ShowBreakpointConditionDialogAsync(
+                location, existing.Condition, existing.HitCondition, existing.LogMessage);
+            if (result != null && result.DialogResult)
+                Breakpoints.UpdateBreakpointCondition(existing, result.Condition, result.HitCount, result.LogMessage);
+        }
+        catch (Exception) { }
     }
 
     private async void OnEditFunctionBreakpointCondition(object? sender, FunctionBreakpointItem breakpoint)
@@ -1363,6 +1474,7 @@ public partial class MainWindowViewModel : ViewModelBase
             // Named async handlers for refactoring commands
             EventHandler onGoToDef = async (s, e) => await GoToDefinitionAsync();
             EventHandler onFindRefs = async (s, e) => await FindReferencesAsync();
+            EventHandler onCallHierarchy = async (s, e) => await ShowCallHierarchyAsync();
             EventHandler onRename = async (s, e) => await RenameSymbolAsync();
             EventHandler onExtractMethod = async (s, e) => await ExtractMethodAsync();
             EventHandler onInlineMethod = async (s, e) => await InlineMethodAsync();
@@ -1405,6 +1517,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
             document.GoToDefinitionRequested += onGoToDef;
             document.FindAllReferencesRequested += onFindRefs;
+            document.ShowCallHierarchyRequested += onCallHierarchy;
             document.RenameSymbolRequested += onRename;
             document.ExtractMethodRequested += onExtractMethod;
             document.InlineMethodRequested += onInlineMethod;
@@ -1647,6 +1760,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 document.DataTipEvaluationRequested -= OnDataTipEvaluationRequested;
                 document.GoToDefinitionRequested -= onGoToDef;
                 document.FindAllReferencesRequested -= onFindRefs;
+                document.ShowCallHierarchyRequested -= onCallHierarchy;
                 document.RenameSymbolRequested -= onRename;
                 document.ExtractMethodRequested -= onExtractMethod;
                 document.InlineMethodRequested -= onInlineMethod;
@@ -6401,6 +6515,9 @@ $"""
         // Wire navigation
         CallHierarchy.NavigationRequested -= OnCallHierarchyNavigation;
         CallHierarchy.NavigationRequested += OnCallHierarchyNavigation;
+
+        // Activate the Call Hierarchy panel
+        _dockFactory.ActivateTool("CallHierarchy");
     }
 
     private async void OnCallHierarchyNavigation(object? sender, CallHierarchyNavigationEventArgs e)

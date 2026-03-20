@@ -1,0 +1,81 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="250" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.TreeViewPanel"
+             x:DataType="vm:TreeViewPanelViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Text="{Binding Title}" Classes="panelTitle"/>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+            <Button Classes="toolbarButton"
+                    ToolTip.Tip="Refresh"
+                    Command="{Binding RefreshCommand}"
+                    Width="24" Height="24"
+                    AutomationProperties.Name="Refresh Tree View">
+              <TextBlock Text="R" FontSize="10" FontWeight="Bold"/>
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- Loading indicator -->
+      <TextBlock DockPanel.Dock="Top"
+                 Text="Loading..."
+                 Foreground="#808080"
+                 FontSize="11"
+                 Margin="12,4"
+                 IsVisible="{Binding IsLoading}"/>
+
+      <!-- Empty state -->
+      <TextBlock DockPanel.Dock="Top"
+                 Text="No items"
+                 Foreground="#606060"
+                 FontSize="11"
+                 Margin="12,8"
+                 IsVisible="{Binding !RootItems.Count}"
+                 x:Name="EmptyText"/>
+
+      <TreeView x:Name="ExtensionTreeView"
+                ItemsSource="{Binding RootItems}"
+                SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+                Background="Transparent"
+                DoubleTapped="OnTreeViewDoubleTapped"
+                AutomationProperties.Name="Extension Tree View">
+        <TreeView.ItemTemplate>
+          <TreeDataTemplate ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal" Spacing="6"
+                        ToolTip.Tip="{Binding Tooltip}">
+              <!-- Icon -->
+              <TextBlock Text="{Binding IconKind}"
+                         FontSize="12"
+                         FontWeight="Bold"
+                         Foreground="#569CD6"
+                         VerticalAlignment="Center"/>
+              <!-- Label -->
+              <TextBlock Text="{Binding Label}"
+                         Foreground="#CCCCCC"
+                         VerticalAlignment="Center"/>
+              <!-- Description (secondary text) -->
+              <TextBlock Text="{Binding Description}"
+                         Foreground="#606060"
+                         FontSize="10"
+                         VerticalAlignment="Center"
+                         IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+            </StackPanel>
+          </TreeDataTemplate>
+        </TreeView.ItemTemplate>
+        <TreeView.Styles>
+          <Style Selector="TreeViewItem">
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+          </Style>
+        </TreeView.Styles>
+      </TreeView>
+    </DockPanel>
+  </Border>
+</UserControl>

@@ -98,6 +98,10 @@ public class ExtensionService : IExtensionService
     public event EventHandler<ExtensionMessageEventArgs>? ExtensionMessageReceived;
     public event EventHandler<ExtensionContributionsLoadedEventArgs>? ContributionsLoaded;
     public event EventHandler<ExtensionDiagnosticsEventArgs>? ExtensionDiagnosticsReceived;
+    public event EventHandler<ExtensionTreeViewEventArgs>? TreeViewCreated;
+    public event EventHandler<ExtensionTreeViewEventArgs>? TreeViewRefreshRequested;
+    public event EventHandler<WebViewCreatedEventArgs>? WebViewCreated;
+    public event EventHandler<WebViewHtmlChangedEventArgs>? WebViewHtmlChanged;
 
     #region Discovery
 
@@ -176,6 +180,29 @@ public class ExtensionService : IExtensionService
         _extensionHost.CommandRegistered += OnCommandRegistered;
         _extensionHost.HostCrashed += OnHostCrashed;
         _extensionHost.DiagnosticsReceived += (s, e) => ExtensionDiagnosticsReceived?.Invoke(this, e);
+        _extensionHost.TreeViewCreated += (s, e) => TreeViewCreated?.Invoke(this, new ExtensionTreeViewEventArgs
+        {
+            ExtensionId = e.ExtensionId,
+            ViewId = e.ViewId,
+            Title = e.Title
+        });
+        _extensionHost.TreeViewRefreshRequested += (s, e) => TreeViewRefreshRequested?.Invoke(this, new ExtensionTreeViewEventArgs
+        {
+            ViewId = e.ViewId,
+            Element = e.Element
+        });
+        _extensionHost.WebViewCreated += (s, e) => WebViewCreated?.Invoke(this, new WebViewCreatedEventArgs
+        {
+            ExtensionId = e.ExtensionId,
+            PanelId = e.PanelId,
+            ViewType = e.ViewType,
+            Title = e.Title
+        });
+        _extensionHost.WebViewHtmlChanged += (s, e) => WebViewHtmlChanged?.Invoke(this, new WebViewHtmlChangedEventArgs
+        {
+            PanelId = e.PanelId,
+            Html = e.Html
+        });
         _extensionHost.ProviderRegistered += (s, e) =>
         {
             // Extract language IDs from selector and add to tracking set
@@ -632,6 +659,18 @@ public class ExtensionService : IExtensionService
     {
         if (_extensionHost == null || !_extensionHost.IsRunning) return null;
         return await _extensionHost.RequestDocumentSymbolsAsync(uri, ct);
+    }
+
+    public async Task<JsonElement?> RequestTreeChildrenAsync(string viewId, string? element, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return null;
+        return await _extensionHost.RequestTreeChildrenAsync(viewId, element, ct);
+    }
+
+    public async Task<JsonElement?> RequestTreeItemAsync(string viewId, string element, CancellationToken ct = default)
+    {
+        if (_extensionHost == null || !_extensionHost.IsRunning) return null;
+        return await _extensionHost.RequestTreeItemAsync(viewId, element, ct);
     }
 
     public async Task NotifyDocumentOpenedAsync(string uri, string languageId, int version, string text, CancellationToken ct = default)

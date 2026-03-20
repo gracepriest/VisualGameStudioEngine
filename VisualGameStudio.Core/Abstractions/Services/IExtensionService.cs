@@ -218,6 +218,27 @@ public interface IExtensionService : IDisposable
     Task ExecuteContributedCommandAsync(string commandId);
 
     /// <summary>
+    /// Requests the children of a tree view element from the extension host.
+    /// Pass null for element to get root-level children.
+    /// </summary>
+    Task<JsonElement?> RequestTreeChildrenAsync(string viewId, string? element, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Requests the tree item representation for a given element.
+    /// </summary>
+    Task<JsonElement?> RequestTreeItemAsync(string viewId, string element, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Raised when an extension creates a tree view (vscode.window.createTreeView).
+    /// </summary>
+    event EventHandler<ExtensionTreeViewEventArgs>? TreeViewCreated;
+
+    /// <summary>
+    /// Raised when an extension requests a tree view refresh.
+    /// </summary>
+    event EventHandler<ExtensionTreeViewEventArgs>? TreeViewRefreshRequested;
+
+    /// <summary>
     /// Checks for updates for all installed extensions.
     /// </summary>
     Task<IReadOnlyList<ExtensionUpdate>> CheckForUpdatesAsync(CancellationToken cancellationToken = default);
@@ -274,6 +295,16 @@ public interface IExtensionService : IDisposable
     /// from an extension, so the IDE can update its UI.
     /// </summary>
     event EventHandler<ExtensionContributionsLoadedEventArgs>? ContributionsLoaded;
+
+    /// <summary>
+    /// Raised when an extension creates a webview panel via vscode.window.createWebviewPanel().
+    /// </summary>
+    event EventHandler<WebViewCreatedEventArgs>? WebViewCreated;
+
+    /// <summary>
+    /// Raised when an extension updates webview HTML content via webview.html = "...".
+    /// </summary>
+    event EventHandler<WebViewHtmlChangedEventArgs>? WebViewHtmlChanged;
 }
 
 #region Extension Types
@@ -819,6 +850,24 @@ public class ExtensionContributionsLoadedEventArgs : EventArgs
 }
 
 /// <summary>
+/// Event args for extension tree view operations.
+/// </summary>
+public class ExtensionTreeViewEventArgs : EventArgs
+{
+    /// <summary>The extension that created or refreshed the tree view.</summary>
+    public string ExtensionId { get; set; } = "";
+
+    /// <summary>The tree view identifier.</summary>
+    public string ViewId { get; set; } = "";
+
+    /// <summary>The display title for the tree view.</summary>
+    public string? Title { get; set; }
+
+    /// <summary>The element to refresh (null for entire tree).</summary>
+    public string? Element { get; set; }
+}
+
+/// <summary>
 /// Event args for extension diagnostics published for a document.
 /// </summary>
 public class ExtensionDiagnosticsEventArgs : EventArgs
@@ -826,6 +875,36 @@ public class ExtensionDiagnosticsEventArgs : EventArgs
     public string Uri { get; set; } = "";
     public JsonElement Diagnostics { get; set; }
     public string CollectionName { get; set; } = "";
+}
+
+/// <summary>
+/// Event args for webview panel creation by an extension.
+/// </summary>
+public class WebViewCreatedEventArgs : EventArgs
+{
+    /// <summary>The extension that created the webview.</summary>
+    public string ExtensionId { get; set; } = "";
+
+    /// <summary>The unique panel identifier.</summary>
+    public string PanelId { get; set; } = "";
+
+    /// <summary>The view type identifier (e.g., "myExtension.preview").</summary>
+    public string ViewType { get; set; } = "";
+
+    /// <summary>The display title for the webview panel tab.</summary>
+    public string? Title { get; set; }
+}
+
+/// <summary>
+/// Event args for webview HTML content updates.
+/// </summary>
+public class WebViewHtmlChangedEventArgs : EventArgs
+{
+    /// <summary>The panel identifier to update.</summary>
+    public string PanelId { get; set; } = "";
+
+    /// <summary>The new HTML content.</summary>
+    public string Html { get; set; } = "";
 }
 
 /// <summary>
