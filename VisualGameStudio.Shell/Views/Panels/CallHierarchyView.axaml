@@ -1,0 +1,92 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:local="using:VisualGameStudio.Shell.Views.Panels"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
+             x:Class="VisualGameStudio.Shell.Views.Panels.CallHierarchyView"
+             x:DataType="vm:CallHierarchyViewModel">
+
+  <UserControl.Resources>
+    <local:HierarchyKindToIconConverter x:Key="KindToIcon"/>
+  </UserControl.Resources>
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <!-- Header with toggle buttons -->
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="Call Hierarchy" Classes="panelTitle"/>
+            <TextBlock Text="{Binding CurrentMethodName}"
+                       Foreground="#808080"
+                       FontSize="11"
+                       VerticalAlignment="Center"/>
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+            <Button Command="{Binding SwitchToIncomingCommand}"
+                    ToolTip.Tip="Show Incoming Calls (callers)"
+                    Width="24" Height="24"
+                    Classes="toolbarButton">
+              <TextBlock Text="&#x2190;" FontSize="12" FontWeight="Bold"/>
+            </Button>
+            <Button Command="{Binding SwitchToOutgoingCommand}"
+                    ToolTip.Tip="Show Outgoing Calls (callees)"
+                    Width="24" Height="24"
+                    Classes="toolbarButton">
+              <TextBlock Text="&#x2192;" FontSize="12" FontWeight="Bold"/>
+            </Button>
+            <Button Command="{Binding ClearCommand}"
+                    ToolTip.Tip="Clear"
+                    Width="24" Height="24"
+                    Classes="toolbarButton">
+              <TextBlock Text="&#x2715;" FontSize="10"/>
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- Loading indicator -->
+      <ProgressBar DockPanel.Dock="Top"
+                   IsIndeterminate="True"
+                   IsVisible="{Binding IsLoading}"
+                   Height="2"
+                   Margin="0"/>
+
+      <!-- Call hierarchy tree -->
+      <TreeView ItemsSource="{Binding RootItems}"
+                SelectedItem="{Binding SelectedItem}"
+                Background="Transparent"
+                DoubleTapped="OnTreeViewDoubleTapped">
+        <TreeView.ItemTemplate>
+          <TreeDataTemplate ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,1">
+              <TextBlock Text="{Binding Kind, Converter={StaticResource KindToIcon}}"
+                         FontSize="12"
+                         VerticalAlignment="Center"
+                         Foreground="#569CD6"/>
+              <TextBlock Text="{Binding Name}"
+                         Foreground="#CCCCCC"
+                         FontWeight="SemiBold"
+                         VerticalAlignment="Center"/>
+              <TextBlock Text="{Binding LocationText}"
+                         Foreground="#606060"
+                         FontSize="10"
+                         VerticalAlignment="Center"/>
+              <ProgressBar IsIndeterminate="True"
+                           IsVisible="{Binding IsLoading}"
+                           Width="40" Height="10"
+                           Margin="4,0,0,0"/>
+            </StackPanel>
+          </TreeDataTemplate>
+        </TreeView.ItemTemplate>
+        <TreeView.Styles>
+          <Style Selector="TreeViewItem">
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+          </Style>
+        </TreeView.Styles>
+      </TreeView>
+    </DockPanel>
+  </Border>
+</UserControl>
