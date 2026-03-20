@@ -41,20 +41,36 @@
         <TreeView.ContextMenu>
           <ContextMenu>
             <MenuItem Header="Add">
+              <MenuItem Header="New BasicLang File (.bas)" Command="{Binding #SolutionTreeView.DataContext.AddNewBasicLangFileCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="B" FontSize="12" FontWeight="Bold" Foreground="#569CD6"/>
+                </MenuItem.Icon>
+              </MenuItem>
+              <MenuItem Header="New Module (.mod)" Command="{Binding #SolutionTreeView.DataContext.AddNewModuleCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="M" FontSize="12" FontWeight="Bold" Foreground="#4FC3F7"/>
+                </MenuItem.Icon>
+              </MenuItem>
+              <MenuItem Header="New Class (.cls)" Command="{Binding #SolutionTreeView.DataContext.AddNewClassCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="C" FontSize="12" FontWeight="Bold" Foreground="#66BB6A"/>
+                </MenuItem.Icon>
+              </MenuItem>
+              <Separator/>
               <MenuItem Header="New File..." Command="{Binding #SolutionTreeView.DataContext.AddNewFileCommand}">
                 <MenuItem.Icon>
-                  <TextBlock Text="📄" FontSize="12"/>
+                  <TextBlock Text="+" FontSize="12" FontWeight="Bold"/>
                 </MenuItem.Icon>
               </MenuItem>
               <MenuItem Header="New Folder..." Command="{Binding #SolutionTreeView.DataContext.AddNewFolderCommand}">
                 <MenuItem.Icon>
-                  <TextBlock Text="📁" FontSize="12"/>
+                  <TextBlock Text="D" FontSize="12" FontWeight="Bold"/>
                 </MenuItem.Icon>
               </MenuItem>
               <Separator/>
               <MenuItem Header="Existing File..." Command="{Binding #SolutionTreeView.DataContext.AddExistingFileCommand}">
                 <MenuItem.Icon>
-                  <TextBlock Text="📋" FontSize="12"/>
+                  <TextBlock Text="+" FontSize="12"/>
                 </MenuItem.Icon>
               </MenuItem>
             </MenuItem>
@@ -77,11 +93,13 @@
         <TreeView.ItemTemplate>
           <TreeDataTemplate ItemsSource="{Binding Children}">
             <Grid ColumnDefinitions="Auto,*,Auto" DoubleTapped="OnItemDoubleTapped">
-              <!-- Icon based on node type -->
+              <!-- Icon based on node type, with file-specific icons for .mod (M) and .cls/.class (C) -->
               <TextBlock Grid.Column="0"
-                         Text="{Binding NodeType, Converter={x:Static vm:NodeTypeIconConverter.Instance}}"
+                         Text="{Binding ., Converter={x:Static vm:NodeTypeIconConverter.Instance}}"
+                         Foreground="{Binding FullPath, Converter={x:Static vm:FileExtensionIconConverter.Instance}}"
                          Margin="0,0,6,0"
                          FontSize="14"
+                         FontWeight="Bold"
                          VerticalAlignment="Center"/>
 
               <!-- Name (always visible - rename handled elsewhere) -->

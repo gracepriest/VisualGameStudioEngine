@@ -127,7 +127,7 @@ namespace BasicLang.Compiler.Driver
 
             // Check for file argument (compile a file)
             var fileArg = args.FirstOrDefault(a => !a.StartsWith("-") &&
-                (a.EndsWith(".bas") || a.EndsWith(".bl") || a.EndsWith(".basic") || a.EndsWith(".blproj")));
+                (a.EndsWith(".bas") || a.EndsWith(".bl") || a.EndsWith(".basic") || a.EndsWith(".mod") || a.EndsWith(".blproj")));
 
             if (fileArg != null)
             {

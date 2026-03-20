@@ -12,7 +12,21 @@ namespace BasicLang.Compiler
     public class ModuleResolver
     {
         private readonly List<string> _searchPaths;
-        private static readonly string[] SupportedExtensions = { ".bas", ".bl", ".basic" };
+        private static readonly string[] SupportedExtensions = { ".bas", ".bl", ".basic", ".mod", ".cls", ".class" };
+
+        /// <summary>
+        /// File extensions that denote implicit class files
+        /// </summary>
+        private static readonly string[] ClassFileExtensions = { ".cls", ".class" };
+
+        /// <summary>
+        /// Check if a file is a class file (.cls or .class)
+        /// </summary>
+        public static bool IsClassFile(string filePath)
+        {
+            var ext = Path.GetExtension(filePath);
+            return ClassFileExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase);
+        }
 
         public IReadOnlyList<string> SearchPaths => _searchPaths;
 

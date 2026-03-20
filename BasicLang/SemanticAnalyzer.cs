@@ -1535,6 +1535,31 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 member.Accept(this);
             }
 
+            // For .mod files, promote all public members to the global (parent) scope
+            // so they are accessible without Import or ModuleName. prefix
+            if (_currentUnit != null && _currentUnit.IsModFile)
+            {
+                var globalScope = _currentScope.Parent;
+                if (globalScope != null)
+                {
+                    foreach (var memberSymbol in _currentScope.Symbols.Values)
+                    {
+                        // Only promote public members (or functions/subs which are public by default in modules)
+                        if (memberSymbol.Access == AST.AccessModifier.Public ||
+                            memberSymbol.Kind == SymbolKind.Function ||
+                            memberSymbol.Kind == SymbolKind.Subroutine ||
+                            memberSymbol.Kind == SymbolKind.Class ||
+                            memberSymbol.Kind == SymbolKind.Constant)
+                        {
+                            if (globalScope.Resolve(memberSymbol.Name) == null)
+                            {
+                                globalScope.Define(memberSymbol);
+                            }
+                        }
+                    }
+                }
+            }
+
             ExitScope();
         }
 

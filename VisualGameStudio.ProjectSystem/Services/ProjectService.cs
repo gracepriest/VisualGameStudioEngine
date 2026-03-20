@@ -119,7 +119,7 @@ public class ProjectService : IProjectService
 
         var solution = new BasicLangSolution
         {
-            Name = name,
+            SolutionName = name,
             FilePath = solutionFile,
             Version = "1.0"
         };

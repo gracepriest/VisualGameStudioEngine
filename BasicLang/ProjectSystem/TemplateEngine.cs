@@ -67,17 +67,38 @@ namespace BasicLang.Compiler.ProjectSystem
     <Optimize>true</Optimize>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include=""Program.bas"" />
+    <Compile Include=""Main.bas"" />
+    <Compile Include=""Helpers.mod"" />
   </ItemGroup>
 </BasicLangProject>",
-                    ["Program.bas"] = @"' {{ProjectName}} - Console Application
+                    ["Main.bas"] = @"' {{ProjectName}} - Console Application
 ' Created: {{Date}}
 
-Module Program
+Using System
+
+Module Main
     Sub Main()
-        PrintLine(""Hello, World!"")
+        PrintHeader(""{{ProjectName}}"")
+        Console.WriteLine(FormatMessage(""Hello, World!""))
+        Console.WriteLine(FormatMessage(""Welcome to {{ProjectName}}!""))
+        Console.WriteLine()
+        Console.WriteLine(""Current time: "" & DateTime.Now.ToString())
+        Console.WriteLine(""Program completed successfully!"")
     End Sub
 End Module
+",
+                    ["Helpers.mod"] = @"' Utility functions for {{ProjectName}}
+
+Public Function FormatMessage(message As String) As String
+    Return ""["" & DateTime.Now.ToString(""HH:mm:ss"") & ""] "" & message
+End Function
+
+Public Sub PrintHeader(title As String)
+    Dim separator As String = New String(""=""c, title.Length + 4)
+    Console.WriteLine(separator)
+    Console.WriteLine(""  "" & title)
+    Console.WriteLine(separator)
+End Sub
 ",
                     [".gitignore"] = @"# Build results
 bin/
@@ -121,19 +142,38 @@ packages/
     <Optimize>true</Optimize>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include=""Class1.bas"" />
+    <Compile Include=""Library.mod"" />
+    <Compile Include=""Types.cls"" />
   </ItemGroup>
 </BasicLangProject>",
-                    ["Class1.bas"] = @"' {{ProjectName}} - Class Library
+                    ["Library.mod"] = @"' {{ProjectName}} — Public API module
 ' Created: {{Date}}
 
-Namespace {{ProjectName}}
-    Public Class Class1
-        Public Function GetMessage() As String
-            Return ""Hello from {{ProjectName}}!""
-        End Function
-    End Class
-End Namespace
+Public Function Add(a As Integer, b As Integer) As Integer
+    Return a + b
+End Function
+
+Public Function Capitalize(text As String) As String
+    If text = """" Then Return """"
+    Return text.Substring(0, 1).ToUpper() & text.Substring(1)
+End Function
+
+Public Function IsValidEmail(email As String) As Boolean
+    Return email.Contains(""@"") And email.Contains(""."")
+End Function
+",
+                    ["Types.cls"] = @"' {{ProjectName}} — Public data types
+' Created: {{Date}}
+
+Public Class Result
+    Public Success As Boolean
+    Public Message As String
+
+    Public Sub New(success As Boolean, message As String)
+        Me.Success = success
+        Me.Message = message
+    End Sub
+End Class
 "
                 }
             };
@@ -166,43 +206,57 @@ End Namespace
     <Optimize>true</Optimize>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include=""Program.bas"" />
+    <Compile Include=""Main.bas"" />
+    <Compile Include=""GameState.mod"" />
+    <Compile Include=""Player.cls"" />
   </ItemGroup>
 </BasicLangProject>",
-                    ["Program.bas"] = @"' {{ProjectName}} - Game Project
-' Created: {{Date}}
-
-Module Game
-    Dim running As Boolean
-
+                    ["Main.bas"] = @"Module Main
     Sub Main()
-        GameInit(800, 600, ""{{ProjectName}}"")
-        SetTargetFPS(60)
-        running = True
+        GameInit(800, 600, ""My Game"")
 
-        While running And Not GameShouldClose()
-            Update()
-            Render()
-        Wend
+        Dim player As New Player(""Hero"")
+
+        While Not GameShouldClose()
+            GameBeginFrame()
+            ClearBackground(40, 40, 60, 255)
+            DrawText(player.Name, 10, 10, 20, 255, 255, 255, 255)
+            GameEndFrame()
+        End While
 
         GameShutdown()
     End Sub
-
-    Sub Update()
-        ' Handle escape key to exit (ESC = 256)
-        If IsKeyPressed(256) Then
-            running = False
-        End If
-    End Sub
-
-    Sub Render()
-        GameBeginFrame()
-        ClearBackground(20, 40, 80)
-        DrawText(""Hello, {{ProjectName}}!"", 300, 280, 32, 255, 255, 255, 255)
-        DrawText(""Press ESC to exit"", 310, 320, 20, 200, 200, 200, 255)
-        GameEndFrame()
-    End Sub
 End Module
+",
+                    ["GameState.mod"] = @"' Global game state — accessible from all files
+
+Public Score As Integer = 0
+Public Level As Integer = 1
+Public IsGameOver As Boolean = False
+
+Public Sub ResetGame()
+    Score = 0
+    Level = 1
+    IsGameOver = False
+End Sub
+",
+                    ["Player.cls"] = @"Public
+
+Public Name As String
+Public X As Single = 400
+Public Y As Single = 300
+Public Speed As Single = 5.0
+
+Public Sub New(name As String)
+    Me.Name = name
+End Sub
+
+Public Sub Update()
+    If IsKeyDown(87) Then Y = Y - Speed
+    If IsKeyDown(83) Then Y = Y + Speed
+    If IsKeyDown(65) Then X = X - Speed
+    If IsKeyDown(68) Then X = X + Speed
+End Sub
 ",
                     [".gitignore"] = @"# Build results
 bin/

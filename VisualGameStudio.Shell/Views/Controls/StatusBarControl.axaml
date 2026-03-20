@@ -276,6 +276,15 @@
             <TextBlock Text="{Binding LanguageMode}" Foreground="#80CCFF" VerticalAlignment="Center"/>
           </Button>
 
+          <!-- File type hint for .mod/.cls files -->
+          <TextBlock Text="{Binding FileTypeHint}"
+                     IsVisible="{Binding HasFileTypeHint}"
+                     Foreground="#AAAAAA"
+                     FontSize="11"
+                     FontStyle="Italic"
+                     VerticalAlignment="Center"
+                     Margin="6,0,0,0"/>
+
           <Border Classes="statusSeparator"/>
 
           <!-- 9. Line endings -->

@@ -85,6 +85,18 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// <summary>Raised to request clipboard set from the View (needs TopLevel access).</summary>
     public event EventHandler<string>? ClipboardCopyRequested;
 
+    /// <summary>
+    /// The currently loaded solution, if any.
+    /// </summary>
+    [ObservableProperty]
+    private BasicLangSolution? _currentSolution;
+
+    /// <summary>
+    /// The name of the startup project within the current solution.
+    /// </summary>
+    [ObservableProperty]
+    private string? _startupProjectName;
+
     public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, IGitService? gitService = null, IWorkspaceService? workspaceService = null)
     {
         _projectService = projectService;
@@ -96,6 +108,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         _projectService.ProjectOpened += OnProjectOpened;
         _projectService.ProjectClosed += OnProjectClosed;
         _projectService.ProjectChanged += OnProjectChanged;
+        _projectService.SolutionOpened += OnSolutionOpened;
+        _projectService.SolutionClosed += OnSolutionClosed;
 
         if (_gitService != null)
         {
@@ -120,10 +134,29 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
     private void OnProjectChanged(object? sender, EventArgs e)
     {
+        // If a solution is loaded, refresh the entire solution tree
+        if (CurrentSolution != null)
+        {
+            LoadSolution(CurrentSolution);
+            return;
+        }
+
         if (_projectService.CurrentProject != null)
         {
             RefreshTree(_projectService.CurrentProject);
         }
+    }
+
+    private void OnSolutionOpened(object? sender, SolutionEventArgs e)
+    {
+        LoadSolution(e.Solution);
+    }
+
+    private void OnSolutionClosed(object? sender, SolutionEventArgs e)
+    {
+        CurrentSolution = null;
+        StartupProjectName = null;
+        Nodes.Clear();
     }
 
     private async void OnGitStatusChanged(object? sender, EventArgs e)
@@ -202,6 +235,374 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         if (!string.IsNullOrEmpty(FilterText))
         {
             ApplyFilter();
+        }
+    }
+
+    // ─── Solution Support ────────────────────────────────────────────
+
+    /// <summary>
+    /// Loads a multi-project solution into the tree.
+    /// Creates a Solution root node, with Project child nodes, each containing source files.
+    /// </summary>
+    public void LoadSolution(BasicLangSolution solution)
+    {
+        CurrentSolution = solution;
+        Nodes.Clear();
+
+        var startupProject = solution.GetStartupProject();
+        StartupProjectName = startupProject?.Name;
+
+        var solutionNode = new TreeNode
+        {
+            Name = solution.SolutionName,
+            NodeType = TreeNodeType.Solution,
+            FullPath = solution.FilePath,
+            IsExpanded = true,
+            Tag = solution
+        };
+
+        foreach (var solProject in solution.Projects)
+        {
+            var isStartup = startupProject != null &&
+                            solProject.Name.Equals(startupProject.Name, StringComparison.OrdinalIgnoreCase);
+
+            var projectNode = new TreeNode
+            {
+                Name = solProject.Name,
+                NodeType = TreeNodeType.Project,
+                FullPath = solProject.GetFullPath(solution.SolutionDirectory),
+                IsExpanded = true,
+                IsBold = isStartup,
+                Tag = solProject
+            };
+
+            // Try to load the project's source files from its directory
+            var projectDir = Path.GetDirectoryName(solProject.GetFullPath(solution.SolutionDirectory)) ?? "";
+            if (Directory.Exists(projectDir))
+            {
+                BuildProjectSourceTree(projectNode, projectDir);
+            }
+
+            solutionNode.Children.Add(projectNode);
+        }
+
+        Nodes.Add(solutionNode);
+
+        // Refresh git decorations
+        _ = RefreshGitDecorationsAsync();
+
+        // Apply filter if active
+        if (!string.IsNullOrEmpty(FilterText))
+        {
+            ApplyFilter();
+        }
+    }
+
+    /// <summary>
+    /// Builds source file nodes under a project node by scanning its directory.
+    /// Uses file extension-based icons: .bas = standard, .mod = "M", .cls/.class = "C".
+    /// </summary>
+    private void BuildProjectSourceTree(TreeNode projectNode, string projectDir)
+    {
+        try
+        {
+            // Add subdirectories
+            var directories = Directory.GetDirectories(projectDir)
+                .OrderBy(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var dir in directories)
+            {
+                var dirName = Path.GetFileName(dir);
+                // Skip hidden/build directories
+                if (dirName.StartsWith('.') || dirName is "bin" or "obj" or "node_modules" or ".git")
+                    continue;
+
+                var dirNode = new TreeNode
+                {
+                    Name = dirName,
+                    NodeType = TreeNodeType.Folder,
+                    FullPath = dir,
+                    IsExpanded = false
+                };
+
+                BuildProjectSourceTree(dirNode, dir);
+
+                // Only add if the folder has children
+                if (dirNode.Children.Count > 0)
+                {
+                    projectNode.Children.Add(dirNode);
+                }
+            }
+
+            // Add source files
+            var sourceExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ".bas", ".bl", ".mod", ".cls", ".class", ".json", ".xml", ".blproj"
+            };
+
+            var files = Directory.GetFiles(projectDir)
+                .Where(f =>
+                {
+                    var ext = Path.GetExtension(f).ToLowerInvariant();
+                    return sourceExtensions.Contains(ext) || ext is ".txt" or ".cfg" or ".ini";
+                })
+                .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var file in files)
+            {
+                var fileName = Path.GetFileName(file);
+                var fileNode = new TreeNode
+                {
+                    Name = fileName,
+                    NodeType = GetSolutionFileNodeType(fileName),
+                    FullPath = file
+                };
+                projectNode.Children.Add(fileNode);
+            }
+        }
+        catch (UnauthorizedAccessException) { }
+        catch (DirectoryNotFoundException) { }
+    }
+
+    /// <summary>
+    /// Gets the node type for files in a solution project.
+    /// .bas/.bl = SourceFile, .mod/.cls/.class = ContentFile (for icon differentiation), others = File.
+    /// </summary>
+    private static TreeNodeType GetSolutionFileNodeType(string fileName)
+    {
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        return ext switch
+        {
+            ".bas" or ".bl" => TreeNodeType.SourceFile,
+            ".mod" => TreeNodeType.ContentFile,       // "M" icon
+            ".cls" or ".class" => TreeNodeType.Resource, // "C" icon via converter
+            ".png" or ".jpg" or ".bmp" or ".ico" or ".svg" => TreeNodeType.Resource,
+            _ => TreeNodeType.File
+        };
+    }
+
+    // ─── Solution Context Menu Commands ─────────────────────────────
+
+    /// <summary>
+    /// Adds a new project to the current solution.
+    /// </summary>
+    [RelayCommand]
+    private async Task AddNewProjectToSolutionAsync()
+    {
+        if (CurrentSolution == null) return;
+
+        var projectName = await _dialogService.PromptAsync(
+            "New Project",
+            "Enter the project name:",
+            "NewProject");
+
+        if (string.IsNullOrWhiteSpace(projectName)) return;
+
+        // Check for duplicate name
+        if (CurrentSolution.Projects.Any(p =>
+            p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase)))
+        {
+            await _dialogService.ShowMessageAsync("Error", $"A project named '{projectName}' already exists in the solution.");
+            return;
+        }
+
+        var relativePath = Path.Combine(projectName, $"{projectName}.blproj");
+        var absolutePath = Path.GetFullPath(Path.Combine(CurrentSolution.SolutionDirectory, relativePath));
+        var projectDir = Path.GetDirectoryName(absolutePath)!;
+
+        // Create the project directory and a default source file
+        Directory.CreateDirectory(projectDir);
+        var mainFile = Path.Combine(projectDir, "Program.bas");
+        if (!File.Exists(mainFile))
+        {
+            await File.WriteAllTextAsync(mainFile,
+                $"' {projectName} - Program.bas\n\nModule Program\n\n    Sub Main()\n        Console.WriteLine(\"Hello from {projectName}\")\n    End Sub\n\nEnd Module\n");
+        }
+
+        var newProject = new SolutionProject
+        {
+            Name = projectName,
+            RelativePath = relativePath,
+            AbsolutePath = absolutePath,
+            Type = "Exe"
+        };
+
+        CurrentSolution.Projects.Add(newProject);
+
+        try
+        {
+            await _projectService.SaveSolutionAsync();
+        }
+        catch { /* Solution save may not be implemented yet */ }
+
+        LoadSolution(CurrentSolution);
+    }
+
+    /// <summary>
+    /// Adds an existing .blproj file to the current solution.
+    /// </summary>
+    [RelayCommand]
+    private async Task AddExistingProjectAsync_Solution()
+    {
+        if (CurrentSolution == null) return;
+
+        var files = await _dialogService.ShowOpenFileDialogAsync(
+            "Add Existing Project",
+            new[] { ("BasicLang Projects", new[] { "*.blproj" }), ("All Files", new[] { "*.*" }) },
+            allowMultiple: false);
+
+        if (files == null || files.Length == 0) return;
+
+        var blprojPath = files[0];
+        var projectName = Path.GetFileNameWithoutExtension(blprojPath);
+
+        // Check for duplicate name
+        if (CurrentSolution.Projects.Any(p =>
+            p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase)))
+        {
+            await _dialogService.ShowMessageAsync("Error", $"A project named '{projectName}' already exists in the solution.");
+            return;
+        }
+
+        var relativePath = Path.GetRelativePath(CurrentSolution.SolutionDirectory, blprojPath);
+        var newProject = new SolutionProject
+        {
+            Name = projectName,
+            RelativePath = relativePath,
+            AbsolutePath = Path.GetFullPath(blprojPath),
+            Type = "Exe"
+        };
+
+        CurrentSolution.Projects.Add(newProject);
+
+        try
+        {
+            await _projectService.SaveSolutionAsync();
+        }
+        catch { /* Solution save may not be implemented yet */ }
+
+        LoadSolution(CurrentSolution);
+    }
+
+    /// <summary>
+    /// Builds all projects in the current solution.
+    /// </summary>
+    [RelayCommand]
+    private async Task BuildSolutionAsync()
+    {
+        if (CurrentSolution == null) return;
+
+        // Build each project in order
+        foreach (var project in CurrentSolution.Projects)
+        {
+            var projectPath = project.GetFullPath(CurrentSolution.SolutionDirectory);
+            if (File.Exists(projectPath))
+            {
+                try
+                {
+                    await _projectService.OpenProjectAsync(projectPath);
+                }
+                catch
+                {
+                    // Continue with next project
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets the selected project as the startup project.
+    /// </summary>
+    [RelayCommand]
+    private async Task SetAsStartupProjectAsync()
+    {
+        if (CurrentSolution == null || SelectedNode == null || !SelectedNode.IsProject) return;
+
+        var projectName = SelectedNode.Name;
+        CurrentSolution.DefaultProject = projectName;
+        StartupProjectName = projectName;
+
+        // Update bold state on all project nodes
+        var solutionNode = Nodes.FirstOrDefault(n => n.IsSolution);
+        if (solutionNode != null)
+        {
+            foreach (var child in solutionNode.Children)
+            {
+                if (child.IsProject)
+                {
+                    child.IsBold = child.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+        }
+
+        try
+        {
+            await _projectService.SaveSolutionAsync();
+        }
+        catch { /* Solution save may not be implemented yet */ }
+    }
+
+    /// <summary>
+    /// Builds the selected project.
+    /// </summary>
+    [RelayCommand]
+    private async Task BuildProjectAsync()
+    {
+        if (SelectedNode == null || !SelectedNode.IsProject) return;
+
+        var solProject = SelectedNode.Tag as SolutionProject;
+        if (solProject == null || CurrentSolution == null) return;
+
+        var projectPath = solProject.GetFullPath(CurrentSolution.SolutionDirectory);
+        if (File.Exists(projectPath))
+        {
+            try
+            {
+                await _projectService.OpenProjectAsync(projectPath);
+            }
+            catch (Exception ex)
+            {
+                await _dialogService.ShowMessageAsync("Build Error", $"Failed to build project: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Removes the selected project from the solution.
+    /// </summary>
+    [RelayCommand]
+    private async Task RemoveFromSolutionAsync()
+    {
+        if (CurrentSolution == null || SelectedNode == null || !SelectedNode.IsProject) return;
+
+        var projectName = SelectedNode.Name;
+        var confirmed = await _dialogService.ConfirmAsync(
+            "Remove Project",
+            $"Remove '{projectName}' from the solution?\n\nThis will not delete project files from disk.");
+
+        if (!confirmed) return;
+
+        var projectToRemove = CurrentSolution.Projects.FirstOrDefault(p =>
+            p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+
+        if (projectToRemove != null)
+        {
+            CurrentSolution.Projects.Remove(projectToRemove);
+
+            // If this was the startup project, clear it
+            if (CurrentSolution.DefaultProject?.Equals(projectName, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                CurrentSolution.DefaultProject = CurrentSolution.Projects.FirstOrDefault()?.Name;
+                StartupProjectName = CurrentSolution.DefaultProject;
+            }
+
+            try
+            {
+                await _projectService.SaveSolutionAsync();
+            }
+            catch { /* Solution save may not be implemented yet */ }
+
+            LoadSolution(CurrentSolution);
         }
     }
 
@@ -331,7 +732,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
-            ".bas" or ".bl" or ".cs" or ".vb" or ".cpp" or ".h" or ".fs" => TreeNodeType.SourceFile,
+            ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".cs" or ".vb" or ".cpp" or ".h" or ".fs" => TreeNodeType.SourceFile,
             ".png" or ".jpg" or ".bmp" or ".ico" or ".svg" => TreeNodeType.Resource,
             _ => TreeNodeType.File
         };
@@ -475,7 +876,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             }
         }
 
-        node.IsVisible = anyChildVisible || node.IsProject;
+        node.IsVisible = anyChildVisible || node.IsProject || node.IsSolution;
         node.FilterMatchIndices = null;
 
         if (anyChildVisible)
@@ -645,6 +1046,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         return ext switch
         {
             ".bas" or ".bl" => $"' {fileName}\n' Created: {DateTime.Now:yyyy-MM-dd}\n\nModule {baseName}\n\n    Sub Main()\n        Console.WriteLine(\"Hello World\")\n    End Sub\n\nEnd Module\n",
+            ".mod" => "' Module is globally accessible from all project files\n' No Import statement needed\n\nPublic Sub Example()\n    ' Add your code here\nEnd Sub\n",
+            ".cls" or ".class" => "' Use \"Import " + baseName + "\" in other files to access this class\n' Add \"Public\" on the first line to make globally accessible\n\nPublic Name As String\n\nPublic Sub New()\n    ' Constructor\nEnd Sub\n",
             ".cs" => $"// {fileName}\nnamespace MyProject\n{{\n    public class {baseName}\n    {{\n    }}\n}}\n",
             ".vb" => $"' {fileName}\nPublic Class {baseName}\n\nEnd Class\n",
             ".json" => "{\n}\n",
@@ -661,7 +1064,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
-            ".bas" or ".bl" => ProjectItemType.Compile,
+            ".bas" or ".bl" or ".mod" or ".cls" or ".class" => ProjectItemType.Compile,
             ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".ico" => ProjectItemType.Resource,
             _ => ProjectItemType.Content
         };
@@ -680,8 +1083,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var fileName = await _dialogService.PromptAsync("New File", "Enter file name:", "NewFile.bas");
         if (string.IsNullOrWhiteSpace(fileName)) return;
 
-        if (!fileName.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) &&
-            !fileName.EndsWith(".bl", StringComparison.OrdinalIgnoreCase))
+        if (!Path.HasExtension(fileName))
         {
             fileName += ".bas";
         }
@@ -694,14 +1096,70 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             return;
         }
 
-        var defaultContent = $"' {fileName}\n' Created: {DateTime.Now:yyyy-MM-dd}\n\n";
-        await File.WriteAllTextAsync(filePath, defaultContent);
+        var content = GetTemplateContent(fileName);
+        await File.WriteAllTextAsync(filePath, content);
 
         var relativePath = Path.GetRelativePath(_projectService.CurrentProject.ProjectDirectory, filePath);
         _projectService.CurrentProject.Items.Add(new ProjectItem
         {
             Include = relativePath,
-            ItemType = ProjectItemType.Compile
+            ItemType = GetItemTypeForExtension(fileName)
+        });
+
+        await _projectService.SaveProjectAsync();
+        RefreshTree(_projectService.CurrentProject);
+        FileOpenRequested?.Invoke(this, filePath);
+    }
+
+    [RelayCommand]
+    private async Task AddNewBasicLangFileAsync()
+    {
+        await AddNewFileWithExtensionAsync("New BasicLang File", "NewFile.bas", ".bas");
+    }
+
+    [RelayCommand]
+    private async Task AddNewModuleAsync()
+    {
+        await AddNewFileWithExtensionAsync("New Module", "NewModule.mod", ".mod");
+    }
+
+    [RelayCommand]
+    private async Task AddNewClassAsync()
+    {
+        await AddNewFileWithExtensionAsync("New Class", "NewClass.cls", ".cls");
+    }
+
+    private async Task AddNewFileWithExtensionAsync(string title, string defaultName, string extension)
+    {
+        if (_projectService.CurrentProject == null) return;
+
+        var targetDir = GetTargetDirectory();
+        if (targetDir == null) return;
+
+        var fileName = await _dialogService.PromptAsync(title, "Enter file name:", defaultName);
+        if (string.IsNullOrWhiteSpace(fileName)) return;
+
+        if (!Path.HasExtension(fileName))
+        {
+            fileName += extension;
+        }
+
+        var filePath = Path.Combine(targetDir, fileName);
+
+        if (File.Exists(filePath))
+        {
+            await _dialogService.ShowMessageAsync("Error", $"File '{fileName}' already exists.");
+            return;
+        }
+
+        var content = GetTemplateContent(fileName);
+        await File.WriteAllTextAsync(filePath, content);
+
+        var relativePath = Path.GetRelativePath(_projectService.CurrentProject.ProjectDirectory, filePath);
+        _projectService.CurrentProject.Items.Add(new ProjectItem
+        {
+            Include = relativePath,
+            ItemType = GetItemTypeForExtension(fileName)
         });
 
         await _projectService.SaveProjectAsync();
@@ -739,7 +1197,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         var files = await _dialogService.ShowOpenFileDialogAsync(
             "Add Existing File",
-            new[] { ("BasicLang Files", new[] { "*.bas", "*.bl" }), ("All Files", new[] { "*.*" }) },
+            new[] { ("BasicLang Files", new[] { "*.bas", "*.bl", "*.mod", "*.cls", "*.class" }), ("All Files", new[] { "*.*" }) },
             allowMultiple: true);
 
         if (files == null || files.Length == 0) return;
@@ -770,7 +1228,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     [RelayCommand]
     private void StartRename()
     {
-        if (SelectedNode == null || SelectedNode.IsProject) return;
+        if (SelectedNode == null || SelectedNode.IsProject || SelectedNode.IsSolution) return;
 
         // Pre-select filename without extension for files
         if (SelectedNode.IsFile)
@@ -897,8 +1355,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         // Support bulk delete from multi-select
         var nodesToDelete = SelectedNodes.Count > 0
-            ? SelectedNodes.Where(n => !n.IsProject).ToList()
-            : (SelectedNode != null && !SelectedNode.IsProject ? new List<TreeNode> { SelectedNode } : new List<TreeNode>());
+            ? SelectedNodes.Where(n => !n.IsProject && !n.IsSolution).ToList()
+            : (SelectedNode != null && !SelectedNode.IsProject && !SelectedNode.IsSolution ? new List<TreeNode> { SelectedNode } : new List<TreeNode>());
 
         if (nodesToDelete.Count == 0) return;
 
@@ -1358,10 +1816,10 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         if (SelectedNodes.Count > 0)
         {
-            return SelectedNodes.Where(n => !n.IsProject).ToList();
+            return SelectedNodes.Where(n => !n.IsProject && !n.IsSolution).ToList();
         }
 
-        if (SelectedNode != null && !SelectedNode.IsProject)
+        if (SelectedNode != null && !SelectedNode.IsProject && !SelectedNode.IsSolution)
         {
             return new List<TreeNode> { SelectedNode };
         }
@@ -1373,7 +1831,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
     public void StartDrag(TreeNode node)
     {
-        if (node.IsProject) return;
+        if (node.IsProject || node.IsSolution) return;
         DragNode = node;
     }
 
@@ -1541,6 +1999,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
     private string? GetTargetDirectory()
     {
+        if (SelectedNode != null && SelectedNode.IsSolution && CurrentSolution != null)
+        {
+            return CurrentSolution.SolutionDirectory;
+        }
+
         if (_projectService.CurrentProject == null) return null;
 
         if (SelectedNode == null || SelectedNode.IsProject)
@@ -1600,11 +2063,23 @@ public partial class TreeNode : ObservableObject
     [ObservableProperty]
     private bool _isDropTarget;
 
+    /// <summary>
+    /// When true, the node name is displayed in bold (e.g., startup project).
+    /// </summary>
+    [ObservableProperty]
+    private bool _isBold;
+
+    /// <summary>
+    /// Tag data for the node (e.g., SolutionProject reference for project nodes).
+    /// </summary>
+    public object? Tag { get; set; }
+
     public bool IsFile => NodeType is TreeNodeType.SourceFile or TreeNodeType.ContentFile
         or TreeNodeType.Resource or TreeNodeType.File;
 
     public bool IsFolder => NodeType is TreeNodeType.Folder or TreeNodeType.WorkspaceFolder;
     public bool IsProject => NodeType == TreeNodeType.Project;
+    public bool IsSolution => NodeType == TreeNodeType.Solution;
 
     /// <summary>
     /// Gets the git status decoration text (single letter).
@@ -1641,6 +2116,10 @@ public partial class TreeNode : ObservableObject
 
 public enum TreeNodeType
 {
+    /// <summary>
+    /// A solution root node containing multiple projects.
+    /// </summary>
+    Solution,
     Project,
     Folder,
     SourceFile,
@@ -1681,6 +2160,7 @@ public partial class OpenEditorItem : ObservableObject
 /// <summary>
 /// Converter to get an icon character for a tree node type.
 /// Uses simple text glyphs for Avalonia compatibility.
+/// When bound to a TreeNode, shows file-specific icons for .mod (M) and .cls/.class (C).
 /// </summary>
 public class NodeTypeIconConverter : IValueConverter
 {
@@ -1688,20 +2168,74 @@ public class NodeTypeIconConverter : IValueConverter
 
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
+        // When bound to the full TreeNode DataContext (via parameter or direct)
+        if (value is TreeNode treeNode)
+        {
+            // Check for file-specific icons based on extension
+            if (!string.IsNullOrEmpty(treeNode.FullPath))
+            {
+                var ext = Path.GetExtension(treeNode.FullPath).ToLowerInvariant();
+                switch (ext)
+                {
+                    case ".mod": return "M";   // Module file icon
+                    case ".cls":
+                    case ".class": return "C"; // Class file icon
+                }
+            }
+
+            return GetIconForNodeType(treeNode.NodeType);
+        }
+
         if (value is TreeNodeType nodeType)
         {
-            return nodeType switch
-            {
-                TreeNodeType.Project => "\u25A3",   // filled square with dot
-                TreeNodeType.Folder => "\u25B6",    // right triangle (closed folder indicator)
-                TreeNodeType.SourceFile => "\u25CB", // circle outline
-                TreeNodeType.ContentFile => "\u25A1",// square outline
-                TreeNodeType.Resource => "\u25C6",   // diamond
-                TreeNodeType.File => "\u25CB",       // circle outline
-                _ => "\u25CB"
-            };
+            return GetIconForNodeType(nodeType);
         }
         return "\u25CB";
+    }
+
+    private static string GetIconForNodeType(TreeNodeType nodeType)
+    {
+        return nodeType switch
+        {
+            TreeNodeType.Solution => "S",        // Solution icon
+            TreeNodeType.Project => "P",         // Project icon
+            TreeNodeType.Folder => "\u25B6",    // right triangle (closed folder indicator)
+            TreeNodeType.SourceFile => "\u25CB", // circle outline
+            TreeNodeType.ContentFile => "\u25A1",// square outline
+            TreeNodeType.Resource => "\u25C6",   // diamond
+            TreeNodeType.File => "\u25CB",       // circle outline
+            _ => "\u25CB"
+        };
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
+}
+
+/// <summary>
+/// Returns an icon character based on file path. For .mod files shows "M", for .cls/.class shows "C",
+/// and falls back to NodeTypeIconConverter behavior for other files.
+/// Bind to FullPath property.
+/// </summary>
+public class FileTypeIconTextConverter : IValueConverter
+{
+    public static readonly FileTypeIconTextConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is string fullPath && !string.IsNullOrEmpty(fullPath))
+        {
+            var ext = Path.GetExtension(fullPath).ToLowerInvariant();
+            return ext switch
+            {
+                ".mod" => "M",             // Module file
+                ".cls" or ".class" => "C", // Class file
+                _ => (string?)null         // Let the fallback handle it
+            };
+        }
+        return null;
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -1726,6 +2260,8 @@ public class FileExtensionIconConverter : IValueConverter
         var hex = ext switch
         {
             ".bas" or ".bl" => "#569CD6",   // Blue for BasicLang
+            ".mod" => "#4FC3F7",               // Light blue for Module
+            ".cls" or ".class" => "#66BB6A",   // Green for Class
             ".cs" => "#68217A",             // Purple for C#
             ".vb" => "#00539C",             // Dark blue for VB
             ".cpp" or ".c" or ".h" => "#F34B7D", // Red for C/C++
@@ -1828,6 +2364,10 @@ public class FolderExpandedIconConverter : IMultiValueConverter
                 return isExpanded ? "\u25BC" : "\u25B6"; // down triangle / right triangle
             }
             if (nodeType == TreeNodeType.Project)
+            {
+                return isExpanded ? "\u25BC" : "\u25B6";
+            }
+            if (nodeType == TreeNodeType.Solution)
             {
                 return isExpanded ? "\u25BC" : "\u25B6";
             }

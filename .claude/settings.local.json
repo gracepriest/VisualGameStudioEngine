@@ -423,7 +423,17 @@
       "Bash(sed -i 's/x:DataType=\"\"vm:RecentProjectItem\"\"//' VisualGameStudio.Shell/Views/Documents/WelcomeDocumentView.axaml)",
       "Bash(sed -i 's/x:DataType=\"\"vm:WalkthroughItem\"\"//' VisualGameStudio.Shell/Views/Documents/WelcomeDocumentView.axaml)",
       "Bash(sed -i 's/x:DataType=\"\"vm:LearnLink\"\"//' VisualGameStudio.Shell/Views/Documents/WelcomeDocumentView.axaml)",
-      "Bash(dotnet build-server:*)"
+      "Bash(dotnet build-server:*)",
+      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.exe IDE/)",
+      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.dll IDE/)",
+      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.Core.dll IDE/)",
+      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.Editor.dll IDE/)",
+      "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.ProjectSystem.dll IDE/)",
+      "Bash(cp BasicLang/bin/Release/net8.0/BasicLang.dll IDE/)",
+      "Bash(cp BasicLang/bin/Release/net8.0/BasicLang.exe IDE/)",
+      "Bash(for f:*)",
+      "Bash(do cp:*)",
+      "Bash(done)"
     ]
   }
 }

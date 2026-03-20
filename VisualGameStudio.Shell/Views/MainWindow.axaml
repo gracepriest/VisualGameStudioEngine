@@ -139,8 +139,10 @@
           AutomationProperties.Name="Main Menu">
       <MenuItem Header="_File">
         <MenuItem Header="_New Project..." Command="{Binding NewProjectCommand}" InputGesture="Ctrl+Shift+N"/>
+        <MenuItem Header="New _Solution..." Command="{Binding NewSolutionCommand}"/>
         <Separator/>
         <MenuItem Header="_Open Project..." Command="{Binding OpenProjectCommand}" InputGesture="Ctrl+Shift+O"/>
+        <MenuItem Header="Open _Solution..." Command="{Binding OpenSolutionCommand}"/>
         <MenuItem Header="Open _File..." Command="{Binding OpenFileCommand}" InputGesture="Ctrl+O"/>
         <MenuItem Header="Open F_older..." Command="{Binding OpenFolderCommand}"/>
         <MenuItem Header="Open _Workspace..." Command="{Binding OpenWorkspaceCommand}"/>
@@ -155,12 +157,16 @@
           </MenuItem.Styles>
         </MenuItem>
         <Separator/>
+        <MenuItem Header="Add _New Project to Solution..." Command="{Binding AddNewProjectToSolutionCommand}" IsEnabled="{Binding HasSolutionOpen}"/>
+        <MenuItem Header="Add E_xisting Project to Solution..." Command="{Binding AddExistingProjectToSolutionCommand}" IsEnabled="{Binding HasSolutionOpen}"/>
+        <Separator/>
         <MenuItem Header="Add Folder to _Workspace..." Command="{Binding AddFolderToWorkspaceCommand}"/>
         <MenuItem Header="Save Workspace As..." Command="{Binding SaveWorkspaceAsCommand}"/>
         <Separator/>
         <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGesture="Ctrl+S"/>
         <MenuItem Header="Save _All" Command="{Binding SaveAllCommand}" InputGesture="Ctrl+Shift+S"/>
         <Separator/>
+        <MenuItem Header="C_lose Solution" Command="{Binding CloseSolutionCommand}" IsEnabled="{Binding HasSolutionOpen}"/>
         <MenuItem Header="E_xit" Command="{Binding ExitCommand}" InputGesture="Alt+F4"/>
       </MenuItem>
 
@@ -254,6 +260,7 @@
       </MenuItem>
 
       <MenuItem Header="_Build">
+        <MenuItem Header="Build _Solution" Command="{Binding BuildSolutionCommand}" IsEnabled="{Binding HasSolutionOpen}"/>
         <MenuItem Header="_Build Project" Command="{Binding BuildCommand}" InputGesture="Ctrl+Shift+B"/>
         <MenuItem Header="_Rebuild Project" Command="{Binding RebuildCommand}"/>
         <MenuItem Header="_Clean Project" Command="{Binding CleanCommand}"/>

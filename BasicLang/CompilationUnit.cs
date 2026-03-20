@@ -105,6 +105,21 @@ namespace BasicLang.Compiler
         /// </summary>
         public DateTime LastModified { get; set; }
 
+        /// <summary>
+        /// Whether this unit originates from a .mod file (implicit module).
+        /// .mod files are automatically wrapped in a Module block, and their
+        /// public members are globally accessible without Import.
+        /// </summary>
+        public bool IsModFile { get; set; }
+
+        /// <summary>
+        /// Whether this unit originates from a .cls or .class file (implicit class file).
+        /// .cls/.class files are automatically wrapped in a Class block.
+        /// Private by default — other files must use "Import ClassName" to access.
+        /// If the file starts with "Public" on its own line, the class is globally accessible.
+        /// </summary>
+        public bool IsClassFile { get; set; }
+
         public CompilationUnit(string filePath)
         {
             if (string.IsNullOrWhiteSpace(filePath))

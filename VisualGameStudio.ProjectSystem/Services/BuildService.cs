@@ -5,12 +5,14 @@ using BasicLang.Compiler.AST;
 using BasicLang.Compiler.SemanticAnalysis;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Models;
+using VisualGameStudio.ProjectSystem.Serialization;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
 public class BuildService : IBuildService
 {
     private readonly IOutputService _outputService;
+    private readonly ProjectSerializer _projectSerializer;
     private CancellationTokenSource? _buildCts;
     private string _currentConfigurationName = "Debug";
 
@@ -34,8 +36,14 @@ public class BuildService : IBuildService
     public event EventHandler? BuildCancelled;
 
     public BuildService(IOutputService outputService)
+        : this(outputService, new ProjectSerializer())
+    {
+    }
+
+    public BuildService(IOutputService outputService, ProjectSerializer projectSerializer)
     {
         _outputService = outputService;
+        _projectSerializer = projectSerializer;
     }
 
     public async Task<BuildResult> BuildProjectAsync(BasicLangProject project, CancellationToken cancellationToken = default)
@@ -45,16 +53,205 @@ public class BuildService : IBuildService
 
     public async Task<BuildResult> BuildSolutionAsync(BasicLangSolution solution, CancellationToken cancellationToken = default)
     {
-        // For now, just build the startup project
-        // In the future, this should build all projects in dependency order
-        var result = new BuildResult { Success = true };
-
-        foreach (var projRef in solution.Projects)
+        if (IsBuilding)
         {
-            var projectPath = projRef.GetFullPath(solution.SolutionDirectory);
-            // Would need to load and build each project
-            _outputService.WriteLine($"Building project: {projRef.Name}", OutputCategory.Build);
+            return new BuildResult
+            {
+                Success = false,
+                Diagnostics = new List<DiagnosticItem>
+                {
+                    new() { Message = "A build is already in progress", Severity = DiagnosticSeverity.Error }
+                }
+            };
         }
+
+        var combinedResult = new BuildResult();
+        var stopwatch = Stopwatch.StartNew();
+        var succeeded = 0;
+        var failed = 0;
+
+        try
+        {
+            IsBuilding = true;
+            _buildCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            BuildStarted?.Invoke(this, EventArgs.Empty);
+            _outputService.Clear(OutputCategory.Build);
+
+            // Compute build order via topological sort
+            List<SolutionProject> buildOrder;
+            try
+            {
+                buildOrder = GetBuildOrder(solution);
+            }
+            catch (InvalidOperationException ex)
+            {
+                combinedResult.Success = false;
+                combinedResult.Diagnostics.Add(new DiagnosticItem
+                {
+                    Id = "BL0010",
+                    Message = ex.Message,
+                    Severity = DiagnosticSeverity.Error
+                });
+                _outputService.WriteError(ex.Message, OutputCategory.Build);
+                return combinedResult;
+            }
+
+            _outputService.WriteLine($"========== Building Solution: {solution.SolutionName} ({buildOrder.Count} project(s)) ==========", OutputCategory.Build);
+            _outputService.WriteLine($"Configuration: {_currentConfigurationName}", OutputCategory.Build);
+            _outputService.WriteLine("", OutputCategory.Build);
+
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Building solution...", 0));
+
+            for (int i = 0; i < buildOrder.Count; i++)
+            {
+                _buildCts.Token.ThrowIfCancellationRequested();
+
+                var project = buildOrder[i];
+                _outputService.WriteLine($"--- Building: {project.Name} ({i + 1} of {buildOrder.Count}) ---", OutputCategory.Build);
+
+                var projectPath = project.GetFullPath(solution.SolutionDirectory);
+                var percent = (int)((double)i / buildOrder.Count * 100);
+                BuildProgress?.Invoke(this, new BuildProgressEventArgs(
+                    $"Building {project.Name}...", percent, projectPath));
+
+                // Load and build the project
+                BasicLangProject? loadedProject = null;
+                try
+                {
+                    loadedProject = await _projectSerializer.LoadAsync(projectPath, _buildCts.Token);
+                }
+                catch (Exception ex)
+                {
+                    _outputService.WriteError($"Failed to load project {project.Name}: {ex.Message}", OutputCategory.Build);
+                }
+
+                if (loadedProject != null)
+                {
+                    var projectResult = await BuildInternalAsync(loadedProject, false, _buildCts.Token);
+
+                    // Merge diagnostics into combined result
+                    combinedResult.Diagnostics.AddRange(projectResult.Diagnostics);
+
+                    if (projectResult.Success)
+                    {
+                        succeeded++;
+                        _outputService.WriteLine($"  {project.Name} succeeded.", OutputCategory.Build);
+                    }
+                    else
+                    {
+                        failed++;
+                        _outputService.WriteError($"  {project.Name} failed.", OutputCategory.Build);
+                        break; // Stop on first failure
+                    }
+                }
+                else
+                {
+                    failed++;
+                    combinedResult.Diagnostics.Add(new DiagnosticItem
+                    {
+                        Id = "BL0011",
+                        Message = $"Could not load project: {project.Name} ({projectPath})",
+                        Severity = DiagnosticSeverity.Error
+                    });
+                    break;
+                }
+            }
+
+            stopwatch.Stop();
+            combinedResult.Duration = stopwatch.Elapsed;
+            combinedResult.Success = failed == 0;
+
+            _outputService.WriteLine("", OutputCategory.Build);
+            _outputService.WriteLine($"========== Build: {succeeded} succeeded, {failed} failed ==========", OutputCategory.Build);
+            _outputService.WriteLine($"    {combinedResult.ErrorCount} Error(s), {combinedResult.WarningCount} Warning(s)", OutputCategory.Build);
+            _outputService.WriteLine($"    Time: {combinedResult.Duration.TotalSeconds:F2}s", OutputCategory.Build);
+
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs(
+                combinedResult.Success ? "Solution build succeeded" : "Solution build failed",
+                100));
+
+            BuildCompleted?.Invoke(this, new BuildCompletedEventArgs(combinedResult, combinedResult.Duration));
+        }
+        catch (OperationCanceledException)
+        {
+            combinedResult.Success = false;
+            combinedResult.Diagnostics.Add(new DiagnosticItem
+            {
+                Message = "Build was cancelled",
+                Severity = DiagnosticSeverity.Warning
+            });
+            _outputService.WriteLine("Build cancelled by user.", OutputCategory.Build);
+        }
+        catch (Exception ex)
+        {
+            combinedResult.Success = false;
+            combinedResult.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = "BL9999",
+                Message = $"Solution build failed with exception: {ex.Message}",
+                Severity = DiagnosticSeverity.Error
+            });
+            _outputService.WriteError($"Build error: {ex.Message}", OutputCategory.Build);
+        }
+        finally
+        {
+            IsBuilding = false;
+            _buildCts?.Dispose();
+            _buildCts = null;
+        }
+
+        return combinedResult;
+    }
+
+    /// <summary>
+    /// Computes a topological build order using Kahn's algorithm.
+    /// Projects with no dependencies are built first.
+    /// </summary>
+    private List<SolutionProject> GetBuildOrder(BasicLangSolution solution)
+    {
+        var inDegree = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var adjacency = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var p in solution.Projects)
+        {
+            inDegree[p.Name] = 0;
+            adjacency[p.Name] = new List<string>();
+        }
+
+        foreach (var p in solution.Projects)
+        {
+            foreach (var dep in p.ProjectReferences)
+            {
+                if (adjacency.ContainsKey(dep))
+                {
+                    adjacency[dep].Add(p.Name);
+                    inDegree[p.Name]++;
+                }
+            }
+        }
+
+        var queue = new Queue<string>(
+            inDegree.Where(kv => kv.Value == 0).Select(kv => kv.Key));
+        var result = new List<SolutionProject>();
+
+        while (queue.Count > 0)
+        {
+            var name = queue.Dequeue();
+            var project = solution.GetProject(name);
+            if (project != null)
+                result.Add(project);
+
+            foreach (var dependent in adjacency[name])
+            {
+                inDegree[dependent]--;
+                if (inDegree[dependent] == 0)
+                    queue.Enqueue(dependent);
+            }
+        }
+
+        if (result.Count != solution.Projects.Count)
+            throw new InvalidOperationException("Circular dependency detected in project references");
 
         return result;
     }

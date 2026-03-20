@@ -109,6 +109,11 @@ namespace BasicLang.Compiler
                 entryUnit.SourceCode = File.ReadAllText(filePath);
                 entryUnit.LastModified = File.GetLastWriteTimeUtc(filePath);
 
+                // Preprocess .mod files: wrap contents in implicit Module block
+                PreprocessModFile(entryUnit);
+                // Preprocess .cls/.class files: wrap contents in implicit Class block
+                PreprocessClassFile(entryUnit);
+
                 // Phase 1: Parse all files and collect imports
                 ParseAndCollectImports(entryUnit, result);
                 if (result.HasErrors) return FinalizeResult(result, startTime);
@@ -189,6 +194,8 @@ namespace BasicLang.Compiler
                         var unit = _registry.GetOrCreate(file);
                         unit.SourceCode = File.ReadAllText(file);
                         unit.LastModified = File.GetLastWriteTimeUtc(file);
+                        PreprocessModFile(unit);
+                        PreprocessClassFile(unit);
                     }
                 }
 
@@ -282,6 +289,8 @@ namespace BasicLang.Compiler
                         {
                             depUnit.SourceCode = File.ReadAllText(resolvedPath);
                             depUnit.LastModified = File.GetLastWriteTimeUtc(resolvedPath);
+                            PreprocessModFile(depUnit);
+                            PreprocessClassFile(depUnit);
                             ParseAndCollectImports(depUnit, result);
                         }
                     }
@@ -311,6 +320,8 @@ namespace BasicLang.Compiler
                         {
                             depUnit.SourceCode = File.ReadAllText(file);
                             depUnit.LastModified = File.GetLastWriteTimeUtc(file);
+                            PreprocessModFile(depUnit);
+                            PreprocessClassFile(depUnit);
                             ParseAndCollectImports(depUnit, result);
                         }
                     }
@@ -420,6 +431,17 @@ namespace BasicLang.Compiler
         {
             foreach (var symbol in scope.Symbols.Values)
             {
+                // For .cls/.class files: only export the class symbol (for Import resolution)
+                // The class itself carries the access modifier (Public/Private)
+                if (unit.IsClassFile)
+                {
+                    if (symbol.Kind == SymbolKind.Class)
+                    {
+                        unit.ExportedSymbols.Add(symbol);
+                    }
+                    continue;
+                }
+
                 // Export public symbols
                 if (symbol.Access == AST.AccessModifier.Public ||
                     symbol.Kind == SymbolKind.Function ||
@@ -527,6 +549,81 @@ namespace BasicLang.Compiler
             }
 
             return combined;
+        }
+
+        /// <summary>
+        /// Preprocess a .mod file by wrapping its contents in an implicit Module block.
+        /// The module name is derived from the filename. If the source already contains
+        /// a top-level Module declaration, a warning is emitted about the implicit wrapper.
+        /// .mod module members are globally accessible without Import.
+        /// </summary>
+        private void PreprocessModFile(CompilationUnit unit)
+        {
+            if (unit == null || string.IsNullOrEmpty(unit.FilePath))
+                return;
+
+            if (!Path.GetExtension(unit.FilePath).Equals(".mod", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            unit.IsModFile = true;
+
+            var source = unit.SourceCode ?? string.Empty;
+            var moduleName = Path.GetFileNameWithoutExtension(unit.FilePath);
+
+            // Check if source already contains a top-level Module declaration
+            var trimmed = source.TrimStart();
+            if (trimmed.StartsWith("Module ", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("Module\t", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("Module\r", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("Module\n", StringComparison.OrdinalIgnoreCase))
+            {
+                // Emit a warning - the file already has a Module declaration but will be double-wrapped
+                Console.Error.WriteLine(
+                    $"Warning: '{Path.GetFileName(unit.FilePath)}': Module declaration is implicit in .mod files — the outer Module wrapper will be used");
+            }
+
+            // Wrap source in Module block
+            unit.SourceCode = $"Module {moduleName}\n{source}\nEnd Module\n";
+        }
+
+        /// <summary>
+        /// Preprocess a .cls/.class file by wrapping its contents in an implicit Class block.
+        /// The filename becomes the class name. Private by default unless the first line is "Public".
+        /// </summary>
+        private void PreprocessClassFile(CompilationUnit unit)
+        {
+            if (unit == null || string.IsNullOrEmpty(unit.FilePath))
+                return;
+
+            if (!ModuleResolver.IsClassFile(unit.FilePath))
+                return;
+
+            unit.IsClassFile = true;
+
+            var source = unit.SourceCode ?? string.Empty;
+            var className = Path.GetFileNameWithoutExtension(unit.FilePath);
+            var trimmed = source.TrimStart();
+            string accessModifier = "Private";
+            string body = source;
+
+            // Check if file starts with "Public" keyword on its own line
+            if (trimmed.StartsWith("Public", StringComparison.OrdinalIgnoreCase))
+            {
+                var afterPublic = trimmed.Substring(6);
+                // Make sure "Public" is standalone keyword on its own line (not "Public Sub" etc.)
+                if (afterPublic.Length == 0 || afterPublic[0] == '\r' || afterPublic[0] == '\n')
+                {
+                    var firstLine = trimmed.Split('\n')[0].Trim().TrimEnd('\r');
+                    if (firstLine.Equals("Public", StringComparison.OrdinalIgnoreCase))
+                    {
+                        accessModifier = "Public";
+                        var newlineIndex = trimmed.IndexOf('\n');
+                        body = newlineIndex >= 0 ? trimmed.Substring(newlineIndex + 1) : string.Empty;
+                    }
+                }
+            }
+
+            unit.SourceCode = $"{accessModifier} Class {className}\n{body}\nEnd Class\n";
         }
 
         private CompilationResult FinalizeResult(CompilationResult result, DateTime startTime)

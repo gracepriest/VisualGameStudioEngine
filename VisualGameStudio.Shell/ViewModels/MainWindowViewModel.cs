@@ -65,6 +65,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IEventAggregator _eventAggregator;
     private readonly IOutputService _outputService;
     private readonly IExtensionService _extensionService;
+    private readonly ISolutionService _solutionService;
     private readonly IWorkspaceService _workspaceService;
     private readonly ITaskRunnerService _taskRunnerService;
     private readonly DockFactory _dockFactory;
@@ -99,6 +100,12 @@ public partial class MainWindowViewModel : ViewModelBase
     /// Gets the current project name for breadcrumb display.
     /// </summary>
     public string? ProjectName => _projectService.CurrentProject?.Name;
+
+    /// <summary>
+    /// Gets whether a solution is currently open. Used for menu item IsEnabled bindings.
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasSolutionOpen;
 
     [ObservableProperty]
     private int _caretLine = 1;
@@ -273,6 +280,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IEventAggregator eventAggregator,
         IOutputService outputService,
         IExtensionService extensionService,
+        ISolutionService solutionService,
         IWorkspaceService workspaceService,
         ITaskRunnerService taskRunnerService,
         DockFactory dockFactory,
@@ -315,6 +323,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _eventAggregator = eventAggregator;
         _outputService = outputService;
         _extensionService = extensionService;
+        _solutionService = solutionService;
         _workspaceService = workspaceService;
         _taskRunnerService = taskRunnerService;
         _dockFactory = dockFactory;
@@ -354,6 +363,10 @@ public partial class MainWindowViewModel : ViewModelBase
         _debugService.StateChanged += OnDebugStateChanged;
         _debugService.Stopped += OnDebugStopped;
         _debugService.OutputReceived += OnDebugOutput;
+
+        // Subscribe to solution events
+        _solutionService.SolutionLoaded += OnSolutionLoaded;
+        _solutionService.SolutionClosed += OnSolutionClosed;
 
         // Handle file open requests from solution explorer
         SolutionExplorer.FileOpenRequested += OnFileOpenRequested;
@@ -567,7 +580,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async void OnProjectOpened(object? sender, ProjectEventArgs e)
     {
-        Title = $"{e.Project.Name} - Visual Game Studio";
+        // Solution name takes precedence over project name in the title bar
+        Title = _solutionService.HasSolution
+            ? $"{_solutionService.CurrentSolution!.SolutionName} - Visual Game Studio"
+            : $"{e.Project.Name} - Visual Game Studio";
         StatusText = $"Project loaded: {e.Project.Name}";
 
         // Track this project in recent projects
@@ -650,7 +666,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void OnProjectClosed(object? sender, ProjectEventArgs e)
     {
-        Title = "Visual Game Studio";
+        // Keep solution title if a solution is still open
+        Title = _solutionService.HasSolution
+            ? $"{_solutionService.CurrentSolution!.SolutionName} - Visual Game Studio"
+            : "Visual Game Studio";
         StatusText = "Ready";
 
         // Clear workspace settings when project is closed
@@ -1694,9 +1713,9 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task BuildAsync()
     {
-        if (_projectService.CurrentProject == null)
+        if (_projectService.CurrentProject == null && _projectService.CurrentSolution == null)
         {
-            await _dialogService.ShowMessageAsync("Build", "No project is open.",
+            await _dialogService.ShowMessageAsync("Build", "No project or solution is open.",
                 DialogButtons.Ok, DialogIcon.Information);
             return;
         }
@@ -1721,7 +1740,16 @@ public partial class MainWindowViewModel : ViewModelBase
         // Show progress notification for the build
         ShowProgressNotification("build", "Building...");
 
-        await _buildService.BuildProjectAsync(_projectService.CurrentProject);
+        // If a solution is loaded, build all projects in dependency order;
+        // otherwise, build the single project.
+        if (_projectService.CurrentSolution != null && _projectService.CurrentSolution.Projects.Count > 0)
+        {
+            await _buildService.BuildSolutionAsync(_projectService.CurrentSolution);
+        }
+        else if (_projectService.CurrentProject != null)
+        {
+            await _buildService.BuildProjectAsync(_projectService.CurrentProject);
+        }
 
         // Dismiss the progress notification once build completes
         DismissNotification("build");
@@ -5171,6 +5199,293 @@ public partial class MainWindowViewModel : ViewModelBase
             await _projectService.CloseProjectAsync();
             Title = "Visual Game Studio";
             StatusText = "Ready";
+        }
+    }
+
+    // ── Solution Commands ──────────────────────────────────────────────
+
+    [RelayCommand]
+    private async Task OpenSolutionAsync()
+    {
+        var filePath = await _dialogService.ShowOpenFileDialogAsync(new FileDialogOptions
+        {
+            Title = "Open Solution",
+            Filters = new List<FileDialogFilter>
+            {
+                new("BasicLang Solution", "blsln"),
+                new("All Files", "*")
+            }
+        });
+
+        if (string.IsNullOrEmpty(filePath)) return;
+
+        try
+        {
+            SetBusy(true, "Opening solution...");
+            var solution = await _solutionService.LoadSolutionAsync(filePath);
+            SolutionExplorer.LoadSolution(solution);
+
+            // Track in recent projects
+            _recentProjectsService.AddRecentProject(filePath, solution.SolutionName);
+
+            Title = $"{solution.SolutionName} - Visual Game Studio";
+            StatusText = $"Solution loaded: {solution.SolutionName}";
+        }
+        catch (Exception ex)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"Failed to open solution: {ex.Message}",
+                DialogButtons.Ok, DialogIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    [RelayCommand]
+    private async Task NewSolutionAsync()
+    {
+        var name = await _dialogService.ShowInputDialogAsync("New Solution", "Enter solution name:");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var directory = await _dialogService.ShowFolderDialogAsync(
+            new FolderDialogOptions { Title = "Select Solution Location" });
+        if (string.IsNullOrEmpty(directory)) return;
+
+        try
+        {
+            SetBusy(true, "Creating solution...");
+            var solutionDir = Path.Combine(directory, name);
+            var solution = await _solutionService.CreateSolutionAsync(name, solutionDir);
+            SolutionExplorer.LoadSolution(solution);
+
+            Title = $"{solution.SolutionName} - Visual Game Studio";
+            StatusText = $"Solution created: {solution.SolutionName}";
+        }
+        catch (Exception ex)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"Failed to create solution: {ex.Message}",
+                DialogButtons.Ok, DialogIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    [RelayCommand]
+    private async Task CloseSolutionAsync()
+    {
+        if (!_solutionService.HasSolution) return;
+
+        // Check for unsaved changes
+        var unsavedDocs = _openDocuments.Values.Where(d => d.IsDirty).ToList();
+        if (unsavedDocs.Any())
+        {
+            var result = await _dialogService.ShowMessageAsync("Close Solution",
+                "Save changes before closing?", DialogButtons.YesNoCancel, DialogIcon.Question);
+            if (result == DialogResult.Cancel) return;
+            if (result == DialogResult.Yes) await SaveAllAsync();
+        }
+
+        // Close all open documents
+        foreach (var doc in _openDocuments.Values.ToList())
+        {
+            _dockFactory.CloseActiveDocument();
+        }
+        _openDocuments.Clear();
+
+        await _solutionService.CloseSolutionAsync();
+        SolutionExplorer.Nodes.Clear();
+        Title = "Visual Game Studio";
+        StatusText = "Ready";
+    }
+
+    [RelayCommand]
+    private async Task BuildSolutionAsync()
+    {
+        if (!_solutionService.HasSolution)
+        {
+            await _dialogService.ShowMessageAsync("Build Solution", "No solution is open.",
+                DialogButtons.Ok, DialogIcon.Information);
+            return;
+        }
+
+        if (_buildService.IsBuilding) return;
+
+        await SaveAllAsync();
+
+        OutputPanel.SelectedCategory = OutputCategory.Build;
+        _dockFactory.ActivateTool("Output");
+
+        StatusBar.SetBuildStarted();
+        StatusText = "Building solution...";
+        Services.ScreenReaderService.Instance.Announce("Solution build started");
+        ShowProgressNotification("build", "Building solution...");
+
+        var buildOrder = _solutionService.GetBuildOrder();
+        var solutionDir = _solutionService.CurrentSolution!.SolutionDirectory;
+        bool allSucceeded = true;
+
+        for (int i = 0; i < buildOrder.Count; i++)
+        {
+            var proj = buildOrder[i];
+            StatusText = $"Building {proj.Name} ({i + 1}/{buildOrder.Count})...";
+
+            var projectPath = proj.GetFullPath(solutionDir);
+            try
+            {
+                var project = await _projectService.OpenProjectAsync(projectPath);
+                await _buildService.BuildProjectAsync(project);
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError($"Failed to build {proj.Name}: {ex.Message}", OutputCategory.Build);
+                allSucceeded = false;
+                break;
+            }
+        }
+
+        DismissNotification("build");
+        StatusText = allSucceeded
+            ? $"Solution build succeeded ({buildOrder.Count} project(s))"
+            : "Solution build failed";
+    }
+
+    [RelayCommand]
+    private async Task AddNewProjectToSolutionAsync()
+    {
+        if (!_solutionService.HasSolution) return;
+        if (App.MainWindow == null) return;
+
+        var vm = new ViewModels.Dialogs.AddProjectToSolutionViewModel();
+        var existingNames = _solutionService.CurrentSolution!.Projects.Select(p => p.Name);
+        vm.Initialize(_solutionService.CurrentSolution.SolutionDirectory, existingNames);
+
+        var dialog = new Views.Dialogs.AddProjectToSolutionDialog
+        {
+            DataContext = vm
+        };
+
+        var result = await dialog.ShowDialog<bool?>(App.MainWindow);
+        if (result != true || !vm.DialogResult) return;
+
+        try
+        {
+            var outputType = vm.GetOutputType();
+            var project = await _solutionService.AddNewProjectAsync(vm.ProjectName, outputType);
+
+            // Write a richer .blproj with backend and source file reference
+            var defaultCode = vm.GetDefaultCode();
+            var hasSource = !string.IsNullOrEmpty(defaultCode) && vm.SelectedTemplate != "Empty";
+            var compileItem = hasSource ? $"\n    <Compile Include=\"Program.bas\" />" : "";
+            var referencesXml = "";
+            var selectedRefs = vm.GetSelectedReferences();
+            if (selectedRefs.Count > 0)
+            {
+                referencesXml = "\n  <ItemGroup>";
+                foreach (var refName in selectedRefs)
+                {
+                    referencesXml += $"\n    <ProjectReference Include=\"..\\{refName}\\{refName}.blproj\" />";
+                    _solutionService.AddProjectReference(vm.ProjectName, refName);
+                }
+                referencesXml += "\n  </ItemGroup>";
+            }
+
+            var blprojContent =
+$"""
+<?xml version="1.0" encoding="utf-8"?>
+<BasicLangProject Version="1.0">
+  <PropertyGroup>
+    <ProjectName>{vm.ProjectName}</ProjectName>
+    <OutputType>{outputType}</OutputType>
+    <RootNamespace>{vm.ProjectName}</RootNamespace>
+    <TargetBackend>{vm.SelectedBackend}</TargetBackend>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <OutputPath>bin\Release</OutputPath>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>{compileItem}
+  </ItemGroup>{referencesXml}
+</BasicLangProject>
+""";
+            await File.WriteAllTextAsync(project.AbsolutePath, blprojContent);
+
+            // Write default source file
+            if (hasSource)
+            {
+                var projectDir = Path.GetDirectoryName(project.AbsolutePath);
+                if (!string.IsNullOrEmpty(projectDir))
+                {
+                    var sourcePath = Path.Combine(projectDir, "Program.bas");
+                    await File.WriteAllTextAsync(sourcePath, defaultCode);
+                }
+            }
+
+            await _solutionService.SaveSolutionAsync();
+            SolutionExplorer.LoadSolution(_solutionService.CurrentSolution!);
+            StatusText = $"Project '{vm.ProjectName}' added to solution";
+        }
+        catch (Exception ex)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"Failed to add project: {ex.Message}",
+                DialogButtons.Ok, DialogIcon.Error);
+        }
+    }
+
+    [RelayCommand]
+    private async Task AddExistingProjectToSolutionAsync()
+    {
+        if (!_solutionService.HasSolution) return;
+
+        var filePath = await _dialogService.ShowOpenFileDialogAsync(new FileDialogOptions
+        {
+            Title = "Add Existing Project",
+            Filters = new List<FileDialogFilter>
+            {
+                new("BasicLang Project", "blproj"),
+                new("All Files", "*")
+            }
+        });
+
+        if (string.IsNullOrEmpty(filePath)) return;
+
+        try
+        {
+            await _solutionService.AddExistingProjectAsync(filePath);
+            await _solutionService.SaveSolutionAsync();
+            SolutionExplorer.LoadSolution(_solutionService.CurrentSolution!);
+            StatusText = $"Project added to solution";
+        }
+        catch (Exception ex)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"Failed to add project: {ex.Message}",
+                DialogButtons.Ok, DialogIcon.Error);
+        }
+    }
+
+    private void OnSolutionLoaded(object? sender, EventArgs e)
+    {
+        HasSolutionOpen = true;
+        if (_solutionService.CurrentSolution != null)
+        {
+            Title = $"{_solutionService.CurrentSolution.SolutionName} - Visual Game Studio";
+        }
+    }
+
+    private void OnSolutionClosed(object? sender, EventArgs e)
+    {
+        HasSolutionOpen = false;
+        if (_projectService.CurrentProject == null)
+        {
+            Title = "Visual Game Studio";
         }
     }
 

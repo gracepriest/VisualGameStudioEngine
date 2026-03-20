@@ -110,6 +110,14 @@ public partial class StatusBarViewModel : ViewModelBase
     [ObservableProperty]
     private bool _hasMergeConflicts;
 
+    // ── File type hint ──
+
+    [ObservableProperty]
+    private string _fileTypeHint = "";
+
+    [ObservableProperty]
+    private bool _hasFileTypeHint;
+
     // ── Notification center ──
 
     [ObservableProperty]
@@ -155,7 +163,7 @@ public partial class StatusBarViewModel : ViewModelBase
     [ObservableProperty]
     private ObservableCollection<string> _availableLanguages = new()
     {
-        "BasicLang", "BasicLang Project", "C#", "Visual Basic", "C++", "C++ Header",
+        "BasicLang", "BasicLang Module", "BasicLang Class", "BasicLang Project", "C#", "Visual Basic", "C++", "C++ Header",
         "C", "XML", "JSON", "Plain Text", "Markdown", "HTML", "CSS", "JavaScript",
         "TypeScript", "Python", "Java", "Go", "Rust", "YAML", "TOML", "INI",
         "SQL", "PowerShell", "Bash", "Batch"
@@ -195,6 +203,8 @@ public partial class StatusBarViewModel : ViewModelBase
         if (string.IsNullOrEmpty(filePath))
         {
             LanguageMode = "Plain Text";
+            FileTypeHint = "";
+            HasFileTypeHint = false;
             return;
         }
 
@@ -203,6 +213,8 @@ public partial class StatusBarViewModel : ViewModelBase
         {
             ".bas" => "BasicLang",
             ".bl" => "BasicLang",
+            ".mod" => "BasicLang Module",
+            ".cls" or ".class" => "BasicLang Class",
             ".blproj" => "BasicLang Project",
             ".cs" => "C#",
             ".vb" => "Visual Basic",
@@ -230,6 +242,55 @@ public partial class StatusBarViewModel : ViewModelBase
             ".bat" or ".cmd" => "Batch",
             _ => "Plain Text"
         };
+
+        // Set file type hint for BasicLang file types
+        UpdateFileTypeHint(filePath, ext);
+    }
+
+    /// <summary>
+    /// Updates the file type hint shown in the status bar for BasicLang files.
+    /// Shows contextual information about .mod (module) and .cls/.class (class) files.
+    /// </summary>
+    private void UpdateFileTypeHint(string filePath, string ext)
+    {
+        switch (ext)
+        {
+            case ".mod":
+                FileTypeHint = "This module is globally accessible";
+                HasFileTypeHint = true;
+                break;
+            case ".cls" or ".class":
+                // Check if file content starts with Public to determine accessibility
+                try
+                {
+                    if (File.Exists(filePath))
+                    {
+                        var firstLines = File.ReadLines(filePath).Take(5).ToList();
+                        var hasPublic = firstLines.Any(line =>
+                        {
+                            var trimmed = line.TrimStart();
+                            return !trimmed.StartsWith("'") && trimmed.StartsWith("Public", StringComparison.OrdinalIgnoreCase);
+                        });
+                        FileTypeHint = hasPublic
+                            ? "This class is publicly accessible"
+                            : "This class requires Import to access";
+                    }
+                    else
+                    {
+                        FileTypeHint = "This class requires Import to access";
+                    }
+                }
+                catch
+                {
+                    FileTypeHint = "This class requires Import to access";
+                }
+                HasFileTypeHint = true;
+                break;
+            default:
+                FileTypeHint = "";
+                HasFileTypeHint = false;
+                break;
+        }
     }
 
     /// <summary>

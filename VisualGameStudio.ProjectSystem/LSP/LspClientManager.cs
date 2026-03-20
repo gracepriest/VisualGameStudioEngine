@@ -77,7 +77,7 @@ public class LspClientManager : ILspClientManager
             Name = "BasicLang Language Server",
             Description = "BasicLang language support via BasicLang.exe --lsp",
             LanguageIds = new List<string> { "basiclang" },
-            FileExtensions = new List<string> { ".bas", ".blproj" },
+            FileExtensions = new List<string> { ".bas", ".bl", ".mod", ".cls", ".class", ".blproj" },
             StartInfo = new ServerStartInfo
             {
                 Command = "dotnet",

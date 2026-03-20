@@ -23,6 +23,7 @@ public static class ServiceConfiguration
         services.AddSingleton<IFileService, FileService>();
         services.AddSingleton<IOutputService, OutputService>();
         services.AddSingleton<IProjectService, ProjectService>();
+        services.AddSingleton<ISolutionService, SolutionService>();
         services.AddSingleton<IBuildService, BuildService>();
         services.AddSingleton<ILanguageService, LanguageService>();
         services.AddSingleton<IDebugService, DebugService>();

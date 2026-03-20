@@ -4366,6 +4366,9 @@ public class RefactoringService : IRefactoringService
             {
                 var files = Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories)
                     .Concat(Directory.GetFiles(projectDir, "*.bl", SearchOption.AllDirectories))
+                    .Concat(Directory.GetFiles(projectDir, "*.mod", SearchOption.AllDirectories))
+                    .Concat(Directory.GetFiles(projectDir, "*.cls", SearchOption.AllDirectories))
+                    .Concat(Directory.GetFiles(projectDir, "*.class", SearchOption.AllDirectories))
                     .Where(f => !f.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase));
 
                 foreach (var file in files)
@@ -4964,6 +4967,9 @@ public class RefactoringService : IRefactoringService
             {
                 var files = Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories)
                     .Concat(Directory.GetFiles(projectDir, "*.bl", SearchOption.AllDirectories))
+                    .Concat(Directory.GetFiles(projectDir, "*.mod", SearchOption.AllDirectories))
+                    .Concat(Directory.GetFiles(projectDir, "*.cls", SearchOption.AllDirectories))
+                    .Concat(Directory.GetFiles(projectDir, "*.class", SearchOption.AllDirectories))
                     .Where(f => !f.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase));
 
                 foreach (var file in files)
@@ -10012,8 +10018,11 @@ public class RefactoringService : IRefactoringService
         var destinations = new List<PushMembersDownDestination>();
         var projectDir = Path.GetDirectoryName(filePath)!;
 
-        // Search for derived classes in .bas files
-        var basFiles = Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories);
+        // Search for derived classes in .bas/.mod/.cls/.class files
+        var basFiles = Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories)
+            .Concat(Directory.GetFiles(projectDir, "*.mod", SearchOption.AllDirectories))
+            .Concat(Directory.GetFiles(projectDir, "*.cls", SearchOption.AllDirectories))
+            .Concat(Directory.GetFiles(projectDir, "*.class", SearchOption.AllDirectories));
 
         foreach (var file in basFiles)
         {
@@ -10739,7 +10748,10 @@ public class RefactoringService : IRefactoringService
         var projectDir = Path.GetDirectoryName(filePath)!;
 
         // Search for the type definition in the project
-        var basFiles = Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories);
+        var basFiles = Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories)
+            .Concat(Directory.GetFiles(projectDir, "*.mod", SearchOption.AllDirectories))
+            .Concat(Directory.GetFiles(projectDir, "*.cls", SearchOption.AllDirectories))
+            .Concat(Directory.GetFiles(projectDir, "*.class", SearchOption.AllDirectories));
 
         foreach (var file in basFiles)
         {
@@ -12356,7 +12368,10 @@ public class RefactoringService : IRefactoringService
             var projectDir = Path.GetDirectoryName(filePath);
             if (projectDir != null)
             {
-                var basFiles = Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories);
+                var basFiles = Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories)
+                    .Concat(Directory.GetFiles(projectDir, "*.mod", SearchOption.AllDirectories))
+                    .Concat(Directory.GetFiles(projectDir, "*.cls", SearchOption.AllDirectories))
+                    .Concat(Directory.GetFiles(projectDir, "*.class", SearchOption.AllDirectories));
                 foreach (var basFile in basFiles)
                 {
                     if (basFile == filePath) continue;

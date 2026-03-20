@@ -293,12 +293,18 @@ namespace BasicLang.Compiler.ProjectSystem
 
             if (SourceFiles.Count == 0)
             {
-                // Default: all .bas and .bl files
+                // Default: all .bas, .bl, .basic, .mod, .cls, and .class files
                 foreach (var file in Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories))
                     yield return file;
                 foreach (var file in Directory.GetFiles(projectDir, "*.bl", SearchOption.AllDirectories))
                     yield return file;
                 foreach (var file in Directory.GetFiles(projectDir, "*.basic", SearchOption.AllDirectories))
+                    yield return file;
+                foreach (var file in Directory.GetFiles(projectDir, "*.mod", SearchOption.AllDirectories))
+                    yield return file;
+                foreach (var file in Directory.GetFiles(projectDir, "*.cls", SearchOption.AllDirectories))
+                    yield return file;
+                foreach (var file in Directory.GetFiles(projectDir, "*.class", SearchOption.AllDirectories))
                     yield return file;
             }
             else

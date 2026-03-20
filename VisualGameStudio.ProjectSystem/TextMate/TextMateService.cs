@@ -39,7 +39,7 @@ public class TextMateService : ITextMateService
             ScopeName = "source.basiclang",
             LanguageId = "basiclang",
             Name = "BasicLang",
-            FileExtensions = new List<string> { ".bl", ".bas" }
+            FileExtensions = new List<string> { ".bl", ".bas", ".mod", ".cls", ".class" }
         });
     }
 

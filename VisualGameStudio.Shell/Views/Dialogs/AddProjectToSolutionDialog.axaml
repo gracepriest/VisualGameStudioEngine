@@ -1,0 +1,135 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="550"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.AddProjectToSolutionDialog"
+        x:DataType="vm:AddProjectToSolutionViewModel"
+        Title="Add New Project to Solution"
+        Width="600" Height="550"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+  <Grid RowDefinitions="*,Auto" Background="#1E1E1E">
+    <!-- Main Content -->
+    <ScrollViewer Grid.Row="0" Padding="16">
+      <StackPanel Spacing="16">
+        <!-- Project Name -->
+        <Border Background="#252526" CornerRadius="4" Padding="16">
+          <StackPanel Spacing="12">
+            <TextBlock Text="Configure New Project"
+                       FontWeight="SemiBold"
+                       FontSize="16"/>
+
+            <StackPanel Spacing="4">
+              <TextBlock Text="Project name"/>
+              <TextBox Text="{Binding ProjectName}"
+                       Watermark="Enter project name"/>
+            </StackPanel>
+
+            <!-- Template -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Template"/>
+              <ComboBox ItemsSource="{Binding Templates}"
+                        SelectedItem="{Binding SelectedTemplate}"
+                        HorizontalAlignment="Stretch"/>
+            </StackPanel>
+
+            <!-- Backend -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Backend"/>
+              <ComboBox ItemsSource="{Binding Backends}"
+                        SelectedItem="{Binding SelectedBackend}"
+                        HorizontalAlignment="Stretch"/>
+            </StackPanel>
+
+            <!-- Location -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Location"/>
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0"
+                         Text="{Binding ProjectLocation}"
+                         Watermark="Select location"
+                         Margin="0,0,4,0"/>
+                <Button Grid.Column="1"
+                        Content="Browse..."
+                        x:Name="BrowseButton"
+                        Width="80"/>
+              </Grid>
+            </StackPanel>
+
+            <!-- Create directory checkbox -->
+            <CheckBox Content="Create directory for project"
+                      IsChecked="{Binding CreateDirectory}"/>
+
+            <StackPanel Spacing="4" IsVisible="{Binding CreateDirectory}">
+              <TextBlock Text="Project will be created in:"
+                         Foreground="#808080"
+                         FontSize="11"/>
+              <TextBlock FontSize="11"
+                         Foreground="#569CD6"
+                         TextWrapping="Wrap">
+                <TextBlock.Text>
+                  <MultiBinding StringFormat="{}{0}\{1}">
+                    <Binding Path="ProjectLocation"/>
+                    <Binding Path="ProjectName"/>
+                  </MultiBinding>
+                </TextBlock.Text>
+              </TextBlock>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- Project References -->
+        <Border Background="#252526" CornerRadius="4" Padding="16"
+                IsVisible="{Binding ProjectReferences.Count}">
+          <StackPanel Spacing="8">
+            <TextBlock Text="Project References"
+                       FontWeight="SemiBold"/>
+            <TextBlock Text="Select projects to reference:"
+                       Foreground="#808080"
+                       FontSize="11"/>
+            <ItemsControl ItemsSource="{Binding ProjectReferences}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <CheckBox Content="{Binding Name}"
+                            IsChecked="{Binding IsChecked}"
+                            Margin="0,2"/>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- Error Message -->
+        <Border Background="#4E2A2A"
+                CornerRadius="4"
+                Padding="12"
+                IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+          <TextBlock Text="{Binding ErrorMessage}"
+                     Foreground="#F48771"/>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- Buttons -->
+    <Border Grid.Row="1"
+            Background="#2D2D2D"
+            Padding="16,12"
+            BorderThickness="0,1,0,0"
+            BorderBrush="#3C3C3C">
+      <StackPanel Orientation="Horizontal"
+                  HorizontalAlignment="Right"
+                  Spacing="8">
+        <Button Content="Create"
+                Command="{Binding CreateCommand}"
+                Width="100"
+                Classes="accent primary"/>
+        <Button Content="Cancel"
+                Command="{Binding CancelCommand}"
+                Width="100"/>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>
