@@ -5,6 +5,7 @@
         xmlns:vm="using:VisualGameStudio.Shell.ViewModels"
         xmlns:dock="using:Dock.Avalonia.Controls"
         xmlns:local="using:VisualGameStudio.Shell.Converters"
+        xmlns:controls="using:VisualGameStudio.Shell.Controls"
         mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
         x:Class="VisualGameStudio.Shell.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -247,6 +248,11 @@
         <MenuItem Header="Column Se_lection Mode" Command="{Binding ToggleColumnSelectionModeCommand}" InputGesture="Alt+Shift+Insert">
           <MenuItem.Icon>
             <CheckBox IsChecked="{Binding IsColumnSelectionMode}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
+          </MenuItem.Icon>
+        </MenuItem>
+        <MenuItem Header="_Maximize Panel" Command="{Binding ToggleBottomPanelMaximizeCommand}">
+          <MenuItem.Icon>
+            <CheckBox IsChecked="{Binding IsBottomPanelMaximized}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
           </MenuItem.Icon>
         </MenuItem>
         <MenuItem Header="_Zen Mode" Command="{Binding ToggleZenModeCommand}" InputGesture="Ctrl+Shift+Z"/>
@@ -588,8 +594,105 @@
       </Grid>
     </Border>
 
-    <!-- Main Content - Dock Control -->
-    <dock:DockControl Layout="{Binding Layout}"/>
+    <!-- Main Content - Activity Bar + Dock Control -->
+    <Grid ColumnDefinitions="Auto,*">
+
+      <!-- Activity Bar (VS Code-style icon strip with badges) -->
+      <Border Grid.Column="0" Background="#333333" Width="48"
+              IsVisible="{Binding !IsZenMode}"
+              AutomationProperties.Name="Activity Bar">
+        <StackPanel Spacing="0" Margin="0,4,0,0">
+
+          <!-- Explorer -->
+          <Button Classes="activityBarButton"
+                  Command="{Binding ShowSolutionExplorerCommand}"
+                  ToolTip.Tip="Explorer"
+                  AutomationProperties.Name="Explorer">
+            <Panel>
+              <TextBlock Text="&#x1F4C1;" FontSize="20"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Panel>
+          </Button>
+
+          <!-- Search -->
+          <Button Classes="activityBarButton"
+                  Command="{Binding ShowFindInFilesCommand}"
+                  ToolTip.Tip="Search"
+                  AutomationProperties.Name="Search">
+            <Panel>
+              <TextBlock Text="&#x1F50D;" FontSize="18"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Panel>
+          </Button>
+
+          <!-- Source Control (with badge) -->
+          <Button Classes="activityBarButton"
+                  Command="{Binding ShowSourceControlCommand}"
+                  ToolTip.Tip="Source Control"
+                  AutomationProperties.Name="Source Control">
+            <Panel>
+              <TextBlock Text="&#x2442;" FontSize="22"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                         Foreground="#CCCCCC"/>
+              <controls:BadgeControl Count="{Binding SourceControlBadgeCount}"
+                                     Kind="Info"
+                                     HorizontalAlignment="Right"
+                                     VerticalAlignment="Top"
+                                     Margin="0,-2,-4,0"/>
+            </Panel>
+          </Button>
+
+          <!-- Debug -->
+          <Button Classes="activityBarButton"
+                  Command="{Binding ShowDebugPanelCommand}"
+                  ToolTip.Tip="Run and Debug"
+                  AutomationProperties.Name="Run and Debug">
+            <Panel>
+              <TextBlock Text="&#x25B6;" FontSize="18"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                         Foreground="#89D185"/>
+            </Panel>
+          </Button>
+
+          <!-- Problems (with badge) -->
+          <Button Classes="activityBarButton"
+                  Command="{Binding ShowProblemsCommand}"
+                  ToolTip.Tip="Problems"
+                  AutomationProperties.Name="Problems">
+            <Panel>
+              <TextBlock Text="&#x26A0;" FontSize="18"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <controls:BadgeControl Count="{Binding ProblemsBadgeCount}"
+                                     Kind="Error"
+                                     HorizontalAlignment="Right"
+                                     VerticalAlignment="Top"
+                                     Margin="0,-2,-4,0"/>
+            </Panel>
+          </Button>
+
+          <!-- Extensions (with badge) -->
+          <Button Classes="activityBarButton"
+                  Command="{Binding ShowExtensionsCommand}"
+                  ToolTip.Tip="Extensions"
+                  AutomationProperties.Name="Extensions">
+            <Panel>
+              <TextBlock Text="&#x2B29;" FontSize="22"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                         Foreground="#CCCCCC"/>
+              <controls:BadgeControl Count="{Binding ExtensionsBadgeCount}"
+                                     Kind="Info"
+                                     HorizontalAlignment="Right"
+                                     VerticalAlignment="Top"
+                                     Margin="0,-2,-4,0"/>
+            </Panel>
+          </Button>
+
+        </StackPanel>
+      </Border>
+
+      <!-- Dock Control -->
+      <dock:DockControl Grid.Column="1" Layout="{Binding Layout}"/>
+    </Grid>
 
   </DockPanel>
 

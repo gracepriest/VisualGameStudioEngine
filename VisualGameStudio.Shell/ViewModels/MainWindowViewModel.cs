@@ -71,6 +71,21 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly DockFactory _dockFactory;
 
     /// <summary>
+    /// Tracks extension-contributed tree view panels by viewId.
+    /// </summary>
+    private readonly Dictionary<string, TreeViewPanelViewModel> _extensionTreeViews = new();
+
+    /// <summary>
+    /// Raised when an extension creates a tree view panel so the shell can add it to the UI.
+    /// </summary>
+    public event EventHandler<TreeViewPanelViewModel>? ExtensionTreeViewPanelCreated;
+
+    /// <summary>
+    /// Gets all currently active extension tree view panels.
+    /// </summary>
+    public IReadOnlyDictionary<string, TreeViewPanelViewModel> ExtensionTreeViews => _extensionTreeViews;
+
+    /// <summary>
     /// Tracks cursor position history for Back/Forward navigation (Alt+Left/Right).
     /// </summary>
     private readonly Services.NavigationHistoryService _navigationHistory = new();
@@ -148,6 +163,13 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isColumnSelectionMode;
 
+    /// <summary>
+    /// Whether the bottom panel area is maximized (fills entire content area).
+    /// When true, the sidebar and editor are hidden and the bottom panel fills the space.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isBottomPanelMaximized;
+
     /// <summary>Whether the minimap is visible in editors.</summary>
     [ObservableProperty]
     private bool _showMinimap = true;
@@ -198,6 +220,29 @@ public partial class MainWindowViewModel : ViewModelBase
     /// <summary>Whether full screen mode is active.</summary>
     [ObservableProperty]
     private bool _isFullScreen;
+
+    // ── Activity Bar Badge Counts ──
+
+    /// <summary>
+    /// Number of changed files in source control (staged + unstaged).
+    /// Displayed as a badge on the Source Control activity bar icon.
+    /// </summary>
+    [ObservableProperty]
+    private int _sourceControlBadgeCount;
+
+    /// <summary>
+    /// Number of problems (errors + warnings) from diagnostics.
+    /// Displayed as a badge on the Problems activity bar icon.
+    /// </summary>
+    [ObservableProperty]
+    private int _problemsBadgeCount;
+
+    /// <summary>
+    /// Number of installed extensions (placeholder for future update count).
+    /// Displayed as a badge on the Extensions activity bar icon.
+    /// </summary>
+    [ObservableProperty]
+    private int _extensionsBadgeCount;
 
     /// <summary>Recent projects list for the Open Recent submenu.</summary>
     [ObservableProperty]
@@ -256,6 +301,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public CallHierarchyViewModel CallHierarchy { get; }
     public TypeHierarchyViewModel TypeHierarchy { get; }
     public ThreadsViewModel Threads { get; }
+    public TimelineViewModel Timeline { get; }
 
     private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Action> _documentCleanupActions = new(StringComparer.OrdinalIgnoreCase);
@@ -302,7 +348,8 @@ public partial class MainWindowViewModel : ViewModelBase
         BookmarksViewModel bookmarks,
         CallHierarchyViewModel callHierarchy,
         TypeHierarchyViewModel typeHierarchy,
-        ThreadsViewModel threads)
+        ThreadsViewModel threads,
+        TimelineViewModel timeline)
     {
         _projectService = projectService;
         _buildService = buildService;
@@ -347,14 +394,18 @@ public partial class MainWindowViewModel : ViewModelBase
         CallHierarchy = callHierarchy;
         TypeHierarchy = typeHierarchy;
         Threads = threads;
+        Timeline = timeline;
 
         // Setup dock layout
-        _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks, threads: threads);
+        _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks, threads: threads, timeline: timeline);
         Layout = _dockFactory.CreateLayout();
         _dockFactory.InitLayout(Layout);
 
         // Subscribe to document close event
         _dockFactory.DocumentClosed += OnDocumentClosed;
+
+        // Subscribe to timeline diff requests
+        Timeline.DiffRequested += OnTimelineDiffRequested;
 
         // Subscribe to events
         _projectService.ProjectOpened += OnProjectOpened;
@@ -413,12 +464,33 @@ public partial class MainWindowViewModel : ViewModelBase
         // Load static contributions from installed extensions (themes, grammars, snippets)
         _ = LoadExtensionContributionsAsync();
 
+        // Subscribe to extension tree view creation and refresh
+        _extensionService.TreeViewCreated += OnExtensionTreeViewCreated;
+        _extensionService.TreeViewRefreshRequested += OnExtensionTreeViewRefreshRequested;
+
         // Load accessibility and zoom settings
         if (_settingsService != null)
         {
             ReduceMotion = _settingsService.Get(SettingsKeys.AccessibilityReduceMotion, false);
             ZoomLevel = _settingsService.Get(SettingsKeys.ZoomLevel, 100);
         }
+
+        // ── Activity bar badge subscriptions ──
+        // Source Control badge: track staged + unstaged change counts
+        GitChanges.StagedChanges.CollectionChanged += (_, _) => UpdateSourceControlBadge();
+        GitChanges.UnstagedChanges.CollectionChanged += (_, _) => UpdateSourceControlBadge();
+
+        // Problems badge: track error list count changes
+        ErrorList.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(ErrorListViewModel.ErrorCount) or nameof(ErrorListViewModel.WarningCount))
+                ProblemsBadgeCount = ErrorList.ErrorCount + ErrorList.WarningCount;
+        };
+    }
+
+    private void UpdateSourceControlBadge()
+    {
+        SourceControlBadgeCount = GitChanges.StagedChanges.Count + GitChanges.UnstagedChanges.Count;
     }
 
     private async Task LoadExtensionContributionsAsync()
@@ -436,6 +508,37 @@ public partial class MainWindowViewModel : ViewModelBase
                     new NotificationAction("Show Output", () => _dockFactory.ActivateTool("Output")),
                 },
                 details: ex.Message);
+        }
+    }
+
+    private void OnExtensionTreeViewCreated(object? sender, ExtensionTreeViewEventArgs e)
+    {
+        if (_extensionTreeViews.ContainsKey(e.ViewId)) return;
+
+        var panelVm = new TreeViewPanelViewModel(
+            e.ViewId,
+            e.Title ?? e.ViewId,
+            e.ExtensionId,
+            getChildrenFunc: (viewId, element, ct) => _extensionService.RequestTreeChildrenAsync(viewId, element, ct),
+            getTreeItemFunc: (viewId, element, ct) => _extensionService.RequestTreeItemAsync(viewId, element, ct),
+            executeCommandFunc: (commandId, args) => _extensionService.ExecuteExtensionCommandAsync(commandId, args));
+
+        _extensionTreeViews[e.ViewId] = panelVm;
+        ExtensionTreeViewPanelCreated?.Invoke(this, panelVm);
+    }
+
+    private async void OnExtensionTreeViewRefreshRequested(object? sender, ExtensionTreeViewEventArgs e)
+    {
+        if (_extensionTreeViews.TryGetValue(e.ViewId, out var panelVm))
+        {
+            try
+            {
+                await panelVm.RefreshElementAsync(e.Element);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[TreeView] Refresh failed for {e.ViewId}: {ex.Message}");
+            }
         }
     }
 
@@ -1209,6 +1312,8 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             // Activate the existing document
             _dockFactory.ActivateDocument(existingDoc);
+            // Refresh timeline for the switched-to file
+            _ = Timeline.LoadTimelineAsync(filePath);
             return;
         }
 
@@ -1522,6 +1627,17 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
             };
             document.BreakpointToggled += onBreakpoint;
+            // Gutter context menu: conditional breakpoints, logpoints, edit/remove
+            EventHandler<int>? onConditionalBp = async (s, line) => { if (!string.IsNullOrEmpty(document.FilePath)) await HandleGutterConditionalBreakpointAsync(document.FilePath, line, "conditional"); };
+            EventHandler<int>? onLogpoint = async (s, line) => { if (!string.IsNullOrEmpty(document.FilePath)) await HandleGutterConditionalBreakpointAsync(document.FilePath, line, "logpoint"); };
+            EventHandler<int>? onEditBp = async (s, line) => { if (!string.IsNullOrEmpty(document.FilePath)) await HandleGutterEditBreakpointAsync(document.FilePath, line); };
+            EventHandler<int>? onRemoveBp = (s, line) => { if (!string.IsNullOrEmpty(document.FilePath)) Breakpoints.RemoveBreakpoint(document.FilePath, line); };
+            EventHandler<int>? onToggleEnableBp = (s, line) => { if (!string.IsNullOrEmpty(document.FilePath)) Breakpoints.ToggleBreakpoint(document.FilePath, line); };
+            document.ConditionalBreakpointRequested += onConditionalBp;
+            document.LogpointRequested += onLogpoint;
+            document.EditBreakpointRequested += onEditBp;
+            document.RemoveBreakpointRequested += onRemoveBp;
+            document.ToggleEnableBreakpointRequested += onToggleEnableBp;
 
             // Register cleanup action to unsubscribe all handlers on document close
             _documentCleanupActions[filePath] = () =>
@@ -1577,6 +1693,11 @@ public partial class MainWindowViewModel : ViewModelBase
                 document.CompletionRequested -= onCompletion;
                 document.TextChanged -= onTextChanged;
                 document.BreakpointToggled -= onBreakpoint;
+                document.ConditionalBreakpointRequested -= onConditionalBp;
+                document.LogpointRequested -= onLogpoint;
+                document.EditBreakpointRequested -= onEditBp;
+                document.RemoveBreakpointRequested -= onRemoveBp;
+                document.ToggleEnableBreakpointRequested -= onToggleEnableBp;
             };
 
             // Wire up code lens commands
@@ -1648,6 +1769,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
             // Update document outline
             await UpdateDocumentOutlineAsync(filePath, content);
+
+            // Load timeline (git file history) for the newly opened file
+            _ = Timeline.LoadTimelineAsync(filePath);
 
             // Fetch initial code lenses and semantic tokens
             await RefreshCodeLensesAsync(document);
@@ -5743,8 +5867,7 @@ $"""
     [RelayCommand]
     private void ShowExtensions()
     {
-        StatusText = "Extensions panel — coming soon";
-        ShowNotification("Extensions marketplace is planned for a future release.", "info");
+        _dockFactory.ActivateTool("Extensions");
     }
 
     [RelayCommand]
@@ -5787,6 +5910,31 @@ $"""
     {
         ShowPanel = !ShowPanel;
         StatusText = ShowPanel ? "Panel visible" : "Panel hidden";
+    }
+
+    /// <summary>
+    /// Toggles the bottom panel between maximized and normal layout.
+    /// When maximized, the bottom panel fills the entire content area (sidebar and editor hidden).
+    /// </summary>
+    [RelayCommand]
+    private void ToggleBottomPanelMaximize()
+    {
+        var isMaximized = _dockFactory.ToggleBottomPanelMaximize();
+        IsBottomPanelMaximized = isMaximized;
+        StatusText = isMaximized ? "Panel maximized" : "Panel restored";
+    }
+
+    /// <summary>
+    /// Restores the bottom panel from maximized state. Called on Escape key.
+    /// </summary>
+    public void RestoreBottomPanel()
+    {
+        if (IsBottomPanelMaximized)
+        {
+            _dockFactory.RestoreBottomPanelIfMaximized();
+            IsBottomPanelMaximized = false;
+            StatusText = "Panel restored";
+        }
     }
 
     [RelayCommand]

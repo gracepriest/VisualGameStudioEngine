@@ -68,13 +68,24 @@ public partial class MainWindow : Window
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        // Escape exits Zen mode
-        if (e.Key == Key.Escape && DataContext is MainWindowViewModel vm && vm.IsZenMode)
+        if (e.Key == Key.Escape && DataContext is MainWindowViewModel vm)
         {
-            vm.ExitZenMode();
-            RestoreFromZenMode();
-            e.Handled = true;
-            return;
+            // Escape restores maximized bottom panel first
+            if (vm.IsBottomPanelMaximized)
+            {
+                vm.RestoreBottomPanel();
+                e.Handled = true;
+                return;
+            }
+
+            // Escape exits Zen mode
+            if (vm.IsZenMode)
+            {
+                vm.ExitZenMode();
+                RestoreFromZenMode();
+                e.Handled = true;
+                return;
+            }
         }
 
         base.OnKeyDown(e);

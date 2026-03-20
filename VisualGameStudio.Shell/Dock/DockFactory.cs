@@ -31,8 +31,20 @@ public class DockFactory : Factory
     private ProblemsViewModel? _problems;
     private DebugConsoleViewModel? _debugConsole;
     private ThreadsViewModel? _threads;
+    private TimelineViewModel? _timeline;
+    private CallHierarchyViewModel? _callHierarchy;
     private DocumentDock? _documentDock;
     private IRootDock? _rootDock;
+    private ProportionalDock? _leftDock;
+    private ProportionalDock? _mainArea;
+    private ProportionalDock? _bottomDock;
+
+    // Saved proportions for maximize/restore
+    private double _savedLeftProportion;
+    private double _savedDocumentProportion;
+    private double _savedBottomProportion;
+    private double _savedMainAreaProportion;
+    private bool _isBottomPanelMaximized;
 
     public void SetViewModels(
         SolutionExplorerViewModel solutionExplorer,
@@ -54,7 +66,9 @@ public class DockFactory : Factory
         ExtensionsViewModel? extensions = null,
         ProblemsViewModel? problems = null,
         DebugConsoleViewModel? debugConsole = null,
-        ThreadsViewModel? threads = null)
+        ThreadsViewModel? threads = null,
+        TimelineViewModel? timeline = null,
+        CallHierarchyViewModel? callHierarchy = null)
     {
         _solutionExplorer = solutionExplorer;
         _outputPanel = outputPanel;
@@ -76,6 +90,8 @@ public class DockFactory : Factory
         _problems = problems;
         _debugConsole = debugConsole;
         _threads = threads;
+        _timeline = timeline;
+        _callHierarchy = callHierarchy;
     }
 
     public override IRootDock CreateLayout()
@@ -159,21 +175,29 @@ public class DockFactory : Factory
             ViewModel = _extensions
         };
 
-        // Left tool dock (Solution Explorer, Git panels, Outline, Bookmarks)
-        var leftDock = new ProportionalDock
+        var timelineTool = new TimelineTool
+        {
+            Id = "Timeline",
+            Title = "Timeline",
+            ViewModel = _timeline
+        };
+
+        // Left tool dock (Solution Explorer, Git panels, Outline, Bookmarks, Timeline)
+        _leftDock = new ProportionalDock
         {
             Proportion = 0.2,
             Orientation = Orientation.Vertical,
             VisibleDockables = CreateList<IDockable>(
                 new ToolDock
                 {
-                    VisibleDockables = CreateList<IDockable>(solutionExplorerTool, gitChangesTool, gitBranchesTool, gitStashTool, gitBlameTool, documentOutlineTool, bookmarksTool, extensionsTool),
+                    VisibleDockables = CreateList<IDockable>(solutionExplorerTool, gitChangesTool, gitBranchesTool, gitStashTool, gitBlameTool, timelineTool, documentOutlineTool, bookmarksTool, extensionsTool),
                     ActiveDockable = solutionExplorerTool,
                     Alignment = Alignment.Left,
                     GripMode = GripMode.Visible
                 }
             )
         };
+        var leftDock = _leftDock;
 
         // Document area
         _documentDock = new DocumentDock
@@ -258,6 +282,13 @@ public class DockFactory : Factory
             ViewModel = _threads
         };
 
+        var callHierarchyTool = new CallHierarchyTool
+        {
+            Id = "CallHierarchy",
+            Title = "Call Hierarchy",
+            ViewModel = _callHierarchy
+        };
+
         // Bottom tool dock - split into two groups for better tab visibility
         // Left group: General tools (Output, Error List, Terminal, Find)
         var bottomLeftTools = new ToolDock
@@ -265,7 +296,7 @@ public class DockFactory : Factory
             Id = "BottomLeftTools",
             Title = "Output",
             Proportion = 0.5,
-            VisibleDockables = CreateList<IDockable>(outputTool, errorListTool, problemsTool, terminalTool, findInFilesTool),
+            VisibleDockables = CreateList<IDockable>(outputTool, errorListTool, problemsTool, terminalTool, findInFilesTool, callHierarchyTool),
             ActiveDockable = outputTool,
             Alignment = Alignment.Bottom,
             GripMode = GripMode.Visible
@@ -283,7 +314,7 @@ public class DockFactory : Factory
             GripMode = GripMode.Visible
         };
 
-        var bottomDock = new ProportionalDock
+        _bottomDock = new ProportionalDock
         {
             Proportion = 0.35,
             Orientation = Orientation.Horizontal,
@@ -293,9 +324,10 @@ public class DockFactory : Factory
                 bottomRightTools
             )
         };
+        var bottomDock = _bottomDock;
 
         // Main content area (documents + bottom tools)
-        var mainArea = new ProportionalDock
+        _mainArea = new ProportionalDock
         {
             Orientation = Orientation.Vertical,
             VisibleDockables = CreateList<IDockable>(
@@ -304,6 +336,7 @@ public class DockFactory : Factory
                 bottomDock
             )
         };
+        var mainArea = _mainArea;
 
         // Root layout
         var rootLayout = new ProportionalDock
@@ -348,7 +381,9 @@ public class DockFactory : Factory
             ["Extensions"] = () => _extensions,
             ["Problems"] = () => _problems,
             ["DebugConsole"] = () => _debugConsole,
-            ["Threads"] = () => _threads
+            ["Threads"] = () => _threads,
+            ["Timeline"] = () => _timeline,
+            ["CallHierarchy"] = () => _callHierarchy
         };
 
         DockableLocator = new Dictionary<string, Func<IDockable?>>
@@ -363,6 +398,57 @@ public class DockFactory : Factory
         };
 
         base.InitLayout(layout);
+    }
+
+    /// <summary>
+    /// Toggles the bottom panel between maximized (fills entire content area) and normal layout.
+    /// When maximized, the left sidebar and document area are collapsed; the bottom panel fills the space.
+    /// </summary>
+    /// <returns>True if the bottom panel is now maximized, false if restored.</returns>
+    public bool ToggleBottomPanelMaximize()
+    {
+        if (_leftDock == null || _documentDock == null || _bottomDock == null || _mainArea == null)
+            return false;
+
+        if (_isBottomPanelMaximized)
+        {
+            // Restore saved proportions
+            _leftDock.Proportion = _savedLeftProportion;
+            _documentDock.Proportion = _savedDocumentProportion;
+            _bottomDock.Proportion = _savedBottomProportion;
+            _isBottomPanelMaximized = false;
+        }
+        else
+        {
+            // Save current proportions
+            _savedLeftProportion = _leftDock.Proportion;
+            _savedDocumentProportion = _documentDock.Proportion;
+            _savedBottomProportion = _bottomDock.Proportion;
+
+            // Maximize: collapse sidebar and documents, expand bottom panel
+            _leftDock.Proportion = 0.001;
+            _documentDock.Proportion = 0.001;
+            _bottomDock.Proportion = 0.998;
+            _isBottomPanelMaximized = true;
+        }
+
+        return _isBottomPanelMaximized;
+    }
+
+    /// <summary>
+    /// Gets whether the bottom panel is currently maximized.
+    /// </summary>
+    public bool IsBottomPanelMaximized => _isBottomPanelMaximized;
+
+    /// <summary>
+    /// Restores the bottom panel from maximized state if it is currently maximized.
+    /// </summary>
+    public void RestoreBottomPanelIfMaximized()
+    {
+        if (_isBottomPanelMaximized)
+        {
+            ToggleBottomPanelMaximize();
+        }
     }
 
     public override void CloseDockable(IDockable dockable)
@@ -399,6 +485,37 @@ public class DockFactory : Factory
         var existingDoc = _documentDock.VisibleDockables
             .OfType<CodeEditorDocument>()
             .FirstOrDefault(d => d.ViewModel == document);
+
+        if (existingDoc != null)
+        {
+            SetActiveDockable(existingDoc);
+            SetFocusedDockable(_documentDock, existingDoc);
+        }
+    }
+
+    public void AddWebViewDocument(WebViewDocumentViewModel viewModel)
+    {
+        if (_documentDock == null) return;
+
+        var webViewDocument = new WebViewDocument
+        {
+            Id = viewModel.Id,
+            Title = viewModel.Title,
+            ViewModel = viewModel
+        };
+
+        AddDockable(_documentDock, webViewDocument);
+        SetActiveDockable(webViewDocument);
+        SetFocusedDockable(_documentDock, webViewDocument);
+    }
+
+    public void ActivateWebViewDocument(WebViewDocumentViewModel viewModel)
+    {
+        if (_documentDock?.VisibleDockables == null) return;
+
+        var existingDoc = _documentDock.VisibleDockables
+            .OfType<WebViewDocument>()
+            .FirstOrDefault(d => d.ViewModel == viewModel);
 
         if (existingDoc != null)
         {
@@ -506,6 +623,11 @@ public class WelcomeDocument : Document
 {
 }
 
+public class WebViewDocument : Document
+{
+    public WebViewDocumentViewModel? ViewModel { get; set; }
+}
+
 public class CallStackTool : Tool
 {
     public CallStackViewModel? ViewModel { get; set; }
@@ -589,6 +711,16 @@ public class DebugConsoleTool : Tool
 public class ThreadsTool : Tool
 {
     public ThreadsViewModel? ViewModel { get; set; }
+}
+
+public class TimelineTool : Tool
+{
+    public TimelineViewModel? ViewModel { get; set; }
+}
+
+public class CallHierarchyTool : Tool
+{
+    public CallHierarchyViewModel? ViewModel { get; set; }
 }
 
 public class HostWindow : IHostWindow
