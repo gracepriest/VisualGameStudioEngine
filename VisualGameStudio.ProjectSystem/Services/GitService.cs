@@ -387,6 +387,21 @@ public class GitService : IGitService
         return false;
     }
 
+    public async Task<bool> RevertHunkAsync(string filePath, string patchText)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandWithStdinAsync("apply --reverse --unidiff-zero -", patchText);
+        if (result.ExitCode == 0)
+        {
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        return false;
+    }
+
     public async Task<IReadOnlyList<GitCommitInfo>> GetRecentCommitsAsync(int count = 20)
     {
         var commits = new List<GitCommitInfo>();
@@ -1451,5 +1466,100 @@ public class GitService : IGitService
             return result.Output;
         }
         return null;
+    }
+
+    public async Task<string?> GetLastCommitMessageAsync()
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return null;
+
+        var result = await RunGitCommandAsync("log -1 --format=\"%B\"");
+        if (result.ExitCode == 0)
+        {
+            return result.Output.Trim();
+        }
+        return null;
+    }
+
+    public async Task<GitCommitResult> CommitAmendAsync(string message)
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return new GitCommitResult { Success = false, ErrorMessage = "Not a git repository" };
+
+        var escapedMessage = message.Replace("\"", "\\\"");
+        var result = await RunGitCommandAsync($"commit --amend -m \"{escapedMessage}\"");
+
+        if (result.ExitCode == 0)
+        {
+            var match = Regex.Match(result.Output, @"\[[\w\-]+\s+([a-f0-9]+)\]");
+            await RefreshAsync();
+            return new GitCommitResult
+            {
+                Success = true,
+                CommitHash = match.Success ? match.Groups[1].Value : null
+            };
+        }
+
+        return new GitCommitResult
+        {
+            Success = false,
+            ErrorMessage = result.Output
+        };
+    }
+
+    public async Task DiscardAllChangesAsync()
+    {
+        if (!_isGitRepository || _repositoryPath == null) return;
+
+        await RunGitCommandAsync("checkout -- .");
+        // Also clean untracked files
+        await RunGitCommandAsync("clean -fd");
+        await RefreshAsync();
+    }
+
+    public async Task<bool> UndoLastCommitAsync()
+    {
+        if (!_isGitRepository || _repositoryPath == null)
+            return false;
+
+        var result = await RunGitCommandAsync("reset --soft HEAD~1");
+        if (result.ExitCode == 0)
+        {
+            await RefreshAsync();
+            return true;
+        }
+        return false;
+    }
+
+    public async Task<IReadOnlyList<GitCommitInfo>> GetFileLogAsync(string filePath, int maxCount = 50)
+    {
+        var commits = new List<GitCommitInfo>();
+
+        if (!_isGitRepository || _repositoryPath == null)
+            return commits;
+
+        var relativePath = GetRelativePath(filePath);
+        var result = await RunGitCommandAsync($"log --follow -n {maxCount} --format=\"%H|%s|%an|%aI\" -- \"{relativePath}\"");
+
+        if (result.ExitCode == 0)
+        {
+            var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var parts = line.Split('|');
+                if (parts.Length >= 4)
+                {
+                    commits.Add(new GitCommitInfo
+                    {
+                        Hash = parts[0],
+                        Message = parts[1],
+                        Author = parts[2],
+                        Date = DateTime.TryParse(parts[3], out var date) ? date : DateTime.Now
+                    });
+                }
+            }
+        }
+
+        return commits;
     }
 }

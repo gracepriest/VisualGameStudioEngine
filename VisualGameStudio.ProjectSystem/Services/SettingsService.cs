@@ -878,6 +878,7 @@ public class SettingsService : ISettingsService, IDisposable
                 Prop("editor.bracketPairColorization", SettingsPropertyType.Boolean, "Bracket Pair Colorization", true, "Enable bracket pair colorization."),
                 Prop("editor.stickyScroll.enabled", SettingsPropertyType.Boolean, "Sticky Scroll", true, "Pin enclosing scope headers at the top of the editor."),
                 Prop("editor.formatOnSave", SettingsPropertyType.Boolean, "Format On Save", false, "Format a file on save."),
+                Prop("editor.trimTrailingWhitespaceOnSave", SettingsPropertyType.Boolean, "Trim Trailing Whitespace", false, "Remove trailing whitespace from all lines when saving a file."),
                 Prop("editor.formatOnType", SettingsPropertyType.Boolean, "Format On Type", true, "Format the line after typing a semicolon or newline."),
                 Prop("editor.autoClosingBrackets", SettingsPropertyType.String, "Auto Closing Brackets", "always", "Controls auto closing of brackets.",
                     enumVals: new[] { "always", "languageDefined", "beforeWhitespace", "never" }),
@@ -892,6 +893,7 @@ public class SettingsService : ISettingsService, IDisposable
                 Prop("editor.inlayHints.enabled", SettingsPropertyType.Boolean, "Inlay Hints", true, "Enable inlay hints in the editor."),
                 Prop("editor.highlightCurrentLine", SettingsPropertyType.Boolean, "Highlight Current Line", true, "Highlight the active line."),
                 Prop("editor.autoIndent", SettingsPropertyType.Boolean, "Auto Indent", true, "Automatically indent new lines."),
+                Prop("editor.trimTrailingWhitespaceOnSave", SettingsPropertyType.Boolean, "Trim Trailing Whitespace", false, "Remove trailing whitespace when saving a file."),
             }
         });
 
@@ -924,6 +926,8 @@ public class SettingsService : ISettingsService, IDisposable
             {
                 Prop("terminal.integrated.fontFamily", SettingsPropertyType.String, "Font Family", "", "Controls the font family of the terminal. Defaults to editor font."),
                 Prop("terminal.integrated.fontSize", SettingsPropertyType.Integer, "Font Size", 14, "Controls the font size in pixels.", min: 6, max: 72),
+                Prop("terminal.integrated.cursorStyle", SettingsPropertyType.String, "Cursor Style", "block", "Controls the style of terminal cursor.",
+                    enumVals: new[] { "block", "underline", "line" }),
                 Prop("terminal.integrated.defaultProfile", SettingsPropertyType.String, "Default Profile", "", "The default terminal profile."),
             }
         });

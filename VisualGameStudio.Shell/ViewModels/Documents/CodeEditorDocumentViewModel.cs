@@ -54,6 +54,12 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// </summary>
     public bool IsDebugPaused { get; set; }
 
+    /// <summary>
+    /// When true, trailing whitespace is trimmed from all lines before saving.
+    /// Set by the MainWindowViewModel based on the user setting.
+    /// </summary>
+    public bool TrimTrailingWhitespaceOnSave { get; set; }
+
     public new string Id => FilePath ?? Guid.NewGuid().ToString();
     public new string Title => GetTitle();
     public new bool CanClose => true;
@@ -551,6 +557,17 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
         try
         {
+            // Trim trailing whitespace from all lines before saving if enabled
+            if (TrimTrailingWhitespaceOnSave)
+            {
+                var lines = Text.Split('\n');
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    lines[i] = lines[i].TrimEnd(' ', '\t', '\r');
+                }
+                Text = string.Join("\n", lines);
+            }
+
             await _fileService.WriteFileAsync(FilePath, Text, cancellationToken);
             _originalText = Text;
             IsDirty = false;

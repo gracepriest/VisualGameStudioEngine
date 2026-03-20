@@ -3,339 +3,356 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        xmlns:views="using:VisualGameStudio.Shell.Views.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="700"
         x:Class="VisualGameStudio.Shell.Views.Dialogs.SettingsDialog"
         x:DataType="vm:SettingsViewModel"
         Title="Settings"
-        Width="800" Height="600"
+        Width="960" Height="700"
+        MinWidth="700" MinHeight="500"
         WindowStartupLocation="CenterOwner">
 
   <Grid RowDefinitions="Auto,*,Auto" Background="{DynamicResource IdeBg}">
 
-    <!-- Search Bar -->
-    <Border Grid.Row="0" Margin="16,16,16,0" Padding="8" Background="{DynamicResource IdePanelBg}" CornerRadius="4">
-      <Grid ColumnDefinitions="Auto,*,Auto">
-        <TextBlock Grid.Column="0" Text="&#x1F50D;" VerticalAlignment="Center" Margin="4,0,8,0" FontSize="14"/>
-        <TextBox Grid.Column="1"
-                 Text="{Binding SearchText, Mode=TwoWay}"
-                 Watermark="Search settings..."
-                 BorderThickness="0"
-                 Background="Transparent"/>
-        <Button Grid.Column="2"
-                Content="&#x2715;"
-                Command="{Binding ClearSearchCommand}"
-                IsVisible="{Binding IsSearchActive}"
-                Background="Transparent"
-                BorderThickness="0"
-                Padding="8,4"
-                VerticalAlignment="Center"/>
+    <!-- Top Bar: Search + Scope Tabs + JSON toggle -->
+    <Border Grid.Row="0" Padding="12,10" Background="{DynamicResource IdePanelBg}"
+            BorderThickness="0,0,0,1" BorderBrush="{DynamicResource IdeFooterBorder}">
+      <Grid RowDefinitions="Auto,Auto">
+        <!-- Row 0: Scope tabs + Open JSON button -->
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" Margin="0,0,0,8">
+          <Button Grid.Column="0" Content="User"
+                  Command="{Binding SwitchToUserScopeCommand}"
+                  Padding="12,4" Margin="0,0,4,0"
+                  FontSize="12" FontWeight="{Binding IsUserScopeActive, Converter={x:Static views:SettingsDialog.BoldIfTrue}}"
+                  Background="{Binding IsUserScopeActive, Converter={x:Static views:SettingsDialog.ScopeTabBg}}"
+                  Foreground="{Binding IsUserScopeActive, Converter={x:Static views:SettingsDialog.ScopeTabFg}}"
+                  CornerRadius="3"/>
+          <Button Grid.Column="1" Content="Workspace"
+                  Command="{Binding SwitchToWorkspaceScopeCommand}"
+                  IsEnabled="{Binding HasWorkspace}"
+                  Padding="12,4" Margin="0,0,4,0"
+                  FontSize="12" FontWeight="{Binding IsWorkspaceScopeActive, Converter={x:Static views:SettingsDialog.BoldIfTrue}}"
+                  Background="{Binding IsWorkspaceScopeActive, Converter={x:Static views:SettingsDialog.ScopeTabBg}}"
+                  Foreground="{Binding IsWorkspaceScopeActive, Converter={x:Static views:SettingsDialog.ScopeTabFg}}"
+                  CornerRadius="3"/>
+
+          <!-- Spacer -->
+          <Panel Grid.Column="2"/>
+
+          <!-- @modified filter -->
+          <Button Grid.Column="3" Content="Modified"
+                  Command="{Binding ShowModifiedOnlyCommand}"
+                  Padding="8,4" Margin="0,0,4,0"
+                  FontSize="11"
+                  Background="Transparent" BorderThickness="1" BorderBrush="#3794FF"
+                  Foreground="#3794FF" CornerRadius="3"
+                  ToolTip.Tip="Show only modified settings (@modified)"/>
+
+          <!-- Open Settings JSON -->
+          <Button Grid.Column="4" Content="{}{} Open Settings (JSON)"
+                  Command="{Binding OpenSettingsJsonCommand}"
+                  Padding="8,4" Margin="0,0,4,0"
+                  FontSize="11"
+                  Background="Transparent" BorderThickness="1"
+                  BorderBrush="{DynamicResource IdeFooterBorder}"
+                  CornerRadius="3"
+                  ToolTip.Tip="Edit settings as JSON"/>
+
+          <!-- Reset All -->
+          <Button Grid.Column="5"
+                  Content="Reset All"
+                  Command="{Binding ResetToDefaultsCommand}"
+                  Padding="8,4"
+                  FontSize="11"
+                  Background="Transparent" BorderThickness="1"
+                  BorderBrush="{DynamicResource IdeFooterBorder}"
+                  CornerRadius="3"
+                  ToolTip.Tip="Reset all settings to defaults"/>
+        </Grid>
+
+        <!-- Row 1: Search box -->
+        <Border Grid.Row="1" Padding="6" Background="{DynamicResource IdeBg}" CornerRadius="4">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <TextBlock Grid.Column="0" Text="Search" VerticalAlignment="Center" Margin="4,0,8,0"
+                       FontSize="12" Opacity="0.5"/>
+            <TextBox Grid.Column="1"
+                     Text="{Binding SearchText, Mode=TwoWay}"
+                     Watermark="Search settings (e.g. font, theme, @modified)..."
+                     BorderThickness="0"
+                     Background="Transparent"
+                     FontSize="13"/>
+            <Button Grid.Column="2"
+                    Content="X"
+                    Command="{Binding ClearSearchCommand}"
+                    IsVisible="{Binding IsSearchActive}"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="8,4"
+                    FontSize="11"
+                    VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
       </Grid>
     </Border>
 
-    <!-- Filtered Search Results (visible when searching) -->
-    <ScrollViewer Grid.Row="1" Margin="16" IsVisible="{Binding IsSearchActive}">
-      <ItemsControl ItemsSource="{Binding FilteredSettings}">
-        <ItemsControl.ItemTemplate>
-          <DataTemplate x:DataType="vm:SearchableSettingItem">
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Margin="0,0,0,8"
-                    BorderThickness="{Binding IsModified, Converter={x:Static vm:ModifiedBorderConverter.Instance}}"
-                    BorderBrush="#3794FF">
-              <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" Margin="12">
-                <!-- Setting name and category badge -->
-                <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                  <Border Background="{DynamicResource IdeFooterBg}" CornerRadius="3" Padding="6,2">
-                    <TextBlock Text="{Binding Category}" FontSize="11" Opacity="0.7"/>
+    <!-- Main Content Area -->
+    <Panel Grid.Row="1">
+
+      <!-- ===== JSON Editor View ===== -->
+      <Grid RowDefinitions="Auto,*,Auto" IsVisible="{Binding IsJsonEditorActive}" Margin="16">
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+          <TextBlock Text="Settings JSON" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          <TextBlock Text="{Binding UserSettingsPath}" FontSize="11" Opacity="0.5" VerticalAlignment="Center"
+                     IsVisible="{Binding IsUserScopeActive}"/>
+          <TextBlock Text="{Binding WorkspaceSettingsPath}" FontSize="11" Opacity="0.5" VerticalAlignment="Center"
+                     IsVisible="{Binding IsWorkspaceScopeActive}"/>
+        </StackPanel>
+
+        <TextBox Grid.Row="1"
+                 Text="{Binding JsonEditorContent, Mode=TwoWay}"
+                 AcceptsReturn="True"
+                 FontFamily="Cascadia Code, Consolas, monospace"
+                 FontSize="13"
+                 TextWrapping="NoWrap"/>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+          <Button Content="Save JSON" Command="{Binding SaveJsonEditorCommand}" Classes="accent" Padding="12,6"/>
+          <Button Content="Validate" Command="{Binding ValidateJsonEditorCommand}" Padding="12,6"/>
+          <Button Content="Back to UI" Command="{Binding ToggleJsonEditorCommand}" Padding="12,6"/>
+          <ItemsControl ItemsSource="{Binding JsonValidationErrors}" Margin="8,0,0,0">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding}" FontSize="11" Foreground="#E5534B" VerticalAlignment="Center"/>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Grid>
+
+      <!-- ===== Search Results View ===== -->
+      <ScrollViewer IsVisible="{Binding IsSearchActive}" Margin="16"
+                    x:Name="SearchResultsScroller">
+        <StackPanel>
+          <TextBlock FontSize="12" Opacity="0.6" Margin="0,0,0,12">
+            <Run Text="Showing "/>
+            <Run Text="{Binding FilteredSettings.Count, Mode=OneWay}"/>
+            <Run Text=" settings"/>
+          </TextBlock>
+          <ItemsControl ItemsSource="{Binding FilteredSettings}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:SearchableSettingItem">
+                <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Margin="0,0,0,6"
+                        BorderThickness="{Binding IsModified, Converter={x:Static vm:ModifiedBorderConverter.Instance}}"
+                        BorderBrush="#3794FF" Padding="0">
+                  <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto,Auto" Margin="14,10">
+                    <!-- Setting name + category badge + scope badge -->
+                    <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
+                      <Border Background="{DynamicResource IdeFooterBg}" CornerRadius="3" Padding="6,2">
+                        <TextBlock Text="{Binding Category}" FontSize="10" Opacity="0.7"/>
+                      </Border>
+                      <Border Background="#264F78" CornerRadius="3" Padding="6,2"
+                              IsVisible="{Binding ScopeBadge, Converter={x:Static vm:ScopeBadgeVisibilityConverter.Instance}}">
+                        <TextBlock Text="{Binding ScopeBadge}" FontSize="10" Foreground="#CCC"/>
+                      </Border>
+                      <Border Background="#3794FF" CornerRadius="3" Padding="6,2" IsVisible="{Binding IsModified}">
+                        <TextBlock Text="Modified" FontSize="10" Foreground="White"/>
+                      </Border>
+                    </StackPanel>
+
+                    <!-- Setting key path -->
+                    <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                               Text="{Binding Key}" FontSize="11" Opacity="0.4" Margin="0,2,0,2"
+                               FontFamily="Cascadia Code, Consolas, monospace"/>
+
+                    <!-- Control -->
+                    <Panel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" Margin="8,0">
+                      <ToggleSwitch IsChecked="{Binding BoolValue}" IsVisible="{Binding IsCheckBox}"
+                                    OnContent="" OffContent="" Padding="0" Margin="0"/>
+                      <NumericUpDown Value="{Binding IntValue}"
+                                    Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Increment="{Binding Increment}"
+                                    Width="110" IsVisible="{Binding IsNumericUpDown}"/>
+                      <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding StringValue}"
+                                MinWidth="170" IsVisible="{Binding IsComboBox}"/>
+                      <TextBox Text="{Binding StringValue, Mode=TwoWay}"
+                               MinWidth="200" IsVisible="{Binding IsTextBox}"/>
+                    </Panel>
+
+                    <!-- Reset button -->
+                    <Button Grid.Row="0" Grid.Column="2"
+                            Content="Reset" Command="{Binding ResetToDefaultCommand}"
+                            IsVisible="{Binding IsModified}"
+                            FontSize="11" Padding="8,3" Margin="4,0,0,0"
+                            Background="Transparent" Foreground="#3794FF"
+                            BorderThickness="1" BorderBrush="#3794FF" CornerRadius="3"
+                            VerticalAlignment="Center"
+                            ToolTip.Tip="Reset to default value"/>
+
+                    <!-- Description -->
+                    <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                               Text="{Binding Description}" FontSize="12" Opacity="0.6"
+                               TextWrapping="Wrap" Margin="0,2,0,0"/>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- ===== Category Sidebar + Settings View ===== -->
+      <Grid ColumnDefinitions="200,*"
+            IsVisible="{Binding !IsSearchActive}"
+            x:Name="CategoryView">
+
+        <!-- Make the whole grid invisible when JSON editor is active -->
+
+        <!-- Left Sidebar -->
+        <Border Grid.Column="0" Background="{DynamicResource IdePanelBg}"
+                BorderThickness="0,0,1,0" BorderBrush="{DynamicResource IdeFooterBorder}"
+                IsVisible="{Binding !IsJsonEditorActive}">
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding Categories}" Margin="0,4">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:SettingsCategoryItem">
+                  <Button Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).SelectCategoryCommand}"
+                          CommandParameter="{Binding Id}"
+                          Background="{Binding IsSelected, Converter={x:Static views:SettingsDialog.CategoryBg}}"
+                          HorizontalAlignment="Stretch"
+                          HorizontalContentAlignment="Stretch"
+                          Padding="12,8" Margin="4,1"
+                          CornerRadius="4"
+                          BorderThickness="0">
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                      <TextBlock Grid.Column="0" Text="{Binding Icon}" FontSize="14" VerticalAlignment="Center"
+                                 Margin="0,0,10,0" Opacity="0.7" Width="20" TextAlignment="Center"/>
+                      <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" VerticalAlignment="Center"
+                                 FontWeight="{Binding IsSelected, Converter={x:Static views:SettingsDialog.BoldIfTrue}}"/>
+                      <Border Grid.Column="2" Background="#3794FF" CornerRadius="8" Padding="6,2" MinWidth="20"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                              IsVisible="{Binding ModifiedCount, Converter={x:Static vm:ModifiedCountVisibilityConverter.Instance}}">
+                        <TextBlock Text="{Binding ModifiedCount}" FontSize="10" Foreground="White"
+                                   HorizontalAlignment="Center"/>
+                      </Border>
+                    </Grid>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Border>
+
+        <!-- Right Content: Settings for selected category -->
+        <ScrollViewer Grid.Column="1" Margin="0" IsVisible="{Binding !IsJsonEditorActive}">
+          <StackPanel Margin="20,12,20,20">
+            <!-- Category title -->
+            <TextBlock Text="{Binding SelectedCategory.Name}" FontSize="18" FontWeight="SemiBold"
+                       Margin="0,0,0,16"/>
+
+            <!-- Keyboard category special view -->
+            <DockPanel IsVisible="False" x:Name="KeyboardPanel">
+              <!-- Handled in code-behind -->
+            </DockPanel>
+
+            <!-- Settings list for category -->
+            <ItemsControl ItemsSource="{Binding CategorySettings}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:SearchableSettingItem">
+                  <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Margin="0,0,0,6"
+                          BorderThickness="{Binding IsModified, Converter={x:Static vm:ModifiedBorderConverter.Instance}}"
+                          BorderBrush="#3794FF">
+                    <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto,Auto" Margin="14,10">
+                      <!-- Setting name + badges -->
+                      <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
+                        <Border Background="#264F78" CornerRadius="3" Padding="6,2"
+                                IsVisible="{Binding ScopeBadge, Converter={x:Static vm:ScopeBadgeVisibilityConverter.Instance}}">
+                          <TextBlock Text="{Binding ScopeBadge}" FontSize="10" Foreground="#CCC"/>
+                        </Border>
+                        <Border Background="#3794FF" CornerRadius="3" Padding="4,1" IsVisible="{Binding IsModified}">
+                          <TextBlock Text="Modified" FontSize="9" Foreground="White"/>
+                        </Border>
+                      </StackPanel>
+
+                      <!-- Setting key -->
+                      <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                 Text="{Binding Key}" FontSize="11" Opacity="0.35"
+                                 FontFamily="Cascadia Code, Consolas, monospace" Margin="0,2,0,2"/>
+
+                      <!-- Control -->
+                      <Panel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" Margin="8,0">
+                        <ToggleSwitch IsChecked="{Binding BoolValue}" IsVisible="{Binding IsCheckBox}"
+                                      OnContent="" OffContent="" Padding="0" Margin="0"/>
+                        <NumericUpDown Value="{Binding IntValue}"
+                                      Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Increment="{Binding Increment}"
+                                      Width="110" IsVisible="{Binding IsNumericUpDown}"/>
+                        <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding StringValue}"
+                                  MinWidth="170" IsVisible="{Binding IsComboBox}"/>
+                        <TextBox Text="{Binding StringValue, Mode=TwoWay}"
+                                 MinWidth="200" IsVisible="{Binding IsTextBox}"/>
+                      </Panel>
+
+                      <!-- Reset button -->
+                      <Button Grid.Row="0" Grid.Column="2"
+                              Content="Reset" Command="{Binding ResetToDefaultCommand}"
+                              IsVisible="{Binding IsModified}"
+                              FontSize="11" Padding="8,3" Margin="4,0,0,0"
+                              Background="Transparent" Foreground="#3794FF"
+                              BorderThickness="1" BorderBrush="#3794FF" CornerRadius="3"
+                              VerticalAlignment="Center"
+                              ToolTip.Tip="Reset to default value"/>
+
+                      <!-- Description -->
+                      <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                                 Text="{Binding Description}" FontSize="12" Opacity="0.6"
+                                 TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    </Grid>
                   </Border>
-                </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
 
-                <!-- Control for the setting (only one visible based on ControlKind) -->
-                <Panel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center">
-                  <CheckBox IsChecked="{Binding BoolValue}"
-                            IsVisible="{Binding IsCheckBox}"
-                            Content=""/>
-                  <NumericUpDown Value="{Binding IntValue}"
-                                Minimum="{Binding Minimum}"
-                                Maximum="{Binding Maximum}"
-                                Increment="{Binding Increment}"
-                                Width="100"
-                                IsVisible="{Binding IsNumericUpDown}"/>
-                  <ComboBox ItemsSource="{Binding Choices}"
-                            SelectedItem="{Binding StringValue}"
-                            MinWidth="160"
-                            IsVisible="{Binding IsComboBox}"/>
-                </Panel>
-
-                <!-- Reset button (visible only when modified) -->
-                <Button Grid.Row="0" Grid.Column="2"
-                        Content="Reset"
-                        Command="{Binding ResetToDefaultCommand}"
-                        IsVisible="{Binding IsModified}"
-                        FontSize="11"
-                        Padding="8,3"
-                        Margin="8,0,0,0"
-                        Background="Transparent"
-                        Foreground="#3794FF"
-                        BorderThickness="1"
-                        BorderBrush="#3794FF"
-                        CornerRadius="3"
-                        VerticalAlignment="Center"/>
-
-                <!-- Description -->
-                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
-                           Text="{Binding Description}"
-                           FontSize="12" Opacity="0.6" TextWrapping="Wrap"
-                           Margin="0,4,0,0"/>
-              </Grid>
-            </Border>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
-    </ScrollViewer>
-
-    <!-- Tabbed View (hidden when searching) -->
-    <TabControl Grid.Row="1" Margin="16" IsVisible="{Binding !IsSearchActive}">
-      <!-- Editor Tab -->
-      <TabItem Header="Editor">
-        <ScrollViewer>
-          <StackPanel Spacing="24" Margin="16">
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
-              <StackPanel Spacing="12">
-                <TextBlock Text="Font" FontWeight="SemiBold"/>
-
-                <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto">
-                  <TextBlock Grid.Row="0" Grid.Column="0"
-                             Text="Font Family:"
-                             VerticalAlignment="Center"
-                             Margin="0,0,12,0"/>
-                  <ComboBox Grid.Row="0" Grid.Column="1"
-                            ItemsSource="{Binding AvailableFonts}"
-                            SelectedItem="{Binding FontFamily}"
-                            MinWidth="200"/>
-
-                  <TextBlock Grid.Row="0" Grid.Column="2"
-                             Text="Size:"
-                             VerticalAlignment="Center"
-                             Margin="24,0,12,0"/>
-                  <NumericUpDown Grid.Row="0" Grid.Column="3"
-                                 Value="{Binding FontSize}"
-                                 Minimum="8"
-                                 Maximum="72"
-                                 Width="80"/>
-
-                  <CheckBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4"
-                            Content="Enable font ligatures (for fonts like Cascadia Code, Fira Code, JetBrains Mono)"
-                            IsChecked="{Binding FontLigatures}"
-                            Margin="0,8,0,0"/>
-                </Grid>
-              </StackPanel>
-            </Border>
-
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
-              <StackPanel Spacing="12">
-                <TextBlock Text="Tabs" FontWeight="SemiBold"/>
-
-                <Grid ColumnDefinitions="Auto,Auto,Auto,*">
-                  <TextBlock Grid.Column="0"
-                             Text="Tab Size:"
-                             VerticalAlignment="Center"
-                             Margin="0,0,12,0"/>
-                  <NumericUpDown Grid.Column="1"
-                                 Value="{Binding TabSize}"
-                                 Minimum="1"
-                                 Maximum="16"
-                                 Width="80"/>
-
-                  <CheckBox Grid.Column="2"
-                            Content="Convert tabs to spaces"
-                            IsChecked="{Binding ConvertTabsToSpaces}"
-                            Margin="24,0,0,0"/>
-                </Grid>
-              </StackPanel>
-            </Border>
-
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
-              <StackPanel Spacing="12">
-                <TextBlock Text="Display" FontWeight="SemiBold"/>
-
-                <WrapPanel>
-                  <CheckBox Content="Show line numbers"
-                            IsChecked="{Binding ShowLineNumbers}"
-                            Margin="0,0,24,8"/>
-                  <CheckBox Content="Highlight current line"
-                            IsChecked="{Binding HighlightCurrentLine}"
-                            Margin="0,0,24,8"/>
-                  <CheckBox Content="Show whitespace"
-                            IsChecked="{Binding ShowWhitespace}"
-                            Margin="0,0,24,8"/>
-                  <CheckBox Content="Word wrap"
-                            IsChecked="{Binding WordWrap}"
-                            Margin="0,0,24,8"/>
-                </WrapPanel>
-              </StackPanel>
-            </Border>
-
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
-              <StackPanel Spacing="12">
-                <TextBlock Text="Behavior" FontWeight="SemiBold"/>
-
-                <WrapPanel>
-                  <CheckBox Content="Auto indent"
-                            IsChecked="{Binding AutoIndent}"
-                            Margin="0,0,24,8"/>
-                  <CheckBox Content="Bracket matching"
-                            IsChecked="{Binding BracketMatching}"
-                            Margin="0,0,24,8"/>
-                  <CheckBox Content="Auto close brackets"
-                            IsChecked="{Binding AutoCloseBrackets}"
-                            Margin="0,0,24,8"/>
-                  <CheckBox Content="Smooth scrolling"
-                            IsChecked="{Binding SmoothScrolling}"
-                            Margin="0,0,24,8"/>
-                </WrapPanel>
-              </StackPanel>
-            </Border>
+            <!-- Keyboard shortcuts (shown only for Keyboard category) -->
+            <DockPanel IsVisible="{Binding SelectedCategory.Id, Converter={x:Static views:SettingsDialog.IsKeyboardCategory}}"
+                       Margin="0,8,0,0">
+              <DataGrid ItemsSource="{Binding Shortcuts}"
+                        AutoGenerateColumns="False"
+                        IsReadOnly="False"
+                        CanUserReorderColumns="False"
+                        CanUserSortColumns="False"
+                        GridLinesVisibility="Horizontal"
+                        Background="{DynamicResource IdePanelBg}"
+                        MaxHeight="400">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="Action" Binding="{Binding Action}" IsReadOnly="True" Width="200"/>
+                  <DataGridTextColumn Header="Shortcut" Binding="{Binding CurrentBinding}" Width="150"/>
+                  <DataGridTextColumn Header="Default" Binding="{Binding DefaultBinding}" IsReadOnly="True" Width="150"/>
+                </DataGrid.Columns>
+              </DataGrid>
+            </DockPanel>
           </StackPanel>
         </ScrollViewer>
-      </TabItem>
+      </Grid>
+    </Panel>
 
-      <!-- IntelliSense Tab -->
-      <TabItem Header="IntelliSense">
-        <ScrollViewer>
-          <StackPanel Spacing="24" Margin="16">
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
-              <StackPanel Spacing="12">
-                <TextBlock Text="Auto Complete" FontWeight="SemiBold"/>
-
-                <CheckBox Content="Enable auto complete"
-                          IsChecked="{Binding EnableAutoComplete}"/>
-                <CheckBox Content="Show quick info on hover"
-                          IsChecked="{Binding ShowQuickInfo}"/>
-                <CheckBox Content="Show signature help"
-                          IsChecked="{Binding ShowSignatureHelp}"/>
-
-                <Grid ColumnDefinitions="Auto,Auto,*">
-                  <TextBlock Grid.Column="0"
-                             Text="Delay (ms):"
-                             VerticalAlignment="Center"
-                             Margin="0,0,12,0"/>
-                  <NumericUpDown Grid.Column="1"
-                                 Value="{Binding AutoCompleteDelay}"
-                                 Minimum="0"
-                                 Maximum="2000"
-                                 Increment="50"
-                                 Width="100"/>
-                </Grid>
-              </StackPanel>
-            </Border>
-          </StackPanel>
-        </ScrollViewer>
-      </TabItem>
-
-      <!-- Build Tab -->
-      <TabItem Header="Build">
-        <ScrollViewer>
-          <StackPanel Spacing="24" Margin="16">
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
-              <StackPanel Spacing="12">
-                <TextBlock Text="Build Options" FontWeight="SemiBold"/>
-
-                <CheckBox Content="Save all files before build"
-                          IsChecked="{Binding SaveBeforeBuild}"/>
-                <CheckBox Content="Show build output panel"
-                          IsChecked="{Binding ShowBuildOutput}"/>
-
-                <Grid ColumnDefinitions="Auto,*">
-                  <TextBlock Grid.Column="0"
-                             Text="Default configuration:"
-                             VerticalAlignment="Center"
-                             Margin="0,0,12,0"/>
-                  <ComboBox Grid.Column="1"
-                            ItemsSource="{Binding Configurations}"
-                            SelectedItem="{Binding DefaultConfiguration}"
-                            MinWidth="150"/>
-                </Grid>
-              </StackPanel>
-            </Border>
-          </StackPanel>
-        </ScrollViewer>
-      </TabItem>
-
-      <!-- Appearance Tab -->
-      <TabItem Header="Appearance">
-        <ScrollViewer>
-          <StackPanel Spacing="24" Margin="16">
-            <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Padding="16">
-              <StackPanel Spacing="12">
-                <TextBlock Text="Theme" FontWeight="SemiBold"/>
-
-                <Grid ColumnDefinitions="Auto,*">
-                  <TextBlock Grid.Column="0"
-                             Text="Color Theme:"
-                             VerticalAlignment="Center"
-                             Margin="0,0,12,0"/>
-                  <ComboBox Grid.Column="1"
-                            ItemsSource="{Binding AvailableThemes}"
-                            SelectedItem="{Binding SelectedTheme}"
-                            MinWidth="200"/>
-                </Grid>
-              </StackPanel>
-            </Border>
-          </StackPanel>
-        </ScrollViewer>
-      </TabItem>
-
-      <!-- Keyboard Tab -->
-      <TabItem Header="Keyboard">
-        <DockPanel Margin="16">
-          <TextBlock DockPanel.Dock="Top"
-                     Text="Keyboard Shortcuts"
-                     FontWeight="SemiBold"
-                     Margin="0,0,0,12"/>
-
-          <DataGrid ItemsSource="{Binding Shortcuts}"
-                    AutoGenerateColumns="False"
-                    IsReadOnly="False"
-                    CanUserReorderColumns="False"
-                    CanUserSortColumns="False"
-                    GridLinesVisibility="Horizontal"
-                    Background="{DynamicResource IdePanelBg}">
-            <DataGrid.Columns>
-              <DataGridTextColumn Header="Action"
-                                  Binding="{Binding Action}"
-                                  IsReadOnly="True"
-                                  Width="200"/>
-              <DataGridTextColumn Header="Shortcut"
-                                  Binding="{Binding CurrentBinding}"
-                                  Width="150"/>
-              <DataGridTextColumn Header="Default"
-                                  Binding="{Binding DefaultBinding}"
-                                  IsReadOnly="True"
-                                  Width="150"/>
-            </DataGrid.Columns>
-          </DataGrid>
-        </DockPanel>
-      </TabItem>
-    </TabControl>
-
-    <!-- Buttons -->
+    <!-- Bottom Bar -->
     <Border Grid.Row="2"
             Background="{DynamicResource IdeFooterBg}"
-            Padding="16,12"
+            Padding="16,10"
             BorderThickness="0,1,0,0"
             BorderBrush="{DynamicResource IdeFooterBorder}">
-      <Grid ColumnDefinitions="Auto,*,Auto">
-        <Button Grid.Column="0"
-                Content="Reset to Defaults"
-                Command="{Binding ResetToDefaultsCommand}"/>
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+        <!-- Settings file path -->
+        <TextBlock Grid.Column="0" FontSize="11" Opacity="0.5" VerticalAlignment="Center">
+          <Run Text="{Binding UserSettingsPath, Mode=OneWay}"/>
+        </TextBlock>
 
-        <StackPanel Grid.Column="2"
-                    Orientation="Horizontal"
-                    Spacing="8">
+        <Panel Grid.Column="1"/>
+
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8">
           <Button Content="OK"
                   Command="{Binding SaveCommand}"
-                  Width="80"
-                  Classes="accent"/>
+                  Width="80" Classes="accent"/>
           <Button Content="Cancel"
                   Command="{Binding CancelCommand}"
                   Width="80"/>

@@ -43,13 +43,15 @@ public partial class SearchableSettingItem : ObservableObject
     public bool IsCheckBox => ControlKind == SettingControlKind.CheckBox;
     public bool IsNumericUpDown => ControlKind == SettingControlKind.NumericUpDown;
     public bool IsComboBox => ControlKind == SettingControlKind.ComboBox;
+    public bool IsTextBox => ControlKind == SettingControlKind.TextBox;
+    public bool IsColorPicker => ControlKind == SettingControlKind.ColorPicker;
 
-    /// <summary>True when the current value differs from the default value.</summary>
     public bool IsModified => ControlKind switch
     {
         SettingControlKind.CheckBox => BoolValue != (bool)DefaultValue,
         SettingControlKind.NumericUpDown => IntValue != (int)DefaultValue,
         SettingControlKind.ComboBox => !string.Equals(StringValue, (string)DefaultValue, StringComparison.Ordinal),
+        SettingControlKind.TextBox => !string.Equals(StringValue, (string)DefaultValue, StringComparison.Ordinal),
         _ => false
     };
 
@@ -98,6 +100,7 @@ public partial class SearchableSettingItem : ObservableObject
                 IntValue = (int)DefaultValue;
                 break;
             case SettingControlKind.ComboBox:
+            case SettingControlKind.TextBox:
                 StringValue = (string)DefaultValue;
                 break;
         }
@@ -135,7 +138,29 @@ public enum SettingControlKind
 {
     CheckBox,
     NumericUpDown,
-    ComboBox
+    ComboBox,
+    TextBox,
+    ColorPicker
+}
+
+/// <summary>
+/// Represents a category in the settings sidebar.
+/// </summary>
+public partial class SettingsCategoryItem : ObservableObject
+{
+    public string Id { get; init; } = "";
+    public string Name { get; init; } = "";
+    public string Icon { get; init; } = "";
+    public int Order { get; init; }
+
+    [ObservableProperty]
+    private bool _isSelected;
+
+    [ObservableProperty]
+    private int _settingsCount;
+
+    [ObservableProperty]
+    private int _modifiedCount;
 }
 
 public partial class SettingsViewModel : ViewModelBase
@@ -174,6 +199,16 @@ public partial class SettingsViewModel : ViewModelBase
 
     [ObservableProperty]
     private string _workspaceSettingsPath = "";
+
+    // -- Sidebar Categories --
+    [ObservableProperty]
+    private ObservableCollection<SettingsCategoryItem> _categories = new();
+
+    [ObservableProperty]
+    private SettingsCategoryItem? _selectedCategory;
+
+    [ObservableProperty]
+    private ObservableCollection<SearchableSettingItem> _categorySettings = new();
 
     // Editor Settings (backed by ISettingsService for new settings, kept for legacy compat)
     [ObservableProperty]
@@ -252,6 +287,10 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private bool _formatOnSave;
 
+    // Trim Trailing Whitespace On Save
+    [ObservableProperty]
+    private bool _trimTrailingWhitespaceOnSave;
+
     // Render Whitespace
     [ObservableProperty]
     private string _renderWhitespace = "none";
@@ -305,6 +344,79 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private ObservableCollection<SearchableSettingItem> _filteredSettings = new();
 
+    // -- Terminal Settings --
+    [ObservableProperty]
+    private string _terminalFontFamily = "";
+
+    [ObservableProperty]
+    private int _terminalFontSize = 14;
+
+    [ObservableProperty]
+    private string _terminalCursorStyle = "block";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _terminalCursorStyles = new() { "block", "underline", "line" };
+
+    [ObservableProperty]
+    private string _terminalDefaultProfile = "";
+
+    // -- Debug Settings --
+    [ObservableProperty]
+    private int _debugConsoleFontSize = 14;
+
+    [ObservableProperty]
+    private bool _debugAllowBreakpointsEverywhere;
+
+    // -- Git Settings --
+    [ObservableProperty]
+    private bool _gitAutoFetch = true;
+
+    [ObservableProperty]
+    private int _gitAutoFetchInterval = 180;
+
+    [ObservableProperty]
+    private bool _gitConfirmSync = true;
+
+    // -- Workbench Settings --
+    [ObservableProperty]
+    private string _iconTheme = "default";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _iconThemes = new() { "default", "minimal", "none" };
+
+    [ObservableProperty]
+    private string _startupEditor = "welcomePage";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _startupEditors = new() { "welcomePage", "none", "newUntitledFile" };
+
+    [ObservableProperty]
+    private string _sideBarLocation = "left";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _sideBarLocations = new() { "left", "right" };
+
+    // -- BasicLang Settings --
+    [ObservableProperty]
+    private string _lspServerPath = "";
+
+    [ObservableProperty]
+    private bool _lspAutoStart = true;
+
+    // -- Minimap Settings --
+    [ObservableProperty]
+    private bool _minimapEnabled = true;
+
+    [ObservableProperty]
+    private string _minimapSide = "right";
+
+    [ObservableProperty]
+    private ObservableCollection<string> _minimapSides = new() { "left", "right" };
+
+    // -- Sticky Scroll --
+    [ObservableProperty]
+    private bool _stickyScrollEnabled = true;
+
     /// <summary>All searchable settings (built once).</summary>
     private List<SearchableSettingItem> _allSettings = new();
 
@@ -326,7 +438,14 @@ public partial class SettingsViewModel : ViewModelBase
         InitializeShortcuts();
         LoadSettings();
         BuildSearchableSettings();
+        BuildCategories();
         UpdateScopePaths();
+
+        // Subscribe to settings file changes for live sync
+        if (_settingsService != null)
+        {
+            _settingsService.SettingsChanged += OnExternalSettingsChanged;
+        }
     }
 
     /// <summary>
@@ -337,6 +456,31 @@ public partial class SettingsViewModel : ViewModelBase
         _settingsService = settingsService;
         LoadFromService();
         UpdateScopePaths();
+    }
+
+    private void OnExternalSettingsChanged(object? sender, SettingsChangedEventArgs e)
+    {
+        // Reload settings when file changes externally
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                LoadFromService();
+                RefreshAllScopeBadges();
+                RefreshCategoryModifiedCounts();
+                // Refresh the current category view
+                if (SelectedCategory != null)
+                {
+                    UpdateCategorySettings(SelectedCategory.Id);
+                }
+                // Update JSON editor if active
+                if (IsJsonEditorActive)
+                {
+                    LoadJsonEditorContent();
+                }
+            });
+        }
+        catch { }
     }
 
     private void UpdateScopePaths()
@@ -413,6 +557,17 @@ public partial class SettingsViewModel : ViewModelBase
         ApplySearchFilter(value);
     }
 
+    partial void OnSelectedCategoryChanged(SettingsCategoryItem? value)
+    {
+        if (value != null)
+        {
+            // Deselect others
+            foreach (var cat in Categories)
+                cat.IsSelected = cat == value;
+            UpdateCategorySettings(value.Id);
+        }
+    }
+
     partial void OnActiveScopeChanged(SettingsScope value)
     {
         IsUserScopeActive = value == SettingsScope.User;
@@ -421,6 +576,7 @@ public partial class SettingsViewModel : ViewModelBase
         // Reload settings for the new scope
         LoadFromService();
         RefreshAllScopeBadges();
+        RefreshCategoryModifiedCounts();
 
         // Update JSON editor if active
         if (IsJsonEditorActive)
@@ -453,9 +609,23 @@ public partial class SettingsViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private void OpenSettingsJson()
+    {
+        // Opens settings.json in the editor by activating JSON view
+        IsJsonEditorActive = true;
+        LoadJsonEditorContent();
+    }
+
+    [RelayCommand]
     private void ClearSearch()
     {
         SearchText = "";
+    }
+
+    [RelayCommand]
+    private void ShowModifiedOnly()
+    {
+        SearchText = "@modified";
     }
 
     [RelayCommand]
@@ -466,6 +636,7 @@ public partial class SettingsViewModel : ViewModelBase
             _ = _settingsService.SetRawJsonAsync(JsonEditorContent, ActiveScope);
             LoadFromService();
             RefreshAllScopeBadges();
+            RefreshCategoryModifiedCounts();
         }
     }
 
@@ -497,6 +668,14 @@ public partial class SettingsViewModel : ViewModelBase
         {
             JsonValidationErrors.Add($"JSON parse error: {ex.Message}");
         }
+    }
+
+    [RelayCommand]
+    private void SelectCategory(string categoryId)
+    {
+        var cat = Categories.FirstOrDefault(c => c.Id == categoryId);
+        if (cat != null)
+            SelectedCategory = cat;
     }
 
     private void LoadJsonEditorContent()
@@ -582,52 +761,154 @@ public partial class SettingsViewModel : ViewModelBase
         }
     }
 
+    private void UpdateCategorySettings(string categoryId)
+    {
+        CategorySettings.Clear();
+
+        // Map category ID to category display name
+        var catName = categoryId switch
+        {
+            "editor" => "Editor",
+            "workbench" => "Workbench",
+            "terminal" => "Terminal",
+            "debug" => "Debug",
+            "git" => "Git",
+            "basiclang" => "BasicLang",
+            "intellisense" => "IntelliSense",
+            "build" => "Build",
+            "files" => "Files",
+            "keyboard" => "Keyboard",
+            _ => categoryId
+        };
+
+        foreach (var item in _allSettings)
+        {
+            if (item.Category.Equals(catName, StringComparison.OrdinalIgnoreCase))
+                CategorySettings.Add(item);
+        }
+    }
+
+    private void BuildCategories()
+    {
+        Categories = new ObservableCollection<SettingsCategoryItem>
+        {
+            new() { Id = "editor", Name = "Editor", Icon = "\u270E", Order = 1 },
+            new() { Id = "workbench", Name = "Workbench", Icon = "\u2699", Order = 2 },
+            new() { Id = "terminal", Name = "Terminal", Icon = "\u2588", Order = 3 },
+            new() { Id = "debug", Name = "Debug", Icon = "\u25B6", Order = 4 },
+            new() { Id = "git", Name = "Git", Icon = "\u2387", Order = 5 },
+            new() { Id = "basiclang", Name = "BasicLang", Icon = "\u2663", Order = 6 },
+            new() { Id = "intellisense", Name = "IntelliSense", Icon = "\u2726", Order = 7 },
+            new() { Id = "build", Name = "Build", Icon = "\u2692", Order = 8 },
+            new() { Id = "files", Name = "Files", Icon = "\u2630", Order = 9 },
+            new() { Id = "keyboard", Name = "Keyboard", Icon = "\u2328", Order = 10 },
+        };
+
+        RefreshCategoryModifiedCounts();
+
+        // Select first category by default
+        if (Categories.Count > 0)
+        {
+            SelectedCategory = Categories[0];
+        }
+    }
+
+    private void RefreshCategoryModifiedCounts()
+    {
+        foreach (var cat in Categories)
+        {
+            var catName = cat.Id switch
+            {
+                "editor" => "Editor",
+                "workbench" => "Workbench",
+                "terminal" => "Terminal",
+                "debug" => "Debug",
+                "git" => "Git",
+                "basiclang" => "BasicLang",
+                "intellisense" => "IntelliSense",
+                "build" => "Build",
+                "files" => "Files",
+                "keyboard" => "Keyboard",
+                _ => cat.Id
+            };
+
+            var catSettings = _allSettings.Where(s => s.Category.Equals(catName, StringComparison.OrdinalIgnoreCase)).ToList();
+            cat.SettingsCount = catSettings.Count;
+            cat.ModifiedCount = catSettings.Count(s => s.IsModified);
+        }
+    }
+
     private void BuildSearchableSettings()
     {
         _allSettings = new List<SearchableSettingItem>
         {
-            // Editor > Font
-            MakeCombo("editor.fontFamily", "Font Family", "Font family used in the code editor", "Editor", nameof(FontFamily), AvailableFonts, "Cascadia Code"),
-            MakeNumeric("editor.fontSize", "Font Size", "Font size for the code editor (in points)", "Editor", nameof(FontSize), 8, 72, defaultValue: 14),
+            // ===== Editor =====
+            // Font
+            MakeCombo("editor.fontFamily", "Font Family", "Font family used in the code editor.", "Editor", nameof(FontFamily), AvailableFonts, "Cascadia Code"),
+            MakeNumeric("editor.fontSize", "Font Size", "Font size for the code editor (in points).", "Editor", nameof(FontSize), 8, 72, defaultValue: 14),
             MakeBool("editor.fontLigatures", "Font Ligatures", "Enable font ligatures for supported fonts (e.g. Cascadia Code, Fira Code, JetBrains Mono).", "Editor", nameof(FontLigatures), false),
 
-            // Editor > Tabs
-            MakeNumeric("editor.tabSize", "Tab Size", "Number of spaces per tab stop", "Editor", nameof(TabSize), 1, 16, defaultValue: 4),
-            MakeBool("editor.insertSpaces", "Convert Tabs to Spaces", "Insert spaces instead of tab characters when pressing Tab", "Editor", nameof(ConvertTabsToSpaces), true),
+            // Tabs
+            MakeNumeric("editor.tabSize", "Tab Size", "Number of spaces per tab stop.", "Editor", nameof(TabSize), 1, 16, defaultValue: 4),
+            MakeBool("editor.insertSpaces", "Convert Tabs to Spaces", "Insert spaces instead of tab characters when pressing Tab.", "Editor", nameof(ConvertTabsToSpaces), true),
 
-            // Editor > Display
-            MakeBool("editor.lineNumbers", "Show Line Numbers", "Display line numbers in the editor gutter", "Editor", nameof(ShowLineNumbers), true),
-            MakeBool("editor.highlightCurrentLine", "Highlight Current Line", "Highlight the line where the cursor is located", "Editor", nameof(HighlightCurrentLine), true),
-            MakeCombo("editor.renderWhitespace", "Render Whitespace", "Controls rendering of whitespace characters", "Editor", nameof(RenderWhitespace), RenderWhitespaceOptions, "none"),
-            MakeCombo("editor.wordWrap", "Word Wrap", "Controls how lines should wrap", "Editor", nameof(WordWrapMode), WordWrapModes, "off"),
+            // Display
+            MakeBool("editor.lineNumbers", "Show Line Numbers", "Display line numbers in the editor gutter.", "Editor", nameof(ShowLineNumbers), true),
+            MakeBool("editor.highlightCurrentLine", "Highlight Current Line", "Highlight the line where the cursor is located.", "Editor", nameof(HighlightCurrentLine), true),
+            MakeCombo("editor.renderWhitespace", "Render Whitespace", "Controls rendering of whitespace characters.", "Editor", nameof(RenderWhitespace), RenderWhitespaceOptions, "none"),
+            MakeCombo("editor.wordWrap", "Word Wrap", "Controls how lines should wrap.", "Editor", nameof(WordWrapMode), WordWrapModes, "off"),
+            MakeBool("editor.minimap.enabled", "Minimap", "Controls whether the minimap is shown.", "Editor", nameof(MinimapEnabled), true),
+            MakeCombo("editor.minimap.side", "Minimap Side", "Controls the side where the minimap is rendered.", "Editor", nameof(MinimapSide), MinimapSides, "right"),
+            MakeBool("editor.stickyScroll.enabled", "Sticky Scroll", "Pin enclosing scope headers at the top of the editor.", "Editor", nameof(StickyScrollEnabled), true),
 
-            // Editor > Behavior
-            MakeBool("editor.autoIndent", "Auto Indent", "Automatically indent new lines based on the previous line", "Editor", nameof(AutoIndent), true),
-            MakeBool("editor.bracketPairColorization", "Bracket Matching", "Highlight matching brackets when the cursor is near one", "Editor", nameof(BracketMatching), true),
-            MakeBool("editor.autoClosingBrackets", "Auto Close Brackets", "Automatically insert closing brackets, quotes, and parentheses", "Editor", nameof(AutoCloseBrackets), true),
-            MakeBool("editor.smoothScrolling", "Smooth Scrolling", "Animate scrolling for a smoother visual experience", "Editor", nameof(SmoothScrolling), true),
-            MakeBool("editor.formatOnSave", "Format On Save", "Format a file on save", "Editor", nameof(FormatOnSave), false),
-            MakeCombo("editor.cursorBlinking", "Cursor Blinking", "Controls cursor blinking animation style", "Editor", nameof(CursorBlinking), CursorBlinkingOptions, "blink"),
+            // Behavior
+            MakeBool("editor.autoIndent", "Auto Indent", "Automatically indent new lines based on the previous line.", "Editor", nameof(AutoIndent), true),
+            MakeBool("editor.bracketPairColorization", "Bracket Pair Colorization", "Colorize matching brackets for easier code navigation.", "Editor", nameof(BracketMatching), true),
+            MakeBool("editor.autoClosingBrackets", "Auto Close Brackets", "Automatically insert closing brackets, quotes, and parentheses.", "Editor", nameof(AutoCloseBrackets), true),
+            MakeBool("editor.smoothScrolling", "Smooth Scrolling", "Animate scrolling for a smoother visual experience.", "Editor", nameof(SmoothScrolling), true),
+            MakeBool("editor.formatOnSave", "Format On Save", "Format a file on save.", "Editor", nameof(FormatOnSave), false),
+            MakeBool("editor.trimTrailingWhitespaceOnSave", "Trim Trailing Whitespace", "Remove trailing whitespace when saving a file.", "Editor", nameof(TrimTrailingWhitespaceOnSave), false),
+            MakeCombo("editor.cursorBlinking", "Cursor Blinking", "Controls cursor blinking animation style.", "Editor", nameof(CursorBlinking), CursorBlinkingOptions, "blink"),
 
-            // IntelliSense
-            MakeBool("intellisense.autoComplete", "Enable Auto Complete", "Show completion suggestions as you type", "IntelliSense", nameof(EnableAutoComplete), true),
-            MakeBool("intellisense.quickInfo", "Show Quick Info", "Display type and documentation info on hover", "IntelliSense", nameof(ShowQuickInfo), true),
-            MakeBool("intellisense.signatureHelp", "Show Signature Help", "Show parameter info when typing function arguments", "IntelliSense", nameof(ShowSignatureHelp), true),
-            MakeNumeric("intellisense.delay", "Auto Complete Delay", "Delay in milliseconds before showing completions", "IntelliSense", nameof(AutoCompleteDelay), 0, 2000, 50, defaultValue: 200),
+            // ===== Workbench =====
+            MakeCombo("workbench.colorTheme", "Color Theme", "Overall color theme for the IDE.", "Workbench", nameof(SelectedTheme), AvailableThemes, "Dark"),
+            MakeCombo("workbench.iconTheme", "Icon Theme", "Specifies the file icon theme used in the explorer and tabs.", "Workbench", nameof(IconTheme), IconThemes, "default"),
+            MakeCombo("workbench.startupEditor", "Startup Editor", "Controls which editor is shown at startup.", "Workbench", nameof(StartupEditor), StartupEditors, "welcomePage"),
+            MakeCombo("workbench.sideBar.location", "Side Bar Location", "Controls the location of the sidebar.", "Workbench", nameof(SideBarLocation), SideBarLocations, "left"),
 
-            // Build
-            MakeBool("build.saveBeforeBuild", "Save Before Build", "Automatically save all open files before building", "Build", nameof(SaveBeforeBuild), true),
-            MakeBool("build.showOutput", "Show Build Output", "Show the build output panel when a build starts", "Build", nameof(ShowBuildOutput), true),
-            MakeCombo("build.defaultConfiguration", "Default Configuration", "Default build configuration for new projects", "Build", nameof(DefaultConfiguration), Configurations, "Debug"),
+            // ===== Terminal =====
+            MakeText("terminal.integrated.fontFamily", "Font Family", "Controls the font family of the terminal. Leave empty to use editor font.", "Terminal", nameof(TerminalFontFamily), ""),
+            MakeNumeric("terminal.integrated.fontSize", "Font Size", "Controls the font size in the terminal (in pixels).", "Terminal", nameof(TerminalFontSize), 6, 72, defaultValue: 14),
+            MakeCombo("terminal.integrated.cursorStyle", "Cursor Style", "Controls the style of terminal cursor.", "Terminal", nameof(TerminalCursorStyle), TerminalCursorStyles, "block"),
+            MakeText("terminal.integrated.defaultProfile", "Default Profile", "The default terminal shell profile.", "Terminal", nameof(TerminalDefaultProfile), ""),
 
-            // Appearance
-            MakeCombo("workbench.colorTheme", "Color Theme", "Overall color theme for the IDE", "Appearance", nameof(SelectedTheme), AvailableThemes, "Dark"),
+            // ===== Debug =====
+            MakeNumeric("debug.console.fontSize", "Console Font Size", "Controls the font size of the debug console.", "Debug", nameof(DebugConsoleFontSize), 6, 72, defaultValue: 14),
+            MakeBool("debug.allowBreakpointsEverywhere", "Allow Breakpoints Everywhere", "Allow setting breakpoints in any file, not just source files.", "Debug", nameof(DebugAllowBreakpointsEverywhere), false),
 
-            // Files
-            MakeCombo("files.autoSave", "Auto Save", "Controls auto save of editors", "Files", nameof(AutoSaveMode), AutoSaveModes, "off"),
+            // ===== Git =====
+            MakeBool("git.autoFetch", "Auto Fetch", "Periodically fetch from remotes to keep the local repo up to date.", "Git", nameof(GitAutoFetch), true),
+            MakeNumeric("git.autoFetchInterval", "Auto Fetch Interval", "Interval in seconds between automatic fetches.", "Git", nameof(GitAutoFetchInterval), 60, 3600, 30, defaultValue: 180),
+            MakeBool("git.confirmSync", "Confirm Sync", "Ask for confirmation before synchronizing (push/pull).", "Git", nameof(GitConfirmSync), true),
 
-            // BasicLang
-            MakeCombo("basiclang.compiler.backend", "Compiler Backend", "The default compilation backend", "BasicLang", nameof(CompilerBackend), CompilerBackends, "CSharp"),
+            // ===== BasicLang =====
+            MakeCombo("basiclang.compiler.backend", "Compiler Backend", "The default compilation backend for BasicLang projects.", "BasicLang", nameof(CompilerBackend), CompilerBackends, "CSharp"),
+            MakeText("basiclang.lsp.path", "LSP Server Path", "Path to the BasicLang LSP server executable. Leave empty for auto-detection.", "BasicLang", nameof(LspServerPath), ""),
+            MakeBool("basiclang.lsp.autoStart", "Auto Start LSP", "Automatically start the LSP server when a BasicLang file is opened.", "BasicLang", nameof(LspAutoStart), true),
+
+            // ===== IntelliSense =====
+            MakeBool("intellisense.autoComplete", "Enable Auto Complete", "Show completion suggestions as you type.", "IntelliSense", nameof(EnableAutoComplete), true),
+            MakeBool("intellisense.quickInfo", "Show Quick Info", "Display type and documentation info on hover.", "IntelliSense", nameof(ShowQuickInfo), true),
+            MakeBool("intellisense.signatureHelp", "Show Signature Help", "Show parameter info when typing function arguments.", "IntelliSense", nameof(ShowSignatureHelp), true),
+            MakeNumeric("intellisense.delay", "Auto Complete Delay", "Delay in milliseconds before showing completions.", "IntelliSense", nameof(AutoCompleteDelay), 0, 2000, 50, defaultValue: 200),
+
+            // ===== Build =====
+            MakeBool("build.saveBeforeBuild", "Save Before Build", "Automatically save all open files before building.", "Build", nameof(SaveBeforeBuild), true),
+            MakeBool("build.showOutput", "Show Build Output", "Show the build output panel when a build starts.", "Build", nameof(ShowBuildOutput), true),
+            MakeCombo("build.defaultConfiguration", "Default Configuration", "Default build configuration for new projects.", "Build", nameof(DefaultConfiguration), Configurations, "Debug"),
+
+            // ===== Files =====
+            MakeCombo("files.autoSave", "Auto Save", "Controls auto save of editors.", "Files", nameof(AutoSaveMode), AutoSaveModes, "off"),
         };
     }
 
@@ -639,6 +920,9 @@ public partial class SettingsViewModel : ViewModelBase
 
     private SearchableSettingItem MakeCombo(string key, string name, string desc, string category, string prop, ObservableCollection<string> choices, string defaultValue = "") =>
         new() { Key = key, Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.ComboBox, Choices = choices, Owner = this, DefaultValue = defaultValue };
+
+    private SearchableSettingItem MakeText(string key, string name, string desc, string category, string prop, string defaultValue = "") =>
+        new() { Key = key, Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.TextBox, Owner = this, DefaultValue = defaultValue };
 
     private void RefreshAllScopeBadges()
     {
@@ -660,6 +944,7 @@ public partial class SettingsViewModel : ViewModelBase
         // Reload the effective value for this setting
         LoadFromService();
         RefreshAllScopeBadges();
+        RefreshCategoryModifiedCounts();
     }
 
     // -- Reflection-free property accessors for SearchableSettingItem proxies --
@@ -682,6 +967,13 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(SaveBeforeBuild) => SaveBeforeBuild,
         nameof(ShowBuildOutput) => ShowBuildOutput,
         nameof(FormatOnSave) => FormatOnSave,
+        nameof(TrimTrailingWhitespaceOnSave) => TrimTrailingWhitespaceOnSave,
+        nameof(GitAutoFetch) => GitAutoFetch,
+        nameof(GitConfirmSync) => GitConfirmSync,
+        nameof(DebugAllowBreakpointsEverywhere) => DebugAllowBreakpointsEverywhere,
+        nameof(LspAutoStart) => LspAutoStart,
+        nameof(MinimapEnabled) => MinimapEnabled,
+        nameof(StickyScrollEnabled) => StickyScrollEnabled,
         _ => false
     };
 
@@ -705,7 +997,18 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(SaveBeforeBuild): SaveBeforeBuild = value; break;
             case nameof(ShowBuildOutput): ShowBuildOutput = value; break;
             case nameof(FormatOnSave): FormatOnSave = value; break;
+            case nameof(TrimTrailingWhitespaceOnSave): TrimTrailingWhitespaceOnSave = value; break;
+            case nameof(GitAutoFetch): GitAutoFetch = value; break;
+            case nameof(GitConfirmSync): GitConfirmSync = value; break;
+            case nameof(DebugAllowBreakpointsEverywhere): DebugAllowBreakpointsEverywhere = value; break;
+            case nameof(LspAutoStart): LspAutoStart = value; break;
+            case nameof(MinimapEnabled): MinimapEnabled = value; break;
+            case nameof(StickyScrollEnabled): StickyScrollEnabled = value; break;
         }
+
+        // Auto-save to service immediately
+        AutoSaveSettingToService(prop, value);
+        RefreshCategoryModifiedCounts();
     }
 
     internal int GetIntSetting(string prop) => prop switch
@@ -713,6 +1016,9 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(FontSize) => FontSize,
         nameof(TabSize) => TabSize,
         nameof(AutoCompleteDelay) => AutoCompleteDelay,
+        nameof(TerminalFontSize) => TerminalFontSize,
+        nameof(DebugConsoleFontSize) => DebugConsoleFontSize,
+        nameof(GitAutoFetchInterval) => GitAutoFetchInterval,
         _ => 0
     };
 
@@ -723,7 +1029,13 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(FontSize): FontSize = value; break;
             case nameof(TabSize): TabSize = value; break;
             case nameof(AutoCompleteDelay): AutoCompleteDelay = value; break;
+            case nameof(TerminalFontSize): TerminalFontSize = value; break;
+            case nameof(DebugConsoleFontSize): DebugConsoleFontSize = value; break;
+            case nameof(GitAutoFetchInterval): GitAutoFetchInterval = value; break;
         }
+
+        AutoSaveSettingToService(prop, value);
+        RefreshCategoryModifiedCounts();
     }
 
     internal string GetStringSetting(string prop) => prop switch
@@ -736,6 +1048,14 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(CursorBlinking) => CursorBlinking,
         nameof(AutoSaveMode) => AutoSaveMode,
         nameof(CompilerBackend) => CompilerBackend,
+        nameof(TerminalFontFamily) => TerminalFontFamily,
+        nameof(TerminalCursorStyle) => TerminalCursorStyle,
+        nameof(TerminalDefaultProfile) => TerminalDefaultProfile,
+        nameof(IconTheme) => IconTheme,
+        nameof(StartupEditor) => StartupEditor,
+        nameof(SideBarLocation) => SideBarLocation,
+        nameof(LspServerPath) => LspServerPath,
+        nameof(MinimapSide) => MinimapSide,
         _ => ""
     };
 
@@ -751,8 +1071,107 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(CursorBlinking): CursorBlinking = value; break;
             case nameof(AutoSaveMode): AutoSaveMode = value; break;
             case nameof(CompilerBackend): CompilerBackend = value; break;
+            case nameof(TerminalFontFamily): TerminalFontFamily = value; break;
+            case nameof(TerminalCursorStyle): TerminalCursorStyle = value; break;
+            case nameof(TerminalDefaultProfile): TerminalDefaultProfile = value; break;
+            case nameof(IconTheme): IconTheme = value; break;
+            case nameof(StartupEditor): StartupEditor = value; break;
+            case nameof(SideBarLocation): SideBarLocation = value; break;
+            case nameof(LspServerPath): LspServerPath = value; break;
+            case nameof(MinimapSide): MinimapSide = value; break;
+        }
+
+        AutoSaveSettingToService(prop, value);
+        RefreshCategoryModifiedCounts();
+
+        // Apply theme change immediately when changed
+        if (prop == nameof(SelectedTheme))
+        {
+            ThemeManager.Apply(SelectedTheme);
         }
     }
+
+    /// <summary>
+    /// Immediately writes a changed setting to the SettingsService (live sync).
+    /// Maps property name back to its settings key and writes to the active scope.
+    /// </summary>
+    private void AutoSaveSettingToService(string prop, object? value)
+    {
+        if (_settingsService == null) return;
+
+        var key = GetSettingsKeyForProperty(prop);
+        if (string.IsNullOrEmpty(key)) return;
+
+        var scope = ActiveScope;
+
+        // Special transformations
+        switch (prop)
+        {
+            case nameof(ShowLineNumbers):
+                _settingsService.Set(key, (bool)value! ? "on" : "off", scope);
+                return;
+            case nameof(AutoCloseBrackets):
+                _settingsService.Set(key, (bool)value! ? "always" : "never", scope);
+                return;
+        }
+
+        if (value is bool b)
+            _settingsService.Set(key, b, scope);
+        else if (value is int i)
+            _settingsService.Set(key, i, scope);
+        else if (value is string s)
+            _settingsService.Set(key, s, scope);
+
+        SettingsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static string? GetSettingsKeyForProperty(string prop) => prop switch
+    {
+        nameof(FontFamily) => "editor.fontFamily",
+        nameof(FontLigatures) => "editor.fontLigatures",
+        nameof(FontSize) => "editor.fontSize",
+        nameof(TabSize) => "editor.tabSize",
+        nameof(ConvertTabsToSpaces) => "editor.insertSpaces",
+        nameof(ShowLineNumbers) => "editor.lineNumbers",
+        nameof(HighlightCurrentLine) => "editor.highlightCurrentLine",
+        nameof(RenderWhitespace) => "editor.renderWhitespace",
+        nameof(WordWrapMode) => "editor.wordWrap",
+        nameof(AutoIndent) => "editor.autoIndent",
+        nameof(BracketMatching) => "editor.bracketPairColorization",
+        nameof(AutoCloseBrackets) => "editor.autoClosingBrackets",
+        nameof(SmoothScrolling) => "editor.smoothScrolling",
+        nameof(FormatOnSave) => "editor.formatOnSave",
+        nameof(TrimTrailingWhitespaceOnSave) => "editor.trimTrailingWhitespaceOnSave",
+        nameof(CursorBlinking) => "editor.cursorBlinking",
+        nameof(MinimapEnabled) => "editor.minimap.enabled",
+        nameof(MinimapSide) => "editor.minimap.side",
+        nameof(StickyScrollEnabled) => "editor.stickyScroll.enabled",
+        nameof(SelectedTheme) => "workbench.colorTheme",
+        nameof(IconTheme) => "workbench.iconTheme",
+        nameof(StartupEditor) => "workbench.startupEditor",
+        nameof(SideBarLocation) => "workbench.sideBar.location",
+        nameof(TerminalFontFamily) => "terminal.integrated.fontFamily",
+        nameof(TerminalFontSize) => "terminal.integrated.fontSize",
+        nameof(TerminalCursorStyle) => "terminal.integrated.cursorStyle",
+        nameof(TerminalDefaultProfile) => "terminal.integrated.defaultProfile",
+        nameof(DebugConsoleFontSize) => "debug.console.fontSize",
+        nameof(DebugAllowBreakpointsEverywhere) => "debug.allowBreakpointsEverywhere",
+        nameof(GitAutoFetch) => "git.autoFetch",
+        nameof(GitAutoFetchInterval) => "git.autoFetchInterval",
+        nameof(GitConfirmSync) => "git.confirmSync",
+        nameof(CompilerBackend) => "basiclang.compiler.backend",
+        nameof(LspServerPath) => "basiclang.lsp.path",
+        nameof(LspAutoStart) => "basiclang.lsp.autoStart",
+        nameof(EnableAutoComplete) => "intellisense.autoComplete",
+        nameof(ShowQuickInfo) => "intellisense.quickInfo",
+        nameof(ShowSignatureHelp) => "intellisense.signatureHelp",
+        nameof(AutoCompleteDelay) => "intellisense.delay",
+        nameof(SaveBeforeBuild) => "build.saveBeforeBuild",
+        nameof(ShowBuildOutput) => "build.showOutput",
+        nameof(DefaultConfiguration) => "build.defaultConfiguration",
+        nameof(AutoSaveMode) => "files.autoSave",
+        _ => null
+    };
 
     private void InitializeShortcuts()
     {
@@ -822,11 +1241,29 @@ public partial class SettingsViewModel : ViewModelBase
         ShowBuildOutput = true;
         DefaultConfiguration = "Debug";
         FormatOnSave = false;
+        TrimTrailingWhitespaceOnSave = false;
         RenderWhitespace = "none";
         WordWrapMode = "off";
         CursorBlinking = "blink";
         AutoSaveMode = "off";
         CompilerBackend = "CSharp";
+        TerminalFontFamily = "";
+        TerminalFontSize = 14;
+        TerminalCursorStyle = "block";
+        TerminalDefaultProfile = "";
+        DebugConsoleFontSize = 14;
+        DebugAllowBreakpointsEverywhere = false;
+        GitAutoFetch = true;
+        GitAutoFetchInterval = 180;
+        GitConfirmSync = true;
+        IconTheme = "default";
+        StartupEditor = "welcomePage";
+        SideBarLocation = "left";
+        LspServerPath = "";
+        LspAutoStart = true;
+        MinimapEnabled = true;
+        MinimapSide = "right";
+        StickyScrollEnabled = true;
 
         foreach (var shortcut in Shortcuts)
         {
@@ -837,6 +1274,8 @@ public partial class SettingsViewModel : ViewModelBase
         {
             _settingsService.ResetAllToDefaults();
         }
+
+        RefreshCategoryModifiedCounts();
     }
 
     /// <summary>
@@ -864,8 +1303,24 @@ public partial class SettingsViewModel : ViewModelBase
         AutoCloseBrackets = _settingsService.Get("editor.autoClosingBrackets", "always", scope) != "never";
         SmoothScrolling = _settingsService.Get("editor.smoothScrolling", true, scope);
         FormatOnSave = _settingsService.Get("editor.formatOnSave", false, scope);
+        TrimTrailingWhitespaceOnSave = _settingsService.Get("editor.trimTrailingWhitespaceOnSave", false, scope);
         CursorBlinking = _settingsService.Get("editor.cursorBlinking", "blink", scope);
+        MinimapEnabled = _settingsService.Get("editor.minimap.enabled", true, scope);
+        MinimapSide = _settingsService.Get("editor.minimap.side", "right", scope);
+        StickyScrollEnabled = _settingsService.Get("editor.stickyScroll.enabled", true, scope);
         SelectedTheme = _settingsService.Get("workbench.colorTheme", "Dark", scope);
+        IconTheme = _settingsService.Get("workbench.iconTheme", "default", scope);
+        StartupEditor = _settingsService.Get("workbench.startupEditor", "welcomePage", scope);
+        SideBarLocation = _settingsService.Get("workbench.sideBar.location", "left", scope);
+        TerminalFontFamily = _settingsService.Get("terminal.integrated.fontFamily", "", scope);
+        TerminalFontSize = _settingsService.Get("terminal.integrated.fontSize", 14, scope);
+        TerminalCursorStyle = _settingsService.Get("terminal.integrated.cursorStyle", "block", scope);
+        TerminalDefaultProfile = _settingsService.Get("terminal.integrated.defaultProfile", "", scope);
+        DebugConsoleFontSize = _settingsService.Get("debug.console.fontSize", 14, scope);
+        DebugAllowBreakpointsEverywhere = _settingsService.Get("debug.allowBreakpointsEverywhere", false, scope);
+        GitAutoFetch = _settingsService.Get("git.autoFetch", true, scope);
+        GitAutoFetchInterval = _settingsService.Get("git.autoFetchInterval", 180, scope);
+        GitConfirmSync = _settingsService.Get("git.confirmSync", true, scope);
         EnableAutoComplete = _settingsService.Get("intellisense.autoComplete", true, scope);
         ShowQuickInfo = _settingsService.Get("intellisense.quickInfo", true, scope);
         ShowSignatureHelp = _settingsService.Get("intellisense.signatureHelp", true, scope);
@@ -875,6 +1330,8 @@ public partial class SettingsViewModel : ViewModelBase
         DefaultConfiguration = _settingsService.Get("build.defaultConfiguration", "Debug", scope);
         AutoSaveMode = _settingsService.Get("files.autoSave", "off", scope);
         CompilerBackend = _settingsService.Get("basiclang.compiler.backend", "CSharp", scope);
+        LspServerPath = _settingsService.Get("basiclang.lsp.path", "", scope);
+        LspAutoStart = _settingsService.Get("basiclang.lsp.autoStart", true, scope);
     }
 
     /// <summary>
@@ -900,8 +1357,24 @@ public partial class SettingsViewModel : ViewModelBase
         _settingsService.Set("editor.autoClosingBrackets", AutoCloseBrackets ? "always" : "never", scope);
         _settingsService.Set("editor.smoothScrolling", SmoothScrolling, scope);
         _settingsService.Set("editor.formatOnSave", FormatOnSave, scope);
+        _settingsService.Set("editor.trimTrailingWhitespaceOnSave", TrimTrailingWhitespaceOnSave, scope);
         _settingsService.Set("editor.cursorBlinking", CursorBlinking, scope);
+        _settingsService.Set("editor.minimap.enabled", MinimapEnabled, scope);
+        _settingsService.Set("editor.minimap.side", MinimapSide, scope);
+        _settingsService.Set("editor.stickyScroll.enabled", StickyScrollEnabled, scope);
         _settingsService.Set("workbench.colorTheme", SelectedTheme, scope);
+        _settingsService.Set("workbench.iconTheme", IconTheme, scope);
+        _settingsService.Set("workbench.startupEditor", StartupEditor, scope);
+        _settingsService.Set("workbench.sideBar.location", SideBarLocation, scope);
+        _settingsService.Set("terminal.integrated.fontFamily", TerminalFontFamily, scope);
+        _settingsService.Set("terminal.integrated.fontSize", TerminalFontSize, scope);
+        _settingsService.Set("terminal.integrated.cursorStyle", TerminalCursorStyle, scope);
+        _settingsService.Set("terminal.integrated.defaultProfile", TerminalDefaultProfile, scope);
+        _settingsService.Set("debug.console.fontSize", DebugConsoleFontSize, scope);
+        _settingsService.Set("debug.allowBreakpointsEverywhere", DebugAllowBreakpointsEverywhere, scope);
+        _settingsService.Set("git.autoFetch", GitAutoFetch, scope);
+        _settingsService.Set("git.autoFetchInterval", GitAutoFetchInterval, scope);
+        _settingsService.Set("git.confirmSync", GitConfirmSync, scope);
         _settingsService.Set("intellisense.autoComplete", EnableAutoComplete, scope);
         _settingsService.Set("intellisense.quickInfo", ShowQuickInfo, scope);
         _settingsService.Set("intellisense.signatureHelp", ShowSignatureHelp, scope);
@@ -911,6 +1384,8 @@ public partial class SettingsViewModel : ViewModelBase
         _settingsService.Set("build.defaultConfiguration", DefaultConfiguration, scope);
         _settingsService.Set("files.autoSave", AutoSaveMode, scope);
         _settingsService.Set("basiclang.compiler.backend", CompilerBackend, scope);
+        _settingsService.Set("basiclang.lsp.path", LspServerPath, scope);
+        _settingsService.Set("basiclang.lsp.autoStart", LspAutoStart, scope);
     }
 
     private void LoadSettings()
@@ -1109,6 +1584,24 @@ public class ScopeBadgeVisibilityConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         return value is string s && !string.IsNullOrEmpty(s);
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
+
+/// <summary>
+/// Converts a modified count (int) to visibility. Count > 0 = visible.
+/// </summary>
+public class ModifiedCountVisibilityConverter : IValueConverter
+{
+    public static readonly ModifiedCountVisibilityConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        return value is int count && count > 0;
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

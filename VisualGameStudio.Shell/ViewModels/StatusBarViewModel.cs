@@ -26,6 +26,9 @@ public partial class StatusBarViewModel : ViewModelBase
     private int _syncDownCount;
 
     [ObservableProperty]
+    private bool _hasUncommittedChanges;
+
+    [ObservableProperty]
     private int _errorCount;
 
     [ObservableProperty]
@@ -290,12 +293,13 @@ public partial class StatusBarViewModel : ViewModelBase
     /// <summary>
     /// Updates git branch and sync status.
     /// </summary>
-    public void UpdateGitStatus(string? branch, int ahead, int behind, bool isRepo)
+    public void UpdateGitStatus(string? branch, int ahead, int behind, bool isRepo, bool hasUncommitted = false)
     {
         IsGitRepository = isRepo;
         BranchName = branch ?? "";
         SyncUpCount = ahead;
         SyncDownCount = behind;
+        HasUncommittedChanges = hasUncommitted;
     }
 
     /// <summary>
@@ -362,21 +366,54 @@ public partial class StatusBarViewModel : ViewModelBase
         }, null, TimeSpan.FromSeconds(5), System.Threading.Timeout.InfiniteTimeSpan);
     }
 
+    // ── Suppressed notification types ──
+    private readonly HashSet<string> _suppressedNotifications = new();
+
     /// <summary>
     /// Adds a notification to the notification center.
     /// </summary>
-    public void AddNotification(string message, NotificationSeverity severity, string source)
+    public void AddNotification(string message, NotificationSeverity severity, string source,
+        string? details = null, List<NotificationAction>? actions = null, string? suppressKey = null)
     {
+        if (suppressKey != null && _suppressedNotifications.Contains(suppressKey))
+            return;
+
         var item = new NotificationItem
         {
             Message = message,
             Severity = severity,
             Source = source,
-            Timestamp = DateTime.Now
+            Timestamp = DateTime.Now,
+            Details = details,
+            Actions = actions,
+            SuppressKey = suppressKey
         };
 
         Notifications.Insert(0, item);
-        NotificationCount = Notifications.Count;
+
+        // Limit to last 100 notifications
+        while (Notifications.Count > 100)
+            Notifications.RemoveAt(Notifications.Count - 1);
+
+        NotificationCount = Notifications.Count(n => !n.IsSuppressed);
+    }
+
+    /// <summary>
+    /// Suppresses future notifications with the given key.
+    /// </summary>
+    public void SuppressNotificationType(string suppressKey)
+    {
+        _suppressedNotifications.Add(suppressKey);
+    }
+
+    /// <summary>
+    /// Gets notifications grouped by time period for the notification center.
+    /// </summary>
+    public IEnumerable<IGrouping<string, NotificationItem>> GetGroupedNotifications()
+    {
+        return Notifications
+            .Where(n => !n.IsSuppressed)
+            .GroupBy(n => n.TimeGroup);
     }
 
     /// <summary>
@@ -656,6 +693,10 @@ public class NotificationItem
     public NotificationSeverity Severity { get; set; }
     public string Source { get; set; } = "";
     public DateTime Timestamp { get; set; }
+    public string? Details { get; set; }
+    public List<NotificationAction>? Actions { get; set; }
+    public bool IsSuppressed { get; set; }
+    public string? SuppressKey { get; set; }
 
     public string TimeText
     {
@@ -669,11 +710,34 @@ public class NotificationItem
         }
     }
 
+    /// <summary>
+    /// Returns a time group label for grouping in the notification center.
+    /// </summary>
+    public string TimeGroup
+    {
+        get
+        {
+            var today = DateTime.Today;
+            if (Timestamp.Date == today) return "Today";
+            if (Timestamp.Date == today.AddDays(-1)) return "Yesterday";
+            return "Earlier";
+        }
+    }
+
     public string SeverityIcon => Severity switch
     {
         NotificationSeverity.Error => "\u274C",
         NotificationSeverity.Warning => "\u26A0",
+        NotificationSeverity.Progress => "\u23F3",
         _ => "\u2139"
+    };
+
+    public string SeverityColor => Severity switch
+    {
+        NotificationSeverity.Error => "#E51400",
+        NotificationSeverity.Warning => "#F0AD4E",
+        NotificationSeverity.Progress => "#58A6FF",
+        _ => "#58A6FF"
     };
 }
 
@@ -681,5 +745,6 @@ public enum NotificationSeverity
 {
     Info,
     Warning,
-    Error
+    Error,
+    Progress
 }

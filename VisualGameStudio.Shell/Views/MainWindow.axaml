@@ -401,7 +401,7 @@
     <Border DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}"
             Background="{Binding IsDebugging, Converter={x:Static local:BoolToBrushConverter.DebugStatusBarInstance}}"
             AutomationProperties.Name="Status Bar">
-      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
         <!-- Status message -->
         <TextBlock Grid.Column="0"
                    Text="{Binding StatusText}"
@@ -466,8 +466,26 @@
           </StackPanel>
         </Border>
 
+        <!-- Notification Center Bell -->
+        <Button Grid.Column="4" Classes="statusBarButton"
+                Command="{Binding StatusBar.ShowNotificationsCommand}"
+                AutomationProperties.Name="Notification Center"
+                AutomationProperties.HelpText="Show notification center"
+                ToolTip.Tip="Notifications">
+          <StackPanel Orientation="Horizontal" Spacing="3" VerticalAlignment="Center">
+            <TextBlock Text="&#x1F514;" FontSize="13" VerticalAlignment="Center"/>
+            <Border CornerRadius="7" Background="#E51400" MinWidth="14" Height="14"
+                    IsVisible="{Binding StatusBar.NotificationCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"
+                    VerticalAlignment="Center" Padding="3,0">
+              <TextBlock Text="{Binding StatusBar.NotificationCount}" Foreground="White"
+                         FontSize="9" FontWeight="Bold"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </StackPanel>
+        </Button>
+
         <!-- Build configuration -->
-        <TextBlock Grid.Column="4"
+        <TextBlock Grid.Column="5"
                    Text="{Binding CurrentConfiguration}"
                    VerticalAlignment="Center"
                    Margin="8,0"
@@ -475,7 +493,7 @@
                    AutomationProperties.Name="Build Configuration"/>
 
         <!-- Caret position -->
-        <TextBlock Grid.Column="5"
+        <TextBlock Grid.Column="6"
                    VerticalAlignment="Center"
                    Margin="8,0"
                    Foreground="White"
@@ -489,7 +507,7 @@
         </TextBlock>
 
         <!-- Indentation indicator (keyboard-focusable button) -->
-        <Button Grid.Column="6" Classes="statusBarButton"
+        <Button Grid.Column="7" Classes="statusBarButton"
                 Click="OnIndentationButtonClick"
                 AutomationProperties.Name="Indentation Settings"
                 AutomationProperties.HelpText="Click or press Enter to change indentation settings"
@@ -500,7 +518,7 @@
         </Button>
 
         <!-- Encoding indicator (keyboard-focusable button) -->
-        <Button Grid.Column="7" Classes="statusBarButton"
+        <Button Grid.Column="8" Classes="statusBarButton"
                 Click="OnEncodingButtonClick"
                 AutomationProperties.Name="File Encoding"
                 AutomationProperties.HelpText="Click or press Enter to change file encoding"
@@ -511,7 +529,7 @@
         </Button>
 
         <!-- Line ending indicator (keyboard-focusable button) -->
-        <Button Grid.Column="8" Classes="statusBarButton"
+        <Button Grid.Column="9" Classes="statusBarButton"
                 Click="OnLineEndingButtonClick"
                 AutomationProperties.Name="Line Ending Style"
                 AutomationProperties.HelpText="Click or press Enter to change line ending style"
@@ -522,7 +540,7 @@
         </Button>
 
         <!-- Language mode indicator (keyboard-focusable button) -->
-        <Button Grid.Column="9" Classes="statusBarButton"
+        <Button Grid.Column="10" Classes="statusBarButton"
                 Click="OnLanguageModeButtonClick"
                 AutomationProperties.Name="Language Mode"
                 AutomationProperties.HelpText="Current language mode"
@@ -532,8 +550,25 @@
                      Foreground="#569CD6"/>
         </Button>
 
+        <!-- Zoom level indicator (keyboard-focusable button) -->
+        <Button Grid.Column="11" Classes="statusBarButton"
+                Command="{Binding ZoomResetCommand}"
+                AutomationProperties.Name="Zoom Level"
+                AutomationProperties.HelpText="Current zoom level. Click to reset to 100%. Use Ctrl+Plus/Minus to zoom."
+                ToolTip.Tip="Click to reset zoom (Ctrl+0)">
+          <TextBlock VerticalAlignment="Center"
+                     Foreground="#BBBBBB"
+                     FontSize="11">
+            <TextBlock.Text>
+              <MultiBinding StringFormat="{}{0}%">
+                <Binding Path="ZoomLevel"/>
+              </MultiBinding>
+            </TextBlock.Text>
+          </TextBlock>
+        </Button>
+
         <!-- Ctrl+Shift+P hint (keyboard-focusable button) -->
-        <Button Grid.Column="10" Classes="statusBarButton"
+        <Button Grid.Column="12" Classes="statusBarButton"
                 Command="{Binding OpenCommandPaletteCommand}"
                 AutomationProperties.Name="Open Command Palette (Ctrl+Shift+P)"
                 AutomationProperties.HelpText="Open the command palette"
@@ -551,14 +586,76 @@
 
   </DockPanel>
 
+  <!-- Notification Center Flyout -->
+  <Border Name="NotificationCenterPanel"
+          HorizontalAlignment="Right"
+          VerticalAlignment="Bottom"
+          Margin="0,0,10,35"
+          Width="380"
+          MaxHeight="500"
+          Background="#252526"
+          BorderBrush="#3C3C3C"
+          BorderThickness="1"
+          CornerRadius="6"
+          IsVisible="{Binding StatusBar.IsNotificationCenterOpen}"
+          BoxShadow="0 4 16 #40000000"
+          AutomationProperties.Name="Notification Center">
+    <DockPanel>
+      <!-- Header -->
+      <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="#3C3C3C">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Text="Notifications" Foreground="White" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          <Button Grid.Column="1" Content="Clear All"
+                  Command="{Binding StatusBar.ClearAllNotificationsCommand}"
+                  FontSize="11" Padding="8,3"
+                  Background="Transparent" Foreground="#58A6FF" BorderThickness="0"
+                  Cursor="Hand"/>
+        </Grid>
+      </Border>
+      <!-- Notification list -->
+      <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="440">
+        <ItemsControl ItemsSource="{Binding StatusBar.Notifications}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Padding="10,8" BorderThickness="0,0,0,1" BorderBrush="#2D2D2D"
+                      Background="Transparent" Cursor="Hand">
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                  <!-- Severity icon -->
+                  <TextBlock Grid.Column="0" Text="{Binding SeverityIcon}" FontSize="14"
+                             Foreground="{Binding SeverityColor}" VerticalAlignment="Top"
+                             Margin="0,2,8,0"/>
+                  <!-- Message and time -->
+                  <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock Text="{Binding Message}" Foreground="#CCCCCC" FontSize="12"
+                               TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="{Binding Source}" Foreground="#606060" FontSize="10"/>
+                      <TextBlock Text="{Binding TimeText}" Foreground="#606060" FontSize="10"/>
+                    </StackPanel>
+                  </StackPanel>
+                  <!-- Dismiss button -->
+                  <Button Grid.Column="2" Content="&#x2715;" FontSize="10" Padding="4,2"
+                          Background="Transparent" Foreground="#606060" BorderThickness="0"
+                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).StatusBar.DismissNotificationCommand}"
+                          CommandParameter="{Binding}"
+                          VerticalAlignment="Top" Cursor="Hand"/>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </DockPanel>
+  </Border>
+
   <!-- Toast Notification Overlay -->
   <StackPanel Name="NotificationArea"
               HorizontalAlignment="Right"
               VerticalAlignment="Bottom"
               Margin="0,0,20,40"
-              MaxWidth="400"
+              MaxWidth="420"
               Spacing="5"
-              IsHitTestVisible="False"
+              IsHitTestVisible="True"
               AutomationProperties.Name="Notifications"
               AutomationProperties.LiveSetting="Assertive"/>
   </Grid>

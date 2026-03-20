@@ -40,6 +40,18 @@ public partial class DiffViewerViewModel : ViewModelBase
     [ObservableProperty]
     private ObservableCollection<DiffLine> _diffLines = new();
 
+    /// <summary>
+    /// Side-by-side aligned lines for left pane (with gap filling).
+    /// </summary>
+    [ObservableProperty]
+    private ObservableCollection<DiffLine> _leftPaneLines = new();
+
+    /// <summary>
+    /// Side-by-side aligned lines for right pane (with gap filling).
+    /// </summary>
+    [ObservableProperty]
+    private ObservableCollection<DiffLine> _rightPaneLines = new();
+
     [ObservableProperty]
     private bool _sideBySide = true;
 
@@ -48,6 +60,9 @@ public partial class DiffViewerViewModel : ViewModelBase
 
     [ObservableProperty]
     private int _removedLines;
+
+    [ObservableProperty]
+    private int _modifiedLines;
 
     [ObservableProperty]
     private string _filePath = "";
@@ -59,7 +74,45 @@ public partial class DiffViewerViewModel : ViewModelBase
     private bool _canUnstageHunks;
 
     [ObservableProperty]
+    private bool _canRevertHunks;
+
+    [ObservableProperty]
     private string? _hunkOperationStatus;
+
+    /// <summary>
+    /// Total number of change regions (groups of consecutive added/removed/modified lines).
+    /// </summary>
+    [ObservableProperty]
+    private int _changeCount;
+
+    /// <summary>
+    /// Current change index (1-based) for navigation display.
+    /// </summary>
+    [ObservableProperty]
+    private int _currentChangeIndex;
+
+    /// <summary>
+    /// Indices into DiffLines that mark the start of each change region.
+    /// </summary>
+    private List<int> _changeStartIndices = new();
+
+    /// <summary>
+    /// Whether to show collapsed (folded) unchanged regions.
+    /// </summary>
+    [ObservableProperty]
+    private bool _foldUnchangedRegions = true;
+
+    /// <summary>
+    /// The display lines after folding is applied. Used for rendering.
+    /// </summary>
+    [ObservableProperty]
+    private ObservableCollection<DiffDisplayItem> _displayItems = new();
+
+    /// <summary>
+    /// Summary text: "N changes (+A -R ~M)"
+    /// </summary>
+    public string ChangesSummaryText => $"{ChangeCount} changes (+{AddedLines} -{RemovedLines}" +
+        (ModifiedLines > 0 ? $" ~{ModifiedLines})" : ")");
 
     public DiffViewerViewModel(IGitService gitService)
     {
@@ -74,6 +127,7 @@ public partial class DiffViewerViewModel : ViewModelBase
         _isStaged = false;
         CanStageHunks = true;
         CanUnstageHunks = false;
+        CanRevertHunks = true;
 
         // Get current content
         if (File.Exists(filePath))
@@ -85,6 +139,10 @@ public partial class DiffViewerViewModel : ViewModelBase
         _rawDiff = await _gitService.GetDiffAsync(filePath);
         ParseDiff(_rawDiff);
         ParseHunks(_rawDiff);
+        BuildSideBySideLines();
+        BuildChangeIndex();
+        BuildDisplayItems();
+        OnPropertyChanged(nameof(ChangesSummaryText));
     }
 
     public async Task LoadStagedDiffAsync(string filePath)
@@ -95,6 +153,7 @@ public partial class DiffViewerViewModel : ViewModelBase
         _isStaged = true;
         CanStageHunks = false;
         CanUnstageHunks = true;
+        CanRevertHunks = false;
 
         // Get current content
         if (File.Exists(filePath))
@@ -106,6 +165,10 @@ public partial class DiffViewerViewModel : ViewModelBase
         _rawDiff = await _gitService.GetStagedDiffAsync(filePath);
         ParseDiff(_rawDiff);
         ParseHunks(_rawDiff);
+        BuildSideBySideLines();
+        BuildChangeIndex();
+        BuildDisplayItems();
+        OnPropertyChanged(nameof(ChangesSummaryText));
     }
 
     /// <summary>
@@ -119,10 +182,15 @@ public partial class DiffViewerViewModel : ViewModelBase
         RightTitle = rightTitle;
         CanStageHunks = false;
         CanUnstageHunks = false;
+        CanRevertHunks = false;
         _rawDiff = rawDiff;
 
         ParseDiff(rawDiff);
         ParseHunks(rawDiff);
+        BuildSideBySideLines();
+        BuildChangeIndex();
+        BuildDisplayItems();
+        OnPropertyChanged(nameof(ChangesSummaryText));
     }
 
     public void LoadContents(string leftContent, string rightContent, string leftTitle = "Original", string rightTitle = "Modified")
@@ -133,9 +201,321 @@ public partial class DiffViewerViewModel : ViewModelBase
         RightTitle = rightTitle;
         CanStageHunks = false;
         CanUnstageHunks = false;
+        CanRevertHunks = false;
 
         ComputeDiff();
+        BuildSideBySideLines();
+        BuildChangeIndex();
+        BuildDisplayItems();
+        OnPropertyChanged(nameof(ChangesSummaryText));
     }
+
+    /// <summary>
+    /// Builds side-by-side aligned lines with gap filling.
+    /// Adjacent removed+added lines are paired as "modified" lines with character-level diff.
+    /// </summary>
+    private void BuildSideBySideLines()
+    {
+        LeftPaneLines.Clear();
+        RightPaneLines.Clear();
+        ModifiedLines = 0;
+
+        var i = 0;
+        while (i < DiffLines.Count)
+        {
+            var line = DiffLines[i];
+
+            if (line.Type == DiffLineType.Unchanged || line.Type == DiffLineType.Header)
+            {
+                LeftPaneLines.Add(line);
+                RightPaneLines.Add(line);
+                i++;
+            }
+            else if (line.Type == DiffLineType.Removed)
+            {
+                // Collect consecutive removed lines
+                var removedStart = i;
+                while (i < DiffLines.Count && DiffLines[i].Type == DiffLineType.Removed)
+                    i++;
+
+                // Collect consecutive added lines that follow
+                var addedStart = i;
+                while (i < DiffLines.Count && DiffLines[i].Type == DiffLineType.Added)
+                    i++;
+
+                var removedCount = addedStart - removedStart;
+                var addedCount = i - addedStart;
+
+                // Pair them up as modified where possible
+                var pairs = Math.Min(removedCount, addedCount);
+                for (var p = 0; p < pairs; p++)
+                {
+                    var removed = DiffLines[removedStart + p];
+                    var added = DiffLines[addedStart + p];
+
+                    // Compute character-level diff highlights
+                    ComputeCharacterDiff(removed.LeftContent, added.RightContent,
+                        out var leftHighlights, out var rightHighlights);
+
+                    var modifiedLeft = new DiffLine
+                    {
+                        LeftLineNumber = removed.LeftLineNumber,
+                        LeftContent = removed.LeftContent,
+                        RightContent = "",
+                        Type = DiffLineType.Modified,
+                        CharHighlights = leftHighlights
+                    };
+                    var modifiedRight = new DiffLine
+                    {
+                        RightLineNumber = added.RightLineNumber,
+                        LeftContent = "",
+                        RightContent = added.RightContent,
+                        Type = DiffLineType.Modified,
+                        CharHighlights = rightHighlights
+                    };
+
+                    LeftPaneLines.Add(modifiedLeft);
+                    RightPaneLines.Add(modifiedRight);
+                    ModifiedLines++;
+                }
+
+                // Remaining removed lines (no paired add)
+                for (var r = pairs; r < removedCount; r++)
+                {
+                    LeftPaneLines.Add(DiffLines[removedStart + r]);
+                    RightPaneLines.Add(DiffLine.Empty); // gap filler
+                }
+
+                // Remaining added lines (no paired remove)
+                for (var a = pairs; a < addedCount; a++)
+                {
+                    LeftPaneLines.Add(DiffLine.Empty); // gap filler
+                    RightPaneLines.Add(DiffLines[addedStart + a]);
+                }
+            }
+            else if (line.Type == DiffLineType.Added)
+            {
+                // Added without preceding removed
+                LeftPaneLines.Add(DiffLine.Empty);
+                RightPaneLines.Add(line);
+                i++;
+            }
+            else
+            {
+                LeftPaneLines.Add(line);
+                RightPaneLines.Add(line);
+                i++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Computes character-level diff between two strings.
+    /// Returns highlight ranges for each side indicating changed characters.
+    /// </summary>
+    private static void ComputeCharacterDiff(string left, string right,
+        out List<CharHighlight> leftHighlights, out List<CharHighlight> rightHighlights)
+    {
+        leftHighlights = new List<CharHighlight>();
+        rightHighlights = new List<CharHighlight>();
+
+        if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+            return;
+
+        // Find common prefix
+        var prefixLen = 0;
+        var minLen = Math.Min(left.Length, right.Length);
+        while (prefixLen < minLen && left[prefixLen] == right[prefixLen])
+            prefixLen++;
+
+        // Find common suffix (don't overlap with prefix)
+        var suffixLen = 0;
+        while (suffixLen < (minLen - prefixLen) &&
+               left[left.Length - 1 - suffixLen] == right[right.Length - 1 - suffixLen])
+            suffixLen++;
+
+        // The changed region
+        var leftChangeStart = prefixLen;
+        var leftChangeEnd = left.Length - suffixLen;
+        var rightChangeStart = prefixLen;
+        var rightChangeEnd = right.Length - suffixLen;
+
+        if (leftChangeStart < leftChangeEnd)
+        {
+            leftHighlights.Add(new CharHighlight { Start = leftChangeStart, Length = leftChangeEnd - leftChangeStart });
+        }
+        if (rightChangeStart < rightChangeEnd)
+        {
+            rightHighlights.Add(new CharHighlight { Start = rightChangeStart, Length = rightChangeEnd - rightChangeStart });
+        }
+    }
+
+    /// <summary>
+    /// Builds the index of change start positions for F7/Shift+F7 navigation.
+    /// </summary>
+    private void BuildChangeIndex()
+    {
+        _changeStartIndices.Clear();
+        var inChange = false;
+
+        for (var i = 0; i < DiffLines.Count; i++)
+        {
+            var isChange = DiffLines[i].Type is DiffLineType.Added or DiffLineType.Removed or DiffLineType.Modified;
+            if (isChange && !inChange)
+            {
+                _changeStartIndices.Add(i);
+                inChange = true;
+            }
+            else if (!isChange)
+            {
+                inChange = false;
+            }
+        }
+
+        ChangeCount = _changeStartIndices.Count;
+        CurrentChangeIndex = ChangeCount > 0 ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Builds display items with folding of unchanged regions.
+    /// Groups of more than 6 consecutive unchanged lines are collapsed.
+    /// </summary>
+    private void BuildDisplayItems()
+    {
+        DisplayItems.Clear();
+
+        if (!FoldUnchangedRegions)
+        {
+            foreach (var line in DiffLines)
+            {
+                DisplayItems.Add(new DiffDisplayItem { Line = line, IsFoldPlaceholder = false });
+            }
+            return;
+        }
+
+        const int contextLines = 3; // Show 3 lines of context around changes
+
+        // First, mark which lines should be visible
+        var visible = new bool[DiffLines.Count];
+
+        // Always show header lines
+        for (var i = 0; i < DiffLines.Count; i++)
+        {
+            if (DiffLines[i].Type != DiffLineType.Unchanged)
+                visible[i] = true;
+        }
+
+        // Show context around changes
+        for (var i = 0; i < DiffLines.Count; i++)
+        {
+            if (DiffLines[i].Type != DiffLineType.Unchanged)
+            {
+                for (var c = Math.Max(0, i - contextLines); c <= Math.Min(DiffLines.Count - 1, i + contextLines); c++)
+                    visible[c] = true;
+            }
+        }
+
+        // If all lines are visible, no folding needed
+        if (visible.All(v => v))
+        {
+            foreach (var line in DiffLines)
+                DisplayItems.Add(new DiffDisplayItem { Line = line, IsFoldPlaceholder = false });
+            return;
+        }
+
+        var i2 = 0;
+        while (i2 < DiffLines.Count)
+        {
+            if (visible[i2])
+            {
+                DisplayItems.Add(new DiffDisplayItem { Line = DiffLines[i2], IsFoldPlaceholder = false });
+                i2++;
+            }
+            else
+            {
+                // Count hidden lines
+                var hiddenStart = i2;
+                while (i2 < DiffLines.Count && !visible[i2])
+                    i2++;
+                var hiddenCount = i2 - hiddenStart;
+
+                DisplayItems.Add(new DiffDisplayItem
+                {
+                    IsFoldPlaceholder = true,
+                    FoldedLineCount = hiddenCount,
+                    FoldStartIndex = hiddenStart
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Expand a folded region, showing all hidden lines.
+    /// </summary>
+    [RelayCommand]
+    private void ExpandFoldedRegion(DiffDisplayItem? placeholder)
+    {
+        if (placeholder == null || !placeholder.IsFoldPlaceholder)
+            return;
+
+        var idx = DisplayItems.IndexOf(placeholder);
+        if (idx < 0) return;
+
+        DisplayItems.RemoveAt(idx);
+
+        // Insert the hidden lines
+        for (var i = 0; i < placeholder.FoldedLineCount; i++)
+        {
+            var lineIdx = placeholder.FoldStartIndex + i;
+            if (lineIdx < DiffLines.Count)
+            {
+                DisplayItems.Insert(idx + i, new DiffDisplayItem
+                {
+                    Line = DiffLines[lineIdx],
+                    IsFoldPlaceholder = false
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Navigate to the next change (F7).
+    /// Returns the line index to scroll to, or -1 if no next change.
+    /// </summary>
+    [RelayCommand]
+    private void GoToNextChange()
+    {
+        if (_changeStartIndices.Count == 0) return;
+
+        if (CurrentChangeIndex < ChangeCount)
+            CurrentChangeIndex++;
+        else
+            CurrentChangeIndex = 1; // wrap around
+
+        // Fire event so view can scroll
+        NavigateToChangeRequested?.Invoke(this, _changeStartIndices[CurrentChangeIndex - 1]);
+    }
+
+    /// <summary>
+    /// Navigate to the previous change (Shift+F7).
+    /// </summary>
+    [RelayCommand]
+    private void GoToPreviousChange()
+    {
+        if (_changeStartIndices.Count == 0) return;
+
+        if (CurrentChangeIndex > 1)
+            CurrentChangeIndex--;
+        else
+            CurrentChangeIndex = ChangeCount; // wrap around
+
+        NavigateToChangeRequested?.Invoke(this, _changeStartIndices[CurrentChangeIndex - 1]);
+    }
+
+    /// <summary>
+    /// Event raised when the view should scroll to a particular DiffLine index.
+    /// </summary>
+    public event EventHandler<int>? NavigateToChangeRequested;
 
     /// <summary>
     /// Extracts individual hunks from raw unified diff output. Each hunk can be
@@ -306,6 +686,10 @@ public partial class DiffViewerViewModel : ViewModelBase
             _rawDiff = await _gitService.GetDiffAsync(FilePath);
             ParseDiff(_rawDiff);
             ParseHunks(_rawDiff);
+            BuildSideBySideLines();
+            BuildChangeIndex();
+            BuildDisplayItems();
+            OnPropertyChanged(nameof(ChangesSummaryText));
         }
         else
         {
@@ -331,10 +715,46 @@ public partial class DiffViewerViewModel : ViewModelBase
             _rawDiff = await _gitService.GetStagedDiffAsync(FilePath);
             ParseDiff(_rawDiff);
             ParseHunks(_rawDiff);
+            BuildSideBySideLines();
+            BuildChangeIndex();
+            BuildDisplayItems();
+            OnPropertyChanged(nameof(ChangesSummaryText));
         }
         else
         {
             HunkOperationStatus = $"Failed to unstage hunk {hunk.Index}.";
+        }
+    }
+
+    [RelayCommand]
+    private async Task RevertHunkAsync(DiffHunk? hunk)
+    {
+        if (hunk == null || string.IsNullOrEmpty(hunk.PatchText))
+            return;
+
+        HunkOperationStatus = $"Reverting hunk {hunk.Index}...";
+
+        var success = await _gitService.RevertHunkAsync(FilePath, hunk.PatchText);
+
+        if (success)
+        {
+            HunkOperationStatus = $"Hunk {hunk.Index} reverted.";
+
+            // Reload file content and diff
+            if (File.Exists(FilePath))
+                RightContent = await File.ReadAllTextAsync(FilePath);
+
+            _rawDiff = await _gitService.GetDiffAsync(FilePath);
+            ParseDiff(_rawDiff);
+            ParseHunks(_rawDiff);
+            BuildSideBySideLines();
+            BuildChangeIndex();
+            BuildDisplayItems();
+            OnPropertyChanged(nameof(ChangesSummaryText));
+        }
+        else
+        {
+            HunkOperationStatus = $"Failed to revert hunk {hunk.Index}.";
         }
     }
 
@@ -347,6 +767,10 @@ public partial class DiffViewerViewModel : ViewModelBase
         _rawDiff = await _gitService.GetDiffAsync(FilePath);
         ParseDiff(_rawDiff);
         ParseHunks(_rawDiff);
+        BuildSideBySideLines();
+        BuildChangeIndex();
+        BuildDisplayItems();
+        OnPropertyChanged(nameof(ChangesSummaryText));
     }
 
     [RelayCommand]
@@ -358,6 +782,10 @@ public partial class DiffViewerViewModel : ViewModelBase
         _rawDiff = await _gitService.GetStagedDiffAsync(FilePath);
         ParseDiff(_rawDiff);
         ParseHunks(_rawDiff);
+        BuildSideBySideLines();
+        BuildChangeIndex();
+        BuildDisplayItems();
+        OnPropertyChanged(nameof(ChangesSummaryText));
     }
 
     private void ParseDiff(string diff)
@@ -577,6 +1005,35 @@ public partial class DiffViewerViewModel : ViewModelBase
     {
         SideBySide = !SideBySide;
     }
+
+    [RelayCommand]
+    private void ToggleFolding()
+    {
+        FoldUnchangedRegions = !FoldUnchangedRegions;
+        BuildDisplayItems();
+    }
+}
+
+/// <summary>
+/// A display item that is either a real DiffLine or a fold placeholder.
+/// </summary>
+public class DiffDisplayItem
+{
+    public DiffLine? Line { get; set; }
+    public bool IsFoldPlaceholder { get; set; }
+    public int FoldedLineCount { get; set; }
+    public int FoldStartIndex { get; set; }
+
+    public string FoldText => $"... {FoldedLineCount} unchanged lines hidden ...";
+}
+
+/// <summary>
+/// Represents a highlighted character range within a line.
+/// </summary>
+public class CharHighlight
+{
+    public int Start { get; set; }
+    public int Length { get; set; }
 }
 
 /// <summary>
@@ -638,6 +1095,12 @@ public class DiffLine
     public string RightContent { get; set; } = "";
     public DiffLineType Type { get; set; }
 
+    /// <summary>Character-level highlight ranges for inline diff visualization.</summary>
+    public List<CharHighlight>? CharHighlights { get; set; }
+
+    /// <summary>True if this is an empty gap filler in side-by-side mode.</summary>
+    public bool IsGapFiller { get; set; }
+
     public string LeftLineNumberText => LeftLineNumber?.ToString() ?? "";
     public string RightLineNumberText => RightLineNumber?.ToString() ?? "";
 
@@ -645,18 +1108,31 @@ public class DiffLine
     {
         DiffLineType.Added => "#1E3A1E",
         DiffLineType.Removed => "#3A1E1E",
+        DiffLineType.Modified => "#2B2B00",
         DiffLineType.Header => "#2D2D2D",
         _ => "Transparent"
     };
 
-    public string LeftBackground => Type == DiffLineType.Removed ? "#3A1E1E" : "Transparent";
-    public string RightBackground => Type == DiffLineType.Added ? "#1E3A1E" : "Transparent";
+    public string LeftBackground => Type switch
+    {
+        DiffLineType.Removed => "#3A1E1E",
+        DiffLineType.Modified => "#3A2A1E",
+        _ => "Transparent"
+    };
+
+    public string RightBackground => Type switch
+    {
+        DiffLineType.Added => "#1E3A1E",
+        DiffLineType.Modified => "#1E2A3A",
+        _ => "Transparent"
+    };
 
     /// <summary>Prefix character for unified diff view: +, -, or space</summary>
     public string UnifiedPrefix => Type switch
     {
         DiffLineType.Added => "+",
         DiffLineType.Removed => "-",
+        DiffLineType.Modified => "~",
         DiffLineType.Header => "@@",
         _ => " "
     };
@@ -666,6 +1142,7 @@ public class DiffLine
     {
         DiffLineType.Added => "#4EC9B0",
         DiffLineType.Removed => "#F48771",
+        DiffLineType.Modified => "#DCDCAA",
         DiffLineType.Header => "#569CD6",
         _ => "#606060"
     };
@@ -677,6 +1154,27 @@ public class DiffLine
         DiffLineType.Removed => LeftContent,
         DiffLineType.Header => LeftContent,
         _ => LeftContent
+    };
+
+    /// <summary>Gutter indicator for the minimap</summary>
+    public string GutterColor => Type switch
+    {
+        DiffLineType.Added => "#4EC9B0",
+        DiffLineType.Removed => "#F48771",
+        DiffLineType.Modified => "#DCDCAA",
+        _ => "Transparent"
+    };
+
+    /// <summary>Whether this line has a gutter marker</summary>
+    public bool HasGutterMark => Type is DiffLineType.Added or DiffLineType.Removed or DiffLineType.Modified;
+
+    /// <summary>Creates an empty gap-filler line for side-by-side alignment.</summary>
+    public static DiffLine Empty => new()
+    {
+        LeftContent = "",
+        RightContent = "",
+        Type = DiffLineType.Unchanged,
+        IsGapFiller = true
     };
 }
 

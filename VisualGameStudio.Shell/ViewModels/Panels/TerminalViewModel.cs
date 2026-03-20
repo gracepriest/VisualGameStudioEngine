@@ -228,6 +228,11 @@ public partial class TerminalSession : ObservableObject, IDisposable
     private readonly object _lock = new();
     private static int _nextId = 1;
 
+    /// <summary>Maximum characters in scroll-back buffer (~10,000 lines at ~80 chars).</summary>
+    private const int MaxBufferChars = 800_000;
+    /// <summary>Target size after truncation.</summary>
+    private const int TruncateTargetChars = 640_000;
+
     /// <summary>
     /// Raised when new output text is appended (carries the raw text with ANSI codes).
     /// </summary>
@@ -246,6 +251,36 @@ public partial class TerminalSession : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _isRunning;
+
+    /// <summary>
+    /// Tracked current working directory of the shell session.
+    /// Updated by detecting cd commands and prompt patterns.
+    /// </summary>
+    [ObservableProperty]
+    private string _currentDirectory = "";
+
+    /// <summary>
+    /// Exit code of the last command that completed in this session.
+    /// Null if no command has completed yet.
+    /// </summary>
+    [ObservableProperty]
+    private int? _lastExitCode;
+
+    /// <summary>
+    /// History of commands entered in this session.
+    /// </summary>
+    public List<string> CommandHistory { get; } = new();
+
+    /// <summary>
+    /// Current position in command history for up/down arrow navigation.
+    /// </summary>
+    public int HistoryIndex { get; set; } = -1;
+
+    /// <summary>
+    /// Environment variables to set for the shell process.
+    /// Must be set before calling Start().
+    /// </summary>
+    public Dictionary<string, string>? EnvironmentVariables { get; set; }
 
     public int Id { get; }
 
@@ -300,6 +335,15 @@ public partial class TerminalSession : ObservableObject, IDisposable
                 StandardErrorEncoding = Encoding.UTF8
             };
 
+            // Apply custom environment variables
+            if (EnvironmentVariables != null)
+            {
+                foreach (var kvp in EnvironmentVariables)
+                {
+                    startInfo.Environment[kvp.Key] = kvp.Value;
+                }
+            }
+
             _shellProcess = new Process { StartInfo = startInfo };
             _shellProcess.OutputDataReceived += OnOutputDataReceived;
             _shellProcess.ErrorDataReceived += OnErrorDataReceived;
@@ -313,6 +357,7 @@ public partial class TerminalSession : ObservableObject, IDisposable
 
             IsRunning = true;
             ShellName = shellDisplayName;
+            CurrentDirectory = workingDirectory;
             OnPropertyChanged(nameof(TabTitle));
 
             AppendOutput($"Terminal started in {workingDirectory}\r\n\r\n");
@@ -370,10 +415,103 @@ public partial class TerminalSession : ObservableObject, IDisposable
         {
             _shellInput.WriteLine(command);
             _shellInput.Flush();
+
+            // Track command history
+            if (!string.IsNullOrWhiteSpace(command))
+            {
+                CommandHistory.Add(command);
+                HistoryIndex = CommandHistory.Count; // past the end
+            }
+
+            // Track CWD changes from cd commands
+            TrackDirectoryChange(command);
         }
         catch (Exception ex)
         {
             AppendOutput($"Error: {ex.Message}\r\n");
+        }
+    }
+
+    /// <summary>
+    /// Sends a SIGINT (Ctrl+C) signal to the shell process to interrupt the current command.
+    /// </summary>
+    public void SendInterrupt()
+    {
+        if (!IsRunning || _shellProcess == null) return;
+
+        try
+        {
+            // On Windows, send Ctrl+C via GenerateConsoleCtrlEvent is not possible
+            // for processes with no console. Instead, send Ctrl+C character to stdin.
+            _shellInput?.Write("\x03");
+            _shellInput?.Flush();
+        }
+        catch
+        {
+            // Ignore - process may have exited
+        }
+    }
+
+    /// <summary>
+    /// Detects directory changes from common cd commands and updates CurrentDirectory.
+    /// </summary>
+    private void TrackDirectoryChange(string command)
+    {
+        var trimmed = command.Trim();
+
+        // Match: cd path, cd "path", Set-Location path, pushd path
+        string? newDir = null;
+
+        if (trimmed.StartsWith("cd ", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("cd\t", StringComparison.OrdinalIgnoreCase))
+        {
+            newDir = trimmed.Substring(3).Trim().Trim('"', '\'');
+        }
+        else if (trimmed.StartsWith("Set-Location ", StringComparison.OrdinalIgnoreCase))
+        {
+            newDir = trimmed.Substring(13).Trim().Trim('"', '\'');
+        }
+        else if (trimmed.StartsWith("pushd ", StringComparison.OrdinalIgnoreCase))
+        {
+            newDir = trimmed.Substring(6).Trim().Trim('"', '\'');
+        }
+        else if (trimmed.Equals("cd", StringComparison.OrdinalIgnoreCase) ||
+                 trimmed.Equals("cd ~", StringComparison.OrdinalIgnoreCase) ||
+                 trimmed.Equals("cd ~\\", StringComparison.OrdinalIgnoreCase) ||
+                 trimmed.Equals("cd ~/", StringComparison.OrdinalIgnoreCase))
+        {
+            newDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        }
+        else if (trimmed.Equals("cd ..", StringComparison.OrdinalIgnoreCase) ||
+                 trimmed.Equals("cd..", StringComparison.OrdinalIgnoreCase))
+        {
+            var parent = Directory.GetParent(CurrentDirectory);
+            if (parent != null)
+                newDir = parent.FullName;
+        }
+
+        if (newDir == null) return;
+
+        try
+        {
+            string resolved;
+            if (Path.IsPathRooted(newDir))
+            {
+                resolved = Path.GetFullPath(newDir);
+            }
+            else
+            {
+                resolved = Path.GetFullPath(Path.Combine(CurrentDirectory, newDir));
+            }
+
+            if (Directory.Exists(resolved))
+            {
+                CurrentDirectory = resolved;
+            }
+        }
+        catch
+        {
+            // Invalid path - ignore
         }
     }
 
@@ -419,11 +557,11 @@ public partial class TerminalSession : ObservableObject, IDisposable
             {
                 _outputBuffer.Append(text);
 
-                // Limit buffer size to prevent memory issues (truncate at line boundary)
+                // Limit buffer size to ~10,000 lines (truncate at line boundary)
                 bool truncated = false;
-                if (_outputBuffer.Length > 100000)
+                if (_outputBuffer.Length > MaxBufferChars)
                 {
-                    var excess = _outputBuffer.Length - 80000;
+                    var excess = _outputBuffer.Length - TruncateTargetChars;
                     var newlineIdx = _outputBuffer.ToString().IndexOf('\n', excess);
                     var removeCount = newlineIdx >= 0 ? newlineIdx + 1 : excess;
                     _outputBuffer.Remove(0, removeCount);
@@ -552,11 +690,23 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     /// </summary>
     public event Action<string, int, int>? FileNavigationRequested;
 
+    /// <summary>
+    /// Environment variables to apply to new terminal sessions.
+    /// Loaded from workspace settings (terminal.integrated.env.windows).
+    /// </summary>
+    public Dictionary<string, string> TerminalEnvironmentVariables { get; } = new();
+
+    /// <summary>
+    /// Raised when the current working directory of the focused session changes.
+    /// </summary>
+    public event Action<string>? CurrentDirectoryChanged;
+
     public TerminalViewModel()
     {
         WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         DetectShellProfiles();
         LoadDefaultShellPreference();
+        LoadTerminalEnvironmentVariables();
     }
 
     /// <summary>
@@ -652,6 +802,61 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// Loads terminal environment variables from settings (terminal.integrated.env.windows).
+    /// </summary>
+    private void LoadTerminalEnvironmentVariables()
+    {
+        try
+        {
+            if (!File.Exists(SettingsFilePath)) return;
+
+            var json = File.ReadAllText(SettingsFilePath);
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+
+            // Look for terminal.integrated.env.windows (or platform-appropriate key)
+            var envKey = Environment.OSVersion.Platform == PlatformID.Win32NT
+                ? "Terminal.Env.Windows"
+                : "Terminal.Env.Linux";
+
+            if (doc.RootElement.TryGetProperty(envKey, out var envProp) &&
+                envProp.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                foreach (var prop in envProp.EnumerateObject())
+                {
+                    TerminalEnvironmentVariables[prop.Name] = prop.Value.GetString() ?? "";
+                }
+            }
+
+            // Also check generic key
+            if (doc.RootElement.TryGetProperty("Terminal.Env", out var genericEnv) &&
+                genericEnv.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                foreach (var prop in genericEnv.EnumerateObject())
+                {
+                    if (!TerminalEnvironmentVariables.ContainsKey(prop.Name))
+                        TerminalEnvironmentVariables[prop.Name] = prop.Value.GetString() ?? "";
+                }
+            }
+        }
+        catch
+        {
+            // Ignore load errors
+        }
+    }
+
+    /// <summary>
+    /// Sets environment variables that will be applied to all new terminal sessions.
+    /// </summary>
+    public void SetEnvironmentVariables(Dictionary<string, string> envVars)
+    {
+        TerminalEnvironmentVariables.Clear();
+        foreach (var kvp in envVars)
+        {
+            TerminalEnvironmentVariables[kvp.Key] = kvp.Value;
+        }
+    }
+
     partial void OnSelectedProfileChanged(ShellProfile? value)
     {
         if (value != null)
@@ -739,6 +944,8 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     private void CreateNewSession()
     {
         var session = new TerminalSession();
+        ApplyEnvironmentVariables(session);
+        session.PropertyChanged += OnAnySessionPropertyChanged;
         Sessions.Add(session);
         ActiveSession = session;
         session.Start(WorkingDirectory, SelectedProfile);
@@ -753,11 +960,55 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
         if (profile == null) return;
 
         var session = new TerminalSession();
+        ApplyEnvironmentVariables(session);
+        session.PropertyChanged += OnAnySessionPropertyChanged;
         Sessions.Add(session);
         ActiveSession = session;
         session.Start(WorkingDirectory, profile);
 
         IsProfileDropdownOpen = false;
+    }
+
+    /// <summary>
+    /// Creates a new terminal session opened at a specific directory.
+    /// Used by "Open Terminal Here" from Solution Explorer.
+    /// </summary>
+    public void CreateSessionAtDirectory(string directory)
+    {
+        if (!Directory.Exists(directory)) return;
+
+        var session = new TerminalSession();
+        ApplyEnvironmentVariables(session);
+        session.PropertyChanged += OnAnySessionPropertyChanged;
+        Sessions.Add(session);
+        ActiveSession = session;
+        session.Start(directory, SelectedProfile);
+    }
+
+    /// <summary>
+    /// Applies configured environment variables to a session before starting.
+    /// </summary>
+    private void ApplyEnvironmentVariables(TerminalSession session)
+    {
+        if (TerminalEnvironmentVariables.Count > 0)
+        {
+            session.EnvironmentVariables = new Dictionary<string, string>(TerminalEnvironmentVariables);
+        }
+    }
+
+    /// <summary>
+    /// Tracks CWD changes in any session and fires CurrentDirectoryChanged for the focused one.
+    /// </summary>
+    private void OnAnySessionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TerminalSession.CurrentDirectory) && sender == FocusedSession)
+        {
+            var dir = FocusedSession?.CurrentDirectory ?? "";
+            if (!string.IsNullOrEmpty(dir))
+            {
+                CurrentDirectoryChanged?.Invoke(dir);
+            }
+        }
     }
 
     /// <summary>
@@ -823,6 +1074,7 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
             UnsplitTerminal();
         }
 
+        session.PropertyChanged -= OnAnySessionPropertyChanged;
         session.Dispose();
         var idx = Sessions.IndexOf(session);
         Sessions.Remove(session);
@@ -865,6 +1117,8 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
 
         // Create a new session for the right pane
         var session = new TerminalSession();
+        ApplyEnvironmentVariables(session);
+        session.PropertyChanged += OnAnySessionPropertyChanged;
         Sessions.Add(session);
         SplitSession = session;
         session.Start(WorkingDirectory, SelectedProfile);

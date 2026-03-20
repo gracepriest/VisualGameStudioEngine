@@ -3,11 +3,11 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
-        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="600"
+        mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
         x:Class="VisualGameStudio.Shell.Views.Dialogs.DiffViewerView"
         x:DataType="vm:DiffViewerViewModel"
         Title="{Binding FilePath, StringFormat='Diff: {0}'}"
-        Width="900" Height="600"
+        Width="1100" Height="700"
         WindowStartupLocation="CenterOwner"
         Background="#1E1E1E">
 
@@ -20,33 +20,110 @@
       <Setter Property="Width" Value="45"/>
       <Setter Property="Padding" Value="4,0"/>
     </Style>
+    <Style Selector="Button.toolbarBtn">
+      <Setter Property="Background" Value="#333333"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="BorderBrush" Value="#555555"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="6,2"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="MinHeight" Value="22"/>
+    </Style>
+    <Style Selector="Button.toolbarBtn:pointerover">
+      <Setter Property="Background" Value="#444444"/>
+    </Style>
+    <Style Selector="Border.gapFiller">
+      <Setter Property="Background" Value="#252526"/>
+    </Style>
+    <Style Selector="Border.foldPlaceholder">
+      <Setter Property="Background" Value="#2D2D3D"/>
+      <Setter Property="Cursor" Value="Hand"/>
+    </Style>
   </Window.Styles>
 
+  <Window.KeyBindings>
+    <KeyBinding Gesture="F7" Command="{Binding GoToNextChangeCommand}"/>
+    <KeyBinding Gesture="Shift+F7" Command="{Binding GoToPreviousChangeCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+M" Command="{Binding ToggleViewCommand}"/>
+  </Window.KeyBindings>
+
   <DockPanel>
-    <!-- Header -->
-    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12,8">
+    <!-- Toolbar -->
+    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="8,6">
       <Grid ColumnDefinitions="*,Auto">
-        <StackPanel Orientation="Horizontal" Spacing="16">
-          <TextBlock Text="{Binding FilePath}" Foreground="#CCCCCC" VerticalAlignment="Center"/>
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <TextBlock Foreground="#4EC9B0" VerticalAlignment="Center">
-              <Run Text="+"/>
-              <Run Text="{Binding AddedLines}"/>
+        <!-- Left: file info and change summary -->
+        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+          <TextBlock Text="{Binding FilePath}" Foreground="#CCCCCC" FontSize="12"
+                     MaxWidth="400" TextTrimming="CharacterEllipsis"
+                     VerticalAlignment="Center"/>
+          <Border Background="#333333" CornerRadius="8" Padding="8,2">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Foreground="#4EC9B0" FontSize="11" VerticalAlignment="Center">
+                <Run Text="+"/>
+                <Run Text="{Binding AddedLines}"/>
+              </TextBlock>
+              <TextBlock Foreground="#F48771" FontSize="11" VerticalAlignment="Center">
+                <Run Text="-"/>
+                <Run Text="{Binding RemovedLines}"/>
+              </TextBlock>
+              <TextBlock Foreground="#DCDCAA" FontSize="11" VerticalAlignment="Center"
+                         IsVisible="{Binding ModifiedLines}">
+                <Run Text="~"/>
+                <Run Text="{Binding ModifiedLines}"/>
+              </TextBlock>
+            </StackPanel>
+          </Border>
+          <!-- Change count badge -->
+          <Border Background="#404040" CornerRadius="8" Padding="8,2"
+                  IsVisible="{Binding ChangeCount}">
+            <TextBlock Foreground="#CCCCCC" FontSize="11" VerticalAlignment="Center">
+              <Run Text="{Binding ChangeCount}"/>
+              <Run Text=" changes"/>
             </TextBlock>
-            <TextBlock Foreground="#F48771" VerticalAlignment="Center">
-              <Run Text="-"/>
-              <Run Text="{Binding RemovedLines}"/>
-            </TextBlock>
-          </StackPanel>
+          </Border>
         </StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+
+        <!-- Right: toolbar buttons -->
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+          <!-- Change navigation -->
+          <Button Classes="toolbarBtn" Command="{Binding GoToPreviousChangeCommand}"
+                  ToolTip.Tip="Previous Change (Shift+F7)" IsEnabled="{Binding ChangeCount}">
+            <TextBlock Text="^" FontWeight="Bold" Foreground="#CCCCCC" FontSize="11"/>
+          </Button>
+          <Border Background="#333333" CornerRadius="3" Padding="4,2" VerticalAlignment="Center">
+            <TextBlock Foreground="#808080" FontSize="10" VerticalAlignment="Center">
+              <Run Text="{Binding CurrentChangeIndex}"/>
+              <Run Text="/"/>
+              <Run Text="{Binding ChangeCount}"/>
+            </TextBlock>
+          </Border>
+          <Button Classes="toolbarBtn" Command="{Binding GoToNextChangeCommand}"
+                  ToolTip.Tip="Next Change (F7)" IsEnabled="{Binding ChangeCount}">
+            <TextBlock Text="v" FontWeight="Bold" Foreground="#CCCCCC" FontSize="11"/>
+          </Button>
+
+          <Border Width="1" Background="#555555" Margin="4,2"/>
+
+          <!-- Fold toggle -->
+          <ToggleButton IsChecked="{Binding FoldUnchangedRegions}"
+                        ToolTip.Tip="Fold Unchanged Regions"
+                        Width="28" Height="24" Classes="toolbarBtn"
+                        Command="{Binding ToggleFoldingCommand}">
+            <TextBlock Text="{}{}" FontSize="10" FontWeight="Bold" Foreground="#CCCCCC"/>
+          </ToggleButton>
+
+          <!-- View toggle -->
           <ToggleButton IsChecked="{Binding SideBySide}"
-                        ToolTip.Tip="Toggle Side-by-Side / Unified View"
-                        Width="28" Height="28"
-                        Classes="toolbarButton">
+                        ToolTip.Tip="Toggle Side-by-Side / Unified View (Ctrl+Shift+M)"
+                        Width="28" Height="24" Classes="toolbarBtn">
             <TextBlock Text="|||" FontSize="10" FontWeight="Bold" Foreground="#CCCCCC"/>
           </ToggleButton>
-          <Button Content="Close" Command="{Binding $parent[Window].Close}" Width="70"/>
+
+          <Border Width="1" Background="#555555" Margin="4,2"/>
+
+          <Button Content="Close" Command="{Binding $parent[Window].Close}"
+                  Classes="toolbarBtn" Width="55"/>
         </StackPanel>
       </Grid>
     </Border>
@@ -54,10 +131,11 @@
     <!-- Column Headers (Side by Side only) -->
     <Border DockPanel.Dock="Top" Background="#252526" Padding="0,4"
             IsVisible="{Binding SideBySide}">
-      <Grid ColumnDefinitions="*,*">
+      <Grid ColumnDefinitions="*,2,*">
         <TextBlock Grid.Column="0" Text="{Binding LeftTitle}"
                    Foreground="#808080" FontSize="11" Margin="50,0,0,0"/>
-        <TextBlock Grid.Column="1" Text="{Binding RightTitle}"
+        <Border Grid.Column="1" Background="#3C3C3C"/>
+        <TextBlock Grid.Column="2" Text="{Binding RightTitle}"
                    Foreground="#808080" FontSize="11" Margin="50,0,0,0"/>
       </Grid>
     </Border>
@@ -65,7 +143,7 @@
     <!-- Hunk-level staging toolbar -->
     <Border DockPanel.Dock="Top" Background="#252526" Padding="8,4"
             IsVisible="{Binding Hunks.Count}">
-      <Grid ColumnDefinitions="*,Auto,Auto">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <TextBlock Foreground="#808080" FontSize="11" VerticalAlignment="Center">
             <Run Text="{Binding Hunks.Count}"/>
@@ -76,111 +154,174 @@
                      VerticalAlignment="Center"
                      IsVisible="{Binding HunkOperationStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
         </StackPanel>
-        <Button Grid.Column="1" Content="Stage All Hunks"
+        <Button Grid.Column="1" Content="Stage All"
                 Command="{Binding StageAllHunksCommand}"
                 IsVisible="{Binding CanStageHunks}"
-                Classes="toolbarButton" FontSize="11"
+                Classes="toolbarBtn"
                 Margin="4,0"/>
-        <Button Grid.Column="2" Content="Unstage All Hunks"
+        <Button Grid.Column="2" Content="Unstage All"
                 Command="{Binding UnstageAllHunksCommand}"
                 IsVisible="{Binding CanUnstageHunks}"
-                Classes="toolbarButton" FontSize="11"
+                Classes="toolbarBtn"
                 Margin="4,0"/>
       </Grid>
     </Border>
 
-    <!-- Diff Content: hunks with per-hunk stage buttons -->
-    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-      <ItemsControl ItemsSource="{Binding Hunks}">
-        <ItemsControl.ItemTemplate>
-          <DataTemplate x:DataType="vm:DiffHunk">
-            <StackPanel>
-              <!-- Hunk header bar with stage/unstage button -->
-              <Border Background="#2D2D44" Padding="8,4" Margin="0,2,0,0">
-                <Grid ColumnDefinitions="Auto,*,Auto,Auto">
-                  <!-- Stage / Unstage button -->
-                  <Button Grid.Column="0"
-                          Classes="toolbarButton"
-                          Command="{Binding $parent[ItemsControl].((vm:DiffViewerViewModel)DataContext).StageHunkCommand}"
-                          CommandParameter="{Binding}"
-                          ToolTip.Tip="Stage this hunk"
-                          IsVisible="{Binding $parent[ItemsControl].((vm:DiffViewerViewModel)DataContext).CanStageHunks}"
-                          Width="24" Height="20"
-                          Margin="0,0,6,0">
-                    <TextBlock Text="+" FontSize="14" FontWeight="Bold" Foreground="#4EC9B0"/>
-                  </Button>
-                  <Button Grid.Column="0"
-                          Classes="toolbarButton"
-                          Command="{Binding $parent[ItemsControl].((vm:DiffViewerViewModel)DataContext).UnstageHunkCommand}"
-                          CommandParameter="{Binding}"
-                          ToolTip.Tip="Unstage this hunk"
-                          IsVisible="{Binding $parent[ItemsControl].((vm:DiffViewerViewModel)DataContext).CanUnstageHunks}"
-                          Width="24" Height="20"
-                          Margin="0,0,6,0">
-                    <TextBlock Text="-" FontSize="14" FontWeight="Bold" Foreground="#F48771"/>
-                  </Button>
-
-                  <!-- Hunk description -->
-                  <TextBlock Grid.Column="1" Text="{Binding DisplayText}"
-                             Foreground="#569CD6" FontSize="11"
-                             VerticalAlignment="Center"
-                             Classes="diffLine"/>
-                  <!-- Change counts -->
-                  <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" Margin="8,0">
-                    <TextBlock Foreground="#4EC9B0" FontSize="11" VerticalAlignment="Center">
-                      <Run Text="+"/>
-                      <Run Text="{Binding AddedCount}"/>
-                    </TextBlock>
-                    <TextBlock Foreground="#F48771" FontSize="11" VerticalAlignment="Center">
-                      <Run Text="-"/>
-                      <Run Text="{Binding RemovedCount}"/>
-                    </TextBlock>
-                  </StackPanel>
-                  <!-- Header line -->
-                  <TextBlock Grid.Column="3" Text="{Binding HeaderLine}"
-                             Foreground="#606060" FontSize="10"
-                             VerticalAlignment="Center"
-                             MaxWidth="200" TextTrimming="CharacterEllipsis"/>
-                </Grid>
-              </Border>
-
-              <!-- Hunk diff lines -->
-              <ItemsControl ItemsSource="{Binding Lines}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:DiffLine">
-                    <Border Background="{Binding BackgroundColor}">
-                      <Grid ColumnDefinitions="45,45,*">
-                        <Border Grid.Column="0" Background="#252526" Padding="4,0">
-                          <TextBlock Text="{Binding LeftLineNumberText}"
-                                     Foreground="#606060"
-                                     HorizontalAlignment="Right"
-                                     Classes="diffLine"/>
-                        </Border>
-                        <Border Grid.Column="1" Background="#252526" Padding="4,0"
-                                BorderBrush="#3C3C3C" BorderThickness="0,0,1,0">
-                          <TextBlock Text="{Binding RightLineNumberText}"
-                                     Foreground="#606060"
-                                     HorizontalAlignment="Right"
-                                     Classes="diffLine"/>
-                        </Border>
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="4,0">
-                          <TextBlock Text="{Binding UnifiedPrefix}"
-                                     Foreground="{Binding UnifiedPrefixColor}"
-                                     Classes="diffLine"
-                                     Width="14"/>
-                          <TextBlock Text="{Binding UnifiedContent}"
-                                     Foreground="#D4D4D4"
-                                     Classes="diffLine"/>
-                        </StackPanel>
-                      </Grid>
+    <!-- Main Content Area -->
+    <Panel>
+      <!-- === SIDE-BY-SIDE VIEW === -->
+      <Grid ColumnDefinitions="*,2,*" IsVisible="{Binding SideBySide}">
+        <!-- Left Pane -->
+        <ScrollViewer Grid.Column="0" Name="LeftScrollViewer"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding LeftPaneLines}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:DiffLine">
+                <Border Background="{Binding LeftBackground}" MinHeight="18">
+                  <Grid ColumnDefinitions="4,45,*">
+                    <!-- Gutter marker -->
+                    <Border Grid.Column="0" Background="{Binding GutterColor}"
+                            IsVisible="{Binding HasGutterMark}"/>
+                    <!-- Line number -->
+                    <Border Grid.Column="1" Background="#252526" Padding="4,0">
+                      <TextBlock Text="{Binding LeftLineNumberText}"
+                                 Foreground="#606060"
+                                 HorizontalAlignment="Right"
+                                 Classes="diffLine"/>
                     </Border>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </StackPanel>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
-    </ScrollViewer>
+                    <!-- Content -->
+                    <Border Grid.Column="2" Padding="4,0"
+                            Opacity="{Binding IsGapFiller, Converter={x:Static BoolConverters.Not}}">
+                      <TextBlock Text="{Binding LeftContent}"
+                                 Foreground="#D4D4D4"
+                                 Classes="diffLine"/>
+                    </Border>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Splitter -->
+        <Border Grid.Column="1" Background="#3C3C3C"/>
+
+        <!-- Right Pane -->
+        <ScrollViewer Grid.Column="2" Name="RightScrollViewer"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding RightPaneLines}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:DiffLine">
+                <Border Background="{Binding RightBackground}" MinHeight="18">
+                  <Grid ColumnDefinitions="4,45,*">
+                    <!-- Gutter marker -->
+                    <Border Grid.Column="0" Background="{Binding GutterColor}"
+                            IsVisible="{Binding HasGutterMark}"/>
+                    <!-- Line number -->
+                    <Border Grid.Column="1" Background="#252526" Padding="4,0">
+                      <TextBlock Text="{Binding RightLineNumberText}"
+                                 Foreground="#606060"
+                                 HorizontalAlignment="Right"
+                                 Classes="diffLine"/>
+                    </Border>
+                    <!-- Content -->
+                    <Border Grid.Column="2" Padding="4,0"
+                            Opacity="{Binding IsGapFiller, Converter={x:Static BoolConverters.Not}}">
+                      <TextBlock Text="{Binding RightContent}"
+                                 Foreground="#D4D4D4"
+                                 Classes="diffLine"/>
+                    </Border>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Grid>
+
+      <!-- === UNIFIED/INLINE VIEW === -->
+      <ScrollViewer IsVisible="{Binding !SideBySide}"
+                    HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Auto"
+                    Name="UnifiedScrollViewer">
+        <ItemsControl ItemsSource="{Binding DisplayItems}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:DiffDisplayItem">
+              <Panel>
+                <!-- Fold placeholder -->
+                <Border IsVisible="{Binding IsFoldPlaceholder}"
+                        Classes="foldPlaceholder" Padding="8,4" Margin="0,1">
+                  <Button Background="Transparent" BorderThickness="0"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          Command="{Binding $parent[ItemsControl].((vm:DiffViewerViewModel)DataContext).ExpandFoldedRegionCommand}"
+                          CommandParameter="{Binding}">
+                    <TextBlock Text="{Binding FoldText}"
+                               Foreground="#808080" FontSize="11"
+                               FontStyle="Italic"
+                               HorizontalAlignment="Center"
+                               Classes="diffLine"/>
+                  </Button>
+                </Border>
+
+                <!-- Normal diff line -->
+                <Border IsVisible="{Binding !IsFoldPlaceholder}"
+                        Background="{Binding Line.BackgroundColor}"
+                        MinHeight="18">
+                  <Grid ColumnDefinitions="4,45,45,20,*">
+                    <!-- Gutter marker -->
+                    <Border Grid.Column="0"
+                            Background="{Binding Line.GutterColor}"/>
+                    <!-- Left line number -->
+                    <Border Grid.Column="1" Background="#252526" Padding="4,0">
+                      <TextBlock Text="{Binding Line.LeftLineNumberText}"
+                                 Foreground="#606060"
+                                 HorizontalAlignment="Right"
+                                 Classes="diffLine"/>
+                    </Border>
+                    <!-- Right line number -->
+                    <Border Grid.Column="2" Background="#252526" Padding="4,0"
+                            BorderBrush="#3C3C3C" BorderThickness="0,0,1,0">
+                      <TextBlock Text="{Binding Line.RightLineNumberText}"
+                                 Foreground="#606060"
+                                 HorizontalAlignment="Right"
+                                 Classes="diffLine"/>
+                    </Border>
+                    <!-- Prefix -->
+                    <Border Grid.Column="3" Padding="2,0">
+                      <TextBlock Text="{Binding Line.UnifiedPrefix}"
+                                 Foreground="{Binding Line.UnifiedPrefixColor}"
+                                 Classes="diffLine"
+                                 HorizontalAlignment="Center"/>
+                    </Border>
+                    <!-- Content -->
+                    <Border Grid.Column="4" Padding="4,0">
+                      <TextBlock Text="{Binding Line.UnifiedContent}"
+                                 Foreground="#D4D4D4"
+                                 Classes="diffLine"/>
+                    </Border>
+                  </Grid>
+                </Border>
+              </Panel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+
+      <!-- === Minimap overlay (right edge) === -->
+      <Border HorizontalAlignment="Right" Width="12" Margin="0,0,2,0"
+              Background="#1A1A1A" Opacity="0.7"
+              IsVisible="{Binding DiffLines.Count}">
+        <ItemsControl ItemsSource="{Binding DiffLines}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:DiffLine">
+              <Border Height="1" Background="{Binding GutterColor}"
+                      IsVisible="{Binding HasGutterMark}"/>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Border>
+    </Panel>
   </DockPanel>
 </Window>

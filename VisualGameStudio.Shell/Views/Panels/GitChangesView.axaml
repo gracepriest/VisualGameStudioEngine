@@ -180,9 +180,9 @@
                                      ToolTip.Tip="{Binding FilePath}"/>
                           <Button Grid.Column="2"
                                   Classes="toolbarButton"
-                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).ShowDiffCommand}"
+                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).ShowStagedDiffCommand}"
                                   CommandParameter="{Binding}"
-                                  ToolTip.Tip="Show Diff"
+                                  ToolTip.Tip="Show Staged Diff"
                                   Width="20" Height="20">
                             <TextBlock Text="≠" FontSize="12"/>
                           </Button>

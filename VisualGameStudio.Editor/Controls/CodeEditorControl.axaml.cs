@@ -62,6 +62,7 @@ public partial class CodeEditorControl : UserControl
     private bool _isColumnSelectionMode;
     private CurrentLineNumberMargin? _currentLineNumberMargin;
     private TextMarkers.SelectionOccurrenceHighlighter? _selectionOccurrenceHighlighter;
+    private bool _trimTrailingWhitespaceOnSave;
 
     // Smooth scrolling state
     private bool _smoothScrollingEnabled = true;
@@ -228,6 +229,15 @@ public partial class CodeEditorControl : UserControl
     {
         get => GetValue(EnableFontLigaturesProperty);
         set => SetValue(EnableFontLigaturesProperty, value);
+    }
+
+    /// <summary>
+    /// Gets or sets whether trailing whitespace is trimmed when saving.
+    /// </summary>
+    public bool TrimTrailingWhitespaceOnSave
+    {
+        get => _trimTrailingWhitespaceOnSave;
+        set => _trimTrailingWhitespaceOnSave = value;
     }
 
     public int CaretLine => _textEditor?.TextArea?.Caret?.Line ?? 1;
@@ -1066,6 +1076,22 @@ public partial class CodeEditorControl : UserControl
             return;
         }
 
+        // Handle Shift+Alt+Up to copy line up (must be before Alt+Up)
+        if (e.Key == Key.Up && e.KeyModifiers == (KeyModifiers.Shift | KeyModifiers.Alt))
+        {
+            CopyLineUp();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Shift+Alt+Down to copy line down (must be before Alt+Down)
+        if (e.Key == Key.Down && e.KeyModifiers == (KeyModifiers.Shift | KeyModifiers.Alt))
+        {
+            CopyLineDown();
+            e.Handled = true;
+            return;
+        }
+
         // Handle Alt+Up to move line up
         if (e.Key == Key.Up && e.KeyModifiers == KeyModifiers.Alt)
         {
@@ -1158,6 +1184,38 @@ public partial class CodeEditorControl : UserControl
         if (e.Key == Key.Oem2 && e.KeyModifiers == KeyModifiers.Control)
         {
             ToggleLineComment();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+Shift+\ to go to matching bracket
+        if (e.Key == Key.OemPipe && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+        {
+            GoToBracket();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+J to join lines
+        if (e.Key == Key.J && e.KeyModifiers == KeyModifiers.Control)
+        {
+            JoinLines();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+Shift+U to transform selection to uppercase
+        if (e.Key == Key.U && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+        {
+            TransformToUpperCase();
+            e.Handled = true;
+            return;
+        }
+
+        // Handle Ctrl+U to transform selection to lowercase
+        if (e.Key == Key.U && e.KeyModifiers == KeyModifiers.Control)
+        {
+            TransformToLowerCase();
             e.Handled = true;
             return;
         }
@@ -2401,6 +2459,432 @@ public partial class CodeEditorControl : UserControl
             {
                 // Remove line including its newline
                 document.Remove(line.Offset, line.TotalLength);
+            }
+        }
+        finally
+        {
+            document.EndUpdate();
+        }
+    }
+
+    /// <summary>
+    /// Copies the current line (or selected lines) and inserts the copy above.
+    /// Equivalent to VS Code's Shift+Alt+Up.
+    /// </summary>
+    public void CopyLineUp()
+    {
+        if (_textEditor == null) return;
+
+        var document = _textEditor.Document;
+        var selection = _textEditor.TextArea.Selection;
+
+        int startLine, endLine;
+        if (selection.IsEmpty)
+        {
+            startLine = endLine = _textEditor.TextArea.Caret.Line;
+        }
+        else
+        {
+            startLine = document.GetLineByOffset(selection.SurroundingSegment.Offset).LineNumber;
+            endLine = document.GetLineByOffset(selection.SurroundingSegment.EndOffset).LineNumber;
+            var endLineStart = document.GetLineByNumber(endLine).Offset;
+            if (selection.SurroundingSegment.EndOffset == endLineStart && endLine > startLine)
+                endLine--;
+        }
+
+        document.BeginUpdate();
+        try
+        {
+            var firstLine = document.GetLineByNumber(startLine);
+            var lastLine = document.GetLineByNumber(endLine);
+            var linesText = document.GetText(firstLine.Offset, lastLine.EndOffset - firstLine.Offset);
+
+            // Insert the copied lines above the block
+            document.Insert(firstLine.Offset, linesText + Environment.NewLine);
+            // Caret stays on the same line number (original content shifted down)
+        }
+        finally
+        {
+            document.EndUpdate();
+        }
+    }
+
+    /// <summary>
+    /// Copies the current line (or selected lines) and inserts the copy below.
+    /// Equivalent to VS Code's Shift+Alt+Down.
+    /// </summary>
+    public void CopyLineDown()
+    {
+        if (_textEditor == null) return;
+
+        var document = _textEditor.Document;
+        var selection = _textEditor.TextArea.Selection;
+
+        int startLine, endLine;
+        if (selection.IsEmpty)
+        {
+            startLine = endLine = _textEditor.TextArea.Caret.Line;
+        }
+        else
+        {
+            startLine = document.GetLineByOffset(selection.SurroundingSegment.Offset).LineNumber;
+            endLine = document.GetLineByOffset(selection.SurroundingSegment.EndOffset).LineNumber;
+            var endLineStart = document.GetLineByNumber(endLine).Offset;
+            if (selection.SurroundingSegment.EndOffset == endLineStart && endLine > startLine)
+                endLine--;
+        }
+
+        document.BeginUpdate();
+        try
+        {
+            var firstLine = document.GetLineByNumber(startLine);
+            var lastLine = document.GetLineByNumber(endLine);
+            var linesText = document.GetText(firstLine.Offset, lastLine.EndOffset - firstLine.Offset);
+
+            // Insert after the last line
+            document.Insert(lastLine.EndOffset, Environment.NewLine + linesText);
+
+            // Move caret to the duplicated block below
+            int lineCount = endLine - startLine + 1;
+            _textEditor.TextArea.Caret.Line = _textEditor.TextArea.Caret.Line + lineCount;
+        }
+        finally
+        {
+            document.EndUpdate();
+        }
+    }
+
+    /// <summary>
+    /// Navigates to the matching bracket.
+    /// Supports character-level brackets: ( ) [ ] { }
+    /// and BasicLang block keywords: Sub/End Sub, If/End If, For/Next, While/End While, etc.
+    /// </summary>
+    public void GoToBracket()
+    {
+        if (_textEditor?.Document == null) return;
+
+        var document = _textEditor.Document;
+        var caretOffset = _textEditor.CaretOffset;
+
+        // Try character-level bracket matching (check char at caret and before caret)
+        int matchOffset = TryFindMatchingCharBracket(document, caretOffset);
+        if (matchOffset >= 0)
+        {
+            _textEditor.CaretOffset = matchOffset;
+            _textEditor.ScrollTo(_textEditor.TextArea.Caret.Line, _textEditor.TextArea.Caret.Column);
+            return;
+        }
+
+        // Try BasicLang block-keyword matching
+        var currentLine = document.GetLineByOffset(caretOffset);
+        var lineText = document.GetText(currentLine.Offset, currentLine.Length).TrimStart();
+        var lineTextUpper = lineText.ToUpperInvariant();
+
+        // Define block start/end pairs
+        var blockPairs = new (string Start, string End)[]
+        {
+            ("SUB ", "END SUB"),
+            ("FUNCTION ", "END FUNCTION"),
+            ("IF ", "END IF"),
+            ("FOR ", "NEXT"),
+            ("WHILE ", "END WHILE"),
+            ("DO ", "LOOP"),
+            ("SELECT ", "END SELECT"),
+            ("CLASS ", "END CLASS"),
+            ("MODULE ", "END MODULE"),
+            ("STRUCTURE ", "END STRUCTURE"),
+            ("NAMESPACE ", "END NAMESPACE"),
+            ("TRY", "END TRY"),
+            ("WITH ", "END WITH"),
+            ("PROPERTY ", "END PROPERTY"),
+            ("ENUM ", "END ENUM"),
+        };
+
+        foreach (var (start, end) in blockPairs)
+        {
+            var startTrimmed = start.TrimEnd();
+            if (lineTextUpper.StartsWith(start) || lineTextUpper == startTrimmed)
+            {
+                int targetLine = FindMatchingBlockEnd(document, currentLine.LineNumber, startTrimmed, end);
+                if (targetLine > 0)
+                {
+                    _textEditor.TextArea.Caret.Line = targetLine;
+                    _textEditor.TextArea.Caret.Column = 1;
+                    _textEditor.ScrollTo(targetLine, 1);
+                    return;
+                }
+            }
+            else if (lineTextUpper.StartsWith(end) || lineTextUpper == end)
+            {
+                int targetLine = FindMatchingBlockStart(document, currentLine.LineNumber, startTrimmed, end);
+                if (targetLine > 0)
+                {
+                    _textEditor.TextArea.Caret.Line = targetLine;
+                    _textEditor.TextArea.Caret.Column = 1;
+                    _textEditor.ScrollTo(targetLine, 1);
+                    return;
+                }
+            }
+        }
+    }
+
+    private int TryFindMatchingCharBracket(TextDocument document, int caretOffset)
+    {
+        var brackets = new Dictionary<char, char>
+        {
+            { '(', ')' }, { ')', '(' },
+            { '[', ']' }, { ']', '[' },
+            { '{', '}' }, { '}', '{' }
+        };
+        var openBrackets = new HashSet<char> { '(', '[', '{' };
+
+        // Check character at caret position
+        if (caretOffset < document.TextLength)
+        {
+            var ch = document.GetCharAt(caretOffset);
+            if (brackets.TryGetValue(ch, out var match))
+                return FindCharBracketMatch(document, caretOffset, ch, match, openBrackets.Contains(ch));
+        }
+
+        // Check character before caret
+        if (caretOffset > 0)
+        {
+            var ch = document.GetCharAt(caretOffset - 1);
+            if (brackets.TryGetValue(ch, out var match))
+                return FindCharBracketMatch(document, caretOffset - 1, ch, match, openBrackets.Contains(ch));
+        }
+
+        return -1;
+    }
+
+    private static int FindCharBracketMatch(TextDocument document, int offset, char bracket, char match, bool isOpening)
+    {
+        int direction = isOpening ? 1 : -1;
+        int depth = 1;
+        int pos = offset + direction;
+        const int maxScan = 10000;
+        int scanned = 0;
+
+        while (pos >= 0 && pos < document.TextLength && scanned < maxScan)
+        {
+            var c = document.GetCharAt(pos);
+            if (c == bracket) depth++;
+            else if (c == match) { depth--; if (depth == 0) return pos; }
+            pos += direction;
+            scanned++;
+        }
+        return -1;
+    }
+
+    private static int FindMatchingBlockEnd(TextDocument document, int fromLine, string startKeyword, string endKeyword)
+    {
+        int depth = 1;
+        for (int i = fromLine + 1; i <= document.LineCount; i++)
+        {
+            var line = document.GetLineByNumber(i);
+            var text = document.GetText(line.Offset, line.Length).TrimStart().ToUpperInvariant();
+            if (text.StartsWith(startKeyword + " ") || text == startKeyword) depth++;
+            if (text.StartsWith(endKeyword) && (text.Length == endKeyword.Length || !char.IsLetterOrDigit(text[endKeyword.Length]))) depth--;
+            if (depth == 0) return i;
+        }
+        return -1;
+    }
+
+    private static int FindMatchingBlockStart(TextDocument document, int fromLine, string startKeyword, string endKeyword)
+    {
+        int depth = 1;
+        for (int i = fromLine - 1; i >= 1; i--)
+        {
+            var line = document.GetLineByNumber(i);
+            var text = document.GetText(line.Offset, line.Length).TrimStart().ToUpperInvariant();
+            if (text.StartsWith(endKeyword) && (text.Length == endKeyword.Length || !char.IsLetterOrDigit(text[endKeyword.Length]))) depth++;
+            if (text.StartsWith(startKeyword + " ") || text == startKeyword) depth--;
+            if (depth == 0) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Joins the current line with the next line, removing leading whitespace from the joined line.
+    /// Equivalent to VS Code's Ctrl+J.
+    /// </summary>
+    public void JoinLines()
+    {
+        if (_textEditor == null) return;
+
+        var document = _textEditor.Document;
+        var caretLine = _textEditor.TextArea.Caret.Line;
+        if (caretLine >= document.LineCount) return;
+
+        document.BeginUpdate();
+        try
+        {
+            var currentLine = document.GetLineByNumber(caretLine);
+            var nextLine = document.GetLineByNumber(caretLine + 1);
+            var nextLineText = document.GetText(nextLine.Offset, nextLine.Length).TrimStart();
+
+            // Determine separator: add space only when both sides have content
+            var currentLineText = document.GetText(currentLine.Offset, currentLine.Length);
+            var separator = currentLineText.Length > 0
+                && !char.IsWhiteSpace(currentLineText[^1])
+                && nextLineText.Length > 0
+                ? " " : "";
+
+            document.Replace(currentLine.EndOffset, nextLine.EndOffset - currentLine.EndOffset, separator + nextLineText);
+        }
+        finally
+        {
+            document.EndUpdate();
+        }
+    }
+
+    /// <summary>
+    /// Transforms the selected text to UPPERCASE.
+    /// If no selection, transforms the word at the caret.
+    /// </summary>
+    public void TransformToUpperCase()
+    {
+        TransformSelectedText(t => t.ToUpperInvariant());
+    }
+
+    /// <summary>
+    /// Transforms the selected text to lowercase.
+    /// If no selection, transforms the word at the caret.
+    /// </summary>
+    public void TransformToLowerCase()
+    {
+        TransformSelectedText(t => t.ToLowerInvariant());
+    }
+
+    private void TransformSelectedText(Func<string, string> transform)
+    {
+        if (_textEditor?.Document == null) return;
+
+        var document = _textEditor.Document;
+
+        if (!string.IsNullOrEmpty(_textEditor.SelectedText))
+        {
+            var start = _textEditor.SelectionStart;
+            var length = _textEditor.SelectionLength;
+            var transformed = transform(_textEditor.SelectedText);
+            if (_textEditor.SelectedText != transformed)
+            {
+                document.Replace(start, length, transformed);
+                _textEditor.Select(start, length);
+            }
+        }
+        else
+        {
+            // Transform current word at caret
+            var offset = _textEditor.CaretOffset;
+            var wordStart = offset;
+            var wordEnd = offset;
+
+            while (wordStart > 0 && char.IsLetterOrDigit(document.GetCharAt(wordStart - 1)))
+                wordStart--;
+            while (wordEnd < document.TextLength && char.IsLetterOrDigit(document.GetCharAt(wordEnd)))
+                wordEnd++;
+
+            if (wordStart == wordEnd) return;
+
+            var word = document.GetText(wordStart, wordEnd - wordStart);
+            var transformed = transform(word);
+            if (word != transformed)
+            {
+                document.Replace(wordStart, word.Length, transformed);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sorts selected lines in ascending alphabetical order.
+    /// If no selection, sorts the entire document.
+    /// </summary>
+    public void SortLinesAscending()
+    {
+        SortSelectedLines(ascending: true);
+    }
+
+    /// <summary>
+    /// Sorts selected lines in descending alphabetical order.
+    /// If no selection, sorts the entire document.
+    /// </summary>
+    public void SortLinesDescending()
+    {
+        SortSelectedLines(ascending: false);
+    }
+
+    private void SortSelectedLines(bool ascending)
+    {
+        if (_textEditor?.Document == null) return;
+
+        var document = _textEditor.Document;
+        var selection = _textEditor.TextArea.Selection;
+
+        int startLine, endLine;
+        if (selection.IsEmpty)
+        {
+            startLine = 1;
+            endLine = document.LineCount;
+        }
+        else
+        {
+            startLine = document.GetLineByOffset(selection.SurroundingSegment.Offset).LineNumber;
+            endLine = document.GetLineByOffset(selection.SurroundingSegment.EndOffset).LineNumber;
+            var endLineStart = document.GetLineByNumber(endLine).Offset;
+            if (selection.SurroundingSegment.EndOffset == endLineStart && endLine > startLine)
+                endLine--;
+        }
+
+        if (startLine >= endLine) return;
+
+        document.BeginUpdate();
+        try
+        {
+            var lines = new List<string>();
+            for (int i = startLine; i <= endLine; i++)
+            {
+                var line = document.GetLineByNumber(i);
+                lines.Add(document.GetText(line.Offset, line.Length));
+            }
+
+            if (ascending)
+                lines.Sort(StringComparer.OrdinalIgnoreCase);
+            else
+                lines.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(b, a));
+
+            var firstLine = document.GetLineByNumber(startLine);
+            var lastLine = document.GetLineByNumber(endLine);
+            document.Replace(firstLine.Offset, lastLine.EndOffset - firstLine.Offset, string.Join(Environment.NewLine, lines));
+        }
+        finally
+        {
+            document.EndUpdate();
+        }
+    }
+
+    /// <summary>
+    /// Trims trailing whitespace from all lines in the document.
+    /// Called before saving when TrimTrailingWhitespaceOnSave is enabled.
+    /// </summary>
+    public void TrimTrailingWhitespace()
+    {
+        if (_textEditor?.Document == null) return;
+
+        var document = _textEditor.Document;
+        document.BeginUpdate();
+        try
+        {
+            // Iterate in reverse so offsets stay valid
+            for (int i = document.LineCount; i >= 1; i--)
+            {
+                var line = document.GetLineByNumber(i);
+                var lineText = document.GetText(line.Offset, line.Length);
+                var trimmed = lineText.TrimEnd(' ', '\t');
+                if (trimmed.Length < lineText.Length)
+                {
+                    document.Replace(line.Offset + trimmed.Length, lineText.Length - trimmed.Length, "");
+                }
             }
         }
         finally

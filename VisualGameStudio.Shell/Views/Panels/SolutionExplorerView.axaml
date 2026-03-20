@@ -69,6 +69,7 @@
             </MenuItem>
             <Separator/>
             <MenuItem Header="Open in Explorer" Command="{Binding #SolutionTreeView.DataContext.OpenInExplorerCommand}"/>
+            <MenuItem Header="Open in Terminal" Command="{Binding #SolutionTreeView.DataContext.OpenInTerminalCommand}"/>
             <MenuItem Header="Copy Path" Command="{Binding #SolutionTreeView.DataContext.CopyPathCommand}"/>
           </ContextMenu>
         </TreeView.ContextMenu>

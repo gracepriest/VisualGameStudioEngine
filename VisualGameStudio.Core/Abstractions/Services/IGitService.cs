@@ -313,9 +313,39 @@ public interface IGitService
     Task<bool> UnstageHunkAsync(string filePath, string patchText);
 
     /// <summary>
+    /// Reverts (discards) a single hunk from the working tree by applying the patch in reverse.
+    /// </summary>
+    Task<bool> RevertHunkAsync(string filePath, string patchText);
+
+    /// <summary>
     /// Raised when an operation progresses
     /// </summary>
     event EventHandler<GitProgress>? Progress;
+
+    /// <summary>
+    /// Gets the last commit message (for amend pre-fill)
+    /// </summary>
+    Task<string?> GetLastCommitMessageAsync();
+
+    /// <summary>
+    /// Commits with --amend flag
+    /// </summary>
+    Task<GitCommitResult> CommitAmendAsync(string message);
+
+    /// <summary>
+    /// Discards all uncommitted changes (git checkout -- .)
+    /// </summary>
+    Task DiscardAllChangesAsync();
+
+    /// <summary>
+    /// Undoes the last commit with soft reset (git reset --soft HEAD~1)
+    /// </summary>
+    Task<bool> UndoLastCommitAsync();
+
+    /// <summary>
+    /// Gets git log for a specific file (recent commits that touched it)
+    /// </summary>
+    Task<IReadOnlyList<GitCommitInfo>> GetFileLogAsync(string filePath, int maxCount = 50);
 }
 
 public class GitStatus

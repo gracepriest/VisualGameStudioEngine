@@ -418,7 +418,12 @@
       "Bash(rm -f IDE/debug.log)",
       "Bash(./IDE/VisualGameStudio.exe)",
       "Bash(git:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(sed -i 's/x:DataType=\"\"vm:WelcomeDocumentViewModel\"\"//' VisualGameStudio.Shell/Views/Documents/WelcomeDocumentView.axaml)",
+      "Bash(sed -i 's/x:DataType=\"\"vm:RecentProjectItem\"\"//' VisualGameStudio.Shell/Views/Documents/WelcomeDocumentView.axaml)",
+      "Bash(sed -i 's/x:DataType=\"\"vm:WalkthroughItem\"\"//' VisualGameStudio.Shell/Views/Documents/WelcomeDocumentView.axaml)",
+      "Bash(sed -i 's/x:DataType=\"\"vm:LearnLink\"\"//' VisualGameStudio.Shell/Views/Documents/WelcomeDocumentView.axaml)",
+      "Bash(dotnet build-server:*)"
     ]
   }
 }

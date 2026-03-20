@@ -124,6 +124,38 @@ public interface IExtensionService : IDisposable
     Task ActivateStaticContributionsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets all commands contributed by extensions (from package.json contributes.commands).
+    /// </summary>
+    IReadOnlyList<ContributedCommand> GetContributedCommands();
+
+    /// <summary>
+    /// Gets all keybindings contributed by extensions (from package.json contributes.keybindings).
+    /// </summary>
+    IReadOnlyList<ContributedKeybinding> GetContributedKeybindings();
+
+    /// <summary>
+    /// Gets all menu contributions from extensions (from package.json contributes.menus).
+    /// </summary>
+    IReadOnlyList<ContributedMenuItem> GetContributedMenuItems(string menuId);
+
+    /// <summary>
+    /// Notifies the extension system that a file with the given language ID was opened,
+    /// triggering onLanguage activation events.
+    /// </summary>
+    Task NotifyLanguageOpenedAsync(string languageId);
+
+    /// <summary>
+    /// Notifies the extension system that a workspace was opened containing the given files,
+    /// triggering workspaceContains activation events.
+    /// </summary>
+    Task NotifyWorkspaceOpenedAsync(string workspacePath);
+
+    /// <summary>
+    /// Executes a contributed command by ID. Activates the owning extension if needed.
+    /// </summary>
+    Task ExecuteContributedCommandAsync(string commandId);
+
+    /// <summary>
     /// Checks for updates for all installed extensions.
     /// </summary>
     Task<IReadOnlyList<ExtensionUpdate>> CheckForUpdatesAsync(CancellationToken cancellationToken = default);
@@ -340,6 +372,81 @@ public class ExtensionDependency
     public string Id { get; set; } = "";
     public string Version { get; set; } = "";
     public bool IsOptional { get; set; }
+}
+
+/// <summary>
+/// A command contributed by an extension, ready for use in the command palette and menus.
+/// </summary>
+public class ContributedCommand
+{
+    /// <summary>The command identifier (e.g., "extension.sayHello").</summary>
+    public string CommandId { get; set; } = "";
+
+    /// <summary>The display title (e.g., "Say Hello").</summary>
+    public string Title { get; set; } = "";
+
+    /// <summary>Optional category for grouping (e.g., "My Extension").</summary>
+    public string? Category { get; set; }
+
+    /// <summary>The extension ID that contributed this command.</summary>
+    public string ExtensionId { get; set; } = "";
+
+    /// <summary>Whether the owning extension has a Node.js entry point.</summary>
+    public bool HasRuntime { get; set; }
+
+    /// <summary>Display name formatted as "Category: Title".</summary>
+    public string DisplayName => string.IsNullOrEmpty(Category) ? Title : $"{Category}: {Title}";
+}
+
+/// <summary>
+/// A keybinding contributed by an extension.
+/// </summary>
+public class ContributedKeybinding
+{
+    /// <summary>The command identifier.</summary>
+    public string CommandId { get; set; } = "";
+
+    /// <summary>The key chord string (e.g., "ctrl+shift+h").</summary>
+    public string Key { get; set; } = "";
+
+    /// <summary>Optional Mac-specific key chord.</summary>
+    public string? Mac { get; set; }
+
+    /// <summary>Optional Linux-specific key chord.</summary>
+    public string? Linux { get; set; }
+
+    /// <summary>Optional when clause.</summary>
+    public string? When { get; set; }
+
+    /// <summary>The extension ID that contributed this keybinding.</summary>
+    public string ExtensionId { get; set; } = "";
+}
+
+/// <summary>
+/// A menu item contributed by an extension.
+/// </summary>
+public class ContributedMenuItem
+{
+    /// <summary>The menu location (e.g., "editor/context", "explorer/context").</summary>
+    public string MenuId { get; set; } = "";
+
+    /// <summary>The command identifier.</summary>
+    public string CommandId { get; set; } = "";
+
+    /// <summary>Optional group for ordering.</summary>
+    public string? Group { get; set; }
+
+    /// <summary>Optional when clause for visibility.</summary>
+    public string? When { get; set; }
+
+    /// <summary>The extension ID that contributed this menu item.</summary>
+    public string ExtensionId { get; set; } = "";
+
+    /// <summary>The display title (resolved from the command contribution).</summary>
+    public string Title { get; set; } = "";
+
+    /// <summary>The category (resolved from the command contribution).</summary>
+    public string? Category { get; set; }
 }
 
 /// <summary>

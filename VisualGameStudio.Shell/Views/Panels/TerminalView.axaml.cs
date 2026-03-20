@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
@@ -19,6 +20,7 @@ public partial class TerminalView : UserControl
     private Border? _searchBar;
     private TextBox? _searchTextBox;
     private TextBlock? _searchMatchCount;
+    private TextBlock? _cwdStatusText;
 
     // Split pane controls
     private ScrollViewer? _splitOutputScroller;
@@ -75,6 +77,7 @@ public partial class TerminalView : UserControl
         _searchBar = this.FindControl<Border>("SearchBar");
         _searchTextBox = this.FindControl<TextBox>("SearchTextBox");
         _searchMatchCount = this.FindControl<TextBlock>("SearchMatchCount");
+        _cwdStatusText = this.FindControl<TextBlock>("CwdStatusText");
         var inputBox = this.FindControl<TextBox>("InputBox");
 
         // Split pane controls
@@ -115,6 +118,7 @@ public partial class TerminalView : UserControl
             vm.SplitOutputAppended += OnSplitOutputAppended;
             vm.SplitOutputCleared += OnSplitOutputCleared;
             vm.SplitStateChanged += OnSplitStateChanged;
+            vm.CurrentDirectoryChanged += OnCurrentDirectoryChanged;
             vm.Sessions.CollectionChanged += (_, _) => UpdateTabHighlights();
         }
     }
@@ -138,6 +142,46 @@ public partial class TerminalView : UserControl
             if (DataContext is TerminalViewModel vm)
             {
                 vm.SplitTerminalCommand.Execute(null);
+            }
+            e.Handled = true;
+        }
+        // Ctrl+C: copy selected text if there is a selection, otherwise send SIGINT
+        else if (e.Key == Key.C && e.KeyModifiers == KeyModifiers.Control)
+        {
+            if (HasTextSelection())
+            {
+                CopySelectedText();
+            }
+            else if (DataContext is TerminalViewModel vm)
+            {
+                vm.FocusedSession?.SendInterrupt();
+            }
+            e.Handled = true;
+        }
+        // Ctrl+V: paste into terminal input
+        else if (e.Key == Key.V && e.KeyModifiers == KeyModifiers.Control)
+        {
+            _ = PasteToTerminalAsync();
+            e.Handled = true;
+        }
+        // Shift+PageUp / Shift+PageDown for scroll navigation
+        else if (e.Key == Key.PageUp && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            if (_outputScroller != null)
+            {
+                var newOffset = Math.Max(0, _outputScroller.Offset.Y - _outputScroller.Viewport.Height);
+                _outputScroller.Offset = new Vector(_outputScroller.Offset.X, newOffset);
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.PageDown && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            if (_outputScroller != null)
+            {
+                var newOffset = Math.Min(
+                    _outputScroller.Extent.Height - _outputScroller.Viewport.Height,
+                    _outputScroller.Offset.Y + _outputScroller.Viewport.Height);
+                _outputScroller.Offset = new Vector(_outputScroller.Offset.X, Math.Max(0, newOffset));
             }
             e.Handled = true;
         }
@@ -478,9 +522,46 @@ public partial class TerminalView : UserControl
 
     private void OnInputKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && DataContext is TerminalViewModel vm)
+        if (DataContext is not TerminalViewModel vm) return;
+
+        if (e.Key == Key.Enter)
         {
             vm.SendInputCommand.Execute(null);
+            e.Handled = true;
+        }
+        // Up arrow: navigate command history backwards
+        else if (e.Key == Key.Up)
+        {
+            var session = vm.FocusedSession;
+            if (session != null && session.CommandHistory.Count > 0)
+            {
+                if (session.HistoryIndex > 0)
+                    session.HistoryIndex--;
+                else
+                    session.HistoryIndex = 0;
+
+                if (session.HistoryIndex >= 0 && session.HistoryIndex < session.CommandHistory.Count)
+                    vm.InputText = session.CommandHistory[session.HistoryIndex];
+            }
+            e.Handled = true;
+        }
+        // Down arrow: navigate command history forwards
+        else if (e.Key == Key.Down)
+        {
+            var session = vm.FocusedSession;
+            if (session != null && session.CommandHistory.Count > 0)
+            {
+                session.HistoryIndex++;
+                if (session.HistoryIndex >= session.CommandHistory.Count)
+                {
+                    session.HistoryIndex = session.CommandHistory.Count;
+                    vm.InputText = "";
+                }
+                else
+                {
+                    vm.InputText = session.CommandHistory[session.HistoryIndex];
+                }
+            }
             e.Handled = true;
         }
     }
@@ -947,5 +1028,95 @@ public partial class TerminalView : UserControl
 
         vm.NavigateToFile(filePath, link.Line, link.Column);
         e.Handled = true;
+    }
+
+    // ──── Context menu handlers ────
+
+    private void OnCopyClick(object? sender, RoutedEventArgs e)
+    {
+        CopySelectedText();
+    }
+
+    private void OnPasteClick(object? sender, RoutedEventArgs e)
+    {
+        _ = PasteToTerminalAsync();
+    }
+
+    private void OnSelectAllClick(object? sender, RoutedEventArgs e)
+    {
+        _outputTextBlock?.SelectAll();
+    }
+
+    private void OnClearTerminalClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is TerminalViewModel vm)
+        {
+            vm.ClearCommand.Execute(null);
+        }
+    }
+
+    private void OnFindFromContextClick(object? sender, RoutedEventArgs e)
+    {
+        OpenSearchBar();
+    }
+
+    // ──── Clipboard helpers ────
+
+    /// <summary>
+    /// Checks whether the output SelectableTextBlock has selected text.
+    /// </summary>
+    private bool HasTextSelection()
+    {
+        if (_outputTextBlock == null) return false;
+        var selected = _outputTextBlock.SelectedText;
+        return !string.IsNullOrEmpty(selected);
+    }
+
+    /// <summary>
+    /// Copies the selected text from the terminal output to the clipboard.
+    /// </summary>
+    private void CopySelectedText()
+    {
+        if (_outputTextBlock == null) return;
+        var selected = _outputTextBlock.SelectedText;
+        if (string.IsNullOrEmpty(selected)) return;
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.Clipboard != null)
+        {
+            _ = topLevel.Clipboard.SetTextAsync(selected);
+        }
+    }
+
+    /// <summary>
+    /// Pastes clipboard text into the terminal input, or directly sends it if
+    /// the input box is not focused.
+    /// </summary>
+    private async Task PasteToTerminalAsync()
+    {
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.Clipboard == null) return;
+
+        var text = await topLevel.Clipboard.GetTextAsync();
+        if (string.IsNullOrEmpty(text)) return;
+
+        if (DataContext is TerminalViewModel vm)
+        {
+            // Paste into the input text box
+            vm.InputText += text;
+        }
+    }
+
+    // ──── CWD status display ────
+
+    /// <summary>
+    /// Updates the CWD status bar when the focused session's directory changes.
+    /// </summary>
+    private void OnCurrentDirectoryChanged(string directory)
+    {
+        if (_cwdStatusText != null)
+        {
+            _cwdStatusText.Text = directory;
+        }
     }
 }

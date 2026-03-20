@@ -24,6 +24,8 @@ public partial class GitChangesView : UserControl
         {
             vm.ShowDiffRequested -= OnShowDiffRequested;
             vm.ShowDiffRequested += OnShowDiffRequested;
+            vm.ShowStagedDiffRequested -= OnShowStagedDiffRequested;
+            vm.ShowStagedDiffRequested += OnShowStagedDiffRequested;
         }
     }
 
@@ -40,13 +42,27 @@ public partial class GitChangesView : UserControl
 
     private async void OnShowDiffRequested(object? sender, string filePath)
     {
+        await ShowDiffViewAsync(filePath, staged: false);
+    }
+
+    private async void OnShowStagedDiffRequested(object? sender, string filePath)
+    {
+        await ShowDiffViewAsync(filePath, staged: true);
+    }
+
+    private async Task ShowDiffViewAsync(string filePath, bool staged)
+    {
         try
         {
             var gitService = App.Services.GetService<IGitService>();
             if (gitService == null) return;
 
             var diffVm = new DiffViewerViewModel(gitService);
-            await diffVm.LoadDiffAsync(filePath);
+
+            if (staged)
+                await diffVm.LoadStagedDiffAsync(filePath);
+            else
+                await diffVm.LoadDiffAsync(filePath);
 
             var diffView = new DiffViewerView
             {

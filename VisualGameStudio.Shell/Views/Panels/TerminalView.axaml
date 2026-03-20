@@ -198,6 +198,17 @@
         </DockPanel>
       </Border>
 
+      <!-- CWD status bar -->
+      <Border DockPanel.Dock="Bottom" Background="#252526" Padding="4,2" IsVisible="{Binding IsRunning}">
+        <TextBlock x:Name="CwdStatusText"
+                   FontFamily="Cascadia Code, Consolas, monospace"
+                   FontSize="11"
+                   Foreground="#808080"
+                   Margin="4,0"
+                   TextTrimming="CharacterEllipsis"
+                   AutomationProperties.Name="Terminal Working Directory"/>
+      </Border>
+
       <!-- Input -->
       <Border DockPanel.Dock="Bottom" Background="#1E1E1E" Padding="4">
         <Grid ColumnDefinitions="Auto,*,Auto">
@@ -254,7 +265,19 @@
                                    Padding="8"
                                    TextWrapping="NoWrap"
                                    x:Name="OutputTextBlock"
-                                   AutomationProperties.Name="Terminal Output"/>
+                                   AutomationProperties.Name="Terminal Output">
+                <SelectableTextBlock.ContextMenu>
+                  <ContextMenu>
+                    <MenuItem Header="Copy" x:Name="CopyMenuItem" Click="OnCopyClick" InputGesture="Ctrl+C"/>
+                    <MenuItem Header="Paste" x:Name="PasteMenuItem" Click="OnPasteClick" InputGesture="Ctrl+V"/>
+                    <Separator/>
+                    <MenuItem Header="Select All" Click="OnSelectAllClick" InputGesture="Ctrl+A"/>
+                    <Separator/>
+                    <MenuItem Header="Clear Terminal" Click="OnClearTerminalClick"/>
+                    <MenuItem Header="Find..." Click="OnFindFromContextClick" InputGesture="Ctrl+F"/>
+                  </ContextMenu>
+                </SelectableTextBlock.ContextMenu>
+              </SelectableTextBlock>
             </ScrollViewer>
           </Border>
 

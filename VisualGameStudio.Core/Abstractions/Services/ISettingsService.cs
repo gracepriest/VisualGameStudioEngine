@@ -398,6 +398,7 @@ public static class SettingsKeys
     public const string AutoSave = "Editor.AutoSave";
     public const string AutoSaveDelay = "Editor.AutoSaveDelay";
     public const string FormatOnSave = "Editor.FormatOnSave";
+    public const string TrimTrailingWhitespaceOnSave = "Editor.TrimTrailingWhitespaceOnSave";
     public const string FormatOnPaste = "Editor.FormatOnPaste";
     public const string RenderWhitespace = "Editor.RenderWhitespace";
     public const string ShowMinimap = "Editor.ShowMinimap";
@@ -426,4 +427,7 @@ public static class SettingsKeys
     public const string GitConfirmSync = "Git.ConfirmSync";
     public const string DebugConsoleFont = "Debug.Console.FontFamily";
     public const string DebugConsoleFontSize = "Debug.Console.FontSize";
+    public const string AccessibilityReduceMotion = "Accessibility.ReduceMotion";
+    public const string AccessibilityScreenReaderOptimized = "Accessibility.ScreenReaderOptimized";
+    public const string ZoomLevel = "Window.ZoomLevel";
 }

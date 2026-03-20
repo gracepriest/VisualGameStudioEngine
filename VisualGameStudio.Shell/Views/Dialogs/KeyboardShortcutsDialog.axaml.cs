@@ -4,11 +4,12 @@ using VisualGameStudio.Shell.ViewModels.Dialogs;
 
 namespace VisualGameStudio.Shell.Views.Dialogs;
 
-public partial class KeyboardShortcutsDialog : Window
+public partial class KeyboardShortcutsDialog : AccessibleDialog
 {
     public KeyboardShortcutsDialog()
     {
         InitializeComponent();
+        EnterActivatesDefaultButton = false; // Search box uses Enter for searching
     }
 
     protected override void OnOpened(EventArgs e)
@@ -22,16 +23,5 @@ public partial class KeyboardShortcutsDialog : Window
         {
             vm.CloseDialog = () => Close();
         }
-    }
-
-    protected override void OnKeyDown(KeyEventArgs e)
-    {
-        if (e.Key == Key.Escape)
-        {
-            Close();
-            e.Handled = true;
-        }
-
-        base.OnKeyDown(e);
     }
 }

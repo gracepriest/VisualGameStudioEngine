@@ -157,6 +157,21 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool _wordWrap;
 
+    /// <summary>
+    /// Whether reduced motion mode is active. When true, disables smooth scrolling,
+    /// cursor blink, toast slide-in animations, and minimap hover animations.
+    /// Can be set via accessibility.reduceMotion setting or detected from OS preferences.
+    /// </summary>
+    [ObservableProperty]
+    private bool _reduceMotion;
+
+    /// <summary>
+    /// Current IDE zoom level as a percentage (50-200). Default 100.
+    /// Applied via LayoutTransform on the main content.
+    /// </summary>
+    [ObservableProperty]
+    private int _zoomLevel = 100;
+
     /// <summary>Whether the menu bar is visible.</summary>
     [ObservableProperty]
     private bool _showMenuBar = true;
@@ -369,6 +384,9 @@ public partial class MainWindowViewModel : ViewModelBase
         // Wire up Terminal file path link navigation
         Terminal.FileNavigationRequested += OnTerminalFileNavigationRequested;
 
+        // Wire up "Open in Terminal" from Solution Explorer
+        SolutionExplorer.OpenInTerminalRequested += OnOpenInTerminalRequested;
+
         // Subscribe to language service diagnostics for error highlighting
         _languageService.DiagnosticsReceived += OnDiagnosticsReceived;
 
@@ -381,6 +399,13 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Load static contributions from installed extensions (themes, grammars, snippets)
         _ = LoadExtensionContributionsAsync();
+
+        // Load accessibility and zoom settings
+        if (_settingsService != null)
+        {
+            ReduceMotion = _settingsService.Get(SettingsKeys.AccessibilityReduceMotion, false);
+            ZoomLevel = _settingsService.Get(SettingsKeys.ZoomLevel, 100);
+        }
     }
 
     private async Task LoadExtensionContributionsAsync()
@@ -392,6 +417,12 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Failed to load extension contributions: {ex.Message}");
+            ShowNotification("An extension failed to activate.", "warning",
+                new List<NotificationAction>
+                {
+                    new NotificationAction("Show Output", () => _dockFactory.ActivateTool("Output")),
+                },
+                details: ex.Message);
         }
     }
 
@@ -483,6 +514,23 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 doc.UpdateDiagnostics(e.Diagnostics);
             }
+
+            // Screen reader announcement for new errors
+            var errorCount = e.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
+            if (errorCount > 0)
+            {
+                var firstError = e.Diagnostics.First(d => d.Severity == DiagnosticSeverity.Error);
+                if (errorCount == 1)
+                {
+                    Services.ScreenReaderService.Instance.AnnounceAssertive(
+                        $"Error: {firstError.Message} at line {firstError.Line}");
+                }
+                else
+                {
+                    Services.ScreenReaderService.Instance.AnnounceAssertive(
+                        $"{errorCount} errors found. First: {firstError.Message} at line {firstError.Line}");
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -498,6 +546,12 @@ public partial class MainWindowViewModel : ViewModelBase
     private void OnTerminalFileNavigationRequested(string filePath, int line, int column)
     {
         _ = OpenFileAndNavigateAsync(filePath, line, column);
+    }
+
+    private void OnOpenInTerminalRequested(object? sender, string directoryPath)
+    {
+        _dockFactory.ActivateTool("Terminal");
+        Terminal.CreateSessionAtDirectory(directoryPath);
     }
 
     private async Task OpenFileAtLineAsync(string filePath, int line)
@@ -621,13 +675,27 @@ public partial class MainWindowViewModel : ViewModelBase
         // Update status bar diagnostic counts
         StatusBar.UpdateDiagnostics(result.ErrorCount, result.WarningCount, 0);
 
+        // Screen reader announcement for build result
         if (result.Success)
         {
-            ShowNotification($"Build succeeded - {result.Duration.TotalSeconds:F1}s", "info");
+            Services.ScreenReaderService.Instance.Announce($"Build succeeded in {result.Duration.TotalSeconds:F1} seconds");
+            ShowNotification($"Build succeeded - {result.Duration.TotalSeconds:F1}s", "info",
+                new List<NotificationAction>
+                {
+                    new NotificationAction("Show Output", () => _dockFactory.ActivateTool("Output"))
+                });
+            ShowStatusBarMessage($"Build succeeded - {result.Duration.TotalSeconds:F1}s", 5.0);
         }
         else
         {
-            ShowNotification($"Build failed: {result.ErrorCount} error(s), {result.WarningCount} warning(s)", "error");
+            Services.ScreenReaderService.Instance.AnnounceAssertive(
+                $"Build failed with {result.ErrorCount} error{(result.ErrorCount == 1 ? "" : "s")} and {result.WarningCount} warning{(result.WarningCount == 1 ? "" : "s")}");
+            ShowNotification($"Build failed: {result.ErrorCount} error(s), {result.WarningCount} warning(s)", "error",
+                new List<NotificationAction>
+                {
+                    new NotificationAction("Show Error List", () => _dockFactory.ActivateTool("ErrorList")),
+                    new NotificationAction("Show Output", () => _dockFactory.ActivateTool("Output"))
+                });
 
             // Show the Error List panel when the build has errors
             _dockFactory.ActivateTool("ErrorList");
@@ -778,7 +846,75 @@ public partial class MainWindowViewModel : ViewModelBase
     public void ShowNotification(string message, string severity = "info")
     {
         NotificationRequested?.Invoke(this, new NotificationEventArgs(message, severity));
+
+        // Add to notification center
+        var sev = severity.ToLowerInvariant() switch
+        {
+            "error" => NotificationSeverity.Error,
+            "warning" => NotificationSeverity.Warning,
+            _ => NotificationSeverity.Info
+        };
+        StatusBar.AddNotification(message, sev, "IDE");
     }
+
+    /// <summary>
+    /// Shows a notification with action buttons (e.g., "Show Output", "Retry", "Open File").
+    /// </summary>
+    public void ShowNotification(string message, string severity, List<NotificationAction> actions, string? details = null)
+    {
+        bool autoDismiss = severity == "info" && actions.Count == 0;
+        NotificationRequested?.Invoke(this, new NotificationEventArgs(
+            message, severity, details, autoDismiss, actions));
+
+        var sev = severity.ToLowerInvariant() switch
+        {
+            "error" => NotificationSeverity.Error,
+            "warning" => NotificationSeverity.Warning,
+            _ => NotificationSeverity.Info
+        };
+        StatusBar.AddNotification(message, sev, "IDE");
+    }
+
+    /// <summary>
+    /// Shows or updates a progress notification for long-running operations.
+    /// </summary>
+    /// <param name="notificationId">Unique ID to update an existing progress notification.</param>
+    /// <param name="message">Current progress message (e.g., "Building... (3/5 files)").</param>
+    /// <param name="progress">Progress value 0.0 to 1.0, or -1 for indeterminate.</param>
+    public void ShowProgressNotification(string notificationId, string message, double progress = -1)
+    {
+        bool isIndeterminate = progress < 0;
+        double clampedProgress = isIndeterminate ? 0 : Math.Clamp(progress, 0, 1);
+        NotificationRequested?.Invoke(this, new NotificationEventArgs(
+            message, "info", null, false, null,
+            clampedProgress, isIndeterminate, true, notificationId));
+    }
+
+    /// <summary>
+    /// Dismisses a progress notification by its ID.
+    /// </summary>
+    public void DismissNotification(string notificationId)
+    {
+        NotificationDismissed?.Invoke(this, notificationId);
+    }
+
+    /// <summary>
+    /// Shows a temporary status bar message that auto-fades after the specified duration.
+    /// </summary>
+    public void ShowStatusBarMessage(string message, double durationSeconds = 3.0)
+    {
+        StatusBarMessageRequested?.Invoke(this, new StatusBarMessageEventArgs(message, durationSeconds));
+    }
+
+    /// <summary>
+    /// Raised when a notification should be dismissed by its ID.
+    /// </summary>
+    public event EventHandler<string>? NotificationDismissed;
+
+    /// <summary>
+    /// Raised when a temporary message should appear in the status bar.
+    /// </summary>
+    public event EventHandler<StatusBarMessageEventArgs>? StatusBarMessageRequested;
 
     private async void OnDataTipEvaluationRequested(object? sender, DataTipEvaluationRequestEventArgs e)
     {
@@ -949,6 +1085,97 @@ public partial class MainWindowViewModel : ViewModelBase
             StatusText = $"Failed to open file: {ex.Message}";
         }
     }
+
+    /// <summary>
+    /// "Compare Active File With..." command: opens a file picker, then shows diff of active file vs selected file.
+    /// </summary>
+    [RelayCommand]
+    private async Task CompareActiveFileWithAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null)
+        {
+            StatusText = "No active file to compare";
+            return;
+        }
+
+        var otherPath = await _dialogService.ShowOpenFileDialogAsync(new FileDialogOptions
+        {
+            Title = "Compare With...",
+            InitialDirectory = Path.GetDirectoryName(activeDoc.FilePath),
+            Filters = new List<FileDialogFilter>
+            {
+                new("All Files", "*")
+            }
+        });
+
+        if (string.IsNullOrEmpty(otherPath)) return;
+
+        var leftContent = await File.ReadAllTextAsync(otherPath);
+        var rightContent = activeDoc.Text;
+
+        var diffVm = new Dialogs.DiffViewerViewModel(_gitService);
+        diffVm.LoadContents(leftContent, rightContent,
+            Path.GetFileName(otherPath),
+            Path.GetFileName(activeDoc.FilePath));
+
+        CompareViewRequested?.Invoke(this, diffVm);
+        StatusText = $"Comparing {Path.GetFileName(activeDoc.FilePath)} with {Path.GetFileName(otherPath)}";
+    }
+
+    /// <summary>
+    /// "Compare with Clipboard" command: diffs current file content against clipboard text.
+    /// </summary>
+    [RelayCommand]
+    private async Task CompareWithClipboardAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null)
+        {
+            StatusText = "No active file to compare";
+            return;
+        }
+
+        CompareWithClipboardRequested?.Invoke(this, activeDoc);
+        StatusText = "Comparing with clipboard...";
+    }
+
+    /// <summary>
+    /// "Compare with Saved" command: diffs current editor content against the last saved version on disk.
+    /// </summary>
+    [RelayCommand]
+    private async Task CompareWithSavedAsync()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        if (activeDoc?.FilePath == null || !File.Exists(activeDoc.FilePath))
+        {
+            StatusText = "No saved file to compare";
+            return;
+        }
+
+        var savedContent = await File.ReadAllTextAsync(activeDoc.FilePath);
+        var currentContent = activeDoc.Text;
+
+        var diffVm = new Dialogs.DiffViewerViewModel(_gitService);
+        diffVm.LoadContents(savedContent, currentContent,
+            $"{Path.GetFileName(activeDoc.FilePath)} (saved)",
+            $"{Path.GetFileName(activeDoc.FilePath)} (unsaved)");
+
+        CompareViewRequested?.Invoke(this, diffVm);
+        StatusText = $"Comparing {Path.GetFileName(activeDoc.FilePath)} with saved version";
+    }
+
+    /// <summary>
+    /// Raised when a diff/compare viewer should be opened.
+    /// The subscriber (MainWindow) creates and shows the DiffViewerView.
+    /// </summary>
+    public event EventHandler<Dialogs.DiffViewerViewModel>? CompareViewRequested;
+
+    /// <summary>
+    /// Raised when "Compare with Clipboard" is requested.
+    /// The view handles clipboard access (which requires UI thread/TopLevel).
+    /// </summary>
+    public event EventHandler<CodeEditorDocumentViewModel>? CompareWithClipboardRequested;
 
     private async Task OpenFileAsync(string filePath)
     {
@@ -1351,6 +1578,9 @@ public partial class MainWindowViewModel : ViewModelBase
             _openDocuments[filePath] = document;
             _dockFactory.AddDocument(document);
 
+            // Screen reader announcement for file opened
+            Services.ScreenReaderService.Instance.Announce($"Opened {Path.GetFileName(filePath)}");
+
             // Update document outline
             await UpdateDocumentOutlineAsync(filePath, content);
 
@@ -1370,8 +1600,14 @@ public partial class MainWindowViewModel : ViewModelBase
             }
             catch { }
 
-            await _dialogService.ShowMessageAsync("Error", $"Failed to open file: {ex.Message}",
-                DialogButtons.Ok, DialogIcon.Error);
+            // Show notification with Retry action instead of just a dialog
+            var failedPath = filePath;
+            ShowNotification($"Could not open file: {Path.GetFileName(filePath)}", "error",
+                new List<NotificationAction>
+                {
+                    new NotificationAction("Retry", () => _ = OpenFileAsync(failedPath)),
+                },
+                details: ex.Message);
         }
     }
 
@@ -1381,16 +1617,35 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc != null)
         {
-            if (await activeDoc.SaveAsync())
+            try
             {
-                await NotifyLspDocumentSavedAsync(activeDoc);
+                // Apply trim trailing whitespace setting before saving
+                activeDoc.TrimTrailingWhitespaceOnSave =
+                    _settingsService?.Get("editor.trimTrailingWhitespaceOnSave", false) ?? false;
 
-                // Invalidate blame cache for saved file and refresh
-                if (activeDoc.FilePath != null)
+                if (await activeDoc.SaveAsync())
                 {
-                    _blameCache.Remove(activeDoc.FilePath);
-                    _ = UpdateBlameForCurrentLineAsync(activeDoc);
+                    await NotifyLspDocumentSavedAsync(activeDoc);
+
+                    // Invalidate blame cache for saved file and refresh
+                    if (activeDoc.FilePath != null)
+                    {
+                        _blameCache.Remove(activeDoc.FilePath);
+                        _ = UpdateBlameForCurrentLineAsync(activeDoc);
+                    }
+
+                    var fileName = activeDoc.FilePath != null ? Path.GetFileName(activeDoc.FilePath) : "File";
+                    ShowStatusBarMessage($"{fileName} saved", 3.0);
                 }
+            }
+            catch (Exception ex)
+            {
+                ShowNotification($"Could not save file: {ex.Message}", "error",
+                    new List<NotificationAction>
+                    {
+                        new NotificationAction("Retry", () => _ = SaveAsync()),
+                    },
+                    details: ex.Message);
             }
         }
     }
@@ -1461,8 +1716,15 @@ public partial class MainWindowViewModel : ViewModelBase
         // Update status bar with build-in-progress indicator
         StatusBar.SetBuildStarted();
         StatusText = "Building...";
+        Services.ScreenReaderService.Instance.Announce("Build started");
+
+        // Show progress notification for the build
+        ShowProgressNotification("build", "Building...");
 
         await _buildService.BuildProjectAsync(_projectService.CurrentProject);
+
+        // Dismiss the progress notification once build completes
+        DismissNotification("build");
     }
 
     [RelayCommand]
@@ -1574,6 +1836,7 @@ public partial class MainWindowViewModel : ViewModelBase
             ClearAllInlineDebugValues();
             ClearAllExecutionLines();
             RestorePreDebugPanels();
+            Services.ScreenReaderService.Instance.Announce("Debug session ended");
 
             // Refresh breakpoint visuals: all revert to filled circles (verified) when not debugging
             OnBreakpointVisualsChanged(this, EventArgs.Empty);
@@ -1594,6 +1857,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 ShowDebugPanels();
                 ShowNotification("Debug session started", "info");
+                Services.ScreenReaderService.Instance.Announce("Debugging started");
             }
         }
     }
@@ -1673,6 +1937,32 @@ public partial class MainWindowViewModel : ViewModelBase
                 StopReason.FunctionBreakpoint => $"Function breakpoint hit{locationSuffix}",
                 _ => $"Stopped{locationSuffix}"
             };
+
+            // Screen reader announcements for debug stop events (assertive for breakpoints/exceptions)
+            var fileName = firstFrame?.FilePath != null ? Path.GetFileName(firstFrame.FilePath) : null;
+            var srMessage = e.Reason switch
+            {
+                StopReason.Breakpoint when fileName != null =>
+                    $"Breakpoint hit at line {firstFrame!.Line} in {fileName}",
+                StopReason.FunctionBreakpoint when fileName != null =>
+                    $"Function breakpoint hit at line {firstFrame!.Line} in {fileName}",
+                StopReason.DataBreakpoint when fileName != null =>
+                    $"Data breakpoint hit at line {firstFrame!.Line} in {fileName}",
+                StopReason.Exception =>
+                    $"Exception: {e.Text ?? "unknown"}{(fileName != null ? $" at line {firstFrame!.Line} in {fileName}" : "")}",
+                StopReason.Step when fileName != null =>
+                    $"Stepped to line {firstFrame!.Line} in {fileName}",
+                _ => StatusText
+            };
+            if (e.Reason == StopReason.Exception || e.Reason == StopReason.Breakpoint ||
+                e.Reason == StopReason.FunctionBreakpoint || e.Reason == StopReason.DataBreakpoint)
+            {
+                Services.ScreenReaderService.Instance.AnnounceAssertive(srMessage);
+            }
+            else
+            {
+                Services.ScreenReaderService.Instance.Announce(srMessage);
+            }
 
             if (firstFrame?.FilePath != null)
             {
@@ -2605,24 +2895,40 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void ZoomIn()
     {
-        // IDE-level zoom is handled by the editor control's font size
-        StatusText = "Zoom In";
-        ShowNotification("Use Ctrl+Mouse Wheel in the editor to zoom", "info");
+        var newZoom = Math.Min(ZoomLevel + 10, 200);
+        SetZoomLevel(newZoom);
     }
 
     [RelayCommand]
     private void ZoomOut()
     {
-        StatusText = "Zoom Out";
-        ShowNotification("Use Ctrl+Mouse Wheel in the editor to zoom", "info");
+        var newZoom = Math.Max(ZoomLevel - 10, 50);
+        SetZoomLevel(newZoom);
     }
 
     [RelayCommand]
     private void ZoomReset()
     {
-        StatusText = "Zoom Reset";
-        ShowNotification("Zoom reset to default", "info");
+        SetZoomLevel(100);
     }
+
+    /// <summary>
+    /// Applies the given zoom level percentage and persists it.
+    /// Raises ZoomLevelChanged event so the view can apply LayoutTransform.
+    /// </summary>
+    private void SetZoomLevel(int percent)
+    {
+        ZoomLevel = percent;
+        StatusText = $"Zoom: {percent}%";
+        Services.ScreenReaderService.Instance.Announce($"Zoom {percent} percent");
+        _settingsService?.Set(SettingsKeys.ZoomLevel, percent);
+        ZoomLevelChanged?.Invoke(this, percent);
+    }
+
+    /// <summary>
+    /// Raised when the zoom level changes. The int parameter is the new zoom percentage (50-200).
+    /// </summary>
+    public event EventHandler<int>? ZoomLevelChanged;
 
     /// <summary>
     /// Toggles Zen mode (distraction-free editing).
@@ -2687,8 +2993,14 @@ public partial class MainWindowViewModel : ViewModelBase
         if (App.MainWindow == null) return;
 
         var vm = new ViewModels.Dialogs.CommandPaletteViewModel();
+        vm.LoadMruData(_settingsService);
         vm.RegisterCommands(this);
         vm.RegisterFiles(_projectService);
+
+        // Set the active document path for symbol search
+        var activeDoc = _dockFactory.GetActiveDocument() as Documents.CodeEditorDocumentViewModel;
+        vm.ActiveDocumentPath = activeDoc?.FilePath;
+
         vm.Open(mode);
 
         var dialog = new Views.Dialogs.CommandPaletteDialog
@@ -2717,11 +3029,31 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                GoToLineCommand.Execute(null);
+                var lineDoc = _dockFactory.GetActiveDocument() as Documents.CodeEditorDocumentViewModel;
+                if (lineDoc != null)
+                {
+                    RecordNavigationPosition(lineDoc);
+                    lineDoc.NavigateTo(dialog.RequestedLineNumber, 1);
+                }
             }
             catch (Exception ex)
             {
                 StatusText = $"Go to line failed: {ex.Message}";
+            }
+            return;
+        }
+
+        // Handle symbol navigation request
+        if (dialog.SymbolNavigationTarget != null)
+        {
+            try
+            {
+                var target = dialog.SymbolNavigationTarget.Value;
+                await OpenFileAndNavigateAsync(target.FilePath, target.Line, 1);
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Symbol navigation failed: {ex.Message}";
             }
             return;
         }
@@ -3371,7 +3703,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
         var totalRefs = references.Count;
         var fileCount = groups.Count();
-        StatusText = $"Found {totalRefs} reference{(totalRefs == 1 ? "" : "s")} in {fileCount} file{(fileCount == 1 ? "" : "s")}";
+        var searchResultMsg = $"Found {totalRefs} reference{(totalRefs == 1 ? "" : "s")} in {fileCount} file{(fileCount == 1 ? "" : "s")}";
+        StatusText = searchResultMsg;
+        Services.ScreenReaderService.Instance.Announce(searchResultMsg);
     }
 
     #endregion
@@ -6230,11 +6564,66 @@ public class NotificationEventArgs : EventArgs
 {
     public string Message { get; }
     public string Severity { get; }
+    public string? Details { get; }
+    public bool AutoDismiss { get; }
+    public double Progress { get; }
+    public bool IsIndeterminate { get; }
+    public bool ShowProgress { get; }
+    public List<NotificationAction> Actions { get; }
+    public string? NotificationId { get; }
 
     public NotificationEventArgs(string message, string severity)
     {
         Message = message;
         Severity = severity;
+        AutoDismiss = severity == "info";
+        Actions = new List<NotificationAction>();
+    }
+
+    public NotificationEventArgs(string message, string severity, string? details,
+        bool autoDismiss, List<NotificationAction>? actions = null,
+        double progress = 0, bool isIndeterminate = false, bool showProgress = false,
+        string? notificationId = null)
+    {
+        Message = message;
+        Severity = severity;
+        Details = details;
+        AutoDismiss = autoDismiss;
+        Actions = actions ?? new List<NotificationAction>();
+        Progress = progress;
+        IsIndeterminate = isIndeterminate;
+        ShowProgress = showProgress;
+        NotificationId = notificationId;
+    }
+}
+
+/// <summary>
+/// Represents a clickable action button on a notification toast.
+/// </summary>
+public class NotificationAction
+{
+    public string Label { get; }
+    public Action Callback { get; }
+
+    public NotificationAction(string label, Action callback)
+    {
+        Label = label;
+        Callback = callback;
+    }
+}
+
+/// <summary>
+/// Event args for temporary status bar messages.
+/// </summary>
+public class StatusBarMessageEventArgs : EventArgs
+{
+    public string Message { get; }
+    public double DurationSeconds { get; }
+
+    public StatusBarMessageEventArgs(string message, double durationSeconds)
+    {
+        Message = message;
+        DurationSeconds = durationSeconds;
     }
 }
 

@@ -10,6 +10,9 @@ using VisualGameStudio.Shell.Services;
 using VisualGameStudio.Shell.ViewModels;
 using VisualGameStudio.Shell.Views.Controls;
 using VisualGameStudio.Shell.Views.Panels;
+using VisualGameStudio.Shell.ViewModels.Dialogs;
+using VisualGameStudio.Shell.ViewModels.Documents;
+using VisualGameStudio.Shell.Views.Dialogs;
 using VisualGameStudio.Shell.Views.Documents;
 
 namespace VisualGameStudio.Shell.Views;
@@ -21,6 +24,17 @@ public partial class MainWindow : Window
     private DispatcherTimer? _hideTimer;
     private MainWindowViewModel? _subscribedVm;
     private StackPanel? _notificationArea;
+
+    /// <summary>
+    /// Tracks active progress notifications by ID so they can be updated in-place.
+    /// </summary>
+    private readonly Dictionary<string, Border> _activeProgressToasts = new();
+
+    /// <summary>
+    /// Timer used for temporary status bar messages that auto-revert.
+    /// </summary>
+    private DispatcherTimer? _statusBarMessageTimer;
+    private string? _previousStatusText;
 
     /// <summary>
     /// Stores the window state before entering Zen mode so it can be restored on exit.
@@ -73,8 +87,13 @@ public partial class MainWindow : Window
         {
             _subscribedVm.DataTipResult -= OnDataTipResult;
             _subscribedVm.NotificationRequested -= OnNotificationRequested;
+            _subscribedVm.NotificationDismissed -= OnNotificationDismissed;
+            _subscribedVm.StatusBarMessageRequested -= OnStatusBarMessageRequested;
             _subscribedVm.PropertyChanged -= OnViewModelPropertyChanged;
             _subscribedVm.FocusPanelRequested -= OnFocusPanelRequested;
+            _subscribedVm.ZoomLevelChanged -= OnZoomLevelChanged;
+            _subscribedVm.CompareViewRequested -= OnCompareViewRequested;
+            _subscribedVm.CompareWithClipboardRequested -= OnCompareWithClipboardRequested;
             _subscribedVm = null;
         }
 
@@ -82,9 +101,20 @@ public partial class MainWindow : Window
         {
             vm.DataTipResult += OnDataTipResult;
             vm.NotificationRequested += OnNotificationRequested;
+            vm.NotificationDismissed += OnNotificationDismissed;
+            vm.StatusBarMessageRequested += OnStatusBarMessageRequested;
             vm.PropertyChanged += OnViewModelPropertyChanged;
             vm.FocusPanelRequested += OnFocusPanelRequested;
+            vm.ZoomLevelChanged += OnZoomLevelChanged;
+            vm.CompareViewRequested += OnCompareViewRequested;
+            vm.CompareWithClipboardRequested += OnCompareWithClipboardRequested;
             _subscribedVm = vm;
+
+            // Apply initial zoom level from settings
+            if (vm.ZoomLevel != 100)
+            {
+                ApplyZoom(vm.ZoomLevel);
+            }
         }
     }
 
@@ -115,64 +145,282 @@ public partial class MainWindow : Window
 
     private void OnNotificationRequested(object? sender, NotificationEventArgs e)
     {
-        Dispatcher.UIThread.Post(() => ShowToastNotification(e.Message, e.Severity));
+        Dispatcher.UIThread.Post(() => ShowToastNotification(e));
     }
 
-    private void ShowToastNotification(string message, string severity)
+    private void OnNotificationDismissed(object? sender, string notificationId)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_activeProgressToasts.TryGetValue(notificationId, out var toast))
+            {
+                RemoveToast(toast);
+                _activeProgressToasts.Remove(notificationId);
+            }
+        });
+    }
+
+    private void OnStatusBarMessageRequested(object? sender, StatusBarMessageEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() => ShowTemporaryStatusBarMessage(e.Message, e.DurationSeconds));
+    }
+
+    /// <summary>
+    /// Shows a temporary message in the status bar that reverts after the specified duration.
+    /// </summary>
+    private void ShowTemporaryStatusBarMessage(string message, double durationSeconds)
+    {
+        if (_subscribedVm == null) return;
+
+        // Save current status text only if we don't already have a saved one
+        if (_previousStatusText == null)
+            _previousStatusText = _subscribedVm.StatusText;
+
+        _subscribedVm.StatusText = message;
+
+        // Cancel previous timer
+        _statusBarMessageTimer?.Stop();
+        _statusBarMessageTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(durationSeconds) };
+        _statusBarMessageTimer.Tick += (s, args) =>
+        {
+            _statusBarMessageTimer?.Stop();
+            if (_subscribedVm != null && _previousStatusText != null)
+            {
+                _subscribedVm.StatusText = _previousStatusText;
+                _previousStatusText = null;
+            }
+        };
+        _statusBarMessageTimer.Start();
+    }
+
+    private void ShowToastNotification(NotificationEventArgs e)
     {
         if (_notificationArea == null) return;
 
-        // Choose background color based on severity
-        IBrush background = severity.ToLowerInvariant() switch
+        // If this is a progress update for an existing notification, update it in place
+        if (e.ShowProgress && e.NotificationId != null && _activeProgressToasts.TryGetValue(e.NotificationId, out var existingToast))
         {
-            "warning" => new SolidColorBrush(Color.FromArgb(230, 180, 150, 20)),   // dark yellow
-            "error"   => new SolidColorBrush(Color.FromArgb(230, 180, 40, 40)),     // dark red
-            _         => new SolidColorBrush(Color.FromArgb(230, 40, 100, 180)),    // dark blue (info)
+            UpdateProgressToast(existingToast, e);
+            return;
+        }
+
+        var severity = e.Severity.ToLowerInvariant();
+
+        // Choose icon and background color based on severity
+        (IBrush background, string icon) = severity switch
+        {
+            "warning" => ((IBrush)new SolidColorBrush(Color.FromArgb(240, 60, 50, 10)), "\u26A0"),
+            "error" => ((IBrush)new SolidColorBrush(Color.FromArgb(240, 80, 20, 20)), "\u274C"),
+            _ => ((IBrush)new SolidColorBrush(Color.FromArgb(240, 20, 50, 80)), "\u2139"),
         };
 
-        var textBlock = new TextBlock
+        // Severity icon
+        var iconBlock = new TextBlock
         {
-            Text = message,
+            Text = icon,
+            FontSize = 16,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+
+        // Message text
+        var messageBlock = new TextBlock
+        {
+            Text = e.Message,
             Foreground = Brushes.White,
             FontSize = 13,
             TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center,
         };
 
+        // Content panel (vertical: message, optional details, optional progress, optional actions)
+        var contentPanel = new StackPanel { Spacing = 6 };
+        contentPanel.Children.Add(messageBlock);
+
+        // Details section (expandable for errors)
+        if (!string.IsNullOrEmpty(e.Details))
+        {
+            var detailsBlock = new TextBlock
+            {
+                Text = e.Details,
+                Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                MaxHeight = 80,
+            };
+            contentPanel.Children.Add(detailsBlock);
+        }
+
+        // Progress bar (for progress notifications)
+        if (e.ShowProgress)
+        {
+            var progressBar = new ProgressBar
+            {
+                Minimum = 0,
+                Maximum = 1,
+                Value = e.Progress,
+                IsIndeterminate = e.IsIndeterminate,
+                Height = 4,
+                Margin = new Thickness(0, 2, 0, 0),
+                Foreground = new SolidColorBrush(Color.FromRgb(88, 166, 255)),
+            };
+            progressBar.Tag = "ProgressBar"; // Tag for updating later
+            contentPanel.Children.Add(progressBar);
+        }
+
+        // Action buttons
+        if (e.Actions.Count > 0)
+        {
+            var actionsPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
+            foreach (var action in e.Actions)
+            {
+                var btn = new Button
+                {
+                    Content = action.Label,
+                    FontSize = 11,
+                    Padding = new Thickness(8, 3),
+                    Background = new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)),
+                    Foreground = Brushes.White,
+                    BorderThickness = new Thickness(0),
+                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+                };
+                var callback = action.Callback;
+                btn.Click += (s, args) =>
+                {
+                    try { callback(); } catch { }
+                };
+                actionsPanel.Children.Add(btn);
+            }
+            contentPanel.Children.Add(actionsPanel);
+        }
+
+        // Close button
+        var closeBtn = new Button
+        {
+            Content = "\u2715",
+            FontSize = 12,
+            Padding = new Thickness(4, 1),
+            Background = Brushes.Transparent,
+            Foreground = new SolidColorBrush(Color.FromRgb(180, 180, 180)),
+            BorderThickness = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Top,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+        };
+
+        // Layout: icon + content + close button
+        var innerGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+        };
+        Grid.SetColumn(iconBlock, 0);
+        Grid.SetColumn(contentPanel, 1);
+        Grid.SetColumn(closeBtn, 2);
+        innerGrid.Children.Add(iconBlock);
+        innerGrid.Children.Add(contentPanel);
+        innerGrid.Children.Add(closeBtn);
+
         var toast = new Border
         {
             Background = background,
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(14, 10),
+            Padding = new Thickness(12, 10),
             BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
             BorderThickness = new Thickness(1),
-            MinWidth = 200,
-            MaxWidth = 400,
+            MinWidth = 280,
+            MaxWidth = 420,
             IsHitTestVisible = true,
-            Child = textBlock,
-            // Drop shadow effect via BoxShadow
+            Child = innerGrid,
             BoxShadow = new BoxShadows(new BoxShadow
             {
                 OffsetX = 0,
                 OffsetY = 2,
-                Blur = 8,
-                Color = Color.FromArgb(120, 0, 0, 0),
+                Blur = 10,
+                Color = Color.FromArgb(140, 0, 0, 0),
             }),
+        };
+
+        // Close button removes the toast
+        closeBtn.Click += (s, args) =>
+        {
+            RemoveToast(toast);
+            if (e.NotificationId != null)
+                _activeProgressToasts.Remove(e.NotificationId);
         };
 
         _notificationArea.Children.Add(toast);
 
-        // Auto-remove after 5 seconds
-        var removeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        removeTimer.Tick += (s, args) =>
+        // Track progress toasts by ID for updates
+        if (e.ShowProgress && e.NotificationId != null)
         {
-            removeTimer.Stop();
-            if (_notificationArea.Children.Contains(toast))
+            _activeProgressToasts[e.NotificationId] = toast;
+        }
+
+        // Auto-dismiss: info toasts after 5s, warnings/errors stay unless autoDismiss is set
+        bool shouldAutoDismiss = e.AutoDismiss || (severity == "info" && e.Actions.Count == 0 && !e.ShowProgress);
+        if (shouldAutoDismiss)
+        {
+            var removeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            removeTimer.Tick += (s, args) =>
             {
-                _notificationArea.Children.Remove(toast);
+                removeTimer.Stop();
+                RemoveToast(toast);
+                if (e.NotificationId != null)
+                    _activeProgressToasts.Remove(e.NotificationId);
+            };
+            removeTimer.Start();
+        }
+
+        // Limit visible toasts to 5 — remove oldest
+        while (_notificationArea.Children.Count > 5)
+        {
+            _notificationArea.Children.RemoveAt(0);
+        }
+    }
+
+    /// <summary>
+    /// Updates an existing progress toast's message and progress bar.
+    /// </summary>
+    private void UpdateProgressToast(Border toast, NotificationEventArgs e)
+    {
+        if (toast.Child is Grid grid)
+        {
+            // Find the content panel (column 1)
+            foreach (var child in grid.Children)
+            {
+                if (child is StackPanel panel && Grid.GetColumn((Control)child) == 1)
+                {
+                    // Update message text (first child)
+                    if (panel.Children.Count > 0 && panel.Children[0] is TextBlock msgBlock)
+                    {
+                        msgBlock.Text = e.Message;
+                    }
+
+                    // Update progress bar
+                    foreach (var pChild in panel.Children)
+                    {
+                        if (pChild is ProgressBar progressBar)
+                        {
+                            progressBar.Value = e.Progress;
+                            progressBar.IsIndeterminate = e.IsIndeterminate;
+                            break;
+                        }
+                    }
+                    break;
+                }
             }
-        };
-        removeTimer.Start();
+        }
+    }
+
+    /// <summary>
+    /// Safely removes a toast from the notification area.
+    /// </summary>
+    private void RemoveToast(Border toast)
+    {
+        if (_notificationArea != null && _notificationArea.Children.Contains(toast))
+        {
+            _notificationArea.Children.Remove(toast);
+        }
     }
 
     private void OnDataTipResult(object? sender, DataTipResultEventArgs e)
@@ -379,6 +627,83 @@ public partial class MainWindow : Window
         if (textEditor?.TextArea != null)
         {
             textEditor.TextArea.Focus();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // IDE Zoom (Ctrl+/Ctrl-/Ctrl+0)
+    // ------------------------------------------------------------------
+
+    private void OnZoomLevelChanged(object? sender, int zoomPercent)
+    {
+        Dispatcher.UIThread.Post(() => ApplyZoom(zoomPercent));
+    }
+
+    /// <summary>
+    /// Applies the zoom level by setting a ScaleTransform on the main content panel.
+    /// The status bar is excluded from zoom so it remains at a constant size.
+    /// </summary>
+    private void ApplyZoom(int zoomPercent)
+    {
+        var scale = zoomPercent / 100.0;
+
+        // Find the DockPanel (main content excluding status bar) inside the root Grid
+        if (this.Content is not Avalonia.Controls.Grid rootGrid) return;
+
+        foreach (var child in rootGrid.Children)
+        {
+            if (child is DockPanel dockPanel)
+            {
+                dockPanel.RenderTransform = new ScaleTransform(scale, scale);
+                dockPanel.RenderTransformOrigin = new Avalonia.RelativePoint(0, 0, Avalonia.RelativeUnit.Relative);
+                break;
+            }
+        }
+    }
+
+    private async void OnCompareViewRequested(object? sender, DiffViewerViewModel diffVm)
+    {
+        try
+        {
+            var diffView = new DiffViewerView { DataContext = diffVm };
+            await diffView.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[MainWindow] Failed to show compare view: {ex.Message}");
+        }
+    }
+
+    private async void OnCompareWithClipboardRequested(object? sender, CodeEditorDocumentViewModel activeDoc)
+    {
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard == null) return;
+
+            var clipboardText = await clipboard.GetTextAsync();
+            if (string.IsNullOrEmpty(clipboardText))
+            {
+                if (DataContext is MainWindowViewModel vm2)
+                    vm2.StatusText = "Clipboard is empty";
+                return;
+            }
+
+            var gitService = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+                .GetService<VisualGameStudio.Core.Abstractions.Services.IGitService>(App.Services);
+            if (gitService == null) return;
+
+            var diffVm = new DiffViewerViewModel(gitService);
+            diffVm.LoadContents(clipboardText, activeDoc.Text,
+                "Clipboard",
+                System.IO.Path.GetFileName(activeDoc.FilePath ?? "Untitled"));
+
+            var diffView = new DiffViewerView { DataContext = diffVm };
+            await diffView.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[MainWindow] Failed to compare with clipboard: {ex.Message}");
         }
     }
 }

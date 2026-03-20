@@ -5,7 +5,7 @@ using VisualGameStudio.Shell.ViewModels.Dialogs;
 
 namespace VisualGameStudio.Shell.Views.Dialogs;
 
-public partial class NewProjectDialog : Window
+public partial class NewProjectDialog : AccessibleDialog
 {
     public NewProjectDialog()
     {

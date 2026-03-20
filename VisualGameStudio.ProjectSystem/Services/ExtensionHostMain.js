@@ -127,6 +127,12 @@ function handleRequest(id, method, params) {
                 .catch(err => sendResponse(id, null, err.message));
             break;
 
+        case 'fireActivationEvent':
+            fireActivationEvent(params.event)
+                .then(result => sendResponse(id, result))
+                .catch(err => sendResponse(id, null, err.message));
+            break;
+
         case 'shutdown':
             deactivateAll().then(() => {
                 sendResponse(id, { ok: true });
@@ -491,6 +497,23 @@ async function executeCommand(command, args) {
 function broadcastToExtensions(method, params) {
     // Extensions can register for document events through the vscode API shim
     // The event emitters will fire when we receive these notifications
+}
+
+/**
+ * Fires an activation event to all loaded extensions.
+ * Extensions that registered for this event through their package.json activationEvents
+ * will have already been activated by the IDE before this is called.
+ * This notifies already-active extensions about the event.
+ */
+async function fireActivationEvent(event) {
+    const results = [];
+    for (const [id, ext] of loadedExtensions) {
+        if (!ext.pkg || !ext.pkg.activationEvents) continue;
+        if (ext.pkg.activationEvents.includes(event) || ext.pkg.activationEvents.includes('*')) {
+            results.push(id);
+        }
+    }
+    return { notified: results };
 }
 
 // ─── Startup ────────────────────────────────────────────────────

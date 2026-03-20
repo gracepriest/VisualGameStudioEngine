@@ -26,21 +26,43 @@ public class ExtensionService : IExtensionService
     private readonly List<Extension> _extensions = new();
     private readonly Dictionary<string, bool> _enabledState = new();
     private readonly Dictionary<string, List<string>> _extensionCommands = new();
+
+    // Activation event tracking: event string -> list of extension IDs
+    private readonly Dictionary<string, List<string>> _activationEventIndex = new();
+    // Track which languages have already triggered activation
+    private readonly HashSet<string> _activatedLanguages = new();
+
+    // Contributed commands from package.json (commandId -> ContributedCommand)
+    private readonly Dictionary<string, ContributedCommand> _contributedCommands = new();
+    // Contributed keybindings from package.json
+    private readonly List<ContributedKeybinding> _contributedKeybindings = new();
+    // Contributed menu items from package.json (menuId -> list of items)
+    private readonly Dictionary<string, List<ContributedMenuItem>> _contributedMenuItems = new();
+
     private readonly string _extensionsDir;
     private readonly string _stateFile;
     private readonly HttpClient _httpClient;
     private readonly IOutputService _outputService;
     private readonly ITextMateService? _textMateService;
     private readonly ISnippetService? _snippetService;
+    private readonly ICommandService? _commandService;
+    private readonly IKeybindingService? _keybindingService;
     private TextMateRegistrar? _textMateRegistrar;
     private ExtensionHost? _extensionHost;
     private bool _disposed;
 
-    public ExtensionService(IOutputService outputService, ITextMateService? textMateService = null, ISnippetService? snippetService = null)
+    public ExtensionService(
+        IOutputService outputService,
+        ITextMateService? textMateService = null,
+        ISnippetService? snippetService = null,
+        ICommandService? commandService = null,
+        IKeybindingService? keybindingService = null)
     {
         _outputService = outputService;
         _textMateService = textMateService;
         _snippetService = snippetService;
+        _commandService = commandService;
+        _keybindingService = keybindingService;
 
         if (_textMateService != null)
         {
@@ -719,6 +741,14 @@ public class ExtensionService : IExtensionService
             extension.Contributions = manifest.Contributes;
         }
 
+        // Index activation events for fast lookup
+        IndexActivationEvents(extension);
+
+        // Parse and register contributed commands, keybindings, and menus
+        ParseContributedCommands(extension);
+        ParseContributedKeybindings(extension);
+        ParseContributedMenus(extension);
+
         return extension;
     }
 
@@ -740,13 +770,21 @@ public class ExtensionService : IExtensionService
             // Load snippets
             stats.SnippetsLoaded = LoadSnippetsFromExtension(extension);
 
-            var total = stats.ThemesLoaded + stats.GrammarsLoaded + stats.SnippetsLoaded;
+            // Register contributed commands with the IDE command service
+            var commandsRegistered = RegisterContributedCommandsWithIDE(extension);
+
+            // Register contributed keybindings with the IDE keybinding service
+            var keybindingsRegistered = RegisterContributedKeybindingsWithIDE(extension);
+
+            var total = stats.ThemesLoaded + stats.GrammarsLoaded + stats.SnippetsLoaded
+                        + commandsRegistered + keybindingsRegistered;
             if (total > 0)
             {
                 _outputService.WriteLine(
                     $"[Extensions] Loaded contributions from {extension.Name}: " +
                     $"{stats.ThemesLoaded} theme(s), {stats.GrammarsLoaded} grammar(s), " +
-                    $"{stats.SnippetsLoaded} snippet file(s)",
+                    $"{stats.SnippetsLoaded} snippet file(s), " +
+                    $"{commandsRegistered} command(s), {keybindingsRegistered} keybinding(s)",
                     OutputCategory.General);
 
                 ContributionsLoaded?.Invoke(this, stats);
@@ -762,6 +800,92 @@ public class ExtensionService : IExtensionService
     {
         // Unregister grammars loaded from this extension
         _textMateRegistrar?.UnregisterExtension(extension.Id);
+
+        // Unregister commands contributed by this extension
+        if (_commandService != null)
+        {
+            foreach (var cmd in _contributedCommands.Values.Where(c => c.ExtensionId == extension.Id))
+            {
+                _commandService.UnregisterCommand(cmd.CommandId);
+            }
+        }
+
+        // Remove keybindings contributed by this extension
+        // (keybinding service tracks by ExtensionId so we remove matching ones)
+        if (_keybindingService != null)
+        {
+            foreach (var kb in _contributedKeybindings.Where(k => k.ExtensionId == extension.Id))
+            {
+                try
+                {
+                    var chord = KeyChord.Parse(kb.Key);
+                    _keybindingService.RemoveKeybinding(kb.CommandId, chord);
+                }
+                catch
+                {
+                    // Ignore parse errors during cleanup
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Registers contributed commands with the IDE command service so they can be executed.
+    /// </summary>
+    private int RegisterContributedCommandsWithIDE(Extension extension)
+    {
+        if (_commandService == null) return 0;
+        if (extension.Contributions?.Commands == null) return 0;
+
+        var count = 0;
+        foreach (var cmd in extension.Contributions.Commands)
+        {
+            if (string.IsNullOrEmpty(cmd.Command)) continue;
+            if (_commandService.IsCommandRegistered(cmd.Command)) continue;
+
+            var commandId = cmd.Command;
+            _commandService.RegisterCommand(commandId, async _ =>
+            {
+                await ExecuteContributedCommandAsync(commandId);
+            });
+            count++;
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Registers contributed keybindings with the IDE keybinding service.
+    /// </summary>
+    private int RegisterContributedKeybindingsWithIDE(Extension extension)
+    {
+        if (_keybindingService == null) return 0;
+        if (extension.Contributions?.Keybindings == null) return 0;
+
+        var count = 0;
+        foreach (var kb in extension.Contributions.Keybindings)
+        {
+            if (string.IsNullOrEmpty(kb.Command) || string.IsNullOrEmpty(kb.Key)) continue;
+
+            try
+            {
+                var chord = KeyChord.Parse(kb.Key);
+                var keybinding = new Keybinding
+                {
+                    CommandId = kb.Command,
+                    Key = chord,
+                    When = kb.When,
+                    ExtensionId = extension.Id,
+                    Source = KeybindingSource.Extension
+                };
+                _keybindingService.RegisterKeybinding(keybinding);
+                count++;
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError($"[Extensions] Failed to register keybinding '{kb.Key}' for '{kb.Command}': {ex.Message}", OutputCategory.General);
+            }
+        }
+        return count;
     }
 
     private int LoadThemesFromExtension(Extension extension)
@@ -1066,6 +1190,275 @@ public class ExtensionService : IExtensionService
         }
     }
 
+    #endregion
+
+    #region Contributed Commands, Keybindings, Menus
+
+    public IReadOnlyList<ContributedCommand> GetContributedCommands()
+    {
+        return _contributedCommands.Values.ToList();
+    }
+
+    public IReadOnlyList<ContributedKeybinding> GetContributedKeybindings()
+    {
+        return _contributedKeybindings.ToList();
+    }
+
+    public IReadOnlyList<ContributedMenuItem> GetContributedMenuItems(string menuId)
+    {
+        if (_contributedMenuItems.TryGetValue(menuId, out var items))
+        {
+            return items.ToList();
+        }
+        return Array.Empty<ContributedMenuItem>();
+    }
+
+    public async Task ExecuteContributedCommandAsync(string commandId)
+    {
+        if (!_contributedCommands.TryGetValue(commandId, out var contributed))
+        {
+            _outputService.WriteError($"[Extensions] Unknown contributed command: {commandId}", OutputCategory.General);
+            return;
+        }
+
+        // Ensure the owning extension is activated (onCommand activation event)
+        var extension = _extensions.FirstOrDefault(e => e.Id == contributed.ExtensionId);
+        if (extension != null && extension.IsEnabled && !extension.IsActive)
+        {
+            _outputService.WriteLine($"[Extensions] Activating {extension.Name} for command: {commandId}", OutputCategory.General);
+            await ActivateAsync(extension.Id);
+        }
+
+        // If the extension has a runtime, send the command to the extension host
+        if (contributed.HasRuntime)
+        {
+            if (_extensionHost?.IsRunning == true)
+            {
+                try
+                {
+                    await _extensionHost.ExecuteCommandAsync(commandId);
+                }
+                catch (Exception ex)
+                {
+                    _outputService.WriteError($"[Extensions] Command '{commandId}' failed: {ex.Message}", OutputCategory.General);
+                }
+            }
+            else
+            {
+                _outputService.WriteError($"[Extensions] Cannot execute '{commandId}': extension host is not running.", OutputCategory.General);
+            }
+        }
+        else
+        {
+            _outputService.WriteLine($"[Extensions] Command '{commandId}' is not available (extension has no runtime).", OutputCategory.General);
+        }
+    }
+
+    public async Task NotifyLanguageOpenedAsync(string languageId)
+    {
+        if (string.IsNullOrEmpty(languageId)) return;
+
+        var activationEvent = $"onLanguage:{languageId}";
+
+        // Avoid redundant activations for the same language
+        if (!_activatedLanguages.Add(languageId)) return;
+
+        _outputService.WriteLine($"[Extensions] Language opened: {languageId}", OutputCategory.General);
+        await TriggerActivationEventAsync(activationEvent);
+    }
+
+    public async Task NotifyWorkspaceOpenedAsync(string workspacePath)
+    {
+        if (string.IsNullOrEmpty(workspacePath) || !Directory.Exists(workspacePath)) return;
+
+        _outputService.WriteLine($"[Extensions] Checking workspaceContains activation events for: {workspacePath}", OutputCategory.General);
+
+        // Find all extensions with workspaceContains events
+        foreach (var ext in _extensions.Where(e => e.IsEnabled && !e.IsActive).ToList())
+        {
+            foreach (var evt in ext.ActivationEvents)
+            {
+                if (evt.StartsWith("workspaceContains:"))
+                {
+                    var glob = evt.Substring("workspaceContains:".Length);
+                    if (WorkspaceContainsMatch(workspacePath, glob))
+                    {
+                        _outputService.WriteLine($"[Extensions] Workspace match for {ext.Name}: {glob}", OutputCategory.General);
+                        await ActivateAsync(ext.Id);
+                        break; // Only need one match per extension
+                    }
+                }
+            }
+        }
+    }
+
+    #endregion
+
+    #region Activation Event Indexing
+
+    private void IndexActivationEvents(Extension extension)
+    {
+        foreach (var evt in extension.ActivationEvents)
+        {
+            if (!_activationEventIndex.TryGetValue(evt, out var extList))
+            {
+                extList = new List<string>();
+                _activationEventIndex[evt] = extList;
+            }
+            if (!extList.Contains(extension.Id))
+            {
+                extList.Add(extension.Id);
+            }
+        }
+    }
+
+    private void ParseContributedCommands(Extension extension)
+    {
+        if (extension.Contributions?.Commands == null) return;
+
+        var hasRuntime = !string.IsNullOrEmpty(extension.Manifest?.Main);
+
+        foreach (var cmd in extension.Contributions.Commands)
+        {
+            if (string.IsNullOrEmpty(cmd.Command)) continue;
+
+            _contributedCommands[cmd.Command] = new ContributedCommand
+            {
+                CommandId = cmd.Command,
+                Title = cmd.Title,
+                Category = cmd.Category,
+                ExtensionId = extension.Id,
+                HasRuntime = hasRuntime
+            };
+        }
+    }
+
+    private void ParseContributedKeybindings(Extension extension)
+    {
+        if (extension.Contributions?.Keybindings == null) return;
+
+        foreach (var kb in extension.Contributions.Keybindings)
+        {
+            if (string.IsNullOrEmpty(kb.Command) || string.IsNullOrEmpty(kb.Key)) continue;
+
+            _contributedKeybindings.Add(new ContributedKeybinding
+            {
+                CommandId = kb.Command,
+                Key = kb.Key,
+                Mac = kb.Mac,
+                Linux = kb.Linux,
+                When = kb.When,
+                ExtensionId = extension.Id
+            });
+        }
+    }
+
+    private void ParseContributedMenus(Extension extension)
+    {
+        if (string.IsNullOrEmpty(extension.InstallPath)) return;
+
+        var packageJsonPath = Path.Combine(extension.InstallPath, "package.json");
+        if (!File.Exists(packageJsonPath)) return;
+
+        try
+        {
+            var json = File.ReadAllText(packageJsonPath);
+            using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            });
+
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("contributes", out var contributes)) return;
+            if (!contributes.TryGetProperty("menus", out var menus)) return;
+
+            // menus is { "editor/context": [...], "explorer/context": [...], ... }
+            foreach (var menuProp in menus.EnumerateObject())
+            {
+                var menuId = menuProp.Name;
+                if (menuProp.Value.ValueKind != JsonValueKind.Array) continue;
+
+                foreach (var entry in menuProp.Value.EnumerateArray())
+                {
+                    var commandId = entry.TryGetProperty("command", out var cmdEl) ? cmdEl.GetString() : null;
+                    if (string.IsNullOrEmpty(commandId)) continue;
+
+                    var group = entry.TryGetProperty("group", out var groupEl) ? groupEl.GetString() : null;
+                    var when = entry.TryGetProperty("when", out var whenEl) ? whenEl.GetString() : null;
+
+                    // Resolve display title from contributed commands
+                    var title = commandId;
+                    string? category = null;
+                    if (_contributedCommands.TryGetValue(commandId, out var contributed))
+                    {
+                        title = contributed.Title;
+                        category = contributed.Category;
+                    }
+
+                    if (!_contributedMenuItems.TryGetValue(menuId, out var menuList))
+                    {
+                        menuList = new List<ContributedMenuItem>();
+                        _contributedMenuItems[menuId] = menuList;
+                    }
+
+                    menuList.Add(new ContributedMenuItem
+                    {
+                        MenuId = menuId,
+                        CommandId = commandId,
+                        Group = group,
+                        When = when,
+                        ExtensionId = extension.Id,
+                        Title = title,
+                        Category = category
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteError($"[Extensions] Failed to parse menus from {extension.Name}: {ex.Message}", OutputCategory.General);
+        }
+    }
+
+    /// <summary>
+    /// Simple glob matching for workspaceContains patterns.
+    /// Supports ** and * patterns.
+    /// </summary>
+    private static bool WorkspaceContainsMatch(string workspacePath, string glob)
+    {
+        try
+        {
+            // Convert glob to a search pattern for Directory.EnumerateFiles
+            // Handle common patterns like "**/*.py", "*.json", ".eslintrc"
+            var searchPattern = glob;
+
+            // Strip leading **/ for recursive search
+            var searchOption = SearchOption.TopDirectoryOnly;
+            if (searchPattern.StartsWith("**/"))
+            {
+                searchPattern = searchPattern.Substring(3);
+                searchOption = SearchOption.AllDirectories;
+            }
+            else if (searchPattern.Contains("**"))
+            {
+                searchOption = SearchOption.AllDirectories;
+                searchPattern = searchPattern.Replace("**/", "");
+            }
+
+            // Use Directory.EnumerateFiles with the simplified pattern
+            // Only check for existence (take 1)
+            var files = Directory.EnumerateFiles(workspacePath, searchPattern, searchOption);
+            return files.Any();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    #endregion
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -1074,6 +1467,4 @@ public class ExtensionService : IExtensionService
         _extensionHost?.Dispose();
         _httpClient.Dispose();
     }
-
-    #endregion
 }

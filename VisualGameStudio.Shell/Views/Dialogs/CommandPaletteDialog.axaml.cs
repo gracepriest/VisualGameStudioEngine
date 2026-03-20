@@ -21,6 +21,11 @@ public partial class CommandPaletteDialog : Window
     /// </summary>
     public int RequestedLineNumber { get; private set; } = -1;
 
+    /// <summary>
+    /// Gets the symbol navigation target (file path + line), if any.
+    /// </summary>
+    public (string FilePath, int Line)? SymbolNavigationTarget { get; private set; }
+
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
@@ -34,6 +39,7 @@ public partial class CommandPaletteDialog : Window
             vm.Dismissed += OnDismissed;
             vm.FileOpenRequested += OnFileOpenRequested;
             vm.GoToLineRequested += OnGoToLineRequested;
+            vm.SymbolNavigationRequested += OnSymbolNavigationRequested;
         }
     }
 
@@ -45,6 +51,7 @@ public partial class CommandPaletteDialog : Window
             vm.Dismissed -= OnDismissed;
             vm.FileOpenRequested -= OnFileOpenRequested;
             vm.GoToLineRequested -= OnGoToLineRequested;
+            vm.SymbolNavigationRequested -= OnSymbolNavigationRequested;
         }
         base.OnClosed(e);
     }
@@ -71,6 +78,12 @@ public partial class CommandPaletteDialog : Window
         Close(null);
     }
 
+    private void OnSymbolNavigationRequested(object? sender, (string FilePath, int Line) target)
+    {
+        SymbolNavigationTarget = target;
+        Close(null);
+    }
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (DataContext is CommandPaletteViewModel vm)
@@ -78,10 +91,23 @@ public partial class CommandPaletteDialog : Window
             switch (e.Key)
             {
                 case Key.Up:
+                    if (string.IsNullOrEmpty(vm.SearchText) &&
+                        vm.CurrentMode == CommandPaletteMode.Command &&
+                        e.KeyModifiers == KeyModifiers.None)
+                    {
+                        // In command mode with empty search, Up/Down also navigate history
+                        vm.HistoryUpCommand.Execute(null);
+                    }
                     vm.MoveUpCommand.Execute(null);
                     e.Handled = true;
                     break;
                 case Key.Down:
+                    if (string.IsNullOrEmpty(vm.SearchText) &&
+                        vm.CurrentMode == CommandPaletteMode.Command &&
+                        e.KeyModifiers == KeyModifiers.None)
+                    {
+                        vm.HistoryDownCommand.Execute(null);
+                    }
                     vm.MoveDownCommand.Execute(null);
                     e.Handled = true;
                     break;

@@ -42,6 +42,80 @@ public partial class GitChangesViewModel : ViewModelBase
     [ObservableProperty]
     private ObservableCollection<string> _branches = new();
 
+    // ── Commit Message Templates ──
+
+    [ObservableProperty]
+    private bool _isCommitPrefixMenuOpen;
+
+    /// <summary>
+    /// Conventional commit prefixes for the dropdown.
+    /// </summary>
+    public IReadOnlyList<string> CommitPrefixes { get; } = new[]
+    {
+        "feat: ",
+        "fix: ",
+        "docs: ",
+        "refactor: ",
+        "test: ",
+        "chore: ",
+        "style: ",
+        "perf: ",
+        "ci: ",
+        "build: "
+    };
+
+    /// <summary>
+    /// Placeholder text for the commit message box.
+    /// </summary>
+    public string CommitMessagePlaceholder => "Message (Ctrl+Enter to commit)";
+
+    // ── Amend Last Commit ──
+
+    [ObservableProperty]
+    private bool _isAmendMode;
+
+    // ── Auto-Refresh ──
+
+    private System.Threading.Timer? _autoRefreshTimer;
+    private int _autoRefreshIntervalMs = 5000;
+
+    [ObservableProperty]
+    private bool _isAutoRefreshEnabled = true;
+
+    /// <summary>
+    /// Auto-refresh interval in milliseconds (default 5000).
+    /// </summary>
+    public int AutoRefreshIntervalMs
+    {
+        get => _autoRefreshIntervalMs;
+        set
+        {
+            if (SetProperty(ref _autoRefreshIntervalMs, value))
+            {
+                RestartAutoRefreshTimer();
+            }
+        }
+    }
+
+    // ── Git Log ──
+
+    [ObservableProperty]
+    private ObservableCollection<GitLogItem> _logEntries = new();
+
+    [ObservableProperty]
+    private bool _isLogViewerOpen;
+
+    [ObservableProperty]
+    private string? _logViewerTitle;
+
+    // ── Dirty indicator ──
+
+    /// <summary>
+    /// True when there are any uncommitted changes (staged or unstaged).
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasUncommittedChanges;
+
     public GitChangesViewModel(IGitService gitService, IDialogService dialogService, IOutputService outputService)
     {
         _gitService = gitService;
@@ -49,9 +123,46 @@ public partial class GitChangesViewModel : ViewModelBase
         _outputService = outputService;
 
         _gitService.StatusChanged += OnGitStatusChanged;
+
+        // Start auto-refresh timer
+        StartAutoRefreshTimer();
     }
 
     private void OnGitStatusChanged(object? sender, EventArgs e)
+    {
+        _ = RefreshAsync();
+    }
+
+    // ── Auto-Refresh Timer ──
+
+    private void StartAutoRefreshTimer()
+    {
+        _autoRefreshTimer = new System.Threading.Timer(
+            _ => { if (IsAutoRefreshEnabled) _ = RefreshAsync(); },
+            null,
+            TimeSpan.FromMilliseconds(_autoRefreshIntervalMs),
+            TimeSpan.FromMilliseconds(_autoRefreshIntervalMs));
+    }
+
+    private void RestartAutoRefreshTimer()
+    {
+        _autoRefreshTimer?.Dispose();
+        if (IsAutoRefreshEnabled)
+        {
+            StartAutoRefreshTimer();
+        }
+    }
+
+    partial void OnIsAutoRefreshEnabledChanged(bool value)
+    {
+        RestartAutoRefreshTimer();
+    }
+
+    /// <summary>
+    /// Call this on file save, window focus, or terminal command completion
+    /// to trigger an immediate refresh.
+    /// </summary>
+    public void NotifyExternalChange()
     {
         _ = RefreshAsync();
     }
@@ -62,6 +173,7 @@ public partial class GitChangesViewModel : ViewModelBase
         if (!_gitService.IsGitRepository)
         {
             IsGitRepository = false;
+            HasUncommittedChanges = false;
             return;
         }
 
@@ -99,6 +211,8 @@ public partial class GitChangesViewModel : ViewModelBase
                     UnstagedChanges.Add(item);
                 }
             }
+
+            HasUncommittedChanges = StagedChanges.Count > 0 || UnstagedChanges.Count > 0;
 
             var branches = await _gitService.GetBranchesAsync();
             Branches.Clear();
@@ -142,6 +256,8 @@ public partial class GitChangesViewModel : ViewModelBase
         }
     }
 
+    // ── Commit (supports amend) ──
+
     [RelayCommand]
     private async Task CommitAsync()
     {
@@ -151,23 +267,165 @@ public partial class GitChangesViewModel : ViewModelBase
             return;
         }
 
-        if (!StagedChanges.Any())
+        if (!IsAmendMode && !StagedChanges.Any())
         {
             await _dialogService.ShowMessageAsync("Error", "No changes staged for commit.");
             return;
         }
 
-        var result = await _gitService.CommitAsync(CommitMessage);
+        GitCommitResult result;
+
+        if (IsAmendMode)
+        {
+            result = await _gitService.CommitAmendAsync(CommitMessage);
+        }
+        else
+        {
+            result = await _gitService.CommitAsync(CommitMessage);
+        }
 
         if (result.Success)
         {
-            _outputService.WriteLine($"Committed: {result.CommitHash}");
+            var action = IsAmendMode ? "Amended" : "Committed";
+            _outputService.WriteLine($"{action}: {result.CommitHash}");
             CommitMessage = "";
+            IsAmendMode = false;
         }
         else
         {
             await _dialogService.ShowMessageAsync("Commit Failed", result.ErrorMessage ?? "Unknown error");
         }
+    }
+
+    // ── Commit Prefix Templates ──
+
+    [RelayCommand]
+    private void ToggleCommitPrefixMenu()
+    {
+        IsCommitPrefixMenuOpen = !IsCommitPrefixMenuOpen;
+    }
+
+    [RelayCommand]
+    private void ApplyCommitPrefix(string? prefix)
+    {
+        if (!string.IsNullOrEmpty(prefix))
+        {
+            CommitMessage = prefix + CommitMessage;
+        }
+        IsCommitPrefixMenuOpen = false;
+    }
+
+    // ── Amend Mode Toggle ──
+
+    [RelayCommand]
+    private async Task ToggleAmendModeAsync()
+    {
+        IsAmendMode = !IsAmendMode;
+
+        if (IsAmendMode)
+        {
+            // Pre-fill with last commit message
+            var lastMessage = await _gitService.GetLastCommitMessageAsync();
+            if (!string.IsNullOrEmpty(lastMessage))
+            {
+                CommitMessage = lastMessage;
+            }
+        }
+        else
+        {
+            CommitMessage = "";
+        }
+    }
+
+    // ── Discard All Changes ──
+
+    [RelayCommand]
+    private async Task DiscardAllChangesAsync()
+    {
+        if (!UnstagedChanges.Any() && !StagedChanges.Any())
+        {
+            await _dialogService.ShowMessageAsync("Info", "No changes to discard.");
+            return;
+        }
+
+        var confirmed = await _dialogService.ConfirmAsync(
+            "Discard All Changes",
+            "Are you sure you want to discard all changes? This cannot be undone.");
+
+        if (confirmed)
+        {
+            await _gitService.DiscardAllChangesAsync();
+            _outputService.WriteLine("All changes discarded.");
+        }
+    }
+
+    // ── Undo Last Commit ──
+
+    [RelayCommand]
+    private async Task UndoLastCommitAsync()
+    {
+        var confirmed = await _dialogService.ConfirmAsync(
+            "Undo Last Commit",
+            "This will undo the last commit but keep all changes staged. Continue?");
+
+        if (!confirmed) return;
+
+        var success = await _gitService.UndoLastCommitAsync();
+        if (success)
+        {
+            _outputService.WriteLine("Last commit undone (changes preserved as staged).");
+        }
+        else
+        {
+            await _dialogService.ShowMessageAsync("Error", "Failed to undo last commit. There may be no commits to undo.");
+        }
+    }
+
+    // ── Git Log Viewer ──
+
+    [RelayCommand]
+    private async Task ShowGitLogAsync()
+    {
+        await ShowGitLogForFileAsync(null);
+    }
+
+    [RelayCommand]
+    private async Task ShowGitLogForFileAsync(string? filePath)
+    {
+        IsLogViewerOpen = true;
+        LogEntries.Clear();
+
+        IReadOnlyList<GitCommitInfo> commits;
+
+        if (!string.IsNullOrEmpty(filePath))
+        {
+            LogViewerTitle = $"Git Log: {Path.GetFileName(filePath)}";
+            commits = await _gitService.GetFileLogAsync(filePath, 50);
+        }
+        else
+        {
+            LogViewerTitle = "Git Log";
+            commits = await _gitService.GetLogAsync(maxCount: 50);
+        }
+
+        foreach (var commit in commits)
+        {
+            LogEntries.Add(new GitLogItem
+            {
+                Hash = commit.Hash,
+                ShortHash = commit.ShortHash,
+                Message = commit.Message,
+                Author = commit.Author,
+                Date = commit.Date,
+                RelativeDate = FormatRelativeDate(commit.Date)
+            });
+        }
+    }
+
+    [RelayCommand]
+    private void CloseLogViewer()
+    {
+        IsLogViewerOpen = false;
     }
 
     /// <summary>
@@ -273,10 +531,15 @@ public partial class GitChangesViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Event raised when the user requests to view a diff for a changed file.
+    /// Event raised when the user requests to view a diff for an unstaged changed file.
     /// The view subscribes to this to show the DiffViewerView window.
     /// </summary>
     public event EventHandler<string>? ShowDiffRequested;
+
+    /// <summary>
+    /// Event raised when the user requests to view a diff for a staged file.
+    /// </summary>
+    public event EventHandler<string>? ShowStagedDiffRequested;
 
     [RelayCommand]
     private async Task ShowDiffAsync(GitChangeItem? item)
@@ -284,6 +547,14 @@ public partial class GitChangesViewModel : ViewModelBase
         if (item == null) return;
 
         ShowDiffRequested?.Invoke(this, item.FilePath);
+    }
+
+    [RelayCommand]
+    private async Task ShowStagedDiffAsync(GitChangeItem? item)
+    {
+        if (item == null) return;
+
+        ShowStagedDiffRequested?.Invoke(this, item.FilePath);
     }
 
     [RelayCommand]
@@ -298,6 +569,17 @@ public partial class GitChangesViewModel : ViewModelBase
             // This would need the project path from somewhere
             _outputService.WriteLine("Git repository initialized.");
         }
+    }
+
+    private static string FormatRelativeDate(DateTime date)
+    {
+        var span = DateTime.Now - date;
+        if (span.TotalMinutes < 1) return "just now";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}m ago";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}h ago";
+        if (span.TotalDays < 30) return $"{(int)span.TotalDays}d ago";
+        if (span.TotalDays < 365) return $"{(int)(span.TotalDays / 30)}mo ago";
+        return $"{(int)(span.TotalDays / 365)}y ago";
     }
 
     private static string GetStatusText(GitFileStatus status) => status switch
@@ -332,4 +614,16 @@ public class GitChangeItem
     public GitFileStatus Status { get; set; }
     public string StatusText { get; set; } = "";
     public string StatusColor { get; set; } = "#808080";
+}
+
+public class GitLogItem
+{
+    public string Hash { get; set; } = "";
+    public string ShortHash { get; set; } = "";
+    public string Message { get; set; } = "";
+    public string Author { get; set; } = "";
+    public DateTime Date { get; set; }
+    public string RelativeDate { get; set; } = "";
+
+    public string DisplayText => $"{ShortHash}  {Author}, {RelativeDate} - {Message}";
 }
