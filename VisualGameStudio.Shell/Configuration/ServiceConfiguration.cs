@@ -75,6 +75,7 @@ public static class ServiceConfiguration
         services.AddSingleton<CallHierarchyViewModel>();
         services.AddSingleton<TypeHierarchyViewModel>();
         services.AddSingleton<ThreadsViewModel>();
+        services.AddSingleton<TimelineViewModel>();
 
         // ViewModels (Transient for documents and dialogs)
         services.AddTransient<CodeEditorDocumentViewModel>();
