@@ -98,7 +98,7 @@
                              Classes="console-text"
                              Text="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss.fff} '}"
                              Foreground="#6A6A6A"
-                             IsVisible="{Binding $parent[ItemsControl].((vm:DebugConsoleViewModel)DataContext).ShowTimestamps}"/>
+                             IsVisible="{Binding $parent[ItemsControl].DataContext.ShowTimestamps}"/>
 
                   <!-- Entry type prefix (>, E, W, i) -->
                   <TextBlock Grid.Column="1" Classes="console-text" Margin="0,0,4,0"
@@ -112,7 +112,7 @@
                       <Button IsVisible="{Binding IsExpandable}"
                               Classes="toolbar-btn"
                               Content="{Binding IsExpanded, Converter={x:Static views:DebugConsoleConverters.ExpanderGlyph}}"
-                              Command="{Binding $parent[ItemsControl].((vm:DebugConsoleViewModel)DataContext).ExpandEntryCommand}"
+                              Command="{Binding $parent[ItemsControl].DataContext.ExpandEntryCommand}"
                               CommandParameter="{Binding}"
                               Padding="2,0"
                               MinWidth="16"
@@ -158,7 +158,7 @@
                   <Button Grid.Column="3"
                           Classes="toolbar-btn copy-btn"
                           Content="Copy"
-                          Command="{Binding $parent[ItemsControl].((vm:DebugConsoleViewModel)DataContext).CopyEntryCommand}"
+                          Command="{Binding $parent[ItemsControl].DataContext.CopyEntryCommand}"
                           CommandParameter="{Binding}"
                           FontSize="10"
                           VerticalAlignment="Top"/>

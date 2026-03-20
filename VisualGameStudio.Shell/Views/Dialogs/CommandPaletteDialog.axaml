@@ -41,9 +41,8 @@
       <!-- Hint bar -->
       <Border DockPanel.Dock="Top" Background="#252526" Padding="12,4">
         <StackPanel Orientation="Horizontal" Spacing="16">
-          <TextBlock FontSize="11" Foreground="#808080">
-            <Run Text="{Binding ModeName}" Foreground="#569CD6"/>
-          </TextBlock>
+          <TextBlock FontSize="11" Foreground="#569CD6"
+                     Text="{Binding ModeName}"/>
           <TextBlock Text="Up/Down Navigate" FontSize="11" Foreground="#606060"/>
           <TextBlock Text="Enter Execute" FontSize="11" Foreground="#606060"/>
           <TextBlock Text="Esc Close" FontSize="11" Foreground="#606060"/>

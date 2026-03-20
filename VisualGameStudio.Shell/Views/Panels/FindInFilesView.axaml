@@ -240,7 +240,7 @@
                       <!-- Dismiss button -->
                       <Button Grid.Column="4" Classes="toolbarButton" Width="18" Height="18"
                               Padding="0" Margin="0,0,2,0"
-                              Command="{Binding $parent[ItemsControl].((vm:FindInFilesViewModel)DataContext).DismissFileResultCommand}"
+                              Command="{Binding $parent[ItemsControl].DataContext.DismissFileResultCommand}"
                               CommandParameter="{Binding}"
                               ToolTip.Tip="Dismiss"
                               AutomationProperties.Name="Dismiss File Result">
@@ -251,10 +251,10 @@
                   </Border>
 
                   <!-- Replace in file button (visible in replace mode) -->
-                  <Border IsVisible="{Binding $parent[ItemsControl].((vm:FindInFilesViewModel)DataContext).IsReplaceMode}"
+                  <Border IsVisible="{Binding $parent[ItemsControl].DataContext.IsReplaceMode}"
                           Padding="20,0,4,2">
                     <Button Classes="toolbarButton" Height="18" Padding="6,0"
-                            Command="{Binding $parent[ItemsControl].((vm:FindInFilesViewModel)DataContext).ReplaceInFileCommand}"
+                            Command="{Binding $parent[ItemsControl].DataContext.ReplaceInFileCommand}"
                             CommandParameter="{Binding}"
                             HorizontalAlignment="Left"
                             AutomationProperties.Name="Replace All in This File">
@@ -295,7 +295,7 @@
                             <!-- Dismiss match button -->
                             <Button Grid.Column="2" Classes="toolbarButton dismissMatch" Width="16" Height="16"
                                     Padding="0" Margin="2,0,0,0" Opacity="0"
-                                    Command="{Binding $parent[ItemsControl;1].((vm:FindInFilesViewModel)DataContext).DismissMatchResultCommand}"
+                                    Command="{Binding $parent[ItemsControl;1].DataContext.DismissMatchResultCommand}"
                                     CommandParameter="{Binding}"
                                     AutomationProperties.Name="Dismiss Match">
                               <TextBlock Text="x" FontSize="9" Foreground="#808080"

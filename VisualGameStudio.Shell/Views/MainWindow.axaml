@@ -643,7 +643,7 @@
                   <!-- Dismiss button -->
                   <Button Grid.Column="2" Content="&#x2715;" FontSize="10" Padding="4,2"
                           Background="Transparent" Foreground="#606060" BorderThickness="0"
-                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).StatusBar.DismissNotificationCommand}"
+                          Command="{Binding $parent[Window].DataContext.StatusBar.DismissNotificationCommand}"
                           CommandParameter="{Binding}"
                           VerticalAlignment="Top" Cursor="Hand"/>
                 </Grid>

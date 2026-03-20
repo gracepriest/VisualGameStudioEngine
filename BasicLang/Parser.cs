@@ -192,8 +192,46 @@ namespace BasicLang.Compiler
                     }
                     return statement;
                 }
+                if (Check(TokenType.Class))
+                {
+                    var cls = ParseClass();
+                    cls.Access = access;
+                    return cls;
+                }
+                if (Check(TokenType.Module))
+                {
+                    return ParseModule();
+                }
+                if (Check(TokenType.Interface))
+                {
+                    return ParseInterface();
+                }
+                if (Check(TokenType.Enum))
+                {
+                    var en = ParseEnum();
+                    en.Access = access;
+                    return en;
+                }
+                if (Check(TokenType.Structure))
+                {
+                    var st = ParseStructure();
+                    st.Access = access;
+                    return st;
+                }
+                if (Check(TokenType.MustInherit))
+                {
+                    Advance(); // consume MustInherit
+                    if (Check(TokenType.Class))
+                    {
+                        var cls = ParseClass();
+                        cls.Access = access;
+                        cls.IsAbstract = true;
+                        return cls;
+                    }
+                    throw new ParseException("Expected 'Class' after 'MustInherit'", Peek());
+                }
                 throw new ParseException(
-                    $"Expected Function, Sub, Dim, or Const after modifiers, got '{Peek().Lexeme}'",
+                    $"Expected Function, Sub, Class, Module, Interface, Enum, Structure, Dim, or Const after modifiers, got '{Peek().Lexeme}'",
                     Peek());
             }
             if (Check(TokenType.Function))
@@ -368,11 +406,33 @@ namespace BasicLang.Compiler
             }
             if (Check(TokenType.Extension))
                 return ParseExtensionMethod();
+            if (Check(TokenType.Class))
+            {
+                var cls = ParseClass();
+                cls.Access = access;
+                return cls;
+            }
+            if (Check(TokenType.Module))
+                return ParseModule();
+            if (Check(TokenType.Interface))
+                return ParseInterface();
+            if (Check(TokenType.Enum))
+            {
+                var en = ParseEnum();
+                en.Access = access;
+                return en;
+            }
+            if (Check(TokenType.Structure))
+            {
+                var st = ParseStructure();
+                st.Access = access;
+                return st;
+            }
 
             throw new ParseException(
                 $"Unexpected token in module: '{Peek().Lexeme}' ({Peek().Type})",
                 Peek(),
-                "Inside a Module, valid declarations include: Function, Sub, Dim, Const, Type, Structure, or nested Class.");
+                "Inside a Module, valid declarations include: Function, Sub, Dim, Const, Type, Structure, Class, or nested Module.");
         }
 
         private UsingDirectiveNode ParseUsing()
@@ -746,6 +806,36 @@ namespace BasicLang.Compiler
 
                     return field;
                 }
+            }
+
+            // Nested Class declaration
+            if (Check(TokenType.Class))
+            {
+                var nestedClass = ParseClass();
+                nestedClass.Access = access;
+                return nestedClass;
+            }
+
+            // Nested Enum declaration
+            if (Check(TokenType.Enum))
+            {
+                var en = ParseEnum();
+                en.Access = access;
+                return en;
+            }
+
+            // Nested Structure declaration
+            if (Check(TokenType.Structure))
+            {
+                var st = ParseStructure();
+                st.Access = access;
+                return st;
+            }
+
+            // Nested Interface declaration
+            if (Check(TokenType.Interface))
+            {
+                return ParseInterface();
             }
 
             throw new ParseException(

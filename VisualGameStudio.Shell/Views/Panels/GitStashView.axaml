@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:local="using:VisualGameStudio.Shell.Converters"
              mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
              x:Class="VisualGameStudio.Shell.Views.Panels.GitStashView"
              x:DataType="vm:GitStashViewModel"
@@ -57,7 +58,7 @@
     <Border DockPanel.Dock="Top"
             Background="#1E1E1E"
             Padding="16"
-            IsVisible="{Binding !Stashes.Count}">
+            IsVisible="{Binding Stashes.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}">
       <StackPanel HorizontalAlignment="Center" Spacing="8">
         <TextBlock Text="📦" FontSize="32" HorizontalAlignment="Center"/>
         <TextBlock Text="No stashes"
@@ -112,14 +113,14 @@
             <Border.ContextMenu>
               <ContextMenu>
                 <MenuItem Header="Apply"
-                          Command="{Binding $parent[ListBox].((vm:GitStashViewModel)DataContext).ApplyStashCommand}"
+                          Command="{Binding $parent[ListBox].DataContext.ApplyStashCommand}"
                           CommandParameter="{Binding}"/>
                 <MenuItem Header="Pop"
-                          Command="{Binding $parent[ListBox].((vm:GitStashViewModel)DataContext).PopStashCommand}"
+                          Command="{Binding $parent[ListBox].DataContext.PopStashCommand}"
                           CommandParameter="{Binding}"/>
                 <Separator/>
                 <MenuItem Header="Drop"
-                          Command="{Binding $parent[ListBox].((vm:GitStashViewModel)DataContext).DropStashCommand}"
+                          Command="{Binding $parent[ListBox].DataContext.DropStashCommand}"
                           CommandParameter="{Binding}"/>
               </ContextMenu>
             </Border.ContextMenu>

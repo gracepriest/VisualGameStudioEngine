@@ -57,6 +57,9 @@ public partial class MinimapControl : UserControl
     private double _hoverTop;
     private double _hoverHeight = 40;
 
+    // Theme change handler (stored so we can unsubscribe)
+    private EventHandler? _themeChangedHandler;
+
     // Data from the editor
     private IReadOnlyList<GitLineChange> _gitChanges = Array.Empty<GitLineChange>();
     private Dictionary<int, GitLineChangeKind> _gitLineMap = new();
@@ -145,11 +148,12 @@ public partial class MinimapControl : UserControl
 
         // Apply theme background
         UpdateBackground();
-        EditorTheme.ThemeChanged += (_, _) =>
+        _themeChangedHandler = (_, _) =>
         {
             UpdateBackground();
             InvalidateBitmap();
         };
+        EditorTheme.ThemeChanged += _themeChangedHandler;
     }
 
     private void UpdateBackground()
@@ -841,4 +845,19 @@ public partial class MinimapControl : UserControl
     }
 
     #endregion
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+
+        // Unsubscribe from static theme event to prevent memory leak
+        if (_themeChangedHandler != null)
+        {
+            EditorTheme.ThemeChanged -= _themeChangedHandler;
+            _themeChangedHandler = null;
+        }
+
+        // Detach from editor events and dispose resources
+        DetachEditor();
+    }
 }

@@ -215,50 +215,50 @@
               <Border.ContextMenu>
                 <ContextMenu>
                   <MenuItem Header="Close" InputGesture="Ctrl+W"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).CloseTabCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.CloseTabCommand}"
                             CommandParameter="{Binding}"/>
                   <MenuItem Header="Close Others"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).CloseOtherTabsCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.CloseOtherTabsCommand}"
                             CommandParameter="{Binding}"/>
                   <MenuItem Header="Close All"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).CloseAllTabsCommand}"/>
+                            Command="{Binding $parent[UserControl].DataContext.CloseAllTabsCommand}"/>
                   <MenuItem Header="Close to the Right"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).CloseTabsToTheRightCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.CloseTabsToTheRightCommand}"
                             CommandParameter="{Binding}"/>
                   <MenuItem Header="Close to the Left"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).CloseTabsToTheLeftCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.CloseTabsToTheLeftCommand}"
                             CommandParameter="{Binding}"/>
                   <MenuItem Header="Close Saved"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).CloseSavedTabsCommand}"/>
+                            Command="{Binding $parent[UserControl].DataContext.CloseSavedTabsCommand}"/>
                   <Separator/>
                   <MenuItem Header="Copy Path"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).CopyPathCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.CopyPathCommand}"
                             CommandParameter="{Binding}"/>
                   <MenuItem Header="Copy Relative Path"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).CopyRelativePathCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.CopyRelativePathCommand}"
                             CommandParameter="{Binding}"/>
                   <Separator/>
                   <MenuItem Header="Reveal in Side Bar"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).RevealInSideBarCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.RevealInSideBarCommand}"
                             CommandParameter="{Binding}"/>
                   <MenuItem Header="Open Containing Folder"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).OpenContainingFolderCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.OpenContainingFolderCommand}"
                             CommandParameter="{Binding}"/>
                   <Separator/>
                   <MenuItem Header="Pin Tab"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).PinTabCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.PinTabCommand}"
                             CommandParameter="{Binding}"
                             IsVisible="{Binding !IsPinned}"/>
                   <MenuItem Header="Unpin Tab"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).UnpinTabCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.UnpinTabCommand}"
                             CommandParameter="{Binding}"
                             IsVisible="{Binding IsPinned}"/>
                   <Separator/>
                   <MenuItem Header="Split Right"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).SplitRightCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.SplitRightCommand}"
                             CommandParameter="{Binding}"/>
                   <MenuItem Header="Split Down"
-                            Command="{Binding $parent[UserControl].((vm:TabManagerViewModel)DataContext).SplitDownCommand}"
+                            Command="{Binding $parent[UserControl].DataContext.SplitDownCommand}"
                             CommandParameter="{Binding}"/>
                 </ContextMenu>
               </Border.ContextMenu>

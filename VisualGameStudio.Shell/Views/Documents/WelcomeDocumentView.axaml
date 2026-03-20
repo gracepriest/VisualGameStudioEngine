@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:local="using:VisualGameStudio.Shell.Converters"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
              x:Class="VisualGameStudio.Shell.Views.Documents.WelcomeDocumentView"
              
@@ -52,7 +53,7 @@
                         BorderThickness="0"
                         Padding="4,2"
                         Cursor="Hand"
-                        IsVisible="{Binding !!RecentProjects.Count}"/>
+                        IsVisible="{Binding RecentProjects.Count, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"/>
               </Grid>
 
               <Border Height="1" Background="#333333"/>
@@ -178,7 +179,7 @@
               <TextBlock Text="No recent projects"
                          Foreground="#606060"
                          FontSize="13"
-                         IsVisible="{Binding !RecentProjects.Count}"
+                         IsVisible="{Binding RecentProjects.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}"
                          Margin="0,8"/>
             </StackPanel>
 

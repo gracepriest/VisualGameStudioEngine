@@ -66,6 +66,26 @@ public class PositiveIntToBoolConverter : IValueConverter
 }
 
 /// <summary>
+/// Converts zero integer to true (for IsVisible binding on empty-state elements).
+/// Inverse of PositiveIntToBoolConverter.
+/// </summary>
+public class ZeroIntToBoolConverter : IValueConverter
+{
+    public static readonly ZeroIntToBoolConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is int count) return count == 0;
+        return true;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}
+
+/// <summary>
 /// Converters for the status bar indicators.
 /// </summary>
 public static class StatusBarConverters

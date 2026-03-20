@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:local="using:VisualGameStudio.Shell.Converters"
              mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="500"
              x:Class="VisualGameStudio.Shell.Views.Panels.GitChangesView"
              x:DataType="vm:GitChangesViewModel">
@@ -98,18 +99,13 @@
         <Border DockPanel.Dock="Top"
                 Background="#252526"
                 Padding="8,4"
-                IsVisible="{Binding !!AheadCount}">
+                IsVisible="{Binding AheadCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
           <StackPanel Orientation="Horizontal" Spacing="12">
-            <TextBlock FontSize="11" Foreground="#808080">
-              <Run Text="↑"/>
-              <Run Text="{Binding AheadCount}"/>
-              <Run Text=" ahead"/>
-            </TextBlock>
-            <TextBlock FontSize="11" Foreground="#808080" IsVisible="{Binding !!BehindCount}">
-              <Run Text="↓"/>
-              <Run Text="{Binding BehindCount}"/>
-              <Run Text=" behind"/>
-            </TextBlock>
+            <TextBlock FontSize="11" Foreground="#808080"
+                       Text="{Binding AheadCount, StringFormat='↑ {0} ahead'}"/>
+            <TextBlock FontSize="11" Foreground="#808080"
+                       Text="{Binding BehindCount, StringFormat='↓ {0} behind'}"
+                       IsVisible="{Binding BehindCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"/>
           </StackPanel>
         </Border>
 
@@ -180,7 +176,7 @@
                                      ToolTip.Tip="{Binding FilePath}"/>
                           <Button Grid.Column="2"
                                   Classes="toolbarButton"
-                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).ShowStagedDiffCommand}"
+                                  Command="{Binding $parent[ItemsControl].DataContext.ShowStagedDiffCommand}"
                                   CommandParameter="{Binding}"
                                   ToolTip.Tip="Show Staged Diff"
                                   Width="20" Height="20">
@@ -188,7 +184,7 @@
                           </Button>
                           <Button Grid.Column="3"
                                   Classes="toolbarButton"
-                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).UnstageFileCommand}"
+                                  Command="{Binding $parent[ItemsControl].DataContext.UnstageFileCommand}"
                                   CommandParameter="{Binding}"
                                   ToolTip.Tip="Unstage"
                                   Width="20" Height="20">
@@ -203,7 +199,7 @@
                            Foreground="#606060"
                            Margin="8"
                            FontSize="11"
-                           IsVisible="{Binding !StagedChanges.Count}"/>
+                           IsVisible="{Binding StagedChanges.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}"/>
               </StackPanel>
             </Expander>
 
@@ -222,7 +218,7 @@
                           Command="{Binding StageAllCommand}"
                           Classes="toolbarButton"
                           FontSize="11"
-                          IsVisible="{Binding UnstagedChanges.Count}"
+                          IsVisible="{Binding UnstagedChanges.Count, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"
                           AutomationProperties.Name="Stage All Changes"/>
                 </Border>
                 <ItemsControl ItemsSource="{Binding UnstagedChanges}"
@@ -253,7 +249,7 @@
                                      ToolTip.Tip="{Binding FilePath}"/>
                           <Button Grid.Column="2"
                                   Classes="toolbarButton"
-                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).ShowDiffCommand}"
+                                  Command="{Binding $parent[ItemsControl].DataContext.ShowDiffCommand}"
                                   CommandParameter="{Binding}"
                                   ToolTip.Tip="Show Diff"
                                   Width="20" Height="20">
@@ -261,7 +257,7 @@
                           </Button>
                           <Button Grid.Column="3"
                                   Classes="toolbarButton"
-                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).StageFileCommand}"
+                                  Command="{Binding $parent[ItemsControl].DataContext.StageFileCommand}"
                                   CommandParameter="{Binding}"
                                   ToolTip.Tip="Stage"
                                   Width="20" Height="20">
@@ -269,7 +265,7 @@
                           </Button>
                           <Button Grid.Column="4"
                                   Classes="toolbarButton"
-                                  Command="{Binding $parent[ItemsControl].((vm:GitChangesViewModel)DataContext).DiscardChangesCommand}"
+                                  Command="{Binding $parent[ItemsControl].DataContext.DiscardChangesCommand}"
                                   CommandParameter="{Binding}"
                                   ToolTip.Tip="Discard Changes"
                                   Width="20" Height="20">
@@ -284,7 +280,7 @@
                            Foreground="#606060"
                            Margin="8"
                            FontSize="11"
-                           IsVisible="{Binding !UnstagedChanges.Count}"/>
+                           IsVisible="{Binding UnstagedChanges.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}"/>
               </StackPanel>
             </Expander>
           </StackPanel>

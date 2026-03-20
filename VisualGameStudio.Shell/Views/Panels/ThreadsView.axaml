@@ -71,14 +71,14 @@
         <ListBox.ContextMenu>
           <ContextMenu>
             <MenuItem Header="Switch To Thread"
-                      Command="{Binding $parent[ListBox].((vm:ThreadsViewModel)DataContext).SwitchThreadCommand}"
+                      Command="{Binding $parent[ListBox].DataContext.SwitchThreadCommand}"
                       CommandParameter="{Binding $parent[ListBox].SelectedItem}"/>
             <Separator/>
             <MenuItem Header="Freeze Thread"
-                      Command="{Binding $parent[ListBox].((vm:ThreadsViewModel)DataContext).FreezeThreadCommand}"
+                      Command="{Binding $parent[ListBox].DataContext.FreezeThreadCommand}"
                       CommandParameter="{Binding $parent[ListBox].SelectedItem}"/>
             <MenuItem Header="Thaw Thread"
-                      Command="{Binding $parent[ListBox].((vm:ThreadsViewModel)DataContext).ThawThreadCommand}"
+                      Command="{Binding $parent[ListBox].DataContext.ThawThreadCommand}"
                       CommandParameter="{Binding $parent[ListBox].SelectedItem}"/>
           </ContextMenu>
         </ListBox.ContextMenu>

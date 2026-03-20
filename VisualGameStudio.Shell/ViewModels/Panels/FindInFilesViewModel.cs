@@ -146,10 +146,11 @@ public partial class FindInFilesViewModel : ViewModelBase
             return;
         }
 
-        // Cancel any existing search
+        // Cancel and dispose any existing search CTS
         if (_searchCts != null)
         {
             await _searchCts.CancelAsync();
+            _searchCts.Dispose();
         }
         _searchCts = new CancellationTokenSource();
         var token = _searchCts.Token;
@@ -252,6 +253,8 @@ public partial class FindInFilesViewModel : ViewModelBase
         if (_searchCts != null)
         {
             await _searchCts.CancelAsync();
+            _searchCts.Dispose();
+            _searchCts = null;
         }
     }
 

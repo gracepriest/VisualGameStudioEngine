@@ -225,12 +225,16 @@ namespace BasicLang.Compiler
                 // Preprocess the source code
                 var processedSource = _preprocessor.Process(unit.SourceCode, unit.FilePath);
 
+                // Line offset from .mod/.cls wrapper preprocessing
+                int lineOffset = unit.LineOffset;
+
                 // Check for preprocessor errors
                 if (_preprocessor.Errors.Count > 0)
                 {
                     foreach (var error in _preprocessor.Errors)
                     {
-                        result.AllErrors.Add(new SemanticError(error.Message, error.Line, error.Column));
+                        int adjustedLine = Math.Max(1, error.Line - lineOffset);
+                        result.AllErrors.Add(new SemanticError(error.Message, adjustedLine, error.Column));
                     }
                 }
 
@@ -245,7 +249,8 @@ namespace BasicLang.Compiler
                 {
                     foreach (var error in parser.Errors)
                     {
-                        result.AllErrors.Add(new SemanticError(error.ToString(), error.Token.Line, error.Token.Column));
+                        int adjustedLine = Math.Max(1, error.Token.Line - lineOffset);
+                        result.AllErrors.Add(new SemanticError(error.ToString(), adjustedLine, error.Token.Column));
                     }
                     unit.Status = CompilationStatus.Error;
                     return;
@@ -394,6 +399,17 @@ namespace BasicLang.Compiler
 
                 bool success = analyzer.Analyze(unit.AST);
                 unit.Symbols = analyzer.GlobalScope;
+
+                // Adjust line numbers for .mod/.cls wrapper offset
+                int lineOffset = unit.LineOffset;
+                if (lineOffset > 0)
+                {
+                    foreach (var error in analyzer.Errors)
+                    {
+                        error.Line = Math.Max(1, error.Line - lineOffset);
+                    }
+                }
+
                 unit.Errors.AddRange(analyzer.Errors);
 
                 if (!success)
@@ -571,7 +587,8 @@ namespace BasicLang.Compiler
             var moduleName = Path.GetFileNameWithoutExtension(unit.FilePath);
 
             // Check if source already contains a top-level Module declaration
-            var trimmed = source.TrimStart();
+            // Strip BOM (U+FEFF) which is not considered whitespace in .NET Core/5+
+            var trimmed = source.TrimStart('\uFEFF').TrimStart();
             if (trimmed.StartsWith("Module ", StringComparison.OrdinalIgnoreCase) ||
                 trimmed.StartsWith("Module\t", StringComparison.OrdinalIgnoreCase) ||
                 trimmed.StartsWith("Module\r", StringComparison.OrdinalIgnoreCase) ||
@@ -582,8 +599,9 @@ namespace BasicLang.Compiler
                     $"Warning: '{Path.GetFileName(unit.FilePath)}': Module declaration is implicit in .mod files — the outer Module wrapper will be used");
             }
 
-            // Wrap source in Module block
+            // Wrap source in Module block — adds 1 line before the original content
             unit.SourceCode = $"Module {moduleName}\n{source}\nEnd Module\n";
+            unit.LineOffset = 1;
         }
 
         /// <summary>
@@ -602,7 +620,8 @@ namespace BasicLang.Compiler
 
             var source = unit.SourceCode ?? string.Empty;
             var className = Path.GetFileNameWithoutExtension(unit.FilePath);
-            var trimmed = source.TrimStart();
+            // Strip BOM (U+FEFF) which is not considered whitespace in .NET Core/5+
+            var trimmed = source.TrimStart('\uFEFF').TrimStart();
             string accessModifier = "Private";
             string body = source;
 
@@ -624,6 +643,10 @@ namespace BasicLang.Compiler
             }
 
             unit.SourceCode = $"{accessModifier} Class {className}\n{body}\nEnd Class\n";
+            // When "Public" was on its own line and stripped from body, the class
+            // declaration replaces it so the remaining body lines keep their original
+            // positions (offset = 0). Otherwise 1 line is inserted before the body.
+            unit.LineOffset = (accessModifier == "Public" && body != source) ? 0 : 1;
         }
 
         private CompilationResult FinalizeResult(CompilationResult result, DateTime startTime)

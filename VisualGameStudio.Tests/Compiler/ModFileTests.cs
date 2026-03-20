@@ -65,7 +65,7 @@ End Function
         // Create a .mod file with a function
         var modFilePath = Path.Combine(_tempDir, "Helpers.mod");
         File.WriteAllText(modFilePath, @"
-Function Double(n As Integer) As Integer
+Function DoubleIt(n As Integer) As Integer
     Return n * 2
 End Function
 ");
@@ -77,7 +77,7 @@ End Function
 Import Helpers
 
 Sub Main()
-    Dim result As Integer = Double(5)
+    Dim result As Integer = DoubleIt(5)
 End Sub
 ");
 

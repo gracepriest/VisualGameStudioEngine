@@ -4952,6 +4952,7 @@ public partial class CodeEditorControl : UserControl
 
         _cursorFadeRenderer?.Stop();
 
+        _minimap?.DetachEditor();
         _stickyScroll?.DetachEditor();
     }
 }

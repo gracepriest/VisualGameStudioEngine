@@ -4,6 +4,16 @@ public class BasicLangSolution
 {
     public string FilePath { get; set; } = "";
     public string SolutionName { get; set; } = "";
+
+    /// <summary>
+    /// Alias for <see cref="SolutionName"/> for convenience.
+    /// </summary>
+    public string Name
+    {
+        get => SolutionName;
+        set => SolutionName = value;
+    }
+
     public string SolutionDirectory => Path.GetDirectoryName(FilePath) ?? "";
     public string? DefaultProject { get; set; }
     public string Version { get; set; } = "1.0";
@@ -13,10 +23,16 @@ public class BasicLangSolution
     public Dictionary<string, string> GlobalProperties { get; set; } = new();
 
     /// <summary>
-    /// Gets the default/startup project, falling back to the first project.
+    /// Gets the startup project. Checks <see cref="SolutionProject.IsStartupProject"/> first,
+    /// then <see cref="DefaultProject"/> by name, then falls back to the first project.
     /// </summary>
     public SolutionProject? GetStartupProject()
     {
+        // First check for a project explicitly marked as startup
+        var startupProj = Projects.FirstOrDefault(p => p.IsStartupProject);
+        if (startupProj != null) return startupProj;
+
+        // Then check by DefaultProject name
         if (!string.IsNullOrEmpty(DefaultProject))
         {
             var defaultProj = Projects.FirstOrDefault(p =>
@@ -43,6 +59,7 @@ public class SolutionProject
     public string RelativePath { get; set; } = "";
     public string AbsolutePath { get; set; } = "";
     public string Type { get; set; } = "Exe"; // Exe, Library, WinExe
+    public bool IsStartupProject { get; set; }
     public List<string> ProjectReferences { get; set; } = new();
 
     /// <summary>

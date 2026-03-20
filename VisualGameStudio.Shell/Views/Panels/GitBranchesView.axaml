@@ -117,17 +117,17 @@
             <Border.ContextMenu>
               <ContextMenu>
                 <MenuItem Header="Checkout"
-                          Command="{Binding $parent[ListBox].((vm:GitBranchesViewModel)DataContext).CheckoutCommand}"
+                          Command="{Binding $parent[ListBox].DataContext.CheckoutCommand}"
                           CommandParameter="{Binding}"
                           IsEnabled="{Binding !IsCurrentBranch}"/>
                 <Separator/>
                 <MenuItem Header="Merge into Current"
-                          Command="{Binding $parent[ListBox].((vm:GitBranchesViewModel)DataContext).MergeBranchCommand}"
+                          Command="{Binding $parent[ListBox].DataContext.MergeBranchCommand}"
                           CommandParameter="{Binding}"
                           IsEnabled="{Binding !IsCurrentBranch}"/>
                 <Separator/>
                 <MenuItem Header="Delete"
-                          Command="{Binding $parent[ListBox].((vm:GitBranchesViewModel)DataContext).DeleteBranchCommand}"
+                          Command="{Binding $parent[ListBox].DataContext.DeleteBranchCommand}"
                           CommandParameter="{Binding}"
                           IsEnabled="{Binding !IsCurrentBranch}"/>
               </ContextMenu>

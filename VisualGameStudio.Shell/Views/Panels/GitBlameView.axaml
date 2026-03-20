@@ -72,7 +72,7 @@
                    Foreground="#808080"
                    FontSize="12"
                    HorizontalAlignment="Center"
-                   IsVisible="{Binding !CurrentFilePath, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
+                   IsVisible="{Binding CurrentFilePath, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
         <TextBlock Text="Open a file to view blame information"
                    Foreground="#606060"
                    FontSize="11"

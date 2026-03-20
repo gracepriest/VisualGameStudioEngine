@@ -120,6 +120,14 @@ namespace BasicLang.Compiler
         /// </summary>
         public bool IsClassFile { get; set; }
 
+        /// <summary>
+        /// Number of lines added before the original source content by preprocessing
+        /// (e.g., the implicit Module or Class wrapper line). Error messages and
+        /// debugger breakpoints should subtract this offset to map back to the
+        /// original .mod/.cls file.
+        /// </summary>
+        public int LineOffset { get; set; }
+
         public CompilationUnit(string filePath)
         {
             if (string.IsNullOrWhiteSpace(filePath))

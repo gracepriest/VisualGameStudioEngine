@@ -375,7 +375,7 @@
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Button Classes="pickerItem"
-                          Command="{Binding $parent[UserControl].((vm:StatusBarViewModel)DataContext).SwitchBranchCommand}"
+                          Command="{Binding $parent[UserControl].DataContext.SwitchBranchCommand}"
                           CommandParameter="{Binding}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                       <TextBlock Text="&#xE0A0;" FontFamily="Segoe UI Symbol" FontSize="11"
@@ -493,7 +493,7 @@
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Button Classes="pickerItem"
-                          Command="{Binding $parent[UserControl].((vm:StatusBarViewModel)DataContext).SetLanguageModeCommand}"
+                          Command="{Binding $parent[UserControl].DataContext.SetLanguageModeCommand}"
                           CommandParameter="{Binding}">
                     <TextBlock Text="{Binding}"/>
                   </Button>
@@ -531,7 +531,7 @@
                       <Button DockPanel.Dock="Right" Background="Transparent"
                               BorderThickness="0" VerticalAlignment="Top" Padding="4,2"
                               Cursor="Hand"
-                              Command="{Binding $parent[UserControl].((vm:StatusBarViewModel)DataContext).DismissNotificationCommand}"
+                              Command="{Binding $parent[UserControl].DataContext.DismissNotificationCommand}"
                               CommandParameter="{Binding}">
                         <TextBlock Text="&#x2715;" Foreground="#888888" FontSize="11"/>
                       </Button>
@@ -561,7 +561,7 @@
                      Foreground="#666666" FontSize="12"
                      HorizontalAlignment="Center" VerticalAlignment="Center"
                      Margin="0,20"
-                     IsVisible="{Binding !Notifications.Count}"/>
+                     IsVisible="{Binding Notifications.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}"/>
         </DockPanel>
       </Border>
     </Popup>

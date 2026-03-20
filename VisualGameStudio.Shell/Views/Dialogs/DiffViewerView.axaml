@@ -3,6 +3,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        xmlns:local="using:VisualGameStudio.Shell.Converters"
         mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
         x:Class="VisualGameStudio.Shell.Views.Dialogs.DiffViewerView"
         x:DataType="vm:DiffViewerViewModel"
@@ -59,28 +60,20 @@
                      VerticalAlignment="Center"/>
           <Border Background="#333333" CornerRadius="8" Padding="8,2">
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock Foreground="#4EC9B0" FontSize="11" VerticalAlignment="Center">
-                <Run Text="+"/>
-                <Run Text="{Binding AddedLines}"/>
-              </TextBlock>
-              <TextBlock Foreground="#F48771" FontSize="11" VerticalAlignment="Center">
-                <Run Text="-"/>
-                <Run Text="{Binding RemovedLines}"/>
-              </TextBlock>
+              <TextBlock Foreground="#4EC9B0" FontSize="11" VerticalAlignment="Center"
+                         Text="{Binding AddedLines, StringFormat='+{0}'}"/>
+              <TextBlock Foreground="#F48771" FontSize="11" VerticalAlignment="Center"
+                         Text="{Binding RemovedLines, StringFormat='-{0}'}"/>
               <TextBlock Foreground="#DCDCAA" FontSize="11" VerticalAlignment="Center"
-                         IsVisible="{Binding ModifiedLines}">
-                <Run Text="~"/>
-                <Run Text="{Binding ModifiedLines}"/>
-              </TextBlock>
+                         IsVisible="{Binding ModifiedLines, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"
+                         Text="{Binding ModifiedLines, StringFormat='~{0}'}"/>
             </StackPanel>
           </Border>
           <!-- Change count badge -->
           <Border Background="#404040" CornerRadius="8" Padding="8,2"
-                  IsVisible="{Binding ChangeCount}">
-            <TextBlock Foreground="#CCCCCC" FontSize="11" VerticalAlignment="Center">
-              <Run Text="{Binding ChangeCount}"/>
-              <Run Text=" changes"/>
-            </TextBlock>
+                  IsVisible="{Binding ChangeCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
+            <TextBlock Foreground="#CCCCCC" FontSize="11" VerticalAlignment="Center"
+                       Text="{Binding ChangeCount, StringFormat='{}{0} changes'}"/>
           </Border>
         </StackPanel>
 
@@ -88,18 +81,21 @@
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
           <!-- Change navigation -->
           <Button Classes="toolbarBtn" Command="{Binding GoToPreviousChangeCommand}"
-                  ToolTip.Tip="Previous Change (Shift+F7)" IsEnabled="{Binding ChangeCount}">
+                  ToolTip.Tip="Previous Change (Shift+F7)" IsEnabled="{Binding ChangeCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
             <TextBlock Text="^" FontWeight="Bold" Foreground="#CCCCCC" FontSize="11"/>
           </Button>
           <Border Background="#333333" CornerRadius="3" Padding="4,2" VerticalAlignment="Center">
-            <TextBlock Foreground="#808080" FontSize="10" VerticalAlignment="Center">
-              <Run Text="{Binding CurrentChangeIndex}"/>
-              <Run Text="/"/>
-              <Run Text="{Binding ChangeCount}"/>
-            </TextBlock>
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Foreground="#808080" FontSize="10" VerticalAlignment="Center"
+                         Text="{Binding CurrentChangeIndex}"/>
+              <TextBlock Foreground="#808080" FontSize="10" VerticalAlignment="Center"
+                         Text="/"/>
+              <TextBlock Foreground="#808080" FontSize="10" VerticalAlignment="Center"
+                         Text="{Binding ChangeCount}"/>
+            </StackPanel>
           </Border>
           <Button Classes="toolbarBtn" Command="{Binding GoToNextChangeCommand}"
-                  ToolTip.Tip="Next Change (F7)" IsEnabled="{Binding ChangeCount}">
+                  ToolTip.Tip="Next Change (F7)" IsEnabled="{Binding ChangeCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
             <TextBlock Text="v" FontWeight="Bold" Foreground="#CCCCCC" FontSize="11"/>
           </Button>
 
@@ -142,13 +138,11 @@
 
     <!-- Hunk-level staging toolbar -->
     <Border DockPanel.Dock="Top" Background="#252526" Padding="8,4"
-            IsVisible="{Binding Hunks.Count}">
+            IsVisible="{Binding Hunks.Count, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
       <Grid ColumnDefinitions="*,Auto,Auto,Auto">
         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-          <TextBlock Foreground="#808080" FontSize="11" VerticalAlignment="Center">
-            <Run Text="{Binding Hunks.Count}"/>
-            <Run Text=" hunk(s)"/>
-          </TextBlock>
+          <TextBlock Foreground="#808080" FontSize="11" VerticalAlignment="Center"
+                     Text="{Binding Hunks.Count, StringFormat='{}{0} hunk(s)'}"/>
           <TextBlock Text="{Binding HunkOperationStatus}"
                      Foreground="#4EC9B0" FontSize="11"
                      VerticalAlignment="Center"
@@ -255,7 +249,7 @@
                         Classes="foldPlaceholder" Padding="8,4" Margin="0,1">
                   <Button Background="Transparent" BorderThickness="0"
                           HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                          Command="{Binding $parent[ItemsControl].((vm:DiffViewerViewModel)DataContext).ExpandFoldedRegionCommand}"
+                          Command="{Binding $parent[ItemsControl].DataContext.ExpandFoldedRegionCommand}"
                           CommandParameter="{Binding}">
                     <TextBlock Text="{Binding FoldText}"
                                Foreground="#808080" FontSize="11"

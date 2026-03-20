@@ -118,7 +118,7 @@
             <DataGridTemplateColumn.CellTemplate>
               <DataTemplate>
                 <Button Classes="toolbarButton"
-                        Command="{Binding $parent[DataGrid].((vm:WatchViewModel)DataContext).RemoveWatchCommand}"
+                        Command="{Binding $parent[DataGrid].DataContext.RemoveWatchCommand}"
                         CommandParameter="{Binding}"
                         IsVisible="{Binding !IsEditable}"
                         Width="20" Height="20"

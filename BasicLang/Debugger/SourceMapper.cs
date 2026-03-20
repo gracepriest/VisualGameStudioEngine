@@ -19,6 +19,10 @@ public sealed class SourceMapper : IDisposable
     // Keyed by method token (raw int32 from MetadataToken)
     private readonly Dictionary<int, List<SequencePointEntry>> _sequencePointsByMethod = new();
 
+    // Line offset for .mod/.cls files whose source was wrapped during preprocessing.
+    // Key = normalized file path, Value = number of wrapper lines added before original content.
+    private readonly Dictionary<string, int> _lineOffsets = new(StringComparer.OrdinalIgnoreCase);
+
     // -----------------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------------
@@ -51,6 +55,44 @@ public sealed class SourceMapper : IDisposable
     }
 
     /// <summary>
+    /// Registers a line offset for a .mod or .cls file that was preprocessed with
+    /// wrapper lines. When the user sets a breakpoint at line N in the original file,
+    /// this offset is added to translate to the PDB line number. When the debugger
+    /// reports a PDB line, the offset is subtracted to show the original line.
+    /// </summary>
+    public void RegisterLineOffset(string filePath, int offset)
+    {
+        if (offset <= 0) return;
+        _lineOffsets[NormalizePath(filePath)] = offset;
+    }
+
+    /// <summary>
+    /// Gets the line offset for a file, or 0 if none is registered.
+    /// </summary>
+    public int GetLineOffset(string filePath)
+    {
+        return _lineOffsets.TryGetValue(NormalizePath(filePath), out var offset) ? offset : 0;
+    }
+
+    /// <summary>
+    /// Translates a user-facing line number to a PDB line number by adding the
+    /// wrapper offset for .mod/.cls files.
+    /// </summary>
+    public int UserLineToPdbLine(string filePath, int userLine)
+    {
+        return userLine + GetLineOffset(filePath);
+    }
+
+    /// <summary>
+    /// Translates a PDB line number to a user-facing line number by subtracting
+    /// the wrapper offset for .mod/.cls files.
+    /// </summary>
+    public int PdbLineToUserLine(string filePath, int pdbLine)
+    {
+        return Math.Max(1, pdbLine - GetLineOffset(filePath));
+    }
+
+    /// <summary>
     /// Returns the IL offset within the given method for the closest sequence point
     /// at or after <paramref name="line"/> in <paramref name="basFilePath"/>.
     /// Returns <c>null</c> if no matching sequence point is found.
@@ -58,6 +100,8 @@ public sealed class SourceMapper : IDisposable
     public (int methodToken, int ilOffset)? GetILOffsetForLine(string basFilePath, int line)
     {
         basFilePath = NormalizePath(basFilePath);
+        // Translate user line to PDB line for .mod/.cls files
+        line = UserLineToPdbLine(basFilePath, line);
         if (!_sequencePointsByFile.TryGetValue(basFilePath, out var entries))
             return null;
 
@@ -95,7 +139,10 @@ public sealed class SourceMapper : IDisposable
                 best = entry;
         }
 
-        return best is null ? null : (best.FilePath, best.StartLine, best.StartColumn);
+        if (best is null) return null;
+        // Translate PDB line back to user-facing line for .mod/.cls files
+        int userLine = PdbLineToUserLine(best.FilePath, best.StartLine);
+        return (best.FilePath, userLine, best.StartColumn);
     }
 
     /// <summary>
@@ -106,19 +153,22 @@ public sealed class SourceMapper : IDisposable
     public int FindNearestExecutableLine(string basFilePath, int line)
     {
         basFilePath = NormalizePath(basFilePath);
+        // Translate user line to PDB line for .mod/.cls files
+        int pdbLine = UserLineToPdbLine(basFilePath, line);
         if (!_sequencePointsByFile.TryGetValue(basFilePath, out var entries))
             return line;
 
         int? nearest = null;
         foreach (var entry in entries)
         {
-            if (entry.StartLine < line)
+            if (entry.StartLine < pdbLine)
                 continue;
             if (nearest == null || entry.StartLine < nearest.Value)
                 nearest = entry.StartLine;
         }
 
-        return nearest ?? line;
+        // Translate back to user-facing line
+        return nearest.HasValue ? PdbLineToUserLine(basFilePath, nearest.Value) : line;
     }
 
     /// <summary>
@@ -128,19 +178,23 @@ public sealed class SourceMapper : IDisposable
     public (int methodToken, int ilOffset, int line)? GetNextExecutableLine(string basFilePath, int currentLine, int currentMethodToken)
     {
         basFilePath = NormalizePath(basFilePath);
+        // Translate user line to PDB line for .mod/.cls files
+        int pdbLine = UserLineToPdbLine(basFilePath, currentLine);
         if (!_sequencePointsByMethod.TryGetValue(currentMethodToken, out var sps))
             return null;
 
         // Find all lines in this method after the current line
         var nextEntry = sps
-            .Where(sp => sp.StartLine > currentLine &&
+            .Where(sp => sp.StartLine > pdbLine &&
                    string.Equals(sp.FilePath, basFilePath, StringComparison.OrdinalIgnoreCase))
             .OrderBy(sp => sp.StartLine)
             .FirstOrDefault();
 
         if (nextEntry == null) return null;
 
-        return (nextEntry.MethodToken, nextEntry.ILOffset, nextEntry.StartLine);
+        // Translate back to user-facing line
+        int userLine = PdbLineToUserLine(basFilePath, nextEntry.StartLine);
+        return (nextEntry.MethodToken, nextEntry.ILOffset, userLine);
     }
 
     /// <summary>

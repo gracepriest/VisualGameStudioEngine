@@ -133,11 +133,8 @@
       <ScrollViewer IsVisible="{Binding IsSearchActive}" Margin="16"
                     x:Name="SearchResultsScroller">
         <StackPanel>
-          <TextBlock FontSize="12" Opacity="0.6" Margin="0,0,0,12">
-            <Run Text="Showing "/>
-            <Run Text="{Binding FilteredSettings.Count, Mode=OneWay}"/>
-            <Run Text=" settings"/>
-          </TextBlock>
+          <TextBlock FontSize="12" Opacity="0.6" Margin="0,0,0,12"
+                     Text="{Binding FilteredSettings.Count, StringFormat='Showing {0} settings', Mode=OneWay}"/>
           <ItemsControl ItemsSource="{Binding FilteredSettings}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:SearchableSettingItem">
@@ -215,7 +212,7 @@
             <ItemsControl ItemsSource="{Binding Categories}" Margin="0,4">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:SettingsCategoryItem">
-                  <Button Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).SelectCategoryCommand}"
+                  <Button Command="{Binding $parent[ItemsControl].DataContext.SelectCategoryCommand}"
                           CommandParameter="{Binding Id}"
                           Background="{Binding IsSelected, Converter={x:Static views:SettingsDialog.CategoryBg}}"
                           HorizontalAlignment="Stretch"
@@ -343,9 +340,8 @@
             BorderBrush="{DynamicResource IdeFooterBorder}">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto">
         <!-- Settings file path -->
-        <TextBlock Grid.Column="0" FontSize="11" Opacity="0.5" VerticalAlignment="Center">
-          <Run Text="{Binding UserSettingsPath, Mode=OneWay}"/>
-        </TextBlock>
+        <TextBlock Grid.Column="0" FontSize="11" Opacity="0.5" VerticalAlignment="Center"
+                   Text="{Binding UserSettingsPath, Mode=OneWay}"/>
 
         <Panel Grid.Column="1"/>
 

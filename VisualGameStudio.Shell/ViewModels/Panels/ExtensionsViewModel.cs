@@ -16,7 +16,7 @@ namespace VisualGameStudio.Shell.ViewModels.Panels;
 /// and disabling extensions from the Open VSX Registry.
 /// Downloads VSIX files, extracts them, and activates static contributions.
 /// </summary>
-public partial class ExtensionsViewModel : ViewModelBase
+public partial class ExtensionsViewModel : ViewModelBase, IDisposable
 {
     private static readonly HttpClient _httpClient = new()
     {
@@ -403,6 +403,7 @@ public partial class ExtensionsViewModel : ViewModelBase
     private async Task SearchMarketplaceAsync(string query, string sortBy = "relevance", string sortOrder = "desc")
     {
         _searchCts?.Cancel();
+        _searchCts?.Dispose();
         _searchCts = new CancellationTokenSource();
         var token = _searchCts.Token;
 
@@ -626,6 +627,17 @@ public partial class ExtensionsViewModel : ViewModelBase
         {
             // Non-critical metadata update failure
         }
+    }
+
+    public void Dispose()
+    {
+        _searchDebounceTimer.Stop();
+        _searchDebounceTimer.Elapsed -= OnSearchDebounceElapsed;
+        _searchDebounceTimer.Dispose();
+
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = null;
     }
 }
 

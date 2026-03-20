@@ -30,10 +30,10 @@
       <!-- Mode indicator -->
       <Border DockPanel.Dock="Top" Background="#252526" Padding="12,4">
         <StackPanel Orientation="Horizontal" Spacing="16">
-          <TextBlock FontSize="11" Foreground="#808080">
-            <Run Text="Mode: "/>
-            <Run Text="{Binding Mode}" Foreground="#569CD6"/>
-          </TextBlock>
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Text="Mode: " FontSize="11" Foreground="#808080"/>
+            <TextBlock Text="{Binding Mode}" FontSize="11" Foreground="#569CD6"/>
+          </StackPanel>
           <TextBlock Text="↑↓ Navigate" FontSize="11" Foreground="#606060"/>
           <TextBlock Text="Enter Select" FontSize="11" Foreground="#606060"/>
           <TextBlock Text="Esc Cancel" FontSize="11" Foreground="#606060"/>

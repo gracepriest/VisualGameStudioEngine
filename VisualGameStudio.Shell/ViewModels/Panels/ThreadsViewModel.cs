@@ -6,7 +6,7 @@ using VisualGameStudio.Core.Abstractions.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
-public partial class ThreadsViewModel : Tool
+public partial class ThreadsViewModel : Tool, IDisposable
 {
     private readonly IDebugService _debugService;
 
@@ -135,6 +135,12 @@ public partial class ThreadsViewModel : Tool
     {
         // Only fire switch when user explicitly changes selection, not programmatic updates
         // The SwitchThread command handles the explicit user action
+    }
+
+    public void Dispose()
+    {
+        _debugService.Stopped -= OnDebugStopped;
+        _debugService.StateChanged -= OnDebugStateChanged;
     }
 }
 

@@ -60,7 +60,7 @@
                 </StackPanel>
               </StackPanel>
               <Button Grid.Column="2"
-                      Command="{Binding $parent[ListBox].((vm:BookmarksViewModel)DataContext).RemoveBookmarkCommand}"
+                      Command="{Binding $parent[ListBox].DataContext.RemoveBookmarkCommand}"
                       CommandParameter="{Binding}"
                       ToolTip.Tip="Remove Bookmark"
                       Width="20" Height="20"
