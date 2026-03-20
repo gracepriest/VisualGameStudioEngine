@@ -18,6 +18,8 @@ using VisualGameStudio.Editor.Folding;
 using VisualGameStudio.Editor.Highlighting;
 using VisualGameStudio.Editor.Margins;
 using VisualGameStudio.Editor.MultiCursor;
+using VisualGameStudio.Editor.Rendering;
+using VisualGameStudio.Editor.Services;
 using VisualGameStudio.Editor.TextMarkers;
 
 namespace VisualGameStudio.Editor.Controls;
@@ -334,6 +336,11 @@ public partial class CodeEditorControl : UserControl
     public event EventHandler<DataTipRequestEventArgs>? DataTipRequested;
     public event EventHandler<CompletionRequestEventArgs>? CompletionRequested;
     public event EventHandler<int>? BreakpointToggled;
+    public event EventHandler<int>? ConditionalBreakpointRequested;
+    public event EventHandler<int>? LogpointRequested;
+    public event EventHandler<int>? EditBreakpointRequested;
+    public event EventHandler<int>? RemoveBreakpointRequested;
+    public event EventHandler<int>? ToggleEnableBreakpointRequested;
     public event EventHandler? EditorReady;
     public event EventHandler? GoToDefinitionRequested;
     public event EventHandler? PeekDefinitionRequested;
@@ -3867,12 +3874,28 @@ public partial class CodeEditorControl : UserControl
 
     #region Code Lens
 
-    private TextMarkers.CodeLensRenderer? _codeLensRenderer;
+    private CodeLensManager? _codeLensManager;
+    private CodeLensElementGenerator? _codeLensElementGenerator;
 
     /// <summary>
     /// Fired when a code lens item is clicked.
     /// </summary>
     public event EventHandler<TextMarkers.CodeLensClickedEventArgs>? CodeLensClicked;
+
+    /// <summary>
+    /// Ensures the CodeLensManager and CodeLensElementGenerator are initialised and
+    /// registered with the text view.  Called lazily on first use.
+    /// </summary>
+    private void EnsureCodeLensInitialized()
+    {
+        if (_codeLensManager != null) return;
+        if (_textEditor?.TextArea?.TextView == null) return;
+
+        _codeLensManager = new CodeLensManager();
+        _codeLensElementGenerator = new CodeLensElementGenerator(_textEditor, _codeLensManager);
+        _codeLensElementGenerator.CodeLensClicked += (s, e) => CodeLensClicked?.Invoke(this, e);
+        _textEditor.TextArea.TextView.ElementGenerators.Add(_codeLensElementGenerator);
+    }
 
     /// <summary>
     /// Shows code lens annotations above function/class lines.
@@ -3881,14 +3904,8 @@ public partial class CodeEditorControl : UserControl
     {
         if (_textEditor?.TextArea?.TextView == null) return;
 
-        if (_codeLensRenderer == null)
-        {
-            _codeLensRenderer = new TextMarkers.CodeLensRenderer(_textEditor);
-            _textEditor.TextArea.TextView.BackgroundRenderers.Add(_codeLensRenderer);
-            _codeLensRenderer.CodeLensClicked += (s, e) => CodeLensClicked?.Invoke(this, e);
-        }
-
-        _codeLensRenderer.SetLenses(lenses);
+        EnsureCodeLensInitialized();
+        _codeLensManager!.SetCodeLens(lenses);
     }
 
     /// <summary>
@@ -3896,7 +3913,7 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void ClearCodeLenses()
     {
-        _codeLensRenderer?.Clear();
+        _codeLensManager?.ClearCodeLens();
     }
 
     #endregion
@@ -4454,6 +4471,16 @@ public partial class CodeEditorControl : UserControl
             onBreakpointToggled(line);
             BreakpointToggled?.Invoke(this, line);
         };
+        _breakpointMargin.ConditionalBreakpointRequested += (s, line) =>
+            ConditionalBreakpointRequested?.Invoke(this, line);
+        _breakpointMargin.LogpointRequested += (s, line) =>
+            LogpointRequested?.Invoke(this, line);
+        _breakpointMargin.EditBreakpointRequested += (s, line) =>
+            EditBreakpointRequested?.Invoke(this, line);
+        _breakpointMargin.RemoveBreakpointRequested += (s, line) =>
+            RemoveBreakpointRequested?.Invoke(this, line);
+        _breakpointMargin.ToggleEnableBreakpointRequested += (s, line) =>
+            ToggleEnableBreakpointRequested?.Invoke(this, line);
 
         // Insert after bookmark margin (if present) but before line numbers
         var insertIndex = _bookmarkMargin != null ? 1 : 0;
