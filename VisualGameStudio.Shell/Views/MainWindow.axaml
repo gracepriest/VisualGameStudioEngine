@@ -92,7 +92,7 @@
     <!-- IDE zoom -->
     <KeyBinding Gesture="Ctrl+OemPlus" Command="{Binding ZoomInCommand}"/>
     <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding ZoomOutCommand}"/>
-    <KeyBinding Gesture="Ctrl+D0" Command="{Binding ZoomResetCommand}"/>
+    <KeyBinding Gesture="Ctrl+Shift+D0" Command="{Binding ZoomResetCommand}"/>
   </Window.KeyBindings>
 
   <Design.DataContext>

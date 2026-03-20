@@ -12,25 +12,7 @@
     <Border x:Name="RenderSurface"
             Background="#191919"
             ClipToBounds="True"/>
-
-    <!-- Viewport indicator overlay -->
-    <Border x:Name="ViewportIndicator"
-            Background="#66264F78"
-            BorderBrush="#40FFFFFF"
-            BorderThickness="0,1,0,1"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Top"
-            Height="40"
-            IsHitTestVisible="False"/>
-
-    <!-- Hover highlight (brighter region under cursor) -->
-    <Border x:Name="HoverHighlight"
-            Background="#20FFFFFF"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Top"
-            Height="40"
-            IsHitTestVisible="False"
-            IsVisible="False"/>
+    <!-- Viewport indicator and hover highlight are drawn in Render() to avoid layout invalidation -->
   </Panel>
 
 </UserControl>

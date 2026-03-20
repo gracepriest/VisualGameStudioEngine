@@ -27,6 +27,13 @@ public class ViewLocator : IDataTemplate
             WatchTool tool => new WatchView { DataContext = tool.ViewModel },
             DocumentOutlineTool tool => new DocumentOutlineView { DataContext = tool.ViewModel },
             BookmarksTool tool => new BookmarksView { DataContext = tool.ViewModel },
+            ImmediateWindowTool tool => new ImmediateWindowView { DataContext = tool.ViewModel },
+            GitBranchesTool tool => new GitBranchesView { DataContext = tool.ViewModel },
+            GitStashTool tool => new GitStashView { DataContext = tool.ViewModel },
+            GitBlameTool tool => new GitBlameView { DataContext = tool.ViewModel },
+            ExtensionsTool tool => new ExtensionsView { DataContext = tool.ViewModel },
+            ProblemsTool tool => new ProblemsView { DataContext = tool.ViewModel },
+            DebugConsoleTool tool => new DebugConsoleView { DataContext = tool.ViewModel },
             CodeEditorDocument doc => new CodeEditorDocumentView { DataContext = doc.ViewModel },
             WelcomeDocument => new WelcomeDocumentView(),
             _ => CreateDefault(data)
@@ -61,6 +68,13 @@ public class ViewLocator : IDataTemplate
             or WatchTool
             or DocumentOutlineTool
             or BookmarksTool
+            or ImmediateWindowTool
+            or GitBranchesTool
+            or GitStashTool
+            or GitBlameTool
+            or ExtensionsTool
+            or ProblemsTool
+            or DebugConsoleTool
             or CodeEditorDocument
             or WelcomeDocument;
     }

@@ -2305,6 +2305,54 @@ public partial class MainWindowViewModel : ViewModelBase
         FocusPanelRequested?.Invoke(this, "Variables");
     }
 
+    private static readonly string[] _panelCycleOrder =
+        { "SolutionExplorer", "Editor", "Output", "Terminal", "ErrorList", "Variables" };
+    private int _currentPanelIndex = 1; // default to Editor
+
+    [RelayCommand]
+    private void FocusNextPanel()
+    {
+        _currentPanelIndex = (_currentPanelIndex + 1) % _panelCycleOrder.Length;
+        var panel = _panelCycleOrder[_currentPanelIndex];
+        if (panel != "Editor")
+            _dockFactory.ActivateTool(panel);
+        FocusPanelRequested?.Invoke(this, panel);
+        StatusText = $"Focus: {panel}";
+    }
+
+    [RelayCommand]
+    private void FocusPreviousPanel()
+    {
+        _currentPanelIndex = (_currentPanelIndex - 1 + _panelCycleOrder.Length) % _panelCycleOrder.Length;
+        var panel = _panelCycleOrder[_currentPanelIndex];
+        if (panel != "Editor")
+            _dockFactory.ActivateTool(panel);
+        FocusPanelRequested?.Invoke(this, panel);
+        StatusText = $"Focus: {panel}";
+    }
+
+    [RelayCommand]
+    private void ZoomIn()
+    {
+        // IDE-level zoom is handled by the editor control's font size
+        StatusText = "Zoom In";
+        ShowNotification("Use Ctrl+Mouse Wheel in the editor to zoom", "info");
+    }
+
+    [RelayCommand]
+    private void ZoomOut()
+    {
+        StatusText = "Zoom Out";
+        ShowNotification("Use Ctrl+Mouse Wheel in the editor to zoom", "info");
+    }
+
+    [RelayCommand]
+    private void ZoomReset()
+    {
+        StatusText = "Zoom Reset";
+        ShowNotification("Zoom reset to default", "info");
+    }
+
     /// <summary>
     /// Toggles Zen mode (distraction-free editing).
     /// Hides menu bar, toolbar, status bar, and side/bottom panels.

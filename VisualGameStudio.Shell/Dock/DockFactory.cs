@@ -27,6 +27,9 @@ public class DockFactory : Factory
     private ImmediateWindowViewModel? _immediateWindow;
     private DocumentOutlineViewModel? _documentOutline;
     private BookmarksViewModel? _bookmarks;
+    private ExtensionsViewModel? _extensions;
+    private ProblemsViewModel? _problems;
+    private DebugConsoleViewModel? _debugConsole;
     private DocumentDock? _documentDock;
     private IRootDock? _rootDock;
 
@@ -46,7 +49,10 @@ public class DockFactory : Factory
         WatchViewModel? watch = null,
         ImmediateWindowViewModel? immediateWindow = null,
         DocumentOutlineViewModel? documentOutline = null,
-        BookmarksViewModel? bookmarks = null)
+        BookmarksViewModel? bookmarks = null,
+        ExtensionsViewModel? extensions = null,
+        ProblemsViewModel? problems = null,
+        DebugConsoleViewModel? debugConsole = null)
     {
         _solutionExplorer = solutionExplorer;
         _outputPanel = outputPanel;
@@ -64,6 +70,9 @@ public class DockFactory : Factory
         _immediateWindow = immediateWindow;
         _documentOutline = documentOutline;
         _bookmarks = bookmarks;
+        _extensions = extensions;
+        _problems = problems;
+        _debugConsole = debugConsole;
     }
 
     public override IRootDock CreateLayout()
@@ -140,6 +149,13 @@ public class DockFactory : Factory
             ViewModel = _bookmarks
         };
 
+        var extensionsTool = new ExtensionsTool
+        {
+            Id = "Extensions",
+            Title = "Extensions",
+            ViewModel = _extensions
+        };
+
         // Left tool dock (Solution Explorer, Git panels, Outline, Bookmarks)
         var leftDock = new ProportionalDock
         {
@@ -148,7 +164,7 @@ public class DockFactory : Factory
             VisibleDockables = CreateList<IDockable>(
                 new ToolDock
                 {
-                    VisibleDockables = CreateList<IDockable>(solutionExplorerTool, gitChangesTool, gitBranchesTool, gitStashTool, gitBlameTool, documentOutlineTool, bookmarksTool),
+                    VisibleDockables = CreateList<IDockable>(solutionExplorerTool, gitChangesTool, gitBranchesTool, gitStashTool, gitBlameTool, documentOutlineTool, bookmarksTool, extensionsTool),
                     ActiveDockable = solutionExplorerTool,
                     Alignment = Alignment.Left,
                     GripMode = GripMode.Visible
@@ -218,6 +234,20 @@ public class DockFactory : Factory
             ViewModel = _immediateWindow
         };
 
+        var problemsTool = new ProblemsTool
+        {
+            Id = "Problems",
+            Title = "Problems",
+            ViewModel = _problems
+        };
+
+        var debugConsoleTool = new DebugConsoleTool
+        {
+            Id = "DebugConsole",
+            Title = "Debug Console",
+            ViewModel = _debugConsole
+        };
+
         // Bottom tool dock - split into two groups for better tab visibility
         // Left group: General tools (Output, Error List, Terminal, Find)
         var bottomLeftTools = new ToolDock
@@ -225,7 +255,7 @@ public class DockFactory : Factory
             Id = "BottomLeftTools",
             Title = "Output",
             Proportion = 0.5,
-            VisibleDockables = CreateList<IDockable>(outputTool, errorListTool, terminalTool, findInFilesTool),
+            VisibleDockables = CreateList<IDockable>(outputTool, errorListTool, problemsTool, terminalTool, findInFilesTool),
             ActiveDockable = outputTool,
             Alignment = Alignment.Bottom,
             GripMode = GripMode.Visible
@@ -237,7 +267,7 @@ public class DockFactory : Factory
             Id = "BottomRightTools",
             Title = "Debug",
             Proportion = 0.5,
-            VisibleDockables = CreateList<IDockable>(callStackTool, variablesTool, breakpointsTool, watchTool, immediateWindowTool),
+            VisibleDockables = CreateList<IDockable>(callStackTool, variablesTool, breakpointsTool, watchTool, immediateWindowTool, debugConsoleTool),
             ActiveDockable = breakpointsTool,
             Alignment = Alignment.Bottom,
             GripMode = GripMode.Visible
@@ -304,7 +334,10 @@ public class DockFactory : Factory
             ["GitBlame"] = () => _gitBlame,
             ["Watch"] = () => _watch,
             ["DocumentOutline"] = () => _documentOutline,
-            ["Bookmarks"] = () => _bookmarks
+            ["Bookmarks"] = () => _bookmarks,
+            ["Extensions"] = () => _extensions,
+            ["Problems"] = () => _problems,
+            ["DebugConsole"] = () => _debugConsole
         };
 
         DockableLocator = new Dictionary<string, Func<IDockable?>>
@@ -525,6 +558,21 @@ public class BookmarksTool : Tool
 public class ImmediateWindowTool : Tool
 {
     public ImmediateWindowViewModel? ViewModel { get; set; }
+}
+
+public class ExtensionsTool : Tool
+{
+    public ExtensionsViewModel? ViewModel { get; set; }
+}
+
+public class ProblemsTool : Tool
+{
+    public ProblemsViewModel? ViewModel { get; set; }
+}
+
+public class DebugConsoleTool : Tool
+{
+    public DebugConsoleViewModel? ViewModel { get; set; }
 }
 
 public class HostWindow : IHostWindow

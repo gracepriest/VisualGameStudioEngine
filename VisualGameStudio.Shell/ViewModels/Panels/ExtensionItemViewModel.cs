@@ -69,6 +69,11 @@ public partial class ExtensionItemViewModel : ObservableObject
     [ObservableProperty]
     private string? _installPath;
 
+    partial void OnInstallCountChanged(int value)
+    {
+        OnPropertyChanged(nameof(FormattedInstallCount));
+    }
+
     /// <summary>
     /// Formatted install count for display (e.g., "1.2M", "45K").
     /// </summary>

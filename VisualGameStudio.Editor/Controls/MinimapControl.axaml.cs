@@ -21,14 +21,12 @@ namespace VisualGameStudio.Editor.Controls;
 /// - Click/drag to scroll
 /// - Search result, diagnostic, git change, and breakpoint markers
 /// - Current line highlight
-/// - Bitmap-cached rendering with debounced updates
+/// - All rendering done via DrawingContext (no layout invalidation during render)
 /// </summary>
 public partial class MinimapControl : UserControl
 {
     private TextEditor? _editor;
     private Border? _renderSurface;
-    private Border? _viewportIndicator;
-    private Border? _hoverHighlight;
     private bool _isDragging;
     private bool _isHovering;
 
@@ -49,6 +47,15 @@ public partial class MinimapControl : UserControl
     private const double LeftPadding = 4.0;
     private const double CharWidth = 0.7;
     private const double MarkerWidth = 3.0;
+
+    // Viewport indicator position (computed outside Render, drawn inside Render)
+    private double _viewportTop;
+    private double _viewportHeight = 40;
+    private bool _viewportVisible = true;
+
+    // Hover highlight position (computed outside Render, drawn inside Render)
+    private double _hoverTop;
+    private double _hoverHeight = 40;
 
     // Data from the editor
     private IReadOnlyList<GitLineChange> _gitChanges = Array.Empty<GitLineChange>();
@@ -92,6 +99,11 @@ public partial class MinimapControl : UserControl
     private static readonly IBrush DefaultBrush = new SolidColorBrush(DefaultCodeColor);
     private static readonly IBrush PreprocessorBrush = new SolidColorBrush(PreprocessorColor);
 
+    // Viewport indicator brushes
+    private static readonly IBrush ViewportFillBrush = new SolidColorBrush(Color.Parse("#66264F78"));
+    private static readonly IBrush ViewportBorderBrush = new SolidColorBrush(Color.Parse("#40FFFFFF"));
+    private static readonly IBrush HoverHighlightBrush = new SolidColorBrush(Color.Parse("#20FFFFFF"));
+
     // Known BasicLang keywords for coloring
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -130,8 +142,6 @@ public partial class MinimapControl : UserControl
     {
         base.OnLoaded(e);
         _renderSurface = this.FindControl<Border>("RenderSurface");
-        _viewportIndicator = this.FindControl<Border>("ViewportIndicator");
-        _hoverHighlight = this.FindControl<Border>("HoverHighlight");
 
         // Apply theme background
         UpdateBackground();
@@ -215,8 +225,8 @@ public partial class MinimapControl : UserControl
         set
         {
             _showSlider = value;
-            if (_viewportIndicator != null)
-                _viewportIndicator.IsVisible = value;
+            _viewportVisible = value;
+            InvalidateVisual();
         }
     }
 
@@ -311,12 +321,14 @@ public partial class MinimapControl : UserControl
 
     private void OnScrollChanged(object? sender, EventArgs e)
     {
-        UpdateViewportIndicator();
+        // Recompute viewport indicator position and redraw
+        RecomputeViewportPosition();
+        InvalidateVisual();
     }
 
     private void OnCaretPositionChanged(object? sender, EventArgs e)
     {
-        if (_editor == null) return;
+        if (_editor?.Document == null) return;
         var newLine = _editor.TextArea.Caret.Line;
         if (newLine != _currentLine)
         {
@@ -333,7 +345,69 @@ public partial class MinimapControl : UserControl
     private void InvalidateBitmap()
     {
         _bitmapDirty = true;
+        RecomputeViewportPosition();
         InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Recomputes the viewport indicator position fields without triggering layout.
+    /// Safe to call from event handlers (NOT from Render).
+    /// </summary>
+    private void RecomputeViewportPosition()
+    {
+        if (_editor?.Document == null || Bounds.Height <= 0)
+        {
+            _viewportVisible = false;
+            return;
+        }
+
+        if (!_showSlider)
+        {
+            _viewportVisible = false;
+            return;
+        }
+
+        var document = _editor.Document;
+        var totalLines = document.LineCount;
+        if (totalLines == 0)
+        {
+            _viewportVisible = false;
+            return;
+        }
+
+        var scaledLineHeight = TotalLineHeight * _scale;
+        var controlHeight = Bounds.Height;
+        var totalMinimapHeight = totalLines * scaledLineHeight;
+
+        // Calculate minimap scroll offset
+        var minimapScrollOffset = 0.0;
+        if (totalMinimapHeight > controlHeight && _editor.TextArea.TextView.DocumentHeight > 0)
+        {
+            var scrollFraction = _editor.TextArea.TextView.ScrollOffset.Y /
+                Math.Max(1, _editor.TextArea.TextView.DocumentHeight - _editor.TextArea.TextView.Bounds.Height);
+            scrollFraction = Math.Clamp(scrollFraction, 0, 1);
+            minimapScrollOffset = scrollFraction * (totalMinimapHeight - controlHeight);
+        }
+
+        var textView = _editor.TextArea.TextView;
+        var editorLineHeight = textView.DefaultLineHeight;
+        if (editorLineHeight <= 0) editorLineHeight = 16;
+
+        var firstVisibleLine = Math.Max(1, (int)(textView.ScrollOffset.Y / editorLineHeight) + 1);
+        var visibleLineCount = (int)(textView.Bounds.Height / editorLineHeight);
+        var lastVisibleLine = Math.Min(totalLines, firstVisibleLine + visibleLineCount);
+
+        // Map to minimap coordinates
+        var top = (firstVisibleLine - 1) * scaledLineHeight - minimapScrollOffset;
+        var height = Math.Max(10, (lastVisibleLine - firstVisibleLine + 1) * scaledLineHeight);
+
+        // Clamp within control bounds
+        top = Math.Clamp(top, 0, Math.Max(0, controlHeight - 10));
+        height = Math.Min(height, controlHeight - top);
+
+        _viewportTop = top;
+        _viewportHeight = height;
+        _viewportVisible = true;
     }
 
     public override void Render(DrawingContext context)
@@ -345,6 +419,8 @@ public partial class MinimapControl : UserControl
 
         var document = _editor.Document;
         var totalLines = document.LineCount;
+        if (totalLines == 0) return;
+
         var scaledLineHeight = TotalLineHeight * _scale;
         var controlWidth = Bounds.Width;
         var controlHeight = Bounds.Height;
@@ -430,8 +506,25 @@ public partial class MinimapControl : UserControl
             }
         }
 
-        // Update viewport indicator position
-        UpdateViewportIndicatorPosition(totalLines, scaledLineHeight, minimapScrollOffset, controlHeight);
+        // Draw hover highlight (only drawing, no layout changes)
+        if (_isHovering)
+        {
+            context.FillRectangle(HoverHighlightBrush,
+                new Rect(0, _hoverTop, controlWidth, _hoverHeight));
+        }
+
+        // Draw viewport indicator (only drawing, no layout changes)
+        if (_viewportVisible && _showSlider)
+        {
+            var vpRect = new Rect(0, _viewportTop, controlWidth, _viewportHeight);
+            context.FillRectangle(ViewportFillBrush, vpRect);
+
+            // Draw top and bottom border lines
+            var pen = new Pen(ViewportBorderBrush, 1);
+            context.DrawLine(pen, new Point(0, _viewportTop), new Point(controlWidth, _viewportTop));
+            context.DrawLine(pen, new Point(0, _viewportTop + _viewportHeight),
+                new Point(controlWidth, _viewportTop + _viewportHeight));
+        }
     }
 
     /// <summary>
@@ -482,7 +575,6 @@ public partial class MinimapControl : UserControl
     {
         var x = startX;
         var i = 0;
-        var inString = false;
 
         while (i < text.Length && x < maxWidth)
         {
@@ -598,46 +690,6 @@ public partial class MinimapControl : UserControl
 
     #endregion
 
-    #region Viewport Indicator
-
-    private void UpdateViewportIndicator()
-    {
-        if (_viewportIndicator == null || _editor == null) return;
-        InvalidateVisual(); // Viewport is drawn as part of Render
-    }
-
-    private void UpdateViewportIndicatorPosition(int totalLines, double scaledLineHeight,
-        double minimapScrollOffset, double controlHeight)
-    {
-        if (_viewportIndicator == null || _editor == null || !_showSlider) return;
-
-        var textView = _editor.TextArea.TextView;
-        var document = _editor.Document;
-        if (document == null || document.LineCount == 0) return;
-
-        // Calculate which lines are visible in the editor
-        var editorLineHeight = textView.DefaultLineHeight;
-        if (editorLineHeight <= 0) editorLineHeight = 16;
-
-        var firstVisibleLine = Math.Max(1, (int)(textView.ScrollOffset.Y / editorLineHeight) + 1);
-        var visibleLineCount = (int)(textView.Bounds.Height / editorLineHeight);
-        var lastVisibleLine = Math.Min(totalLines, firstVisibleLine + visibleLineCount);
-
-        // Map to minimap coordinates
-        var top = (firstVisibleLine - 1) * scaledLineHeight - minimapScrollOffset;
-        var height = Math.Max(10, (lastVisibleLine - firstVisibleLine + 1) * scaledLineHeight);
-
-        // Clamp within control bounds
-        top = Math.Clamp(top, 0, Math.Max(0, controlHeight - 10));
-        height = Math.Min(height, controlHeight - top);
-
-        _viewportIndicator.Margin = new Thickness(0, top, 0, 0);
-        _viewportIndicator.Height = height;
-        _viewportIndicator.IsVisible = _showSlider;
-    }
-
-    #endregion
-
     #region Mouse Interaction
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
@@ -674,8 +726,7 @@ public partial class MinimapControl : UserControl
     {
         base.OnPointerEntered(e);
         _isHovering = true;
-        if (_hoverHighlight != null)
-            _hoverHighlight.IsVisible = true;
+        InvalidateVisual();
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
@@ -683,8 +734,7 @@ public partial class MinimapControl : UserControl
         base.OnPointerExited(e);
         _isHovering = false;
         _isDragging = false;
-        if (_hoverHighlight != null)
-            _hoverHighlight.IsVisible = false;
+        InvalidateVisual();
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
@@ -692,7 +742,7 @@ public partial class MinimapControl : UserControl
         base.OnPointerWheelChanged(e);
 
         // Forward mouse wheel to the main editor
-        if (_editor != null)
+        if (_editor?.Document != null)
         {
             var scrollViewer = _editor.TextArea.TextView;
             var currentOffset = scrollViewer.ScrollOffset;
@@ -705,10 +755,12 @@ public partial class MinimapControl : UserControl
 
     private void UpdateHoverHighlight(double y)
     {
-        if (_hoverHighlight == null || _editor?.Document == null) return;
+        if (_editor?.Document == null) return;
 
         var document = _editor.Document;
         var totalLines = document.LineCount;
+        if (totalLines == 0) return;
+
         var scaledLineHeight = TotalLineHeight * _scale;
 
         // Show a highlight region around the hover position matching ~visible editor lines
@@ -720,8 +772,8 @@ public partial class MinimapControl : UserControl
         var top = y - hoverHeight / 2;
         top = Math.Clamp(top, 0, Math.Max(0, Bounds.Height - hoverHeight));
 
-        _hoverHighlight.Margin = new Thickness(0, top, 0, 0);
-        _hoverHighlight.Height = hoverHeight;
+        _hoverTop = top;
+        _hoverHeight = hoverHeight;
 
         // Update tooltip with line info
         var line = GetLineFromMinimapY(y);
@@ -735,6 +787,8 @@ public partial class MinimapControl : UserControl
                 ToolTip.SetShowDelay(this, 200);
             }
         }
+
+        InvalidateVisual();
     }
 
     /// <summary>
@@ -747,6 +801,7 @@ public partial class MinimapControl : UserControl
 
         var line = GetLineFromMinimapY(y);
         var document = _editor.Document;
+        if (document.LineCount == 0) return;
         line = Math.Clamp(line, 1, document.LineCount);
 
         // Center the clicked line in the editor viewport
@@ -756,7 +811,6 @@ public partial class MinimapControl : UserControl
         var targetLine = Math.Max(1, line - visibleLines / 2);
 
         var scrollY = (targetLine - 1) * editorLineHeight;
-        var currentOffset = _editor.TextArea.TextView.ScrollOffset;
         _editor.ScrollToVerticalOffset(scrollY);
     }
 
@@ -768,6 +822,8 @@ public partial class MinimapControl : UserControl
         if (_editor?.Document == null) return 1;
 
         var totalLines = _editor.Document.LineCount;
+        if (totalLines == 0) return 1;
+
         var scaledLineHeight = TotalLineHeight * _scale;
         var controlHeight = Bounds.Height;
         var totalMinimapHeight = totalLines * scaledLineHeight;

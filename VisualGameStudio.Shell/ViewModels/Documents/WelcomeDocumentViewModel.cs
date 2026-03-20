@@ -36,23 +36,22 @@ public partial class WelcomeDocumentViewModel : ViewModelBase
     [ObservableProperty]
     private ObservableCollection<LearnLink> _learnLinks = new();
 
-    // Legacy constructor for backward compat with DI when RecentProjectsService is resolved directly
-    public WelcomeDocumentViewModel(
-        ProjectSystem.Services.RecentProjectsService legacyService,
-        Action<string>? openProject = null,
-        Action? newProject = null,
-        Action? openFile = null)
-        : this((IRecentProjectsService)legacyService, openProject, newProject, openFile, null, null)
+    /// <summary>
+    /// DI-friendly constructor that only requires the service.
+    /// Action callbacks can be set later via SetCallbacks().
+    /// </summary>
+    public WelcomeDocumentViewModel(IRecentProjectsService recentProjectsService)
+        : this(recentProjectsService, null, null, null, null, null)
     {
     }
 
     public WelcomeDocumentViewModel(
         IRecentProjectsService recentProjectsService,
-        Action<string>? openProject = null,
-        Action? newProject = null,
-        Action? openFile = null,
-        Action? openFolder = null,
-        Action? cloneRepository = null)
+        Action<string>? openProject,
+        Action? newProject,
+        Action? openFile,
+        Action? openFolder,
+        Action? cloneRepository)
     {
         _recentProjectsService = recentProjectsService;
         _openProject = openProject;

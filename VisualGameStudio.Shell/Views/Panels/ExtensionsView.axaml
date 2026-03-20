@@ -8,6 +8,32 @@
              x:Class="VisualGameStudio.Shell.Views.Panels.ExtensionsView"
              x:DataType="vm:ExtensionsViewModel">
 
+  <UserControl.Resources>
+    <local:StringEqualConverter x:Key="StringEqualConverter"/>
+    <local:StringNotEqualConverter x:Key="StringNotEqualConverter"/>
+  </UserControl.Resources>
+
+  <UserControl.Styles>
+    <Style Selector="Button.filterButton">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#808080"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="CornerRadius" Value="3"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="MinHeight" Value="0"/>
+    </Style>
+    <Style Selector="Button.filterButton:pointerover">
+      <Setter Property="Background" Value="#2A2D2E"/>
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <Style Selector="Button.filterButton.active">
+      <Setter Property="Background" Value="#094771"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+    </Style>
+  </UserControl.Styles>
+
   <Border Classes="toolPanel">
     <DockPanel>
 
@@ -163,13 +189,8 @@
                     <TextBlock Text="|" Foreground="#404040" FontSize="12"
                                IsVisible="{Binding SelectedExtension.InstallCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"/>
                     <TextBlock Foreground="#808080" FontSize="12"
-                               IsVisible="{Binding SelectedExtension.InstallCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
-                      <TextBlock.Text>
-                        <MultiBinding StringFormat="{}{0} installs">
-                          <Binding Path="SelectedExtension.FormattedInstallCount"/>
-                        </MultiBinding>
-                      </TextBlock.Text>
-                    </TextBlock>
+                               IsVisible="{Binding SelectedExtension.InstallCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"
+                               Text="{Binding SelectedExtension.FormattedInstallCount, StringFormat='{}{0} installs'}"/>
                   </StackPanel>
                   <TextBlock Text="{Binding SelectedExtension.Description}"
                              Foreground="#AAAAAA"
@@ -457,30 +478,5 @@
     </DockPanel>
   </Border>
 
-  <UserControl.Resources>
-    <local:StringEqualConverter x:Key="StringEqualConverter"/>
-    <local:StringNotEqualConverter x:Key="StringNotEqualConverter"/>
-  </UserControl.Resources>
-
-  <UserControl.Styles>
-    <Style Selector="Button.filterButton">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="#808080"/>
-      <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="Padding" Value="8,4"/>
-      <Setter Property="FontSize" Value="12"/>
-      <Setter Property="CornerRadius" Value="3"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="MinHeight" Value="0"/>
-    </Style>
-    <Style Selector="Button.filterButton:pointerover">
-      <Setter Property="Background" Value="#2A2D2E"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
-    </Style>
-    <Style Selector="Button.filterButton.active">
-      <Setter Property="Background" Value="#094771"/>
-      <Setter Property="Foreground" Value="#FFFFFF"/>
-    </Style>
-  </UserControl.Styles>
 
 </UserControl>

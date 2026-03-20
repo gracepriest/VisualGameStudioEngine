@@ -70,20 +70,4 @@ public partial class FindInFilesView : UserControl
         }
     }
 
-    private void OnResultDoubleTapped(object? sender, TappedEventArgs e)
-    {
-        if (sender is not TreeView treeView || DataContext is not FindInFilesViewModel vm)
-            return;
-
-        // Check what was selected
-        if (treeView.SelectedItem is FindResult result)
-        {
-            vm.NavigateToResultCommand.Execute(result);
-        }
-        else if (treeView.SelectedItem is FindResultGroup group && group.Results.Count > 0)
-        {
-            // Navigate to the first result in the group
-            vm.NavigateToResultCommand.Execute(group.Results[0]);
-        }
-    }
 }

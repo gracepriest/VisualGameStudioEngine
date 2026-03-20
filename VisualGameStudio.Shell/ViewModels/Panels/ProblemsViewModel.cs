@@ -362,10 +362,14 @@ public partial class ProblemsViewModel : ViewModelBase
         {
             if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
             {
-                var clipboard = desktop.MainWindow?.Clipboard;
-                if (clipboard != null)
+                var mainWindow = desktop.MainWindow;
+                if (mainWindow != null)
                 {
-                    await clipboard.SetTextAsync(text);
+                    var clipboard = Avalonia.Controls.TopLevel.GetTopLevel(mainWindow)?.Clipboard;
+                    if (clipboard != null)
+                    {
+                        await clipboard.SetTextAsync(text);
+                    }
                 }
             }
         }

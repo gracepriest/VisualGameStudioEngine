@@ -76,6 +76,12 @@ public partial class FindInFilesViewModel : ViewModelBase
     [ObservableProperty]
     private bool _limitReached;
 
+    [ObservableProperty]
+    private bool _hasResults;
+
+    [ObservableProperty]
+    private bool _hasNoResults = true;
+
     // === Legacy compatibility (used by FindReferences) ===
 
     [ObservableProperty]
@@ -150,6 +156,7 @@ public partial class FindInFilesViewModel : ViewModelBase
 
         IsSearching = true;
         Results.Clear();
+        UpdateResultsVisibility();
         TotalMatchCount = 0;
         TotalFileCount = 0;
         LimitReached = false;
@@ -287,6 +294,7 @@ public partial class FindInFilesViewModel : ViewModelBase
 
             // Re-run search to refresh results
             Results.Clear();
+            UpdateResultsVisibility();
             TotalMatchCount = 0;
             TotalFileCount = 0;
             SearchSummary = "";
@@ -433,6 +441,7 @@ public partial class FindInFilesViewModel : ViewModelBase
     private void ClearResults()
     {
         Results.Clear();
+        UpdateResultsVisibility();
         TotalMatchCount = 0;
         TotalFileCount = 0;
         LimitReached = false;
@@ -479,8 +488,15 @@ public partial class FindInFilesViewModel : ViewModelBase
         return null;
     }
 
+    private void UpdateResultsVisibility()
+    {
+        HasResults = Results.Count > 0;
+        HasNoResults = Results.Count == 0;
+    }
+
     private void UpdateSummary()
     {
+        UpdateResultsVisibility();
         if (TotalMatchCount == 0)
         {
             SearchSummary = "No results";

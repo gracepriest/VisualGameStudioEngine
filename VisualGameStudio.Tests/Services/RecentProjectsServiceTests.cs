@@ -92,14 +92,14 @@ public class RecentProjectsServiceTests
     [Test]
     public async Task AddRecentProjectAsync_LimitsToMaxProjects()
     {
-        // Add 12 projects (max is 10)
-        for (int i = 0; i < 12; i++)
+        // Add 22 projects (max is 20)
+        for (int i = 0; i < 22; i++)
         {
             var path = CreateTestProjectFile($"Project{i}.blproj");
             await _service.AddRecentProjectAsync($"Project{i}", path);
         }
 
-        Assert.That(_service.RecentProjects.Count, Is.LessThanOrEqualTo(10));
+        Assert.That(_service.RecentProjects.Count, Is.LessThanOrEqualTo(20));
     }
 
     [Test]

@@ -1,5 +1,6 @@
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
+using VisualGameStudio.Core.Models;
 using VisualGameStudio.ProjectSystem.Services;
 
 namespace VisualGameStudio.Tests.Services;
@@ -61,7 +62,7 @@ public class SnippetServiceTests
         var results = _service.SearchSnippets("for");
 
         Assert.That(results, Is.Not.Empty);
-        Assert.That(results.Any(s => s.Shortcut == "for"), Is.True);
+        Assert.That(results.Any(s => s.Prefix == "for"), Is.True);
     }
 
     [Test]
@@ -70,9 +71,9 @@ public class SnippetServiceTests
         var results = _service.SearchSnippets("Loop");
 
         Assert.That(results, Is.Not.Empty);
-        Assert.That(results.All(s => s.Title.Contains("Loop", StringComparison.OrdinalIgnoreCase) ||
+        Assert.That(results.All(s => s.Name.Contains("Loop", StringComparison.OrdinalIgnoreCase) ||
                                      s.Description.Contains("Loop", StringComparison.OrdinalIgnoreCase) ||
-                                     s.Shortcut.Contains("Loop", StringComparison.OrdinalIgnoreCase)), Is.True);
+                                     s.Prefix.Contains("Loop", StringComparison.OrdinalIgnoreCase)), Is.True);
     }
 
     [Test]
@@ -253,10 +254,10 @@ public class SnippetServiceTests
     public void BuiltInSnippets_ControlFlow_Exist()
     {
         Assert.That(_service.GetSnippet("if"), Is.Not.Null);
-        Assert.That(_service.GetSnippet("ife"), Is.Not.Null);
+        Assert.That(_service.GetSnippet("ifelse"), Is.Not.Null);
         Assert.That(_service.GetSnippet("for"), Is.Not.Null);
         Assert.That(_service.GetSnippet("while"), Is.Not.Null);
-        Assert.That(_service.GetSnippet("sel"), Is.Not.Null);
+        Assert.That(_service.GetSnippet("select"), Is.Not.Null);
         Assert.That(_service.GetSnippet("try"), Is.Not.Null);
     }
 
@@ -266,7 +267,7 @@ public class SnippetServiceTests
         Assert.That(_service.GetSnippet("sub"), Is.Not.Null);
         Assert.That(_service.GetSnippet("func"), Is.Not.Null);
         Assert.That(_service.GetSnippet("class"), Is.Not.Null);
-        Assert.That(_service.GetSnippet("mod"), Is.Not.Null);
+        Assert.That(_service.GetSnippet("module"), Is.Not.Null);
         Assert.That(_service.GetSnippet("prop"), Is.Not.Null);
     }
 
@@ -275,7 +276,7 @@ public class SnippetServiceTests
     {
         Assert.That(_service.GetSnippet("dim"), Is.Not.Null);
         Assert.That(_service.GetSnippet("dims"), Is.Not.Null);
-        Assert.That(_service.GetSnippet("dimi"), Is.Not.Null);
+        Assert.That(_service.GetSnippet("dimb"), Is.Not.Null);
         Assert.That(_service.GetSnippet("arr"), Is.Not.Null);
     }
 
@@ -295,7 +296,7 @@ public class SnippetServiceTests
     {
         var snippets = _service.GetSnippets();
 
-        Assert.That(snippets, Is.InstanceOf<IReadOnlyList<CodeSnippet>>());
+        Assert.That(snippets, Is.InstanceOf<IReadOnlyList<Snippet>>());
     }
 }
 
