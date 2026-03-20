@@ -662,6 +662,12 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             _ = _languageService.CloseDocumentAsync(filePath);
         }
+
+        // Notify extension host (for all file types)
+        if (_extensionService.IsExtensionHostRunning)
+        {
+            _ = _extensionService.NotifyDocumentClosedAsync(filePath);
+        }
     }
 
     private void OnProjectClosed(object? sender, ProjectEventArgs e)
@@ -1218,6 +1224,13 @@ public partial class MainWindowViewModel : ViewModelBase
                 await _languageService.OpenDocumentAsync(filePath, content);
             }
 
+            // Notify extension host about opened document (for all file types)
+            if (_extensionService.IsExtensionHostRunning)
+            {
+                var langId = GetLanguageIdForFile(filePath);
+                _ = _extensionService.NotifyDocumentOpenedAsync(filePath, langId, 1, content);
+            }
+
             var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
             {
                 FilePath = filePath,
@@ -1347,6 +1360,19 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     if (e == null || document.FilePath == null) return;
                     var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
+
+                    // Try extension host providers if built-in LSP returned nothing
+                    if (hover == null &&
+                        _extensionService.HasExtensionProviders(GetLanguageIdForFile(document.FilePath)))
+                    {
+                        var extResult = await _extensionService.RequestHoverAsync(
+                            document.FilePath, e.Line, e.Column);
+                        if (extResult.HasValue)
+                        {
+                            hover = ParseExtensionHover(extResult.Value);
+                        }
+                    }
+
                     document.ProvideHoverResult(hover);
                 }
                 catch (Exception ex)
@@ -1420,7 +1446,20 @@ public partial class MainWindowViewModel : ViewModelBase
                             e.Column);
                     }
 
-                    // Provide completions (either from LSP or fallback)
+                    // Try extension host providers if LSP returned nothing
+                    if ((completions == null || !completions.Any()) &&
+                        document.FilePath != null &&
+                        _extensionService.HasExtensionProviders(GetLanguageIdForFile(document.FilePath)))
+                    {
+                        var extResult = await _extensionService.RequestCompletionAsync(
+                            document.FilePath, e.Line, e.Column);
+                        if (extResult.HasValue)
+                        {
+                            completions = ParseExtensionCompletions(extResult.Value);
+                        }
+                    }
+
+                    // Provide completions (either from LSP, extension, or fallback)
                     if (completions?.Any() == true)
                     {
                         // Filter to type-only completions after "As " keyword
@@ -1452,12 +1491,19 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 try
                 {
+                    documentVersion++;
+
                     if (_languageService.IsConnected && document.FilePath != null &&
                         (document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
                          document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
                     {
-                        documentVersion++;
                         await _languageService.ChangeDocumentAsync(document.FilePath, newText, documentVersion);
+                    }
+
+                    // Notify extension host (for all file types)
+                    if (_extensionService.IsExtensionHostRunning && document.FilePath != null)
+                    {
+                        _ = _extensionService.NotifyDocumentChangedAsync(document.FilePath, documentVersion, newText);
                     }
                 }
                 catch (Exception ex)
@@ -6631,6 +6677,176 @@ $"""
     /// <summary>
     /// Gets fallback completions when LSP is not connected
     /// </summary>
+    /// <summary>
+    /// Gets a language ID from a file path based on extension.
+    /// </summary>
+    private static string GetLanguageIdForFile(string filePath)
+    {
+        var ext = System.IO.Path.GetExtension(filePath)?.ToLowerInvariant();
+        return ext switch
+        {
+            ".html" or ".htm" => "html",
+            ".css" => "css",
+            ".scss" => "scss",
+            ".less" => "less",
+            ".js" => "javascript",
+            ".jsx" => "javascriptreact",
+            ".ts" => "typescript",
+            ".tsx" => "typescriptreact",
+            ".json" => "json",
+            ".jsonc" => "jsonc",
+            ".md" or ".markdown" => "markdown",
+            ".xml" => "xml",
+            ".yaml" or ".yml" => "yaml",
+            ".py" => "python",
+            ".rs" => "rust",
+            ".go" => "go",
+            ".cs" => "csharp",
+            ".java" => "java",
+            ".cpp" or ".cc" or ".cxx" => "cpp",
+            ".c" => "c",
+            ".h" or ".hpp" => "cpp",
+            ".lua" => "lua",
+            ".bas" or ".bl" => "basiclang",
+            ".blproj" => "basiclang",
+            ".sql" => "sql",
+            ".sh" or ".bash" => "shellscript",
+            ".ps1" => "powershell",
+            ".php" => "php",
+            ".rb" => "ruby",
+            ".swift" => "swift",
+            ".kt" or ".kts" => "kotlin",
+            _ => ext?.TrimStart('.') ?? "plaintext",
+        };
+    }
+
+    /// <summary>
+    /// Parses completion items from extension host JSON response.
+    /// </summary>
+    private static IReadOnlyList<CompletionItem> ParseExtensionCompletions(System.Text.Json.JsonElement json)
+    {
+        var completions = new List<CompletionItem>();
+        try
+        {
+            // Extension host returns either a CompletionList {items: [...]} or an array
+            System.Text.Json.JsonElement items;
+            if (json.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                json.TryGetProperty("items", out items))
+            {
+                // CompletionList format
+            }
+            else if (json.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                items = json;
+            }
+            else
+            {
+                return completions;
+            }
+
+            foreach (var item in items.EnumerateArray())
+            {
+                var label = item.TryGetProperty("label", out var lbl)
+                    ? (lbl.ValueKind == System.Text.Json.JsonValueKind.String ? lbl.GetString() : lbl.TryGetProperty("label", out var inner) ? inner.GetString() : null)
+                    : null;
+                if (string.IsNullOrEmpty(label)) continue;
+
+                var kind = item.TryGetProperty("kind", out var k) ? k.GetInt32() : 0;
+                var detail = item.TryGetProperty("detail", out var d) ? d.GetString() : null;
+                var insertText = item.TryGetProperty("insertText", out var it) ? it.GetString() : label;
+
+                completions.Add(new CompletionItem
+                {
+                    Label = label!,
+                    InsertText = insertText ?? label!,
+                    Detail = detail,
+                    Kind = MapExtensionCompletionKind(kind),
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ExtCompletion] Parse error: {ex.Message}");
+        }
+        return completions;
+    }
+
+    private static CompletionItemKind MapExtensionCompletionKind(int kind) => kind switch
+    {
+        1 => CompletionItemKind.Method,
+        2 => CompletionItemKind.Function,
+        3 => CompletionItemKind.Constructor,
+        4 => CompletionItemKind.Field,
+        5 => CompletionItemKind.Variable,
+        6 => CompletionItemKind.Class,
+        7 => CompletionItemKind.Interface,
+        8 => CompletionItemKind.Module,
+        9 => CompletionItemKind.Property,
+        10 => CompletionItemKind.Unit,
+        11 => CompletionItemKind.Value,
+        12 => CompletionItemKind.Enum,
+        13 => CompletionItemKind.Keyword,
+        14 => CompletionItemKind.Snippet,
+        15 => CompletionItemKind.Color,
+        16 => CompletionItemKind.File,
+        17 => CompletionItemKind.Reference,
+        18 => CompletionItemKind.Folder,
+        19 => CompletionItemKind.EnumMember,
+        20 => CompletionItemKind.Constant,
+        21 => CompletionItemKind.Struct,
+        22 => CompletionItemKind.Event,
+        23 => CompletionItemKind.Operator,
+        24 => CompletionItemKind.TypeParameter,
+        _ => CompletionItemKind.Text,
+    };
+
+    /// <summary>
+    /// Parses hover info from extension host JSON response.
+    /// </summary>
+    private static HoverInfo? ParseExtensionHover(System.Text.Json.JsonElement json)
+    {
+        try
+        {
+            if (json.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+
+            string? content = null;
+
+            // VS Code hover format: { contents: MarkupContent | string | array }
+            if (json.TryGetProperty("contents", out var contents))
+            {
+                if (contents.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    content = contents.GetString();
+                }
+                else if (contents.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                         contents.TryGetProperty("value", out var val))
+                {
+                    content = val.GetString();
+                }
+                else if (contents.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    var parts = new List<string>();
+                    foreach (var part in contents.EnumerateArray())
+                    {
+                        if (part.ValueKind == System.Text.Json.JsonValueKind.String)
+                            parts.Add(part.GetString() ?? "");
+                        else if (part.TryGetProperty("value", out var pv))
+                            parts.Add(pv.GetString() ?? "");
+                    }
+                    content = string.Join("\n\n", parts);
+                }
+            }
+
+            if (string.IsNullOrEmpty(content)) return null;
+            return new HoverInfo { Contents = content };
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ExtHover] Parse error: {ex.Message}");
+            return null;
+        }
+    }
+
     private static IReadOnlyList<CompletionItem> GetFallbackCompletions()
     {
         var completions = new List<CompletionItem>();
