@@ -16,6 +16,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     private readonly IFileService _fileService;
     private readonly IDialogService _dialogService;
     private readonly IGitService? _gitService;
+    private readonly IWorkspaceService? _workspaceService;
 
     [ObservableProperty]
     private ObservableCollection<TreeNode> _nodes = new();
@@ -84,12 +85,13 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// <summary>Raised to request clipboard set from the View (needs TopLevel access).</summary>
     public event EventHandler<string>? ClipboardCopyRequested;
 
-    public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, IGitService? gitService = null)
+    public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, IGitService? gitService = null, IWorkspaceService? workspaceService = null)
     {
         _projectService = projectService;
         _fileService = fileService;
         _dialogService = dialogService;
         _gitService = gitService;
+        _workspaceService = workspaceService;
 
         _projectService.ProjectOpened += OnProjectOpened;
         _projectService.ProjectClosed += OnProjectClosed;
@@ -98,6 +100,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         if (_gitService != null)
         {
             _gitService.StatusChanged += OnGitStatusChanged;
+        }
+
+        if (_workspaceService != null)
+        {
+            _workspaceService.WorkspaceChanged += OnWorkspaceChanged;
         }
     }
 
@@ -196,6 +203,138 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         {
             ApplyFilter();
         }
+    }
+
+    // ─── Multi-Root Workspace Support ────────────────────────────────
+
+    private void OnWorkspaceChanged(object? sender, EventArgs e)
+    {
+        if (_workspaceService?.CurrentWorkspace != null && _workspaceService.Folders.Count > 0)
+        {
+            RefreshWorkspaceTree();
+        }
+    }
+
+    /// <summary>
+    /// Refreshes the tree to show all workspace folders as root nodes.
+    /// Each folder gets its own expandable root in the solution explorer.
+    /// </summary>
+    public void RefreshWorkspaceTree()
+    {
+        if (_workspaceService?.CurrentWorkspace == null) return;
+
+        Nodes.Clear();
+
+        foreach (var folder in _workspaceService.Folders)
+        {
+            if (!Directory.Exists(folder.Path)) continue;
+
+            var folderRootNode = new TreeNode
+            {
+                Name = folder.DisplayName,
+                NodeType = TreeNodeType.WorkspaceFolder,
+                FullPath = folder.Path,
+                IsExpanded = true
+            };
+
+            BuildDirectoryTree(folderRootNode, folder.Path, maxDepth: 3);
+            Nodes.Add(folderRootNode);
+        }
+
+        // Refresh git decorations
+        _ = RefreshGitDecorationsAsync();
+
+        if (!string.IsNullOrEmpty(FilterText))
+        {
+            ApplyFilter();
+        }
+    }
+
+    /// <summary>
+    /// Loads a single folder into the tree (for non-project folder opening).
+    /// </summary>
+    public void LoadFolderTree(string folderPath)
+    {
+        Nodes.Clear();
+
+        var folderName = Path.GetFileName(folderPath) ?? folderPath;
+        var rootNode = new TreeNode
+        {
+            Name = folderName,
+            NodeType = TreeNodeType.Folder,
+            FullPath = folderPath,
+            IsExpanded = true
+        };
+
+        BuildDirectoryTree(rootNode, folderPath, maxDepth: 3);
+        Nodes.Add(rootNode);
+
+        _ = RefreshGitDecorationsAsync();
+    }
+
+    /// <summary>
+    /// Recursively builds a directory tree under the given parent node.
+    /// </summary>
+    private void BuildDirectoryTree(TreeNode parentNode, string directoryPath, int maxDepth, int currentDepth = 0)
+    {
+        if (currentDepth >= maxDepth) return;
+
+        try
+        {
+            // Add subdirectories
+            var directories = Directory.GetDirectories(directoryPath)
+                .OrderBy(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var dir in directories)
+            {
+                var dirName = Path.GetFileName(dir);
+                // Skip hidden/build directories
+                if (dirName.StartsWith('.') || dirName is "bin" or "obj" or "node_modules" or ".git")
+                    continue;
+
+                var dirNode = new TreeNode
+                {
+                    Name = dirName,
+                    NodeType = TreeNodeType.Folder,
+                    FullPath = dir,
+                    IsExpanded = false
+                };
+
+                BuildDirectoryTree(dirNode, dir, maxDepth, currentDepth + 1);
+                parentNode.Children.Add(dirNode);
+            }
+
+            // Add files
+            var files = Directory.GetFiles(directoryPath)
+                .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var file in files)
+            {
+                var fileName = Path.GetFileName(file);
+                if (fileName.StartsWith('.') && fileName != ".gitignore") continue;
+
+                var fileNode = new TreeNode
+                {
+                    Name = fileName,
+                    NodeType = GetFileNodeType(fileName),
+                    FullPath = file
+                };
+                parentNode.Children.Add(fileNode);
+            }
+        }
+        catch (UnauthorizedAccessException) { }
+        catch (DirectoryNotFoundException) { }
+    }
+
+    private static TreeNodeType GetFileNodeType(string fileName)
+    {
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        return ext switch
+        {
+            ".bas" or ".bl" or ".cs" or ".vb" or ".cpp" or ".h" or ".fs" => TreeNodeType.SourceFile,
+            ".png" or ".jpg" or ".bmp" or ".ico" or ".svg" => TreeNodeType.Resource,
+            _ => TreeNodeType.File
+        };
     }
 
     private static TreeNodeType GetNodeType(ProjectItem item)
@@ -1464,7 +1603,7 @@ public partial class TreeNode : ObservableObject
     public bool IsFile => NodeType is TreeNodeType.SourceFile or TreeNodeType.ContentFile
         or TreeNodeType.Resource or TreeNodeType.File;
 
-    public bool IsFolder => NodeType == TreeNodeType.Folder;
+    public bool IsFolder => NodeType is TreeNodeType.Folder or TreeNodeType.WorkspaceFolder;
     public bool IsProject => NodeType == TreeNodeType.Project;
 
     /// <summary>
@@ -1507,7 +1646,11 @@ public enum TreeNodeType
     SourceFile,
     ContentFile,
     Resource,
-    File
+    File,
+    /// <summary>
+    /// A root folder in a multi-root workspace.
+    /// </summary>
+    WorkspaceFolder
 }
 
 public enum DropPosition

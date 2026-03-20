@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using System.IO.Compression;
 using System.Net.Http;
 using System.Text.Json;
 using System.Timers;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
@@ -12,6 +14,7 @@ namespace VisualGameStudio.Shell.ViewModels.Panels;
 /// ViewModel for the Extensions panel.
 /// Provides browsing, searching, installing, uninstalling, enabling,
 /// and disabling extensions from the Open VSX Registry.
+/// Downloads VSIX files, extracts them, and activates static contributions.
 /// </summary>
 public partial class ExtensionsViewModel : ViewModelBase
 {
@@ -25,6 +28,11 @@ public partial class ExtensionsViewModel : ViewModelBase
 
     private readonly System.Timers.Timer _searchDebounceTimer;
     private CancellationTokenSource? _searchCts;
+
+    /// <summary>
+    /// Extension service for installation, activation, and lifecycle management.
+    /// </summary>
+    private IExtensionService? _extensionService;
 
     /// <summary>
     /// Path where extensions are installed locally.
@@ -69,9 +77,8 @@ public partial class ExtensionsViewModel : ViewModelBase
 
     public ExtensionsViewModel()
     {
-        _extensionsDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VisualGameStudio", "Extensions");
+        var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        _extensionsDirectory = Path.Combine(userHome, ".vgs", "extensions");
 
         Directory.CreateDirectory(_extensionsDirectory);
 
@@ -81,6 +88,15 @@ public partial class ExtensionsViewModel : ViewModelBase
 
         // Load installed extensions on startup
         LoadInstalledExtensions();
+    }
+
+    /// <summary>
+    /// Sets the extension service for proper install/activate integration.
+    /// Called from MainWindowViewModel after DI construction.
+    /// </summary>
+    public void SetExtensionService(IExtensionService extensionService)
+    {
+        _extensionService = extensionService;
     }
 
     partial void OnSearchQueryChanged(string value)
@@ -148,49 +164,99 @@ public partial class ExtensionsViewModel : ViewModelBase
                 return;
             }
 
-            // Download the extension
-            var extensionDir = Path.Combine(_extensionsDirectory, $"{extension.Publisher}.{extension.Name}");
-            Directory.CreateDirectory(extensionDir);
-
-            var vsixPath = Path.Combine(extensionDir, $"{extension.Name}-{extension.Version}.vsix");
-
-            using var response = await _httpClient.GetAsync(extension.DownloadUrl);
-            response.EnsureSuccessStatusCode();
-
-            await using var fs = File.Create(vsixPath);
-            await response.Content.CopyToAsync(fs);
-
-            // Write extension metadata
-            var metadataPath = Path.Combine(extensionDir, "extension.json");
-            var metadata = new ExtensionMetadata
+            // Download VSIX to temp file
+            var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.vsix");
+            try
             {
-                Name = extension.Name,
-                DisplayName = extension.DisplayName,
-                Description = extension.Description,
-                Version = extension.Version,
-                Publisher = extension.Publisher,
-                Namespace = extension.Namespace,
-                IconUrl = extension.IconUrl,
-                Categories = extension.Categories.ToList(),
-                IsEnabled = true,
-                InstalledDate = DateTime.UtcNow
-            };
+                using var response = await _httpClient.GetAsync(extension.DownloadUrl);
+                response.EnsureSuccessStatusCode();
 
-            var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
-            await File.WriteAllTextAsync(metadataPath, json);
+                await using (var fs = File.Create(tempPath))
+                {
+                    await response.Content.CopyToAsync(fs);
+                }
 
-            extension.IsInstalled = true;
-            extension.IsEnabled = true;
-            extension.InstallPath = extensionDir;
-            extension.Status = "Installed";
+                // Extract the VSIX (which is a ZIP) to the extensions directory
+                var extensionId = $"{extension.Publisher}.{extension.Name}";
+                var installDirName = $"{extensionId}-{extension.Version}";
+                var installDir = Path.Combine(_extensionsDirectory, installDirName);
 
-            // Add to installed list if not already there
-            if (!InstalledExtensions.Any(e => e.Namespace == extension.Namespace))
-            {
-                InstalledExtensions.Add(extension);
+                // Remove old versions
+                foreach (var dir in Directory.GetDirectories(_extensionsDirectory))
+                {
+                    var dirName = Path.GetFileName(dir);
+                    if (dirName.StartsWith(extensionId + "-", StringComparison.OrdinalIgnoreCase) ||
+                        dirName.Equals(extensionId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { Directory.Delete(dir, true); } catch { }
+                    }
+                }
+
+                // Extract VSIX to temp dir, then copy content to install dir
+                var tempExtractDir = Path.Combine(Path.GetTempPath(), $"vgs-extract-{Guid.NewGuid():N}");
+                Directory.CreateDirectory(tempExtractDir);
+
+                try
+                {
+                    ZipFile.ExtractToDirectory(tempPath, tempExtractDir, overwriteFiles: true);
+
+                    // Find the package.json
+                    var packageJsonInExt = Path.Combine(tempExtractDir, "extension", "package.json");
+                    var packageJsonRoot = Path.Combine(tempExtractDir, "package.json");
+
+                    string sourceDir;
+                    if (File.Exists(packageJsonInExt))
+                    {
+                        sourceDir = Path.Combine(tempExtractDir, "extension");
+                    }
+                    else if (File.Exists(packageJsonRoot))
+                    {
+                        sourceDir = tempExtractDir;
+                    }
+                    else
+                    {
+                        StatusMessage = $"Failed to install {extension.DisplayName}: no package.json found in VSIX.";
+                        return;
+                    }
+
+                    // Copy extension content to install directory
+                    CopyDirectory(sourceDir, installDir);
+                }
+                finally
+                {
+                    try { Directory.Delete(tempExtractDir, true); } catch { }
+                }
+
+                extension.IsInstalled = true;
+                extension.IsEnabled = true;
+                extension.InstallPath = installDir;
+                extension.Status = "Installed";
+
+                // Add to installed list if not already there
+                if (!InstalledExtensions.Any(e => e.Namespace == extension.Namespace))
+                {
+                    InstalledExtensions.Add(extension);
+                }
+
+                // Activate via ExtensionService if available
+                if (_extensionService != null)
+                {
+                    // Re-discover to pick up the new extension
+                    await _extensionService.DiscoverExtensionsAsync();
+                    var ext = _extensionService.GetExtension(extensionId);
+                    if (ext != null)
+                    {
+                        await _extensionService.ActivateAsync(ext.Id);
+                        extension.IsActive = true;
+                    }
+                }
+
+                StatusMessage = $"{extension.DisplayName} installed successfully.";
             }
-
-            StatusMessage = $"{extension.DisplayName} installed successfully.";
+            finally
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
         }
         catch (Exception ex)
         {
@@ -202,6 +268,21 @@ public partial class ExtensionsViewModel : ViewModelBase
         }
     }
 
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+
+        foreach (var file in Directory.GetFiles(source))
+        {
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), true);
+        }
+
+        foreach (var dir in Directory.GetDirectories(source))
+        {
+            CopyDirectory(dir, Path.Combine(destination, Path.GetFileName(dir)));
+        }
+    }
+
     [RelayCommand]
     private async Task UninstallAsync(ExtensionItemViewModel? extension)
     {
@@ -210,6 +291,12 @@ public partial class ExtensionsViewModel : ViewModelBase
         try
         {
             StatusMessage = $"Uninstalling {extension.DisplayName}...";
+
+            // Uninstall via ExtensionService if available
+            if (_extensionService != null && !string.IsNullOrEmpty(extension.Namespace))
+            {
+                await _extensionService.UninstallAsync(extension.Namespace);
+            }
 
             var extensionDir = extension.InstallPath
                 ?? Path.Combine(_extensionsDirectory, $"{extension.Publisher}.{extension.Name}");
@@ -241,7 +328,12 @@ public partial class ExtensionsViewModel : ViewModelBase
 
         extension.IsEnabled = true;
         extension.Status = "";
-        UpdateExtensionMetadata(extension);
+
+        if (_extensionService != null && !string.IsNullOrEmpty(extension.Namespace))
+        {
+            _ = _extensionService.EnableAsync(extension.Namespace);
+        }
+
         StatusMessage = $"{extension.DisplayName} enabled.";
     }
 
@@ -252,7 +344,12 @@ public partial class ExtensionsViewModel : ViewModelBase
 
         extension.IsEnabled = false;
         extension.Status = "Disabled";
-        UpdateExtensionMetadata(extension);
+
+        if (_extensionService != null && !string.IsNullOrEmpty(extension.Namespace))
+        {
+            _ = _extensionService.DisableAsync(extension.Namespace);
+        }
+
         StatusMessage = $"{extension.DisplayName} disabled.";
     }
 
@@ -405,43 +502,103 @@ public partial class ExtensionsViewModel : ViewModelBase
 
         foreach (var dir in Directory.GetDirectories(_extensionsDirectory))
         {
-            var metadataPath = Path.Combine(dir, "extension.json");
-            if (!File.Exists(metadataPath)) continue;
+            // Check for package.json (extracted VSIX format)
+            var packageJsonPath = Path.Combine(dir, "package.json");
+            var extensionSubPath = Path.Combine(dir, "extension", "package.json");
+            // Also support legacy extension.json metadata
+            var legacyMetaPath = Path.Combine(dir, "extension.json");
 
-            try
+            if (File.Exists(packageJsonPath) || File.Exists(extensionSubPath))
             {
-                var json = File.ReadAllText(metadataPath);
-                var metadata = JsonSerializer.Deserialize<ExtensionMetadata>(json);
-                if (metadata == null) continue;
+                var jsonPath = File.Exists(packageJsonPath) ? packageJsonPath : extensionSubPath;
+                var actualDir = Path.GetDirectoryName(jsonPath)!;
 
-                var item = new ExtensionItemViewModel
+                try
                 {
-                    Name = metadata.Name ?? "",
-                    DisplayName = metadata.DisplayName ?? metadata.Name ?? "",
-                    Description = metadata.Description ?? "",
-                    Version = metadata.Version ?? "",
-                    Publisher = metadata.Publisher ?? "",
-                    Namespace = metadata.Namespace ?? "",
-                    IconUrl = metadata.IconUrl,
-                    IsInstalled = true,
-                    IsEnabled = metadata.IsEnabled,
-                    InstallPath = dir,
-                    Status = metadata.IsEnabled ? "" : "Disabled"
-                };
-
-                if (metadata.Categories != null)
-                {
-                    foreach (var cat in metadata.Categories)
+                    var json = File.ReadAllText(jsonPath);
+                    using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
                     {
-                        item.Categories.Add(cat);
-                    }
-                }
+                        CommentHandling = JsonCommentHandling.Skip,
+                        AllowTrailingCommas = true
+                    });
+                    var root = doc.RootElement;
 
-                InstalledExtensions.Add(item);
+                    var name = root.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                    var displayName = root.TryGetProperty("displayName", out var dnEl) ? dnEl.GetString() ?? name : name;
+                    var description = root.TryGetProperty("description", out var descEl) ? descEl.GetString() ?? "" : "";
+                    var version = root.TryGetProperty("version", out var verEl) ? verEl.GetString() ?? "" : "";
+                    var publisher = root.TryGetProperty("publisher", out var pubEl) ? pubEl.GetString() ?? "" : "";
+                    var icon = root.TryGetProperty("icon", out var iconEl) ? iconEl.GetString() : null;
+
+                    var item = new ExtensionItemViewModel
+                    {
+                        Name = name,
+                        DisplayName = displayName,
+                        Description = description,
+                        Version = version,
+                        Publisher = publisher,
+                        Namespace = $"{publisher}.{name}",
+                        IconUrl = icon != null ? Path.Combine(actualDir, icon) : null,
+                        IsInstalled = true,
+                        IsEnabled = true,
+                        InstallPath = actualDir,
+                        Status = ""
+                    };
+
+                    if (root.TryGetProperty("categories", out var catsEl) && catsEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var cat in catsEl.EnumerateArray())
+                        {
+                            var catStr = cat.GetString();
+                            if (!string.IsNullOrEmpty(catStr))
+                                item.Categories.Add(catStr);
+                        }
+                    }
+
+                    InstalledExtensions.Add(item);
+                }
+                catch
+                {
+                    // Skip corrupted package.json
+                }
             }
-            catch
+            else if (File.Exists(legacyMetaPath))
             {
-                // Skip corrupted extension metadata
+                try
+                {
+                    var json = File.ReadAllText(legacyMetaPath);
+                    var metadata = JsonSerializer.Deserialize<ExtensionMetadata>(json);
+                    if (metadata == null) continue;
+
+                    var item = new ExtensionItemViewModel
+                    {
+                        Name = metadata.Name ?? "",
+                        DisplayName = metadata.DisplayName ?? metadata.Name ?? "",
+                        Description = metadata.Description ?? "",
+                        Version = metadata.Version ?? "",
+                        Publisher = metadata.Publisher ?? "",
+                        Namespace = metadata.Namespace ?? "",
+                        IconUrl = metadata.IconUrl,
+                        IsInstalled = true,
+                        IsEnabled = metadata.IsEnabled,
+                        InstallPath = dir,
+                        Status = metadata.IsEnabled ? "" : "Disabled"
+                    };
+
+                    if (metadata.Categories != null)
+                    {
+                        foreach (var cat in metadata.Categories)
+                        {
+                            item.Categories.Add(cat);
+                        }
+                    }
+
+                    InstalledExtensions.Add(item);
+                }
+                catch
+                {
+                    // Skip corrupted extension metadata
+                }
             }
         }
     }

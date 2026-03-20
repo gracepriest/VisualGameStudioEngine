@@ -78,6 +78,12 @@ public static class StatusBarConverters
         Color.Parse("#89D185"),  // green - running
         Color.Parse("#E51400")   // red - stopped
     );
+
+    /// <summary>
+    /// Converts an integer count to "s" (plural) or "" (singular).
+    /// Used in StringFormat bindings like "{0} conflict{1}".
+    /// </summary>
+    public static readonly IValueConverter PluralSuffixConverter = new IntToPluralSuffixConverter();
 }
 
 /// <summary>
@@ -137,4 +143,23 @@ public class BoolToBrushConverter : IValueConverter
         new SolidColorBrush(Color.Parse("#CC6800")),  // orange - debugging
         new SolidColorBrush(Color.Parse("#007ACC"))    // blue - normal
     );
+}
+
+/// <summary>
+/// Converts an integer to "s" for plural or "" for singular.
+/// Used in MultiBinding StringFormat patterns like "{0} item{1}".
+/// </summary>
+public class IntToPluralSuffixConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is int count && count == 1)
+            return "";
+        return "s";
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
 }

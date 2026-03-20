@@ -142,6 +142,8 @@
         <Separator/>
         <MenuItem Header="_Open Project..." Command="{Binding OpenProjectCommand}" InputGesture="Ctrl+Shift+O"/>
         <MenuItem Header="Open _File..." Command="{Binding OpenFileCommand}" InputGesture="Ctrl+O"/>
+        <MenuItem Header="Open F_older..." Command="{Binding OpenFolderCommand}"/>
+        <MenuItem Header="Open _Workspace..." Command="{Binding OpenWorkspaceCommand}"/>
         <MenuItem Header="Open _Recent" ItemsSource="{Binding RecentProjectMenuItems}">
           <MenuItem.Styles>
             <Style Selector="MenuItem">
@@ -152,6 +154,9 @@
             </Style>
           </MenuItem.Styles>
         </MenuItem>
+        <Separator/>
+        <MenuItem Header="Add Folder to _Workspace..." Command="{Binding AddFolderToWorkspaceCommand}"/>
+        <MenuItem Header="Save Workspace As..." Command="{Binding SaveWorkspaceAsCommand}"/>
         <Separator/>
         <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGesture="Ctrl+S"/>
         <MenuItem Header="Save _All" Command="{Binding SaveAllCommand}" InputGesture="Ctrl+Shift+S"/>
@@ -254,6 +259,18 @@
         <MenuItem Header="_Clean Project" Command="{Binding CleanCommand}"/>
         <Separator/>
         <MenuItem Header="Cancel Build" Command="{Binding CancelBuildCommand}"/>
+      </MenuItem>
+
+      <MenuItem Header="Te_rminal">
+        <MenuItem Header="_New Terminal" Command="{Binding CreateNewTerminalCommand}" InputGesture="Ctrl+Shift+OemTilde"/>
+        <MenuItem Header="_Split Terminal" Command="{Binding SplitTerminalCommand}"/>
+        <Separator/>
+        <MenuItem Header="Run _Task..." Command="{Binding RunTaskCommand}"/>
+        <MenuItem Header="Run _Build Task" Command="{Binding RunBuildTaskCommand}" InputGesture="Ctrl+Shift+B"/>
+        <MenuItem Header="Run _Test Task" Command="{Binding RunTestTaskCommand}"/>
+        <Separator/>
+        <MenuItem Header="_Configure Tasks..." Command="{Binding ConfigureTasksCommand}"/>
+        <MenuItem Header="Configure Default _Shell..." Command="{Binding ConfigureDefaultShellCommand}"/>
       </MenuItem>
 
       <MenuItem Header="_Debug">

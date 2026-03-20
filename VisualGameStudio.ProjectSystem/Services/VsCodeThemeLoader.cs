@@ -303,6 +303,104 @@ public class VsCodeThemeLoader
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Extracts a flat scope-to-style map from token color rules.
+    /// For each TextMate scope, returns the foreground color and font style.
+    /// When multiple rules match a scope, the last one wins (VS Code behavior).
+    /// </summary>
+    public Dictionary<string, (string? foreground, bool bold, bool italic)> ExtractTokenColorMap(LoadedTheme theme)
+    {
+        var map = new Dictionary<string, (string? foreground, bool bold, bool italic)>();
+
+        foreach (var rule in theme.TokenColors)
+        {
+            foreach (var scope in rule.Scopes)
+            {
+                map[scope] = (rule.Style.Foreground, rule.Style.Bold, rule.Style.Italic);
+            }
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// Maps a loaded theme's VS Code color keys to the IDE's Avalonia resource keys (Ide* keys).
+    /// These keys match the SolidColorBrush resources defined in AppStyles.axaml.
+    /// </summary>
+    public Dictionary<string, string> MapToIdeResourceKeys(LoadedTheme theme)
+    {
+        var mapped = new Dictionary<string, string>();
+
+        // Map VS Code color keys to Ide* AXAML resource keys
+        TryMap(theme.Colors, "editor.background", "IdeBg", mapped);
+        TryMap(theme.Colors, "editor.foreground", "IdeFg", mapped);
+        TryMap(theme.Colors, "sideBar.background", "IdePanelBg", mapped);
+        TryMap(theme.Colors, "menu.background", "IdeMenuBg", mapped);
+        TryMap(theme.Colors, "panel.border", "IdeBorder", mapped);
+        TryMap(theme.Colors, "list.hoverBackground", "IdeHoverBg", mapped);
+        TryMap(theme.Colors, "input.background", "IdeInputBg", mapped);
+        TryMap(theme.Colors, "input.border", "IdeInputBorder", mapped);
+        TryMap(theme.Colors, "editor.selectionBackground", "IdeSelectionBg", mapped);
+        TryMap(theme.Colors, "sideBarSectionHeader.background", "IdeHeaderBg", mapped);
+        TryMap(theme.Colors, "scrollbarSlider.background", "IdeThumbBg", mapped);
+        TryMap(theme.Colors, "scrollbarSlider.hoverBackground", "IdeThumbHover", mapped);
+        TryMap(theme.Colors, "editorWidget.background", "IdeContextBg", mapped);
+        TryMap(theme.Colors, "editorWidget.border", "IdeContextBorder", mapped);
+        TryMap(theme.Colors, "button.background", "IdeSecondaryBg", mapped);
+        TryMap(theme.Colors, "button.foreground", "IdeSecondaryFg", mapped);
+        TryMap(theme.Colors, "button.hoverBackground", "IdeSecondaryHover", mapped);
+        TryMap(theme.Colors, "list.hoverBackground", "IdeListHover", mapped);
+        TryMap(theme.Colors, "list.activeSelectionBackground", "IdeListSelected", mapped);
+        TryMap(theme.Colors, "statusBar.background", "IdeFooterBg", mapped);
+        TryMap(theme.Colors, "statusBar.border", "IdeFooterBorder", mapped);
+
+        // Fallbacks: if certain keys aren't set, derive from related colors
+        if (!mapped.ContainsKey("IdeMenuBg") && theme.Colors.ContainsKey("editorGroupHeader.tabsBackground"))
+            mapped["IdeMenuBg"] = theme.Colors["editorGroupHeader.tabsBackground"];
+        if (!mapped.ContainsKey("IdeBorder") && theme.Colors.ContainsKey("sideBar.border"))
+            mapped["IdeBorder"] = theme.Colors["sideBar.border"];
+        if (!mapped.ContainsKey("IdeFooterBorder") && mapped.ContainsKey("IdeBorder"))
+            mapped["IdeFooterBorder"] = mapped["IdeBorder"];
+
+        return mapped;
+    }
+
+    private static void TryMap(Dictionary<string, string> source, string vsCodeKey, string ideKey, Dictionary<string, string> dest)
+    {
+        if (source.TryGetValue(vsCodeKey, out var value) && !string.IsNullOrEmpty(value))
+        {
+            dest[ideKey] = value;
+        }
+    }
+
+    /// <summary>
+    /// Quickly loads just the name and type from a VS Code theme JSON file without
+    /// fully parsing all token colors. Useful for populating theme menus.
+    /// </summary>
+    public (string name, string type)? PeekThemeInfo(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath)) return null;
+
+            var json = StripJsonComments(File.ReadAllText(filePath));
+            using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+            var root = doc.RootElement;
+            var name = root.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? Path.GetFileNameWithoutExtension(filePath) : Path.GetFileNameWithoutExtension(filePath);
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "dark" : "dark";
+            return (name, type);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     #region Private Helpers
 
     private ThemeTokenColorRule? ParseTokenColorRule(JsonElement element)

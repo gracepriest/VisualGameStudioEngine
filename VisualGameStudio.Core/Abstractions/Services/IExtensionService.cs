@@ -117,6 +117,13 @@ public interface IExtensionService : IDisposable
     Task TriggerActivationEventAsync(string activationEvent);
 
     /// <summary>
+    /// Discovers installed extensions and activates all static contributions
+    /// (themes, grammars, snippets, language configs) without requiring Node.js.
+    /// Call this on IDE startup.
+    /// </summary>
+    Task ActivateStaticContributionsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Checks for updates for all installed extensions.
     /// </summary>
     Task<IReadOnlyList<ExtensionUpdate>> CheckForUpdatesAsync(CancellationToken cancellationToken = default);
@@ -167,6 +174,12 @@ public interface IExtensionService : IDisposable
     /// Raised when an extension sends a message to the IDE (e.g., showInformationMessage).
     /// </summary>
     event EventHandler<ExtensionMessageEventArgs>? ExtensionMessageReceived;
+
+    /// <summary>
+    /// Raised when static contributions (themes, grammars, snippets) are loaded
+    /// from an extension, so the IDE can update its UI.
+    /// </summary>
+    event EventHandler<ExtensionContributionsLoadedEventArgs>? ContributionsLoaded;
 }
 
 #region Extension Types
@@ -617,6 +630,23 @@ public class ExtensionMessageEventArgs : EventArgs
     /// Task completion source to return the selected action back to the extension.
     /// </summary>
     public TaskCompletionSource<string?>? ResponseSource { get; set; }
+}
+
+/// <summary>
+/// Event args for when static contributions are loaded from an extension.
+/// </summary>
+public class ExtensionContributionsLoadedEventArgs : EventArgs
+{
+    public Extension Extension { get; }
+    public int ThemesLoaded { get; set; }
+    public int GrammarsLoaded { get; set; }
+    public int SnippetsLoaded { get; set; }
+    public int LanguageConfigsLoaded { get; set; }
+
+    public ExtensionContributionsLoadedEventArgs(Extension extension)
+    {
+        Extension = extension;
+    }
 }
 
 /// <summary>

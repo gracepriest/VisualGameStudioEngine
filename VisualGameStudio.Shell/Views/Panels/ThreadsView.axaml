@@ -1,0 +1,89 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="200"
+             x:Class="VisualGameStudio.Shell.Views.Panels.ThreadsView"
+             x:DataType="vm:ThreadsViewModel">
+
+  <Border Classes="toolPanel">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Classes="panelHeader">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Classes="panelTitle" Text="Threads"/>
+          <Button Grid.Column="1" Classes="toolbarButton" Command="{Binding RefreshThreadsCommand}" ToolTip.Tip="Refresh"
+                  AutomationProperties.Name="Refresh Threads">
+            <TextBlock Text="&#x21BB;" FontSize="14"/>
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Thread list -->
+      <ListBox ItemsSource="{Binding Threads}"
+               SelectedItem="{Binding SelectedThread}"
+               Background="Transparent"
+               Padding="4"
+               AutomationProperties.Name="Debug Threads"
+               DoubleTapped="OnThreadDoubleTapped">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="2">
+              <!-- Current thread indicator -->
+              <TextBlock Grid.Column="0"
+                         Text="&#x25B6;"
+                         Foreground="#FFD700"
+                         FontSize="10"
+                         VerticalAlignment="Center"
+                         Margin="0,0,6,0"
+                         IsVisible="{Binding IsCurrent}"/>
+
+              <!-- Thread name and preview -->
+              <StackPanel Grid.Column="1" Orientation="Vertical">
+                <TextBlock Text="{Binding Name}"
+                           Foreground="#CCCCCC"
+                           FontFamily="Cascadia Code, Consolas, monospace"
+                           FontSize="12"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding CallStackPreview}"
+                           Foreground="#888888"
+                           FontFamily="Cascadia Code, Consolas, monospace"
+                           FontSize="10"
+                           TextTrimming="CharacterEllipsis"
+                           IsVisible="{Binding CallStackPreview, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+              </StackPanel>
+
+              <!-- Status badge -->
+              <Border Grid.Column="2"
+                      CornerRadius="3"
+                      Padding="6,2"
+                      VerticalAlignment="Center"
+                      Margin="4,0,0,0"
+                      Background="#444444">
+                <TextBlock Text="{Binding Status}"
+                           FontSize="10"
+                           Foreground="#AAAAAA"/>
+              </Border>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+
+        <ListBox.ContextMenu>
+          <ContextMenu>
+            <MenuItem Header="Switch To Thread"
+                      Command="{Binding $parent[ListBox].((vm:ThreadsViewModel)DataContext).SwitchThreadCommand}"
+                      CommandParameter="{Binding $parent[ListBox].SelectedItem}"/>
+            <Separator/>
+            <MenuItem Header="Freeze Thread"
+                      Command="{Binding $parent[ListBox].((vm:ThreadsViewModel)DataContext).FreezeThreadCommand}"
+                      CommandParameter="{Binding $parent[ListBox].SelectedItem}"/>
+            <MenuItem Header="Thaw Thread"
+                      Command="{Binding $parent[ListBox].((vm:ThreadsViewModel)DataContext).ThawThreadCommand}"
+                      CommandParameter="{Binding $parent[ListBox].SelectedItem}"/>
+          </ContextMenu>
+        </ListBox.ContextMenu>
+      </ListBox>
+    </DockPanel>
+  </Border>
+
+</UserControl>

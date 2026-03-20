@@ -30,6 +30,7 @@ public class DockFactory : Factory
     private ExtensionsViewModel? _extensions;
     private ProblemsViewModel? _problems;
     private DebugConsoleViewModel? _debugConsole;
+    private ThreadsViewModel? _threads;
     private DocumentDock? _documentDock;
     private IRootDock? _rootDock;
 
@@ -52,7 +53,8 @@ public class DockFactory : Factory
         BookmarksViewModel? bookmarks = null,
         ExtensionsViewModel? extensions = null,
         ProblemsViewModel? problems = null,
-        DebugConsoleViewModel? debugConsole = null)
+        DebugConsoleViewModel? debugConsole = null,
+        ThreadsViewModel? threads = null)
     {
         _solutionExplorer = solutionExplorer;
         _outputPanel = outputPanel;
@@ -73,6 +75,7 @@ public class DockFactory : Factory
         _extensions = extensions;
         _problems = problems;
         _debugConsole = debugConsole;
+        _threads = threads;
     }
 
     public override IRootDock CreateLayout()
@@ -248,6 +251,13 @@ public class DockFactory : Factory
             ViewModel = _debugConsole
         };
 
+        var threadsTool = new ThreadsTool
+        {
+            Id = "Threads",
+            Title = "Threads",
+            ViewModel = _threads
+        };
+
         // Bottom tool dock - split into two groups for better tab visibility
         // Left group: General tools (Output, Error List, Terminal, Find)
         var bottomLeftTools = new ToolDock
@@ -261,13 +271,13 @@ public class DockFactory : Factory
             GripMode = GripMode.Visible
         };
 
-        // Right group: Debug tools (Call Stack, Variables, Breakpoints, Watch, Immediate)
+        // Right group: Debug tools (Call Stack, Variables, Breakpoints, Watch, Immediate, Threads)
         var bottomRightTools = new ToolDock
         {
             Id = "BottomRightTools",
             Title = "Debug",
             Proportion = 0.5,
-            VisibleDockables = CreateList<IDockable>(callStackTool, variablesTool, breakpointsTool, watchTool, immediateWindowTool, debugConsoleTool),
+            VisibleDockables = CreateList<IDockable>(callStackTool, variablesTool, breakpointsTool, watchTool, immediateWindowTool, debugConsoleTool, threadsTool),
             ActiveDockable = breakpointsTool,
             Alignment = Alignment.Bottom,
             GripMode = GripMode.Visible
@@ -337,7 +347,8 @@ public class DockFactory : Factory
             ["Bookmarks"] = () => _bookmarks,
             ["Extensions"] = () => _extensions,
             ["Problems"] = () => _problems,
-            ["DebugConsole"] = () => _debugConsole
+            ["DebugConsole"] = () => _debugConsole,
+            ["Threads"] = () => _threads
         };
 
         DockableLocator = new Dictionary<string, Func<IDockable?>>
@@ -573,6 +584,11 @@ public class ProblemsTool : Tool
 public class DebugConsoleTool : Tool
 {
     public DebugConsoleViewModel? ViewModel { get; set; }
+}
+
+public class ThreadsTool : Tool
+{
+    public ThreadsViewModel? ViewModel { get; set; }
 }
 
 public class HostWindow : IHostWindow

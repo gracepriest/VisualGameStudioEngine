@@ -194,6 +194,30 @@
             </StackPanel>
           </Border>
 
+          <!-- 15. Merge conflict indicator (contextual - red) -->
+          <Border IsVisible="{Binding HasMergeConflicts}" Margin="0" VerticalAlignment="Stretch">
+            <Button Classes="statusItem"
+                    Command="{Binding ShowMergeConflictsCommand}"
+                    ToolTip.Tip="Click to navigate merge conflicts"
+                    AutomationProperties.Name="Merge Conflicts">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <Border Width="14" Height="14" CornerRadius="7"
+                        Background="#E51400" VerticalAlignment="Center">
+                  <TextBlock Text="!" Foreground="White" FontSize="9" FontWeight="Bold"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                </Border>
+                <TextBlock Foreground="#FFB0B0" VerticalAlignment="Center">
+                  <TextBlock.Text>
+                    <MultiBinding StringFormat="{}{0} merge conflict{1}">
+                      <Binding Path="MergeConflictCount"/>
+                      <Binding Path="MergeConflictCount" Converter="{x:Static local:StatusBarConverters.PluralSuffixConverter}"/>
+                    </MultiBinding>
+                  </TextBlock.Text>
+                </TextBlock>
+              </StackPanel>
+            </Button>
+          </Border>
+
         </StackPanel>
 
         <!-- ═══ RIGHT SIDE ═══ -->

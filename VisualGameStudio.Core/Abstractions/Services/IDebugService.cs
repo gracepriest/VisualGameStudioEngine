@@ -162,6 +162,11 @@ public interface IDebugService : IDisposable
     Task<DataBreakpointAccessInfo?> GetDataBreakpointInfoAsync(
         int variablesReference, string name,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get all threads in the debugged process
+    /// </summary>
+    Task<IReadOnlyList<ThreadInfo>> GetThreadsAsync();
 }
 
 public enum DebugState
@@ -316,4 +321,13 @@ public class DataBreakpointAccessInfo
     public string Description { get; set; } = "";
     public List<string> AccessTypes { get; set; } = new();
     public bool CanPersist { get; set; }
+}
+
+public class ThreadInfo
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public string Status { get; set; } = "Running";
+    public bool IsFrozen { get; set; }
+    public string CallStackPreview { get; set; } = "";
 }

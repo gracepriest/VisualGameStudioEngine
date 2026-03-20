@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using VisualGameStudio.Core.Abstractions.Services;
+using ITextMateService = VisualGameStudio.Core.Abstractions.Services.ITextMateService;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
@@ -31,6 +32,16 @@ public class TextMateRegistrar
     private readonly Dictionary<string, string> _extensionToLanguage = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Maps language IDs to their display names (e.g., "python" -> "Python").
+    /// </summary>
+    private readonly Dictionary<string, string> _languageNames = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Maps language IDs to their file extensions.
+    /// </summary>
+    private readonly Dictionary<string, List<string>> _languageExtensions = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Maps scope names to their injection targets for grammar injection.
     /// </summary>
     private readonly Dictionary<string, List<string>> _injectionGrammars = new(StringComparer.OrdinalIgnoreCase);
@@ -39,6 +50,19 @@ public class TextMateRegistrar
     /// Tracks which grammars have been loaded, keyed by scope name.
     /// </summary>
     private readonly Dictionary<string, LoadedGrammarInfo> _loadedGrammars = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Callback invoked after a grammar file is loaded. Used by the editor to convert the
+    /// grammar into an AvalonEdit highlighting definition.
+    /// Parameters: languageId, languageName, fileExtensions, grammarFilePath, grammarJsonContent.
+    /// </summary>
+    public Action<string, string, IEnumerable<string>, string, string?>? OnGrammarLoaded { get; set; }
+
+    /// <summary>
+    /// Callback invoked when a language configuration is loaded from an extension.
+    /// Parameters: languageId, config.
+    /// </summary>
+    public Action<string, LanguageConfiguration>? OnLanguageConfigurationLoaded { get; set; }
 
     /// <summary>
     /// Raised when a grammar is registered from an extension.
@@ -166,6 +190,22 @@ public class TextMateRegistrar
     /// </summary>
     public IReadOnlyDictionary<string, LoadedGrammarInfo> LoadedGrammars => _loadedGrammars;
 
+    /// <summary>
+    /// Gets the file extensions registered for a language ID.
+    /// </summary>
+    public IReadOnlyList<string> GetFileExtensions(string languageId)
+    {
+        return _languageExtensions.TryGetValue(languageId, out var exts) ? exts : new List<string>();
+    }
+
+    /// <summary>
+    /// Gets the display name for a language ID.
+    /// </summary>
+    public string GetLanguageName(string languageId)
+    {
+        return _languageNames.TryGetValue(languageId, out var name) ? name : languageId;
+    }
+
     #region Private Methods
 
     private void RegisterLanguages(JsonElement languages, string extensionPath)
@@ -176,16 +216,41 @@ public class TextMateRegistrar
             if (string.IsNullOrEmpty(id))
                 continue;
 
+            // Get display name from aliases or id
+            if (lang.TryGetProperty("aliases", out var aliases))
+            {
+                var aliasList = aliases.EnumerateArray().ToList();
+                if (aliasList.Count > 0)
+                {
+                    var displayName = aliasList[0].GetString();
+                    if (!string.IsNullOrEmpty(displayName))
+                    {
+                        _languageNames[id] = displayName;
+                    }
+                }
+            }
+            if (!_languageNames.ContainsKey(id))
+            {
+                _languageNames[id] = id;
+            }
+
             // Register file extensions
             if (lang.TryGetProperty("extensions", out var extensions))
             {
+                if (!_languageExtensions.ContainsKey(id))
+                    _languageExtensions[id] = new List<string>();
+
                 foreach (var ext in extensions.EnumerateArray())
                 {
                     var extStr = ext.GetString();
                     if (!string.IsNullOrEmpty(extStr))
                     {
                         var normalized = extStr.StartsWith(".") ? extStr : "." + extStr;
-                        _extensionToLanguage[normalized.ToLowerInvariant()] = id;
+                        var normalizedLower = normalized.ToLowerInvariant();
+                        _extensionToLanguage[normalizedLower] = id;
+
+                        if (!_languageExtensions[id].Contains(normalizedLower))
+                            _languageExtensions[id].Add(normalizedLower);
                     }
                 }
             }
@@ -301,6 +366,23 @@ public class TextMateRegistrar
                 EmbeddedLanguages = embeddedLanguages,
                 IsInjection = grammar.TryGetProperty("injectTo", out _)
             };
+
+            // Notify editor to convert grammar for AvalonEdit highlighting
+            if (!string.IsNullOrEmpty(languageId) && OnGrammarLoaded != null)
+            {
+                try
+                {
+                    var displayName = GetLanguageName(languageId);
+                    var fileExts2 = GetFileExtensions(languageId);
+                    string? grammarContent = null;
+                    try { grammarContent = await File.ReadAllTextAsync(fullPath); } catch { }
+                    OnGrammarLoaded(languageId, displayName, fileExts2, fullPath, grammarContent);
+                }
+                catch (Exception convEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to convert grammar for AvalonEdit: {convEx.Message}");
+                }
+            }
 
             GrammarRegistered?.Invoke(this, new GrammarRegisteredEventArgs(
                 scopeName, languageId ?? "", extensionId, fullPath));
@@ -447,6 +529,9 @@ public class TextMateRegistrar
 
             // Store configuration for later use
             _languageConfigurations[languageId] = config;
+
+            // Notify editor about the loaded configuration
+            OnLanguageConfigurationLoaded?.Invoke(languageId, config);
         }
         catch (Exception ex)
         {

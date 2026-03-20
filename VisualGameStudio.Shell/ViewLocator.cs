@@ -34,6 +34,7 @@ public class ViewLocator : IDataTemplate
             ExtensionsTool tool => new ExtensionsView { DataContext = tool.ViewModel },
             ProblemsTool tool => new ProblemsView { DataContext = tool.ViewModel },
             DebugConsoleTool tool => new DebugConsoleView { DataContext = tool.ViewModel },
+            ThreadsTool tool => new ThreadsView { DataContext = tool.ViewModel },
             CodeEditorDocument doc => new CodeEditorDocumentView { DataContext = doc.ViewModel },
             WelcomeDocument => new WelcomeDocumentView(),
             _ => CreateDefault(data)
@@ -75,6 +76,7 @@ public class ViewLocator : IDataTemplate
             or ExtensionsTool
             or ProblemsTool
             or DebugConsoleTool
+            or ThreadsTool
             or CodeEditorDocument
             or WelcomeDocument;
     }

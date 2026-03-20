@@ -101,6 +101,12 @@ public partial class StatusBarViewModel : ViewModelBase
     [ObservableProperty]
     private int _notificationCount;
 
+    [ObservableProperty]
+    private int _mergeConflictCount;
+
+    [ObservableProperty]
+    private bool _hasMergeConflicts;
+
     // ── Notification center ──
 
     [ObservableProperty]
@@ -166,6 +172,8 @@ public partial class StatusBarViewModel : ViewModelBase
     public event EventHandler<string>? EncodingChangeRequested;
     public event EventHandler<string>? LineEndingChangeRequested;
     public event EventHandler<string>? LanguageModeChangeRequested;
+
+    public event EventHandler? ShowMergeConflictsRequested;
 
     // Events to notify the MainWindow to show picker popups (legacy compat)
     public event EventHandler? LineEndingClicked;
@@ -371,7 +379,22 @@ public partial class StatusBarViewModel : ViewModelBase
         NotificationCount = Notifications.Count;
     }
 
+    /// <summary>
+    /// Updates the merge conflict count in the status bar.
+    /// </summary>
+    public void UpdateMergeConflicts(int count)
+    {
+        MergeConflictCount = count;
+        HasMergeConflicts = count > 0;
+    }
+
     // ── Commands ──
+
+    [RelayCommand]
+    private void ShowMergeConflicts()
+    {
+        ShowMergeConflictsRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     [RelayCommand]
     private void ShowBranchPicker()

@@ -952,6 +952,56 @@ public class DebugService : IDebugService
         }
     }
 
+    public async Task<IReadOnlyList<ThreadInfo>> GetThreadsAsync()
+    {
+        if (_writer == null) return Array.Empty<ThreadInfo>();
+
+        try
+        {
+            var result = await SendRequestAsync("threads", new { });
+
+            var threads = new List<ThreadInfo>();
+            if (result.TryGetProperty("threads", out var threadsArray) && threadsArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var t in threadsArray.EnumerateArray())
+                {
+                    var id = t.TryGetProperty("id", out var idProp) ? idProp.GetInt32() : 0;
+                    var name = t.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "";
+
+                    threads.Add(new ThreadInfo
+                    {
+                        Id = id,
+                        Name = name,
+                        Status = "Paused"
+                    });
+                }
+            }
+
+            // Try to get call stack preview for each thread (top frame name)
+            foreach (var thread in threads)
+            {
+                try
+                {
+                    var frames = await GetStackTraceAsync(thread.Id);
+                    if (frames.Count > 0)
+                    {
+                        thread.CallStackPreview = frames[0].Name;
+                    }
+                }
+                catch
+                {
+                    // Stack trace may not be available for all threads
+                }
+            }
+
+            return threads;
+        }
+        catch
+        {
+            return Array.Empty<ThreadInfo>();
+        }
+    }
+
     private void SetState(DebugState newState)
     {
         var oldState = State;

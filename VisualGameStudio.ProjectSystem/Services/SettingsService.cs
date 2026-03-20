@@ -58,6 +58,12 @@ public class SettingsService : ISettingsService, IDisposable
     public event EventHandler<SettingsChangedEventArgs>? SettingsChanged;
 
     /// <summary>
+    /// Raised when the workspace path changes (project opened/closed).
+    /// The string argument is the new workspace path, or null if closed.
+    /// </summary>
+    public event EventHandler<string?>? WorkspacePathChanged;
+
+    /// <summary>
     /// Gets the user settings file path.
     /// </summary>
     public string UserSettingsPath => _userSettingsPath;
@@ -342,6 +348,7 @@ public class SettingsService : ISettingsService, IDisposable
 
     public void SetWorkspacePath(string? path)
     {
+        var oldPath = _workspacePath;
         _workspacePath = path;
         _workspaceSettings.Clear();
         TeardownWorkspaceWatcher();
@@ -350,6 +357,18 @@ public class SettingsService : ISettingsService, IDisposable
         {
             _ = LoadWorkspaceSettingsAsync();
             SetupWorkspaceFileWatcher();
+        }
+
+        if (oldPath != path)
+        {
+            WorkspacePathChanged?.Invoke(this, path);
+
+            // Fire SettingsChanged so consumers re-evaluate effective values
+            var allKeys = _workspaceSettings.Keys.ToList();
+            if (allKeys.Count > 0)
+            {
+                SettingsChanged?.Invoke(this, new SettingsChangedEventArgs(allKeys, SettingsScope.Workspace));
+            }
         }
     }
 
@@ -677,11 +696,32 @@ public class SettingsService : ISettingsService, IDisposable
 
     private async Task SaveWorkspaceSettingsAsync()
     {
-        if (string.IsNullOrEmpty(_workspacePath) || _workspaceSettings.Count == 0) return;
+        if (string.IsNullOrEmpty(_workspacePath)) return;
 
         var settingsDir = Path.Combine(_workspacePath, ".vgs");
         var settingsPath = Path.Combine(settingsDir, "settings.json");
+
+        if (_workspaceSettings.Count == 0)
+        {
+            // If no workspace settings remain, delete the file (but keep directory)
+            try
+            {
+                if (File.Exists(settingsPath))
+                    File.Delete(settingsPath);
+            }
+            catch { }
+            return;
+        }
+
+        // Create .vgs directory on first write
+        bool dirCreated = !Directory.Exists(settingsDir);
         await SaveToFileAsync(settingsPath, _workspaceSettings);
+
+        // Start watching if we just created the directory
+        if (dirCreated && _workspaceWatcher == null)
+        {
+            SetupWorkspaceFileWatcher();
+        }
     }
 
     private void ScheduleSave(SettingsScope scope)
@@ -748,14 +788,18 @@ public class SettingsService : ISettingsService, IDisposable
         try
         {
             var vgsDir = Path.Combine(_workspacePath, ".vgs");
-            Directory.CreateDirectory(vgsDir);
 
-            _workspaceWatcher = new FileSystemWatcher(vgsDir, "settings.json")
+            // Only watch if the .vgs directory already exists
+            // (it will be created on first workspace setting write)
+            if (Directory.Exists(vgsDir))
             {
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime,
-                EnableRaisingEvents = true
-            };
-            _workspaceWatcher.Changed += OnWorkspaceSettingsFileChanged;
+                _workspaceWatcher = new FileSystemWatcher(vgsDir, "settings.json")
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime,
+                    EnableRaisingEvents = true
+                };
+                _workspaceWatcher.Changed += OnWorkspaceSettingsFileChanged;
+            }
         }
         catch
         {

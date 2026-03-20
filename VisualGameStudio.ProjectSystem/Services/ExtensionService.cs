@@ -2,13 +2,14 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using VisualGameStudio.Core.Abstractions.Services;
+using VisualGameStudio.Core.Models;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
 /// <summary>
 /// Manages IDE extensions with VS Code extension host support.
-/// Handles discovery, installation, and lifecycle of extensions that run
-/// in a Node.js subprocess communicating via JSON-RPC.
+/// Handles discovery, installation, lifecycle, and static contribution loading
+/// (themes, grammars, snippets, language configs) without requiring Node.js.
 /// </summary>
 public class ExtensionService : IExtensionService
 {
@@ -17,7 +18,9 @@ public class ExtensionService : IExtensionService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = true
+        WriteIndented = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true
     };
 
     private readonly List<Extension> _extensions = new();
@@ -27,15 +30,26 @@ public class ExtensionService : IExtensionService
     private readonly string _stateFile;
     private readonly HttpClient _httpClient;
     private readonly IOutputService _outputService;
+    private readonly ITextMateService? _textMateService;
+    private readonly ISnippetService? _snippetService;
+    private TextMateRegistrar? _textMateRegistrar;
     private ExtensionHost? _extensionHost;
     private bool _disposed;
 
-    public ExtensionService(IOutputService outputService)
+    public ExtensionService(IOutputService outputService, ITextMateService? textMateService = null, ISnippetService? snippetService = null)
     {
         _outputService = outputService;
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _extensionsDir = Path.Combine(appData, "VisualGameStudio", "extensions");
-        _stateFile = Path.Combine(appData, "VisualGameStudio", "extensions-state.json");
+        _textMateService = textMateService;
+        _snippetService = snippetService;
+
+        if (_textMateService != null)
+        {
+            _textMateRegistrar = new TextMateRegistrar(_textMateService);
+        }
+
+        var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        _extensionsDir = Path.Combine(userHome, ".vgs", "extensions");
+        _stateFile = Path.Combine(userHome, ".vgs", "extensions-state.json");
         _httpClient = new HttpClient();
 
         Directory.CreateDirectory(_extensionsDir);
@@ -58,6 +72,7 @@ public class ExtensionService : IExtensionService
     public event EventHandler<ExtensionEventArgs>? ExtensionDeactivated;
     public event EventHandler<bool>? ExtensionHostStateChanged;
     public event EventHandler<ExtensionMessageEventArgs>? ExtensionMessageReceived;
+    public event EventHandler<ExtensionContributionsLoadedEventArgs>? ContributionsLoaded;
 
     #region Discovery
 
@@ -72,14 +87,29 @@ public class ExtensionService : IExtensionService
 
         foreach (var dir in Directory.GetDirectories(_extensionsDir))
         {
+            // Check for package.json at root level or in extension/ subdirectory
             var manifestPath = Path.Combine(dir, "package.json");
+            var extensionSubDir = Path.Combine(dir, "extension", "package.json");
+
+            string? actualDir = null;
             if (File.Exists(manifestPath))
+            {
+                actualDir = dir;
+            }
+            else if (File.Exists(extensionSubDir))
+            {
+                actualDir = Path.Combine(dir, "extension");
+            }
+
+            if (actualDir != null)
             {
                 try
                 {
-                    var extension = await LoadExtensionFromDirectoryAsync(dir);
+                    var extension = await LoadExtensionFromDirectoryAsync(actualDir);
                     if (extension != null)
                     {
+                        extension.InstallPath = actualDir;
+
                         if (_enabledState.TryGetValue(extension.Id, out var enabled))
                         {
                             extension.IsEnabled = enabled;
@@ -203,12 +233,18 @@ public class ExtensionService : IExtensionService
                 }
 
                 var extensionId = $"{manifest.Publisher}.{manifest.Name}";
-                var installDir = Path.Combine(_extensionsDir, extensionId);
+                var installDirName = $"{extensionId}-{manifest.Version}";
+                var installDir = Path.Combine(_extensionsDir, installDirName);
 
-                // Remove existing installation
-                if (Directory.Exists(installDir))
+                // Remove existing installation (any version)
+                foreach (var existingDir in Directory.GetDirectories(_extensionsDir))
                 {
-                    Directory.Delete(installDir, true);
+                    var dirName = Path.GetFileName(existingDir);
+                    if (dirName.StartsWith(extensionId + "-", StringComparison.OrdinalIgnoreCase) ||
+                        dirName.Equals(extensionId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { Directory.Delete(existingDir, true); } catch { }
+                    }
                 }
 
                 // Copy files to install directory
@@ -229,7 +265,17 @@ public class ExtensionService : IExtensionService
 
                     _outputService.WriteLine($"[Extensions] Installed: {ext.Name} ({ext.Id} v{ext.Version})", OutputCategory.General);
 
-                    // If the host is running and extension has '*' activation, activate immediately
+                    // Activate static contributions immediately
+                    LoadContributions(ext);
+
+                    // Mark pure static extensions as active
+                    if (string.IsNullOrEmpty(ext.Manifest?.Main))
+                    {
+                        ext.IsActive = true;
+                        ext.Status = ExtensionStatus.Active;
+                    }
+
+                    // If the host is running and extension has '*' activation, activate JS too
                     if (_extensionHost?.IsRunning == true && ext.ActivationEvents.Contains("*"))
                     {
                         await ActivateAsync(ext.Id);
@@ -304,9 +350,13 @@ public class ExtensionService : IExtensionService
         try
         {
             // Deactivate first if active
-            if (extension.IsActive && _extensionHost?.IsRunning == true)
+            if (extension.IsActive)
             {
-                _ = _extensionHost.DeactivateExtensionAsync(extensionId);
+                UnloadContributions(extension);
+                if (_extensionHost?.IsRunning == true)
+                {
+                    _ = _extensionHost.DeactivateExtensionAsync(extensionId);
+                }
             }
 
             if (Directory.Exists(extension.InstallPath))
@@ -347,6 +397,9 @@ public class ExtensionService : IExtensionService
         _enabledState[extensionId] = true;
         SaveState();
 
+        // Re-activate static contributions
+        LoadContributions(extension);
+
         ExtensionEnabled?.Invoke(this, new ExtensionEventArgs(extension));
         return Task.FromResult(true);
     }
@@ -360,9 +413,13 @@ public class ExtensionService : IExtensionService
         }
 
         // Deactivate if currently active
-        if (extension.IsActive && _extensionHost?.IsRunning == true)
+        if (extension.IsActive)
         {
-            _ = _extensionHost.DeactivateExtensionAsync(extensionId);
+            UnloadContributions(extension);
+            if (_extensionHost?.IsRunning == true)
+            {
+                _ = _extensionHost.DeactivateExtensionAsync(extensionId);
+            }
         }
 
         extension.IsEnabled = false;
@@ -412,9 +469,12 @@ public class ExtensionService : IExtensionService
         {
             if (_extensionHost?.IsRunning != true)
             {
-                _outputService.WriteError($"[Extensions] Cannot activate {extensionId}: Extension host not running.", OutputCategory.General);
-                extension.Status = ExtensionStatus.Error;
-                return false;
+                // Static contributions are already loaded, just mark as active for static-only
+                extension.IsActive = true;
+                extension.Status = ExtensionStatus.Active;
+                ExtensionActivated?.Invoke(this, new ExtensionEventArgs(extension));
+                _outputService.WriteLine($"[Extensions] Activated (static only): {extension.Name} ({extensionId})", OutputCategory.General);
+                return true;
             }
 
             var success = await _extensionHost.ActivateExtensionAsync(
@@ -424,8 +484,10 @@ public class ExtensionService : IExtensionService
 
             if (!success)
             {
-                extension.Status = ExtensionStatus.Error;
-                return false;
+                // Still keep static contributions loaded
+                extension.IsActive = true;
+                extension.Status = ExtensionStatus.Active;
+                _outputService.WriteError($"[Extensions] JS activation failed for {extensionId}, static contributions still active.", OutputCategory.General);
             }
         }
 
@@ -490,6 +552,43 @@ public class ExtensionService : IExtensionService
         {
             await _extensionHost.FireActivationEventAsync(activationEvent);
         }
+    }
+
+    public async Task ActivateStaticContributionsAsync(CancellationToken cancellationToken = default)
+    {
+        _outputService.WriteLine("[Extensions] Loading static contributions from installed extensions...", OutputCategory.General);
+
+        // Discover all installed extensions
+        await DiscoverExtensionsAsync();
+
+        // Activate each enabled extension's static contributions
+        var activatedCount = 0;
+        foreach (var ext in _extensions.Where(e => e.IsEnabled).ToList())
+        {
+            if (cancellationToken.IsCancellationRequested) break;
+
+            try
+            {
+                // Load static contributions (themes, grammars, snippets)
+                LoadContributions(ext);
+
+                // Mark as active if it has no JS entry point (pure static extension)
+                if (string.IsNullOrEmpty(ext.Manifest?.Main))
+                {
+                    ext.IsActive = true;
+                    ext.Status = ExtensionStatus.Active;
+                }
+
+                activatedCount++;
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError($"[Extensions] Failed to activate {ext.Id}: {ex.Message}", OutputCategory.General);
+                ext.Status = ExtensionStatus.Error;
+            }
+        }
+
+        _outputService.WriteLine($"[Extensions] Loaded static contributions from {activatedCount} extension(s).", OutputCategory.General);
     }
 
     #endregion
@@ -625,19 +724,250 @@ public class ExtensionService : IExtensionService
 
     private void LoadContributions(Extension extension)
     {
-        // Declarative contributions are loaded by the IDE directly:
-        // - Grammars are forwarded to the TextMateService
-        // - Themes are forwarded to the ThemeManager
-        // - Snippets are forwarded to the SnippetService
-        // - Keybindings are forwarded to the KeybindingService
-        // - Configuration defaults are applied to SettingsService
-        // The actual forwarding is handled by higher-level code (e.g., Shell)
-        // that subscribes to ExtensionActivated events.
+        if (string.IsNullOrEmpty(extension.InstallPath) || !Directory.Exists(extension.InstallPath))
+            return;
+
+        var stats = new ExtensionContributionsLoadedEventArgs(extension);
+
+        try
+        {
+            // Load themes
+            stats.ThemesLoaded = LoadThemesFromExtension(extension);
+
+            // Load grammars and language configurations via TextMateRegistrar
+            stats.GrammarsLoaded = LoadGrammarsFromExtension(extension);
+
+            // Load snippets
+            stats.SnippetsLoaded = LoadSnippetsFromExtension(extension);
+
+            var total = stats.ThemesLoaded + stats.GrammarsLoaded + stats.SnippetsLoaded;
+            if (total > 0)
+            {
+                _outputService.WriteLine(
+                    $"[Extensions] Loaded contributions from {extension.Name}: " +
+                    $"{stats.ThemesLoaded} theme(s), {stats.GrammarsLoaded} grammar(s), " +
+                    $"{stats.SnippetsLoaded} snippet file(s)",
+                    OutputCategory.General);
+
+                ContributionsLoaded?.Invoke(this, stats);
+            }
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteError($"[Extensions] Failed to load contributions from {extension.Name}: {ex.Message}", OutputCategory.General);
+        }
     }
 
     private void UnloadContributions(Extension extension)
     {
-        // Reverse of LoadContributions - handled by Shell via ExtensionDeactivated event
+        // Unregister grammars loaded from this extension
+        _textMateRegistrar?.UnregisterExtension(extension.Id);
+    }
+
+    private int LoadThemesFromExtension(Extension extension)
+    {
+        if (_textMateService == null) return 0;
+
+        var packageJsonPath = Path.Combine(extension.InstallPath, "package.json");
+        if (!File.Exists(packageJsonPath)) return 0;
+
+        try
+        {
+            var json = File.ReadAllText(packageJsonPath);
+            using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            });
+
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("contributes", out var contributes)) return 0;
+            if (!contributes.TryGetProperty("themes", out var themes)) return 0;
+
+            var count = 0;
+            foreach (var themeEntry in themes.EnumerateArray())
+            {
+                var themePath = themeEntry.TryGetProperty("path", out var pathEl) ? pathEl.GetString() : null;
+                var label = themeEntry.TryGetProperty("label", out var labelEl) ? labelEl.GetString() : null;
+                var uiTheme = themeEntry.TryGetProperty("uiTheme", out var uiEl) ? uiEl.GetString() : "vs-dark";
+
+                if (string.IsNullOrEmpty(themePath)) continue;
+
+                var fullPath = Path.Combine(extension.InstallPath, themePath.TrimStart('/'));
+                if (!File.Exists(fullPath)) continue;
+
+                try
+                {
+                    var themeJson = File.ReadAllText(fullPath);
+                    var theme = _textMateService.LoadThemeFromJson(themeJson, label ?? Path.GetFileNameWithoutExtension(fullPath));
+                    if (theme != null)
+                    {
+                        theme.Type = uiTheme switch
+                        {
+                            "vs" => "light",
+                            "vs-dark" => "dark",
+                            "hc-black" => "hc-dark",
+                            "hc-light" => "hc-light",
+                            _ => "dark"
+                        };
+                        count++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _outputService.WriteError($"[Extensions] Failed to load theme '{label}' from {extension.Name}: {ex.Message}", OutputCategory.General);
+                }
+            }
+            return count;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private int LoadGrammarsFromExtension(Extension extension)
+    {
+        if (_textMateRegistrar == null) return 0;
+
+        try
+        {
+            var task = _textMateRegistrar.RegisterFromExtensionAsync(extension.InstallPath, extension.Id);
+            return task.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteError($"[Extensions] Failed to load grammars from {extension.Name}: {ex.Message}", OutputCategory.General);
+            return 0;
+        }
+    }
+
+    private int LoadSnippetsFromExtension(Extension extension)
+    {
+        if (_snippetService == null) return 0;
+
+        var packageJsonPath = Path.Combine(extension.InstallPath, "package.json");
+        if (!File.Exists(packageJsonPath)) return 0;
+
+        try
+        {
+            var json = File.ReadAllText(packageJsonPath);
+            using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            });
+
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("contributes", out var contributes)) return 0;
+            if (!contributes.TryGetProperty("snippets", out var snippets)) return 0;
+
+            var count = 0;
+            foreach (var snippetEntry in snippets.EnumerateArray())
+            {
+                var language = snippetEntry.TryGetProperty("language", out var langEl) ? langEl.GetString() : null;
+                var snippetPath = snippetEntry.TryGetProperty("path", out var pathEl) ? pathEl.GetString() : null;
+
+                if (string.IsNullOrEmpty(snippetPath)) continue;
+
+                var fullPath = Path.Combine(extension.InstallPath, snippetPath.TrimStart('/'));
+                if (!File.Exists(fullPath)) continue;
+
+                try
+                {
+                    var snippetJson = File.ReadAllText(fullPath);
+                    var parsedSnippets = ParseVSCodeSnippets(snippetJson, language ?? "");
+                    foreach (var snippet in parsedSnippets)
+                    {
+                        snippet.Source = $"extension:{extension.Id}";
+                        _snippetService.AddUserSnippet(snippet.Scope, snippet);
+                    }
+                    if (parsedSnippets.Count > 0) count++;
+                }
+                catch (Exception ex)
+                {
+                    _outputService.WriteError($"[Extensions] Failed to load snippets from {extension.Name}: {ex.Message}", OutputCategory.General);
+                }
+            }
+            return count;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Parses VS Code format snippet JSON: { "name": { prefix, body, description } }
+    /// </summary>
+    private static List<Snippet> ParseVSCodeSnippets(string json, string language)
+    {
+        var result = new List<Snippet>();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            });
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                var name = prop.Name;
+                var entry = prop.Value;
+
+                var prefix = "";
+                if (entry.TryGetProperty("prefix", out var prefixEl))
+                {
+                    prefix = prefixEl.ValueKind == JsonValueKind.Array
+                        ? prefixEl.EnumerateArray().FirstOrDefault().GetString() ?? ""
+                        : prefixEl.GetString() ?? "";
+                }
+
+                var body = Array.Empty<string>();
+                if (entry.TryGetProperty("body", out var bodyEl))
+                {
+                    if (bodyEl.ValueKind == JsonValueKind.Array)
+                    {
+                        body = bodyEl.EnumerateArray()
+                            .Select(e => e.GetString() ?? "")
+                            .ToArray();
+                    }
+                    else if (bodyEl.ValueKind == JsonValueKind.String)
+                    {
+                        body = (bodyEl.GetString() ?? "").Split('\n');
+                    }
+                }
+
+                var description = entry.TryGetProperty("description", out var descEl)
+                    ? descEl.GetString() ?? ""
+                    : "";
+
+                var scope = language;
+                if (entry.TryGetProperty("scope", out var scopeEl))
+                {
+                    scope = scopeEl.GetString() ?? language;
+                }
+
+                result.Add(new Snippet
+                {
+                    Name = name,
+                    Prefix = prefix,
+                    Body = body,
+                    Description = description,
+                    Scope = scope,
+                    IsBuiltIn = false,
+                    Category = "Extension"
+                });
+            }
+        }
+        catch
+        {
+            // Skip malformed snippet files
+        }
+
+        return result;
     }
 
     private string? FindExtensionHostScript()

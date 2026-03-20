@@ -268,10 +268,16 @@ public class GitService : IGitService
             return new GitPullResult { Success = true };
         }
 
+        // Check for merge conflicts after a failed pull
+        var statusResult = await GetStatusAsync();
+        var conflicted = statusResult.Changes.Where(c => c.Status == GitFileStatus.Conflicted).Select(c => c.FilePath).ToList();
+
         return new GitPullResult
         {
             Success = false,
-            ErrorMessage = result.Output
+            ErrorMessage = result.Output,
+            HasConflicts = conflicted.Any(),
+            ConflictedFiles = conflicted,
         };
     }
 

@@ -374,6 +374,67 @@ public partial class CodeEditorControl : UserControl
         _documentFilePath = filePath;
     }
 
+    /// <summary>
+    /// Sets the syntax highlighting for the editor based on the file extension.
+    /// Checks TextMate grammars loaded from VS Code extensions first, then falls back
+    /// to AvalonEdit built-in definitions, and finally to BasicLang highlighting.
+    /// </summary>
+    /// <param name="filePath">The file path to determine highlighting for.</param>
+    public void SetHighlightingForFile(string? filePath)
+    {
+        if (_textEditor == null || string.IsNullOrEmpty(filePath))
+            return;
+
+        var ext = Path.GetExtension(filePath);
+        if (string.IsNullOrEmpty(ext))
+            return;
+
+        // BasicLang files use the built-in highlighting
+        if (ext.Equals(".bas", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".bl", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".basic", StringComparison.OrdinalIgnoreCase))
+        {
+            var basicLangDef = HighlightingManager.Instance.GetDefinition("BasicLang");
+            if (basicLangDef != null)
+            {
+                _textEditor.SyntaxHighlighting = basicLangDef;
+            }
+            return;
+        }
+
+        // Check TextMate-derived definitions (from VS Code extensions)
+        var definition = Highlighting.HighlightingLoader.GetDefinitionForExtension(ext);
+        if (definition != null)
+        {
+            _textEditor.SyntaxHighlighting = definition;
+            return;
+        }
+
+        // Fall back to AvalonEdit's built-in definitions
+        var builtIn = HighlightingManager.Instance.GetDefinitionByExtension(ext);
+        if (builtIn != null)
+        {
+            _textEditor.SyntaxHighlighting = builtIn;
+            return;
+        }
+
+        // No highlighting found - clear it
+        _textEditor.SyntaxHighlighting = null;
+    }
+
+    /// <summary>
+    /// Gets the active language configuration for the current file, if one was loaded
+    /// from a VS Code extension. Used for bracket matching, auto-close, and comments.
+    /// </summary>
+    public Highlighting.LanguageConfigurationData? GetActiveLanguageConfiguration()
+    {
+        if (string.IsNullOrEmpty(_documentFilePath))
+            return null;
+
+        var ext = Path.GetExtension(_documentFilePath);
+        return Highlighting.HighlightingLoader.GetLanguageConfigurationForExtension(ext);
+    }
+
     public CodeEditorControl()
     {
         InitializeComponent();
@@ -1399,10 +1460,18 @@ public partial class CodeEditorControl : UserControl
             _currentLineNumberMargin?.UpdateThemeColors();
 
             // Re-apply syntax highlighting with theme-appropriate colors
-            var highlighting = HighlightingManager.Instance.GetDefinition("BasicLang");
-            if (highlighting != null)
+            // Try file-specific highlighting first, then fall back to BasicLang
+            if (!string.IsNullOrEmpty(_documentFilePath))
             {
-                _textEditor.SyntaxHighlighting = highlighting;
+                SetHighlightingForFile(_documentFilePath);
+            }
+            else
+            {
+                var highlighting = HighlightingManager.Instance.GetDefinition("BasicLang");
+                if (highlighting != null)
+                {
+                    _textEditor.SyntaxHighlighting = highlighting;
+                }
             }
         });
     }

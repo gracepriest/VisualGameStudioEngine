@@ -416,7 +416,9 @@
       "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.Core.dll IDE/VisualGameStudio.Core.dll)",
       "Bash(cp VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.Editor.dll IDE/VisualGameStudio.Editor.dll)",
       "Bash(rm -f IDE/debug.log)",
-      "Bash(./IDE/VisualGameStudio.exe)"
+      "Bash(./IDE/VisualGameStudio.exe)",
+      "Bash(git:*)",
+      "Bash(python3:*)"
     ]
   }
 }

@@ -111,6 +111,21 @@ public interface ISettingsService
     void SetWorkspacePath(string? path);
 
     /// <summary>
+    /// Gets whether a workspace is currently active.
+    /// </summary>
+    bool HasWorkspace { get; }
+
+    /// <summary>
+    /// Gets the workspace settings file path, or null if no workspace is open.
+    /// </summary>
+    string? WorkspaceSettingsPath { get; }
+
+    /// <summary>
+    /// Returns true if the setting is overridden in workspace settings.
+    /// </summary>
+    bool IsOverriddenInWorkspace(string key);
+
+    /// <summary>
     /// Raised when a setting changes.
     /// </summary>
     event EventHandler<SettingChangedEventArgs>? SettingChanged;
@@ -119,6 +134,11 @@ public interface ISettingsService
     /// Raised when multiple settings change.
     /// </summary>
     event EventHandler<SettingsChangedEventArgs>? SettingsChanged;
+
+    /// <summary>
+    /// Raised when the workspace path changes (project opened/closed).
+    /// </summary>
+    event EventHandler<string?>? WorkspacePathChanged;
 }
 
 #region Settings Types

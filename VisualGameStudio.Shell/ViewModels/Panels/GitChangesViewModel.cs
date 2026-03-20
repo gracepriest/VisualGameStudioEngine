@@ -170,6 +170,12 @@ public partial class GitChangesViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Raised when merge conflicts are detected after a pull/merge operation.
+    /// The list contains the file paths of conflicted files.
+    /// </summary>
+    public event EventHandler<IReadOnlyList<string>>? MergeConflictsDetected;
+
     [RelayCommand]
     private async Task PullAsync()
     {
@@ -183,7 +189,25 @@ public partial class GitChangesViewModel : ViewModelBase
         else
         {
             _outputService.WriteLine($"Pull failed: {result.ErrorMessage}");
-            await _dialogService.ShowMessageAsync("Pull Failed", result.ErrorMessage ?? "Unknown error");
+
+            if (result.HasConflicts && result.ConflictedFiles.Count > 0)
+            {
+                _outputService.WriteLine($"Merge conflicts detected in {result.ConflictedFiles.Count} file(s):");
+                foreach (var file in result.ConflictedFiles)
+                {
+                    _outputService.WriteLine($"  - {file}");
+                }
+
+                await _dialogService.ShowMessageAsync(
+                    "Merge Conflicts",
+                    $"Merge conflicts detected in {result.ConflictedFiles.Count} file(s). Please resolve the conflicts and commit.");
+
+                MergeConflictsDetected?.Invoke(this, result.ConflictedFiles);
+            }
+            else
+            {
+                await _dialogService.ShowMessageAsync("Pull Failed", result.ErrorMessage ?? "Unknown error");
+            }
         }
     }
 
@@ -285,7 +309,7 @@ public partial class GitChangesViewModel : ViewModelBase
         GitFileStatus.Copied => "C",
         GitFileStatus.Untracked => "?",
         GitFileStatus.Ignored => "!",
-        GitFileStatus.Conflicted => "C",
+        GitFileStatus.Conflicted => "!",
         _ => " "
     };
 

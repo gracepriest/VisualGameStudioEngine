@@ -374,6 +374,8 @@ public class GitPullResult
     public bool Success { get; set; }
     public int CommitsPulled { get; set; }
     public string? ErrorMessage { get; set; }
+    public bool HasConflicts { get; set; }
+    public IReadOnlyList<string> ConflictedFiles { get; set; } = Array.Empty<string>();
 }
 
 public class GitPushResult

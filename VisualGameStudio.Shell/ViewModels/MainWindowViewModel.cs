@@ -64,6 +64,9 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IRecentProjectsService _recentProjectsService;
     private readonly IEventAggregator _eventAggregator;
     private readonly IOutputService _outputService;
+    private readonly IExtensionService _extensionService;
+    private readonly IWorkspaceService _workspaceService;
+    private readonly ITaskRunnerService _taskRunnerService;
     private readonly DockFactory _dockFactory;
 
     /// <summary>
@@ -230,6 +233,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public BookmarksViewModel Bookmarks { get; }
     public CallHierarchyViewModel CallHierarchy { get; }
     public TypeHierarchyViewModel TypeHierarchy { get; }
+    public ThreadsViewModel Threads { get; }
 
     private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Action> _documentCleanupActions = new(StringComparer.OrdinalIgnoreCase);
@@ -253,6 +257,9 @@ public partial class MainWindowViewModel : ViewModelBase
         IRecentProjectsService recentProjectsService,
         IEventAggregator eventAggregator,
         IOutputService outputService,
+        IExtensionService extensionService,
+        IWorkspaceService workspaceService,
+        ITaskRunnerService taskRunnerService,
         DockFactory dockFactory,
         SolutionExplorerViewModel solutionExplorer,
         OutputPanelViewModel outputPanel,
@@ -271,7 +278,8 @@ public partial class MainWindowViewModel : ViewModelBase
         DocumentOutlineViewModel documentOutline,
         BookmarksViewModel bookmarks,
         CallHierarchyViewModel callHierarchy,
-        TypeHierarchyViewModel typeHierarchy)
+        TypeHierarchyViewModel typeHierarchy,
+        ThreadsViewModel threads)
     {
         _projectService = projectService;
         _buildService = buildService;
@@ -291,6 +299,9 @@ public partial class MainWindowViewModel : ViewModelBase
         _recentProjectsService = recentProjectsService;
         _eventAggregator = eventAggregator;
         _outputService = outputService;
+        _extensionService = extensionService;
+        _workspaceService = workspaceService;
+        _taskRunnerService = taskRunnerService;
         _dockFactory = dockFactory;
 
         SolutionExplorer = solutionExplorer;
@@ -311,9 +322,10 @@ public partial class MainWindowViewModel : ViewModelBase
         Bookmarks = bookmarks;
         CallHierarchy = callHierarchy;
         TypeHierarchy = typeHierarchy;
+        Threads = threads;
 
         // Setup dock layout
-        _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks);
+        _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks, threads: threads);
         Layout = _dockFactory.CreateLayout();
         _dockFactory.InitLayout(Layout);
 
@@ -348,6 +360,9 @@ public partial class MainWindowViewModel : ViewModelBase
         // Handle call stack frame selection (navigate to source)
         CallStack.FrameSelected += OnCallStackFrameSelected;
 
+        // Handle thread switching (refresh call stack and variables for the selected thread)
+        Threads.ThreadSwitched += OnThreadSwitched;
+
         // Wire up Find in Files navigation
         FindInFiles.SetNavigationCallback(OpenFileAtLine);
 
@@ -363,6 +378,21 @@ public partial class MainWindowViewModel : ViewModelBase
         // Load recent projects and subscribe to changes
         _recentProjectsService.RecentProjectsChanged += OnRecentProjectsChanged;
         _ = LoadRecentProjectsAsync();
+
+        // Load static contributions from installed extensions (themes, grammars, snippets)
+        _ = LoadExtensionContributionsAsync();
+    }
+
+    private async Task LoadExtensionContributionsAsync()
+    {
+        try
+        {
+            await _extensionService.ActivateStaticContributionsAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to load extension contributions: {ex.Message}");
+        }
     }
 
     private async Task LoadRecentProjectsAsync()
@@ -507,6 +537,35 @@ public partial class MainWindowViewModel : ViewModelBase
             }
         }
 
+        // Load workspace settings for this project
+        if (_settingsService is VisualGameStudio.ProjectSystem.Services.SettingsService settingsSvc)
+        {
+            settingsSvc.SetWorkspacePath(e.Project.ProjectDirectory);
+
+            // Suggest adding .vgs/ to .gitignore if it's a git repo
+            var gitignorePath = Path.Combine(e.Project.ProjectDirectory, ".gitignore");
+            var vgsDir = Path.Combine(e.Project.ProjectDirectory, ".vgs");
+            if (Directory.Exists(Path.Combine(e.Project.ProjectDirectory, ".git")) &&
+                Directory.Exists(vgsDir))
+            {
+                bool alreadyIgnored = false;
+                if (File.Exists(gitignorePath))
+                {
+                    try
+                    {
+                        var content = await File.ReadAllTextAsync(gitignorePath);
+                        alreadyIgnored = content.Contains(".vgs/") || content.Contains(".vgs\\");
+                    }
+                    catch { }
+                }
+
+                if (!alreadyIgnored)
+                {
+                    ShowNotification("Workspace settings detected. Consider adding .vgs/ to .gitignore.", "info");
+                }
+            }
+        }
+
         // Load persisted breakpoints
         Breakpoints.SetProjectDirectory(e.Project.ProjectDirectory);
         await Breakpoints.LoadBreakpointsAsync();
@@ -539,6 +598,12 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         Title = "Visual Game Studio";
         StatusText = "Ready";
+
+        // Clear workspace settings when project is closed
+        if (_settingsService is VisualGameStudio.ProjectSystem.Services.SettingsService settingsSvc)
+        {
+            settingsSvc.SetWorkspacePath(null);
+        }
     }
 
     private void OnBuildCompleted(object? sender, BuildCompletedEventArgs e)
@@ -1779,6 +1844,55 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception)
         {
             // Ignore navigation errors to prevent crashes
+        }
+    }
+
+    private async void OnThreadSwitched(object? sender, ThreadItem thread)
+    {
+        try
+        {
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                // Refresh call stack for the newly selected thread
+                var frames = await _debugService.GetStackTraceAsync(thread.Id);
+                CallStack.StackFrames.Clear();
+                foreach (var frame in frames)
+                {
+                    CallStack.StackFrames.Add(new StackFrameItem
+                    {
+                        Id = frame.Id,
+                        Name = frame.Name,
+                        FilePath = frame.FilePath,
+                        Line = frame.Line,
+                        Column = frame.Column,
+                        DisplayText = frame.FilePath != null
+                            ? $"{frame.Name} at {Path.GetFileName(frame.FilePath)}:{frame.Line}"
+                            : frame.Name
+                    });
+                }
+
+                // Navigate to the top frame of the selected thread
+                var topFrame = frames.FirstOrDefault();
+                if (topFrame?.FilePath != null)
+                {
+                    _currentFrameId = topFrame.Id;
+                    ClearAllExecutionLines();
+                    await OpenFileAsync(topFrame.FilePath);
+
+                    if (_openDocuments.TryGetValue(topFrame.FilePath, out var doc))
+                    {
+                        doc.SetExecutionLine(topFrame.Line);
+                        doc.NavigateTo(topFrame.Line);
+                    }
+                }
+
+                // Update status bar
+                StatusText = $"Thread {thread.Id}: {thread.Name}";
+            });
+        }
+        catch (Exception)
+        {
+            // Ignore thread switch errors to prevent crashes
         }
     }
 
@@ -4564,7 +4678,109 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         else
         {
+            // Open as a workspace folder
+            _workspaceService.CreateNewWorkspace();
+            _workspaceService.AddFolder(folderPath);
+            SolutionExplorer.RefreshWorkspaceTree();
+            Title = $"Visual Game Studio - {Path.GetFileName(folderPath)}";
+
+            // Set workspace path for folder-level settings even without a project file
+            if (_settingsService is VisualGameStudio.ProjectSystem.Services.SettingsService settingsSvc)
+            {
+                settingsSvc.SetWorkspacePath(folderPath);
+            }
             StatusText = $"Opened folder: {folderPath}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task AddFolderToWorkspaceAsync()
+    {
+        var folderPath = await _dialogService.ShowFolderDialogAsync(
+            new Core.Abstractions.Services.FolderDialogOptions { Title = "Add Folder to Workspace" });
+        if (string.IsNullOrEmpty(folderPath)) return;
+
+        if (_workspaceService.CurrentWorkspace == null)
+        {
+            _workspaceService.CreateNewWorkspace();
+        }
+
+        _workspaceService.AddFolder(folderPath);
+        SolutionExplorer.RefreshWorkspaceTree();
+        Title = $"Visual Game Studio - {_workspaceService.CurrentWorkspace!.DisplayName}";
+        StatusText = $"Added folder: {Path.GetFileName(folderPath)}";
+    }
+
+    [RelayCommand]
+    private async Task OpenWorkspaceAsync()
+    {
+        var filePath = await _dialogService.ShowOpenFileDialogAsync(new FileDialogOptions
+        {
+            Title = "Open Workspace",
+            Filters = new List<FileDialogFilter>
+            {
+                new("VGS Workspace", "vgs-workspace"),
+                new("All Files", "*")
+            }
+        });
+
+        if (string.IsNullOrEmpty(filePath)) return;
+
+        try
+        {
+            SetBusy(true, "Opening workspace...");
+            await _workspaceService.OpenWorkspaceAsync(filePath);
+            SolutionExplorer.RefreshWorkspaceTree();
+            Title = $"Visual Game Studio - {_workspaceService.CurrentWorkspace?.DisplayName ?? "Workspace"}";
+            StatusText = $"Opened workspace: {Path.GetFileName(filePath)}";
+
+            // Track in recent projects
+            _recentProjectsService.AddRecentProject(
+                filePath,
+                _workspaceService.CurrentWorkspace?.DisplayName ?? Path.GetFileNameWithoutExtension(filePath));
+        }
+        catch (Exception ex)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"Failed to open workspace: {ex.Message}",
+                DialogButtons.Ok, DialogIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveWorkspaceAsAsync()
+    {
+        if (_workspaceService.CurrentWorkspace == null)
+        {
+            StatusText = "No workspace is open.";
+            return;
+        }
+
+        var filePath = await _dialogService.ShowSaveFileDialogAsync(new FileDialogOptions
+        {
+            Title = "Save Workspace As",
+            Filters = new List<FileDialogFilter>
+            {
+                new("VGS Workspace", "vgs-workspace"),
+                new("All Files", "*")
+            }
+        });
+
+        if (string.IsNullOrEmpty(filePath)) return;
+
+        try
+        {
+            await _workspaceService.SaveWorkspaceAsync(filePath);
+            Title = $"Visual Game Studio - {_workspaceService.CurrentWorkspace.DisplayName}";
+            StatusText = $"Workspace saved: {Path.GetFileName(filePath)}";
+        }
+        catch (Exception ex)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"Failed to save workspace: {ex.Message}",
+                DialogButtons.Ok, DialogIcon.Error);
         }
     }
 
@@ -4663,13 +4879,71 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         if (App.MainWindow == null) return;
 
-        var themes = new List<string> { "Dark (Default)", "Light", "High Contrast", "Monokai", "Solarized Dark", "Solarized Light" };
+        var themes = new List<string>(ThemeManager.AllThemeNames);
+        themes.Add("--- Import VS Code Theme (.json) ---");
+
         var selected = await _dialogService.ShowListSelectionAsync("Color Theme", "Select a color theme:", themes);
 
         if (selected >= 0 && selected < themes.Count)
         {
-            StatusText = $"Theme changed to: {themes[selected]}";
-            ShowNotification($"Theme: {themes[selected]}", "info");
+            var themeName = themes[selected];
+
+            if (themeName.StartsWith("---"))
+            {
+                await ImportVsCodeThemeAsync();
+                return;
+            }
+
+            ThemeManager.Apply(themeName);
+            StatusText = $"Theme changed to: {themeName}";
+            ShowNotification($"Theme: {themeName}", "info");
+        }
+    }
+
+    private async Task ImportVsCodeThemeAsync()
+    {
+        try
+        {
+            if (App.MainWindow == null) return;
+
+            var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(App.MainWindow);
+            if (topLevel == null) return;
+
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(
+                new Avalonia.Platform.Storage.FilePickerOpenOptions
+                {
+                    Title = "Import VS Code Theme",
+                    AllowMultiple = false,
+                    FileTypeFilter = new[]
+                    {
+                        new Avalonia.Platform.Storage.FilePickerFileType("VS Code Theme")
+                        {
+                            Patterns = new[] { "*.json" }
+                        }
+                    }
+                });
+
+            if (files.Count == 0) return;
+
+            var filePath = files[0].Path?.LocalPath;
+            if (string.IsNullOrEmpty(filePath)) return;
+
+            var label = await ThemeManager.LoadVsCodeThemeFileAsync(filePath);
+            if (label != null)
+            {
+                ThemeManager.Apply(label);
+                StatusText = $"Theme imported and applied: {label}";
+                ShowNotification($"Theme: {label}", "info");
+            }
+            else
+            {
+                StatusText = "Failed to import theme file.";
+                ShowNotification("Failed to import theme. The file may not be a valid VS Code theme.", "error");
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Theme import error: {ex.Message}";
         }
     }
 
@@ -4991,16 +5265,114 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void RunTask()
+    private async Task RunTaskAsync()
     {
-        StatusText = "Run task — configure tasks in launch.json";
-        ShowNotification("Configure tasks in your project's launch.json file", "info");
+        var projectDir = _projectService.CurrentProject?.ProjectDirectory;
+        if (string.IsNullOrEmpty(projectDir))
+        {
+            ShowNotification("No project open. Open a project to run tasks.", "warning");
+            return;
+        }
+
+        var tasks = _taskRunnerService.GetAvailableTasks(projectDir);
+        if (tasks.Count == 0)
+        {
+            ShowNotification("No tasks found. Use 'Configure Tasks...' to create tasks.json.", "info");
+            return;
+        }
+
+        var taskLabels = tasks.Select(t =>
+            t.IsAutoDetected ? $"{t.Label} (auto-detected)" : t.Label).ToList();
+
+        var selected = await _dialogService.ShowListSelectionAsync(
+            "Run Task", "Select a task to run:", taskLabels);
+
+        if (selected >= 0 && selected < tasks.Count)
+        {
+            var task = tasks[selected];
+            StatusText = $"Running task: {task.Label}...";
+            _dockFactory.ActivateTool("Output");
+
+            var exitCode = await _taskRunnerService.RunTaskAsync(task, projectDir);
+            StatusText = exitCode == 0
+                ? $"Task '{task.Label}' completed successfully"
+                : $"Task '{task.Label}' failed (exit code {exitCode})";
+        }
     }
 
     [RelayCommand]
     private async Task RunBuildTaskAsync()
     {
-        await BuildAsync();
+        var projectDir = _projectService.CurrentProject?.ProjectDirectory;
+        if (string.IsNullOrEmpty(projectDir))
+        {
+            await BuildAsync();
+            return;
+        }
+
+        var buildTask = await _taskRunnerService.GetDefaultBuildTaskAsync(projectDir);
+        if (buildTask != null)
+        {
+            StatusText = $"Running build task: {buildTask.Label}...";
+            _dockFactory.ActivateTool("Output");
+
+            var exitCode = await _taskRunnerService.RunTaskAsync(buildTask, projectDir);
+            StatusText = exitCode == 0
+                ? $"Build task '{buildTask.Label}' completed successfully"
+                : $"Build task '{buildTask.Label}' failed (exit code {exitCode})";
+        }
+        else
+        {
+            await BuildAsync();
+        }
+    }
+
+    [RelayCommand]
+    private async Task RunTestTaskAsync()
+    {
+        var projectDir = _projectService.CurrentProject?.ProjectDirectory;
+        if (string.IsNullOrEmpty(projectDir))
+        {
+            ShowNotification("No project open.", "warning");
+            return;
+        }
+
+        var testTask = await _taskRunnerService.GetDefaultTestTaskAsync(projectDir);
+        if (testTask != null)
+        {
+            StatusText = $"Running test task: {testTask.Label}...";
+            _dockFactory.ActivateTool("Output");
+
+            var exitCode = await _taskRunnerService.RunTaskAsync(testTask, projectDir);
+            StatusText = exitCode == 0
+                ? $"Test task '{testTask.Label}' completed successfully"
+                : $"Test task '{testTask.Label}' failed (exit code {exitCode})";
+        }
+        else
+        {
+            ShowNotification("No test task configured. Add a task with group 'test' in tasks.json.", "info");
+        }
+    }
+
+    [RelayCommand]
+    private async Task ConfigureTasksAsync()
+    {
+        var projectDir = _projectService.CurrentProject?.ProjectDirectory;
+        if (string.IsNullOrEmpty(projectDir))
+        {
+            ShowNotification("No project open. Open a project to configure tasks.", "warning");
+            return;
+        }
+
+        var tasksFile = _taskRunnerService.GetTasksFilePath(projectDir);
+        if (!File.Exists(tasksFile))
+        {
+            tasksFile = await _taskRunnerService.CreateDefaultTasksFileAsync(projectDir);
+            ShowNotification("Created default tasks.json", "info");
+        }
+
+        await OpenFileAsync(tasksFile);
+        StatusText = "Editing tasks.json";
     }
 
     [RelayCommand]

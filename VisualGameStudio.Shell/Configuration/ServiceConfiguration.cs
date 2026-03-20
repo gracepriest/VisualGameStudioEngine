@@ -36,7 +36,14 @@ public static class ServiceConfiguration
         services.AddSingleton<IHotExitService, HotExitService>();
         services.AddSingleton<IFileWatcherService, FileWatcherService>();
         services.AddSingleton<IRecentProjectsService, RecentProjectsService>();
-        services.AddSingleton<IExtensionService, ExtensionService>();
+        services.AddSingleton<IWorkspaceService, WorkspaceService>();
+        services.AddSingleton<ITaskRunnerService, TaskRunnerService>();
+        services.AddSingleton<ITextMateService, TextMateService>();
+        services.AddSingleton<IExtensionService>(sp =>
+            new ExtensionService(
+                sp.GetRequiredService<IOutputService>(),
+                sp.GetRequiredService<ITextMateService>(),
+                sp.GetRequiredService<ISnippetService>()));
         services.AddSingleton<FileSearchService>();
 
         // Shell Services
@@ -66,6 +73,7 @@ public static class ServiceConfiguration
         services.AddSingleton<BookmarksViewModel>();
         services.AddSingleton<CallHierarchyViewModel>();
         services.AddSingleton<TypeHierarchyViewModel>();
+        services.AddSingleton<ThreadsViewModel>();
 
         // ViewModels (Transient for documents and dialogs)
         services.AddTransient<CodeEditorDocumentViewModel>();

@@ -103,6 +103,16 @@ public partial class SearchableSettingItem : ObservableObject
         }
     }
 
+    /// <summary>Removes the workspace override for this setting, reverting to the user/default value.</summary>
+    [RelayCommand]
+    private void RemoveWorkspaceOverride()
+    {
+        Owner.RemoveWorkspaceOverride(Key);
+        RefreshScopeBadges(
+            App.Services?.GetService(typeof(ISettingsService)) as SettingsService,
+            Owner.ActiveScope);
+    }
+
     /// <summary>Updates scope badges from the settings service.</summary>
     public void RefreshScopeBadges(SettingsService? service, SettingsScope activeScope)
     {
@@ -210,7 +220,7 @@ public partial class SettingsViewModel : ViewModelBase
     private string _selectedTheme = "Dark";
 
     [ObservableProperty]
-    private ObservableCollection<string> _availableThemes = new() { "Dark", "Light", "High Contrast" };
+    private ObservableCollection<string> _availableThemes = new(ThemeManager.AllThemeNames);
 
     // IntelliSense Settings
     [ObservableProperty]
@@ -636,6 +646,20 @@ public partial class SettingsViewModel : ViewModelBase
         {
             item.RefreshScopeBadges(_settingsService, ActiveScope);
         }
+    }
+
+    /// <summary>
+    /// Removes a workspace override for the given setting key, reverting to user/default value.
+    /// </summary>
+    internal void RemoveWorkspaceOverride(string key)
+    {
+        if (_settingsService == null) return;
+
+        _settingsService.Remove(key, SettingsScope.Workspace);
+
+        // Reload the effective value for this setting
+        LoadFromService();
+        RefreshAllScopeBadges();
     }
 
     // -- Reflection-free property accessors for SearchableSettingItem proxies --
