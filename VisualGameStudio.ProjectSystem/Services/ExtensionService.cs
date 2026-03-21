@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -39,7 +40,7 @@ public class ExtensionService : IExtensionService
     // Contributed menu items from package.json (menuId -> list of items)
     private readonly Dictionary<string, List<ContributedMenuItem>> _contributedMenuItems = new();
     // Track languages that have extension providers registered
-    private readonly HashSet<string> _extensionProviderLanguages = new();
+    private readonly ConcurrentDictionary<string, byte> _extensionProviderLanguages = new();
 
     private readonly string _extensionsDir;
     private readonly string _stateFile;
@@ -216,7 +217,7 @@ public class ExtensionService : IExtensionService
                         var lang = langProp.GetString();
                         if (!string.IsNullOrEmpty(lang))
                         {
-                            _extensionProviderLanguages.Add(lang);
+                            _extensionProviderLanguages.TryAdd(lang, 0);
                         }
                     }
                     else if (doc.RootElement.ValueKind == JsonValueKind.Array)
@@ -228,7 +229,7 @@ public class ExtensionService : IExtensionService
                                 var lang = itemLang.GetString();
                                 if (!string.IsNullOrEmpty(lang))
                                 {
-                                    _extensionProviderLanguages.Add(lang);
+                                    _extensionProviderLanguages.TryAdd(lang, 0);
                                 }
                             }
                         }
@@ -623,7 +624,7 @@ public class ExtensionService : IExtensionService
 
     #region Extension Provider Methods
 
-    public bool HasExtensionProviders(string languageId) => _extensionProviderLanguages.Contains(languageId);
+    public bool HasExtensionProviders(string languageId) => _extensionProviderLanguages.ContainsKey(languageId);
 
     public async Task<JsonElement?> RequestCompletionAsync(string uri, int line, int character, CancellationToken ct = default)
     {
@@ -812,10 +813,11 @@ public class ExtensionService : IExtensionService
         _extensionCommands[args.ExtensionId].Add(args.CommandId);
     }
 
+    private int _crashRestartCount;
+    private const int MaxCrashRestarts = 5;
+
     private async void OnHostCrashed(object? sender, EventArgs e)
     {
-        _outputService.WriteError("[Extensions] Extension host crashed. Attempting restart in 5 seconds...", OutputCategory.General);
-
         // Mark all extensions as inactive
         foreach (var ext in _extensions.Where(e => e.IsActive))
         {
@@ -823,11 +825,21 @@ public class ExtensionService : IExtensionService
             ext.Status = ExtensionStatus.Installed;
         }
 
+        if (_crashRestartCount >= MaxCrashRestarts)
+        {
+            _outputService.WriteError($"[Extensions] Extension host crashed {MaxCrashRestarts} times. Not restarting.", OutputCategory.General);
+            return;
+        }
+
+        _crashRestartCount++;
+        _outputService.WriteError($"[Extensions] Extension host crashed. Attempting restart in 5 seconds (attempt {_crashRestartCount}/{MaxCrashRestarts})...", OutputCategory.General);
+
         await Task.Delay(5000);
 
         try
         {
             await StartExtensionHostAsync();
+            _crashRestartCount = 0; // Reset on successful start
         }
         catch (Exception ex)
         {

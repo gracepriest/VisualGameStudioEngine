@@ -50,7 +50,8 @@ public partial class TimelineViewModel : ViewModelBase
 
         // Subscribe to active document changes so timeline auto-updates
         _activeDocumentSubscription = _eventAggregator.Subscribe<ActiveDocumentChangedEvent>(
-            evt => _ = LoadTimelineAsync(evt.FilePath));
+            evt => Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => _ = LoadTimelineAsync(evt.FilePath)));
     }
 
     [RelayCommand]

@@ -22,9 +22,7 @@ public class ExtensionHost : IDisposable
     private readonly object _lock = new();
     private bool _disposed;
 
-    private int _restartAttempts;
     private readonly List<(string extensionId, string extensionPath)> _activeExtensions = new();
-    private const int MaxRestartDelayMs = 30000;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -723,9 +721,9 @@ public class ExtensionHost : IDisposable
 
     #region Private Helpers
 
-    private async void OnHostProcessExited(object? sender, EventArgs e)
+    private void OnHostProcessExited(object? sender, EventArgs e)
     {
-        if (!IsRunning) return; // Expected shutdown
+        if (!IsRunning) return;
 
         var exitCode = _hostProcess?.ExitCode ?? -1;
         _outputService.WriteError($"[ExtensionHost] Process exited unexpectedly with code {exitCode}.", OutputCategory.General);
@@ -733,25 +731,6 @@ public class ExtensionHost : IDisposable
         IsRunning = false;
         StateChanged?.Invoke(this, false);
         HostCrashed?.Invoke(this, EventArgs.Empty);
-
-        // Auto-restart with exponential backoff
-        var delay = Math.Min((int)Math.Pow(2, _restartAttempts) * 2000, MaxRestartDelayMs);
-        _restartAttempts++;
-        _outputService.WriteLine($"[ExtensionHost] Restarting in {delay}ms (attempt {_restartAttempts})...", OutputCategory.General);
-        await Task.Delay(delay);
-        try
-        {
-            await StartAsync();
-            // Re-activate previously active extensions
-            foreach (var (extId, extPath) in _activeExtensions.ToList())
-            {
-                await ActivateExtensionAsync(extId, extPath, null);
-            }
-        }
-        catch (Exception ex)
-        {
-            _outputService.WriteError($"[ExtensionHost] Restart failed: {ex.Message}", OutputCategory.General);
-        }
     }
 
     private async Task RunHeartbeatAsync(CancellationToken cancellationToken)
@@ -767,9 +746,6 @@ public class ExtensionHost : IDisposable
                     using var hbCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                     using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hbCts.Token);
                     await _rpc.InvokeWithCancellationAsync<bool>("heartbeat", cancellationToken: linked.Token);
-
-                    // Successful heartbeat — reset restart backoff
-                    _restartAttempts = 0;
                 }
             }
             catch (OperationCanceledException)

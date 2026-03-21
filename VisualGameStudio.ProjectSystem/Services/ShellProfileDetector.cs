@@ -423,7 +423,7 @@ public static class ShellProfileDetector
 
         try
         {
-            using var baseKey = useHkcu
+            var baseKey = useHkcu
                 ? Microsoft.Win32.Registry.CurrentUser
                 : Microsoft.Win32.Registry.LocalMachine;
             using var key = baseKey.OpenSubKey(subKey);
@@ -446,7 +446,7 @@ public static class ShellProfileDetector
 
         try
         {
-            using var baseKey = Microsoft.Win32.Registry.LocalMachine;
+            var baseKey = Microsoft.Win32.Registry.LocalMachine;
             using var versionsKey = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\PowerShellCore\InstalledVersions");
             if (versionsKey == null) return null;
 

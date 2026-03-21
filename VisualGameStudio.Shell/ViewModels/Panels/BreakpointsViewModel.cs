@@ -533,15 +533,12 @@ public partial class BreakpointsViewModel : Tool
 
         // Update verified status
         var resultList = result.ToList();
-        for (int i = 0; i < _functionBreakpointsList.Count && i < resultList.Count; i++)
+        var enabledList = _functionBreakpointsList.Where(f => f.IsEnabled).ToList();
+        for (int i = 0; i < enabledList.Count && i < resultList.Count; i++)
         {
-            var fb = _functionBreakpointsList.Where(f => f.IsEnabled).ElementAtOrDefault(i);
-            if (fb != null && i < resultList.Count)
-            {
-                fb.Id = resultList[i].Id;
-                fb.IsVerified = resultList[i].Verified;
-                fb.Message = resultList[i].Message;
-            }
+            enabledList[i].Id = resultList[i].Id;
+            enabledList[i].IsVerified = resultList[i].Verified;
+            enabledList[i].Message = resultList[i].Message;
         }
     }
 

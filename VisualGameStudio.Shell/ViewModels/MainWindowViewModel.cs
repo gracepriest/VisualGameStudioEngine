@@ -1704,24 +1704,24 @@ public partial class MainWindowViewModel : ViewModelBase
             document.CompletionRequested += onCompletion;
 
             // Wire up text change notifications for LSP
-            var documentVersion = 1;
+            var documentVersion = 0;
             EventHandler<string>? onTextChanged = async (s, newText) =>
             {
                 try
                 {
-                    documentVersion++;
+                    var version = System.Threading.Interlocked.Increment(ref documentVersion);
 
                     if (_languageService.IsConnected && document.FilePath != null &&
                         (document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
                          document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
                     {
-                        await _languageService.ChangeDocumentAsync(document.FilePath, newText, documentVersion);
+                        await _languageService.ChangeDocumentAsync(document.FilePath, newText, version);
                     }
 
                     // Notify extension host (for all file types)
                     if (_extensionService.IsExtensionHostRunning && document.FilePath != null)
                     {
-                        _ = _extensionService.NotifyDocumentChangedAsync(document.FilePath, documentVersion, newText);
+                        _ = _extensionService.NotifyDocumentChangedAsync(document.FilePath, version, newText);
                     }
                 }
                 catch (Exception ex)
