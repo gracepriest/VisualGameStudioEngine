@@ -214,6 +214,8 @@ function startReading() {
     let buffer = Buffer.alloc(0);
     let contentLength = -1;
 
+    process.stdin.on('end', () => { process.exit(0); });
+
     process.stdin.on('data', (chunk) => {
         buffer = Buffer.concat([buffer, chunk]);
 

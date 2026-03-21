@@ -93,7 +93,7 @@ function createLanguagesApi(rpc, providerRegistry, extensionId) {
         },
 
         registerReferenceProvider(selector, provider) {
-            return _registerProvider('reference', selector, provider);
+            return _registerProvider('references', selector, provider);
         },
 
         registerDocumentHighlightProvider(selector, provider) {

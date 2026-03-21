@@ -71,10 +71,12 @@ Module._resolveFilename = function (request, parent) {
 // correct facade for whichever extension is currently being activated or
 // is requiring it.
 const realCache = Module._cache;
+let _cachedCacheProxy = null;
 
 Object.defineProperty(Module, '_cache', {
     get() {
-        return new Proxy(realCache, {
+        if (!_cachedCacheProxy) {
+            _cachedCacheProxy = new Proxy(realCache, {
             get(target, prop) {
                 if (prop === 'vscode') {
                     // During activation we know exactly which extension is loading
@@ -108,6 +110,8 @@ Object.defineProperty(Module, '_cache', {
                 return prop === 'vscode' || prop in target;
             },
         });
+        }
+        return _cachedCacheProxy;
     },
 });
 
@@ -229,6 +233,7 @@ async function activateExtension(extensionPath, extensionId) {
         return { activated: true, hasMain: true };
     } catch (err) {
         currentActivatingExtensionId = null;
+        extensionFacades.delete(extensionId);
         rpc.sendNotification('log', {
             level: 'error',
             message: `Failed to activate ${extensionId}: ${err.message}\n${err.stack || ''}`,
@@ -475,8 +480,9 @@ rpc.onRequest('executeCommand', async (params) => {
         try {
             const result = await ext.facade.commands._executeLocal(command, args);
             return result;
-        } catch (_) {
-            // Command not registered in this extension — try next
+        } catch (err) {
+            if (err && err.message && err.message.startsWith('Command not found:')) continue;
+            throw err;
         }
     }
     throw new Error(`Command not found: ${command}`);
