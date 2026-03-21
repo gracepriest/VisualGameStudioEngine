@@ -24,11 +24,13 @@ public partial class TreeViewPanel : UserControl
 
             if (vm.RootItems.Count == 0)
             {
+                var capturedVm = vm;
                 Dispatcher.UIThread.InvokeAsync(async () =>
                 {
-                    await vm.LoadRootItemsAsync();
-                    // Re-subscribe after loading since items are new
-                    SubscribeToItemExpansion(vm);
+                    await capturedVm.LoadRootItemsAsync();
+                    // Only re-subscribe if DataContext hasn't changed while loading
+                    if (DataContext == capturedVm)
+                        SubscribeToItemExpansion(capturedVm);
                 });
             }
         }

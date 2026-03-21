@@ -74,6 +74,14 @@ public partial class CodeEditorDocumentView : UserControl
             MainEditor.DocumentLinkClicked -= OnEditorDocumentLinkClicked;
             MainEditor.FileDropped -= OnEditorFileDropped;
             MainEditor.EditorReady -= OnEditorReady;
+            MainEditor.ConditionalBreakpointRequested -= OnEditorConditionalBreakpoint;
+            MainEditor.LogpointRequested -= OnEditorLogpoint;
+            MainEditor.EditBreakpointRequested -= OnEditorEditBreakpoint;
+            MainEditor.RemoveBreakpointRequested -= OnEditorRemoveBreakpoint;
+            MainEditor.ToggleEnableBreakpointRequested -= OnEditorToggleEnableBreakpoint;
+            _highlightDebounceTimer?.Stop();
+            _highlightDebounceTimer?.Dispose();
+            _highlightDebounceTimer = null;
             _editorEventsWired = false;
         }
     }
@@ -405,7 +413,10 @@ public partial class CodeEditorDocumentView : UserControl
 
     private void OnDiagnosticsUpdated(object? sender, IEnumerable<DiagnosticItem> diagnostics)
     {
-        MainEditor?.UpdateDiagnostics(diagnostics);
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            MainEditor?.UpdateDiagnostics(diagnostics);
+        });
     }
 
     private void OnCodeLensUpdated(object? sender, IEnumerable<CodeLensItemInfo> lenses)
@@ -568,18 +579,24 @@ public partial class CodeEditorDocumentView : UserControl
             vm.OnBreakpointToggled(line);
         });
 
-        // Wire gutter context menu events
-        MainEditor.ConditionalBreakpointRequested += (s, line) =>
-            vm.OnConditionalBreakpointRequested(line);
-        MainEditor.LogpointRequested += (s, line) =>
-            vm.OnLogpointRequested(line);
-        MainEditor.EditBreakpointRequested += (s, line) =>
-            vm.OnEditBreakpointRequested(line);
-        MainEditor.RemoveBreakpointRequested += (s, line) =>
-            vm.OnRemoveBreakpointRequested(line);
-        MainEditor.ToggleEnableBreakpointRequested += (s, line) =>
-            vm.OnToggleEnableBreakpointRequested(line);
+        // Wire gutter context menu events (named handlers so we can unsubscribe)
+        MainEditor.ConditionalBreakpointRequested += OnEditorConditionalBreakpoint;
+        MainEditor.LogpointRequested += OnEditorLogpoint;
+        MainEditor.EditBreakpointRequested += OnEditorEditBreakpoint;
+        MainEditor.RemoveBreakpointRequested += OnEditorRemoveBreakpoint;
+        MainEditor.ToggleEnableBreakpointRequested += OnEditorToggleEnableBreakpoint;
     }
+
+    private void OnEditorConditionalBreakpoint(object? s, int line)
+        => _subscribedVm?.OnConditionalBreakpointRequested(line);
+    private void OnEditorLogpoint(object? s, int line)
+        => _subscribedVm?.OnLogpointRequested(line);
+    private void OnEditorEditBreakpoint(object? s, int line)
+        => _subscribedVm?.OnEditBreakpointRequested(line);
+    private void OnEditorRemoveBreakpoint(object? s, int line)
+        => _subscribedVm?.OnRemoveBreakpointRequested(line);
+    private void OnEditorToggleEnableBreakpoint(object? s, int line)
+        => _subscribedVm?.OnToggleEnableBreakpointRequested(line);
 
     /// <summary>
     /// Updates the visual breakpoints to match the debugger's state
