@@ -1,44 +1,40 @@
 # BasicLang Visual Studio 2022 Extension
 
-Full Visual Studio 2022 support for the BasicLang programming language with CPS project system integration, LSP-based IntelliSense, debugging, and MSBuild integration.
+Visual Studio 2022 support for the BasicLang programming language: CPS-based project system integration, LSP-based IntelliSense, project/item templates, and MSBuild integration.
 
 ## Features
 
-- **CPS Project System**: Native project system integration for `.blproj` files
-- **LSP IntelliSense**: Full language server protocol support for:
+- **CPS Project System**: Project system integration for `.blproj` files
+- **Syntax Highlighting**: TextMate grammar for `.bas`, `.bl`, and `.blproj` files
+- **LSP IntelliSense** (via `BasicLang.exe --lsp`):
   - Code completion
-  - Go to definition
-  - Find all references
   - Hover information
-  - Diagnostics (errors, warnings)
-  - Semantic highlighting
-  - Inlay hints
-  - CodeLens
-- **Project Templates**:
-  - Console Application
-  - Class Library
-  - Windows Forms Application
-  - WPF Application
-- **Item Templates**:
-  - Class
-  - Module
-  - Interface
-- **Debugging**: F5 debugging with Debug Adapter Protocol
-- **Multiple Backends**: CSharp, MSIL, LLVM, C++
+  - Diagnostics (errors)
+  - Go to definition
+- **BasicLang Menu Commands**: Build Project, Run, Change Backend, Restart Language Server, Go to Definition, Find All References
+- **Options Pages**: Tools > Options > BasicLang (General and Compiler settings)
+- **Project Templates**: Console Application, Class Library, Windows Forms Application, WPF Application
+- **Item Templates**: Class, Module, Interface
+- **Multiple Compiler Backends**: CSharp, MSIL, LLVM, C++ (selectable via the Change Backend command or Compiler options)
 
-## Current Status (January 2026)
+Not supported yet:
+
+- **Debugging**: There is no debug launch support (no F5 debugging). The Run command builds and runs the program without a debugger attached.
+- Find references, semantic highlighting, inlay hints, and CodeLens are not implemented by the language server yet. The related options and the Find All References menu command exist, but have no effect until the server supports them.
+
+## Current Status
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | CPS Project System | ✅ Implemented | Simplified for public NuGet APIs |
-| LSP Client | ✅ Implemented | Connects to `BasicLang.exe --lsp` |
+| LSP Client | ✅ Implemented | Connects to `BasicLang.exe --lsp` (completion, hover, diagnostics, go to definition) |
 | Syntax Highlighting | ✅ Implemented | TextMate grammar from vscode-basiclang |
-| Menu Commands | ✅ Implemented | Build, Run, Change Backend, Restart Server |
-| Options Pages | ✅ Implemented | General and Compiler settings |
-| Project Templates | ⚠️ Created | Not yet wired into VSIX |
-| Item Templates | ⚠️ Created | Not yet wired into VSIX |
+| Menu Commands | ✅ Implemented | Build, Run, Change Backend, Restart Server, Go to Definition, Find All References |
+| Options Pages | ✅ Implemented | General and Compiler settings (some toggles depend on unimplemented server features) |
+| Project Templates | ✅ Included in VSIX | 4 templates under ProjectTemplates/BasicLang |
+| Item Templates | ✅ Included in VSIX | 3 templates under ItemTemplates/BasicLang |
 | Debug Launch Provider | ❌ Not implemented | CPS debug APIs not publicly available |
-| Bundled Compiler | ❌ Not included | SDK tools/ folder is empty |
+| Bundled Compiler | ❌ Not included | BasicLang.exe must be installed separately (PATH or options) |
 
 ## Requirements
 
@@ -107,10 +103,7 @@ Access via **Tools > Options > BasicLang**:
 **General:**
 - Auto-start language server
 - Language server path
-- Semantic highlighting
-- Inlay hints
-- CodeLens
-- Diagnostics
+- Semantic highlighting, inlay hints, CodeLens, diagnostics toggles (semantic highlighting, inlay hints, and CodeLens currently have no effect - the language server does not implement them yet)
 
 **Compiler:**
 - Default backend
@@ -135,15 +128,16 @@ In `.blproj` files:
 
 ## Commands
 
-| Command | Shortcut | Description |
-|---------|----------|-------------|
-| Build Project | Ctrl+Shift+B | Build the current BasicLang project |
-| Run | F5 | Run with debugging |
-| Run without Debugging | Ctrl+F5 | Run without debugging |
-| Go to Definition | F12 | Navigate to symbol definition |
-| Find All References | Shift+F12 | Find all symbol references |
-| Change Backend | - | Change compiler backend |
-| Restart Language Server | - | Restart the LSP server |
+All commands live in the **BasicLang** top-level menu and are enabled when a `.bas`, `.bl`, or `.blproj` file is active. No keyboard shortcuts are bound by the extension.
+
+| Command | Description |
+|---------|-------------|
+| Build Project | Build the current BasicLang project with BasicLang.exe |
+| Run | Build and run the program (no debugger attached) |
+| Change Backend... | Change the compiler backend (CSharp, MSIL, LLVM, C++) |
+| Restart Language Server | Restart the LSP server |
+| Go to Definition | Navigate to symbol definition (context menu) |
+| Find All References | Present but non-functional until the language server implements references |
 
 ## License
 

@@ -199,16 +199,53 @@
       {
         "name": "basiclang",
         "owner": "basiclang",
-        "fileLocation": ["relative", "${workspaceFolder}"],
-        "pattern": {
-          "regexp": "^(.+)\\((\\d+),(\\d+)\\):\\s+(error|warning)\\s+([A-Z]+\\d+):\\s+(.+)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "code": 5,
-          "message": 6
-        }
+        "source": "basiclang",
+        "severity": "error",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^\\s*Compiling:?\\s+(.+?)(?:\\.\\.\\.)?\\s*$",
+            "file": 1
+          },
+          {
+            "regexp": "^\\s+(?:(Error|Warning):\\s+(?:(?:Parse\\s+)?[Ee]rror at line (\\d+), column (\\d+)(?: in [^:]+)?:\\s*)?|Suggestion:\\s*)(.+)$",
+            "severity": 1,
+            "line": 2,
+            "column": 3,
+            "message": 4,
+            "loop": true
+          }
+        ]
+      },
+      {
+        "name": "basiclang-compile",
+        "owner": "basiclang",
+        "source": "basiclang",
+        "severity": "error",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^\\s*Compiling:\\s+(.+?)\\s*$",
+            "file": 1
+          },
+          {
+            "regexp": "^\\s*$"
+          },
+          {
+            "regexp": "^Compilation failed with \\d+ error\\(s\\):\\s*$"
+          },
+          {
+            "regexp": "^\\s*$"
+          },
+          {
+            "regexp": "^(?:\\s+(Error|Warning) at line (\\d+):(?:\\s*(?:Parse\\s+)?[Ee]rror at line \\d+, column (\\d+)[^:]*:)?\\s*(.+)|\\s+Suggestion:.*|\\s+\\d+\\s*\\|.*|\\s+\\|.*|\\s*)$",
+            "severity": 1,
+            "line": 2,
+            "column": 3,
+            "message": 4,
+            "loop": true
+          }
+        ]
       }
     ],
     "taskDefinitions": [

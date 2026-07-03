@@ -93,8 +93,8 @@
     <Message Text="Compiling BasicLang file: %(BasicLangCompile.Identity)" Importance="high" />
     <Exec Command="&quot;$(BasicLangCompilerPath)&quot; compile &quot;%(BasicLangCompile.FullPath)&quot; --target=$(BasicLangBackend.ToLower()) --output=&quot;$(IntermediateOutputPath)%(BasicLangCompile.Filename).g.cs&quot;"
           ContinueOnError="false" />
-    <!-- BasicLang.exe currently exits 0 even when compilation fails, so verify
-         the generated file actually exists. -->
+    <!-- Defense in depth: the compiler exits non-zero on errors, but also
+         verify the generated file exists in case output went elsewhere. -->
     <Error Condition="!Exists('$(IntermediateOutputPath)%(BasicLangCompile.Filename).g.cs')"
            Text="BasicLang compilation of '%(BasicLangCompile.Identity)' produced no output (see compiler errors above)." />
   </Target>
