@@ -16,7 +16,13 @@
     <AssemblyName>$safeprojectname$</AssemblyName>
   </PropertyGroup>
 
+  <!-- BasicLang project capability (activates CPS components) -->
+  <ItemGroup>
+    <ProjectCapability Include="BasicLang" />
+  </ItemGroup>
+
   <!-- Import BasicLang build targets -->
+  <Import Project="$(BasicLangTargetsPath)" Condition="'$(BasicLangTargetsPath)' != '' And Exists('$(BasicLangTargetsPath)')" />
   <Import Project="$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets" Condition="Exists('$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets')" />
 
   <!-- BasicLang source files -->

@@ -32,12 +32,4 @@ public static class BasicLangContentTypeDefinition
     [FileExtension(BasicLangConstants.FileExtension2)]
     [ContentType(BasicLangConstants.ContentTypeName)]
     public static FileExtensionToContentTypeDefinition? BasicLangFileExtension2;
-
-    /// <summary>
-    /// Associates .blproj files with the BasicLang content type.
-    /// </summary>
-    [Export]
-    [FileExtension(BasicLangConstants.ProjectExtension)]
-    [ContentType(BasicLangConstants.ContentTypeName)]
-    public static FileExtensionToContentTypeDefinition? BasicLangProjectExtension;
 }

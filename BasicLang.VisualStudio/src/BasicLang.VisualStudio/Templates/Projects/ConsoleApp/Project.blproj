@@ -15,13 +15,38 @@
     <AssemblyName>$safeprojectname$</AssemblyName>
   </PropertyGroup>
 
-  <!-- Import BasicLang build targets -->
-  <Import Project="$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets" Condition="Exists('$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets')" />
+  <!-- BasicLang project capability (activates CPS components) -->
+  <ItemGroup>
+    <ProjectCapability Include="BasicLang" />
+  </ItemGroup>
+
+  <!-- Locate BasicLang.targets: an explicit $(BasicLangTargetsPath) (MSBuild
+       property or environment variable) wins, then known install locations. -->
+  <PropertyGroup>
+    <BasicLangTargetsPath Condition="'$(BasicLangTargetsPath)' == '' And Exists('$(MSBuildProjectDirectory)\BasicLang.targets')">$(MSBuildProjectDirectory)\BasicLang.targets</BasicLangTargetsPath>
+    <BasicLangTargetsPath Condition="'$(BasicLangTargetsPath)' == '' And Exists('$(LocalAppData)\BasicLang\BuildSystem\BasicLang.targets')">$(LocalAppData)\BasicLang\BuildSystem\BasicLang.targets</BasicLangTargetsPath>
+    <BasicLangTargetsPath Condition="'$(BasicLangTargetsPath)' == '' And Exists('$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets')">$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets</BasicLangTargetsPath>
+  </PropertyGroup>
+
+  <!-- Import BasicLang build targets (sets LanguageTargets and BasicLangTargetsImported) -->
+  <Import Project="$(BasicLangTargetsPath)" Condition="'$(BasicLangTargetsPath)' != '' And Exists('$(BasicLangTargetsPath)')" />
+
+  <!-- Even without BasicLang.targets, run the C# language targets so the standard
+       Build/Clean targets exist and EnsureBasicLangTargetsFound reports a real
+       error instead of MSB4057 ("Build" does not exist). -->
+  <PropertyGroup Condition="'$(BasicLangTargetsImported)' != 'true'">
+    <LanguageTargets>$(MSBuildToolsPath)\Microsoft.CSharp.targets</LanguageTargets>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <Target Name="EnsureBasicLangTargetsFound" BeforeTargets="PrepareForBuild;CoreCompile" Condition="'$(BasicLangTargetsImported)' != 'true'">
+    <Error Text="BasicLang.targets was not found, so this project cannot be built. Set the 'BasicLangTargetsPath' MSBuild property or environment variable to the full path of BasicLang.targets (shipped in the 'BuildSystem' folder of the BasicLang Visual Studio extension), e.g.: dotnet build -p:BasicLangTargetsPath=&quot;C:\path\to\BuildSystem\BasicLang.targets&quot;" />
+  </Target>
 
   <!-- BasicLang source files -->
   <ItemGroup>
-    <BasicLangCompile Include="**\*.bas" />
-    <BasicLangCompile Include="**\*.bl" />
+    <BasicLangCompile Include="**\*.bas" Exclude="$(DefaultItemExcludes)" />
+    <BasicLangCompile Include="**\*.bl" Exclude="$(DefaultItemExcludes)" />
   </ItemGroup>
 
 </Project>

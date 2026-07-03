@@ -25,7 +25,7 @@ namespace BasicLang.Compiler.Driver
     /// </summary>
     class Program
     {
-        static async Task Main(string[] args)
+        static async Task<int> Main(string[] args)
         {
             // Check for LSP mode
             if (args.Contains("--lsp") || args.Contains("--language-server"))
@@ -33,7 +33,7 @@ namespace BasicLang.Compiler.Driver
                 // Use simple LSP server for better compatibility
                 var server = new SimpleLspServer(Console.OpenStandardInput(), Console.OpenStandardOutput());
                 await server.RunAsync();
-                return;
+                return 0;
             }
 
             // Check for Debug Adapter mode
@@ -51,7 +51,7 @@ namespace BasicLang.Compiler.Driver
                     var netAdapter = new NetDebugAdapter(Console.OpenStandardInput(), Console.OpenStandardOutput());
                     await netAdapter.RunAsync();
                 }
-                return;
+                return 0;
             }
 
             // Check for REPL mode
@@ -59,21 +59,21 @@ namespace BasicLang.Compiler.Driver
             {
                 var repl = new REPL();
                 repl.Run();
-                return;
+                return 0;
             }
 
             // Check for help
             if (args.Contains("--help") || args.Contains("-h"))
             {
                 PrintUsage();
-                return;
+                return 0;
             }
 
             // Check for version
             if (args.Contains("--version") || args.Contains("-v"))
             {
                 PrintVersion();
-                return;
+                return 0;
             }
 
             // Handle subcommands
@@ -86,35 +86,49 @@ namespace BasicLang.Compiler.Driver
                 {
                     case "new":
                         HandleNewCommand(subArgs);
-                        return;
+                        return 0;
 
                     case "restore":
                         await HandleRestoreCommand(subArgs);
-                        return;
+                        return 0;
 
                     case "add":
                         await HandleAddCommand(subArgs);
-                        return;
+                        return 0;
 
                     case "remove":
                         HandleRemoveCommand(subArgs);
-                        return;
+                        return 0;
 
                     case "build":
-                        await HandleBuildCommand(subArgs);
-                        return;
+                        try
+                        {
+                            return await HandleBuildCommand(subArgs);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"Build failed: {ex.Message}");
+                            return 1;
+                        }
 
                     case "run":
-                        await HandleRunCommand(subArgs);
-                        return;
+                        try
+                        {
+                            return await HandleRunCommand(subArgs);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"Run failed: {ex.Message}");
+                            return 1;
+                        }
 
                     case "list":
                         HandleListCommand(subArgs);
-                        return;
+                        return 0;
 
                     case "search":
                         await HandleSearchCommand(subArgs);
-                        return;
+                        return 0;
                 }
             }
 
@@ -122,7 +136,7 @@ namespace BasicLang.Compiler.Driver
             if (args.Contains("--parser-tests"))
             {
                 BasicLang.Test.ParserTests.Run();
-                return;
+                return 0;
             }
 
             // Check for file argument (compile a file)
@@ -131,15 +145,20 @@ namespace BasicLang.Compiler.Driver
 
             if (fileArg != null)
             {
-                if (fileArg.EndsWith(".blproj"))
+                try
                 {
-                    await HandleBuildCommand(new[] { fileArg });
+                    if (fileArg.EndsWith(".blproj"))
+                    {
+                        return await HandleBuildCommand(new[] { fileArg });
+                    }
+
+                    return CompileFile(fileArg, args);
                 }
-                else
+                catch (Exception ex)
                 {
-                    CompileFile(fileArg, args);
+                    Console.Error.WriteLine($"Compilation failed: {ex.Message}");
+                    return 1;
                 }
-                return;
             }
 
             Console.WriteLine("=".PadRight(70, '='));
@@ -179,6 +198,7 @@ namespace BasicLang.Compiler.Driver
 
             Console.WriteLine();
             Console.WriteLine("Demo complete! Check the generated files in GeneratedCode folder.");
+            return 0;
         }
 
         static void PrintVersion()
@@ -351,13 +371,13 @@ namespace BasicLang.Compiler.Driver
             }
         }
 
-        static async Task HandleBuildCommand(string[] args)
+        static async Task<int> HandleBuildCommand(string[] args)
         {
             var projectPath = FindProjectFile(args.FirstOrDefault(a => !a.StartsWith("-")));
             if (projectPath == null)
             {
-                Console.WriteLine("No project file found.");
-                return;
+                Console.Error.WriteLine("No project file found.");
+                return 1;
             }
 
             Console.WriteLine($"Building {Path.GetFileName(projectPath)}...");
@@ -370,8 +390,8 @@ namespace BasicLang.Compiler.Driver
 
             if (!restoreResult.Success)
             {
-                Console.WriteLine("Package restore failed. Fix errors and try again.");
-                return;
+                Console.Error.WriteLine("Package restore failed. Fix errors and try again.");
+                return 1;
             }
 
             // Get configuration
@@ -392,8 +412,8 @@ namespace BasicLang.Compiler.Driver
             var sourceFiles = project.GetSourceFiles().ToList();
             if (sourceFiles.Count == 0)
             {
-                Console.WriteLine("No source files found.");
-                return;
+                Console.Error.WriteLine("No source files found.");
+                return 1;
             }
 
             var options = new BasicLang.Compiler.CompilerOptions
@@ -426,7 +446,7 @@ namespace BasicLang.Compiler.Driver
                     success = false;
                     foreach (var error in result.AllErrors)
                     {
-                        Console.WriteLine($"    Error: {error.Message}");
+                        Console.Error.WriteLine($"    Error: {error.Message}");
                     }
                 }
                 else if (result.CombinedIR != null)
@@ -554,8 +574,8 @@ namespace BasicLang.Compiler.Driver
                     {
                         success = false;
                         Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine();
-                        Console.WriteLine("  .NET compilation failed!");
+                        Console.Error.WriteLine();
+                        Console.Error.WriteLine("  .NET compilation failed!");
                         Console.ResetColor();
 
                         // Parse and display C# compiler errors in a more helpful format
@@ -566,19 +586,19 @@ namespace BasicLang.Compiler.Driver
 
                         if (errorLines.Any())
                         {
-                            Console.WriteLine();
-                            Console.WriteLine("  C# Compiler Errors:");
+                            Console.Error.WriteLine();
+                            Console.Error.WriteLine("  C# Compiler Errors:");
                             foreach (var errorLine in errorLines.Take(10))
                             {
                                 // Parse error format: file(line,col): error CSxxxx: message
                                 var trimmed = errorLine.Trim();
                                 Console.ForegroundColor = ConsoleColor.Red;
-                                Console.WriteLine($"    {trimmed}");
+                                Console.Error.WriteLine($"    {trimmed}");
                                 Console.ResetColor();
                             }
                             if (errorLines.Count > 10)
                             {
-                                Console.WriteLine($"    ... and {errorLines.Count - 10} more errors");
+                                Console.Error.WriteLine($"    ... and {errorLines.Count - 10} more errors");
                             }
                         }
                         else if (!string.IsNullOrWhiteSpace(allOutput))
@@ -603,25 +623,29 @@ namespace BasicLang.Compiler.Driver
             }
             else if (!success)
             {
-                Console.WriteLine();
-                Console.WriteLine("Build failed.");
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("Build failed.");
             }
             else
             {
                 Console.WriteLine();
                 Console.WriteLine("Build completed but no output generated.");
             }
+
+            return success ? 0 : 1;
         }
 
-        static async Task HandleRunCommand(string[] args)
+        static async Task<int> HandleRunCommand(string[] args)
         {
             // First build
-            await HandleBuildCommand(args);
+            var buildExitCode = await HandleBuildCommand(args);
+            if (buildExitCode != 0)
+                return buildExitCode;
 
             // Then run
             var projectPath = FindProjectFile(args.FirstOrDefault(a => !a.StartsWith("-")));
             if (projectPath == null)
-                return;
+                return 1;
 
             var project = ProjectFile.Load(projectPath);
             var projectDir = Path.GetDirectoryName(projectPath) ?? ".";
@@ -666,12 +690,14 @@ namespace BasicLang.Compiler.Driver
                     Console.Error.WriteLine(errors);
                 }
                 await process.WaitForExitAsync();
+                return process.ExitCode;
             }
             else
             {
-                Console.WriteLine($"Output not found. Searched:");
+                Console.Error.WriteLine($"Output not found. Searched:");
                 foreach (var p in possiblePaths)
-                    Console.WriteLine($"  - {p}");
+                    Console.Error.WriteLine($"  - {p}");
+                return 1;
             }
         }
 
@@ -773,9 +799,10 @@ namespace BasicLang.Compiler.Driver
         }
 
         /// <summary>
-        /// Compile a source file using the new multi-file compiler
+        /// Compile a source file using the new multi-file compiler.
+        /// Returns 0 on success (including success with warnings), 1 if any errors occurred.
         /// </summary>
-        static void CompileFile(string filePath, string[] args)
+        static int CompileFile(string filePath, string[] args)
         {
             Console.WriteLine($"Compiling: {filePath}");
             Console.WriteLine();
@@ -864,11 +891,13 @@ namespace BasicLang.Compiler.Driver
                         Console.WriteLine(new string('-', 60));
                     }
                 }
+
+                return 0;
             }
             else
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"Compilation failed with {result.AllErrors.Count} error(s):");
+                Console.Error.WriteLine($"Compilation failed with {result.AllErrors.Count} error(s):");
                 Console.ResetColor();
 
                 // Get source code for error context
@@ -887,9 +916,9 @@ namespace BasicLang.Compiler.Driver
                 var grouped = ErrorGrouper.GroupErrors(result.AllErrors);
                 foreach (var group in grouped)
                 {
-                    Console.WriteLine();
+                    Console.Error.WriteLine();
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"  Error at line {group.PrimaryError.Line}: {group.PrimaryError.Message}");
+                    Console.Error.WriteLine($"  Error at line {group.PrimaryError.Line}: {group.PrimaryError.Message}");
                     Console.ResetColor();
 
                     // Show source code context
@@ -899,16 +928,16 @@ namespace BasicLang.Compiler.Driver
                         var errorLine = sourceLines[lineIndex];
 
                         Console.ForegroundColor = ConsoleColor.DarkGray;
-                        Console.Write($"    {group.PrimaryError.Line,4} | ");
+                        Console.Error.Write($"    {group.PrimaryError.Line,4} | ");
                         Console.ResetColor();
-                        Console.WriteLine(errorLine);
+                        Console.Error.WriteLine(errorLine);
 
                         // Show error position marker
                         if (group.PrimaryError.Column > 0)
                         {
                             var indent = new string(' ', group.PrimaryError.Column - 1);
                             Console.ForegroundColor = ConsoleColor.Red;
-                            Console.WriteLine($"         | {indent}^");
+                            Console.Error.WriteLine($"         | {indent}^");
                             Console.ResetColor();
                         }
                     }
@@ -916,15 +945,17 @@ namespace BasicLang.Compiler.Driver
                     if (!string.IsNullOrEmpty(group.CommonCause))
                     {
                         Console.ForegroundColor = ConsoleColor.Yellow;
-                        Console.WriteLine($"    Cause: {group.CommonCause}");
+                        Console.Error.WriteLine($"    Cause: {group.CommonCause}");
                         Console.ResetColor();
                     }
 
                     if (group.RelatedErrors.Count > 0)
                     {
-                        Console.WriteLine($"    ({group.RelatedErrors.Count} related error(s))");
+                        Console.Error.WriteLine($"    ({group.RelatedErrors.Count} related error(s))");
                     }
                 }
+
+                return 1;
             }
         }
 

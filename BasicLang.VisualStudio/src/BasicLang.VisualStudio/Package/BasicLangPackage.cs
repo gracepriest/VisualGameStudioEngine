@@ -50,11 +50,30 @@ public sealed class BasicLangPackage : AsyncPackage
         // Switch to main thread for UI operations
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
+        // Each initialization step is guarded separately so a failure in one
+        // (e.g. factory registration) doesn't take down the others and surface
+        // a "package did not load correctly" gold bar on every VS launch —
+        // this package autoloads in NoSolution and all solution contexts.
+
         // Register project factory
-        RegisterProjectFactory(new ProjectSystem.BasicLangProjectFactory(this));
+        try
+        {
+            RegisterProjectFactory(new ProjectSystem.BasicLangProjectFactory(this));
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException))
+        {
+            ActivityLog.LogError(nameof(BasicLangPackage), $"Failed to register BasicLang project factory: {ex}");
+        }
 
         // Initialize commands
-        await Commands.CommandHandlers.InitializeAsync(this);
+        try
+        {
+            await Commands.CommandHandlers.InitializeAsync(this);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException))
+        {
+            ActivityLog.LogError(nameof(BasicLangPackage), $"Failed to initialize BasicLang commands: {ex}");
+        }
 
         // Log successful initialization
         System.Diagnostics.Debug.WriteLine("BasicLang Visual Studio package initialized successfully");

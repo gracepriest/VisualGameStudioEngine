@@ -7,7 +7,7 @@ Namespace $rootnamespace$
     ''' <summary>
     ''' $fileinputname$ module.
     ''' </summary>
-    Module $fileinputname$
+    Module $safeitemname$
         ''' <summary>
         ''' Sample shared method.
         ''' </summary>

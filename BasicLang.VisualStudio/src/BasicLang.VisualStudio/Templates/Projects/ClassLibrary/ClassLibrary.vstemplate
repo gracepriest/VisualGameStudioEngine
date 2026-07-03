@@ -3,8 +3,8 @@
   <TemplateData>
     <Name>BasicLang Class Library</Name>
     <Description>A class library project for the BasicLang programming language.</Description>
-    <ProjectType>BasicLang</ProjectType>
-    <LanguageTag>BasicLang</LanguageTag>
+    <ProjectType>VisualBasic</ProjectType>
+    <LanguageTag>visualbasic</LanguageTag>
     <PlatformTag>Windows</PlatformTag>
     <PlatformTag>Linux</PlatformTag>
     <PlatformTag>macOS</PlatformTag>

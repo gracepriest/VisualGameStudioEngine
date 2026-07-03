@@ -6,7 +6,7 @@
   "publisher": "visualgamestudio",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.82.0"
   },
   "categories": [
     "Programming Languages",
@@ -22,13 +22,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/visualgamestudio/vscode-basiclang"
+    "url": "https://github.com/gracepriest/VisualGameStudioEngine",
+    "directory": "vscode-basiclang"
   },
   "activationEvents": [
     "onLanguage:basiclang",
     "workspaceContains:**/*.bl",
     "workspaceContains:**/*.bas",
-    "workspaceContains:**/*.blproj"
+    "workspaceContains:**/*.blproj",
+    "onDebug"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -43,7 +45,7 @@
         "id": "basiclang-project",
         "aliases": ["BasicLang Project"],
         "extensions": [".blproj"],
-        "configuration": "./language-configuration.json"
+        "configuration": "./blproj-language-configuration.json"
       }
     ],
     "grammars": [
@@ -141,7 +143,7 @@
               "program": {
                 "type": "string",
                 "description": "Path to the BasicLang project file or source file",
-                "default": "${workspaceFolder}/Main.bl"
+                "default": "${workspaceFolder}/Program.bas"
               },
               "stopOnEntry": {
                 "type": "boolean",
@@ -169,7 +171,7 @@
             "type": "basiclang",
             "request": "launch",
             "name": "Launch BasicLang",
-            "program": "${workspaceFolder}/Main.bl",
+            "program": "${workspaceFolder}/Program.bas",
             "stopOnEntry": false
           }
         ],
@@ -181,7 +183,7 @@
               "type": "basiclang",
               "request": "launch",
               "name": "Launch BasicLang",
-              "program": "^\"\\${workspaceFolder}/Main.bl\"",
+              "program": "^\"\\${workspaceFolder}/Program.bas\"",
               "stopOnEntry": false
             }
           }
@@ -240,7 +242,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
-    "@types/vscode": "^1.80.0",
+    "@types/vscode": "^1.82.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
     "eslint": "^8.54.0",

@@ -37,8 +37,7 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
     public IEnumerable<string> FilesToWatch => new[]
     {
         "**/*.bl",
-        "**/*.bas",
-        "**/*.blproj"
+        "**/*.bas"
     };
 
     /// <inheritdoc />
@@ -179,62 +178,7 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
     /// </summary>
     private string? FindLanguageServer()
     {
-        var possiblePaths = new[]
-        {
-            // Extension directory
-            Path.Combine(Path.GetDirectoryName(typeof(BasicLangLanguageClient).Assembly.Location) ?? "", "BasicLang.exe"),
-            // Local app data installation
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BasicLang", "BasicLang.exe"),
-            // Program Files installation
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "BasicLang", "BasicLang.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "BasicLang", "BasicLang.exe"),
-            // Development build (relative to solution)
-            @"..\..\..\..\BasicLang\bin\Release\net8.0\BasicLang.exe",
-            @"..\..\..\..\BasicLang\bin\Debug\net8.0\BasicLang.exe",
-            @"..\..\..\..\IDE\BasicLang.exe"
-        };
-
-        foreach (var path in possiblePaths)
-        {
-            try
-            {
-                var fullPath = Path.GetFullPath(path);
-                if (File.Exists(fullPath))
-                {
-                    Debug.WriteLine($"Found BasicLang language server at: {fullPath}");
-                    return fullPath;
-                }
-            }
-            catch
-            {
-                // Ignore path errors
-            }
-        }
-
-        // Search in PATH environment variable
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
-        {
-            foreach (var dir in pathEnv.Split(Path.PathSeparator))
-            {
-                try
-                {
-                    var fullPath = Path.Combine(dir, "BasicLang.exe");
-                    if (File.Exists(fullPath))
-                    {
-                        Debug.WriteLine($"Found BasicLang language server in PATH: {fullPath}");
-                        return fullPath;
-                    }
-                }
-                catch
-                {
-                    // Ignore path errors
-                }
-            }
-        }
-
-        Debug.WriteLine("BasicLang language server not found in any location");
-        return null;
+        return BasicLangExeLocator.FindBasicLangExe();
     }
 
     /// <summary>

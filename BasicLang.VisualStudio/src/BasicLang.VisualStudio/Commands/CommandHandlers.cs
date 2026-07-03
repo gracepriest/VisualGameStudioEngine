@@ -1,4 +1,5 @@
 using System.ComponentModel.Design;
+using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using BasicLang.VisualStudio.LanguageService;
@@ -26,6 +27,15 @@ public static class CommandHandlers
 {
     private static AsyncPackage? _package;
     private static OleMenuCommandService? _commandService;
+
+    /// <summary>
+    /// Matches compiler error diagnostics in build output, e.g. "Error: ...",
+    /// "error CS1002: ...", "Error at line 5: ...", "Compilation failed with 3 error(s)".
+    /// Needed because BasicLang.exe may exit 0 even when compilation fails.
+    /// </summary>
+    private static readonly Regex ErrorDiagnosticPattern = new(
+        @"(^|[\s:(\[])error\s*([A-Za-z]*\d+)?\s*:|(^|\s)error\s+at\s+line\s|\bcompilation\s+failed\b|\bbuild\s+failed\b|\brestore\s+failed\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Multiline);
 
     /// <summary>
     /// Initializes the command handlers.
@@ -83,9 +93,119 @@ public static class CommandHandlers
                  activeDoc.Name.EndsWith(".bl", StringComparison.OrdinalIgnoreCase) ||
                  activeDoc.Name.EndsWith(".blproj", StringComparison.OrdinalIgnoreCase));
 
-            command.Visible = true;
+            command.Visible = isBasicLangFile;
             command.Enabled = isBasicLangFile;
         }
+    }
+
+    /// <summary>
+    /// Reports an unexpected failure of an async void command handler. Must never throw:
+    /// an unhandled exception in an async void handler crashes devenv.exe.
+    /// </summary>
+    private static async Task ReportHandlerErrorAsync(string commandName, Exception ex)
+    {
+        try
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            ActivityLog.TryLogError(nameof(CommandHandlers), $"BasicLang '{commandName}' command failed: {ex}");
+            ShowMessage($"BasicLang {commandName}", $"The command failed: {ex.Message}");
+        }
+        catch
+        {
+            // Never let error reporting itself take down VS.
+        }
+    }
+
+    /// <summary>
+    /// Finds the .blproj for the given start directory, walking up parent directories
+    /// until one is found. Stops at the repository/solution root (a directory containing
+    /// a .sln or .git entry) or the drive root.
+    /// </summary>
+    private static string? FindProjectFile(string startDir)
+    {
+        var dir = new DirectoryInfo(startDir);
+        while (dir != null)
+        {
+            var projectFiles = dir.GetFiles("*.blproj");
+            if (projectFiles.Length > 0)
+                return projectFiles[0].FullName;
+
+            // Don't search above the solution/repo root
+            bool isRoot = dir.GetFiles("*.sln").Length > 0 ||
+                          Directory.Exists(Path.Combine(dir.FullName, ".git"));
+            if (isRoot)
+                break;
+
+            dir = dir.Parent;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Reads the &lt;TargetFramework&gt; element from a .blproj file, if present.
+    /// </summary>
+    private static string? ReadProjectTargetFramework(string blprojPath)
+    {
+        try
+        {
+            var content = File.ReadAllText(blprojPath);
+            var match = Regex.Match(content, @"<TargetFramework>\s*([^<\s]+)\s*</TargetFramework>", RegexOptions.IgnoreCase);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Maps a compiler options backend to the compiler's --target argument value.
+    /// </summary>
+    private static string GetBackendTargetName(Options.CompilerBackend backend) => backend switch
+    {
+        Options.CompilerBackend.MSIL => "msil",
+        Options.CompilerBackend.LLVM => "llvm",
+        Options.CompilerBackend.CPlusPlus => "cpp",
+        _ => "csharp",
+    };
+
+    /// <summary>
+    /// Returns true if the compiler output contains error diagnostics. BasicLang.exe
+    /// historically exits 0 even on compile errors, so the exit code alone is not enough.
+    /// </summary>
+    private static bool ContainsErrorDiagnostics(string output)
+    {
+        return !string.IsNullOrEmpty(output) && ErrorDiagnosticPattern.IsMatch(output);
+    }
+
+    /// <summary>
+    /// Finds the built executable for a project. The compiler outputs to
+    /// bin\&lt;Configuration&gt;\&lt;TargetFramework&gt;, so probe the target framework
+    /// subdirectory (read from the .blproj), then bin\&lt;Configuration&gt; itself,
+    /// then any other subdirectories.
+    /// </summary>
+    private static string? FindBuiltExecutable(string projectDir, string configuration, string? targetFramework)
+    {
+        var configDir = Path.Combine(projectDir, "bin", configuration);
+        if (!Directory.Exists(configDir))
+            return null;
+
+        var searchDirs = new List<string>();
+        if (!string.IsNullOrEmpty(targetFramework))
+            searchDirs.Add(Path.Combine(configDir, targetFramework));
+        searchDirs.Add(configDir);
+        searchDirs.AddRange(Directory.GetDirectories(configDir));
+
+        foreach (var dir in searchDirs.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(dir))
+                continue;
+
+            var exeFiles = Directory.GetFiles(dir, "*.exe");
+            if (exeFiles.Length > 0)
+                return exeFiles[0];
+        }
+        return null;
     }
 
     /// <summary>
@@ -93,27 +213,48 @@ public static class CommandHandlers
     /// </summary>
     private static async void ExecuteBuildAsync(object sender, EventArgs e)
     {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-
-        var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
-        var activeDocument = dte?.ActiveDocument;
-
-        if (activeDocument == null)
+        try
         {
-            ShowMessage("No active document", "Please open a BasicLang file first.");
-            return;
-        }
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var projectDir = Path.GetDirectoryName(activeDocument.FullName);
-        await BuildProjectAsync(projectDir!);
+            var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+            var activeDocument = dte?.ActiveDocument;
+
+            if (activeDocument == null)
+            {
+                ShowMessage("No active document", "Please open a BasicLang file first.");
+                return;
+            }
+
+            var startDir = Path.GetDirectoryName(activeDocument.FullName)!;
+            var blprojPath = FindProjectFile(startDir);
+            if (blprojPath == null)
+            {
+                ShowMessage("Build", "No .blproj file found in the current directory or any parent directory.");
+                return;
+            }
+
+            await BuildProjectAsync(blprojPath);
+        }
+        catch (Exception ex)
+        {
+            await ReportHandlerErrorAsync("Build", ex);
+        }
     }
 
     /// <summary>
-    /// Runs the BasicLang compiler on the project in <paramref name="projectDir"/> and returns
-    /// true if the build succeeded (exit code 0).
+    /// Runs the BasicLang compiler on the given .blproj and returns true if the build
+    /// succeeded. Success requires exit code 0 AND no error diagnostics in the output
+    /// (BasicLang.exe may exit 0 even when compilation fails).
     /// </summary>
-    private static async Task<bool> BuildProjectAsync(string projectDir)
+    private static async Task<bool> BuildProjectAsync(string blprojPath)
     {
+        // Read compiler options on the main thread before any await
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var compilerOptions = BasicLangPackage.Instance?.CompilerOptions;
+        var backendTarget = GetBackendTargetName(compilerOptions?.DefaultBackend ?? Options.CompilerBackend.CSharp);
+        var additionalArgs = compilerOptions?.AdditionalCompilerArgs?.Trim() ?? "";
+
         var outputWindow = Package.GetGlobalService(typeof(SVsOutputWindow)) as IVsOutputWindow;
         var guidPane = Microsoft.VisualStudio.VSConstants.OutputWindowPaneGuid.BuildOutputPane_guid;
         IVsOutputWindowPane? pane = null;
@@ -124,14 +265,7 @@ public static class CommandHandlers
         }
         pane?.Activate();
 
-        var projectFiles = Directory.GetFiles(projectDir, "*.blproj");
-        if (projectFiles.Length == 0)
-        {
-            pane?.OutputStringThreadSafe("No .blproj file found in the current directory.\n");
-            return false;
-        }
-
-        var blprojPath = projectFiles[0];
+        var projectDir = Path.GetDirectoryName(blprojPath)!;
         pane?.OutputStringThreadSafe($"Building: {blprojPath}\n");
 
         var basicLangPath = FindBasicLangCompiler();
@@ -143,10 +277,14 @@ public static class CommandHandlers
 
         pane?.OutputStringThreadSafe($"Using compiler: {basicLangPath}\n");
 
+        var arguments = $"build \"{blprojPath}\" --target={backendTarget}";
+        if (!string.IsNullOrEmpty(additionalArgs))
+            arguments += $" {additionalArgs}";
+
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
             FileName = basicLangPath,
-            Arguments = $"build \"{blprojPath}\"",
+            Arguments = arguments,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -161,17 +299,27 @@ public static class CommandHandlers
             return false;
         }
 
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var errors = await process.StandardError.ReadToEndAsync();
+        // Drain both pipes concurrently to avoid a deadlock if one fills while
+        // the other is being read sequentially
+        var outTask = process.StandardOutput.ReadToEndAsync();
+        var errTask = process.StandardError.ReadToEndAsync();
+        await Task.WhenAll(outTask, errTask);
         await Task.Run(() => process.WaitForExit());
+        var output = outTask.Result;
+        var errors = errTask.Result;
 
         if (!string.IsNullOrEmpty(output))
             pane?.OutputStringThreadSafe(output);
         if (!string.IsNullOrEmpty(errors))
             pane?.OutputStringThreadSafe($"Errors:\n{errors}\n");
 
-        pane?.OutputStringThreadSafe($"\nBuild {(process.ExitCode == 0 ? "succeeded" : "FAILED")} (exit code {process.ExitCode})\n");
-        return process.ExitCode == 0;
+        // The exit code alone isn't reliable — also scan the output for error diagnostics
+        bool succeeded = process.ExitCode == 0 &&
+                         !ContainsErrorDiagnostics(output) &&
+                         !ContainsErrorDiagnostics(errors);
+
+        pane?.OutputStringThreadSafe($"\nBuild {(succeeded ? "succeeded" : "FAILED")} (exit code {process.ExitCode})\n");
+        return succeeded;
     }
 
     /// <summary>
@@ -179,45 +327,57 @@ public static class CommandHandlers
     /// </summary>
     private static async void ExecuteRunAsync(object sender, EventArgs e)
     {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-
-        var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
-        var activeDocument = dte?.ActiveDocument;
-
-        if (activeDocument == null)
+        try
         {
-            ShowMessage("No active document", "Please open a BasicLang file first.");
-            return;
-        }
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var projectDir = Path.GetDirectoryName(activeDocument.FullName)!;
+            var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+            var activeDocument = dte?.ActiveDocument;
 
-        // Build first and wait for it to finish before launching
-        bool buildSucceeded = await BuildProjectAsync(projectDir);
-        if (!buildSucceeded)
-        {
-            ShowMessage("Run Failed", "Build failed. See the Build output window for details.");
-            return;
-        }
-
-        var outputDir = Path.Combine(projectDir, "bin", "Debug");
-
-        var exeFiles = Directory.Exists(outputDir)
-            ? Directory.GetFiles(outputDir, "*.exe")
-            : Array.Empty<string>();
-
-        if (exeFiles.Length > 0)
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            if (activeDocument == null)
             {
-                FileName = exeFiles[0],
-                WorkingDirectory = outputDir,
-                UseShellExecute = true
-            });
+                ShowMessage("No active document", "Please open a BasicLang file first.");
+                return;
+            }
+
+            var startDir = Path.GetDirectoryName(activeDocument.FullName)!;
+            var blprojPath = FindProjectFile(startDir);
+            if (blprojPath == null)
+            {
+                ShowMessage("Run", "No .blproj file found in the current directory or any parent directory.");
+                return;
+            }
+
+            // Build first and wait for it to finish before launching
+            bool buildSucceeded = await BuildProjectAsync(blprojPath);
+            if (!buildSucceeded)
+            {
+                ShowMessage("Run Failed", "Build failed. See the Build output window for details.");
+                return;
+            }
+
+            // The compiler outputs to bin\Debug\{TargetFramework}, so probe subdirectories too
+            var projectDir = Path.GetDirectoryName(blprojPath)!;
+            var targetFramework = ReadProjectTargetFramework(blprojPath);
+            var exePath = FindBuiltExecutable(projectDir, "Debug", targetFramework);
+
+            if (exePath != null)
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = exePath,
+                    WorkingDirectory = Path.GetDirectoryName(exePath)!,
+                    UseShellExecute = true
+                });
+            }
+            else
+            {
+                ShowMessage("Run Failed", "No executable found under bin\\Debug after build.");
+            }
         }
-        else
+        catch (Exception ex)
         {
-            ShowMessage("Run Failed", "No executable found in bin\\Debug after build.");
+            await ReportHandlerErrorAsync("Run", ex);
         }
     }
 
@@ -226,21 +386,27 @@ public static class CommandHandlers
     /// </summary>
     private static async void ExecuteChangeBackendAsync(object sender, EventArgs e)
     {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        try
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        // Show backend selection dialog
-        var backends = new[] { "CSharp", "MSIL", "LLVM", "CPlusPlus" };
-        var currentBackend = "CSharp"; // Would read from project
+            var currentBackend = (BasicLangPackage.Instance?.CompilerOptions?.DefaultBackend
+                ?? Options.CompilerBackend.CSharp).ToString();
 
-        // For now, just show a message - would show a proper dialog
-        ShowMessage("Change Backend",
-            $"Available backends:\n" +
-            $"- CSharp (C# transpilation, recommended)\n" +
-            $"- MSIL (Direct IL generation)\n" +
-            $"- LLVM (Native code via LLVM)\n" +
-            $"- CPlusPlus (C++ transpilation)\n\n" +
-            $"Current: {currentBackend}\n\n" +
-            $"Edit the <Backend> element in your .blproj file to change.");
+            // For now, just show a message - would show a proper dialog
+            ShowMessage("Change Backend",
+                $"Available backends:\n" +
+                $"- CSharp (C# transpilation, recommended)\n" +
+                $"- MSIL (Direct IL generation)\n" +
+                $"- LLVM (Native code via LLVM)\n" +
+                $"- CPlusPlus (C++ transpilation)\n\n" +
+                $"Current: {currentBackend}\n\n" +
+                $"Change it in Tools > Options > BasicLang > Compiler, or edit the <Backend> element in your .blproj file.");
+        }
+        catch (Exception ex)
+        {
+            await ReportHandlerErrorAsync("Change Backend", ex);
+        }
     }
 
     /// <summary>
@@ -248,31 +414,40 @@ public static class CommandHandlers
     /// </summary>
     private static async void ExecuteRestartServerAsync(object sender, EventArgs e)
     {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-
-        // Find the language client and restart it
-        var componentModel = Package.GetGlobalService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
-            as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
-
-        if (componentModel != null)
+        try
         {
-            try
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            // The language client is a MEF part exported as ILanguageClient, so it must be
+            // resolved through the component model's extensions, not GetService
+            var componentModel = Package.GetGlobalService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+                as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
+
+            if (componentModel == null)
             {
-                var languageClient = componentModel.GetService<BasicLangLanguageClient>();
-                if (languageClient != null)
-                {
-                    await languageClient.RestartServerAsync();
-                    ShowMessage("Language Server", "BasicLang language server restarted.");
-                }
-                else
-                {
-                    ShowMessage("Language Server", "Language server not found. It will start automatically when you open a BasicLang file.");
-                }
+                ShowMessage("Language Server", "Component model service is unavailable.");
+                return;
             }
-            catch (Exception ex)
+
+            var languageClient = componentModel
+                .GetExtensions<Microsoft.VisualStudio.LanguageServer.Client.ILanguageClient>()
+                .OfType<BasicLangLanguageClient>()
+                .FirstOrDefault();
+
+            if (languageClient != null)
             {
-                ShowMessage("Error", $"Failed to restart language server: {ex.Message}");
+                await languageClient.RestartServerAsync();
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                ShowMessage("Language Server", "BasicLang language server restarted.");
             }
+            else
+            {
+                ShowMessage("Language Server", "Language server not found. It will start automatically when you open a BasicLang file.");
+            }
+        }
+        catch (Exception ex)
+        {
+            await ReportHandlerErrorAsync("Restart Server", ex);
         }
     }
 
@@ -281,12 +456,19 @@ public static class CommandHandlers
     /// </summary>
     private static async void ExecuteGoToDefinitionAsync(object sender, EventArgs e)
     {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        try
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        // This would be handled by the LSP client
-        // For now, just trigger the standard VS Go to Definition
-        var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
-        dte?.ExecuteCommand("Edit.GoToDefinition");
+            // This would be handled by the LSP client
+            // For now, just trigger the standard VS Go to Definition
+            var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+            dte?.ExecuteCommand("Edit.GoToDefinition");
+        }
+        catch (Exception ex)
+        {
+            await ReportHandlerErrorAsync("Go To Definition", ex);
+        }
     }
 
     /// <summary>
@@ -294,12 +476,19 @@ public static class CommandHandlers
     /// </summary>
     private static async void ExecuteFindReferencesAsync(object sender, EventArgs e)
     {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        try
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        // This would be handled by the LSP client
-        // For now, just trigger the standard VS Find All References
-        var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
-        dte?.ExecuteCommand("Edit.FindAllReferences");
+            // This would be handled by the LSP client
+            // For now, just trigger the standard VS Find All References
+            var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+            dte?.ExecuteCommand("Edit.FindAllReferences");
+        }
+        catch (Exception ex)
+        {
+            await ReportHandlerErrorAsync("Find References", ex);
+        }
     }
 
     /// <summary>
@@ -323,24 +512,6 @@ public static class CommandHandlers
     /// </summary>
     private static string? FindBasicLangCompiler()
     {
-        var possiblePaths = new[]
-        {
-            Path.Combine(Path.GetDirectoryName(typeof(CommandHandlers).Assembly.Location) ?? "", "BasicLang.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BasicLang", "BasicLang.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "BasicLang", "BasicLang.exe"),
-            "BasicLang.exe"
-        };
-
-        foreach (var path in possiblePaths)
-        {
-            try
-            {
-                if (File.Exists(path))
-                    return path;
-            }
-            catch { }
-        }
-
-        return null;
+        return BasicLangExeLocator.FindBasicLangExe();
     }
 }

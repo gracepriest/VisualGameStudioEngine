@@ -5,12 +5,13 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#preprocessor" },
+    { "include": "#inline-code" },
     { "include": "#attributes" },
     { "include": "#strings" },
     { "include": "#tuples" },
     { "include": "#keywords" },
-    { "include": "#operators" },
     { "include": "#numbers" },
+    { "include": "#operators" },
     { "include": "#types" },
     { "include": "#functions" },
     { "include": "#variables" }
@@ -30,16 +31,8 @@
           "match": "'.*$"
         },
         {
-          "name": "comment.block.basiclang",
-          "begin": "/\\*",
-          "end": "\\*/",
-          "patterns": [
-            { "include": "#comments" }
-          ]
-        },
-        {
           "name": "comment.line.rem.basiclang",
-          "match": "(?i)^\\s*REM\\b.*$"
+          "match": "(?i)(?<![\\w.])REM\\b.*$"
         }
       ]
     },
@@ -47,15 +40,90 @@
       "patterns": [
         {
           "name": "keyword.preprocessor.basiclang",
-          "match": "(?i)^\\s*#(If|ElseIf|Else|End\\s+If|Const|Region|End\\s+Region|ExternalSource|End\\s+ExternalSource|Enable|Disable)\\b.*$"
+          "match": "(?i)^\\s*#(IfNDef|IfDef|ElseIf|EndIf|If|Else|Define|Undefine|Undef|Include|Const|Region|End\\s+Region)\\b.*$"
         }
+      ]
+    },
+    "inline-code": {
+      "patterns": [
+        {
+          "name": "meta.embedded.block.csharp.basiclang",
+          "begin": "(?i)\\b(csharp)\\s*(\\{)",
+          "end": "\\}",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.inline-code.basiclang" },
+            "2": { "name": "punctuation.section.embedded.begin.basiclang" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.embedded.end.basiclang" }
+          },
+          "contentName": "meta.embedded.block.csharp",
+          "patterns": [
+            { "include": "#inline-code-braces" }
+          ]
+        },
+        {
+          "name": "meta.embedded.block.cpp.basiclang",
+          "begin": "(?i)\\b(cpp)\\s*(\\{)",
+          "end": "\\}",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.inline-code.basiclang" },
+            "2": { "name": "punctuation.section.embedded.begin.basiclang" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.embedded.end.basiclang" }
+          },
+          "contentName": "meta.embedded.block.cpp",
+          "patterns": [
+            { "include": "#inline-code-braces" }
+          ]
+        },
+        {
+          "name": "meta.embedded.block.llvm.basiclang",
+          "begin": "(?i)\\b(llvm)\\s*(\\{)",
+          "end": "\\}",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.inline-code.basiclang" },
+            "2": { "name": "punctuation.section.embedded.begin.basiclang" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.embedded.end.basiclang" }
+          },
+          "contentName": "meta.embedded.block.llvm",
+          "patterns": [
+            { "include": "#inline-code-braces" }
+          ]
+        },
+        {
+          "name": "meta.embedded.block.msil.basiclang",
+          "begin": "(?i)\\b(msil)\\s*(\\{)",
+          "end": "\\}",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.inline-code.basiclang" },
+            "2": { "name": "punctuation.section.embedded.begin.basiclang" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.embedded.end.basiclang" }
+          },
+          "contentName": "meta.embedded.block.msil",
+          "patterns": [
+            { "include": "#inline-code-braces" }
+          ]
+        }
+      ]
+    },
+    "inline-code-braces": {
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [
+        { "include": "#inline-code-braces" }
       ]
     },
     "attributes": {
       "patterns": [
         {
           "name": "meta.attribute.basiclang",
-          "begin": "<(?=[A-Za-z])",
+          "begin": "^\\s*<(?=[A-Za-z])",
           "end": ">",
           "beginCaptures": {
             "0": { "name": "punctuation.definition.attribute.begin.basiclang" }
@@ -77,6 +145,10 @@
     "strings": {
       "patterns": [
         {
+          "name": "constant.character.basiclang",
+          "match": "\"(?:\\\\.|[^\"\\\\])\"[cC]"
+        },
+        {
           "name": "string.quoted.double.basiclang",
           "begin": "\"",
           "end": "\"",
@@ -84,10 +156,6 @@
             {
               "name": "constant.character.escape.basiclang",
               "match": "\\\\."
-            },
-            {
-              "name": "constant.character.escape.double-quote.basiclang",
-              "match": "\"\""
             }
           ]
         },
@@ -113,17 +181,6 @@
               "patterns": [
                 { "include": "$self" }
               ]
-            }
-          ]
-        },
-        {
-          "name": "string.quoted.triple.basiclang",
-          "begin": "\"\"\"",
-          "end": "\"\"\"",
-          "patterns": [
-            {
-              "name": "constant.character.escape.basiclang",
-              "match": "\\\\."
             }
           ]
         }
@@ -190,75 +247,83 @@
       "patterns": [
         {
           "name": "keyword.control.basiclang",
-          "match": "(?i)\\b(If|Then|Else|ElseIf|End\\s+If|Select|Case|End\\s+Select|For|To|Step|Next|Each|In|While|Wend|End\\s+While|Do|Loop|Until|Continue|Exit|Return|GoTo|On\\s+Error|Resume|Throw)\\b"
-        },
-        {
-          "name": "keyword.control.pattern.basiclang",
-          "match": "(?i)\\b(When|Match|Where)\\b"
-        },
-        {
-          "name": "keyword.declaration.basiclang",
-          "match": "(?i)\\b(Dim|Const|Static|ReDim|Preserve|As|New|With|End\\s+With|Using|End\\s+Using|Let)\\b"
-        },
-        {
-          "name": "keyword.declaration.function.basiclang",
-          "match": "(?i)\\b(Sub|Function|End\\s+Sub|End\\s+Function|ByVal|ByRef|Optional|ParamArray|Async|Await|Iterator|Yield|Lambda)\\b"
-        },
-        {
-          "name": "keyword.declaration.class.basiclang",
-          "match": "(?i)\\b(Class|End\\s+Class|Module|End\\s+Module|Namespace|End\\s+Namespace|Interface|End\\s+Interface|Enum|End\\s+Enum|Structure|End\\s+Structure|Record)\\b"
-        },
-        {
-          "name": "keyword.declaration.property.basiclang",
-          "match": "(?i)\\b(Property|Get|Set|End\\s+Property|End\\s+Get|End\\s+Set|Auto)\\b"
-        },
-        {
-          "name": "keyword.modifier.basiclang",
-          "match": "(?i)\\b(Public|Private|Protected|Friend|Internal|Shared|Static|ReadOnly|WriteOnly|Overloads|Overrides|Overridable|NotOverridable|MustOverride|MustInherit|NotInheritable|Partial|Shadows|Virtual|Abstract|Sealed|Override|Default)\\b"
-        },
-        {
-          "name": "keyword.other.basiclang",
-          "match": "(?i)\\b(Imports|Option|Strict|Explicit|Compare|Binary|Text|Inherits|Implements|Handles|AddHandler|RemoveHandler|RaiseEvent|Event|Delegate|Operator|Widening|Narrowing|Of|TypeOf|GetType|NameOf|CType|DirectCast|TryCast|CBool|CByte|CChar|CDate|CDbl|CDec|CInt|CLng|CObj|CSByte|CShort|CSng|CStr|CUInt|CULng|CUShort)\\b"
+          "match": "(?i)(?<!\\.)\\b(If|Then|ElseIf|Else|End\\s+If|Select|Case|End\\s+Select|For|To|Step|Next|Each|In|While|Wend|Do|Loop|Until|Exit|Return|Throw)\\b"
         },
         {
           "name": "keyword.control.exception.basiclang",
-          "match": "(?i)\\b(Try|Catch|Finally|End\\s+Try|When)\\b"
+          "match": "(?i)(?<!\\.)\\b(Try|Catch|Finally|End\\s+Try|When)\\b"
+        },
+        {
+          "name": "keyword.declaration.basiclang",
+          "match": "(?i)(?<!\\.)\\b(Dim|Auto|Const|As|New|TypeDefine|With|End\\s+With|Using|End\\s+Using)\\b"
+        },
+        {
+          "name": "keyword.declaration.function.basiclang",
+          "match": "(?i)(?<!\\.)\\b(Sub|Function|End\\s+Sub|End\\s+Function|ByVal|ByRef|Optional|ParamArray|Async|Await|Iterator|Yield)\\b"
+        },
+        {
+          "name": "keyword.declaration.class.basiclang",
+          "match": "(?i)(?<!\\.)\\b(Class|End\\s+Class|Module|End\\s+Module|Namespace|End\\s+Namespace|Interface|End\\s+Interface|Enum|End\\s+Enum|Structure|End\\s+Structure|Type|End\\s+Type|Union|End\\s+Union|Template|End\\s+Template)\\b"
+        },
+        {
+          "name": "keyword.declaration.property.basiclang",
+          "match": "(?i)(?<!\\.)\\b(Property|End\\s+Property|Get|End\\s+Get|Set|End\\s+Set|ReadOnly|WriteOnly)\\b"
+        },
+        {
+          "name": "keyword.modifier.basiclang",
+          "match": "(?i)(?<!\\.)\\b(Public|Private|Protected|Friend|Shared|Overridable|Overrides|MustOverride|MustInherit|NotOverridable|Widening|Narrowing|Inline)\\b"
+        },
+        {
+          "name": "keyword.other.ffi.basiclang",
+          "match": "(?i)(?<!\\.)\\b(Declare|Lib|Alias|CDecl|StdCall|Extern|End\\s+Extern)\\b"
+        },
+        {
+          "name": "keyword.other.query.basiclang",
+          "match": "(?i)(?<!\\.)\\b(From|Where|Order\\s+By|Group\\s+By|Ascending|Descending|Join|On|Equals|Into|Let|Aggregate|Take|Skip|Distinct|Any|All|First|Last)\\b"
+        },
+        {
+          "name": "keyword.other.basiclang",
+          "match": "(?i)(?<!\\.)\\b(Import|Inherits|Implements|Handles|AddHandler|RemoveHandler|RaiseEvent|Event|Delegate|Operator|End\\s+Operator|Of|TypeOf|Extension|AddressOf|Deref|SizeOf|AllocateMemory|DeallocateMemory)\\b"
         },
         {
           "name": "constant.language.basiclang",
-          "match": "(?i)\\b(True|False|Nothing|Null|Me|MyBase|MyClass|Self)\\b"
+          "match": "(?i)(?<!\\.)\\b(True|False|Nothing|Me|MyBase)\\b"
         },
         {
           "name": "keyword.operator.logical.basiclang",
-          "match": "(?i)\\b(And|AndAlso|Or|OrElse|Xor|Not|Is|IsNot|Like|Mod)\\b"
+          "match": "(?i)(?<!\\.)\\b(And|Or|Not|Is|IsEqual|NotEqual|Mod)\\b"
         }
       ]
     },
     "operators": {
       "patterns": [
         {
+          "name": "keyword.operator.assignment.basiclang",
+          "match": "(\\+=|-=|\\*=|/=|=\\+|=-)"
+        },
+        {
+          "name": "keyword.operator.increment-decrement.basiclang",
+          "match": "(\\+\\+|--)"
+        },
+        {
+          "name": "keyword.operator.shift.basiclang",
+          "match": "(<<|>>)"
+        },
+        {
           "name": "keyword.operator.comparison.basiclang",
-          "match": "(===|!==|==|!=|=|<>|<|>|<=|>=)"
+          "match": "(==|!=|<>|<=|>=|=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.symbolic.basiclang",
+          "match": "(&&|\\|\\||!)"
         },
         {
           "name": "keyword.operator.arithmetic.basiclang",
-          "match": "(\\+|-|\\*|/|\\\\|\\^|&|\\?\\?)"
+          "match": "(\\+|-|\\*|/|\\\\|\\^|&|%)"
         },
         {
-          "name": "keyword.operator.assignment.basiclang",
-          "match": "(\\+=|-=|\\*=|/=|\\\\=|\\^=|&=|\\?\\?=|:=)"
-        },
-        {
-          "name": "keyword.operator.range.basiclang",
-          "match": "\\.\\."
-        },
-        {
-          "name": "keyword.operator.null-conditional.basiclang",
-          "match": "\\?\\."
-        },
-        {
-          "name": "keyword.operator.arrow.basiclang",
-          "match": "=>|->|->"
+          "name": "keyword.operator.bitwise.basiclang",
+          "match": "(\\||~)"
         }
       ]
     },
@@ -266,35 +331,23 @@
       "patterns": [
         {
           "name": "constant.numeric.hex.basiclang",
-          "match": "(?i)&H[0-9A-F]+[SILUL]?"
-        },
-        {
-          "name": "constant.numeric.hex.prefix.basiclang",
-          "match": "(?i)0x[0-9A-F]+[SILUL]?"
+          "match": "(?i)&H[0-9A-F]+"
         },
         {
           "name": "constant.numeric.octal.basiclang",
-          "match": "(?i)&O[0-7]+[SILUL]?"
+          "match": "(?i)&O[0-7]+"
         },
         {
           "name": "constant.numeric.binary.basiclang",
-          "match": "(?i)&B[01]+[SILUL]?"
-        },
-        {
-          "name": "constant.numeric.binary.prefix.basiclang",
-          "match": "(?i)0b[01]+[SILUL]?"
+          "match": "(?i)&B[01]+"
         },
         {
           "name": "constant.numeric.float.basiclang",
-          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?[FDR]?\\b"
-        },
-        {
-          "name": "constant.numeric.float.scientific.basiclang",
-          "match": "\\b\\d+[eE][+-]?\\d+[FDR]?\\b"
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?[fF]?\\b"
         },
         {
           "name": "constant.numeric.integer.basiclang",
-          "match": "\\b\\d+[SILULFD]?\\b"
+          "match": "\\b\\d+[LlFf]?\\b"
         }
       ]
     },
@@ -302,11 +355,11 @@
       "patterns": [
         {
           "name": "storage.type.primitive.basiclang",
-          "match": "(?i)\\b(Boolean|Byte|SByte|Char|Date|DateTime|Decimal|Double|Single|Integer|UInteger|Long|ULong|Short|UShort|String|Object|Variant|Void)\\b"
+          "match": "(?i)\\b(Boolean|Byte|UByte|Char|Double|Single|Integer|UInteger|Long|ULong|Short|UShort|String|Pointer)\\b"
         },
         {
           "name": "storage.type.nullable.basiclang",
-          "match": "(?i)\\b(Boolean|Byte|SByte|Char|Date|DateTime|Decimal|Double|Single|Integer|UInteger|Long|ULong|Short|UShort)\\?\\b"
+          "match": "(?i)\\b(Boolean|Byte|UByte|Char|Double|Single|Integer|UInteger|Long|ULong|Short|UShort)\\?"
         },
         {
           "name": "storage.type.collection.basiclang",
@@ -338,7 +391,7 @@
         },
         {
           "name": "support.function.builtin.basiclang",
-          "match": "(?i)\\b(Abs|Asc|Chr|CStr|Format|InStr|InStrRev|Join|LCase|Left|Len|LTrim|Mid|Replace|Right|RTrim|Space|Split|Str|StrComp|StrConv|StrReverse|Trim|UCase|Val|Array|IsArray|IsDate|IsEmpty|IsNull|IsNumeric|IsObject|TypeName|VarType|CBool|CByte|CDate|CDbl|CDec|CInt|CLng|CSng|CStr|Fix|Int|Sgn|Rnd|Round|Timer|Now|Date|Time|DateAdd|DateDiff|DatePart|DateSerial|DateValue|Day|Hour|Minute|Month|Second|Weekday|Year|TimeSerial|TimeValue|MsgBox|InputBox|Print|Debug\\.Print|Console\\.WriteLine|Console\\.Write|Console\\.ReadLine|Console\\.ReadKey|PrintLine|ReadLine|Input)\\b"
+          "match": "(?i)\\b(Abs|Asc|Chr|CStr|Format|InStr|InStrRev|LCase|Left|Len|LTrim|Mid|Replace|Right|RTrim|Space|Split|Str|StrComp|StrConv|StrReverse|Trim|UCase|Val|IsArray|IsDate|IsEmpty|IsNull|IsNumeric|IsObject|TypeName|VarType|CBool|CByte|CDate|CDbl|CDec|CInt|CLng|CSng|Fix|Int|Sgn|Rnd|Round|Timer|Now|Date|Time|DateAdd|DateDiff|DatePart|DateSerial|DateValue|Day|Hour|Minute|Month|Second|Weekday|Year|TimeSerial|TimeValue|MsgBox|InputBox|Print|Debug\\.Print|Console\\.WriteLine|Console\\.Write|Console\\.ReadLine|Console\\.ReadKey|PrintLine|ReadLine|Input|UBound)\\b"
         },
         {
           "name": "support.function.raylib.basiclang",

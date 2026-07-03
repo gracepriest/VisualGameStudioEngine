@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   BasicLang.targets - MSBuild targets for BasicLang projects
-  This file provides the BasicLang capability for CPS and integrates with the build system.
+
+  Imported by .blproj files (via $(BasicLangTargetsPath)) in the project body,
+  i.e. BEFORE the Microsoft.NET.Sdk targets, so properties set here are visible
+  to the SDK targets.
+
+  Build model: each .bas/.bl file (item type BasicLangCompile) is transpiled to
+  C# into $(IntermediateOutputPath), the generated files are added to @(Compile)
+  and @(FileWrites), and the standard C# language targets (csc) produce the
+  assembly. Build/Clean/Rebuild and incremental builds all come from the stock
+  .NET SDK infrastructure.
 -->
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 
@@ -17,9 +26,37 @@
   <PropertyGroup>
     <IsBasicLangProject Condition="'$(IsBasicLangProject)' == ''">true</IsBasicLangProject>
     <BasicLangBackend Condition="'$(BasicLangBackend)' == ''">CSharp</BasicLangBackend>
-    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == ''">BasicLang.exe</BasicLangCompilerPath>
     <Language>BasicLang</Language>
-    <LanguageTargets>$(MSBuildThisFileDirectory)BasicLang.targets</LanguageTargets>
+
+    <!-- Marker checked by .blproj files to detect that these targets were found -->
+    <BasicLangTargetsImported>true</BasicLangTargetsImported>
+
+    <!-- Run the real C# language targets so Build/Clean/incremental/csc all work.
+         (LanguageTargets must never point back at this file - it defines no Build
+         target, so the build would no-op without producing an assembly.) -->
+    <LanguageTargets Condition="'$(LanguageTargets)' == ''">$(MSBuildToolsPath)\Microsoft.CSharp.targets</LanguageTargets>
+
+    <!-- .blproj has no DefaultLanguageSourceExtension, so the SDK's default
+         Compile glob would expand to '**/*' and feed every file to csc.
+         Sources come from @(BasicLangCompile); generated C# is added explicitly. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <!-- Locate the BasicLang compiler. First match wins:
+       1. $(BasicLangCompilerPath) set explicitly (property or environment variable)
+       2. $(BasicLangCompilerDir)\BasicLang.exe
+       3. BasicLang.exe shipped next to these targets or in the extension root
+       4. Per-user / machine-wide install locations
+       5. The repository IDE folder (when building from the dev tree)
+       6. PATH (bare 'BasicLang.exe', validated before compiling) -->
+  <PropertyGroup>
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == '' And '$(BasicLangCompilerDir)' != '' And Exists('$(BasicLangCompilerDir)\BasicLang.exe')">$(BasicLangCompilerDir)\BasicLang.exe</BasicLangCompilerPath>
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == '' And Exists('$(MSBuildThisFileDirectory)BasicLang.exe')">$(MSBuildThisFileDirectory)BasicLang.exe</BasicLangCompilerPath>
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == '' And Exists('$(MSBuildThisFileDirectory)..\BasicLang.exe')">$(MSBuildThisFileDirectory)..\BasicLang.exe</BasicLangCompilerPath>
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == '' And Exists('$(LocalAppData)\BasicLang\BasicLang.exe')">$(LocalAppData)\BasicLang\BasicLang.exe</BasicLangCompilerPath>
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == '' And Exists('$(ProgramFiles)\BasicLang\BasicLang.exe')">$(ProgramFiles)\BasicLang\BasicLang.exe</BasicLangCompilerPath>
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\..\..\IDE\BasicLang.exe')">$(MSBuildThisFileDirectory)..\..\..\..\IDE\BasicLang.exe</BasicLangCompilerPath>
+    <BasicLangCompilerPath Condition="'$(BasicLangCompilerPath)' == ''">BasicLang.exe</BasicLangCompilerPath>
   </PropertyGroup>
 
   <!-- BasicLang file item types -->
@@ -27,24 +64,52 @@
     <AvailableItemName Include="BasicLangCompile" />
   </ItemGroup>
 
-  <!-- Compile BasicLang files before CoreCompile -->
-  <Target Name="BasicLangCompile" BeforeTargets="CoreCompile" Condition="'@(BasicLangCompile)' != ''">
-    <Message Text="Compiling BasicLang files: @(BasicLangCompile)" Importance="high" />
-
-    <!-- Generate C# from BasicLang -->
-    <Exec Command="&quot;$(BasicLangCompilerPath)&quot; compile &quot;%(BasicLangCompile.Identity)&quot; --target=$(BasicLangBackend) --output=&quot;$(IntermediateOutputPath)%(BasicLangCompile.Filename).cs&quot;"
-          Condition="'$(BasicLangBackend)' == 'CSharp'"
-          ContinueOnError="false" />
-
-    <!-- Add generated C# to compile items -->
-    <ItemGroup Condition="'$(BasicLangBackend)' == 'CSharp'">
-      <Compile Include="$(IntermediateOutputPath)%(BasicLangCompile.Filename).cs" />
-    </ItemGroup>
+  <!-- Fail with actionable messages instead of cryptic Exec/csc errors -->
+  <Target Name="_BasicLangValidateToolchain">
+    <Error Condition="'$(BasicLangBackend)' != 'CSharp'"
+           Text="BasicLangBackend '$(BasicLangBackend)' is not supported by the MSBuild integration; only 'CSharp' is. Set &lt;BasicLangBackend&gt;CSharp&lt;/BasicLangBackend&gt; in the project file." />
+    <Exec Command="where BasicLang.exe"
+          Condition="'$(BasicLangCompilerPath)' == 'BasicLang.exe'"
+          IgnoreExitCode="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="_BasicLangWhereExitCode" />
+    </Exec>
+    <Error Condition="'$(BasicLangCompilerPath)' == 'BasicLang.exe' And '$(_BasicLangWhereExitCode)' != '0'"
+           Text="BasicLang.exe was not found on PATH or in any known install location. Install the BasicLang compiler, or set the 'BasicLangCompilerPath' MSBuild property (or environment variable) to the full path of BasicLang.exe, e.g. dotnet build -p:BasicLangCompilerPath=&quot;C:\path\to\BasicLang.exe&quot;." />
+    <Error Condition="'$(BasicLangCompilerPath)' != 'BasicLang.exe' And !Exists('$(BasicLangCompilerPath)')"
+           Text="BasicLang compiler not found at '$(BasicLangCompilerPath)'. Set the 'BasicLangCompilerPath' MSBuild property (or environment variable) to the full path of BasicLang.exe." />
   </Target>
 
-  <!-- Clean BasicLang output -->
-  <Target Name="BasicLangClean" BeforeTargets="CoreClean">
-    <Delete Files="$(IntermediateOutputPath)*.cs" Condition="'$(BasicLangBackend)' == 'CSharp'" />
+  <!-- Transpile BasicLang files to C#. Inputs/Outputs give incremental builds:
+       only sources newer than their generated .g.cs are recompiled. -->
+  <Target Name="BasicLangCompile"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="_BasicLangValidateToolchain"
+          Inputs="@(BasicLangCompile)"
+          Outputs="@(BasicLangCompile->'$(IntermediateOutputPath)%(Filename).g.cs')"
+          Condition="'@(BasicLangCompile)' != ''">
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Message Text="Compiling BasicLang file: %(BasicLangCompile.Identity)" Importance="high" />
+    <Exec Command="&quot;$(BasicLangCompilerPath)&quot; compile &quot;%(BasicLangCompile.FullPath)&quot; --target=$(BasicLangBackend.ToLower()) --output=&quot;$(IntermediateOutputPath)%(BasicLangCompile.Filename).g.cs&quot;"
+          ContinueOnError="false" />
+    <!-- BasicLang.exe currently exits 0 even when compilation fails, so verify
+         the generated file actually exists. -->
+    <Error Condition="!Exists('$(IntermediateOutputPath)%(BasicLangCompile.Filename).g.cs')"
+           Text="BasicLang compilation of '%(BasicLangCompile.Identity)' produced no output (see compiler errors above)." />
+  </Target>
+
+  <!-- Always runs (even when BasicLangCompile is skipped as up to date) so the
+       generated C# reaches csc, and is recorded in @(FileWrites) so the standard
+       IncrementalClean/Clean targets remove it. -->
+  <Target Name="BasicLangIncludeGenerated"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="BasicLangCompile"
+          Condition="'@(BasicLangCompile)' != ''">
+    <ItemGroup>
+      <Compile Include="@(BasicLangCompile->'$(IntermediateOutputPath)%(Filename).g.cs')" />
+      <FileWrites Include="@(BasicLangCompile->'$(IntermediateOutputPath)%(Filename).g.cs')" />
+    </ItemGroup>
   </Target>
 
 </Project>

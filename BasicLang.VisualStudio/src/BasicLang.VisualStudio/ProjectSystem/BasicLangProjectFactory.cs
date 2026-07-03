@@ -15,6 +15,12 @@ public class BasicLangProjectFactory : IVsProjectFactory
     private readonly AsyncPackage _package;
     private IOleServiceProvider? _serviceProvider;
 
+    // Guards against re-entrant CreateProject calls: delegating to
+    // IVsSolution.CreateProject with the CPS GUID can route back into this
+    // factory via ProjectTypeGuids, which would recurse indefinitely.
+    [ThreadStatic]
+    private static bool _isDelegatingToCps;
+
     public BasicLangProjectFactory(AsyncPackage package)
     {
         _package = package;
@@ -28,7 +34,9 @@ public class BasicLangProjectFactory : IVsProjectFactory
 
     public int CanCreateProject(string pszFilename, uint grfCreateFlags, out int pfCanCreate)
     {
-        pfCanCreate = 1; // We can create any .blproj file
+        pfCanCreate = pszFilename != null && pszFilename.EndsWith(".blproj", StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : 0;
         return VSConstants.S_OK;
     }
 
@@ -44,6 +52,11 @@ public class BasicLangProjectFactory : IVsProjectFactory
         ppvProject = IntPtr.Zero;
         pfCanceled = 0;
 
+        // Fail fast if the CPS delegation below routed back into this factory
+        // instead of recursing.
+        if (_isDelegatingToCps)
+            return VSConstants.VS_E_INCOMPATIBLEPROJECT;
+
         try
         {
             // For SDK-style projects, delegate to the Common Project System
@@ -54,29 +67,43 @@ public class BasicLangProjectFactory : IVsProjectFactory
 
             if (_serviceProvider != null)
             {
-                var solution = (IVsSolution)GetService(typeof(SVsSolution));
+                var solution = GetService(typeof(SVsSolution)) as IVsSolution;
                 if (solution != null)
                 {
                     // Let VS handle the SDK-style project through normal CPS infrastructure
                     // The project file imports Microsoft.NET.Sdk which provides CPS integration
                     var guidCPS = new Guid("13B669BE-BB05-4DDF-9536-439F39A36129"); // CPS Guid
 
-                    int hr = solution.CreateProject(
-                        ref guidCPS,
-                        pszFilename,
-                        pszLocation,
-                        pszName,
-                        grfCreateFlags,
-                        ref iidProject,
-                        out ppvProject);
+                    int hr;
+                    _isDelegatingToCps = true;
+                    try
+                    {
+                        hr = solution.CreateProject(
+                            ref guidCPS,
+                            pszFilename,
+                            pszLocation,
+                            pszName,
+                            grfCreateFlags,
+                            ref iidProject,
+                            out ppvProject);
+                    }
+                    finally
+                    {
+                        _isDelegatingToCps = false;
+                    }
 
-                    if (hr == VSConstants.S_OK)
+                    if (hr == VSConstants.S_OK && ppvProject != IntPtr.Zero)
                         return VSConstants.S_OK;
+
+                    // Delegation failed: propagate its HRESULT. Never return S_OK
+                    // with a null ppvProject (IVsProjectFactory contract violation).
+                    ppvProject = IntPtr.Zero;
+                    return hr < 0 ? hr : VSConstants.E_FAIL;
                 }
             }
 
-            // Fallback: Return S_OK and let VS handle it through extension lookup
-            return VSConstants.S_OK;
+            // No solution service available — we cannot produce a project.
+            return VSConstants.E_FAIL;
         }
         catch (Exception ex)
         {
@@ -99,7 +126,7 @@ public class BasicLangProjectFactory : IVsProjectFactory
             return null;
 
         Guid guidService = serviceType.GUID;
-        Guid guidInterface = serviceType.GUID;
+        Guid guidInterface = VSConstants.IID_IUnknown;
         IntPtr pUnknown;
 
         int hr = _serviceProvider.QueryService(ref guidService, ref guidInterface, out pUnknown);

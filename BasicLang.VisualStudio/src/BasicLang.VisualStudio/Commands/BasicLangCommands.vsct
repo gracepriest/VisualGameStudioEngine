@@ -106,15 +106,12 @@
   </Commands>
 
   <!-- Key bindings -->
+  <!-- Note: Run/GoToDefinition/FindReferences deliberately have NO key bindings.
+       Editor-scoped F5/F12/Shift+F12 bindings would hijack VS's global
+       Debug.Start and Edit.GoToDefinition shortcuts in every text editor. -->
   <KeyBindings>
-    <!-- Ctrl+Shift+B for Build -->
-    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidBuild" editor="guidVSStd97" key1="B" mod1="Control Shift"/>
-    <!-- F5 for Run (when in BasicLang context) -->
-    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidRun" editor="GUID_TextEditorFactory" key1="VK_F5"/>
-    <!-- F12 for Go to Definition -->
-    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidGoToDefinition" editor="GUID_TextEditorFactory" key1="VK_F12"/>
-    <!-- Shift+F12 for Find All References -->
-    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidFindReferences" editor="GUID_TextEditorFactory" key1="VK_F12" mod1="Shift"/>
+    <!-- Ctrl+Shift+Alt+B for Build (Ctrl+Shift+B is reserved by Build.BuildSolution) -->
+    <KeyBinding guid="guidBasicLangCommandSet" id="cmdidBuild" editor="guidVSStd97" key1="B" mod1="Control Shift Alt"/>
   </KeyBindings>
 
   <Symbols>

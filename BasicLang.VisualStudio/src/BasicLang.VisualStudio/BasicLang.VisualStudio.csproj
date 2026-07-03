@@ -28,7 +28,7 @@
     <StartArguments>/rootsuffix Exp</StartArguments>
 
     <!-- VSIX output location -->
-    <TargetVsixContainer>$(OutputPath)$(AssemblyName).vsix</TargetVsixContainer>
+    <TargetVsixContainer>$(MSBuildProjectDirectory)\bin\$(Configuration)\net48\$(AssemblyName).vsix</TargetVsixContainer>
 
     <!-- Disable VSSDK template processing - we do it manually -->
     <DeployVSTemplates>false</DeployVSTemplates>
@@ -79,10 +79,12 @@
     <Content Include="LanguageService\BasicLangGrammar.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>Grammars\basiclang\syntaxes</VSIXSubPath>
     </Content>
     <Content Include="LanguageService\basiclang-language-configuration.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>Grammars\basiclang</VSIXSubPath>
     </Content>
   </ItemGroup>
 
@@ -121,9 +123,12 @@
     </VSCTCompile>
   </ItemGroup>
 
-  <!-- EmbeddedResource for VSCT -->
+  <!-- VSPackage.resx - merged with compiled VSCT (cto) so VS can load Menus.ctmenu from VSPackage.resources -->
   <ItemGroup>
-    <EmbeddedResource Include="Commands\BasicLangCommands.vsct" Condition="false" />
+    <EmbeddedResource Update="VSPackage.resx">
+      <MergeWithCTO>true</MergeWithCTO>
+      <ManifestResourceName>VSPackage</ManifestResourceName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!-- Import VSSDK targets for VSIX packaging -->
@@ -135,7 +140,7 @@
   <Target Name="GetZipFilesFromVSTemplates" />
 
   <!-- Create template zips manually before VSIX creation -->
-  <Target Name="CreateTemplateZips" BeforeTargets="CreateVsixContainer">
+  <Target Name="CreateTemplateZips" BeforeTargets="GetVsixSourceItems">
     <Message Importance="High" Text="Creating template zip files..." />
 
     <!-- Create output directories -->
@@ -157,18 +162,20 @@
   </Target>
 
   <!-- Include template zips in VSIX (dynamically added after CreateTemplateZips) -->
-  <Target Name="AddTemplateZipsToVsix" BeforeTargets="CreateVsixContainer" DependsOnTargets="CreateTemplateZips">
+  <Target Name="AddTemplateZipsToVsix" BeforeTargets="GetVsixSourceItems;DetokenizeVsixSourceItems" DependsOnTargets="CreateTemplateZips">
     <ItemGroup>
       <_ProjectTemplateZip Include="$(OutputPath)ProjectTemplates\BasicLang\*.zip" />
       <_ItemTemplateZip Include="$(OutputPath)ItemTemplates\BasicLang\*.zip" />
     </ItemGroup>
     <ItemGroup>
-      <VSIXSourceItem Include="@(_ProjectTemplateZip)">
+      <Content Include="@(_ProjectTemplateZip)">
+        <IncludeInVSIX>true</IncludeInVSIX>
         <VSIXSubPath>ProjectTemplates\BasicLang</VSIXSubPath>
-      </VSIXSourceItem>
-      <VSIXSourceItem Include="@(_ItemTemplateZip)">
+      </Content>
+      <Content Include="@(_ItemTemplateZip)">
+        <IncludeInVSIX>true</IncludeInVSIX>
         <VSIXSubPath>ItemTemplates\BasicLang</VSIXSubPath>
-      </VSIXSourceItem>
+      </Content>
     </ItemGroup>
     <Message Importance="High" Text="Added template zips to VSIX: @(_ProjectTemplateZip);@(_ItemTemplateZip)" />
   </Target>
@@ -183,12 +190,14 @@
     <Message Importance="High" Text="VSIX created: $(TargetVsixContainer)" Condition="Exists('$(TargetVsixContainer)')" />
   </Target>
 
-  <!-- Add template zips to VSIX after creation (vstman files are added via Content items above) -->
-  <Target Name="AddTemplatesToVsix" AfterTargets="_CreateVsixAfterBuild" DependsOnTargets="CreateTemplateZips">
-    <Message Importance="High" Text="Adding template zips to VSIX..." />
-    <!-- Add template zips only - vstman files are already included via Content items with IncludeInVSIX=true -->
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;Add-Type -AssemblyName System.IO.Compression.FileSystem; $vsix = [System.IO.Compression.ZipFile]::Open('$(TargetVsixContainer)', 'Update'); Get-ChildItem -Path '$(OutputPath)ProjectTemplates\BasicLang\*.zip' | ForEach-Object { [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($vsix, $_.FullName, ('ProjectTemplates/BasicLang/' + $_.Name)) }; Get-ChildItem -Path '$(OutputPath)ItemTemplates\BasicLang\*.zip' | ForEach-Object { [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($vsix, $_.FullName, ('ItemTemplates/BasicLang/' + $_.Name)) }; $vsix.Dispose()&quot;" />
-    <Message Importance="High" Text="Template zips added to VSIX successfully." />
+  <!-- Inject template zips into the VSIX as proper OPC parts.
+       VsixUtil.exe (VSSDK 17.9) silently drops *.zip files under ProjectTemplates/ItemTemplates
+       even when they are emitted as VSIXSourceItem/Content and listed in files.json, so they
+       must be added after packaging. InjectTemplateZips.ps1 uses System.IO.Packaging (not raw
+       zip appending) so [Content_Types].xml and manifest.json stay consistent and the VSIX
+       installer actually installs the zips. -->
+  <Target Name="InjectTemplateZipsAsOpcParts" AfterTargets="CreateVsixContainer" DependsOnTargets="CreateTemplateZips" Condition="Exists('$(TargetVsixContainer)')">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\BuildSystem\InjectTemplateZips.ps1&quot; -VsixPath &quot;$(TargetVsixContainer)&quot; -OutDir &quot;$(MSBuildProjectDirectory)\bin\$(Configuration)\net48&quot;" />
   </Target>
 
 </Project>

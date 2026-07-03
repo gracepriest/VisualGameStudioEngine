@@ -7,7 +7,7 @@ Namespace $rootnamespace$
     ''' <summary>
     ''' $fileinputname$ interface.
     ''' </summary>
-    Public Interface $fileinputname$
+    Public Interface $safeitemname$
         ''' <summary>
         ''' Sample method signature.
         ''' </summary>

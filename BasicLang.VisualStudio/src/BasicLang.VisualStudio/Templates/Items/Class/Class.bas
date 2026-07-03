@@ -7,7 +7,7 @@ Namespace $rootnamespace$
     ''' <summary>
     ''' $fileinputname$ class.
     ''' </summary>
-    Public Class $fileinputname$
+    Public Class $safeitemname$
         ''' <summary>
         ''' Creates a new instance of $fileinputname$.
         ''' </summary>

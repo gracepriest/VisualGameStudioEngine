@@ -12,8 +12,7 @@
     { "open": "{", "close": "}" },
     { "open": "[", "close": "]" },
     { "open": "(", "close": ")" },
-    { "open": "\"", "close": "\"", "notIn": ["string"] },
-    { "open": "'", "close": "", "notIn": ["string", "comment"] }
+    { "open": "\"", "close": "\"", "notIn": ["string"] }
   ],
   "surroundingPairs": [
     { "open": "{", "close": "}" },
@@ -23,8 +22,8 @@
   ],
   "folding": {
     "markers": {
-      "start": "^\\s*(Sub|Function|Class|Module|Namespace|If|For|While|Do|Select|Try|With|Region)\\b",
-      "end": "^\\s*(End\\s+(Sub|Function|Class|Module|Namespace|If|For|While|Do|Select|Try|With|Region)|Next|Loop|End\\s+Region)\\b"
+      "start": "^\\s*(([Ss]ub|[Ff]unction|[Cc]lass|[Mm]odule|[Nn]amespace|[Ii]f|[Ff]or|[Ww]hile|[Dd]o|[Ss]elect|[Tt]ry|[Ww]ith)\\b|#[Rr]egion\\b)",
+      "end": "^\\s*(([Ee]nd\\s+(Sub|Function|Class|Module|Namespace|If|For|While|Do|Select|Try|With)|[Nn]ext|[Ll]oop)\\b|#[Ee]nd\\s+[Rr]egion\\b)"
     }
   },
   "indentationRules": {

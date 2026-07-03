@@ -44,47 +44,11 @@
 ; ============================================
 ; NewProjectTemplates - Template Directory Registration
 ; ============================================
-; Register under project factory GUID
-[$RootKey$\NewProjectTemplates\TemplateDirs\{95a8f3e1-1234-4567-8903-abcdef123456}\/1]
+; Register under package GUID (VS resolves this key against [$RootKey$\Packages] to find $PackageFolder$)
+[$RootKey$\NewProjectTemplates\TemplateDirs\{95a8f3e1-1234-4567-8901-abcdef123456}\/1]
 @="BasicLang"
 "SortPriority"=dword:00000028
 "TemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
-
-; ============================================
-; Content Type Registration
-; ============================================
-[$RootKey$\ContentTypes\.bas]
-@="basiclang"
-
-[$RootKey$\ContentTypes\.bl]
-@="basiclang"
-
-[$RootKey$\ContentTypes\.blproj]
-@="basiclang"
-
-; ============================================
-; Language Service Registration
-; ============================================
-[$RootKey$\Languages\Language Services\BasicLang]
-@="{95a8f3e1-1234-4567-8906-abcdef123456}"
-"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
-"LangResID"=dword:00000000
-"ShowCompletion"=dword:00000001
-"ShowSmartIndent"=dword:00000001
-"ShowMatchingBrace"=dword:00000001
-"RequestStockColors"=dword:00000000
-"CodeSense"=dword:00000001
-"QuickInfo"=dword:00000001
-
-; File extension to language mapping
-[$RootKey$\Languages\File Extensions\.bas]
-@="{95a8f3e1-1234-4567-8906-abcdef123456}"
-
-[$RootKey$\Languages\File Extensions\.bl]
-@="{95a8f3e1-1234-4567-8906-abcdef123456}"
-
-[$RootKey$\Languages\File Extensions\.blproj]
-@="{95a8f3e1-1234-4567-8906-abcdef123456}"
 
 ; ============================================
 ; Auto Load Package Contexts
@@ -98,18 +62,12 @@
 "{95a8f3e1-1234-4567-8901-abcdef123456}"=dword:00000002
 
 ; Load when solution has multiple projects
-[$RootKey$\AutoLoadPackages\{8fe2df1d-e0da-4ebe-9d5c-415d40e487b5}]
+[$RootKey$\AutoLoadPackages\{93694fa0-0397-11d1-9f4e-00a0c911004f}]
 "{95a8f3e1-1234-4567-8901-abcdef123456}"=dword:00000002
 
 ; Load when solution has single project
-[$RootKey$\AutoLoadPackages\{fbaee8ff-3495-4fa1-b251-0cc13b1f1e0b}]
+[$RootKey$\AutoLoadPackages\{adfc4e66-0397-11d1-9f4e-00a0c911004f}]
 "{95a8f3e1-1234-4567-8901-abcdef123456}"=dword:00000002
-
-; ============================================
-; Solution/Project Persistence
-; ============================================
-[$RootKey$\SolutionPersistence\{95a8f3e1-1234-4567-8903-abcdef123456}]
-@="BasicLang"
 
 ; ============================================
 ; MSBuild Extension Registration
@@ -129,37 +87,46 @@
 "InstalledPath"="$PackageFolder$\ItemTemplates"
 
 ; ============================================
-; Language Templates Registration
-; This adds "BasicLang" to the New Project dialog language filter
-; ============================================
-[$RootKey$\NewProjectTemplates\LanguageTemplates\BasicLang]
-@="BasicLang"
-"DisplayName"="BasicLang"
-"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
-"SortPriority"=dword:00000064
-
-; Register BasicLang as a template language
-[$RootKey$\Languages\Language Services\BasicLang\Templates]
-"ProjectTemplatesDir"="$PackageFolder$\ProjectTemplates\BasicLang"
-"ItemTemplatesDir"="$PackageFolder$\ItemTemplates\BasicLang"
-
-; ============================================
-; Template Hosting
-; ============================================
-[$RootKey$\TemplateHostingAssemblies]
-"{95a8f3e1-1234-4567-8901-abcdef123456}"="$PackageFolder$\BasicLang.VisualStudio.dll"
-
-; ============================================
 ; TextMate Grammar Repository Registration
 ; ============================================
 ; Point VS to the folder containing the TextMate grammar JSON
 [$RootKey$\TextMate\Repositories]
-"BasicLang"="$PackageFolder$\LanguageService"
+"BasicLang"="$PackageFolder$\Grammars"
 
 ; Map TextMate scope to language configuration
 [$RootKey$\TextMate\LanguageConfiguration\GrammarMapping]
-"source.basiclang"="$PackageFolder$\LanguageService\basiclang-language-configuration.json"
+"source.basiclang"="$PackageFolder$\Grammars\basiclang\basiclang-language-configuration.json"
 
 ; Map content type to language configuration
 [$RootKey$\TextMate\LanguageConfiguration\ContentTypeMapping]
-"basiclang"="$PackageFolder$\LanguageService\basiclang-language-configuration.json"
+"basiclang"="$PackageFolder$\Grammars\basiclang\basiclang-language-configuration.json"
+
+; ============================================
+; Tools > Options Pages (ProvideOptionPage registration)
+; ============================================
+[$RootKey$\ToolsOptionsPages\BasicLang]
+@="BasicLang"
+"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+
+[$RootKey$\ToolsOptionsPages\BasicLang\General]
+@="General"
+"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+"Page"="{95a8f3e1-1234-4567-8909-abcdef123456}"
+
+[$RootKey$\ToolsOptionsPages\BasicLang\Compiler]
+@="Compiler"
+"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+"Page"="{95a8f3e1-1234-4567-890a-abcdef123456}"
+
+[$RootKey$\AutomationProperties\BasicLang]
+@="BasicLang"
+
+[$RootKey$\AutomationProperties\BasicLang\General]
+@="General"
+"Name"="BasicLang.General"
+"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"
+
+[$RootKey$\AutomationProperties\BasicLang\Compiler]
+@="Compiler"
+"Name"="BasicLang.Compiler"
+"Package"="{95a8f3e1-1234-4567-8901-abcdef123456}"

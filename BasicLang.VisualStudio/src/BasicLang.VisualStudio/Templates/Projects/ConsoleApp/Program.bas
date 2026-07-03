@@ -1,7 +1,7 @@
 ' $safeprojectname$ - BasicLang Console Application
 ' Created with Visual Studio 2022
 
-Imports System
+Using System
 
 Module Program
     ''' <summary>
@@ -9,7 +9,7 @@ Module Program
     ''' </summary>
     Sub Main()
         Console.WriteLine("Hello, BasicLang!")
-        Console.WriteLine("Press any key to exit...")
-        Console.ReadKey()
+        Console.WriteLine("Press Enter to exit...")
+        Console.ReadLine()
     End Sub
 End Module

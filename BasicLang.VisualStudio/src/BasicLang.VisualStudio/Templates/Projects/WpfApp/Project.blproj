@@ -16,13 +16,25 @@
     <AssemblyName>$safeprojectname$</AssemblyName>
   </PropertyGroup>
 
+  <!-- BasicLang project capability (activates CPS components) -->
+  <ItemGroup>
+    <ProjectCapability Include="BasicLang" />
+  </ItemGroup>
+
   <!-- Import BasicLang build targets -->
+  <Import Project="$(BasicLangTargetsPath)" Condition="'$(BasicLangTargetsPath)' != '' And Exists('$(BasicLangTargetsPath)')" />
   <Import Project="$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets" Condition="Exists('$(MSBuildExtensionsPath)\BasicLang\BasicLang.targets')" />
 
   <!-- BasicLang source files -->
   <ItemGroup>
     <BasicLangCompile Include="**\*.bas" />
     <BasicLangCompile Include="**\*.bl" />
+  </ItemGroup>
+
+  <!-- Skip WPF markup compilation; XAML is loaded at runtime via XamlReader -->
+  <ItemGroup>
+    <Page Remove="**\*.xaml" />
+    <None Include="**\*.xaml" />
   </ItemGroup>
 
 </Project>

@@ -3,8 +3,8 @@
   <TemplateData>
     <Name>BasicLang WPF Application</Name>
     <Description>A WPF desktop application for the BasicLang programming language.</Description>
-    <ProjectType>BasicLang</ProjectType>
-    <LanguageTag>BasicLang</LanguageTag>
+    <ProjectType>VisualBasic</ProjectType>
+    <LanguageTag>visualbasic</LanguageTag>
     <PlatformTag>Windows</PlatformTag>
     <ProjectTypeTag>Desktop</ProjectTypeTag>
     <ProjectTypeTag>WPF</ProjectTypeTag>
@@ -19,7 +19,7 @@
     <Project File="Project.blproj" ReplaceParameters="true">
       <ProjectItem ReplaceParameters="true" TargetFileName="App.bas">App.bas</ProjectItem>
       <ProjectItem ReplaceParameters="true" TargetFileName="MainWindow.bas">MainWindow.bas</ProjectItem>
-      <ProjectItem ReplaceParameters="false" TargetFileName="MainWindow.xaml">MainWindow.xaml</ProjectItem>
+      <ProjectItem ReplaceParameters="true" TargetFileName="MainWindow.xaml">MainWindow.xaml</ProjectItem>
     </Project>
   </TemplateContent>
 </VSTemplate>
