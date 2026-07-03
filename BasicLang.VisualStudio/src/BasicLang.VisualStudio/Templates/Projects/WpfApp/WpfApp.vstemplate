@@ -19,7 +19,6 @@
     <Project File="Project.blproj" ReplaceParameters="true">
       <ProjectItem ReplaceParameters="true" TargetFileName="App.bas">App.bas</ProjectItem>
       <ProjectItem ReplaceParameters="true" TargetFileName="MainWindow.bas">MainWindow.bas</ProjectItem>
-      <ProjectItem ReplaceParameters="true" TargetFileName="MainWindow.xaml">MainWindow.xaml</ProjectItem>
     </Project>
   </TemplateContent>
 </VSTemplate>

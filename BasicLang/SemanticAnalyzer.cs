@@ -1445,6 +1445,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     foreach (var member in cls.Members)
                         RegisterDeclaration(member);
                     break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterDeclaration(member);
+                    break;
             }
         }
 
@@ -1582,7 +1586,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var baseType = _typeManager.GetType(node.BaseClass);
                 if (baseType == null)
                 {
-                    Error($"Unknown base class '{node.BaseClass}'", node.Line, node.Column);
+                    if (_netNamespaces.Count > 0)
+                    {
+                        // A Using directive brought in .NET namespaces, so an
+                        // unresolved base is assumed to be an external .NET class
+                        // (e.g. Form, Window). Treat it as opaque; the backend
+                        // emits the name as-is and csc validates it.
+                        classType.BaseType = new TypeInfo(node.BaseClass, TypeKind.Class);
+                    }
+                    else
+                    {
+                        Error($"Unknown base class '{node.BaseClass}'", node.Line, node.Column);
+                    }
                 }
                 else if (baseType.Kind != TypeKind.Class)
                 {

@@ -1,8 +1,8 @@
 ' $safeprojectname$ - BasicLang Windows Forms Application
 ' Created with Visual Studio 2022
 
-Imports System
-Imports System.Windows.Forms
+Using System
+Using System.Windows.Forms
 
 Module Program
     ''' <summary>

@@ -1,24 +1,15 @@
 ' $safeprojectname$ - BasicLang WPF Application
 ' Created with Visual Studio 2022
 
-Imports System
-Imports System.Windows
+Using System
+Using System.Windows
 
-Namespace $safeprojectname$
+Module Program
     ''' <summary>
-    ''' Main application class.
+    ''' Main entry point for the application.
     ''' </summary>
-    Public Class App
-        Inherits Application
-
-        ''' <summary>
-        ''' Main entry point.
-        ''' </summary>
-        <STAThread>
-        Public Shared Sub Main()
-            Dim app As New App()
-            app.StartupUri = New Uri("MainWindow.xaml", UriKind.Relative)
-            app.Run()
-        End Sub
-    End Class
-End Namespace
+    Sub Main()
+        Dim app As Application = New Application()
+        app.Run(New MainWindow())
+    End Sub
+End Module

@@ -985,6 +985,23 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 InitializeFunctionContext(ctor.Implementation);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+
+                // Declare locals (same as GenerateMethod)
+                var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var localVar in ctor.Implementation.LocalVariables)
+                {
+                    var varName = GetValueName(localVar);
+                    if (declared.Add(varName))
+                    {
+                        var csharpType = MapType(localVar.Type);
+                        var defaultValue = GetDefaultValue(localVar.Type);
+                        WriteLine($"{csharpType} {varName} = {defaultValue};");
+                    }
+                }
+
+                if (ctor.Implementation.LocalVariables.Count > 0)
+                    WriteLine();
+
                 GenerateStructuredBlock(ctor.Implementation.EntryBlock);
                 _currentFunction = null;
             }
@@ -1352,6 +1369,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Use the function's access modifier if set, otherwise use the default
             var accessMod = MapAccessModifier(function.Access);
+
+            // WinForms/WPF require an STA entry point; harmless for console apps.
+            // Not valid on async Main (compiler ignores it with a warning there).
+            if (functionName.Equals("Main", StringComparison.OrdinalIgnoreCase) && !function.IsAsync)
+                WriteLine("[STAThread]");
 
             WriteLine($"{accessMod} static {asyncModifier}{actualReturnType} {functionName}{genericParams}({parameters}){constraints}");
 
