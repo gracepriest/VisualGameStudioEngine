@@ -2,7 +2,7 @@
   "Function": {
     "prefix": ["func", "function"],
     "body": [
-      "Function ${1:Name}(${2:params}) As ${3:Integer}",
+      "Function ${1:Name}(${2:arg As Integer}) As ${3:Integer}",
       "    ${0}",
       "End Function"
     ],
@@ -11,7 +11,7 @@
   "Sub": {
     "prefix": ["sub", "subroutine"],
     "body": [
-      "Sub ${1:Name}(${2:params})",
+      "Sub ${1:Name}(${2:arg As Integer})",
       "    ${0}",
       "End Sub"
     ],
@@ -71,7 +71,7 @@
   "For Each Loop": {
     "prefix": ["foreach", "fore"],
     "body": [
-      "For Each ${1:item} As ${2:Type} In ${3:collection}",
+      "For Each ${1:item} As ${2:Integer} In ${3:collection}",
       "    ${0}",
       "Next"
     ],
@@ -82,7 +82,7 @@
     "body": [
       "While ${1:condition}",
       "    ${0}",
-      "End While"
+      "Wend"
     ],
     "description": "While loop"
   },
@@ -140,9 +140,9 @@
     "prefix": "classc",
     "body": [
       "Class ${1:ClassName}",
-      "    Private _${2:field} As ${3:Type}",
+      "    Private _${2:field} As ${3:Integer}",
       "",
-      "    Sub New(${2:field} As ${3:Type})",
+      "    Sub New(${2:field} As ${3:Integer})",
       "        _${2:field} = ${2:field}",
       "    End Sub",
       "",
@@ -172,30 +172,40 @@
   "Property": {
     "prefix": "prop",
     "body": [
-      "Property ${1:Name} As ${2:Type}",
+      "Private _${1:Name} As ${2:Integer}",
+      "Property ${1:Name} As ${2:Integer}",
       "    Get",
       "        Return _${1:Name}",
       "    End Get",
-      "    Set(value As ${2:Type})",
+      "    Set(value As ${2:Integer})",
       "        _${1:Name} = value",
       "    End Set",
       "End Property"
     ],
-    "description": "Create a property"
+    "description": "Create a property with backing field"
   },
   "Auto Property": {
     "prefix": "propa",
     "body": [
-      "Public Property ${1:Name} As ${2:Type}"
+      "Private _${1:Name} As ${2:Integer}",
+      "Public Property ${1:Name} As ${2:Integer}",
+      "    Get",
+      "        Return _${1:Name}",
+      "    End Get",
+      "    Set(value As ${2:Integer})",
+      "        _${1:Name} = value",
+      "    End Set",
+      "End Property"
     ],
-    "description": "Create an auto property"
+    "description": "Create a public property with backing field (BasicLang does not support auto properties)"
   },
   "ReadOnly Property": {
     "prefix": "propr",
     "body": [
-      "ReadOnly Property ${1:Name} As ${2:Type}",
+      "Private _${1:Name} As ${2:Integer}",
+      "ReadOnly Property ${1:Name} As ${2:Integer}",
       "    Get",
-      "        Return ${3:value}",
+      "        Return _${1:Name}",
       "    End Get",
       "End Property"
     ],
@@ -228,23 +238,26 @@
   "Using": {
     "prefix": "using",
     "body": [
-      "Using ${1:resource} As ${2:IDisposable} = ${3:New Object()}",
+      "Dim ${1:resource} As ${2:Object} = ${3:New Object()}",
+      "Try",
       "    ${0}",
-      "End Using"
+      "Finally",
+      "    ${1:resource}.Dispose()",
+      "End Try"
     ],
-    "description": "Using block for disposable resources"
+    "description": "Acquire/dispose pattern for disposable resources (BasicLang does not support Using blocks)"
   },
   "Event": {
     "prefix": "event",
     "body": [
-      "Public Event ${1:EventName}(sender As Object, e As ${2:EventArgs})"
+      "Public Event ${1:EventName} As ${2:EventHandler}"
     ],
-    "description": "Declare an event"
+    "description": "Declare an event with a delegate type"
   },
   "Delegate": {
     "prefix": "delegate",
     "body": [
-      "Public Delegate Sub ${1:DelegateName}(${2:params})"
+      "Delegate Sub ${1:DelegateName}(${2:arg As Integer})"
     ],
     "description": "Declare a delegate"
   },
@@ -272,7 +285,7 @@
     "prefix": "struct",
     "body": [
       "Structure ${1:StructName}",
-      "    Public ${2:Field1} As ${3:Type}",
+      "    Public ${2:Field1} As ${3:Integer}",
       "    ${0}",
       "End Structure"
     ],
@@ -295,21 +308,21 @@
   "Dim Variable": {
     "prefix": "dim",
     "body": [
-      "Dim ${1:name} As ${2:Type}"
+      "Dim ${1:name} As ${2:Integer}"
     ],
     "description": "Declare a variable"
   },
   "Dim With Value": {
     "prefix": "dimv",
     "body": [
-      "Dim ${1:name} As ${2:Type} = ${3:value}"
+      "Dim ${1:name} As ${2:Integer} = ${3:0}"
     ],
     "description": "Declare a variable with initial value"
   },
   "Const": {
     "prefix": "const",
     "body": [
-      "Const ${1:NAME} As ${2:Type} = ${3:value}"
+      "Const ${1:NAME} As ${2:Integer} = ${3:0}"
     ],
     "description": "Declare a constant"
   },
@@ -325,7 +338,7 @@
   "Main with Args": {
     "prefix": "maina",
     "body": [
-      "Sub Main(args As String())",
+      "Sub Main(args[] As String)",
       "    ${0}",
       "End Sub"
     ],
@@ -341,7 +354,7 @@
   "Async Function": {
     "prefix": "asyncf",
     "body": [
-      "Async Function ${1:Name}(${2:params}) As Task(Of ${3:Result})",
+      "Async Function ${1:Name}(${2:arg As Integer}) As Task(Of ${3:Integer})",
       "    ${0}",
       "End Function"
     ],
@@ -350,7 +363,7 @@
   "Async Sub": {
     "prefix": "asyncs",
     "body": [
-      "Async Sub ${1:Name}(${2:params})",
+      "Async Sub ${1:Name}(${2:arg As Integer})",
       "    ${0}",
       "End Sub"
     ],
@@ -359,11 +372,11 @@
   "Region": {
     "prefix": "region",
     "body": [
-      "#Region \"${1:RegionName}\"",
+      "' Region: ${1:RegionName}",
       "${0}",
-      "#End Region"
+      "' End Region: ${1:RegionName}"
     ],
-    "description": "Create a code region"
+    "description": "Create a commented code region (the BasicLang compiler does not accept #Region directives)"
   },
   "File Header": {
     "prefix": "header",
