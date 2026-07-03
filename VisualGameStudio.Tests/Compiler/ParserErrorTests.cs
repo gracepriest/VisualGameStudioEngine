@@ -169,6 +169,92 @@ End Sub";
 
     #endregion
 
+    #region Structure/Type/Union Member Parsing Tests (regression: infinite loop)
+
+    // Runs parser.Parse() with a hard timeout so a parser infinite loop fails the
+    // test instead of hanging the whole run.
+    private Parser ParseWithTimeout(string source, int timeoutMs = 10000)
+    {
+        var tokens = Tokenize(source);
+        var parser = new Parser(tokens);
+        var task = System.Threading.Tasks.Task.Run(() => parser.Parse());
+        Assert.That(task.Wait(timeoutMs), Is.True,
+            $"Parser did not finish within {timeoutMs}ms — likely infinite loop");
+        return parser;
+    }
+
+    [Test]
+    public void Parse_StructureWithPublicMember_ParsesSuccessfully()
+    {
+        // Regression: 'Public Field1 As Integer' inside a Structure used to cause
+        // an infinite loop because the member loop never consumed the modifier token.
+        var source = @"Module StructTest
+    Structure StructName
+        Public Field1 As Integer
+        Private Field2 As String
+        Dim Field3 As Double
+    End Structure
+End Module";
+        var parser = ParseWithTimeout(source);
+
+        Assert.That(parser.Errors, Is.Empty,
+            "Expected no parse errors: " + string.Join("; ", parser.Errors.Select(e => e.Message)));
+    }
+
+    [Test]
+    public void Parse_StructureWithPlainMember_ParsesSuccessfully()
+    {
+        var source = @"Structure Point
+    X As Integer
+    Y As Integer
+End Structure";
+        var parser = ParseWithTimeout(source);
+
+        Assert.That(parser.Errors, Is.Empty,
+            "Expected no parse errors: " + string.Join("; ", parser.Errors.Select(e => e.Message)));
+    }
+
+    [Test]
+    public void Parse_StructureWithUnexpectedToken_ReportsErrorInsteadOfHanging()
+    {
+        // Regression: garbage inside a Structure body used to spin forever.
+        var source = @"Structure Broken
+    While
+End Structure";
+        var parser = ParseWithTimeout(source);
+
+        Assert.That(parser.Errors.Count, Is.GreaterThan(0),
+            "Expected parse errors for unexpected token inside Structure");
+    }
+
+    [Test]
+    public void Parse_TypeBlockWithPublicMember_ParsesSuccessfully()
+    {
+        var source = @"Type Person
+    Public Name As String
+    Age As Integer
+End Type";
+        var parser = ParseWithTimeout(source);
+
+        Assert.That(parser.Errors, Is.Empty,
+            "Expected no parse errors: " + string.Join("; ", parser.Errors.Select(e => e.Message)));
+    }
+
+    [Test]
+    public void Parse_UnionWithPublicMember_ParsesSuccessfully()
+    {
+        var source = @"Union Value
+    Public IntValue As Integer
+    FloatValue As Single
+End Union";
+        var parser = ParseWithTimeout(source);
+
+        Assert.That(parser.Errors, Is.Empty,
+            "Expected no parse errors: " + string.Join("; ", parser.Errors.Select(e => e.Message)));
+    }
+
+    #endregion
+
     #region Module and Namespace Tests
 
     [Test]

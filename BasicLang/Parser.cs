@@ -1244,14 +1244,23 @@ namespace BasicLang.Compiler
 
             while (!Check(TokenType.EndType) && !IsAtEnd())
             {
-                if (Check(TokenType.Identifier))
-                {
-                    var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
-                    member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
-                    Consume(TokenType.As, "Expected 'As'");
-                    member.Type = ParseTypeReference();
-                    node.Members.Add(member);
-                }
+                SkipNewlines();
+                if (Check(TokenType.EndType) || IsAtEnd())
+                    break;
+
+                // Type members default to Public in VB
+                var access = AccessModifier.Public;
+                if (Match(TokenType.Public)) access = AccessModifier.Public;
+                else if (Match(TokenType.Private)) access = AccessModifier.Private;
+                else if (Match(TokenType.Friend)) access = AccessModifier.Friend;
+                Match(TokenType.Dim);
+
+                var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
+                member.Access = access;
+                member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
+                Consume(TokenType.As, "Expected 'As'");
+                member.Type = ParseTypeReference();
+                node.Members.Add(member);
                 SkipNewlines();
             }
 
@@ -1269,14 +1278,23 @@ namespace BasicLang.Compiler
 
             while (!Check(TokenType.EndStructure) && !IsAtEnd())
             {
-                if (Check(TokenType.Identifier))
-                {
-                    var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
-                    member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
-                    Consume(TokenType.As, "Expected 'As'");
-                    member.Type = ParseTypeReference();
-                    node.Members.Add(member);
-                }
+                SkipNewlines();
+                if (Check(TokenType.EndStructure) || IsAtEnd())
+                    break;
+
+                // Structure members default to Public in VB
+                var access = AccessModifier.Public;
+                if (Match(TokenType.Public)) access = AccessModifier.Public;
+                else if (Match(TokenType.Private)) access = AccessModifier.Private;
+                else if (Match(TokenType.Friend)) access = AccessModifier.Friend;
+                Match(TokenType.Dim);
+
+                var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
+                member.Access = access;
+                member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
+                Consume(TokenType.As, "Expected 'As'");
+                member.Type = ParseTypeReference();
+                node.Members.Add(member);
                 SkipNewlines();
             }
 
@@ -1294,14 +1312,23 @@ namespace BasicLang.Compiler
 
             while (!Check(TokenType.EndUnion) && !IsAtEnd())
             {
-                if (Check(TokenType.Identifier))
-                {
-                    var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
-                    member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
-                    Consume(TokenType.As, "Expected 'As'");
-                    member.Type = ParseTypeReference();
-                    node.Members.Add(member);
-                }
+                SkipNewlines();
+                if (Check(TokenType.EndUnion) || IsAtEnd())
+                    break;
+
+                // Union members default to Public in VB
+                var access = AccessModifier.Public;
+                if (Match(TokenType.Public)) access = AccessModifier.Public;
+                else if (Match(TokenType.Private)) access = AccessModifier.Private;
+                else if (Match(TokenType.Friend)) access = AccessModifier.Friend;
+                Match(TokenType.Dim);
+
+                var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
+                member.Access = access;
+                member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
+                Consume(TokenType.As, "Expected 'As'");
+                member.Type = ParseTypeReference();
+                node.Members.Add(member);
                 SkipNewlines();
             }
 
