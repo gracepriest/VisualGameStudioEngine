@@ -614,9 +614,11 @@ namespace BasicLang.Compiler.IR.Optimization
                 ReplaceUses(inst, copies);
                 
                 // Track copy assignments
-                if (inst is IRAssignment assignment && 
+                // Never propagate awaits - duplicating them would re-execute the awaited task
+                if (inst is IRAssignment assignment &&
                     assignment.Target is IRVariable target &&
-                    assignment.Value is IRValue value)
+                    assignment.Value is IRValue value &&
+                    value is not IRAwait)
                 {
                     copies[target] = value;
                 }

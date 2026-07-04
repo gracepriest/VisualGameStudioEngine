@@ -736,6 +736,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
+        /// Wrap an async method's return type in Task/Task&lt;T&gt;.
+        /// A declared Task(Of T)/Task return type is kept as-is (no double wrapping).
+        /// </summary>
+        private static string WrapAsyncReturnType(string returnType)
+        {
+            if (returnType == "void")
+                return "Task";
+            if (returnType == "Task" || returnType.StartsWith("Task<"))
+                return returnType;
+            return $"Task<{returnType}>";
+        }
+
+        /// <summary>
         /// Map BasicLang access modifiers to C# access modifiers
         /// </summary>
         private string MapAccessModifier(AST.AccessModifier access)
@@ -1088,6 +1101,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var returnType = MapType(method.ReturnType);
             var name = SanitizeName(method.Name);
 
+            // Async methods return Task/Task<T> (abstract methods have no implementation to check)
+            var asyncMod = "";
+            if (method.Implementation?.IsAsync == true && !method.IsAbstract)
+            {
+                asyncMod = "async ";
+                returnType = WrapAsyncReturnType(returnType);
+            }
+
             // Add generic parameters
             var genericParams = "";
             if (method.GenericParameters != null && method.GenericParameters.Count > 0)
@@ -1148,7 +1169,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else
             {
-                WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{abstractMod}{virtualMod}{returnType} {name}{genericParams}({paramList})");
+                WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{abstractMod}{virtualMod}{asyncMod}{returnType} {name}{genericParams}({paramList})");
             }
 
             // Abstract methods don't have a body
@@ -1351,11 +1372,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             if (function.IsAsync)
             {
-                // Wrap return type in Task<T> or use Task for void
-                if (returnType == "void")
-                    actualReturnType = "Task";
-                else
-                    actualReturnType = $"Task<{returnType}>";
+                actualReturnType = WrapAsyncReturnType(returnType);
             }
             else if (function.IsIterator)
             {
@@ -2460,8 +2477,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (instruction is IRStore or IRAssignment)
                 return true;
 
-            if (instruction is IRAlloca or IRPhi or IRAwait)
+            if (instruction is IRAlloca or IRPhi)
                 return false;
+
+            // Awaits whose result is consumed are inlined into the consuming expression;
+            // awaits assigned to a declared variable or with an unused result must be
+            // emitted as statements for their side effects
+            if (instruction is IRAwait awaitValue)
+                return IsNamedDestination(awaitValue) || GetUseCount(awaitValue) == 0;
 
             // IRArrayAlloc must always be emitted because IRArrayStore depends on it
             if (instruction is IRArrayAlloc)
@@ -2717,7 +2740,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             }
                             else
                             {
-                                var fn = SanitizeName(call.FunctionName);
+                                // Preserve dots in qualified names like Task.Delay
+                                var fn = string.Join(".", call.FunctionName.Split('.').Select(SanitizeName));
                                 var args = string.Join(", ", argExprs);
                                 innerExpr = $"{fn}({args})";
                             }
@@ -2832,6 +2856,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return phi.Operands.Select(i => i.Value).ToList();
                 case IRTupleElement tupleElem:
                     return new[] { tupleElem.Tuple };
+                case IRAwait awaited:
+                    return awaited.Expression != null ? new[] { awaited.Expression } : Array.Empty<IRValue>();
                 default:
                     return Array.Empty<IRValue>();
             }
@@ -3183,22 +3209,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRAwait awaitInst)
         {
-            string exprVal;
-
-            // If the expression is an IRCall, emit the call inline with await
-            if (awaitInst.Expression is IRCall call)
+            // Only reached for statement-level awaits - see ShouldEmitInstruction.
+            // EmitExpression handles the IRAwait case, emitting "await <expr>" inline.
+            if (IsNamedDestination(awaitInst))
             {
-                var argExprs = call.Arguments.Select(EmitExpression).ToArray();
-                var argsStr = string.Join(", ", argExprs);
-                exprVal = $"{SanitizeName(call.FunctionName)}({argsStr})";
+                // Await assigned directly to a declared variable (Dim r = Await f())
+                WriteLine($"{GetValueName(awaitInst)} = {EmitExpression(awaitInst)};");
             }
             else
             {
-                exprVal = awaitInst.Expression is IRConstant c ? EmitConstant(c) : GetValueName(awaitInst.Expression);
+                WriteLine($"{EmitExpression(awaitInst)};");
             }
-
-            var resultType = MapType(awaitInst.Type);
-            WriteLine($"{resultType} {awaitInst.Name} = await {exprVal};");
         }
 
         public void Visit(IRYield yieldInst)

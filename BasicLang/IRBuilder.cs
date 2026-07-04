@@ -439,6 +439,10 @@ namespace BasicLang.Compiler.IR
                     {
                         call.Name = localVar.Name;
                     }
+                    else if (initValue is IRAwait awaitVal)
+                    {
+                        awaitVal.Name = localVar.Name;
+                    }
                     else if (initValue is IRBinaryOp binOp)
                     {
                         binOp.Name = localVar.Name;
@@ -1506,46 +1510,55 @@ namespace BasicLang.Compiler.IR
         public void Visit(AwaitExpressionNode node)
         {
             TrackSourceLine(node);
-            IRValue taskExpr;
+            IRValue taskExpr = null;
 
             // Special handling for CallExpressionNode - don't emit it separately
             // Instead, create the IRCall and embed it in the IRAwait
             if (node.Expression is CallExpressionNode callNode)
             {
-                string functionName = "";
+                string functionName = null;
                 if (callNode.Callee is IdentifierExpressionNode idExpr)
                 {
                     functionName = idExpr.Name;
                 }
-                else if (callNode.Callee is MemberAccessExpressionNode memberExpr)
+                else if (callNode.Callee is MemberAccessExpressionNode memberExpr &&
+                         memberExpr.Object is IdentifierExpressionNode objExpr)
                 {
-                    functionName = $"{memberExpr.Object}.{memberExpr.MemberName}";
+                    // Qualified call like Task.Delay(10)
+                    functionName = $"{objExpr.Name}.{memberExpr.MemberName}";
                 }
 
-                var returnType = _semanticAnalyzer.GetNodeType(callNode);
-                var tempName = _currentFunction.GetNextTempName();
-                var call = new IRCall(tempName, functionName, returnType);
-
-                // Evaluate arguments
-                foreach (var arg in callNode.Arguments)
+                if (functionName != null)
                 {
-                    arg.Accept(this);
-                    call.Arguments.Add(_expressionResult);
-                }
+                    var returnType = _semanticAnalyzer.GetNodeType(callNode);
+                    var tempName = _currentFunction.GetNextTempName();
+                    var call = new IRCall(tempName, functionName, returnType);
 
-                // Don't emit the call - it will be part of the await
-                taskExpr = call;
+                    // Evaluate arguments
+                    foreach (var arg in callNode.Arguments)
+                    {
+                        arg.Accept(this);
+                        call.Arguments.Add(_expressionResult);
+                    }
+
+                    // Don't emit the call - it will be part of the await
+                    taskExpr = call;
+                }
             }
-            else
+
+            if (taskExpr == null)
             {
-                // For non-call expressions, evaluate normally
+                // For other expressions (complex member calls, variables), evaluate normally
                 node.Expression?.Accept(this);
                 taskExpr = _expressionResult;
             }
 
             // Generate IRAwait instruction
+            // Await unwraps Task(Of T) to T - the semantic analyzer records the awaited type
             var resultName = _currentFunction.GetNextTempName();
-            var resultType = taskExpr?.Type ?? new TypeInfo("Object", TypeKind.Class);
+            var resultType = _semanticAnalyzer.GetNodeType(node)
+                             ?? taskExpr?.Type
+                             ?? new TypeInfo("Object", TypeKind.Class);
             var awaitInst = new IRAwait(resultName, taskExpr, resultType);
             EmitInstruction(awaitInst);
 

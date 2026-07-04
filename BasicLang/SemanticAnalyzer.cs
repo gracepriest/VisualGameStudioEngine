@@ -1917,6 +1917,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             symbol.ReturnType = returnType;
             symbol.Type = returnType;
             functionScope.ReturnType = returnType;
+            functionScope.IsAsync = node.IsAsync;
 
             SetNodeSymbol(node, symbol);
             SetNodeType(node, returnType);
@@ -1990,6 +1991,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Enter subroutine scope
             var subScope = EnterScope(node.Name, ScopeKind.Subroutine);
             subScope.ReturnType = _typeManager.VoidType;
+            subScope.IsAsync = node.IsAsync;
 
             // Register generic type parameters as symbols in the subroutine scope
             var genericTypeParams = new List<TypeInfo>();
@@ -3140,8 +3142,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             node.Expression?.Accept(this);
 
-            // The expression should return a Task-like type
-            // For now, we'll trust the programmer
+            // Await unwraps Task(Of T) to T; awaiting a non-generic Task yields no value.
+            // Async functions declared with a bare return type (As Integer) already report T.
+            var exprType = node.Expression != null ? GetNodeType(node.Expression) : null;
+            SetNodeType(node, UnwrapTaskType(exprType) ?? _typeManager.ObjectType);
+        }
+
+        /// <summary>
+        /// Returns true if the type is System.Threading.Tasks.Task (generic or not)
+        /// </summary>
+        private static bool IsTaskType(TypeInfo type)
+        {
+            return type != null &&
+                   (type.Name == "Task" || type.Name == "System.Threading.Tasks.Task");
+        }
+
+        /// <summary>
+        /// Unwraps Task(Of T) to T. A non-generic Task unwraps to Void.
+        /// Non-Task types are returned unchanged.
+        /// </summary>
+        private TypeInfo UnwrapTaskType(TypeInfo type)
+        {
+            if (!IsTaskType(type))
+                return type;
+
+            return type.GenericArguments != null && type.GenericArguments.Count == 1
+                ? type.GenericArguments[0]
+                : _typeManager.VoidType;
         }
 
         public void Visit(YieldStatementNode node)
@@ -3789,32 +3816,38 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // Inside an Async function declared As Task(Of T), Return expressions
+            // type-check against the unwrapped T (VB.NET semantics)
+            var expectedReturnType = functionScope.IsAsync
+                ? UnwrapTaskType(functionScope.ReturnType)
+                : functionScope.ReturnType;
+
             if (node.Value != null)
             {
                 node.Value.Accept(this);
                 var returnType = GetNodeType(node.Value);
 
-                if (functionScope.ReturnType.Equals(_typeManager.VoidType))
+                if (expectedReturnType.Equals(_typeManager.VoidType))
                 {
                     Error("Cannot return a value from a subroutine", node.Line, node.Column);
                 }
                 // Allow returning any type when the expected type is a type parameter (generics)
-                else if (functionScope.ReturnType.Kind == TypeKind.TypeParameter ||
+                else if (expectedReturnType.Kind == TypeKind.TypeParameter ||
                          returnType?.Kind == TypeKind.TypeParameter)
                 {
                     // Type parameters are checked at instantiation time
                 }
-                else if (!functionScope.ReturnType.IsAssignableFrom(returnType))
+                else if (!expectedReturnType.IsAssignableFrom(returnType))
                 {
-                    Error($"Cannot return type '{returnType}' from function expecting '{functionScope.ReturnType}'",
+                    Error($"Cannot return type '{returnType}' from function expecting '{expectedReturnType}'",
                           node.Line, node.Column);
                 }
             }
             else
             {
-                if (!functionScope.ReturnType.Equals(_typeManager.VoidType))
+                if (!expectedReturnType.Equals(_typeManager.VoidType))
                 {
-                    Error($"Function must return a value of type '{functionScope.ReturnType}'",
+                    Error($"Function must return a value of type '{expectedReturnType}'",
                           node.Line, node.Column);
                 }
             }

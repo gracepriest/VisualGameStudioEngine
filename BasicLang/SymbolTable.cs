@@ -274,7 +274,10 @@ public class TypeInfo
         
         // For function/method scopes
         public TypeInfo ReturnType { get; set; }
-        
+
+        // True when the enclosing function/sub is declared Async
+        public bool IsAsync { get; set; }
+
         // For class scopes
         public TypeInfo ClassType { get; set; }
         
