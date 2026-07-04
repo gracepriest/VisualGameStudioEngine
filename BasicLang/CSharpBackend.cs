@@ -922,7 +922,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 var staticMod = field.IsStatic ? "static " : "";
                 var type = MapType(field.Type);
                 var name = SanitizeName(field.Name);
-                WriteLine($"{access} {staticMod}{type} {name};");
+                var init = field.Initializer is IRConstant c ? $" = {EmitConstant(c)}" : "";
+                WriteLine($"{access} {staticMod}{type} {name}{init};");
             }
 
             if (irClass.Fields.Count > 0)

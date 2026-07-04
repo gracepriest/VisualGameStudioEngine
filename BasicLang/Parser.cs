@@ -428,6 +428,17 @@ namespace BasicLang.Compiler
                 st.Access = access;
                 return st;
             }
+            // Module-level field without 'Dim' (VB.NET style):
+            // "Public Score As Integer = 0"
+            if (Check(TokenType.Identifier))
+            {
+                var statement = ParseVariableDeclaration(requireDim: false);
+                if (statement is VariableDeclarationNode fieldDecl)
+                {
+                    fieldDecl.Access = access;
+                }
+                return statement;
+            }
 
             throw new ParseException(
                 $"Unexpected token in module: '{Peek().Lexeme}' ({Peek().Type})",
@@ -798,8 +809,9 @@ namespace BasicLang.Compiler
                         field.Type.ArrayDimensions = arrayDimensions;
                     }
 
-                    // Optional initializer
-                    if (Match(TokenType.Equal))
+                    // Optional initializer. '=' lexes as Assignment, not Equal —
+                    // checking Equal here left "Public X As Single = 400" broken.
+                    if (Match(TokenType.Assignment) || Match(TokenType.Equal))
                     {
                         field.Initializer = ParseExpression();
                     }
@@ -2011,14 +2023,24 @@ namespace BasicLang.Compiler
         // Variable Declarations
         // ====================================================================
 
-        private StatementNode ParseVariableDeclaration()
+        private StatementNode ParseVariableDeclaration(bool requireDim = true)
         {
-            var token = Consume(TokenType.Dim, "Expected 'Dim'");
-
-            // Check for tuple deconstruction: Dim (x, y) = ...
-            if (Check(TokenType.LeftParen))
+            Token token;
+            if (requireDim)
             {
-                return ParseTupleDeconstruction(token);
+                token = Consume(TokenType.Dim, "Expected 'Dim'");
+
+                // Check for tuple deconstruction: Dim (x, y) = ...
+                if (Check(TokenType.LeftParen))
+                {
+                    return ParseTupleDeconstruction(token);
+                }
+            }
+            else
+            {
+                // Field declaration without 'Dim' (e.g. module/class-level
+                // "Public Score As Integer = 0"); cursor is at the name.
+                token = Peek();
             }
 
             var node = new VariableDeclarationNode(token.Line, token.Column);

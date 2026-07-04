@@ -588,12 +588,14 @@ namespace BasicLang.Compiler.IR
                 if (member is VariableDeclarationNode varDecl)
                 {
                     // Add as field
+                    var fieldType = _semanticAnalyzer.GetNodeType(varDecl);
                     var field = new IRField
                     {
                         Name = varDecl.Name,
-                        Type = _semanticAnalyzer.GetNodeType(varDecl),
+                        Type = fieldType,
                         Access = MapAccessModifier(varDecl.Access),
-                        IsStatic = varDecl.IsStatic
+                        IsStatic = varDecl.IsStatic,
+                        Initializer = BuildConstantFieldInitializer(varDecl.Initializer, fieldType)
                     };
                     irClass.Fields.Add(field);
                 }
@@ -710,6 +712,74 @@ namespace BasicLang.Compiler.IR
                 BasicLang.Compiler.AST.AccessModifier.Protected => AccessModifier.Protected,
                 _ => AccessModifier.Private
             };
+        }
+
+        /// <summary>
+        /// Build a constant IR value for a class field initializer. Handles
+        /// literals and unary +/- on numeric literals (e.g. "= 400", "= -5",
+        /// "= 5.0"), coercing the value to the field's declared type so the
+        /// backend emits valid C# (e.g. a Single field gets a float literal).
+        /// Non-constant initializers return null and the field is emitted
+        /// without an initializer, as before.
+        /// </summary>
+        private IRConstant BuildConstantFieldInitializer(ExpressionNode initializer, TypeInfo fieldType)
+        {
+            if (initializer == null) return null;
+
+            object value = null;
+            if (initializer is LiteralExpressionNode literal)
+            {
+                value = literal.Value;
+            }
+            else if (initializer is UnaryExpressionNode unary
+                     && unary.Operand is LiteralExpressionNode operand
+                     && (unary.Operator == "-" || unary.Operator == "+"))
+            {
+                value = operand.Value;
+                if (unary.Operator == "-")
+                {
+                    value = value switch
+                    {
+                        int i => -i,
+                        long l => -l,
+                        double d => -d,
+                        float f => -f,
+                        decimal m => -m,
+                        _ => value
+                    };
+                }
+            }
+
+            if (value == null) return null;
+
+            value = CoerceConstantToType(value, fieldType);
+            return new IRConstant(value, fieldType);
+        }
+
+        private static object CoerceConstantToType(object value, TypeInfo fieldType)
+        {
+            var typeName = fieldType?.Name?.ToLowerInvariant();
+            try
+            {
+                switch (typeName)
+                {
+                    case "single":
+                    case "float":
+                        return Convert.ToSingle(value);
+                    case "double":
+                        return Convert.ToDouble(value);
+                    case "long":
+                        return Convert.ToInt64(value);
+                    case "integer":
+                    case "int":
+                        return value is double || value is float ? value : Convert.ToInt32(value);
+                }
+            }
+            catch
+            {
+                // Leave the value unconverted; the backend renders it as-is.
+            }
+            return value;
         }
 
         public void Visit(InterfaceNode node)

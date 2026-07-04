@@ -413,6 +413,7 @@ namespace BasicLang.Compiler
             { "Next", TokenType.Next },
             { "While", TokenType.While },
             { "Wend", TokenType.Wend },
+            { "End While", TokenType.Wend }, // VB.NET spelling; same terminator as Wend
             { "Do", TokenType.Do },
             { "Loop", TokenType.Loop },
             { "Each", TokenType.Each },
