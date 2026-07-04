@@ -61,9 +61,31 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public string GeneratedCode => _output.ToString();
 
+        // Names of functions/subs defined by the user program. A user definition
+        // shadows a stdlib builtin of the same name (e.g. a user "Run" must call
+        // the user's method, not emit the Process.Start builtin).
+        private readonly HashSet<string> _userFunctionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private void CollectUserFunctionNames(IRModule module)
+        {
+            _userFunctionNames.Clear();
+            foreach (var func in module.Functions)
+            {
+                if (string.IsNullOrEmpty(func.Name)) continue;
+                _userFunctionNames.Add(func.Name);
+                // Also record the unqualified last segment (e.g. "M.Run" -> "Run").
+                var dot = func.Name.LastIndexOf('.');
+                if (dot >= 0 && dot < func.Name.Length - 1)
+                    _userFunctionNames.Add(func.Name.Substring(dot + 1));
+            }
+        }
+
         // Helper methods to check both stdlib providers (Framework first, then CSharp)
         private bool StdLibCanHandle(string functionName)
         {
+            // A user-defined function of the same name shadows the builtin.
+            if (functionName != null && _userFunctionNames.Contains(functionName))
+                return false;
             return _frameworkStdLib.CanHandle(functionName) || _stdLib.CanHandle(functionName);
         }
 
@@ -135,6 +157,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _output.Clear();
             _indentLevel = 0;
             _usings.Clear();
+
+            CollectUserFunctionNames(module);
 
             // Build the candidate usings set
             _usings.Add("System");
