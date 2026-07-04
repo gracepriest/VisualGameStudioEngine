@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
@@ -10,6 +11,9 @@ namespace VisualGameStudio.Shell.Views.Panels;
 
 public partial class DebugConsoleView : UserControl
 {
+    private DebugConsoleViewModel? _subscribedViewModel;
+    private INotifyCollectionChanged? _subscribedEntries;
+
     public DebugConsoleView()
     {
         InitializeComponent();
@@ -18,26 +22,46 @@ public partial class DebugConsoleView : UserControl
 
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
+        // Detach from the previous view model so handlers never accumulate
+        // when the DataContext is reassigned.
+        if (_subscribedViewModel != null)
+        {
+            _subscribedViewModel.FocusInputRequested -= OnFocusInputRequested;
+        }
+        if (_subscribedEntries != null)
+        {
+            _subscribedEntries.CollectionChanged -= OnEntriesCollectionChanged;
+        }
+        _subscribedViewModel = null;
+        _subscribedEntries = null;
+
         if (DataContext is DebugConsoleViewModel vm)
         {
+            _subscribedViewModel = vm;
+            _subscribedEntries = vm.Entries;
+
             // Auto-scroll to bottom when entries change
-            vm.Entries.CollectionChanged += (s, args) =>
-            {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                {
-                    OutputScroller?.ScrollToEnd();
-                });
-            };
+            _subscribedEntries.CollectionChanged += OnEntriesCollectionChanged;
 
             // Focus input when requested (e.g., on breakpoint hit)
-            vm.FocusInputRequested += () =>
-            {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                {
-                    InputTextBox?.Focus();
-                });
-            };
+            _subscribedViewModel.FocusInputRequested += OnFocusInputRequested;
         }
+    }
+
+    private void OnEntriesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            OutputScroller?.ScrollToEnd();
+        });
+    }
+
+    private void OnFocusInputRequested()
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            InputTextBox?.Focus();
+        });
     }
 
     private void OnInputKeyDown(object? sender, KeyEventArgs e)

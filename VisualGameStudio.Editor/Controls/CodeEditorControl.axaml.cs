@@ -584,17 +584,10 @@ public partial class CodeEditorControl : UserControl
         _textEditor.AddHandler(DragDrop.DropEvent, OnDrop);
 
         // Setup folding update timer (debounced)
-        _foldingUpdateTimer = new System.Timers.Timer(500);
-        _foldingUpdateTimer.Elapsed += (s, e) =>
-        {
-            Avalonia.Threading.Dispatcher.UIThread.Post(UpdateFoldings);
-        };
-        _foldingUpdateTimer.AutoReset = false;
+        EnsureFoldingUpdateTimer();
 
         // Setup hover timer for data tips (debounced)
-        _hoverTimer = new System.Timers.Timer(500);
-        _hoverTimer.Elapsed += OnHoverTimerElapsed;
-        _hoverTimer.AutoReset = false;
+        EnsureHoverTimer();
 
         // Subscribe to pointer move for hover detection
         _textEditor.TextArea.PointerMoved += OnTextAreaPointerMoved;
@@ -605,11 +598,7 @@ public partial class CodeEditorControl : UserControl
             Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
         // Setup smooth scrolling timer
-        _smoothScrollTimer = new DispatcherTimer(DispatcherPriority.Render)
-        {
-            Interval = TimeSpan.FromMilliseconds(SmoothScrollInterval)
-        };
-        _smoothScrollTimer.Tick += OnSmoothScrollTick;
+        EnsureSmoothScrollTimer();
 
         // Initialize scroll targets to current position
         _scrollCurrentY = _textEditor.TextArea.TextView.ScrollOffset.Y;
@@ -656,6 +645,37 @@ public partial class CodeEditorControl : UserControl
     {
         base.OnAttachedToVisualTree(e);
 
+        // Dock hosts (tab drag to another dock group, float/re-dock, panel
+        // maximize/restore) detach and re-attach the same control instance.
+        // OnDetachedFromVisualTree tears down timers and global event
+        // subscriptions, so they must be re-established here. Every call
+        // below is idempotent, which also makes the very first attach
+        // (right after OnInitialized) and any double-attach safe.
+        if (_isInitialized)
+        {
+            EnsureFoldingUpdateTimer();
+            EnsureHoverTimer();
+            EnsureSmoothScrollTimer();
+
+            // Re-subscribe to theme changes (unsubscribe first so handlers
+            // never stack) and re-apply colors in case the theme changed
+            // while this editor was detached.
+            EditorTheme.ThemeChanged -= OnEditorThemeChanged;
+            EditorTheme.ThemeChanged += OnEditorThemeChanged;
+            ApplyEditorThemeColors();
+
+            // Resume the cursor fade animation stopped on detach.
+            _cursorFadeRenderer?.Start();
+
+            // Re-wire minimap and sticky scroll; their Attach methods detach
+            // any previous subscriptions first, so this is re-entrant safe.
+            if (_textEditor != null)
+            {
+                _minimap?.AttachEditor(_textEditor);
+                _stickyScroll?.AttachEditor(_textEditor);
+            }
+        }
+
         // When using Document binding, the Document carries the undo history
         // and is the source of truth. Don't touch it on reattach.
         if (Document != null)
@@ -674,6 +694,55 @@ public partial class CodeEditorControl : UserControl
                 UpdateFoldings();
             }
         }
+    }
+
+    /// <summary>
+    /// Creates the debounced folding-update timer if it does not already exist.
+    /// Called from OnInitialized and again from OnAttachedToVisualTree because
+    /// OnDetachedFromVisualTree disposes the timer (the docking system can
+    /// detach and re-attach the same editor instance).
+    /// </summary>
+    private void EnsureFoldingUpdateTimer()
+    {
+        if (_foldingUpdateTimer != null)
+            return;
+
+        _foldingUpdateTimer = new System.Timers.Timer(500);
+        _foldingUpdateTimer.Elapsed += (s, e) =>
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(UpdateFoldings);
+        };
+        _foldingUpdateTimer.AutoReset = false;
+    }
+
+    /// <summary>
+    /// Creates the debounced hover (data tip) timer if it does not already exist.
+    /// See <see cref="EnsureFoldingUpdateTimer"/> for why this is re-run on attach.
+    /// </summary>
+    private void EnsureHoverTimer()
+    {
+        if (_hoverTimer != null)
+            return;
+
+        _hoverTimer = new System.Timers.Timer(500);
+        _hoverTimer.Elapsed += OnHoverTimerElapsed;
+        _hoverTimer.AutoReset = false;
+    }
+
+    /// <summary>
+    /// Creates the smooth-scroll animation timer if it does not already exist.
+    /// See <see cref="EnsureFoldingUpdateTimer"/> for why this is re-run on attach.
+    /// </summary>
+    private void EnsureSmoothScrollTimer()
+    {
+        if (_smoothScrollTimer != null)
+            return;
+
+        _smoothScrollTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(SmoothScrollInterval)
+        };
+        _smoothScrollTimer.Tick += OnSmoothScrollTick;
     }
 
     /// <summary>
@@ -4956,6 +5025,18 @@ public partial class CodeEditorControl : UserControl
         {
             _fadeTimer.Stop();
         }
+
+        /// <summary>
+        /// Resumes the fade animation after <see cref="Stop"/>. Called when the
+        /// editor is re-attached to the visual tree; safe to call when already
+        /// running. Resets the phase so the caret starts fully visible.
+        /// </summary>
+        public void Start()
+        {
+            _phase = 0;
+            _lastCaretMove = DateTime.UtcNow;
+            _fadeTimer.Start();
+        }
     }
 
     #endregion
@@ -4976,6 +5057,9 @@ public partial class CodeEditorControl : UserControl
 
         _smoothScrollTimer?.Stop();
         _smoothScrollTimer = null;
+        // Reset the animation flag so a wheel event after re-attach starts the
+        // (re-created) timer instead of assuming an animation is in flight.
+        _isSmoothScrolling = false;
 
         // Stop the pending semantic-token debounce timer; it captures `this`
         // and would otherwise keep the closed editor rooted and fire
