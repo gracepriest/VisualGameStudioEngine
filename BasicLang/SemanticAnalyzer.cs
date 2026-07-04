@@ -2173,6 +2173,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error($"Auto variable '{node.Name}' must have an initializer", node.Line, node.Column);
                     varType = _typeManager.ObjectType;
                 }
+                else if (node.Initializer is LiteralExpressionNode nothingLit &&
+                         nothingLit.LiteralType == TokenType.Nothing)
+                {
+                    Error($"Cannot infer type for variable '{node.Name}' from 'Nothing'. Specify a type: Dim {node.Name} As <Type> = Nothing",
+                          node.Line, node.Column);
+                    varType = _typeManager.ObjectType;
+                }
                 else
                 {
                     node.Initializer.Accept(this);

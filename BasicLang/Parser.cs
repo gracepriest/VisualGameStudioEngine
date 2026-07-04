@@ -2086,9 +2086,15 @@ namespace BasicLang.Compiler
                 elementType.ArrayDimensions = arrayType.ArrayDimensions;
                 node.Type = elementType;
             }
+            else if (Check(TokenType.Assignment))
+            {
+                // 'Dim x = expr' - no As clause; infer the type from the initializer
+                // (same inference path as the Auto keyword; initializer parsed below)
+                node.IsAuto = true;
+            }
             else
             {
-                Consume(TokenType.As, "Expected 'As'");
+                Consume(TokenType.As, "Expected 'As <Type>' or '= <initializer>' after variable name");
 
                 // Handle "As New Type" pattern - creates initializer with New expression
                 if (Match(TokenType.New))
