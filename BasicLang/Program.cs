@@ -30,9 +30,19 @@ namespace BasicLang.Compiler.Driver
             // Check for LSP mode
             if (args.Contains("--lsp") || args.Contains("--language-server"))
             {
-                // Use simple LSP server for better compatibility
-                var server = new SimpleLspServer(Console.OpenStandardInput(), Console.OpenStandardOutput());
-                await server.RunAsync();
+                if (args.Contains("--lsp-simple"))
+                {
+                    // Fallback: minimal server (completion/hover/definition/diagnostics)
+                    var simpleServer = new SimpleLspServer(Console.OpenStandardInput(), Console.OpenStandardOutput());
+                    await simpleServer.RunAsync();
+                }
+                else
+                {
+                    // Full OmniSharp-based server with all handlers (references,
+                    // rename, semantic tokens, inlay hints, code lens, formatting, ...)
+                    var server = new BasicLang.Compiler.LSP.BasicLangLanguageServer();
+                    await server.RunAsync();
+                }
                 return 0;
             }
 

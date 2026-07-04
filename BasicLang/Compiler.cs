@@ -652,7 +652,52 @@ namespace BasicLang.Compiler
         private CompilationResult FinalizeResult(CompilationResult result, DateTime startTime)
         {
             result.Duration = DateTime.UtcNow - startTime;
+
+            // Ensure every located error carries its position in the message text.
+            // Project build mode (BasicLang.exe build) prints only error.Message,
+            // so without this prefix semantic errors lose line/column information
+            // and cannot be placed by IDE/VS Code problem matchers. Parse errors
+            // already embed "Error at line N, column M: ..." via ParseError.ToString();
+            // this makes semantic/preprocessor/import errors use the same format.
+            for (int i = 0; i < result.AllErrors.Count; i++)
+            {
+                result.AllErrors[i] = WithInlineLocation(result.AllErrors[i]);
+            }
+
             return result;
+        }
+
+        /// <summary>
+        /// Returns an error whose Message starts with "Error at line N, column M: "
+        /// (the same format ParseError.ToString() produces) so that consumers which
+        /// only print the message still emit the source location. The original error
+        /// instance is left untouched (it is shared with unit.Errors / analyzer.Errors);
+        /// a prefixed copy is returned instead. Errors without location (Line <= 0) or
+        /// whose message already contains a location prefix are returned unchanged.
+        /// </summary>
+        private static SemanticError WithInlineLocation(SemanticError error)
+        {
+            if (error == null || error.Line <= 0)
+                return error;
+
+            var message = error.Message ?? string.Empty;
+
+            // Already carries an inline location (e.g. parse errors)
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                    message, @"^(Parse\s+)?(Error|Warning|error|warning) at line \d+"))
+            {
+                return error;
+            }
+
+            return new SemanticError(
+                $"{error.Severity} at line {error.Line}, column {error.Column}: {message}",
+                error.Line, error.Column, error.Severity)
+            {
+                ErrorCode = error.ErrorCode,
+                Suggestion = error.Suggestion,
+                ExpectedType = error.ExpectedType,
+                ActualType = error.ActualType
+            };
         }
     }
 }

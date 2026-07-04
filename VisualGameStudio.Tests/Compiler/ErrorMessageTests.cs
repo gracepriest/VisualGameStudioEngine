@@ -329,4 +329,94 @@ End Sub";  // Missing close paren
     }
 
     #endregion
+
+    #region Compilation Result Inline Location Tests
+
+    // BasicLang.exe build mode prints only error.Message per error, so
+    // CompilationResult.AllErrors messages must embed "Error at line N, column M: "
+    // (same format as parse errors / SemanticError.ToString) for IDE and
+    // VS Code problem matchers to place the error in the source file.
+
+    [Test]
+    public void CompileFile_SemanticError_MessageContainsLineAndColumn()
+    {
+        var tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "BasicLang_ErrMsgTests_" + System.IO.Path.GetRandomFileName());
+        System.IO.Directory.CreateDirectory(tempDir);
+        try
+        {
+            var basFile = System.IO.Path.Combine(tempDir, "Program.bas");
+            System.IO.File.WriteAllText(basFile, @"Module Program
+    Sub Main()
+        PrintLine(undefinedVar)
+    End Sub
+End Module
+");
+            var compiler = new BasicCompiler();
+            var result = compiler.CompileFile(basFile);
+
+            Assert.That(result.Success, Is.False, "Expected compilation to fail");
+            Assert.That(result.AllErrors, Is.Not.Empty);
+
+            var error = result.AllErrors.First(e => e.Message.Contains("undefinedVar"));
+            Assert.That(error.Line, Is.EqualTo(3), "Error should carry the source line");
+            Assert.That(error.Message, Does.Match(@"^Error at line 3, column \d+: "),
+                "Message must embed location so build-mode output is matchable by problem matchers");
+        }
+        finally
+        {
+            try { System.IO.Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Test]
+    public void CompileFile_ParseError_MessageNotDoublePrefixed()
+    {
+        var tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "BasicLang_ErrMsgTests_" + System.IO.Path.GetRandomFileName());
+        System.IO.Directory.CreateDirectory(tempDir);
+        try
+        {
+            var basFile = System.IO.Path.Combine(tempDir, "Program.bas");
+            // Missing "Then" produces a parse error whose message already embeds location
+            System.IO.File.WriteAllText(basFile, @"Sub Test()
+    If x = 10
+        PrintLine(x)
+    End If
+End Sub
+");
+            var compiler = new BasicCompiler();
+            var result = compiler.CompileFile(basFile);
+
+            Assert.That(result.Success, Is.False, "Expected compilation to fail");
+            Assert.That(result.AllErrors, Is.Not.Empty);
+
+            foreach (var error in result.AllErrors)
+            {
+                var occurrences = System.Text.RegularExpressions.Regex
+                    .Matches(error.Message, "at line").Count;
+                Assert.That(occurrences, Is.LessThanOrEqualTo(1),
+                    $"Location prefix must not be duplicated: {error.Message}");
+            }
+        }
+        finally
+        {
+            try { System.IO.Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Test]
+    public void CompileFile_ErrorWithoutLocation_MessageUnchanged()
+    {
+        var compiler = new BasicCompiler();
+        var result = compiler.CompileFile(System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "BasicLang_DoesNotExist_" + System.IO.Path.GetRandomFileName() + ".bas"));
+
+        Assert.That(result.Success, Is.False);
+        Assert.That(result.AllErrors, Is.Not.Empty);
+        Assert.That(result.AllErrors[0].Message, Does.StartWith("File not found:"),
+            "Errors without line info must not get a location prefix");
+    }
+
+    #endregion
 }
