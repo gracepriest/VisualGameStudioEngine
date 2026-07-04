@@ -175,32 +175,107 @@ namespace BasicLang.Compiler
         /// </summary>
         public CompilationResult CompileProject(string entryPoint, IEnumerable<string> additionalFiles = null)
         {
+            var allFiles = new List<string> { entryPoint };
+            if (additionalFiles != null)
+            {
+                allFiles.AddRange(additionalFiles);
+            }
+
+            return CompileProjectFiles(allFiles);
+        }
+
+        /// <summary>
+        /// Compile an explicit set of project source files as ONE program.
+        /// Every file's public symbols are visible to every other file with no
+        /// Import directive required, and the combined IR contains all files'
+        /// declarations (not just the last one compiled).
+        /// </summary>
+        public CompilationResult CompileProjectFiles(IEnumerable<string> sourceFiles)
+        {
             var startTime = DateTime.UtcNow;
             var result = new CompilationResult();
 
             try
             {
-                // Add all files to registry
-                var allFiles = new List<string> { entryPoint };
-                if (additionalFiles != null)
+                var files = sourceFiles
+                    .Select(Path.GetFullPath)
+                    .Where(File.Exists)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (files.Count == 0)
                 {
-                    allFiles.AddRange(additionalFiles);
+                    result.AllErrors.Add(new SemanticError("No source files found.", 0, 0));
+                    return FinalizeResult(result, startTime);
                 }
 
-                foreach (var file in allFiles)
+                // Register + preprocess every file up front.
+                foreach (var file in files)
                 {
-                    if (File.Exists(file))
+                    var dir = Path.GetDirectoryName(file);
+                    if (!string.IsNullOrEmpty(dir))
                     {
-                        var unit = _registry.GetOrCreate(file);
-                        unit.SourceCode = File.ReadAllText(file);
-                        unit.LastModified = File.GetLastWriteTimeUtc(file);
-                        PreprocessModFile(unit);
-                        PreprocessClassFile(unit);
+                        _resolver.AddSearchPath(dir);
                     }
+
+                    var unit = _registry.GetOrCreate(file);
+                    unit.SourceCode = File.ReadAllText(file);
+                    unit.LastModified = File.GetLastWriteTimeUtc(file);
+                    PreprocessModFile(unit);
+                    PreprocessClassFile(unit);
                 }
 
-                // Compile starting from entry point
-                return CompileFile(entryPoint);
+                var projectUnits = files.Select(f => _registry.GetOrCreate(f)).ToList();
+
+                // Phase 1: parse all files (also pulls in explicitly imported deps).
+                foreach (var unit in projectUnits)
+                {
+                    ParseAndCollectImports(unit, result);
+                }
+                if (result.HasErrors) return FinalizeResult(result, startTime);
+
+                // Phase 2: compile library-like units (.mod/.cls) before entry
+                // files (.bas/.bl) so their exported symbols exist when an entry
+                // file that uses them is analyzed. Each unit sees every already
+                // completed sibling as an implicit import.
+                var compileOrder = projectUnits
+                    .OrderBy(u => IsEntryLikeFile(u.FilePath) ? 1 : 0)
+                    .ToList();
+
+                foreach (var unit in compileOrder)
+                {
+                    if (unit.IsComplete) continue;
+
+                    var completedSiblings = projectUnits
+                        .Where(u => u != unit && u.IsComplete)
+                        .ToList();
+
+                    CompileUnit(unit, result, completedSiblings);
+                }
+                if (result.HasErrors) return FinalizeResult(result, startTime);
+
+                // Phase 3: combine EVERY project unit's IR (plus any imported
+                // dependencies), not just the entry file's closure.
+                var allModuleIds = _registry.Modules.Select(u => u.Id).ToList();
+                result.CombinedIR = CombineIRModules(allModuleIds);
+
+                if (result.CombinedIR != null)
+                {
+                    var pipeline = new OptimizationPipeline();
+                    if (_options.OptimizeAggressive)
+                        pipeline.AddAggressivePasses();
+                    else
+                        pipeline.AddStandardPasses();
+                    pipeline.Run(result.CombinedIR);
+                }
+
+                result.Success = !result.HasErrors;
+                result.Units = _registry.Modules.ToList();
+            }
+            catch (CircularDependencyException ex)
+            {
+                result.AllErrors.Add(new SemanticError(
+                    $"Circular dependency: {string.Join(" -> ", ex.Cycle)}", 0, 0));
             }
             catch (Exception ex)
             {
@@ -208,6 +283,13 @@ namespace BasicLang.Compiler
             }
 
             return FinalizeResult(result, startTime);
+        }
+
+        private static bool IsEntryLikeFile(string filePath)
+        {
+            var ext = Path.GetExtension(filePath)?.ToLowerInvariant();
+            // .mod/.cls/.class are library units; everything else can hold Main.
+            return ext != ".mod" && ext != ".cls" && ext != ".class";
         }
 
         /// <summary>
@@ -382,6 +464,11 @@ namespace BasicLang.Compiler
         /// </summary>
         private void CompileUnit(CompilationUnit unit, CompilationResult result)
         {
+            CompileUnit(unit, result, null);
+        }
+
+        private void CompileUnit(CompilationUnit unit, CompilationResult result, IEnumerable<CompilationUnit> implicitImports)
+        {
             if (unit.AST == null)
             {
                 result.AllErrors.Add(new SemanticError($"No AST for {unit.ModuleName}", 0, 0));
@@ -396,6 +483,10 @@ namespace BasicLang.Compiler
                 // Semantic analysis
                 var analyzer = new SemanticAnalyzer();
                 analyzer.ConfigureModuleSystem(_registry, _resolver, unit);
+                if (implicitImports != null)
+                {
+                    analyzer.AddImplicitImports(implicitImports);
+                }
 
                 bool success = analyzer.Analyze(unit.AST);
                 unit.Symbols = analyzer.GlobalScope;

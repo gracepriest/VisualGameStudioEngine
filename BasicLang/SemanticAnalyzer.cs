@@ -29,6 +29,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private ModuleResolver _moduleResolver;
         private CompilationUnit _currentUnit;
 
+        // Sibling project units whose public symbols are visible to this unit
+        // WITHOUT an explicit Import (implicit project-wide visibility). Every
+        // file in a .blproj can call every other file's public members, the way
+        // a VB.NET project treats all its files as one compilation.
+        private readonly List<CompilationUnit> _implicitImportUnits = new List<CompilationUnit>();
+
         // Project-wide symbol table for multi-file compilation
         private ProjectSymbolTable _projectSymbols;
         private string _currentModuleName;
@@ -107,6 +113,67 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _moduleRegistry = registry;
             _moduleResolver = resolver;
             _currentUnit = currentUnit;
+        }
+
+        /// <summary>
+        /// Register sibling project units whose public symbols are visible to
+        /// this unit without an explicit Import. Only already-compiled units
+        /// (with populated ExportedSymbols) contribute symbols.
+        /// </summary>
+        public void AddImplicitImports(IEnumerable<CompilationUnit> units)
+        {
+            if (units == null) return;
+            foreach (var unit in units)
+            {
+                if (unit != null && unit != _currentUnit && !_implicitImportUnits.Contains(unit))
+                {
+                    _implicitImportUnits.Add(unit);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Pull the exported symbols of every implicit sibling unit into the
+        /// global scope so unqualified and qualified cross-file references
+        /// resolve. Mirrors ImportSymbolsFromFile but needs no Import directive.
+        /// </summary>
+        private void ImportImplicitProjectSymbols()
+        {
+            foreach (var unit in _implicitImportUnits)
+            {
+                if (unit == null || !unit.IsComplete) continue;
+
+                if (!string.IsNullOrEmpty(unit.ModuleName))
+                {
+                    _importedModules.Add(unit.ModuleName);
+                }
+
+                foreach (var symbol in unit.ExportedSymbols)
+                {
+                    if (GlobalScope.Resolve(symbol.Name) != null) continue;
+
+                    var sourceModule = !string.IsNullOrEmpty(symbol.SourceModule)
+                        ? symbol.SourceModule
+                        : unit.ModuleName;
+
+                    var importedSymbol = new Symbol(
+                        symbol.Name,
+                        symbol.Kind,
+                        symbol.Type,
+                        0,
+                        0)
+                    {
+                        IsImported = true,
+                        SourceModule = sourceModule,
+                        Parameters = symbol.Parameters,
+                        ReturnType = symbol.ReturnType,
+                        Access = symbol.Access,
+                        IsExtern = symbol.IsExtern
+                    };
+
+                    GlobalScope.Define(importedSymbol);
+                }
+            }
         }
 
         /// <summary>
@@ -294,6 +361,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Register standard library functions
             RegisterStdLibFunctions();
+
+            // Make sibling project files' public symbols visible (implicit
+            // project-wide imports) before registering this unit's declarations.
+            ImportImplicitProjectSymbols();
 
             try
             {

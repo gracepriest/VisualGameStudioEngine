@@ -450,19 +450,22 @@ namespace BasicLang.Compiler.Driver
             foreach (var sourceFile in sourceFiles)
             {
                 Console.WriteLine($"  Compiling {Path.GetFileName(sourceFile)}...");
-                var result = compiler.CompileFile(sourceFile);
-                if (!result.Success)
+            }
+
+            // Compile all project files as ONE program: every file sees every
+            // other file's public symbols, and the combined IR keeps them all.
+            var projectResult = compiler.CompileProjectFiles(sourceFiles);
+            if (!projectResult.Success)
+            {
+                success = false;
+                foreach (var error in projectResult.AllErrors)
                 {
-                    success = false;
-                    foreach (var error in result.AllErrors)
-                    {
-                        Console.Error.WriteLine($"    Error: {error.Message}");
-                    }
+                    Console.Error.WriteLine($"    Error: {error.Message}");
                 }
-                else if (result.CombinedIR != null)
-                {
-                    combinedIR = result.CombinedIR;
-                }
+            }
+            else
+            {
+                combinedIR = projectResult.CombinedIR;
             }
 
             if (success && combinedIR != null)
