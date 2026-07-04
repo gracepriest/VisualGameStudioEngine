@@ -175,6 +175,21 @@ public class GeneralOptionsPage : DialogPage
         // Notify the language client of settings changes
         System.Diagnostics.Debug.WriteLine("BasicLang general options saved");
     }
+
+    /// <summary>
+    /// Called when the Options dialog is closed (OK or Cancel).
+    /// VS does not revert a DialogPage's in-memory property values when the user
+    /// clicks Cancel — OnApply is simply never raised — so without this override
+    /// cancelled edits would linger in the page object and could be persisted by a
+    /// later OK. Reloading from storage reverts the fields on Cancel and is a no-op
+    /// after OK (it re-reads the values just saved). It also refreshes the snapshot
+    /// (see <see cref="LoadSettingsFromStorage"/>), keeping it consistent either way.
+    /// </summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        LoadSettingsFromStorage();
+        base.OnClosed(e);
+    }
 }
 
 /// <summary>
