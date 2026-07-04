@@ -549,15 +549,37 @@ namespace BasicLang.Compiler.Driver
                         packageSection.AppendLine("  </ItemGroup>");
                     }
 
+                    // Windows desktop UI frameworks need the net*-windows TFM
+                    // and their SDK feature flags, or WinForms/WPF types won't
+                    // resolve.
+                    var targetFramework = project.TargetFramework;
+                    if ((project.UseWindowsForms || project.UseWpf) && !targetFramework.Contains("-windows"))
+                    {
+                        targetFramework += "-windows";
+                    }
+
+                    var outputTypeValue = project.OutputType switch
+                    {
+                        "Library" => "Library",
+                        "WinExe" => "WinExe",
+                        _ => "Exe"
+                    };
+
+                    var uiFrameworkProps = new System.Text.StringBuilder();
+                    if (project.UseWindowsForms)
+                        uiFrameworkProps.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
+                    if (project.UseWpf)
+                        uiFrameworkProps.AppendLine("    <UseWPF>true</UseWPF>");
+
                     var csprojContent = $@"<Project Sdk=""Microsoft.NET.Sdk"">
   <PropertyGroup>
-    <OutputType>{(project.OutputType == "Library" ? "Library" : "Exe")}</OutputType>
-    <TargetFramework>{project.TargetFramework}</TargetFramework>
+    <OutputType>{outputTypeValue}</OutputType>
+    <TargetFramework>{targetFramework}</TargetFramework>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <AssemblyName>{outputFileName}</AssemblyName>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-  </PropertyGroup>
+{uiFrameworkProps}  </PropertyGroup>
   <ItemGroup>
     <Compile Include=""{csFileName}"" />
   </ItemGroup>

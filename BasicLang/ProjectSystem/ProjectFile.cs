@@ -38,6 +38,10 @@ namespace BasicLang.Compiler.ProjectSystem
         public bool DebugSymbols { get; set; } = true;
         public string Backend { get; set; } = "CSharp"; // CSharp, MSIL, LLVM
 
+        // Windows desktop UI frameworks (require the net*-windows TFM)
+        public bool UseWindowsForms { get; set; } = false;
+        public bool UseWpf { get; set; } = false;
+
         // Build configurations
         public Dictionary<string, BuildConfiguration> Configurations { get; set; } = new Dictionary<string, BuildConfiguration>();
 
@@ -96,6 +100,12 @@ namespace BasicLang.Compiler.ProjectSystem
 
                 var debug = propertyGroup.Element("DebugSymbols")?.Value;
                 if (debug != null) project.DebugSymbols = bool.Parse(debug);
+
+                var useWinForms = propertyGroup.Element("UseWindowsForms")?.Value;
+                if (useWinForms != null && bool.TryParse(useWinForms, out var uwf)) project.UseWindowsForms = uwf;
+
+                var useWpf = propertyGroup.Element("UseWPF")?.Value;
+                if (useWpf != null && bool.TryParse(useWpf, out var uwp)) project.UseWpf = uwp;
             }
 
             // Parse ItemGroup for various references
