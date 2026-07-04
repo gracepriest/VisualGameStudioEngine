@@ -715,6 +715,28 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// Convert a call's explicit generic type-argument references (Of T1, T2)
+        /// into TypeInfo the backend can render as &lt;T1, T2&gt;.
+        /// </summary>
+        private List<TypeInfo> BuildGenericArgTypes(List<TypeReference> typeRefs)
+        {
+            var result = new List<TypeInfo>();
+            if (typeRefs == null) return result;
+
+            foreach (var typeRef in typeRefs)
+            {
+                if (typeRef == null || string.IsNullOrEmpty(typeRef.Name)) continue;
+                var info = new TypeInfo(typeRef.Name, TypeKind.Class);
+                if (typeRef.GenericArguments != null && typeRef.GenericArguments.Count > 0)
+                {
+                    info.GenericArguments.AddRange(BuildGenericArgTypes(typeRef.GenericArguments));
+                }
+                result.Add(info);
+            }
+            return result;
+        }
+
+        /// <summary>
         /// Build a constant IR value for a class field initializer. Handles
         /// literals and unary +/- on numeric literals (e.g. "= 400", "= -5",
         /// "= 5.0"), coercing the value to the field's declared type so the
@@ -3090,6 +3112,7 @@ namespace BasicLang.Compiler.IR
                 {
                     // Static method call: ClassName.Method()
                     var call = new IRCall(tempName, $"{staticVar.Name}.{memberExpr.MemberName}", returnType);
+                    call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
                     foreach (var arg in node.Arguments)
                     {
                         arg.Accept(this);
@@ -3102,6 +3125,7 @@ namespace BasicLang.Compiler.IR
                 {
                     // Instance method call: obj.Method()
                     var methodCall = new IRInstanceMethodCall(tempName, obj, memberExpr.MemberName, returnType);
+                    methodCall.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
 
                     foreach (var arg in node.Arguments)
                     {
@@ -3184,6 +3208,7 @@ namespace BasicLang.Compiler.IR
 
                 // Regular function call
                 var call = new IRCall(tempName, functionName, returnType);
+                call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
 
                 for (int i = 0; i < node.Arguments.Count; i++)
                 {

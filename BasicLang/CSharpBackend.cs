@@ -2577,6 +2577,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private int GetUseCount(IRValue value) => _useCounts.TryGetValue(value, out var c) ? c : 0;
 
+        /// <summary>Render explicit generic type arguments as "&lt;T1, T2&gt;", or "" if none.</summary>
+        private string FormatGenericArgs(List<TypeInfo> genericArgs)
+        {
+            if (genericArgs == null || genericArgs.Count == 0) return "";
+            return "<" + string.Join(", ", genericArgs.Select(MapType)) + ">";
+        }
+
         private bool IsNamedDestination(IRValue value)
         {
             if (value == null) return false;
@@ -2746,7 +2753,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             ? string.Join(".", call.FunctionName.Split('.').Select(SanitizeName))
                             : SanitizeName(call.FunctionName);
                         var args = string.Join(", ", argExprs);
-                        return $"{fn}({args})";
+                        return $"{fn}{FormatGenericArgs(call.GenericArguments)}({args})";
                     }
 
                     case IRLoad load:
@@ -2819,7 +2826,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         var methodName = SanitizeName(methodCall.MethodName);
                         var argExprs = methodCall.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
                         var args = string.Join(", ", argExprs);
-                        return $"{obj}.{methodName}({args})";
+                        return $"{obj}.{methodName}{FormatGenericArgs(methodCall.GenericArguments)}({args})";
                     }
 
                     case IRBaseMethodCall baseCall:
@@ -2889,6 +2896,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return call.CalleeValue != null
                         ? call.Arguments.Concat(new[] { call.CalleeValue })
                         : call.Arguments;
+                case IRInstanceMethodCall methodCall:
+                    // The receiver (Object) is a use — chain intermediates like
+                    // a.B() feeding .C() must count so they aren't also emitted
+                    // as standalone (double-executing) statements.
+                    return new[] { methodCall.Object }.Concat(methodCall.Arguments);
+                case IRBaseMethodCall baseMethodCall:
+                    return baseMethodCall.Arguments;
+                case IRNewObject newObject:
+                    return newObject.Arguments;
+                case IRIndexerAccess indexerAccess:
+                    return new[] { indexerAccess.Collection }.Concat(indexerAccess.Indices);
+                case IRFieldAccess fieldAccess:
+                    return new[] { fieldAccess.Object };
                 case IRAssignment asg:
                     return new[] { asg.Value, asg.Target };
                 case IRLoad load:
@@ -3111,6 +3131,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var sanitizedName = functionName.Contains(".")
                 ? string.Join(".", functionName.Split('.').Select(SanitizeName))
                 : SanitizeName(functionName);
+            sanitizedName += FormatGenericArgs(call.GenericArguments);
 
             // If this call is explicitly targeted at a declared variable, emit assignment.
             if (hasReturn && IsNamedDestination(call))
@@ -3364,6 +3385,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var obj = EmitExpression(methodCall.Object);
             var methodName = SanitizeName(methodCall.MethodName);
+            var generics = FormatGenericArgs(methodCall.GenericArguments);
             var args = string.Join(", ", methodCall.Arguments.Select(EmitExpression));
 
             // Emit as statement (no assignment) if:
@@ -3374,12 +3396,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (methodCall.Type == null || methodCall.Type.Name == "Void" ||
                 string.IsNullOrEmpty(methodCall.Name) || GetUseCount(methodCall) == 0)
             {
-                WriteLine($"{obj}.{methodName}({args});");
+                WriteLine($"{obj}.{methodName}{generics}({args});");
             }
             else
             {
                 var resultType = MapType(methodCall.Type);
-                WriteLine($"{resultType} {methodCall.Name} = {obj}.{methodName}({args});");
+                WriteLine($"{resultType} {methodCall.Name} = {obj}.{methodName}{generics}({args});");
             }
         }
 

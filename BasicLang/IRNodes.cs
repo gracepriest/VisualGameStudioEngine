@@ -565,6 +565,12 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public IRValue CalleeValue { get; set; }
 
+        /// <summary>
+        /// Explicit generic type arguments on the call — Method(Of T1, T2)() —
+        /// rendered by backends as Method&lt;T1, T2&gt;(...).
+        /// </summary>
+        public List<TypeInfo> GenericArguments { get; set; } = new List<TypeInfo>();
+
         public IRCall(string resultName, string functionName, TypeInfo returnType)
             : base(resultName, returnType)
         {
@@ -1439,6 +1445,9 @@ namespace BasicLang.Compiler.IR
         public string MethodName { get; set; }
         public List<IRValue> Arguments { get; set; }
         public bool IsVirtual { get; set; }
+
+        /// <summary>Explicit generic type arguments: obj.Method(Of T)() -> obj.Method&lt;T&gt;().</summary>
+        public List<TypeInfo> GenericArguments { get; set; } = new List<TypeInfo>();
 
         public IRInstanceMethodCall(string resultName, IRValue obj, string methodName, TypeInfo returnType)
             : base(resultName, returnType)
