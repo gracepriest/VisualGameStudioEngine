@@ -1017,6 +1017,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// Format a delegate type signature (e.g. Func(Of Integer, Integer)) for error messages
+        /// </summary>
+        private static string FormatDelegateSignature(TypeInfo delegateType)
+        {
+            if (delegateType.GenericArguments.Count == 0)
+                return delegateType.Name;
+
+            return $"{delegateType.Name}(Of {string.Join(", ", delegateType.GenericArguments.Select(t => t.ToString()))})";
+        }
+
+        /// <summary>
         /// Get available members of a module for suggestions
         /// </summary>
         private IEnumerable<string> GetModuleMemberNames(string moduleName)
@@ -4488,6 +4499,41 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 foreach (var arg in node.Arguments)
                 {
                     arg.Accept(this);
+                }
+
+                // Validate arguments against the delegate's parameter types
+                // (Func(Of T1, ..., TResult) excludes the trailing return type; Action(Of T1, ...) uses all)
+                var delegateParamTypes = GetDelegateParameterTypes(calleeType);
+                if (delegateParamTypes != null)
+                {
+                    var delegateName = calleeSymbol?.Name ?? calleeType.Name;
+                    var signature = FormatDelegateSignature(calleeType);
+
+                    if (node.Arguments.Count != delegateParamTypes.Count)
+                    {
+                        Error($"Delegate '{delegateName}' expects {delegateParamTypes.Count} argument(s), got {node.Arguments.Count}. Expected: {signature}",
+                              node.Line, node.Column);
+                    }
+                    else
+                    {
+                        for (int i = 0; i < node.Arguments.Count; i++)
+                        {
+                            var argType = GetNodeType(node.Arguments[i]);
+                            var paramType = delegateParamTypes[i];
+
+                            // Allow any type when the parameter is a type parameter (generics)
+                            if (paramType?.Kind == TypeKind.TypeParameter || argType?.Kind == TypeKind.TypeParameter)
+                            {
+                                continue;
+                            }
+
+                            if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
+                            {
+                                Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'. Expected: {signature}",
+                                      node.Arguments[i].Line, node.Arguments[i].Column);
+                            }
+                        }
+                    }
                 }
 
                 // Func(Of T1, ..., TResult): last generic argument is the return type

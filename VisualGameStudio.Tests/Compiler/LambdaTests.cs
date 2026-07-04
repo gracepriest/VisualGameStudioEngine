@@ -217,4 +217,114 @@ End Sub";
         // The lambda body must not "return" the result of a void call
         Assert.That(output, Does.Not.Contain("return Console.Write"));
     }
+
+    // ========================================================================
+    // Delegate invocation argument validation
+    // ========================================================================
+
+    [Test]
+    public void Compile_DelegateInvocation_WrongArgumentType_ReportsError()
+    {
+        var source = @"
+Sub Main()
+    Dim f As Func(Of Integer, Integer) = Function(x As Integer) x * 2
+    Dim r As Integer = f(""wrong"")
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(output, Is.Null, "Compilation should fail for wrong argument type");
+        Assert.That(errors, Is.Not.Empty);
+        var allErrors = string.Join("; ", errors);
+        Assert.That(allErrors, Does.Contain("cannot convert from 'String' to 'Integer'"));
+        Assert.That(allErrors, Does.Contain("Func(Of Integer, Integer)"));
+    }
+
+    [Test]
+    public void Compile_DelegateInvocation_TooManyArguments_ReportsError()
+    {
+        var source = @"
+Sub Main()
+    Dim f As Func(Of Integer, Integer) = Function(x As Integer) x * 2
+    Dim r As Integer = f(1, 2)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(output, Is.Null, "Compilation should fail for too many arguments");
+        Assert.That(errors, Is.Not.Empty);
+        var allErrors = string.Join("; ", errors);
+        Assert.That(allErrors, Does.Contain("expects 1 argument(s), got 2"));
+        Assert.That(allErrors, Does.Contain("Func(Of Integer, Integer)"));
+    }
+
+    [Test]
+    public void Compile_DelegateInvocation_TooFewArguments_ReportsError()
+    {
+        var source = @"
+Sub Main()
+    Dim f As Func(Of Integer, Integer) = Function(x As Integer) x * 2
+    Dim r As Integer = f()
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(output, Is.Null, "Compilation should fail for too few arguments");
+        Assert.That(errors, Is.Not.Empty);
+        Assert.That(string.Join("; ", errors), Does.Contain("expects 1 argument(s), got 0"));
+    }
+
+    [Test]
+    public void Compile_DelegateInvocation_ValidArguments_Compiles()
+    {
+        var source = @"
+Sub Main()
+    Dim f As Func(Of Integer, Integer) = Function(x As Integer) x * 2
+    Dim r As Integer = f(5)
+    Dim g As Func(Of Double, Double) = Function(x As Double) x * 2.0
+    Dim d As Double = g(3)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("f(5)"));
+        // Implicit Integer -> Double widening must still be allowed
+        Assert.That(output, Does.Contain("g(3)"));
+    }
+
+    [Test]
+    public void Compile_ActionInvocation_WrongArgumentType_ReportsError()
+    {
+        var source = @"
+Sub Main()
+    Dim greet As Action(Of String) = Sub(name As String) Print(name)
+    greet(123)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(output, Is.Null, "Compilation should fail for wrong Action argument type");
+        Assert.That(errors, Is.Not.Empty);
+        var allErrors = string.Join("; ", errors);
+        Assert.That(allErrors, Does.Contain("cannot convert from 'Integer' to 'String'"));
+        Assert.That(allErrors, Does.Contain("Action(Of String)"));
+    }
+
+    [Test]
+    public void Compile_ActionInvocation_ValidArgument_Compiles()
+    {
+        var source = @"
+Sub Main()
+    Dim greet As Action(Of String) = Sub(name As String) Print(name)
+    greet(""hello"")
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("greet(\"hello\")"));
+    }
 }
