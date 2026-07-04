@@ -31,7 +31,10 @@ public class AutoSaveService : IAutoSaveService
 
     private void LoadSettings()
     {
-        var modeStr = _settingsService.Get<string>(SettingsKeys.AutoSave, "off");
+        // The Settings UI writes the VS Code-style "files.autoSave" keys.
+        // Fall back to the legacy Editor.* keys for older configuration files.
+        var legacyMode = _settingsService.Get<string>(SettingsKeys.AutoSave, "off");
+        var modeStr = _settingsService.Get("files.autoSave", legacyMode);
         Mode = modeStr?.ToLowerInvariant() switch
         {
             "afterdelay" => AutoSaveMode.AfterDelay,
@@ -40,13 +43,26 @@ public class AutoSaveService : IAutoSaveService
             _ => AutoSaveMode.Off
         };
 
-        DelayMilliseconds = _settingsService.Get(SettingsKeys.AutoSaveDelay, 1000);
+        var legacyDelay = _settingsService.Get(SettingsKeys.AutoSaveDelay, 1000);
+        DelayMilliseconds = _settingsService.Get("files.autoSaveDelay", legacyDelay);
+        if (DelayMilliseconds <= 0) DelayMilliseconds = 1000;
         SkipOnErrors = _settingsService.Get("files.autoSaveSkipOnErrors", false);
+
+        // Cancel any pending debounce timers when auto-save is turned off
+        // or switched away from AfterDelay mode.
+        if (Mode != AutoSaveMode.AfterDelay)
+        {
+            foreach (var key in _timers.Keys.ToList())
+            {
+                StopTimer(key);
+            }
+        }
     }
 
     private void OnSettingChanged(object? sender, SettingChangedEventArgs e)
     {
-        if (e.Key == SettingsKeys.AutoSave || e.Key == SettingsKeys.AutoSaveDelay ||
+        if (e.Key == "files.autoSave" || e.Key == "files.autoSaveDelay" ||
+            e.Key == SettingsKeys.AutoSave || e.Key == SettingsKeys.AutoSaveDelay ||
             e.Key == "files.autoSaveSkipOnErrors")
         {
             LoadSettings();
@@ -94,6 +110,8 @@ public class AutoSaveService : IAutoSaveService
         {
             timer.Dispose();
             _timers.TryRemove(filePath, out _);
+            // Re-check mode: settings may have changed while the timer was pending.
+            if (_disposed || Mode != AutoSaveMode.AfterDelay) return;
             await TrySaveDocumentAsync(filePath);
         };
 

@@ -311,6 +311,10 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Action> _documentCleanupActions = new(StringComparer.OrdinalIgnoreCase);
 
+    // Documents with a save currently in progress. Only touched on the UI thread;
+    // prevents an auto-save from overlapping a manual save (and vice versa).
+    private readonly HashSet<string> _documentsBeingSaved = new(StringComparer.OrdinalIgnoreCase);
+
     public MainWindowViewModel(
         IProjectService projectService,
         IBuildService buildService,
@@ -818,6 +822,9 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         _openDocuments.Remove(filePath);
+
+        // Stop auto-save tracking for the closed document (cancels any pending timer)
+        _autoSaveService.UnregisterDocument(filePath);
 
         // Remove blame cache for closed document
         _blameCache.Remove(filePath);
@@ -1893,7 +1900,19 @@ public partial class MainWindowViewModel : ViewModelBase
             };
             document.TextChanged += onTextChangedSemanticTokens;
 
-            // Add code lens and semantic token handlers to cleanup
+            // Auto-save (VS Code "afterDelay" behavior): register the document with the
+            // auto-save service and forward edits so its per-document debounce timer resets.
+            RegisterDocumentForAutoSave(document, filePath);
+            EventHandler<string>? onTextChangedAutoSave = (s, _) =>
+            {
+                if (!string.IsNullOrEmpty(document.FilePath))
+                {
+                    _autoSaveService.NotifyDocumentChanged(document.FilePath);
+                }
+            };
+            document.TextChanged += onTextChangedAutoSave;
+
+            // Add code lens, semantic token, and auto-save handlers to cleanup
             var existingCleanup = _documentCleanupActions.GetValueOrDefault(filePath);
             _documentCleanupActions[filePath] = () =>
             {
@@ -1901,6 +1920,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 document.CodeLensCommandRequested -= onCodeLensCmd;
                 document.TextChanged -= onTextChangedCodeLens;
                 document.TextChanged -= onTextChangedSemanticTokens;
+                document.TextChanged -= onTextChangedAutoSave;
                 semanticTokenCts?.Cancel();
                 semanticTokenCts?.Dispose();
             };
@@ -1952,20 +1972,10 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                // Apply trim trailing whitespace setting before saving
-                activeDoc.TrimTrailingWhitespaceOnSave =
-                    _settingsService?.Get("editor.trimTrailingWhitespaceOnSave", false) ?? false;
-
-                if (await activeDoc.SaveAsync())
+                if (await SaveDocumentCoreAsync(activeDoc))
                 {
-                    await NotifyLspDocumentSavedAsync(activeDoc);
-
-                    // Invalidate blame cache for saved file and refresh
-                    if (activeDoc.FilePath != null)
-                    {
-                        _blameCache.Remove(activeDoc.FilePath);
-                        _ = UpdateBlameForCurrentLineAsync(activeDoc);
-                    }
+                    // Refresh blame for the saved (active) document
+                    _ = UpdateBlameForCurrentLineAsync(activeDoc);
 
                     var fileName = activeDoc.FilePath != null ? Path.GetFileName(activeDoc.FilePath) : "File";
                     ShowStatusBarMessage($"{fileName} saved", 3.0);
@@ -1983,6 +1993,78 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Shared save path used by manual save, Save All, and auto-save so that
+    /// trim-on-save, LSP notifications, and blame invalidation stay consistent.
+    /// Returns false when the document has no file path (untitled) or when a
+    /// save for it is already in progress. Must be called on the UI thread.
+    /// </summary>
+    private async Task<bool> SaveDocumentCoreAsync(CodeEditorDocumentViewModel doc)
+    {
+        var filePath = doc.FilePath;
+        if (string.IsNullOrEmpty(filePath)) return false;
+
+        // Guard against overlapping saves (e.g. auto-save firing during a manual save)
+        if (!_documentsBeingSaved.Add(filePath)) return false;
+        try
+        {
+            // Apply trim trailing whitespace setting before saving
+            doc.TrimTrailingWhitespaceOnSave =
+                _settingsService?.Get("editor.trimTrailingWhitespaceOnSave", false) ?? false;
+
+            if (!await doc.SaveAsync()) return false;
+
+            await NotifyLspDocumentSavedAsync(doc);
+
+            // Invalidate blame cache for the saved file
+            _blameCache.Remove(filePath);
+            return true;
+        }
+        finally
+        {
+            _documentsBeingSaved.Remove(filePath);
+        }
+    }
+
+    /// <summary>
+    /// Registers a document with the auto-save service. The save callback marshals
+    /// to the UI thread (the auto-save timer fires on a threadpool thread) and then
+    /// runs the same save path as a manual save.
+    /// </summary>
+    private void RegisterDocumentForAutoSave(CodeEditorDocumentViewModel document, string filePath)
+    {
+        _autoSaveService.RegisterDocument(
+            filePath,
+            () => AutoSaveDocumentAsync(document),
+            () => document.IsDirty,
+            () => IsFileReadOnly(filePath));
+    }
+
+    private async Task<bool> AutoSaveDocumentAsync(CodeEditorDocumentViewModel document)
+    {
+        // The auto-save timer fires on a threadpool thread; all document/view-model
+        // access must be marshalled to the UI thread.
+        return await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            // Never auto-save untitled documents; re-check dirty state on the UI thread.
+            if (string.IsNullOrEmpty(document.FilePath) || !document.IsDirty) return false;
+            return await SaveDocumentCoreAsync(document);
+        });
+    }
+
+    private static bool IsFileReadOnly(string filePath)
+    {
+        try
+        {
+            var info = new FileInfo(filePath);
+            return info.Exists && info.IsReadOnly;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task NotifyLspDocumentSavedAsync(CodeEditorDocumentViewModel doc)
     {
         if (_languageService.IsConnected && doc.FilePath != null &&
@@ -1997,18 +2079,10 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveAllAsync()
     {
-        foreach (var doc in _openDocuments.Values.Where(d => d.IsDirty))
+        foreach (var doc in _openDocuments.Values.Where(d => d.IsDirty).ToList())
         {
-            if (await doc.SaveAsync())
-            {
-                await NotifyLspDocumentSavedAsync(doc);
-
-                // Invalidate blame cache for saved files
-                if (doc.FilePath != null)
-                {
-                    _blameCache.Remove(doc.FilePath);
-                }
-            }
+            // Shared save path (trim-on-save, LSP notify, blame invalidation)
+            await SaveDocumentCoreAsync(doc);
         }
 
         // Refresh blame for active document after saving all
@@ -5484,8 +5558,13 @@ public partial class MainWindowViewModel : ViewModelBase
             activeDoc.IsDirty = false;
 
             // Re-register under new path
-            if (oldPath != null) _openDocuments.Remove(oldPath);
+            if (oldPath != null)
+            {
+                _openDocuments.Remove(oldPath);
+                _autoSaveService.UnregisterDocument(oldPath);
+            }
             _openDocuments[filePath] = activeDoc;
+            RegisterDocumentForAutoSave(activeDoc, filePath);
 
             StatusText = $"Saved as: {Path.GetFileName(filePath)}";
         }

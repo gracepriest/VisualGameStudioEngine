@@ -319,6 +319,9 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private ObservableCollection<string> _autoSaveModes = new() { "off", "afterDelay", "onFocusChange", "onWindowChange" };
 
+    [ObservableProperty]
+    private int _autoSaveDelay = 1000;
+
     // Compiler Backend
     [ObservableProperty]
     private string _compilerBackend = "CSharp";
@@ -909,6 +912,7 @@ public partial class SettingsViewModel : ViewModelBase
 
             // ===== Files =====
             MakeCombo("files.autoSave", "Auto Save", "Controls auto save of editors.", "Files", nameof(AutoSaveMode), AutoSaveModes, "off"),
+            MakeNumeric("files.autoSaveDelay", "Auto Save Delay", "Delay in milliseconds after the last change before a dirty editor is auto saved. Only applies when Auto Save is set to afterDelay.", "Files", nameof(AutoSaveDelay), 100, 60000, 100, defaultValue: 1000),
         };
     }
 
@@ -1019,6 +1023,7 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(TerminalFontSize) => TerminalFontSize,
         nameof(DebugConsoleFontSize) => DebugConsoleFontSize,
         nameof(GitAutoFetchInterval) => GitAutoFetchInterval,
+        nameof(AutoSaveDelay) => AutoSaveDelay,
         _ => 0
     };
 
@@ -1032,6 +1037,7 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(TerminalFontSize): TerminalFontSize = value; break;
             case nameof(DebugConsoleFontSize): DebugConsoleFontSize = value; break;
             case nameof(GitAutoFetchInterval): GitAutoFetchInterval = value; break;
+            case nameof(AutoSaveDelay): AutoSaveDelay = value; break;
         }
 
         AutoSaveSettingToService(prop, value);
@@ -1170,6 +1176,7 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(ShowBuildOutput) => "build.showOutput",
         nameof(DefaultConfiguration) => "build.defaultConfiguration",
         nameof(AutoSaveMode) => "files.autoSave",
+        nameof(AutoSaveDelay) => "files.autoSaveDelay",
         _ => null
     };
 
@@ -1246,6 +1253,7 @@ public partial class SettingsViewModel : ViewModelBase
         WordWrapMode = "off";
         CursorBlinking = "blink";
         AutoSaveMode = "off";
+        AutoSaveDelay = 1000;
         CompilerBackend = "CSharp";
         TerminalFontFamily = "";
         TerminalFontSize = 14;
@@ -1329,6 +1337,7 @@ public partial class SettingsViewModel : ViewModelBase
         ShowBuildOutput = _settingsService.Get("build.showOutput", true, scope);
         DefaultConfiguration = _settingsService.Get("build.defaultConfiguration", "Debug", scope);
         AutoSaveMode = _settingsService.Get("files.autoSave", "off", scope);
+        AutoSaveDelay = _settingsService.Get("files.autoSaveDelay", 1000, scope);
         CompilerBackend = _settingsService.Get("basiclang.compiler.backend", "CSharp", scope);
         LspServerPath = _settingsService.Get("basiclang.lsp.path", "", scope);
         LspAutoStart = _settingsService.Get("basiclang.lsp.autoStart", true, scope);
@@ -1383,6 +1392,7 @@ public partial class SettingsViewModel : ViewModelBase
         _settingsService.Set("build.showOutput", ShowBuildOutput, scope);
         _settingsService.Set("build.defaultConfiguration", DefaultConfiguration, scope);
         _settingsService.Set("files.autoSave", AutoSaveMode, scope);
+        _settingsService.Set("files.autoSaveDelay", AutoSaveDelay, scope);
         _settingsService.Set("basiclang.compiler.backend", CompilerBackend, scope);
         _settingsService.Set("basiclang.lsp.path", LspServerPath, scope);
         _settingsService.Set("basiclang.lsp.autoStart", LspAutoStart, scope);
