@@ -4520,6 +4520,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // Task(Of T).Result unwraps to T; otherwise the generic .NET member
+            // lookup below yields Object and member chaining off .Result breaks.
+            if (node.MemberName == "Result" && IsTaskType(objectType))
+            {
+                var resultType = UnwrapTaskType(objectType);
+                if (resultType != null)
+                {
+                    SetNodeType(node, resultType);
+                    return;
+                }
+            }
+
             // Look up member in type
             if (objectType.Members.TryGetValue(node.MemberName, out var memberSymbol))
             {
