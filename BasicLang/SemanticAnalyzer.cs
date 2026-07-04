@@ -2888,6 +2888,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             TypeInfo bodyType = null;
             if (node.Body != null)
             {
+                // If the body is itself a lambda (curried form: Function(x) Function(y) ...),
+                // propagate the target delegate's RETURN type (last Func generic argument)
+                // so the inner lambda's parameters can be inferred too
+                if (node.Body is LambdaExpressionNode && targetType != null &&
+                    targetType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
+                    targetType.GenericArguments.Count > 0)
+                {
+                    _lambdaTargetType = targetType.GenericArguments[targetType.GenericArguments.Count - 1];
+                }
                 node.Body.Accept(this);
                 bodyType = GetNodeType(node.Body) ?? _typeManager.GetType("Object");
             }
@@ -2957,6 +2966,34 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return name != null &&
                    (name.Equals("Func", StringComparison.OrdinalIgnoreCase) ||
                     name.Equals("Action", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Visits a call argument, target-typing it when the argument is a lambda and
+        /// the corresponding parameter type is a Func/Action delegate. This lets
+        /// untyped lambda parameters be inferred from the callee's signature, e.g.
+        /// Apply(5, Function(x) x * 2) where Apply takes a Func(Of Integer, Integer).
+        /// The previous target type is saved/restored so nested lambdas and nested
+        /// calls each see only their own target context (and non-lambda arguments
+        /// never inherit an outer target type).
+        /// </summary>
+        private void VisitArgumentWithLambdaTarget(ExpressionNode argument, TypeInfo parameterType)
+        {
+            var savedTarget = _lambdaTargetType;
+            _lambdaTargetType = (argument is LambdaExpressionNode &&
+                                 parameterType != null &&
+                                 parameterType.Kind == TypeKind.Delegate &&
+                                 IsDelegateTypeName(parameterType.Name))
+                ? parameterType
+                : null;
+            try
+            {
+                argument.Accept(this);
+            }
+            finally
+            {
+                _lambdaTargetType = savedTarget;
+            }
         }
 
         public void Visit(CollectionInitializerNode node)
@@ -4496,14 +4533,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 (calleeSymbol == null || calleeSymbol.Kind == SymbolKind.Variable ||
                  calleeSymbol.Kind == SymbolKind.Parameter))
             {
-                foreach (var arg in node.Arguments)
+                // Compute parameter types first so lambda arguments can be target-typed
+                // (Func(Of T1, ..., TResult) excludes the trailing return type; Action(Of T1, ...) uses all)
+                var delegateParamTypes = GetDelegateParameterTypes(calleeType);
+
+                for (int i = 0; i < node.Arguments.Count; i++)
                 {
-                    arg.Accept(this);
+                    var targetParamType = delegateParamTypes != null && i < delegateParamTypes.Count
+                        ? delegateParamTypes[i]
+                        : null;
+                    VisitArgumentWithLambdaTarget(node.Arguments[i], targetParamType);
                 }
 
                 // Validate arguments against the delegate's parameter types
-                // (Func(Of T1, ..., TResult) excludes the trailing return type; Action(Of T1, ...) uses all)
-                var delegateParamTypes = GetDelegateParameterTypes(calleeType);
                 if (delegateParamTypes != null)
                 {
                     var delegateName = calleeSymbol?.Name ?? calleeType.Name;
@@ -4581,10 +4623,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // Check argument types
                     for (int i = 0; i < node.Arguments.Count; i++)
                     {
-                        node.Arguments[i].Accept(this);
-                        var argType = GetNodeType(node.Arguments[i]);
-
-                        TypeInfo paramType;
+                        // Resolve the parameter type BEFORE visiting the argument so that
+                        // an untyped lambda argument can infer its parameter types from
+                        // a Func/Action-typed parameter (target-typing)
+                        TypeInfo paramType = null;
                         if (i < calleeSymbol.Parameters.Count)
                         {
                             var param = calleeSymbol.Parameters[i];
@@ -4604,7 +4646,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             var paramArrayParam = calleeSymbol.Parameters.Last();
                             paramType = paramArrayParam.Type?.ElementType ?? paramArrayParam.Type;
                         }
-                        else
+
+                        VisitArgumentWithLambdaTarget(node.Arguments[i], paramType);
+                        var argType = GetNodeType(node.Arguments[i]);
+
+                        if (paramType == null)
                         {
                             continue;
                         }

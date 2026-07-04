@@ -14,6 +14,7 @@ namespace BasicLang.Compiler.IR
         private readonly SemanticAnalyzer _semanticAnalyzer;
         private IRModule _module;
         private IRFunction _currentFunction;
+        private int _lambdaCounter;
         private BasicBlock _currentBlock;
         private readonly Stack<LoopContext> _loopStack;
         private readonly Dictionary<string, Stack<IRVariable>> _variableVersions;
@@ -1061,8 +1062,12 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(LambdaExpressionNode node)
         {
-            // Generate a unique name for the lambda function
-            var lambdaName = $"__lambda_{_module.Functions.Count}";
+            // Generate a unique name for the lambda function.
+            // NOTE: must use a dedicated counter, not _module.Functions.Count — a nested
+            // lambda is visited before its enclosing lambda is added to the module, so
+            // both would otherwise get the same name and the backend would inline the
+            // wrong function at the call site.
+            var lambdaName = $"__lambda_{_lambdaCounter++}";
 
             // Determine return type from semantic analysis
             var lambdaType = _semanticAnalyzer.GetNodeType(node);

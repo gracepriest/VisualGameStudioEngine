@@ -327,4 +327,194 @@ End Sub";
         Assert.That(output, Is.Not.Null);
         Assert.That(output, Does.Contain("greet(\"hello\")"));
     }
+
+    // ========================================================================
+    // Lambda parameter inference from call arguments (target-typed arguments)
+    // ========================================================================
+
+    [Test]
+    public void Compile_UntypedLambdaArgument_InferredFromFuncParameter()
+    {
+        var source = @"
+Function Apply(n As Integer, f As Func(Of Integer, Integer)) As Integer
+    Return f(n)
+End Function
+
+Sub Main()
+    Dim r As Integer = Apply(5, Function(x) x * 2)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("Apply(5, (int x) => x * 2)"));
+        Assert.That(output, Does.Not.Contain("(object x)"));
+    }
+
+    [Test]
+    public void Compile_UntypedSubLambdaArgument_InferredFromActionParameter()
+    {
+        var source = @"
+Sub Announce(msg As String, a As Action(Of String))
+    a(msg)
+End Sub
+
+Sub Main()
+    Announce(""hello"", Sub(s) Print(s))
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("(string s) =>"));
+        Assert.That(output, Does.Not.Contain("(object s)"));
+    }
+
+    [Test]
+    public void Compile_UntypedMultiParamLambdaArgument_InferredFromFuncParameter()
+    {
+        var source = @"
+Function Combine(x As Integer, y As Integer, f As Func(Of Integer, Integer, Integer)) As Integer
+    Return f(x, y)
+End Function
+
+Sub Main()
+    Dim c As Integer = Combine(2, 3, Function(a, b) a + b)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("(int a, int b) => a + b"));
+    }
+
+    [Test]
+    public void Compile_UntypedLambdaArgument_InferredFromClassMethodParameter()
+    {
+        var source = @"
+Class Calculator
+    Public Function Compute(n As Integer, f As Func(Of Integer, Integer)) As Integer
+        Return f(n)
+    End Function
+End Class
+
+Sub Main()
+    Dim calc As New Calculator()
+    Dim m As Integer = calc.Compute(7, Function(x) x + 1)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("(int x) => x + 1"));
+    }
+
+    [Test]
+    public void Compile_NestedUntypedLambdaArguments_BothInferred()
+    {
+        // A lambda argument whose body contains another call with its own
+        // untyped lambda argument - the target-type context must nest correctly
+        var source = @"
+Function Apply(n As Integer, f As Func(Of Integer, Integer)) As Integer
+    Return f(n)
+End Function
+
+Sub Main()
+    Dim r As Integer = Apply(4, Function(x) Apply(x, Function(y) y + 1))
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("(int x)"));
+        Assert.That(output, Does.Contain("(int y) => y + 1"));
+        Assert.That(output, Does.Not.Contain("(object"));
+    }
+
+    [Test]
+    public void Compile_CurriedUntypedLambdaArgument_InnerInferredFromFuncReturnType()
+    {
+        // Function(x) Function(y) ... against Func(Of Integer, Func(Of Integer, Integer)):
+        // the inner lambda's parameter is inferred from the outer delegate's return type
+        var source = @"
+Function Twice(n As Integer, f As Func(Of Integer, Func(Of Integer, Integer))) As Integer
+    Dim g As Func(Of Integer, Integer) = f(n)
+    Return g(n)
+End Function
+
+Sub Main()
+    Dim r As Integer = Twice(3, Function(x) Function(y) x + y)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("(int x) => (int y) => x + y"));
+    }
+
+    [Test]
+    public void Compile_UntypedLambdaArgument_ToDelegateInvocation_Inferred()
+    {
+        // Passing an untyped lambda as an argument when invoking a delegate variable
+        // whose parameter type is itself a delegate
+        var source = @"
+Sub Main()
+    Dim h As Func(Of Func(Of Integer, Integer), Integer) = Function(f As Func(Of Integer, Integer)) f(10)
+    Dim r As Integer = h(Function(x) x + 1)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("(int x) => x + 1"));
+    }
+
+    [Test]
+    public void Compile_InferredLambdaArgument_IncompatibleBody_SingleError()
+    {
+        // Parameter type is inferred (x As Integer), but the body produces a String,
+        // so the lambda's delegate type does not match the parameter's - exactly one
+        // conversion error, no "cannot infer" cascade
+        var source = @"
+Function Apply(n As Integer, f As Func(Of Integer, Integer)) As Integer
+    Return f(n)
+End Function
+
+Sub Main()
+    Dim r As Integer = Apply(5, Function(x) x & ""str"")
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(output, Is.Null, "Compilation should fail for incompatible lambda body");
+        Assert.That(errors.Count, Is.EqualTo(1), string.Join("; ", errors));
+        Assert.That(errors[0], Does.Contain("cannot convert from 'Func<Integer, String>' to 'Func<Integer, Integer>'"));
+        Assert.That(errors[0], Does.Not.Contain("Cannot infer type"));
+    }
+
+    [Test]
+    public void Compile_UntypedLambdaArgument_NonDelegateParameter_ReportsClearError()
+    {
+        var source = @"
+Function TakesInt(n As Integer) As Integer
+    Return n
+End Function
+
+Sub Main()
+    Dim r As Integer = TakesInt(Function(x) x * 2)
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(output, Is.Null, "Compilation should fail for lambda in non-delegate position");
+        Assert.That(errors, Is.Not.Empty);
+        Assert.That(string.Join("; ", errors), Does.Contain("Cannot infer type for lambda parameter 'x'"));
+    }
 }
