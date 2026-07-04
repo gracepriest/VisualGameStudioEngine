@@ -12,7 +12,13 @@ namespace BasicLang.Debugger
     public class VariableInspector
     {
         private readonly Dictionary<int, object> _variableReferences = new(); // DAP ref ID → ICorDebugValue
-        private int _nextRefId = 1;
+
+        // Start high so variable reference IDs can never collide with the
+        // adapter's scope reference IDs (which start at 1 and are checked first
+        // in the variables request) — a collision makes child expansion of the
+        // first variables return scope contents instead of the object's fields.
+        private const int RefIdBase = 1_000_000;
+        private int _nextRefId = RefIdBase;
 
         // -------------------------------------------------------------------------
         // Public API
@@ -79,6 +85,10 @@ namespace BasicLang.Debugger
 
             try
             {
+                // Raw COM pointer registered by the raw-vtable inspection path
+                if (storedValue is IntPtr rawPtr && rawPtr != IntPtr.Zero)
+                    return RawGetChildren(rawPtr);
+
                 if (storedValue is ICorDebugObjectValue objectVal)
                     return GetObjectFields(objectVal);
 
@@ -95,11 +105,39 @@ namespace BasicLang.Debugger
 
         /// <summary>
         /// Get local variables from a stack frame.
+        ///
+        /// Accepts either an ICorDebugILFrame RCW or a boxed IntPtr to the raw
+        /// ICorDebugILFrame COM pointer (managed casts of mscordbi objects fail
+        /// unpredictably on .NET Core, so the raw-vtable path is preferred).
+        ///
+        /// Understands compiler-generated code from lambdas and async functions:
+        ///  - Async state-machine frames (&lt;Foo&gt;d__N.MoveNext): locals hoisted to
+        ///    fields like "&lt;n&gt;5__2" are surfaced with their original names; the
+        ///    raw compiler temp slots and plumbing fields are hidden.
+        ///  - Closure frames (&lt;&gt;c__DisplayClass...): captured variables (fields
+        ///    of 'this') are surfaced as locals with their original names.
+        ///  - Normal frames whose locals include a closure container
+        ///    ("CS$&lt;&gt;8__locals0"): the captured fields are appended as
+        ///    additional top-level locals.
         /// </summary>
         public List<DapVariable> GetLocals(object corDebugILFrame)
         {
-            var result = new List<DapVariable>();
+            // Preferred: raw-vtable inspection (robust against RCW cast failures)
+            var ctx = FrameContext.Acquire(corDebugILFrame);
+            if (ctx != null)
+            {
+                using (ctx)
+                {
+                    try { return RawGetLocals(ctx); }
+                    catch (Exception ex)
+                    {
+                        return new List<DapVariable> { MakeVariable("<error>", ex.Message, "Error", 0) };
+                    }
+                }
+            }
 
+            // Legacy fallback: managed COM interfaces
+            var result = new List<DapVariable>();
             if (corDebugILFrame is not ICorDebugILFrame ilFrame)
                 return result;
 
@@ -132,12 +170,29 @@ namespace BasicLang.Debugger
         }
 
         /// <summary>
-        /// Get arguments from a stack frame.
+        /// Get arguments from a stack frame. Accepts an ICorDebugILFrame RCW or a
+        /// boxed IntPtr (see GetLocals). Parameters are named from metadata; the
+        /// compiler-generated 'this' of closure frames is hidden, a real 'this'
+        /// is shown as "Me", and for async state-machine frames the hoisted
+        /// parameters (plain-named fields of the state machine) are returned.
         /// </summary>
         public List<DapVariable> GetArguments(object corDebugILFrame)
         {
-            var result = new List<DapVariable>();
+            var ctx = FrameContext.Acquire(corDebugILFrame);
+            if (ctx != null)
+            {
+                using (ctx)
+                {
+                    try { return RawGetArguments(ctx); }
+                    catch (Exception ex)
+                    {
+                        return new List<DapVariable> { MakeVariable("<error>", ex.Message, "Error", 0) };
+                    }
+                }
+            }
 
+            // Legacy fallback: managed COM interfaces
+            var result = new List<DapVariable>();
             if (corDebugILFrame is not ICorDebugILFrame ilFrame)
                 return result;
 
@@ -171,11 +226,19 @@ namespace BasicLang.Debugger
 
         /// <summary>
         /// Clear all cached variable references (call on continue/step).
+        /// Releases any raw COM pointers registered for child expansion.
         /// </summary>
         public void ClearReferences()
         {
+            foreach (var value in _variableReferences.Values)
+            {
+                if (value is IntPtr ptr && ptr != IntPtr.Zero)
+                {
+                    try { Marshal.Release(ptr); } catch { }
+                }
+            }
             _variableReferences.Clear();
-            _nextRefId = 1;
+            _nextRefId = RefIdBase;
         }
 
         // -------------------------------------------------------------------------
@@ -699,6 +762,903 @@ namespace BasicLang.Debugger
             {
                 return $"field_0x{fieldToken:X}";
             }
+        }
+
+        // =========================================================================
+        // Raw-vtable inspection engine
+        //
+        // mscordbi's ICorDebug* objects reject standard RCW interface casts on
+        // .NET Core in many contexts ("Unable to cast COM object"), while raw
+        // IUnknown::QueryInterface + direct vtable calls work reliably. This
+        // engine performs all frame/value access through raw vtable calls and
+        // understands the compiler-generated shapes produced for lambdas
+        // (closure display classes) and async functions (state machines).
+        // =========================================================================
+
+        private static readonly Guid IID_ICorDebugILFrame       = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+        private static readonly Guid IID_ICorDebugReferenceValue = new Guid("CC7BCAF9-8A68-11D2-983C-0000F808342D");
+        private static readonly Guid IID_ICorDebugGenericValue  = new Guid("CC7BCAF8-8A68-11D2-983C-0000F808342D");
+        private static readonly Guid IID_ICorDebugStringValue   = new Guid("CC7BCAF1-8A68-11D2-983C-0000F808342D");
+        private static readonly Guid IID_ICorDebugObjectValue   = new Guid("18AD3D6E-B7D2-11D2-BD04-0000F80849BD");
+        private static readonly Guid IID_ICorDebugBoxedValue    = new Guid("CC7BCAF3-8A68-11D2-983C-0000F808342D");
+        private static readonly Guid IID_ICorDebugArrayValue    = new Guid("0405B0DF-A660-11D2-BD02-0000F80849BD");
+        private static readonly Guid IID_IMetaDataImport        = new Guid("7DAC8207-D3AE-4C75-9B67-92801A497D44");
+
+        // Field attribute flags (CorHdr.h)
+        private const uint FdStatic  = 0x0010;
+        private const uint FdLiteral = 0x0040;
+        // Method attribute flags
+        private const uint MdStatic  = 0x0010;
+
+        // --- Raw delegate shapes -------------------------------------------------
+
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate int D_GetUInt(IntPtr self, out uint value);
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate int D_GetInt(IntPtr self, out int value);
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate int D_GetPtr(IntPtr self, out IntPtr value);
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate int D_GetIndexedPtr(IntPtr self, uint index, out IntPtr value);
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate int D_GetBuffer(IntPtr self, IntPtr dest);
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate int D_GetChars(IntPtr self, uint cch, out uint pcch,
+            [Out][MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] char[] buffer);
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate int D_GetMetaData(IntPtr self, ref Guid riid, out IntPtr ppObj);
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate int D_GetFieldValue(IntPtr self, IntPtr pClass, uint fieldDef, out IntPtr ppValue);
+
+        private static T Fn<T>(IntPtr comPtr, int slot) where T : Delegate =>
+            (T)Marshal.GetDelegateForFunctionPointer(
+                Marshal.ReadIntPtr(Marshal.ReadIntPtr(comPtr), slot * IntPtr.Size), typeof(T));
+
+        private static bool QI(IntPtr comPtr, Guid iid, out IntPtr result)
+        {
+            result = IntPtr.Zero;
+            if (comPtr == IntPtr.Zero) return false;
+            try
+            {
+                int hr = Marshal.QueryInterface(comPtr, ref iid, out result);
+                if (hr < 0 || result == IntPtr.Zero) { result = IntPtr.Zero; return false; }
+                return true;
+            }
+            catch { result = IntPtr.Zero; return false; }
+        }
+
+        private static void SafeRelease(IntPtr ptr)
+        {
+            if (ptr != IntPtr.Zero)
+            {
+                try { Marshal.Release(ptr); } catch { }
+            }
+        }
+
+        // --- Frame context -------------------------------------------------------
+
+        /// <summary>
+        /// Resolved raw-frame state: the ICorDebugILFrame pointer plus method/type
+        /// identity resolved from metadata. Owns one reference to FramePtr.
+        /// </summary>
+        private sealed class FrameContext : IDisposable
+        {
+            public IntPtr FramePtr;
+            public int FunctionToken;
+            public uint DeclTypeToken;
+            public uint MethodAttrs;
+            public string DeclTypeName = string.Empty;
+            public string MethodName = string.Empty;
+            public string ModulePath = string.Empty;
+            public IMetaDataImport Metadata;
+
+            /// <summary>
+            /// Accepts an ICorDebugILFrame RCW or a boxed IntPtr; returns null if
+            /// the raw ICorDebugILFrame interface cannot be obtained.
+            /// </summary>
+            public static FrameContext Acquire(object frame)
+            {
+                IntPtr unk = IntPtr.Zero;
+                bool ownUnk = false;
+                try
+                {
+                    if (frame is IntPtr p && p != IntPtr.Zero)
+                    {
+                        unk = p; // borrowed
+                    }
+                    else if (frame != null)
+                    {
+                        try { unk = Marshal.GetIUnknownForObject(frame); ownUnk = true; }
+                        catch { return null; }
+                    }
+                    if (unk == IntPtr.Zero) return null;
+
+                    if (!QI(unk, IID_ICorDebugILFrame, out var framePtr))
+                        return null;
+
+                    var ctx = new FrameContext { FramePtr = framePtr };
+                    ctx.Populate();
+                    return ctx;
+                }
+                finally
+                {
+                    if (ownUnk) SafeRelease(unk);
+                }
+            }
+
+            private void Populate()
+            {
+                try
+                {
+                    // ICorDebugFrame::GetFunctionToken — slot 6
+                    if (Fn<D_GetUInt>(FramePtr, 6)(FramePtr, out uint token) >= 0)
+                        FunctionToken = (int)token;
+
+                    // ICorDebugFrame::GetFunction — slot 5
+                    if (Fn<D_GetPtr>(FramePtr, 5)(FramePtr, out var funcPtr) < 0 || funcPtr == IntPtr.Zero)
+                        return;
+                    try
+                    {
+                        // ICorDebugFunction::GetClass — slot 4
+                        if (Fn<D_GetPtr>(funcPtr, 4)(funcPtr, out var classPtr) >= 0 && classPtr != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                // ICorDebugClass::GetToken — slot 4
+                                if (Fn<D_GetUInt>(classPtr, 4)(classPtr, out uint typeTok) >= 0)
+                                    DeclTypeToken = typeTok;
+                            }
+                            finally { SafeRelease(classPtr); }
+                        }
+
+                        // ICorDebugFunction::GetModule — slot 3
+                        if (Fn<D_GetPtr>(funcPtr, 3)(funcPtr, out var modulePtr) >= 0 && modulePtr != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                ModulePath = RawGetModuleName(modulePtr);
+                                Metadata = RawGetMetadata(modulePtr);
+                            }
+                            finally { SafeRelease(modulePtr); }
+                        }
+                    }
+                    finally { SafeRelease(funcPtr); }
+
+                    if (Metadata != null)
+                    {
+                        if (DeclTypeToken != 0)
+                            DeclTypeName = GetTypeNameFromToken(Metadata, DeclTypeToken) ?? string.Empty;
+                        (MethodName, MethodAttrs) = GetMethodNameAndAttrs(Metadata, (uint)FunctionToken);
+                    }
+                }
+                catch { /* keep whatever was resolved */ }
+            }
+
+            public void Dispose()
+            {
+                SafeRelease(FramePtr);
+                FramePtr = IntPtr.Zero;
+            }
+        }
+
+        private static string RawGetModuleName(IntPtr modulePtr)
+        {
+            try
+            {
+                // ICorDebugModule::GetName — slot 6
+                var buffer = new char[1024];
+                if (Fn<D_GetChars>(modulePtr, 6)(modulePtr, (uint)buffer.Length, out uint len, buffer) >= 0 && len > 1)
+                    return new string(buffer, 0, (int)len - 1);
+            }
+            catch { }
+            return string.Empty;
+        }
+
+        private static IMetaDataImport RawGetMetadata(IntPtr modulePtr)
+        {
+            try
+            {
+                // ICorDebugModule::GetMetaDataInterface — slot 14
+                Guid iid = IID_IMetaDataImport;
+                if (Fn<D_GetMetaData>(modulePtr, 14)(modulePtr, ref iid, out var mdPtr) >= 0 && mdPtr != IntPtr.Zero)
+                {
+                    try { return Marshal.GetObjectForIUnknown(mdPtr) as IMetaDataImport; }
+                    finally { SafeRelease(mdPtr); }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static string GetTypeNameFromToken(IMetaDataImport mdImport, uint typeToken)
+        {
+            try
+            {
+                var buffer = new char[1024];
+                int hr = mdImport.GetTypeDefProps(typeToken, buffer, (uint)buffer.Length,
+                    out uint len, out _, out _);
+                if (hr >= 0 && len > 1)
+                    return new string(buffer, 0, (int)len - 1);
+            }
+            catch { }
+            return null;
+        }
+
+        private static (string name, uint attrs) GetMethodNameAndAttrs(IMetaDataImport mdImport, uint methodToken)
+        {
+            try
+            {
+                var buffer = new char[512];
+                int hr = mdImport.GetMethodProps(methodToken, out _, buffer, (uint)buffer.Length,
+                    out uint len, out uint attrs, out _, out _, out _, out _);
+                if (hr >= 0 && len > 1)
+                    return (new string(buffer, 0, (int)len - 1), attrs);
+            }
+            catch { }
+            return (string.Empty, 0);
+        }
+
+        // --- PDB name cache ------------------------------------------------------
+
+        // Module path → SourceMapper (null when no PDB is available for the module)
+        private readonly Dictionary<string, SourceMapper> _pdbByModule =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private Dictionary<int, string> GetPdbLocalNames(FrameContext ctx)
+        {
+            if (string.IsNullOrEmpty(ctx.ModulePath))
+                return new Dictionary<int, string>();
+
+            if (!_pdbByModule.TryGetValue(ctx.ModulePath, out var mapper))
+            {
+                mapper = new SourceMapper();
+                bool ok = false;
+                try
+                {
+                    var pdbPath = System.IO.Path.ChangeExtension(ctx.ModulePath, ".pdb");
+                    ok = System.IO.File.Exists(pdbPath) && mapper.LoadPdb(pdbPath);
+                }
+                catch { }
+                if (!ok) { mapper.Dispose(); mapper = null; }
+                _pdbByModule[ctx.ModulePath] = mapper;
+            }
+
+            return mapper?.GetLocalVariableNames(ctx.FunctionToken) ?? new Dictionary<int, string>();
+        }
+
+        // --- Locals --------------------------------------------------------------
+
+        private List<DapVariable> RawGetLocals(FrameContext ctx)
+        {
+            bool isStateMachine = GeneratedNames.IsStateMachineType(ctx.DeclTypeName);
+            bool isDisplayClass = GeneratedNames.IsDisplayClassType(ctx.DeclTypeName);
+
+            // Async state-machine frame: user locals live as hoisted fields
+            // ("<n>5__2") on 'this'; the IL slot locals are compiler temps.
+            if (isStateMachine)
+            {
+                var hoisted = GetThisFields(ctx, HoistedKind.HoistedLocals);
+                if (hoisted.Count > 0)
+                    return hoisted;
+                // else fall through to slot locals (better than nothing)
+            }
+
+            var pdbNames = GetPdbLocalNames(ctx);
+            var result = new List<DapVariable>();
+            var closureExpansions = new List<int>(); // variablesReference of display-class locals
+
+            // ICorDebugILFrame::EnumerateLocalVariables — slot 13
+            uint count = 0;
+            if (Fn<D_GetPtr>(ctx.FramePtr, 13)(ctx.FramePtr, out var enumPtr) >= 0 && enumPtr != IntPtr.Zero)
+            {
+                try
+                {
+                    // ICorDebugEnum::GetCount — slot 6
+                    Fn<D_GetUInt>(enumPtr, 6)(enumPtr, out count);
+                }
+                finally { SafeRelease(enumPtr); }
+            }
+
+            for (uint i = 0; i < count; i++)
+            {
+                bool hasPdbName = pdbNames.TryGetValue((int)i, out var pdbName);
+
+                // In a state-machine frame without hoisted fields available we
+                // list raw slots; in normal frames unnamed slots are compiler
+                // temps but are kept (positionally) so PDB-based renaming and
+                // setVariable by index still line up.
+                IntPtr valPtr = IntPtr.Zero;
+                DapVariable dapVar;
+                try
+                {
+                    // ICorDebugILFrame::GetLocalVariable — slot 14
+                    int hr = Fn<D_GetIndexedPtr>(ctx.FramePtr, 14)(ctx.FramePtr, i, out valPtr);
+                    dapVar = (hr >= 0 && valPtr != IntPtr.Zero)
+                        ? RawInspect(valPtr, hasPdbName ? pdbName : $"local_{i}")
+                        : MakeVariable(hasPdbName ? pdbName : $"local_{i}", "<unavailable>", "Object", 0);
+                }
+                finally { SafeRelease(valPtr); }
+
+                // A closure container local ("CS$<>8__locals0", filtered out of
+                // pdbNames) — give it a friendly name and remember to surface
+                // its captured fields as top-level locals below.
+                if (!hasPdbName && GeneratedNames.IsDisplayClassType(dapVar.Type))
+                {
+                    dapVar.Name = "(closure)";
+                    if (dapVar.VariablesReference > 0)
+                        closureExpansions.Add(dapVar.VariablesReference);
+                }
+
+                result.Add(dapVar);
+            }
+
+            // Closure frame (lambda body): captured variables are fields of 'this'.
+            if (isDisplayClass)
+            {
+                foreach (var captured in GetThisFields(ctx, HoistedKind.All))
+                {
+                    if (!result.Exists(v => v.Name == captured.Name))
+                        result.Add(captured);
+                }
+            }
+
+            // Normal frame with closure containers: append the captured fields
+            // as top-level locals (after the positional slot list).
+            foreach (var refId in closureExpansions)
+            {
+                foreach (var field in GetChildren(refId))
+                {
+                    if (!GeneratedNames.IsPlumbingFieldName(field.Name) &&
+                        !result.Exists(v => v.Name == field.Name))
+                    {
+                        result.Add(field);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        // --- Arguments -----------------------------------------------------------
+
+        private List<DapVariable> RawGetArguments(FrameContext ctx)
+        {
+            bool isStateMachine = GeneratedNames.IsStateMachineType(ctx.DeclTypeName);
+            bool isDisplayClass = GeneratedNames.IsDisplayClassType(ctx.DeclTypeName);
+
+            // Async state-machine frame: the original parameters were hoisted to
+            // plain-named fields on the state machine.
+            if (isStateMachine)
+                return GetThisFields(ctx, HoistedKind.HoistedParameters);
+
+            var result = new List<DapVariable>();
+            bool hasThis = (ctx.MethodAttrs & MdStatic) == 0;
+            var paramNames = GetParamNamesFromMetadata(ctx);
+
+            // ICorDebugILFrame::EnumerateArguments — slot 15
+            uint count = 0;
+            if (Fn<D_GetPtr>(ctx.FramePtr, 15)(ctx.FramePtr, out var enumPtr) >= 0 && enumPtr != IntPtr.Zero)
+            {
+                try { Fn<D_GetUInt>(enumPtr, 6)(enumPtr, out count); }
+                finally { SafeRelease(enumPtr); }
+            }
+
+            for (uint i = 0; i < count; i++)
+            {
+                string name;
+                if (i == 0 && hasThis)
+                {
+                    // Hide the compiler-generated 'this' of closure classes;
+                    // show a real receiver as "Me".
+                    if (isDisplayClass || GeneratedNames.IsCompilerGeneratedType(ctx.DeclTypeName))
+                        continue;
+                    name = "Me";
+                }
+                else
+                {
+                    int paramIndex = hasThis ? (int)i - 1 : (int)i;
+                    name = paramNames.TryGetValue(paramIndex, out var pn) ? pn : $"arg_{i}";
+                }
+
+                IntPtr valPtr = IntPtr.Zero;
+                try
+                {
+                    // ICorDebugILFrame::GetArgument — slot 16
+                    int hr = Fn<D_GetIndexedPtr>(ctx.FramePtr, 16)(ctx.FramePtr, i, out valPtr);
+                    result.Add(hr >= 0 && valPtr != IntPtr.Zero
+                        ? RawInspect(valPtr, name)
+                        : MakeVariable(name, "<unavailable>", "Object", 0));
+                }
+                finally { SafeRelease(valPtr); }
+            }
+
+            return result;
+        }
+
+        /// <summary>Parameter names (0-based, excluding 'this') from metadata.</summary>
+        private static Dictionary<int, string> GetParamNamesFromMetadata(FrameContext ctx)
+        {
+            var result = new Dictionary<int, string>();
+            if (ctx.Metadata == null) return result;
+
+            try
+            {
+                for (uint seq = 1; seq <= 64; seq++)
+                {
+                    int hr = ctx.Metadata.GetParamForMethodIndex((uint)ctx.FunctionToken, seq, out uint paramToken);
+                    if (hr < 0 || paramToken == 0)
+                        break;
+
+                    var buffer = new char[512];
+                    hr = ctx.Metadata.GetParamProps(paramToken, out _, out uint sequence,
+                        buffer, (uint)buffer.Length, out uint len, out _, out _, out _, out _);
+                    if (hr >= 0 && len > 1 && sequence >= 1)
+                        result[(int)sequence - 1] = new string(buffer, 0, (int)len - 1);
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        // --- Hoisted/captured field extraction ------------------------------------
+
+        private enum HoistedKind
+        {
+            /// <summary>Hoisted locals: fields named "&lt;x&gt;5__N" (plus "&lt;&gt;4__this" as Me).</summary>
+            HoistedLocals,
+            /// <summary>Hoisted parameters: plain-named, non-plumbing fields.</summary>
+            HoistedParameters,
+            /// <summary>Everything except plumbing (closure captures).</summary>
+            All
+        }
+
+        /// <summary>
+        /// Reads the instance fields of the frame's 'this' argument (state machine
+        /// or closure object), demangles their names and filters out plumbing.
+        /// </summary>
+        private List<DapVariable> GetThisFields(FrameContext ctx, HoistedKind kind)
+        {
+            var result = new List<DapVariable>();
+            if (ctx.Metadata == null || ctx.DeclTypeToken == 0)
+                return result;
+
+            IntPtr thisArg = IntPtr.Zero;
+            try
+            {
+                // ICorDebugILFrame::GetArgument(0) — slot 16
+                int hr = Fn<D_GetIndexedPtr>(ctx.FramePtr, 16)(ctx.FramePtr, 0, out thisArg);
+                if (hr < 0 || thisArg == IntPtr.Zero)
+                    return result;
+
+                IntPtr objPtr = RawResolveToObject(thisArg);
+                if (objPtr == IntPtr.Zero)
+                    return result;
+
+                try
+                {
+                    result = ReadObjectFieldsRaw(objPtr, ctx.Metadata, ctx.DeclTypeToken, kind);
+                }
+                finally { SafeRelease(objPtr); }
+            }
+            catch { }
+            finally { SafeRelease(thisArg); }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Follows reference/boxed wrappers until an ICorDebugObjectValue is
+        /// reached. Returns an owned pointer (caller releases) or IntPtr.Zero.
+        /// </summary>
+        private static IntPtr RawResolveToObject(IntPtr valuePtr)
+        {
+            if (valuePtr == IntPtr.Zero) return IntPtr.Zero;
+
+            if (QI(valuePtr, IID_ICorDebugReferenceValue, out var refPtr))
+            {
+                try
+                {
+                    // ICorDebugReferenceValue::IsNull — slot 7
+                    if (Fn<D_GetInt>(refPtr, 7)(refPtr, out int isNull) < 0 || isNull != 0)
+                        return IntPtr.Zero;
+                    // ICorDebugReferenceValue::Dereference — slot 10
+                    if (Fn<D_GetPtr>(refPtr, 10)(refPtr, out var derefPtr) < 0 || derefPtr == IntPtr.Zero)
+                        return IntPtr.Zero;
+                    try { return RawResolveToObject(derefPtr); }
+                    finally { SafeRelease(derefPtr); }
+                }
+                finally { SafeRelease(refPtr); }
+            }
+
+            if (QI(valuePtr, IID_ICorDebugBoxedValue, out var boxPtr))
+            {
+                try
+                {
+                    // ICorDebugBoxedValue::GetObject — slot 9
+                    if (Fn<D_GetPtr>(boxPtr, 9)(boxPtr, out var innerPtr) >= 0 && innerPtr != IntPtr.Zero)
+                        return innerPtr; // already an object value (owned)
+                }
+                finally { SafeRelease(boxPtr); }
+                return IntPtr.Zero;
+            }
+
+            if (QI(valuePtr, IID_ICorDebugObjectValue, out var objPtr))
+                return objPtr; // owned
+
+            return IntPtr.Zero;
+        }
+
+        /// <summary>
+        /// Enumerates the instance fields of an object via metadata + raw
+        /// GetFieldValue calls, applying the HoistedKind filter and demangling.
+        /// </summary>
+        private List<DapVariable> ReadObjectFieldsRaw(IntPtr objPtr, IMetaDataImport mdImport,
+            uint typeToken, HoistedKind kind)
+        {
+            var result = new List<DapVariable>();
+
+            // ICorDebugObjectValue::GetClass — slot 7 (needed for GetFieldValue)
+            if (Fn<D_GetPtr>(objPtr, 7)(objPtr, out var classPtr) < 0 || classPtr == IntPtr.Zero)
+                return result;
+
+            IntPtr hEnum = IntPtr.Zero;
+            try
+            {
+                var fieldTokens = new uint[64];
+                while (true)
+                {
+                    int hr = mdImport.EnumFields(ref hEnum, typeToken, fieldTokens, (uint)fieldTokens.Length, out uint fetched);
+                    if (hr < 0 || fetched == 0)
+                        break;
+
+                    for (uint i = 0; i < fetched; i++)
+                    {
+                        uint fieldToken = fieldTokens[i];
+                        var (fieldName, fieldAttrs) = GetFieldNameAndAttrs(mdImport, fieldToken);
+
+                        if (string.IsNullOrEmpty(fieldName))
+                            continue;
+                        if ((fieldAttrs & (FdStatic | FdLiteral)) != 0)
+                            continue;
+
+                        bool isHoistedLocal = fieldName.Length > 1 && fieldName[0] == '<' &&
+                                              !fieldName.StartsWith("<>", StringComparison.Ordinal);
+                        bool isHoistedThis = fieldName.StartsWith("<>4__this", StringComparison.Ordinal);
+                        bool isPlumbing = GeneratedNames.IsPlumbingFieldName(fieldName);
+
+                        bool include = kind switch
+                        {
+                            HoistedKind.HoistedLocals => isHoistedLocal || isHoistedThis,
+                            HoistedKind.HoistedParameters => !isPlumbing && !isHoistedLocal && !isHoistedThis,
+                            _ => !isPlumbing
+                        };
+                        if (!include)
+                            continue;
+
+                        string displayName = GeneratedNames.DemangleMemberName(fieldName);
+
+                        IntPtr fieldValPtr = IntPtr.Zero;
+                        try
+                        {
+                            // ICorDebugObjectValue::GetFieldValue — slot 8
+                            hr = Fn<D_GetFieldValue>(objPtr, 8)(objPtr, classPtr, fieldToken, out fieldValPtr);
+                            result.Add(hr >= 0 && fieldValPtr != IntPtr.Zero
+                                ? RawInspect(fieldValPtr, displayName)
+                                : MakeVariable(displayName, "<unavailable>", "Object", 0));
+                        }
+                        finally { SafeRelease(fieldValPtr); }
+                    }
+
+                    if (fetched < (uint)fieldTokens.Length)
+                        break;
+                }
+            }
+            catch { }
+            finally
+            {
+                if (hEnum != IntPtr.Zero)
+                {
+                    try { mdImport.CloseEnum(hEnum); } catch { }
+                }
+                SafeRelease(classPtr);
+            }
+
+            return result;
+        }
+
+        private static (string name, uint attrs) GetFieldNameAndAttrs(IMetaDataImport mdImport, uint fieldToken)
+        {
+            try
+            {
+                var buffer = new char[512];
+                int hr = mdImport.GetFieldProps(fieldToken, out _, buffer, (uint)buffer.Length,
+                    out uint len, out uint attrs, out _, out _, out _, out _, out _);
+                if (hr >= 0 && len > 1)
+                    return (new string(buffer, 0, (int)len - 1), attrs);
+            }
+            catch { }
+            return (null, 0);
+        }
+
+        // --- Raw value inspection --------------------------------------------------
+
+        /// <summary>
+        /// Inspect a raw ICorDebugValue pointer (borrowed reference; this method
+        /// takes its own references as needed for child expansion).
+        /// </summary>
+        private DapVariable RawInspect(IntPtr valuePtr, string name, int depth = 0)
+        {
+            if (valuePtr == IntPtr.Zero || depth > 8)
+                return MakeVariable(name, "Nothing", "Object", 0);
+
+            try
+            {
+                // Reference → dereference (or Nothing)
+                if (QI(valuePtr, IID_ICorDebugReferenceValue, out var refPtr))
+                {
+                    try
+                    {
+                        if (Fn<D_GetInt>(refPtr, 7)(refPtr, out int isNull) < 0 || isNull != 0)
+                            return MakeVariable(name, "Nothing", "Object", 0);
+                        if (Fn<D_GetPtr>(refPtr, 10)(refPtr, out var derefPtr) < 0 || derefPtr == IntPtr.Zero)
+                            return MakeVariable(name, "Nothing", "Object", 0);
+                        try { return RawInspect(derefPtr, name, depth + 1); }
+                        finally { SafeRelease(derefPtr); }
+                    }
+                    finally { SafeRelease(refPtr); }
+                }
+
+                // Boxed value → unwrap
+                if (QI(valuePtr, IID_ICorDebugBoxedValue, out var boxPtr))
+                {
+                    try
+                    {
+                        if (Fn<D_GetPtr>(boxPtr, 9)(boxPtr, out var innerPtr) >= 0 && innerPtr != IntPtr.Zero)
+                        {
+                            try { return RawInspect(innerPtr, name, depth + 1); }
+                            finally { SafeRelease(innerPtr); }
+                        }
+                        return MakeVariable(name, "<boxed>", "Object", 0);
+                    }
+                    finally { SafeRelease(boxPtr); }
+                }
+
+                // String
+                if (QI(valuePtr, IID_ICorDebugStringValue, out var strPtr))
+                {
+                    try { return RawInspectString(strPtr, name); }
+                    finally { SafeRelease(strPtr); }
+                }
+
+                // Array
+                if (QI(valuePtr, IID_ICorDebugArrayValue, out var arrPtr))
+                {
+                    try
+                    {
+                        // ICorDebugArrayValue::GetElementType — slot 9; GetCount — slot 11
+                        int elemType = 0;
+                        uint count = 0;
+                        Fn<D_GetInt>(arrPtr, 9)(arrPtr, out elemType);
+                        Fn<D_GetUInt>(arrPtr, 11)(arrPtr, out count);
+                        string elemTypeName = CorElementTypeToTypeName((CorElementType)elemType);
+                        string typeName = $"{elemTypeName}({count})";
+                        int refId = count > 0 ? RegisterRawReference(arrPtr) : 0;
+                        return MakeVariable(name, typeName, typeName, refId);
+                    }
+                    finally { SafeRelease(arrPtr); }
+                }
+
+                // Object (class or struct instance)
+                if (QI(valuePtr, IID_ICorDebugObjectValue, out var objPtr))
+                {
+                    try
+                    {
+                        string typeName = RawGetObjectTypeName(objPtr) ?? "Object";
+                        typeName = MapToBasicLangTypeName(typeName);
+                        int refId = RegisterRawReference(objPtr);
+                        return MakeVariable(name, $"{{{typeName}}}", typeName, refId);
+                    }
+                    finally { SafeRelease(objPtr); }
+                }
+
+                // Primitive
+                if (QI(valuePtr, IID_ICorDebugGenericValue, out var genPtr))
+                {
+                    try { return RawInspectPrimitive(valuePtr, genPtr, name); }
+                    finally { SafeRelease(genPtr); }
+                }
+
+                // Fallback — type info only
+                int fallbackType = 0;
+                try { Fn<D_GetInt>(valuePtr, 3)(valuePtr, out fallbackType); } catch { }
+                var et = (CorElementType)fallbackType;
+                return MakeVariable(name, $"<{et}>", et.ToString(), 0);
+            }
+            catch (Exception ex)
+            {
+                return MakeVariable(name, $"<error: {ex.Message}>", "Error", 0);
+            }
+        }
+
+        private static DapVariable RawInspectString(IntPtr strPtr, string name)
+        {
+            // ICorDebugStringValue::GetLength — slot 9; GetString — slot 10
+            if (Fn<D_GetUInt>(strPtr, 9)(strPtr, out uint length) < 0)
+                return MakeVariable(name, "<unreadable string>", "String", 0);
+            if (length == 0)
+                return MakeVariable(name, "\"\"", "String", 0);
+
+            var buffer = new char[length + 1];
+            if (Fn<D_GetChars>(strPtr, 10)(strPtr, length + 1, out uint fetched, buffer) < 0)
+                return MakeVariable(name, "<unreadable string>", "String", 0);
+
+            string value = new string(buffer, 0, (int)Math.Min(fetched, length));
+            string escaped = EscapeString(value);
+            string preview = escaped.Length > 100 ? escaped.Substring(0, 100) + "..." : escaped;
+            return MakeVariable(name, $"\"{preview}\"", "String", 0);
+        }
+
+        private static DapVariable RawInspectPrimitive(IntPtr valuePtr, IntPtr genPtr, string name)
+        {
+            // ICorDebugValue::GetType — slot 3; GetSize — slot 4 (on the base value)
+            int elemTypeRaw = 0;
+            uint size = 0;
+            Fn<D_GetInt>(valuePtr, 3)(valuePtr, out elemTypeRaw);
+            Fn<D_GetUInt>(valuePtr, 4)(valuePtr, out size);
+            var elemType = (CorElementType)elemTypeRaw;
+
+            if (size == 0 || size > 64)
+                return MakeVariable(name, "<empty>", elemType.ToString(), 0);
+
+            IntPtr buffer = Marshal.AllocHGlobal((int)size);
+            try
+            {
+                // ICorDebugGenericValue::GetValue — slot 7
+                if (Fn<D_GetBuffer>(genPtr, 7)(genPtr, buffer) < 0)
+                    return MakeVariable(name, "<unreadable>", elemType.ToString(), 0);
+
+                var bytes = new byte[size];
+                Marshal.Copy(buffer, bytes, 0, (int)size);
+                string display = ReadPrimitiveValue(elemType, bytes);
+                return MakeVariable(name, display, CorElementTypeToTypeName(elemType), 0);
+            }
+            finally { Marshal.FreeHGlobal(buffer); }
+        }
+
+        private static string RawGetObjectTypeName(IntPtr objPtr)
+        {
+            // ICorDebugObjectValue::GetClass — slot 7
+            if (Fn<D_GetPtr>(objPtr, 7)(objPtr, out var classPtr) < 0 || classPtr == IntPtr.Zero)
+                return null;
+            try
+            {
+                // ICorDebugClass::GetToken — slot 4; GetModule — slot 3
+                if (Fn<D_GetUInt>(classPtr, 4)(classPtr, out uint typeToken) < 0)
+                    return null;
+                if (Fn<D_GetPtr>(classPtr, 3)(classPtr, out var modulePtr) < 0 || modulePtr == IntPtr.Zero)
+                    return null;
+                try
+                {
+                    var mdImport = RawGetMetadata(modulePtr);
+                    if (mdImport == null) return null;
+                    string fullName = GetTypeNameFromToken(mdImport, typeToken);
+                    if (string.IsNullOrEmpty(fullName)) return null;
+                    int dot = fullName.LastIndexOf('.');
+                    return dot >= 0 ? fullName.Substring(dot + 1) : fullName;
+                }
+                finally { SafeRelease(modulePtr); }
+            }
+            finally { SafeRelease(classPtr); }
+        }
+
+        // --- Raw children (object fields / array elements) -------------------------
+
+        private List<DapVariable> RawGetChildren(IntPtr rawPtr)
+        {
+            var result = new List<DapVariable>();
+
+            // Object fields
+            if (QI(rawPtr, IID_ICorDebugObjectValue, out var objPtr))
+            {
+                try
+                {
+                    // Resolve type + metadata from the object's class
+                    if (Fn<D_GetPtr>(objPtr, 7)(objPtr, out var classPtr) >= 0 && classPtr != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            if (Fn<D_GetUInt>(classPtr, 4)(classPtr, out uint typeToken) >= 0 &&
+                                Fn<D_GetPtr>(classPtr, 3)(classPtr, out var modulePtr) >= 0 && modulePtr != IntPtr.Zero)
+                            {
+                                try
+                                {
+                                    var mdImport = RawGetMetadata(modulePtr);
+                                    if (mdImport != null)
+                                        return ReadObjectFieldsRaw(objPtr, mdImport, typeToken, HoistedKind.All);
+                                }
+                                finally { SafeRelease(modulePtr); }
+                            }
+                        }
+                        finally { SafeRelease(classPtr); }
+                    }
+                }
+                finally { SafeRelease(objPtr); }
+                return result;
+            }
+
+            // Array elements
+            if (QI(rawPtr, IID_ICorDebugArrayValue, out var arrPtr))
+            {
+                try
+                {
+                    Fn<D_GetUInt>(arrPtr, 11)(arrPtr, out uint count);
+                    uint limit = Math.Min(count, 100);
+                    for (uint i = 0; i < limit; i++)
+                    {
+                        IntPtr elemPtr = IntPtr.Zero;
+                        try
+                        {
+                            // ICorDebugArrayValue::GetElementAtPosition — slot 16
+                            int hr = Fn<D_GetIndexedPtr>(arrPtr, 16)(arrPtr, i, out elemPtr);
+                            result.Add(hr >= 0 && elemPtr != IntPtr.Zero
+                                ? RawInspect(elemPtr, $"[{i}]")
+                                : MakeVariable($"[{i}]", "<unavailable>", "Object", 0));
+                        }
+                        finally { SafeRelease(elemPtr); }
+                    }
+                    if (count > limit)
+                        result.Add(MakeVariable("...", $"({count - limit} more elements)", "", 0));
+                }
+                finally { SafeRelease(arrPtr); }
+            }
+
+            return result;
+        }
+
+        // --- Frame name resolution (for stack traces) -------------------------------
+
+        /// <summary>
+        /// Resolves a user-facing frame name from a raw ICorDebugILFrame/ICorDebugFrame
+        /// pointer by reading the method + declaring type from the frame's OWN module
+        /// metadata (method tokens are only unique per module — searching other
+        /// modules produces garbage names). Compiler-generated names are demangled:
+        /// "&lt;&gt;c__DisplayClass0_0.&lt;Main&gt;b__0" → "Main.&lt;lambda&gt;",
+        /// "&lt;WorkAsync&gt;d__1.MoveNext" → "WorkAsync".
+        /// Returns null if resolution fails (callers should fall back).
+        /// </summary>
+        public static string ResolveFrameName(IntPtr framePtr)
+        {
+            if (framePtr == IntPtr.Zero) return null;
+            try
+            {
+                using var ctx = FrameContext.Acquire(framePtr);
+                if (ctx == null || string.IsNullOrEmpty(ctx.MethodName))
+                    return null;
+
+                string typeName = ctx.DeclTypeName ?? string.Empty;
+                // Strip namespace for display
+                int dot = typeName.LastIndexOf('.');
+                string simpleType = dot >= 0 ? typeName.Substring(dot + 1) : typeName;
+
+                string full = string.IsNullOrEmpty(simpleType)
+                    ? ctx.MethodName
+                    : $"{simpleType}.{ctx.MethodName}";
+
+                return GeneratedNames.DemangleFrameName(full) ?? full;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>Registers a raw COM pointer for child expansion (takes a reference).</summary>
+        private int RegisterRawReference(IntPtr ptr)
+        {
+            try { Marshal.AddRef(ptr); } catch { return 0; }
+            int refId = _nextRefId++;
+            _variableReferences[refId] = ptr;
+            return refId;
         }
 
         // -------------------------------------------------------------------------

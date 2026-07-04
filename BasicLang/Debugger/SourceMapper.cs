@@ -121,6 +121,54 @@ public sealed class SourceMapper : IDisposable
     }
 
     /// <summary>
+    /// Returns ALL (methodToken, ilOffset) pairs whose sequence points sit on the
+    /// nearest executable line at or after <paramref name="line"/>.
+    ///
+    /// A single .bas line can have IL in SEVERAL methods: a line containing a
+    /// lambda has sequence points both in the enclosing method and in the
+    /// compiler-generated closure method (&lt;&gt;c__DisplayClass...), and async
+    /// functions split lines between the kickoff method and the state-machine
+    /// MoveNext. Callers that bind breakpoints should bind to every returned
+    /// method so the breakpoint hits both when the line executes normally and
+    /// when the lambda/continuation is invoked.
+    /// For each method, the lowest IL offset on that line is returned.
+    /// </summary>
+    public IReadOnlyList<(int methodToken, int ilOffset)> GetAllILOffsetsForLine(string basFilePath, int line)
+    {
+        var result = new List<(int methodToken, int ilOffset)>();
+        basFilePath = NormalizePath(basFilePath);
+        line = UserLineToPdbLine(basFilePath, line);
+        if (!_sequencePointsByFile.TryGetValue(basFilePath, out var entries))
+            return result;
+
+        // Find the nearest executable line at or after the requested line
+        int? bestLine = null;
+        foreach (var entry in entries)
+        {
+            if (entry.StartLine < line)
+                continue;
+            if (bestLine == null || entry.StartLine < bestLine.Value)
+                bestLine = entry.StartLine;
+        }
+        if (bestLine == null)
+            return result;
+
+        // Collect the lowest IL offset per method on that line
+        var perMethod = new Dictionary<int, int>();
+        foreach (var entry in entries)
+        {
+            if (entry.StartLine != bestLine.Value)
+                continue;
+            if (!perMethod.TryGetValue(entry.MethodToken, out var existing) || entry.ILOffset < existing)
+                perMethod[entry.MethodToken] = entry.ILOffset;
+        }
+
+        foreach (var kvp in perMethod.OrderBy(k => k.Key))
+            result.Add((kvp.Key, kvp.Value));
+        return result;
+    }
+
+    /// <summary>
     /// Returns the source location (file, line, column) for a given method token and IL offset.
     /// Finds the sequence point whose IL offset is closest to (but not exceeding) the given offset.
     /// Returns <c>null</c> if no match is found.
@@ -326,10 +374,19 @@ public sealed class SourceMapper : IDisposable
                     var localVar = _pdbReader.GetLocalVariable(varHandle);
                     string name = _pdbReader.GetString(localVar.Name);
                     int slot = localVar.Index;
+
+                    // Skip compiler-generated locals (e.g. "CS$<>8__locals0" closure
+                    // containers, cached delegates). Omitting the slot (rather than
+                    // renaming it) lets callers keep their own friendly name for the
+                    // slot while positional slot->name mapping stays intact for the
+                    // remaining user locals.
+                    if (GeneratedNames.IsCompilerGeneratedLocalName(name))
+                        continue;
+
                     // Only store if not already present (outer scope takes precedence)
                     if (!result.ContainsKey(slot))
                     {
-                        result[slot] = name;
+                        result[slot] = GeneratedNames.DemangleMemberName(name);
                     }
                 }
             }
@@ -564,5 +621,185 @@ public sealed class SourceMapper : IDisposable
         public int EndColumn { get; set; }
         public int ILOffset { get; set; }
         public int MethodToken { get; set; }
+    }
+}
+
+/// <summary>
+/// Helpers for recognizing and demangling C#-compiler-generated names produced
+/// when BasicLang lambdas and async functions are compiled through the C#
+/// backend:
+///
+///   Closure classes:        &lt;&gt;c__DisplayClass0_0, &lt;&gt;c (no captures)
+///   Lambda methods:         &lt;Main&gt;b__0, &lt;Main&gt;b__0_0
+///   Local functions:        &lt;Main&gt;g__Helper|0_0
+///   Async state machines:   &lt;WorkAsync&gt;d__1 (method MoveNext)
+///   Hoisted locals:         &lt;n&gt;5__2            → n
+///   Hoisted 'this':         &lt;&gt;4__this          → Me
+///   Plumbing fields:        &lt;&gt;1__state, &lt;&gt;t__builder, &lt;&gt;u__1
+///   Closure locals:         CS$&lt;&gt;8__locals0 (slot in enclosing method)
+/// </summary>
+public static class GeneratedNames
+{
+    /// <summary>True for async/iterator state machine type names like "&lt;WorkAsync&gt;d__1".</summary>
+    public static bool IsStateMachineType(string typeName)
+    {
+        if (string.IsNullOrEmpty(typeName)) return false;
+        string simple = SimpleTypeName(typeName);
+        if (simple.Length < 4 || simple[0] != '<') return false;
+        int close = simple.IndexOf('>');
+        if (close <= 1) return false;
+        // "<Name>d__N"
+        return close + 1 < simple.Length && simple[close + 1] == 'd';
+    }
+
+    /// <summary>True for closure display class names like "&lt;&gt;c__DisplayClass0_0" or "&lt;&gt;c".</summary>
+    public static bool IsDisplayClassType(string typeName)
+    {
+        if (string.IsNullOrEmpty(typeName)) return false;
+        string simple = SimpleTypeName(typeName);
+        return simple.StartsWith("<>c", StringComparison.Ordinal);
+    }
+
+    /// <summary>True if the frame's declaring type is any compiler-generated nested type.</summary>
+    public static bool IsCompilerGeneratedType(string typeName) =>
+        IsStateMachineType(typeName) || IsDisplayClassType(typeName);
+
+    /// <summary>
+    /// Extracts the user-facing method name from a state machine type name:
+    /// "&lt;WorkAsync&gt;d__1" → "WorkAsync". Returns null when the pattern does not match.
+    /// </summary>
+    public static string GetStateMachineMethodName(string typeName)
+    {
+        if (string.IsNullOrEmpty(typeName)) return null;
+        string simple = SimpleTypeName(typeName);
+        if (simple.Length < 4 || simple[0] != '<') return null;
+        int close = simple.IndexOf('>');
+        if (close <= 1) return null;
+        return simple.Substring(1, close - 1);
+    }
+
+    /// <summary>
+    /// Extracts the containing method name from a generated lambda/local-function
+    /// method name: "&lt;Main&gt;b__0_0" → "Main". Returns null when not a generated name.
+    /// </summary>
+    public static string GetContainingMethodName(string methodName)
+    {
+        if (string.IsNullOrEmpty(methodName) || methodName[0] != '<') return null;
+        int close = methodName.IndexOf('>');
+        if (close <= 1) return null;
+        return methodName.Substring(1, close - 1);
+    }
+
+    /// <summary>
+    /// True for state-machine/closure plumbing fields that should be hidden from
+    /// the user: &lt;&gt;1__state, &lt;&gt;t__builder, &lt;&gt;u__1 (awaiters), cached delegates
+    /// (&lt;&gt;9__...), nested closure references, etc. The hoisted-this field
+    /// (&lt;&gt;4__this) is NOT plumbing — it is surfaced as "Me".
+    /// </summary>
+    public static bool IsPlumbingFieldName(string fieldName)
+    {
+        if (string.IsNullOrEmpty(fieldName)) return true;
+        if (!fieldName.StartsWith("<>", StringComparison.Ordinal)) return false;
+        if (fieldName.StartsWith("<>4__this", StringComparison.Ordinal)) return false;
+        return true; // <>1__state, <>t__builder, <>u__N, <>9, <>9__N, <>8__N (nested closures kept out)
+    }
+
+    /// <summary>
+    /// Demangles a hoisted/captured member name for display:
+    ///   "&lt;n&gt;5__2"   → "n"      (hoisted local in a state machine)
+    ///   "&lt;&gt;4__this" → "Me"     (hoisted enclosing instance)
+    ///   "captured"      → "captured" (closure fields keep their original name)
+    /// </summary>
+    public static string DemangleMemberName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.StartsWith("<>4__this", StringComparison.Ordinal)) return "Me";
+        if (name[0] == '<')
+        {
+            int close = name.IndexOf('>');
+            if (close > 1)
+                return name.Substring(1, close - 1);
+        }
+        return name;
+    }
+
+    /// <summary>
+    /// True for compiler-generated LOCAL variable names in the enclosing method,
+    /// e.g. "CS$&lt;&gt;8__locals0" (closure container) or other CS$ temps.
+    /// </summary>
+    public static bool IsCompilerGeneratedLocalName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return true;
+        return name.StartsWith("CS$", StringComparison.Ordinal) ||
+               name.StartsWith("<>", StringComparison.Ordinal) ||
+               name.StartsWith("<", StringComparison.Ordinal) && name.Contains('>') && name.Contains("__");
+    }
+
+    /// <summary>
+    /// Maps a compiler-generated "Type.Method" frame name back to a user-facing
+    /// name:
+    ///   "&lt;&gt;c__DisplayClass0_0.&lt;Main&gt;b__0" → "Main.&lt;lambda&gt;"
+    ///   "&lt;&gt;c.&lt;Main&gt;b__0_0"              → "Main.&lt;lambda&gt;"
+    ///   "&lt;WorkAsync&gt;d__1.MoveNext"           → "WorkAsync"
+    ///   "Program.&lt;Main&gt;g__Helper|0_0"        → "Main.Helper"
+    /// Returns null when the name is not a recognized generated pattern
+    /// (callers should then fall back to the raw name).
+    /// </summary>
+    public static string DemangleFrameName(string typeDotMethod)
+    {
+        if (string.IsNullOrEmpty(typeDotMethod)) return null;
+
+        int lastDot = typeDotMethod.LastIndexOf('.');
+        string typePart = lastDot > 0 ? typeDotMethod.Substring(0, lastDot) : string.Empty;
+        string methodPart = lastDot >= 0 ? typeDotMethod.Substring(lastDot + 1) : typeDotMethod;
+
+        // Async/iterator state machine: <WorkAsync>d__1.MoveNext → WorkAsync
+        if (IsStateMachineType(typePart) &&
+            (methodPart == "MoveNext" || methodPart == "MoveNextAsync"))
+        {
+            return GetStateMachineMethodName(typePart);
+        }
+
+        // Closure class: <>c__DisplayClass0_0.<Main>b__0 → Main.<lambda>
+        if (IsDisplayClassType(typePart))
+        {
+            string containing = GetContainingMethodName(methodPart);
+            return containing != null ? containing + ".<lambda>" : "<lambda>";
+        }
+
+        // Local function on a normal type: Program.<Main>g__Helper|0_0 → Main.Helper
+        if (methodPart.Length > 2 && methodPart[0] == '<')
+        {
+            int close = methodPart.IndexOf('>');
+            if (close > 1 && close + 2 < methodPart.Length && methodPart[close + 1] == 'g')
+            {
+                string containing = methodPart.Substring(1, close - 1);
+                int start = methodPart.IndexOf("__", close, StringComparison.Ordinal);
+                if (start > 0)
+                {
+                    int bar = methodPart.IndexOf('|', start);
+                    string local = bar > start + 2
+                        ? methodPart.Substring(start + 2, bar - start - 2)
+                        : methodPart.Substring(start + 2);
+                    return containing + "." + local;
+                }
+            }
+            // Lambda emitted directly on the containing type: Program.<Main>b__0_0
+            if (close > 1 && close + 1 < methodPart.Length && methodPart[close + 1] == 'b')
+            {
+                return methodPart.Substring(1, close - 1) + ".<lambda>";
+            }
+        }
+
+        return null;
+    }
+
+    private static string SimpleTypeName(string typeName)
+    {
+        // Strip namespace and enclosing type prefixes ("Ns.Outer+<Foo>d__1")
+        int plus = typeName.LastIndexOf('+');
+        int dot = typeName.LastIndexOf('.');
+        int cut = Math.Max(plus, dot);
+        return cut >= 0 && cut + 1 < typeName.Length ? typeName.Substring(cut + 1) : typeName;
     }
 }

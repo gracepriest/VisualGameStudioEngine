@@ -412,8 +412,12 @@ namespace BasicLang.Debugger
                     bool verified = false;
                     int actualLine = line;
 
-                    var ilInfo = _sourceMapper?.GetILOffsetForLine(sourcePath, line);
-                    if (ilInfo.HasValue && _loadedModules.Count > 0)
+                    // A single .bas line can have IL in multiple methods (enclosing
+                    // method + lambda closure method, or async kickoff + MoveNext).
+                    // Bind to ALL of them so the breakpoint hits in every context.
+                    // [edited by variable-inspection agent — see SourceMapper.GetAllILOffsetsForLine]
+                    var ilCandidates = _sourceMapper?.GetAllILOffsetsForLine(sourcePath, line);
+                    if (ilCandidates != null && ilCandidates.Count > 0 && _loadedModules.Count > 0)
                     {
                         actualLine = _sourceMapper.FindNearestExecutableLine(sourcePath, line);
                         // Try to bind on user modules (not system assemblies)
@@ -423,11 +427,15 @@ namespace BasicLang.Debugger
                             bool isSystem = modName.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
                                 modName.Equals("mscorlib.dll", StringComparison.OrdinalIgnoreCase) ||
                                 modName.Equals("netstandard.dll", StringComparison.OrdinalIgnoreCase);
-                            if (!isSystem && TryBindBreakpoint(entry, ilInfo.Value.methodToken, ilInfo.Value.ilOffset, kvp.Value))
+                            if (isSystem)
+                                continue;
+                            foreach (var cand in ilCandidates)
                             {
-                                verified = true;
-                                break;
+                                if (TryBindBreakpoint(entry, cand.methodToken, cand.ilOffset, kvp.Value))
+                                    verified = true;
                             }
+                            if (verified)
+                                break;
                         }
                     }
 
@@ -638,9 +646,14 @@ namespace BasicLang.Debugger
 
                                 if (isUserFrame)
                                 {
-                                    // Frame maps to .bas → the token belongs to a user
-                                    // module; resolve the name there for a correct match.
-                                    string methodName = GetMethodNameFromUserModules((int)functionToken)
+                                    // Resolve the method name from the frame's OWN module
+                                    // (method tokens are only unique per module — an
+                                    // all-modules search returns CoreLib garbage) and
+                                    // demangle compiler-generated lambda/async names.
+                                    // Fall back to a user-modules-only token search, then
+                                    // the legacy metadata lookup.
+                                    string methodName = VariableInspector.ResolveFrameName(ilFramePtr)
+                                        ?? GetMethodNameFromUserModules((int)functionToken)
                                         ?? GetMethodNameFromMetadata((int)functionToken);
                                     if (!string.IsNullOrEmpty(methodName))
                                     {
@@ -661,8 +674,11 @@ namespace BasicLang.Debugger
                                 }
                                 else
                                 {
-                                    // Non-user frame — mark as external code
-                                    string methodName = GetMethodNameFromMetadata((int)functionToken);
+                                    // Non-user frame — mark as external code.
+                                    // [edited by variable-inspection agent: resolve from the
+                                    // frame's own module first — see VariableInspector.ResolveFrameName]
+                                    string methodName = VariableInspector.ResolveFrameName(ilFramePtr)
+                                                        ?? GetMethodNameFromMetadata((int)functionToken);
                                     if (!string.IsNullOrEmpty(methodName))
                                         frameName = $"[External Code] {methodName}";
                                     else
@@ -792,15 +808,20 @@ namespace BasicLang.Debugger
                     {
                         List<DapVariable> dapVars = null;
 
-                        // Strategy 1: Managed COM interface (works when RCW cast succeeded)
-                        if (frameInfo.ManagedFrame != null)
+                        // Strategy 1: VariableInspector (raw-vtable engine; accepts the
+                        // managed RCW or a boxed raw ICorDebugILFrame pointer — the RCW
+                        // cast fails unpredictably for lambda/async frames, so fall back
+                        // to the raw pointer when ManagedFrame is null).
+                        // [edited by variable-inspection agent — see VariableInspector.cs]
+                        if (frameInfo.ManagedFrame != null || frameInfo.RawILFramePtr != IntPtr.Zero)
                         {
                             try
                             {
+                                object frameArg = frameInfo.ManagedFrame ?? (object)frameInfo.RawILFramePtr;
                                 if (scopeInfo.Kind == ScopeKind.Locals)
-                                    dapVars = _variableInspector.GetLocals(frameInfo.ManagedFrame);
+                                    dapVars = _variableInspector.GetLocals(frameArg);
                                 else
-                                    dapVars = _variableInspector.GetArguments(frameInfo.ManagedFrame);
+                                    dapVars = _variableInspector.GetArguments(frameArg);
 
                                 if (dapVars != null && dapVars.Count > 0 &&
                                     !dapVars.TrueForAll(v => v.Name == "<error>"))
@@ -2458,10 +2479,19 @@ namespace BasicLang.Debugger
             var pending = _breakpointManager.GetAllPending();
             foreach (var entry in pending)
             {
-                var ilInfo = _sourceMapper?.GetILOffsetForLine(entry.FilePath, entry.RequestedLine);
-                if (ilInfo.HasValue)
+                // Bind to every method containing IL for this line (lambda closure
+                // methods, async MoveNext, ...), not just the first match.
+                // [edited by variable-inspection agent — see SourceMapper.GetAllILOffsetsForLine]
+                var ilCandidates = _sourceMapper?.GetAllILOffsetsForLine(entry.FilePath, entry.RequestedLine);
+                if (ilCandidates != null && ilCandidates.Count > 0)
                 {
-                    if (TryBindBreakpoint(entry, ilInfo.Value.methodToken, ilInfo.Value.ilOffset, module))
+                    bool anyBound = false;
+                    foreach (var cand in ilCandidates)
+                    {
+                        if (TryBindBreakpoint(entry, cand.methodToken, cand.ilOffset, module))
+                            anyBound = true;
+                    }
+                    if (anyBound)
                     {
                         // Send breakpoint changed event to update IDE
                         var bpFilePath = entry.FilePath;
