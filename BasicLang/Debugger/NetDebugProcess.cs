@@ -21,6 +21,7 @@ namespace BasicLang.Debugger
     public class StepCompletedEventArgs : EventArgs
     {
         public int ThreadId { get; set; }
+        public CorDebugStepReason Reason { get; set; }
     }
 
     public class ExceptionThrownEventArgs : EventArgs
@@ -418,8 +419,8 @@ namespace BasicLang.Debugger
         internal void RaiseBreakpointHit(int threadId, ICorDebugBreakpoint bp) =>
             BreakpointHit?.Invoke(this, new BreakpointHitEventArgs { ThreadId = threadId, BreakpointToken = bp });
 
-        internal void RaiseStepCompleted(int threadId) =>
-            StepCompleted?.Invoke(this, new StepCompletedEventArgs { ThreadId = threadId });
+        internal void RaiseStepCompleted(int threadId, CorDebugStepReason reason = CorDebugStepReason.STEP_NORMAL) =>
+            StepCompleted?.Invoke(this, new StepCompletedEventArgs { ThreadId = threadId, Reason = reason });
 
         internal void RaiseExceptionThrown(int threadId, bool unhandled, string exceptionType, string message) =>
             ExceptionThrown?.Invoke(this, new ExceptionThrownEventArgs { ThreadId = threadId, IsUnhandled = unhandled, ExceptionType = exceptionType, ExceptionMessage = message });
@@ -449,6 +450,15 @@ namespace BasicLang.Debugger
         private class ManagedCallbackHandler : ICorDebugManagedCallback, ICorDebugManagedCallback2
         {
             private readonly NetDebugProcess _owner;
+
+            // Trace all ICorDebug callbacks to stderr when BASICLANG_DAP_TRACE=1
+            private static readonly bool _trace =
+                Environment.GetEnvironmentVariable("BASICLANG_DAP_TRACE") == "1";
+
+            private static void Trace(string msg)
+            {
+                if (_trace) Console.Error.WriteLine($"[DAP-CB] {msg}");
+            }
 
             public ManagedCallbackHandler(NetDebugProcess owner)
             {
@@ -499,25 +509,66 @@ namespace BasicLang.Debugger
                 catch { return 0; }
             }
 
-            private static void ContinueFromAppDomain(ICorDebugAppDomain pAppDomain)
+            private void ContinueFromAppDomain(ICorDebugAppDomain pAppDomain)
             {
-                if (pAppDomain == null) return;
-                try
+                // IMPORTANT: several callbacks (notably NameChange for a THREAD name
+                // change — which fires whenever a threadpool worker renames itself,
+                // i.e. on every async continuation) deliver a NULL pAppDomain.
+                // Returning without continuing leaves the process synchronized
+                // forever (deadlock). Fall back to continuing the process directly.
+                Trace("ContinueFromAppDomain enter");
+                bool continued = false;
+                if (pAppDomain != null)
                 {
-                    var adPtr = Marshal.GetIUnknownForObject(pAppDomain);
                     try
                     {
-                        var vtable = Marshal.ReadIntPtr(adPtr);
-                        // ICorDebugAppDomain: Continue is inherited from ICorDebugController at slot 3+1=4
+                        var adPtr = Marshal.GetIUnknownForObject(pAppDomain);
+                        try
+                        {
+                            var vtable = Marshal.ReadIntPtr(adPtr);
+                            // ICorDebugAppDomain: Continue is inherited from ICorDebugController at slot 3+1=4
+                            var continueSlot = Marshal.ReadIntPtr(vtable, 4 * IntPtr.Size);
+                            var continueFn = Marshal.GetDelegateForFunctionPointer<RawContinueDelegate>(continueSlot);
+                            int hr = continueFn(adPtr, 0);
+                            continued = hr >= 0;
+                        }
+                        finally { Marshal.Release(adPtr); }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[DAP] ContinueFromAppDomain error: {ex.Message}");
+                    }
+                }
+
+                if (!continued)
+                    ContinueViaProcess();
+                Trace("ContinueFromAppDomain exit");
+            }
+
+            /// <summary>
+            /// Continue the debuggee via ICorDebugProcess directly (raw vtable).
+            /// Used when a callback has no usable app domain pointer.
+            /// </summary>
+            private void ContinueViaProcess()
+            {
+                try
+                {
+                    var proc = _owner._corDebugProcess;
+                    if (proc == null) return;
+                    var pPtr = Marshal.GetIUnknownForObject(proc);
+                    try
+                    {
+                        var vtable = Marshal.ReadIntPtr(pPtr);
+                        // ICorDebugController::Continue is slot 3+1 = 4
                         var continueSlot = Marshal.ReadIntPtr(vtable, 4 * IntPtr.Size);
                         var continueFn = Marshal.GetDelegateForFunctionPointer<RawContinueDelegate>(continueSlot);
-                        continueFn(adPtr, 0);
+                        continueFn(pPtr, 0);
                     }
-                    finally { Marshal.Release(adPtr); }
+                    finally { Marshal.Release(pPtr); }
                 }
                 catch (Exception ex)
                 {
-                    Console.Error.WriteLine($"[DAP] ContinueFromAppDomain error: {ex.Message}");
+                    Console.Error.WriteLine($"[DAP] ContinueViaProcess error: {ex.Message}");
                 }
             }
 
@@ -771,6 +822,7 @@ namespace BasicLang.Debugger
 
             public int Breakpoint(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugBreakpoint pBreakpoint)
             {
+                Trace("Breakpoint");
                 try
                 {
                     StopProcess(pAppDomain);
@@ -788,12 +840,13 @@ namespace BasicLang.Debugger
 
             public int StepComplete(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, IntPtr pStepper, CorDebugStepReason reason)
             {
+                Trace("StepComplete");
                 try
                 {
                     Console.Error.WriteLine($"[DAP] StepComplete callback fired! reason={reason}");
                     StopProcess(pAppDomain);
                     int threadId = GetThreadId(pThread);
-                    _owner.RaiseStepCompleted(threadId);
+                    _owner.RaiseStepCompleted(threadId, reason);
                 }
                 catch (Exception ex)
                 {
@@ -805,6 +858,7 @@ namespace BasicLang.Debugger
 
             public int Break(ICorDebugAppDomain pAppDomain, ICorDebugThread thread)
             {
+                Trace("Break");
                 try
                 {
                     StopProcess(pAppDomain);
@@ -820,6 +874,7 @@ namespace BasicLang.Debugger
 
             public int Exception(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, bool unhandled)
             {
+                Trace("Exception");
                 // Callback1 Exception: always raise to the adapter and let it decide
                 // whether to stop (based on exception filters) or continue.
                 try
@@ -844,24 +899,28 @@ namespace BasicLang.Debugger
 
             public int EvalComplete(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugEval pEval)
             {
+                Trace("EvalComplete");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int EvalException(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugEval pEval)
             {
+                Trace("EvalException");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int CreateProcess(ICorDebugProcess pProcess)
             {
+                Trace("CreateProcess");
                 pProcess?.Continue(false);
                 return 0;
             }
 
             public int ExitProcess(ICorDebugProcess pProcess)
             {
+                Trace("ExitProcess");
                 int exitCode = 0;
                 try
                 {
@@ -878,6 +937,7 @@ namespace BasicLang.Debugger
 
             public int CreateThread(ICorDebugAppDomain pAppDomain, ICorDebugThread thread)
             {
+                Trace("CreateThread");
                 int threadId = GetThreadId(thread);
                 _owner.TrackThread(threadId, thread);
                 _owner.RaiseThreadCreated(threadId);
@@ -887,6 +947,7 @@ namespace BasicLang.Debugger
 
             public int ExitThread(ICorDebugAppDomain pAppDomain, ICorDebugThread thread)
             {
+                Trace("ExitThread");
                 int threadId = GetThreadId(thread);
                 _owner.UntrackThread(threadId);
                 _owner.RaiseThreadExited(threadId);
@@ -896,6 +957,7 @@ namespace BasicLang.Debugger
 
             public int LoadModule(ICorDebugAppDomain pAppDomain, ICorDebugModule pModule)
             {
+                Trace("LoadModule");
                 string path = GetModuleName(pModule);
                 string name = Path.GetFileName(path);
                 _owner.RaiseModuleLoaded(name, path, pModule);
@@ -905,42 +967,49 @@ namespace BasicLang.Debugger
 
             public int UnloadModule(ICorDebugAppDomain pAppDomain, ICorDebugModule pModule)
             {
+                Trace("UnloadModule");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int LoadClass(ICorDebugAppDomain pAppDomain, ICorDebugClass c)
             {
+                Trace("LoadClass");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int UnloadClass(ICorDebugAppDomain pAppDomain, ICorDebugClass c)
             {
+                Trace("UnloadClass");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int DebuggerError(ICorDebugProcess pProcess, int errorHR, uint errorCode)
             {
+                Trace("DebuggerError");
                 pProcess?.Continue(false);
                 return 0;
             }
 
             public int LogMessage(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, int lLevel, string pLogSwitchName, string pMessage)
             {
+                Trace("LogMessage");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int LogSwitch(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, int lLevel, uint ulReason, string pLogSwitchName, string pParentName)
             {
+                Trace("LogSwitch");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int CreateAppDomain(ICorDebugProcess pProcess, ICorDebugAppDomain pAppDomain)
             {
+                Trace("CreateAppDomain");
                 // Attach to the app domain so we get callbacks for it
                 pAppDomain?.Attach();
                 pProcess?.Continue(false);
@@ -949,48 +1018,56 @@ namespace BasicLang.Debugger
 
             public int ExitAppDomain(ICorDebugProcess pProcess, ICorDebugAppDomain pAppDomain)
             {
+                Trace("ExitAppDomain");
                 pProcess?.Continue(false);
                 return 0;
             }
 
             public int LoadAssembly(ICorDebugAppDomain pAppDomain, ICorDebugAssembly pAssembly)
             {
+                Trace("LoadAssembly");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int UnloadAssembly(ICorDebugAppDomain pAppDomain, ICorDebugAssembly pAssembly)
             {
+                Trace("UnloadAssembly");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int ControlCTrap(ICorDebugProcess pProcess)
             {
+                Trace("ControlCTrap");
                 pProcess?.Continue(false);
                 return 0;
             }
 
             public int NameChange(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread)
             {
+                Trace("NameChange");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int UpdateModuleSymbols(ICorDebugAppDomain pAppDomain, ICorDebugModule pModule, object pSymbolStream)
             {
+                Trace("UpdateModuleSymbols");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int EditAndContinueRemap(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugFunction pFunction, bool fAccurate)
             {
+                Trace("EditAndContinueRemap");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int BreakpointSetError(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugBreakpoint pBreakpoint, uint dwError)
             {
+                Trace("BreakpointSetError");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
@@ -1001,30 +1078,35 @@ namespace BasicLang.Debugger
 
             public int FunctionRemapOpportunity(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugFunction pOldFunction, ICorDebugFunction pNewFunction, uint oldILOffset)
             {
+                Trace("FunctionRemapOpportunity");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int CreateConnection(ICorDebugProcess pProcess, uint dwConnectionId, string pConnName)
             {
+                Trace("CreateConnection");
                 pProcess?.Continue(false);
                 return 0;
             }
 
             public int ChangeConnection(ICorDebugProcess pProcess, uint dwConnectionId)
             {
+                Trace("ChangeConnection");
                 pProcess?.Continue(false);
                 return 0;
             }
 
             public int DestroyConnection(ICorDebugProcess pProcess, uint dwConnectionId)
             {
+                Trace("DestroyConnection");
                 pProcess?.Continue(false);
                 return 0;
             }
 
             public int Exception(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugFrame pFrame, uint nOffset, CorDebugExceptionCallbackType dwEventType, uint dwFlags)
             {
+                Trace("Exception");
                 // Callback2 Exception: provides richer exception type classification.
                 // DEBUG_EXCEPTION_FIRST_CHANCE = thrown but may be caught
                 // DEBUG_EXCEPTION_USER_FIRST_CHANCE = first-chance in user code
@@ -1062,14 +1144,24 @@ namespace BasicLang.Debugger
                 return 0;
             }
 
+            public int ExceptionUnwind(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, CorDebugExceptionUnwindCallbackType dwEventType, uint dwFlags)
+            {
+                Trace("ExceptionUnwind");
+                // Unwind progress notification — nothing to surface to the IDE; keep running.
+                ContinueFromAppDomain(pAppDomain);
+                return 0;
+            }
+
             public int FunctionRemapComplete(ICorDebugAppDomain pAppDomain, ICorDebugThread pThread, ICorDebugFunction pFunction)
             {
+                Trace("FunctionRemapComplete");
                 ContinueFromAppDomain(pAppDomain);
                 return 0;
             }
 
             public int MDANotification(ICorDebugController pController, ICorDebugThread pThread, ICorDebugMDA pMDA)
             {
+                Trace("MDANotification");
                 // ICorDebugController can be either process or app domain
                 pController?.Continue(false);
                 return 0;

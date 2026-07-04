@@ -74,6 +74,12 @@ namespace BasicLang.Debugger
         DEBUG_EXCEPTION_UNHANDLED = 4
     }
 
+    public enum CorDebugExceptionUnwindCallbackType
+    {
+        DEBUG_EXCEPTION_UNWIND_BEGIN = 1,
+        DEBUG_EXCEPTION_INTERCEPTED = 2
+    }
+
     public enum CorDebugIntercept
     {
         INTERCEPT_NONE = 0x0,
@@ -1575,14 +1581,25 @@ namespace BasicLang.Debugger
             CorDebugExceptionCallbackType dwEventType,
             uint dwFlags);
 
-        // vtable slot 5
+        // vtable slot 5 — MUST be present: the real ICorDebugManagedCallback2 has
+        // ExceptionUnwind between Exception and FunctionRemapComplete. Omitting it
+        // shifts every following slot and the CLR ends up invoking the wrong method
+        // (FunctionRemapComplete for unwind events, garbage for MDANotification).
+        [PreserveSig]
+        int ExceptionUnwind(
+            [MarshalAs(UnmanagedType.Interface)] ICorDebugAppDomain pAppDomain,
+            [MarshalAs(UnmanagedType.Interface)] ICorDebugThread pThread,
+            CorDebugExceptionUnwindCallbackType dwEventType,
+            uint dwFlags);
+
+        // vtable slot 6
         [PreserveSig]
         int FunctionRemapComplete(
             [MarshalAs(UnmanagedType.Interface)] ICorDebugAppDomain pAppDomain,
             [MarshalAs(UnmanagedType.Interface)] ICorDebugThread pThread,
             [MarshalAs(UnmanagedType.Interface)] ICorDebugFunction pFunction);
 
-        // vtable slot 6
+        // vtable slot 7
         [PreserveSig]
         int MDANotification(
             [MarshalAs(UnmanagedType.Interface)] ICorDebugController pController,

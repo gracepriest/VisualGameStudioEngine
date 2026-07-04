@@ -638,8 +638,10 @@ namespace BasicLang.Debugger
 
                                 if (isUserFrame)
                                 {
-                                    // Try to get the real method name from metadata
-                                    string methodName = GetMethodNameFromMetadata((int)functionToken);
+                                    // Frame maps to .bas → the token belongs to a user
+                                    // module; resolve the name there for a correct match.
+                                    string methodName = GetMethodNameFromUserModules((int)functionToken)
+                                        ?? GetMethodNameFromMetadata((int)functionToken);
                                     if (!string.IsNullOrEmpty(methodName))
                                     {
                                         // Map C# generated names back to BasicLang names
@@ -1206,6 +1208,13 @@ namespace BasicLang.Debugger
             int threadId = args.TryGetProperty("threadId", out var tidProp) ? tidProp.GetInt32() : 0;
             bool singleThread = args.TryGetProperty("singleThread", out var stProp) && stProp.GetBoolean();
 
+            // Cancel any in-flight step machinery — an outstanding stepper or step
+            // catch-up breakpoint would otherwise fire a spurious stop later.
+            ReleaseActiveStepper(deactivate: true);
+            RemoveTempStepBreakpoint();
+            _jmcAutoStepCount = 0;
+            _stepInFlight = false;
+
             // Apply frozen thread states before continuing
             ApplyFrozenThreadStates();
 
@@ -1232,7 +1241,14 @@ namespace BasicLang.Debugger
                 var thread = GetThreadForId(threadId) ?? GetFirstThread();
                 if (thread != null)
                 {
+                    _lastStepWasInto = false;
+                    _jmcAutoStepCount = 0;
+                    RemoveTempStepBreakpoint();
                     RawCreateStepperAndStep(thread, stepInto: false);
+                    // Async safety net: if this line is an Await, the stepper's frame
+                    // returns and the continuation resumes on another thread.
+                    TryPlantStepCatchupBreakpoint(thread);
+                    _stepInFlight = true;
                     ApplyFrozenThreadStates();
                     RawContinueProcess();
                 }
@@ -1261,7 +1277,13 @@ namespace BasicLang.Debugger
                 var thread = GetThreadForId(threadId) ?? GetFirstThread();
                 if (thread != null)
                 {
+                    _lastStepWasInto = true;
+                    _jmcAutoStepCount = 0;
+                    RemoveTempStepBreakpoint();
                     RawCreateStepperAndStep(thread, stepInto: true);
+                    // Async safety net for stepping on an Await line
+                    TryPlantStepCatchupBreakpoint(thread);
+                    _stepInFlight = true;
                     ApplyFrozenThreadStates();
                     RawContinueProcess();
                 }
@@ -1290,7 +1312,11 @@ namespace BasicLang.Debugger
                 var thread = GetThreadForId(threadId) ?? GetFirstThread();
                 if (thread != null)
                 {
+                    _lastStepWasInto = false;
+                    _jmcAutoStepCount = 0;
+                    RemoveTempStepBreakpoint();
                     RawCreateStepperAndStepOut(thread);
+                    _stepInFlight = true;
                     ApplyFrozenThreadStates();
                     RawContinueProcess();
                 }
@@ -1837,17 +1863,26 @@ namespace BasicLang.Debugger
                 int dapThreadId = MapToDapThreadId(e.ThreadId);
                 string reason = "breakpoint";
 
-                // Check if this is a temporary step breakpoint
-                if (_isStepBreakpoint)
-                {
+                // Is this our temporary step catch-up breakpoint (COM identity check),
+                // or a real user breakpoint that happened to be hit while a step was
+                // in flight?
+                if (_isStepBreakpoint && IsTempStepBreakpoint(e.BreakpointToken))
                     reason = "step";
-                    RemoveTempStepBreakpoint();
-                }
+
+                // Any breakpoint stop cancels in-flight step machinery: the
+                // outstanding stepper (e.g. one left on the caller thread that is
+                // still blocked across an await) would otherwise fire a spurious
+                // StepComplete later.
+                ReleaseActiveStepper(deactivate: true);
+                RemoveTempStepBreakpoint();
+                _jmcAutoStepCount = 0;
+                _stepInFlight = false;
 
                 // For real breakpoints (not steps), evaluate all conditions
                 if (reason == "breakpoint")
                 {
-                    var entry = FindBreakpointEntryForCurrentLocation();
+                    var entry = FindBreakpointEntryForCurrentLocation(
+                        GetThreadForId(e.ThreadId) ?? GetFirstThread());
                     if (entry != null)
                     {
                         // Always increment hit count
@@ -1909,11 +1944,11 @@ namespace BasicLang.Debugger
         /// Resolve the current execution point to a ClrBreakpointEntry by reading the
         /// active frame's function token / IL offset and mapping to a source location.
         /// </summary>
-        private ClrBreakpointEntry FindBreakpointEntryForCurrentLocation()
+        private ClrBreakpointEntry FindBreakpointEntryForCurrentLocation(ICorDebugThread thread = null)
         {
             try
             {
-                var thread = GetFirstThread();
+                thread ??= GetFirstThread();
                 if (thread == null || _sourceMapper == null) return null;
 
                 var threadPtr = Marshal.GetIUnknownForObject(thread);
@@ -2008,16 +2043,47 @@ namespace BasicLang.Debugger
         {
             try
             {
+                // Orphan StepComplete (queued callback from a stepper that was already
+                // deactivated because a breakpoint reported this stop) — swallow it,
+                // otherwise the process is left suspended with a spurious stop event.
+                if (!_stepInFlight)
+                {
+                    RawContinueProcess();
+                    return;
+                }
+
+                // The stepper that fired is finished — drop our handle (no deactivation
+                // needed; a completed stepper is inert).
+                ReleaseActiveStepper(deactivate: false);
+
+                // Async step-over: the stepper completed because the state-machine
+                // frame RETURNED (await suspension). The logical "next line" will run
+                // when the continuation resumes — usually on a different threadpool
+                // thread — and the armed catch-up breakpoint will catch it there.
+                // Suppress this physical stop and keep running.
+                if (e.Reason == CorDebugStepReason.STEP_RETURN &&
+                    _isStepBreakpoint && _tempStepBreakpoint != IntPtr.Zero)
+                {
+                    RawContinueProcess();
+                    return;
+                }
+
                 // "Just My Code" — if we landed in non-user code (framework/library),
                 // automatically step again until we're back in .bas user code.
-                // Uses a retry counter (max 100) to prevent infinite loops in case
-                // we never land back in user code.
+                // The counter is a FIELD (persistent across StepComplete callbacks —
+                // a local counter would reset on every callback, making the cap
+                // meaningless) and is reset whenever a new user step starts or a
+                // stop is reported.
                 const int maxRetries = 100;
-                int retryCount = 0;
 
-                while (retryCount < maxRetries)
+                // IMPORTANT: use the thread the callback was delivered on. Async
+                // continuations run on threadpool threads; inspecting/re-stepping
+                // "the first thread" (the main thread) chases the wrong stack.
+                var callbackThread = GetThreadForId(e.ThreadId) ?? GetFirstThread();
+
+                while (_jmcAutoStepCount < maxRetries)
                 {
-                    var thread = GetFirstThread();
+                    var thread = callbackThread;
                     if (thread == null || _sourceMapper == null)
                         break;
 
@@ -2076,10 +2142,14 @@ namespace BasicLang.Debugger
                     if (isUser)
                         break; // We're in user code — send the stopped event
 
-                    // Not user code — step again automatically
+                    // Not user code — step again automatically. Preserve the step
+                    // KIND: a step-into request must keep stepping INTO through the
+                    // async kickoff stub, otherwise it steps over the state machine
+                    // and never enters the Async Function body.
                     try
                     {
-                        RawCreateStepperAndStep(thread, stepInto: false);
+                        _jmcAutoStepCount++;
+                        RawCreateStepperAndStep(thread, stepInto: _lastStepWasInto);
                         RawContinueProcess();
                         return; // Don't send stopped event; the next StepCompleted callback will re-check
                     }
@@ -2089,6 +2159,11 @@ namespace BasicLang.Debugger
                         break;
                     }
                 }
+
+                // Reporting a stop — tear down remaining step machinery.
+                RemoveTempStepBreakpoint();
+                _jmcAutoStepCount = 0;
+                _stepInFlight = false;
 
                 int dapThreadId = MapToDapThreadId(e.ThreadId);
                 await SendEventAsync("stopped", new Dictionary<string, object>
@@ -2198,6 +2273,10 @@ namespace BasicLang.Debugger
                 {
                     TryBindPendingBreakpoints(e.Module);
                 }
+
+                // Mark JMC status for runtime Just-My-Code stepping:
+                // user modules = user code, system assemblies = not user code.
+                TrySetModuleJmcStatus(e.Module, isUserCode: !isSystemModule);
 
                 await SendEventAsync("output", new Dictionary<string, object>
                 {
@@ -2647,7 +2726,29 @@ namespace BasicLang.Debugger
         private bool IsUserCode(int methodToken, int ilOffset)
         {
             var loc = _sourceMapper?.GetSourceLocation(methodToken, ilOffset);
-            return loc != null && loc.Value.file.EndsWith(".bas", StringComparison.OrdinalIgnoreCase);
+            if (loc == null || !loc.Value.file.EndsWith(".bas", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Hidden-region check: SourceMapper drops hidden sequence points, so an
+            // IL offset inside compiler-generated plumbing (async state-machine save/
+            // resume blocks, epilogues) gets mapped to the closest PRECEDING real
+            // line. Detect that by checking whether the offset actually lies within
+            // the reported line's IL range; if not, this is hidden code and the
+            // JMC auto-step should keep going instead of reporting a bogus stop
+            // (classic symptom: step-over of an Await "lands" on the method's last
+            // Return line because the suspend path jumped to the hidden epilogue).
+            try
+            {
+                var range = _sourceMapper.GetILRangeForLine(methodToken, loc.Value.line);
+                if (range.HasValue &&
+                    (ilOffset < range.Value.startOffset || ilOffset >= range.Value.endOffset))
+                {
+                    return false;
+                }
+            }
+            catch { /* if range lookup fails, keep legacy behavior */ }
+
+            return true;
         }
 
         /// <summary>
@@ -2655,6 +2756,71 @@ namespace BasicLang.Debugger
         /// Walks the loaded modules to find the one that owns this token.
         /// Returns null if metadata is not available.
         /// </summary>
+        /// <summary>
+        /// Resolve a method token to its name using ONLY user (non-system) modules.
+        /// Method tokens are per-module — probing every loaded module returns the
+        /// name of whatever method happens to share the token in the first module
+        /// probed (usually System.Private.CoreLib), which is garbage. When the
+        /// caller already knows the token belongs to user code (e.g. it mapped to a
+        /// .bas source location via the PDB), this overload gives the correct name.
+        /// </summary>
+        private string GetMethodNameFromUserModules(int methodToken)
+        {
+            try
+            {
+                foreach (var kvp in _loadedModules)
+                {
+                    var modName = Path.GetFileName(kvp.Key);
+                    bool isSystem = modName.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
+                        modName.Equals("mscorlib.dll", StringComparison.OrdinalIgnoreCase) ||
+                        modName.Equals("netstandard.dll", StringComparison.OrdinalIgnoreCase);
+                    if (isSystem) continue;
+
+                    var name = GetMethodNameFromModule(kvp.Value, methodToken);
+                    if (name != null) return name;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static string GetMethodNameFromModule(ICorDebugModule module, int methodToken)
+        {
+            try
+            {
+                Guid imdImportGuid = new Guid("7DAC8207-D3AE-4C75-9B67-92801A497D44");
+                module.GetMetaDataInterface(ref imdImportGuid, out object mdObj);
+                if (mdObj is not IMetaDataImport mdImport) return null;
+
+                char[] methodNameBuf = new char[512];
+                int hr = mdImport.GetMethodProps(
+                    (uint)methodToken,
+                    out uint classToken,
+                    methodNameBuf,
+                    (uint)methodNameBuf.Length,
+                    out uint methodNameLen,
+                    out _, out _, out _, out _, out _);
+                if (hr < 0 || methodNameLen == 0) return null;
+
+                string methodName = new string(methodNameBuf, 0, (int)methodNameLen - 1);
+
+                if (classToken != 0)
+                {
+                    char[] typeNameBuf = new char[512];
+                    hr = mdImport.GetTypeDefProps(
+                        classToken, typeNameBuf, (uint)typeNameBuf.Length,
+                        out uint typeNameLen, out _, out _);
+                    if (hr >= 0 && typeNameLen > 0)
+                    {
+                        string typeName = new string(typeNameBuf, 0, (int)typeNameLen - 1);
+                        return $"{typeName}.{methodName}";
+                    }
+                }
+                return methodName;
+            }
+            catch { return null; }
+        }
+
         private string GetMethodNameFromMetadata(int methodToken)
         {
             try
@@ -3607,6 +3773,256 @@ namespace BasicLang.Debugger
         private IntPtr _tempStepBreakpoint = IntPtr.Zero;
         private bool _isStepBreakpoint; // true if next breakpoint hit is from a step
 
+        // --- Async-aware stepping state ---
+        // Outstanding stepper (raw COM ptr). Kept so a stop from another source
+        // (breakpoint / step catch-up) can deactivate it — otherwise it fires a
+        // spurious StepComplete later (e.g. after an await, when the blocked
+        // caller thread finally returns).
+        private IntPtr _activeStepperPtr = IntPtr.Zero;
+        private bool _lastStepWasInto;   // last user step request was stepIn (JMC auto-step must preserve this)
+        private int _jmcAutoStepCount;   // persistent auto-step counter across StepComplete callbacks
+        private bool _jmcModuleMarked;   // a user module was successfully marked as JMC user-code
+
+        // True while a user-initiated step is logically in progress. When a stepper
+        // and the step catch-up breakpoint trigger at the SAME IL offset (await that
+        // completed synchronously), ICorDebug queues BOTH callbacks; the breakpoint
+        // one reports the stop, and the queued StepComplete from the (already
+        // deactivated) stepper must be swallowed — otherwise it emits a spurious
+        // stopped event and leaves the process suspended forever.
+        private volatile bool _stepInFlight;
+
+        /// <summary>
+        /// Release (and optionally deactivate) the outstanding stepper.
+        /// </summary>
+        private void ReleaseActiveStepper(bool deactivate)
+        {
+            var ptr = _activeStepperPtr;
+            if (ptr == IntPtr.Zero) return;
+            _activeStepperPtr = IntPtr.Zero;
+            try
+            {
+                if (deactivate)
+                {
+                    // ICorDebugStepper::Deactivate is slot 4 (IUnknown(3) + IsActive(0) + Deactivate(1))
+                    var vtable = Marshal.ReadIntPtr(ptr);
+                    var deactivateSlot = Marshal.ReadIntPtr(vtable, 4 * IntPtr.Size);
+                    var deactivateFn = Marshal.GetDelegateForFunctionPointer<StepperDeactivateDelegate>(deactivateSlot);
+                    deactivateFn(ptr);
+                }
+            }
+            catch { }
+            try { Marshal.Release(ptr); } catch { }
+        }
+
+        /// <summary>
+        /// COM-identity check: is the breakpoint delivered by the Breakpoint callback
+        /// our temporary step catch-up breakpoint (as opposed to a user breakpoint)?
+        /// </summary>
+        private bool IsTempStepBreakpoint(ICorDebugBreakpoint bp)
+        {
+            if (_tempStepBreakpoint == IntPtr.Zero) return false;
+            if (bp == null) return true; // cannot compare — preserve legacy assumption
+            try
+            {
+                Guid iidUnknown = new Guid("00000000-0000-0000-C000-000000000046");
+                IntPtr bpUnk = IntPtr.Zero, tmpUnk = IntPtr.Zero;
+                var bpPtr = Marshal.GetIUnknownForObject(bp);
+                try
+                {
+                    Marshal.QueryInterface(bpPtr, ref iidUnknown, out bpUnk);
+                    Marshal.QueryInterface(_tempStepBreakpoint, ref iidUnknown, out tmpUnk);
+                    return bpUnk != IntPtr.Zero && bpUnk == tmpUnk;
+                }
+                finally
+                {
+                    if (bpUnk != IntPtr.Zero) Marshal.Release(bpUnk);
+                    if (tmpUnk != IntPtr.Zero) Marshal.Release(tmpUnk);
+                    Marshal.Release(bpPtr);
+                }
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// If the thread's active frame is an async state-machine MoveNext method,
+        /// plant a temporary breakpoint on the next executable line of that method.
+        /// Stepping over an Await line physically RETURNS from MoveNext and the
+        /// continuation resumes later — often on a different threadpool thread where
+        /// the stepper cannot fire. This catch-up breakpoint is what catches the
+        /// continuation and turns it into a "step" stop.
+        /// </summary>
+        private void TryPlantStepCatchupBreakpoint(ICorDebugThread thread)
+        {
+            if (thread == null || _sourceMapper == null) return;
+            try
+            {
+                var threadPtr = Marshal.GetIUnknownForObject(thread);
+                try
+                {
+                    var vtable = Marshal.ReadIntPtr(threadPtr);
+                    var getActiveFrameSlot = Marshal.ReadIntPtr(vtable, 15 * IntPtr.Size);
+                    var getActiveFrame = Marshal.GetDelegateForFunctionPointer<GetActiveFrameDelegate>(getActiveFrameSlot);
+                    int hr = getActiveFrame(threadPtr, out var framePtr);
+                    if (hr < 0 || framePtr == IntPtr.Zero) return;
+
+                    try
+                    {
+                        var frameVtable = Marshal.ReadIntPtr(framePtr);
+                        var getFnTokenSlot = Marshal.ReadIntPtr(frameVtable, 6 * IntPtr.Size);
+                        var getFnToken = Marshal.GetDelegateForFunctionPointer<GetFunctionTokenDelegate>(getFnTokenSlot);
+                        getFnToken(framePtr, out uint functionToken);
+
+                        // Only for compiler-generated async state machines.
+                        // The token maps to .bas via the PDB, so it MUST live in a
+                        // user module — resolve the name there (probing all modules
+                        // returns whichever method shares the token in CoreLib).
+                        string methodName = GetMethodNameFromUserModules((int)functionToken);
+                        if (methodName == null || !methodName.Contains("MoveNext"))
+                            return;
+
+                        Guid iidILFrame = new Guid("03E26311-4F76-11D3-88C6-006097945418");
+                        int qiHr = Marshal.QueryInterface(framePtr, ref iidILFrame, out IntPtr ilFramePtr);
+                        uint currentIL = 0;
+                        if (qiHr >= 0 && ilFramePtr != IntPtr.Zero)
+                        {
+                            var ilFrameVtable = Marshal.ReadIntPtr(ilFramePtr);
+                            var getIPSlot = Marshal.ReadIntPtr(ilFrameVtable, 11 * IntPtr.Size);
+                            var getIP = Marshal.GetDelegateForFunctionPointer<GetIPDelegate>(getIPSlot);
+                            getIP(ilFramePtr, out currentIL, out _);
+                            Marshal.Release(ilFramePtr);
+                        }
+
+                        var currentLoc = _sourceMapper.GetSourceLocation((int)functionToken, (int)currentIL);
+                        if (currentLoc == null) return;
+
+                        var nextLine = _sourceMapper.GetNextExecutableLine(
+                            currentLoc.Value.file, currentLoc.Value.line, (int)functionToken);
+                        if (nextLine == null) return;
+
+                        RemoveTempStepBreakpoint();
+
+                        foreach (var module in _loadedModules.Values)
+                        {
+                            var modulePtr = Marshal.GetIUnknownForObject(module);
+                            try
+                            {
+                                var modVtable = Marshal.ReadIntPtr(modulePtr);
+                                var getFuncSlot = Marshal.ReadIntPtr(modVtable, 9 * IntPtr.Size);
+                                var getFunc = Marshal.GetDelegateForFunctionPointer<GetFunctionFromTokenDelegate>(getFuncSlot);
+                                hr = getFunc(modulePtr, (uint)nextLine.Value.methodToken, out var funcPtr);
+                                if (hr < 0 || funcPtr == IntPtr.Zero) continue;
+
+                                var funcVtable2 = Marshal.ReadIntPtr(funcPtr);
+                                var getCodeSlot = Marshal.ReadIntPtr(funcVtable2, 6 * IntPtr.Size);
+                                var getCode = Marshal.GetDelegateForFunctionPointer<GetILCodeDelegate>(getCodeSlot);
+                                hr = getCode(funcPtr, out var codePtr);
+                                Marshal.Release(funcPtr);
+                                if (hr < 0 || codePtr == IntPtr.Zero) continue;
+
+                                var codeVtable2 = Marshal.ReadIntPtr(codePtr);
+                                var createBpSlot = Marshal.ReadIntPtr(codeVtable2, 7 * IntPtr.Size);
+                                var createBp = Marshal.GetDelegateForFunctionPointer<CreateBreakpointDelegate>(createBpSlot);
+                                hr = createBp(codePtr, (uint)nextLine.Value.ilOffset, out var bpPtr);
+                                Marshal.Release(codePtr);
+                                if (hr < 0 || bpPtr == IntPtr.Zero) continue;
+
+                                var bpVtable2 = Marshal.ReadIntPtr(bpPtr);
+                                var activateSlot = Marshal.ReadIntPtr(bpVtable2, 3 * IntPtr.Size);
+                                var activate = Marshal.GetDelegateForFunctionPointer<ActivateBreakpointDelegate>(activateSlot);
+                                hr = activate(bpPtr, 1);
+                                if (hr >= 0)
+                                {
+                                    _tempStepBreakpoint = bpPtr;
+                                    _isStepBreakpoint = true;
+                                    return;
+                                }
+                                Marshal.Release(bpPtr);
+                            }
+                            finally
+                            {
+                                Marshal.Release(modulePtr);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(framePtr);
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(threadPtr);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[DAP] TryPlantStepCatchupBreakpoint error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Mark a module's code as user code / non-user code for runtime JMC stepping.
+        /// Uses ICorDebugModule2::SetJMCStatus via raw QI (RCW casts fail on .NET Core).
+        /// Best-effort: R2R/optimized system modules commonly reject "true"; that's fine.
+        /// </summary>
+        private void TrySetModuleJmcStatus(ICorDebugModule module, bool isUserCode)
+        {
+            try
+            {
+                var modPtr = Marshal.GetIUnknownForObject(module);
+                try
+                {
+                    Guid iidModule2 = new Guid("7FCC5FB5-49C0-41DE-9938-3B88B5B9ADD7");
+                    int hr = Marshal.QueryInterface(modPtr, ref iidModule2, out IntPtr mod2Ptr);
+                    if (hr < 0 || mod2Ptr == IntPtr.Zero) return;
+                    try
+                    {
+                        // ICorDebugModule2::SetJMCStatus is slot 3 (IUnknown(3) + 0)
+                        var vtable = Marshal.ReadIntPtr(mod2Ptr);
+                        var setJmcSlot = Marshal.ReadIntPtr(vtable, 3 * IntPtr.Size);
+                        var setJmc = Marshal.GetDelegateForFunctionPointer<SetJMCStatusDelegate>(setJmcSlot);
+                        hr = setJmc(mod2Ptr, isUserCode ? 1 : 0, 0, IntPtr.Zero);
+                        if (hr >= 0 && isUserCode)
+                            _jmcModuleMarked = true;
+                    }
+                    finally { Marshal.Release(mod2Ptr); }
+                }
+                finally { Marshal.Release(modPtr); }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Enable Just-My-Code on a freshly created stepper (ICorDebugStepper2::SetJMC)
+        /// so the runtime itself skips framework/plumbing code — essential for stepping
+        /// into async methods, where the call goes through the kickoff stub and
+        /// AsyncTaskMethodBuilder before reaching user code in MoveNext.
+        /// Only enabled once at least one user module was marked as user code.
+        /// </summary>
+        private void TryEnableStepperJmc(IntPtr stepperPtr)
+        {
+            if (!_jmcModuleMarked || stepperPtr == IntPtr.Zero) return;
+            try
+            {
+                Guid iidStepper2 = new Guid("C5B6E9C3-E7D1-4A8E-873B-7F047F0706F7");
+                int hr = Marshal.QueryInterface(stepperPtr, ref iidStepper2, out IntPtr s2Ptr);
+                if (hr < 0 || s2Ptr == IntPtr.Zero) return;
+                try
+                {
+                    // ICorDebugStepper2::SetJMC is slot 3 (IUnknown(3) + 0)
+                    var vtable = Marshal.ReadIntPtr(s2Ptr);
+                    var setJmcSlot = Marshal.ReadIntPtr(vtable, 3 * IntPtr.Size);
+                    var setJmc = Marshal.GetDelegateForFunctionPointer<StepperSetJMCDelegate>(setJmcSlot);
+                    setJmc(s2Ptr, 1);
+                }
+                finally { Marshal.Release(s2Ptr); }
+            }
+            catch { }
+        }
+
         /// <summary>
         /// Step to the next source line by setting a temporary breakpoint.
         /// Works across P/Invoke boundaries unlike ICorDebugStepper.
@@ -3844,6 +4260,30 @@ namespace BasicLang.Debugger
 
                 var stepperVtable = Marshal.ReadIntPtr(stepperPtr);
 
+                // Don't stop in class constructors / exception filters / unmapped IL
+                try
+                {
+                    var setInterceptSlot = Marshal.ReadIntPtr(stepperVtable, 5 * IntPtr.Size);
+                    var setInterceptFn = Marshal.GetDelegateForFunctionPointer<SetInterceptMaskDelegate>(setInterceptSlot);
+                    setInterceptFn(stepperPtr, 0); // INTERCEPT_NONE
+
+                    var setUnmappedSlot = Marshal.ReadIntPtr(stepperVtable, 6 * IntPtr.Size);
+                    var setUnmappedFn = Marshal.GetDelegateForFunctionPointer<SetUnmappedStopMaskDelegate>(setUnmappedSlot);
+                    setUnmappedFn(stepperPtr, 0); // STOP_NONE
+                }
+                catch { }
+
+                // Runtime Just-My-Code: the stepper skips non-user code entirely —
+                // this is what makes step-into an Async Function land on the first
+                // user line of MoveNext instead of inside builder plumbing.
+                TryEnableStepperJmc(stepperPtr);
+
+                // Track the stepper so a stop from another source can deactivate it.
+                // Ownership of the CreateStepper reference transfers to _activeStepperPtr
+                // (previously this reference was leaked).
+                ReleaseActiveStepper(deactivate: true);
+                _activeStepperPtr = stepperPtr;
+
                 // --- Try StepRange for source-line stepping ---
                 bool usedStepRange = false;
                 if (haveFrameInfo && _sourceMapper != null)
@@ -3913,32 +4353,32 @@ namespace BasicLang.Debugger
                     return;
                 }
 
-                try
+                var stepperVtable = Marshal.ReadIntPtr(stepperPtr);
+
+                // SetInterceptMask (slot 5) — skip interceptors so StepOut lands in user code
+                var setInterceptSlot = Marshal.ReadIntPtr(stepperVtable, 5 * IntPtr.Size);
+                var setInterceptFn = Marshal.GetDelegateForFunctionPointer<SetInterceptMaskDelegate>(setInterceptSlot);
+                setInterceptFn(stepperPtr, 0); // INTERCEPT_NONE — don't stop in class init, security, etc.
+
+                // SetUnmappedStopMask (slot 6) — skip unmapped code regions
+                var setUnmappedSlot = Marshal.ReadIntPtr(stepperVtable, 6 * IntPtr.Size);
+                var setUnmappedFn = Marshal.GetDelegateForFunctionPointer<SetUnmappedStopMaskDelegate>(setUnmappedSlot);
+                setUnmappedFn(stepperPtr, 0); // STOP_NONE — don't stop in unmapped IL
+
+                // Runtime JMC so StepOut lands in user code, skipping plumbing
+                TryEnableStepperJmc(stepperPtr);
+
+                // Track this stepper (ownership transfers to _activeStepperPtr)
+                ReleaseActiveStepper(deactivate: true);
+                _activeStepperPtr = stepperPtr;
+
+                // StepOut is at vtable slot 3+6 = 9
+                var stepOutSlot = Marshal.ReadIntPtr(stepperVtable, 9 * IntPtr.Size);
+                var stepOutFn = Marshal.GetDelegateForFunctionPointer<StepOutDelegate>(stepOutSlot);
+                hr = stepOutFn(stepperPtr);
+                if (hr < 0)
                 {
-                    var stepperVtable = Marshal.ReadIntPtr(stepperPtr);
-
-                    // SetInterceptMask (slot 5) — skip interceptors so StepOut lands in user code
-                    var setInterceptSlot = Marshal.ReadIntPtr(stepperVtable, 5 * IntPtr.Size);
-                    var setInterceptFn = Marshal.GetDelegateForFunctionPointer<SetInterceptMaskDelegate>(setInterceptSlot);
-                    setInterceptFn(stepperPtr, 0); // INTERCEPT_NONE — don't stop in class init, security, etc.
-
-                    // SetUnmappedStopMask (slot 6) — skip unmapped code regions
-                    var setUnmappedSlot = Marshal.ReadIntPtr(stepperVtable, 6 * IntPtr.Size);
-                    var setUnmappedFn = Marshal.GetDelegateForFunctionPointer<SetUnmappedStopMaskDelegate>(setUnmappedSlot);
-                    setUnmappedFn(stepperPtr, 0); // STOP_NONE — don't stop in unmapped IL
-
-                    // StepOut is at vtable slot 3+6 = 9
-                    var stepOutSlot = Marshal.ReadIntPtr(stepperVtable, 9 * IntPtr.Size);
-                    var stepOutFn = Marshal.GetDelegateForFunctionPointer<StepOutDelegate>(stepOutSlot);
-                    hr = stepOutFn(stepperPtr);
-                    if (hr < 0)
-                    {
-                        Console.Error.WriteLine($"[DAP] StepOut failed: hr=0x{hr:X8}");
-                    }
-                }
-                finally
-                {
-                    Marshal.Release(stepperPtr);
+                    Console.Error.WriteLine($"[DAP] StepOut failed: hr=0x{hr:X8}");
                 }
             }
             finally
@@ -3977,6 +4417,17 @@ namespace BasicLang.Debugger
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int StepOutDelegate(IntPtr self);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int StepperDeactivateDelegate(IntPtr self);
+
+        // ICorDebugStepper2::SetJMC(BOOL fIsJMCStepper)
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int StepperSetJMCDelegate(IntPtr self, int fIsJMCStepper);
+
+        // ICorDebugModule2::SetJMCStatus(BOOL bIsJustMyCode, ULONG32 cTokens, mdToken pTokens[])
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int SetJMCStatusDelegate(IntPtr self, int bIsJustMyCode, uint cTokens, IntPtr pTokens);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int SetInterceptMaskDelegate(IntPtr self, int mask);
