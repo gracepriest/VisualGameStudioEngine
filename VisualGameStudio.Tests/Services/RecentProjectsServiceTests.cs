@@ -12,9 +12,11 @@ public class RecentProjectsServiceTests
     [SetUp]
     public void SetUp()
     {
-        _service = new RecentProjectsService();
         _testDir = Path.Combine(Path.GetTempPath(), $"RecentProjectsTest_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDir);
+        // Storage dir is injected so tests never touch the user's real
+        // %APPDATA%\VisualGameStudio\recentProjects.json store.
+        _service = new RecentProjectsService(_testDir);
     }
 
     [TearDown]
@@ -235,18 +237,80 @@ public class RecentProjectsServiceTests
     }
 
     [Test]
-    public async Task LoadAsync_FiltersNonExistentProjects()
+    public async Task LoadAsync_RoundTripsPersistedProjects()
     {
-        // Add a project, then delete the file
         var path = CreateTestProjectFile("Project.blproj");
         await _service.AddRecentProjectAsync("Project", path);
 
-        // Create a new service and load (to test filtering)
-        var newService = new RecentProjectsService();
+        var newService = new RecentProjectsService(_testDir);
         await newService.LoadAsync();
 
-        // The project should be in the list since the file exists
-        Assert.Pass("Load completed without error");
+        Assert.That(newService.RecentProjects, Has.Count.EqualTo(1));
+        Assert.That(newService.RecentProjects[0].FilePath, Is.EqualTo(path));
+    }
+
+    [Test]
+    public async Task GetRecentProjects_HidesEntriesWhoseFileIsMissing()
+    {
+        var path = CreateTestProjectFile("Project.blproj");
+        await _service.AddRecentProjectAsync("Project", path);
+
+        File.Delete(path);
+
+        Assert.That(_service.GetRecentProjects(), Is.Empty);
+    }
+
+    [Test]
+    public async Task LoadAsync_MissingFileEntry_IsHiddenButNotErasedFromStore()
+    {
+        // A project whose file is temporarily unavailable (e.g. OneDrive offline,
+        // unplugged drive) must be hidden from the menu but survive in storage,
+        // so it reappears when the file comes back.
+        var path = CreateTestProjectFile("Project.blproj");
+        await _service.AddRecentProjectAsync("Project", path);
+
+        File.Delete(path);
+
+        var whileMissing = new RecentProjectsService(_testDir);
+        await whileMissing.LoadAsync();
+        Assert.That(whileMissing.GetRecentProjects(), Is.Empty, "missing entry should be hidden");
+
+        // File comes back; a fresh service must still know about the entry.
+        File.WriteAllText(path, "test project content");
+        var afterRestore = new RecentProjectsService(_testDir);
+        await afterRestore.LoadAsync();
+        Assert.That(afterRestore.GetRecentProjects(), Has.Count.EqualTo(1),
+            "entry must survive a load performed while its file was missing");
+        Assert.That(afterRestore.GetRecentProjects()[0].Path, Is.EqualTo(path));
+    }
+
+    [Test]
+    public async Task LoadAsync_MergesWithEntriesAddedBeforeLoadCompleted()
+    {
+        // Startup race: the shell may open a project (AddRecentProject) before
+        // LoadAsync has finished reading the store. The loaded list must merge
+        // with, not replace, in-memory entries.
+        var persistedPath = CreateTestProjectFile("Persisted.blproj");
+        await _service.AddRecentProjectAsync("Persisted", persistedPath);
+
+        var newService = new RecentProjectsService(_testDir);
+        var earlyPath = CreateTestProjectFile("AddedBeforeLoad.blproj");
+        newService.AddRecentProject(earlyPath, "AddedBeforeLoad");
+        await newService.LoadAsync();
+
+        var paths = newService.GetRecentProjects().Select(p => p.Path).ToList();
+        Assert.That(paths, Does.Contain(earlyPath), "entry added before load must survive");
+        Assert.That(paths, Does.Contain(persistedPath), "persisted entry must be loaded");
+    }
+
+    [Test]
+    public async Task Storage_WritesOnlyToInjectedDirectory()
+    {
+        var path = CreateTestProjectFile("Project.blproj");
+        await _service.AddRecentProjectAsync("Project", path);
+
+        Assert.That(File.Exists(Path.Combine(_testDir, "recentProjects.json")), Is.True,
+            "store must live in the injected directory");
     }
 
     #endregion

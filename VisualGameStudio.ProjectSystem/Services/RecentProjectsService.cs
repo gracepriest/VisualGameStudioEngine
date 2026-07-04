@@ -5,15 +5,20 @@ namespace VisualGameStudio.ProjectSystem.Services;
 
 /// <summary>
 /// Persists and manages the list of recently opened projects.
-/// Thread-safe with a lock object. Saves to ~/.vgs/recentProjects.json.
+/// Thread-safe with a lock object. Saves to %APPDATA%\VisualGameStudio\recentProjects.json
+/// (or an injected storage directory, used by tests to avoid touching the real store).
 /// Pinned projects always sort to the top, then by LastOpened descending.
-/// On load, entries whose files no longer exist are automatically pruned.
+/// Entries whose files are currently missing are hidden from the getters but kept
+/// in storage, so projects on temporarily unavailable paths (OneDrive offline,
+/// unplugged drives) reappear instead of being permanently erased.
 /// </summary>
 public class RecentProjectsService : IRecentProjectsService
 {
     private readonly string _recentFilePath;
     private readonly object _lock = new();
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
     private List<RecentProjectEntry> _entries = new();
+    private bool _loaded;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -34,46 +39,45 @@ public class RecentProjectsService : IRecentProjectsService
     {
         get
         {
-            lock (_lock)
-            {
-                return _entries
-                    .OrderByDescending(e => e.IsPinned)
-                    .ThenByDescending(e => e.LastOpened)
-                    .Select(e => new RecentProject
-                    {
-                        Name = e.Name,
-                        FilePath = e.Path,
-                        LastOpened = e.LastOpened
-                    })
-                    .ToList()
-                    .AsReadOnly();
-            }
+            return SnapshotExisting()
+                .Select(e => new RecentProject
+                {
+                    Name = e.Name,
+                    FilePath = e.Path,
+                    LastOpened = e.LastOpened
+                })
+                .ToList()
+                .AsReadOnly();
         }
     }
 
     public async Task RemoveRecentProjectAsync(string filePath)
     {
-        RemoveRecentProject(filePath);
-        await Task.CompletedTask;
+        RemoveRecentProjectCore(filePath);
+        await SaveAsync();
     }
 
     public async Task ClearAsync()
     {
-        ClearRecentProjects();
-        await Task.CompletedTask;
+        ClearRecentProjectsCore();
+        await SaveAsync();
     }
 
     public async Task AddRecentProjectAsync(string name, string filePath)
     {
-        AddRecentProject(filePath, name);
-        await Task.CompletedTask;
+        AddRecentProjectCore(filePath, name, null);
+        await SaveAsync();
     }
 
     // ── End legacy ──────────────────────────────────────────────────
 
-    public RecentProjectsService()
+    public RecentProjectsService() : this(null)
     {
-        var appDataPath = Path.Combine(
+    }
+
+    public RecentProjectsService(string? storageDirectory)
+    {
+        var appDataPath = storageDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "VisualGameStudio");
 
@@ -95,63 +99,120 @@ public class RecentProjectsService : IRecentProjectsService
 
     public async Task LoadAsync()
     {
+        var fromDisk = await ReadStoreAsync();
+
+        bool hadPreLoadEntries;
+        lock (_lock)
+        {
+            hadPreLoadEntries = _entries.Count > 0;
+            if (fromDisk != null)
+            {
+                MergeLocked(fromDisk);
+            }
+            _loaded = true;
+        }
+
+        // The shell may have opened a project before load finished; persist the
+        // merged union so those early entries survive.
+        if (hadPreLoadEntries)
+        {
+            await SaveAsync();
+        }
+
+        RecentProjectsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async Task<List<RecentProjectEntry>?> ReadStoreAsync()
+    {
         try
         {
-            if (File.Exists(_recentFilePath))
+            if (!File.Exists(_recentFilePath))
             {
-                var json = await File.ReadAllTextAsync(_recentFilePath);
-                var data = JsonSerializer.Deserialize<RecentProjectsData>(json, JsonOptions);
-
-                lock (_lock)
-                {
-                    if (data?.Projects != null)
-                    {
-                        // Prune entries whose files no longer exist
-                        _entries = data.Projects
-                            .Where(p => File.Exists(p.Path))
-                            .ToList();
-                    }
-                    else
-                    {
-                        _entries = new List<RecentProjectEntry>();
-                    }
-                }
-
-                // Save back pruned list
-                await SaveAsync();
+                return null;
             }
+
+            var json = await File.ReadAllTextAsync(_recentFilePath);
+            var data = JsonSerializer.Deserialize<RecentProjectsData>(json, JsonOptions);
+            return data?.Projects;
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Failed to load recent projects: {ex.Message}");
-            lock (_lock)
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Merges disk entries into the in-memory list. In-memory entries win on
+    /// path collisions (they are newer than anything persisted). Missing files
+    /// are NOT pruned here — they are only hidden by the getters.
+    /// </summary>
+    private void MergeLocked(List<RecentProjectEntry> fromDisk)
+    {
+        foreach (var diskEntry in fromDisk)
+        {
+            if (!_entries.Any(e => e.Path.Equals(diskEntry.Path, StringComparison.OrdinalIgnoreCase)))
             {
-                _entries = new List<RecentProjectEntry>();
+                _entries.Add(diskEntry);
             }
         }
+
+        TrimEntries();
     }
 
     public IReadOnlyList<RecentProjectInfo> GetRecentProjects()
     {
+        return SnapshotExisting()
+            .Select(e => new RecentProjectInfo
+            {
+                Path = e.Path,
+                Name = e.Name,
+                LastOpened = e.LastOpened,
+                IsPinned = e.IsPinned,
+                IconPath = e.IconPath
+            })
+            .ToList()
+            .AsReadOnly();
+    }
+
+    /// <summary>
+    /// Ordered snapshot of entries whose files currently exist. Missing files are
+    /// hidden, not deleted — File.Exists runs outside the lock on a copy.
+    /// </summary>
+    private List<RecentProjectEntry> SnapshotExisting()
+    {
+        List<RecentProjectEntry> snapshot;
         lock (_lock)
         {
-            return _entries
-                .OrderByDescending(e => e.IsPinned)
-                .ThenByDescending(e => e.LastOpened)
-                .Select(e => new RecentProjectInfo
-                {
-                    Path = e.Path,
-                    Name = e.Name,
-                    LastOpened = e.LastOpened,
-                    IsPinned = e.IsPinned,
-                    IconPath = e.IconPath
-                })
-                .ToList()
-                .AsReadOnly();
+            snapshot = new List<RecentProjectEntry>(_entries);
         }
+
+        return snapshot
+            .Where(e => File.Exists(e.Path))
+            .OrderByDescending(e => e.IsPinned)
+            .ThenByDescending(e => e.LastOpened)
+            .ToList();
     }
 
     public void AddRecentProject(string path, string name, string? iconPath = null)
+    {
+        AddRecentProjectCore(path, name, iconPath);
+        _ = SaveAsync();
+    }
+
+    public void RemoveRecentProject(string path)
+    {
+        RemoveRecentProjectCore(path);
+        _ = SaveAsync();
+    }
+
+    public void ClearRecentProjects()
+    {
+        ClearRecentProjectsCore();
+        _ = SaveAsync();
+    }
+
+    private void AddRecentProjectCore(string path, string name, string? iconPath)
     {
         lock (_lock)
         {
@@ -170,29 +231,29 @@ public class RecentProjectsService : IRecentProjectsService
             TrimEntries();
         }
 
-        _ = SaveAsync();
         RecentProjectsChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public void RemoveRecentProject(string path)
+    private void RemoveRecentProjectCore(string path)
     {
         lock (_lock)
         {
             _entries.RemoveAll(e => e.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
         }
 
-        _ = SaveAsync();
         RecentProjectsChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public void ClearRecentProjects()
+    private void ClearRecentProjectsCore()
     {
         lock (_lock)
         {
             _entries.Clear();
+            // Clear is authoritative: don't let a pre-load save merge the old
+            // store back in.
+            _loaded = true;
         }
 
-        _ = SaveAsync();
         RecentProjectsChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -246,12 +307,35 @@ public class RecentProjectsService : IRecentProjectsService
 
     private async Task SaveAsync()
     {
+        // A save can fire before the initial load (fire-and-forget from an early
+        // AddRecentProject). Merge the store in first so the write doesn't wipe
+        // the persisted history.
+        bool needsMerge;
+        lock (_lock)
+        {
+            needsMerge = !_loaded;
+        }
+
+        if (needsMerge)
+        {
+            var fromDisk = await ReadStoreAsync();
+            lock (_lock)
+            {
+                if (fromDisk != null)
+                {
+                    MergeLocked(fromDisk);
+                }
+                _loaded = true;
+            }
+        }
+
         List<RecentProjectEntry> snapshot;
         lock (_lock)
         {
             snapshot = new List<RecentProjectEntry>(_entries);
         }
 
+        await _saveGate.WaitAsync();
         try
         {
             var data = new RecentProjectsData { Projects = snapshot };
@@ -261,6 +345,10 @@ public class RecentProjectsService : IRecentProjectsService
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Failed to save recent projects: {ex.Message}");
+        }
+        finally
+        {
+            _saveGate.Release();
         }
     }
 
