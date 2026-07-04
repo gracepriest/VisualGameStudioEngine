@@ -45,10 +45,18 @@ public partial class VariablesViewModel : Tool
 
     private async void OnDebugStopped(object? sender, StoppedEventArgs e)
     {
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+        try
         {
-            await RefreshVariablesAsync();
-        });
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                await RefreshVariablesAsync();
+            });
+        }
+        catch (Exception ex)
+        {
+            // async void: an unhandled exception here would crash the process
+            System.Diagnostics.Debug.WriteLine($"[Variables] Refresh failed: {ex.Message}");
+        }
     }
 
     private void OnDebugStateChanged(object? sender, DebugStateChangedEventArgs e)

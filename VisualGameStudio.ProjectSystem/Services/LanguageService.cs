@@ -140,17 +140,27 @@ public class LanguageService : ILanguageService
         IsConnected = false;
         ConnectionChanged?.Invoke(this, false);
 
-        _cts?.Cancel();
-
         if (_writer != null)
         {
+            // Send the shutdown request BEFORE cancelling the read loop —
+            // otherwise the response can never be read and the request would
+            // hang forever. Use a short timeout in case the server is dead.
             try
             {
-                await SendRequestAsync("shutdown", new { });
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await SendRequestAsync("shutdown", new { }, timeoutCts.Token);
+            }
+            catch { }
+
+            try
+            {
                 await SendNotificationAsync("exit", new { });
             }
             catch { }
         }
+
+        _cts?.Cancel();
+        FailPendingRequests();
 
         _writer?.Dispose();
         _reader?.Dispose();
@@ -168,6 +178,22 @@ public class LanguageService : ILanguageService
         _serverProcess = null;
         _writer = null;
         _reader = null;
+    }
+
+    /// <summary>
+    /// Cancels all in-flight requests so callers awaiting a response do not
+    /// hang forever once the server connection is gone.
+    /// </summary>
+    private void FailPendingRequests()
+    {
+        lock (_lock)
+        {
+            foreach (var pending in _pendingRequests.Values)
+            {
+                pending.TrySetCanceled();
+            }
+            _pendingRequests.Clear();
+        }
     }
 
     private async Task InitializeAsync(CancellationToken cancellationToken)
@@ -537,18 +563,32 @@ public class LanguageService : ILanguageService
     private async Task<JsonElement> SendRequestAsync(string method, object parms, CancellationToken cancellationToken = default)
     {
         var id = Interlocked.Increment(ref _requestId);
-        var tcs = new TaskCompletionSource<JsonElement>();
+        // RunContinuationsAsynchronously prevents awaiter continuations from
+        // executing inline on the read-loop thread (inside its lock).
+        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         lock (_lock)
         {
             _pendingRequests[id] = tcs;
         }
 
-        var request = new { jsonrpc = "2.0", id, method, @params = parms };
-        await SendMessageAsync(request);
+        try
+        {
+            var request = new { jsonrpc = "2.0", id, method, @params = parms };
+            await SendMessageAsync(request);
 
-        using var ctr = cancellationToken.Register(() => tcs.TrySetCanceled());
-        return await tcs.Task;
+            using var ctr = cancellationToken.Register(() => tcs.TrySetCanceled());
+            return await tcs.Task;
+        }
+        finally
+        {
+            // Remove the entry on cancellation/timeout as well — otherwise
+            // requests the server never answers leak dictionary entries.
+            lock (_lock)
+            {
+                _pendingRequests.Remove(id);
+            }
+        }
     }
 
     private async Task SendNotificationAsync(string method, object parms)
@@ -1813,7 +1853,32 @@ public class LanguageService : ILanguageService
 
     public void Dispose()
     {
-        StopAsync().Wait(TimeSpan.FromSeconds(2));
+        // Synchronous cleanup only — blocking on StopAsync() here could stall
+        // (or deadlock) the UI thread, and previously always burned the full
+        // wait timeout because the shutdown response could never be read.
+        IsConnected = false;
+        _cts?.Cancel();
+        FailPendingRequests();
+
+        try { _writer?.Dispose(); } catch { }
+        try { _reader?.Dispose(); } catch { }
+        _writer = null;
+        _reader = null;
+
+        if (_serverProcess != null)
+        {
+            try
+            {
+                if (!_serverProcess.HasExited)
+                {
+                    _serverProcess.Kill();
+                }
+            }
+            catch { }
+            try { _serverProcess.Dispose(); } catch { }
+            _serverProcess = null;
+        }
+
         _writeLock.Dispose();
     }
 }

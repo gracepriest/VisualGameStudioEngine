@@ -570,6 +570,83 @@ public class TerminalServiceTests
 
     #endregion
 
+    #region Concurrency / Cleanup Regression Tests
+
+    [Test]
+    public void History_ConcurrentReadsWritesAndClears_DoesNotThrow()
+    {
+        // Regression: session history was a plain List<T> mutated from the
+        // process stdout/stderr callback threads while the UI thread read
+        // (GetHistory -> ToList) or cleared it, corrupting the list.
+        var session = _service.CreateSession();
+        var exceptions = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        using var start = new ManualResetEventSlim(false);
+
+        var writers = Enumerable.Range(0, 4).Select(_ => new Thread(() =>
+        {
+            start.Wait();
+            try
+            {
+                for (int i = 0; i < 200; i++)
+                {
+                    _service.SendInput(session.Id, "rem noop");
+                }
+            }
+            catch (Exception ex)
+            {
+                exceptions.Enqueue(ex);
+            }
+        })).ToList();
+
+        var reader = new Thread(() =>
+        {
+            start.Wait();
+            try
+            {
+                for (int i = 0; i < 500; i++)
+                {
+                    _ = _service.GetHistory(session.Id);
+                    if (i % 50 == 0)
+                    {
+                        _service.Clear(session.Id);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                exceptions.Enqueue(ex);
+            }
+        });
+
+        var threads = writers.Append(reader).ToList();
+        threads.ForEach(t => t.Start());
+        start.Set();
+        threads.ForEach(t => Assert.That(t.Join(TimeSpan.FromSeconds(30)), Is.True, "thread did not finish"));
+
+        Assert.That(exceptions, Is.Empty);
+    }
+
+    [Test]
+    public void CloseSession_AfterProcessAlreadyExited_DoesNotThrow()
+    {
+        // Regression: CloseSession skipped Process.Dispose() when the shell
+        // had already exited on its own (handle leak) — and must never throw.
+        var session = _service.CreateSession();
+
+        // Ask the shell to exit and wait for the Exited event to mark it
+        _service.SendInput(session.Id, "exit");
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (session.IsRunning && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(50);
+        }
+
+        Assert.DoesNotThrow(() => _service.CloseSession(session.Id));
+        Assert.That(_service.Sessions, Is.Empty);
+    }
+
+    #endregion
+
     #region Output Received Tests
 
     [Test]

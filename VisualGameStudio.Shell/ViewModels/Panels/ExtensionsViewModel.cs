@@ -124,13 +124,19 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private async void OnSearchDebounceElapsed(object? sender, ElapsedEventArgs e)
+    private void OnSearchDebounceElapsed(object? sender, ElapsedEventArgs e)
     {
-        var query = SearchQuery;
-        if (!string.IsNullOrWhiteSpace(query))
+        // Timer callbacks arrive on a threadpool thread. SearchMarketplaceAsync
+        // mutates UI-bound state (SearchResults, IsSearching, ...), so it must
+        // start on the UI thread; its awaits then also resume there.
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            await SearchMarketplaceAsync(query);
-        }
+            var query = SearchQuery;
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                _ = SearchMarketplaceAsync(query);
+            }
+        });
     }
 
     [RelayCommand]

@@ -72,28 +72,30 @@ public class TerminalService : ITerminalService
             }
         }
 
+        Process? process = null;
         try
         {
-            var process = new Process { StartInfo = startInfo };
-            process.OutputDataReceived += (s, e) =>
+            var proc = new Process { StartInfo = startInfo };
+            process = proc;
+            proc.OutputDataReceived += (s, e) =>
             {
                 if (e.Data != null)
                 {
                     OnOutputReceived(session.Id, e.Data, TerminalOutputType.StandardOutput);
                 }
             };
-            process.ErrorDataReceived += (s, e) =>
+            proc.ErrorDataReceived += (s, e) =>
             {
                 if (e.Data != null)
                 {
                     OnOutputReceived(session.Id, e.Data, TerminalOutputType.StandardError);
                 }
             };
-            process.Exited += (s, e) =>
+            proc.Exited += (s, e) =>
             {
                 try
                 {
-                    session.LastExitCode = process.ExitCode;
+                    session.LastExitCode = proc.ExitCode;
                 }
                 catch (ObjectDisposedException)
                 {
@@ -104,16 +106,18 @@ public class TerminalService : ITerminalService
                     session.IsRunning = false;
                 }
             };
-            process.EnableRaisingEvents = true;
+            proc.EnableRaisingEvents = true;
 
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            proc.Start();
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
 
-            _processes[session.Id] = process;
+            _processes[session.Id] = proc;
         }
         catch (Exception ex)
         {
+            // Release the half-constructed Process if Start() failed
+            try { process?.Dispose(); } catch { }
             OnOutputReceived(session.Id, $"Failed to start shell: {ex.Message}", TerminalOutputType.System);
             session.IsRunning = false;
         }
@@ -136,17 +140,25 @@ public class TerminalService : ITerminalService
     {
         if (_sessions.TryRemove(sessionId, out var session))
         {
-            try
+            if (_processes.TryRemove(sessionId, out var process))
             {
-                if (_processes.TryRemove(sessionId, out var process) && !process.HasExited)
+                try
                 {
-                    process.Kill(true);
+                    if (!process.HasExited)
+                    {
+                        process.Kill(true);
+                    }
+                }
+                catch
+                {
+                    // Ignore errors during cleanup
+                }
+                finally
+                {
+                    // Always release the process handle, even when the shell
+                    // already exited on its own (previously leaked).
                     process.Dispose();
                 }
-            }
-            catch
-            {
-                // Ignore errors during cleanup
             }
 
             session.IsRunning = false;
@@ -279,14 +291,24 @@ public class TerminalService : ITerminalService
         var id = sessionId ?? _activeSessionId;
         if (id != null && _history.TryGetValue(id, out var history))
         {
-            history.Clear();
+            lock (history)
+            {
+                history.Clear();
+            }
         }
     }
 
     /// <inheritdoc/>
     public IReadOnlyList<TerminalOutput> GetHistory(string sessionId)
     {
-        return _history.TryGetValue(sessionId, out var history) ? history.ToList() : Array.Empty<TerminalOutput>();
+        if (_history.TryGetValue(sessionId, out var history))
+        {
+            lock (history)
+            {
+                return history.ToList();
+            }
+        }
+        return Array.Empty<TerminalOutput>();
     }
 
     /// <inheritdoc/>
@@ -312,12 +334,18 @@ public class TerminalService : ITerminalService
 
         if (_history.TryGetValue(sessionId, out var history))
         {
-            history.Add(output);
-
-            // Limit history size
-            while (history.Count > 10000)
+            // stdout and stderr callbacks arrive concurrently on threadpool
+            // threads while the UI thread reads via GetHistory(); List<T> is
+            // not thread-safe, so synchronize all access.
+            lock (history)
             {
-                history.RemoveAt(0);
+                history.Add(output);
+
+                // Limit history size
+                while (history.Count > 10000)
+                {
+                    history.RemoveAt(0);
+                }
             }
         }
 

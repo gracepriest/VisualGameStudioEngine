@@ -138,8 +138,18 @@ public partial class TypeHierarchyViewModel : Tool
         // Could trigger navigation or other actions
     }
 
-    private async Task LoadSupertypesAsync(TypeHierarchyItem item)
+    private Task LoadSupertypesAsync(TypeHierarchyItem item)
+        => LoadSupertypesAsync(item, new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0);
+
+    private async Task LoadSupertypesAsync(TypeHierarchyItem item, HashSet<string> visited, int depth)
     {
+        // Guard against cyclic supertype chains from the language server
+        // (A : B, B : A) — unbounded recursion here is an uncatchable
+        // StackOverflowException that kills the whole IDE.
+        const int MaxDepth = 32;
+        if (depth >= MaxDepth) return;
+        if (!visited.Add($"{item.FilePath}|{item.Line}|{item.Column}|{item.Name}")) return;
+
         // Get supertypes from language service
         var supertypes = await _languageService.GetSupertypesAsync(
             item.FilePath, item.Line, item.Column);
@@ -158,7 +168,7 @@ public partial class TypeHierarchyViewModel : Tool
             };
 
             // Recursively load supertypes
-            await LoadSupertypesAsync(child);
+            await LoadSupertypesAsync(child, visited, depth + 1);
 
             item.Children.Add(child);
         }

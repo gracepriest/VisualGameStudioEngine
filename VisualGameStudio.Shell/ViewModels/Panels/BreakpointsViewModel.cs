@@ -60,6 +60,15 @@ public partial class BreakpointsViewModel : Tool
 
     private void OnBreakpointsChanged(object? sender, BreakpointsChangedEventArgs e)
     {
+        // DebugService raises this from its DAP read-loop (threadpool) thread.
+        // This handler mutates UI-bound BreakpointItem properties and triggers
+        // editor visual updates, so it must run on the UI thread.
+        if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => OnBreakpointsChanged(sender, e));
+            return;
+        }
+
         // Update verified status from debugger
         bool anyChanged = false;
 

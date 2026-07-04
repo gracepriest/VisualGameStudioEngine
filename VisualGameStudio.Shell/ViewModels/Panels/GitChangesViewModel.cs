@@ -137,8 +137,18 @@ public partial class GitChangesViewModel : ViewModelBase
 
     private void StartAutoRefreshTimer()
     {
+        // Timer callbacks run on a threadpool thread with no SynchronizationContext,
+        // so RefreshAsync's continuations would mutate the UI-bound collections
+        // (StagedChanges/UnstagedChanges/Branches) off the UI thread and crash.
+        // Start the refresh on the UI thread instead.
         _autoRefreshTimer = new System.Threading.Timer(
-            _ => { if (IsAutoRefreshEnabled) _ = RefreshAsync(); },
+            _ =>
+            {
+                if (IsAutoRefreshEnabled)
+                {
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() => _ = RefreshAsync());
+                }
+            },
             null,
             TimeSpan.FromMilliseconds(_autoRefreshIntervalMs),
             TimeSpan.FromMilliseconds(_autoRefreshIntervalMs));

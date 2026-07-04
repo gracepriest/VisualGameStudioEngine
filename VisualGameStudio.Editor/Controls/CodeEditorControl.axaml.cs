@@ -4977,6 +4977,20 @@ public partial class CodeEditorControl : UserControl
         _smoothScrollTimer?.Stop();
         _smoothScrollTimer = null;
 
+        // Stop the pending semantic-token debounce timer; it captures `this`
+        // and would otherwise keep the closed editor rooted and fire
+        // SemanticTokensRefreshNeeded on a torn-down control.
+        _semanticTokenTimer?.Stop();
+        _semanticTokenTimer?.Dispose();
+        _semanticTokenTimer = null;
+        _semanticTokenCts?.Cancel();
+        _semanticTokenCts?.Dispose();
+        _semanticTokenCts = null;
+
+        // Unhook from the singleton bookmark service so closed documents
+        // don't leak the entire editor visual tree.
+        _bookmarkMargin?.Detach();
+
         _cursorFadeRenderer?.Stop();
 
         _minimap?.DetachEditor();

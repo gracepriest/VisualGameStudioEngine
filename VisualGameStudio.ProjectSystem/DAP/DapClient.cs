@@ -315,15 +315,17 @@ public class DapClient : IDapClient
         var seq = seqProp.GetInt32();
         if (_pendingRequests.TryRemove(seq, out var tcs))
         {
+            // TrySetResult — the request's 30s timeout may have cancelled the
+            // TCS concurrently; SetResult would throw and drop the message.
             if (root.TryGetProperty("success", out var successProp) && successProp.GetBoolean())
             {
                 if (root.TryGetProperty("body", out var body))
                 {
-                    tcs.SetResult(body.Clone());
+                    tcs.TrySetResult(body.Clone());
                 }
                 else
                 {
-                    tcs.SetResult(null);
+                    tcs.TrySetResult(null);
                 }
             }
             else
@@ -334,7 +336,7 @@ public class DapClient : IDapClient
                     message = msgProp.GetString() ?? message;
                 }
                 Debug.WriteLine($"DAP error: {message}");
-                tcs.SetResult(null);
+                tcs.TrySetResult(null);
             }
         }
     }

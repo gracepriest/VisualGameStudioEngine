@@ -522,32 +522,44 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void OnExtensionTreeViewCreated(object? sender, ExtensionTreeViewEventArgs e)
     {
-        if (_extensionTreeViews.ContainsKey(e.ViewId)) return;
+        // Raised from the extension host's JSON-RPC handler on a threadpool
+        // thread. Marshal to the UI thread (like the webview sibling) so the
+        // non-concurrent _extensionTreeViews dictionary and any panel creation
+        // are only touched on the UI thread.
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (_extensionTreeViews.ContainsKey(e.ViewId)) return;
 
-        var panelVm = new TreeViewPanelViewModel(
-            e.ViewId,
-            e.Title ?? e.ViewId,
-            e.ExtensionId,
-            getChildrenFunc: (viewId, element, ct) => _extensionService.RequestTreeChildrenAsync(viewId, element, ct),
-            getTreeItemFunc: (viewId, element, ct) => _extensionService.RequestTreeItemAsync(viewId, element, ct),
-            executeCommandFunc: (commandId, args) => _extensionService.ExecuteExtensionCommandAsync(commandId, args));
+            var panelVm = new TreeViewPanelViewModel(
+                e.ViewId,
+                e.Title ?? e.ViewId,
+                e.ExtensionId,
+                getChildrenFunc: (viewId, element, ct) => _extensionService.RequestTreeChildrenAsync(viewId, element, ct),
+                getTreeItemFunc: (viewId, element, ct) => _extensionService.RequestTreeItemAsync(viewId, element, ct),
+                executeCommandFunc: (commandId, args) => _extensionService.ExecuteExtensionCommandAsync(commandId, args));
 
-        _extensionTreeViews[e.ViewId] = panelVm;
-        ExtensionTreeViewPanelCreated?.Invoke(this, panelVm);
+            _extensionTreeViews[e.ViewId] = panelVm;
+            ExtensionTreeViewPanelCreated?.Invoke(this, panelVm);
+        });
     }
 
     private async void OnExtensionTreeViewRefreshRequested(object? sender, ExtensionTreeViewEventArgs e)
     {
-        if (_extensionTreeViews.TryGetValue(e.ViewId, out var panelVm))
+        // Raised on a threadpool JSON-RPC thread; the dictionary and the tree
+        // panel's bound collections must only be touched on the UI thread.
+        try
         {
-            try
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () =>
             {
-                await panelVm.RefreshElementAsync(e.Element);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[TreeView] Refresh failed for {e.ViewId}: {ex.Message}");
-            }
+                if (_extensionTreeViews.TryGetValue(e.ViewId, out var panelVm))
+                {
+                    await panelVm.RefreshElementAsync(e.Element);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[TreeView] Refresh failed for {e.ViewId}: {ex.Message}");
         }
     }
 
@@ -717,6 +729,22 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async void OnProjectOpened(object? sender, ProjectEventArgs e)
     {
+        try
+        {
+            await OnProjectOpenedCoreAsync(e);
+        }
+        catch (Exception ex)
+        {
+            // async void: an unhandled exception here would crash the process
+            // (e.g., project directory deleted between load and this handler,
+            // or a corrupted breakpoints file).
+            System.Diagnostics.Debug.WriteLine($"[ProjectOpened] Error: {ex.Message}");
+            StatusText = $"Project loaded with warnings: {ex.Message}";
+        }
+    }
+
+    private async Task OnProjectOpenedCoreAsync(ProjectEventArgs e)
+    {
         // Solution name takes precedence over project name in the title bar
         Title = _solutionService.HasSolution
             ? $"{_solutionService.CurrentSolution!.SolutionName} - Visual Game Studio"
@@ -732,7 +760,9 @@ public partial class MainWindowViewModel : ViewModelBase
         else
         {
             // Try to find the actual .blproj file in the project directory
-            var blprojFiles = Directory.GetFiles(e.Project.ProjectDirectory, "*.blproj", SearchOption.TopDirectoryOnly);
+            var blprojFiles = Directory.Exists(e.Project.ProjectDirectory)
+                ? Directory.GetFiles(e.Project.ProjectDirectory, "*.blproj", SearchOption.TopDirectoryOnly)
+                : Array.Empty<string>();
             if (blprojFiles.Length > 0)
             {
                 _recentProjectsService.AddRecentProject(blprojFiles[0], e.Project.Name);

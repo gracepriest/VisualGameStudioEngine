@@ -24,19 +24,53 @@ public class BookmarkMargin : AbstractMargin
 
     private int _hoveredLine = -1;
 
+    private bool _subscribed;
+
     public BookmarkMargin(TextEditor editor, IBookmarkService bookmarkService)
     {
         _editor = editor;
         _bookmarkService = bookmarkService;
-        _bookmarkService.BookmarkChanged += OnBookmarkChanged;
+        Subscribe();
 
         Cursor = new Cursor(StandardCursorType.Hand);
+    }
+
+    private void Subscribe()
+    {
+        if (_subscribed) return;
+        _bookmarkService.BookmarkChanged += OnBookmarkChanged;
+        _subscribed = true;
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        // Re-subscribe when a dock host re-attaches a reused editor instance.
+        Subscribe();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        Detach();
     }
 
     public void SetFilePath(string? filePath)
     {
         _filePath = filePath;
         InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Unsubscribes from the (singleton) bookmark service. Called when the
+    /// margin leaves the visual tree — otherwise the service keeps this margin,
+    /// its TextEditor, and the whole editor visual tree alive per closed document.
+    /// </summary>
+    public void Detach()
+    {
+        if (!_subscribed) return;
+        _bookmarkService.BookmarkChanged -= OnBookmarkChanged;
+        _subscribed = false;
     }
 
     private void OnBookmarkChanged(object? sender, BookmarkChangedEventArgs e)

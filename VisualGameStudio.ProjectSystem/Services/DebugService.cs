@@ -404,32 +404,60 @@ public class DebugService : IDebugService
         _outputService.WriteLine("Debugging stopped", OutputCategory.Debug);
     }
 
+    private readonly object _cleanupLock = new();
+
     private void CleanupProcesses()
     {
-        _writer?.Dispose();
-        _reader?.Dispose();
-        _stdinWriter?.Dispose();
-        _stdinWriter = null;
+        // Can be invoked concurrently (terminated event on the read-loop
+        // thread racing user Stop / Dispose on the UI thread). Atomically
+        // claim the fields under a lock so each process is killed/disposed
+        // exactly once, and HasExited is never called on a disposed Process.
+        Process? debugProcess;
+        Process? targetProcess;
+
+        lock (_cleanupLock)
+        {
+            try { _writer?.Dispose(); } catch { }
+            try { _reader?.Dispose(); } catch { }
+            try { _stdinWriter?.Dispose(); } catch { }
+            _stdinWriter = null;
+            _writer = null;
+            _reader = null;
+
+            debugProcess = _debugProcess;
+            targetProcess = _targetProcess;
+            _debugProcess = null;
+            _targetProcess = null;
+        }
 
         // Kill the debug adapter process and its entire process tree
         // (the game/debuggee is a child process of the adapter)
-        if (_debugProcess != null && !_debugProcess.HasExited)
+        if (debugProcess != null)
         {
-            try { _debugProcess.Kill(entireProcessTree: true); } catch { }
+            try
+            {
+                if (!debugProcess.HasExited)
+                {
+                    debugProcess.Kill(entireProcessTree: true);
+                }
+            }
+            catch { }
+            try { debugProcess.Dispose(); } catch { }
         }
-        _debugProcess?.Dispose();
 
         // Kill the target process tree (used in "Run without debugging" mode)
-        if (_targetProcess != null && !_targetProcess.HasExited)
+        if (targetProcess != null)
         {
-            try { _targetProcess.Kill(entireProcessTree: true); } catch { }
+            try
+            {
+                if (!targetProcess.HasExited)
+                {
+                    targetProcess.Kill(entireProcessTree: true);
+                }
+            }
+            catch { }
+            try { targetProcess.Dispose(); } catch { }
         }
-        _targetProcess?.Dispose();
-
-        _debugProcess = null;
-        _targetProcess = null;
-        _writer = null;
-        _reader = null;
     }
 
     public async Task ContinueAsync()
@@ -1078,14 +1106,16 @@ public class DebugService : IDebugService
                 if (_pendingRequests.TryGetValue(reqSeq, out var tcs))
                 {
                     _pendingRequests.Remove(reqSeq);
+                    // TrySet* — the request may have been cancelled (timeout /
+                    // stop) concurrently; Set* would throw on the read loop.
                     if (message.TryGetProperty("success", out var s) && s.GetBoolean())
                     {
-                        tcs.SetResult(message.TryGetProperty("body", out var body) ? body : default);
+                        tcs.TrySetResult(message.TryGetProperty("body", out var body) ? body : default);
                     }
                     else
                     {
                         var errorMsg = message.TryGetProperty("message", out var m) ? m.GetString() : "Unknown error";
-                        tcs.SetException(new Exception(errorMsg));
+                        tcs.TrySetException(new Exception(errorMsg));
                     }
                 }
             }
@@ -1199,22 +1229,32 @@ public class DebugService : IDebugService
     private async Task<JsonElement> SendRequestAsync(string command, object arguments, CancellationToken cancellationToken = default)
     {
         var seq = Interlocked.Increment(ref _requestSeq);
-        var tcs = new TaskCompletionSource<JsonElement>();
+        // RunContinuationsAsynchronously keeps awaiter continuations from
+        // running inline on the read-loop thread while it holds _lock.
+        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         lock (_lock)
         {
             _pendingRequests[seq] = tcs;
         }
 
-        var request = new { seq, type = "request", command, arguments };
-        await SendMessageAsync(request);
+        try
+        {
+            var request = new { seq, type = "request", command, arguments };
+            await SendMessageAsync(request);
 
-        using var ctr = cancellationToken.Register(() =>
+            // Internal timeout: if the adapter dies (SendMessageAsync swallows
+            // pipe errors) the response never arrives, and callers that pass
+            // no token would otherwise await forever.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+            using var ctr = timeoutCts.Token.Register(() => tcs.TrySetCanceled());
+            return await tcs.Task;
+        }
+        finally
         {
             lock (_lock) { _pendingRequests.Remove(seq); }
-            tcs.TrySetCanceled();
-        });
-        return await tcs.Task;
+        }
     }
 
     private async Task SendMessageAsync(object message)
@@ -1259,6 +1299,18 @@ public class DebugService : IDebugService
         // Use synchronous cleanup to avoid thread pool starvation deadlocks
         // when many tests run in parallel
         _cts?.Cancel();
+
+        // Release any callers still awaiting a DAP response so they don't
+        // hang after disposal.
+        lock (_lock)
+        {
+            foreach (var tcs in _pendingRequests.Values)
+            {
+                tcs.TrySetCanceled();
+            }
+            _pendingRequests.Clear();
+        }
+
         CleanupProcesses();
         State = DebugState.Stopped;
     }
