@@ -3277,6 +3277,7 @@ namespace BasicLang.Compiler.IR
             var castKind = DetermineCastKind(sourceType, targetType);
 
             var cast = new IRCast(tempName, value, sourceType, targetType, castKind);
+            cast.IsTryCast = node.IsTryCast;
             EmitInstruction(cast);
 
             _expressionResult = cast;
@@ -3356,6 +3357,8 @@ namespace BasicLang.Compiler.IR
 
         private CastKind DetermineCastKind(TypeInfo source, TypeInfo target)
         {
+            if (source == null || target == null)
+                return CastKind.Bitcast;
             if (source.IsFloatingPoint() && target.IsIntegral())
                 return CastKind.FPToSI;
             if (source.IsIntegral() && target.IsFloatingPoint())

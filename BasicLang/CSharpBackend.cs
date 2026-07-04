@@ -2737,9 +2737,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRCast cast:
                     {
-                        var target = MapType(cast.Type);
                         var expr = EmitExpression(cast.Value, stack, false);
-                        return $"({target}){expr}";
+                        return EmitCastText(cast, expr);
                     }
 
                     case IRAwait awaitVal:
@@ -3176,11 +3175,59 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return;
 
             var value = EmitExpression(cast.Value);
-            var targetType = MapType(cast.Type);
             var target = GetValueName(cast);
 
-            WriteLine($"{target} = ({targetType}){value};");
+            WriteLine($"{target} = {EmitCastText(cast, value)};");
         }
+
+        /// <summary>
+        /// Render a cast as C# text. TryCast becomes the 'as' operator; String
+        /// conversions to/from other types use Convert.*; everything else is a C# cast.
+        /// </summary>
+        private string EmitCastText(IRCast cast, string valueExpr)
+        {
+            var targetType = MapType(cast.Type);
+
+            if (cast.IsTryCast)
+                return $"({valueExpr} as {targetType})";
+
+            var sourceName = cast.SourceType?.Name;
+            var targetName = cast.Type?.Name;
+
+            // String -> numeric/bool/char: a C# cast is invalid, use Convert.*
+            if (sourceName == "String" && targetName != null &&
+                ConvertMethodForType(targetName) is string convertMethod)
+            {
+                return $"Convert.{convertMethod}({valueExpr})";
+            }
+
+            // Non-String, non-Object -> String: a C# cast is invalid, use Convert.ToString
+            if (targetName == "String" && sourceName != null &&
+                sourceName != "String" && sourceName != "Object")
+            {
+                return $"Convert.ToString({valueExpr})";
+            }
+
+            return $"({targetType})({valueExpr})";
+        }
+
+        /// <summary>Convert.* method name for a BasicLang primitive target type, or null.</summary>
+        private static string ConvertMethodForType(string typeName) => typeName switch
+        {
+            "Integer" => "ToInt32",
+            "UInteger" => "ToUInt32",
+            "Long" => "ToInt64",
+            "ULong" => "ToUInt64",
+            "Short" => "ToInt16",
+            "UShort" => "ToUInt16",
+            "Byte" => "ToSByte",
+            "UByte" => "ToByte",
+            "Single" => "ToSingle",
+            "Double" => "ToDouble",
+            "Boolean" => "ToBoolean",
+            "Char" => "ToChar",
+            _ => null
+        };
 
         public void Visit(IRLabel label)
         {

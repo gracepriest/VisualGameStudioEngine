@@ -618,6 +618,9 @@ namespace BasicLang.Compiler.IR
         public IRValue Value { get; set; }
         public TypeInfo SourceType { get; set; }
         public CastKind Kind { get; set; }
+
+        /// <summary>True for TryCast - backends emit a null-on-failure cast (C# 'as')</summary>
+        public bool IsTryCast { get; set; }
         
         public IRCast(string resultName, IRValue value, TypeInfo sourceType, TypeInfo targetType, CastKind kind)
             : base(resultName, targetType)

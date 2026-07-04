@@ -4993,6 +4993,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             node.Expression.Accept(this);
             var targetType = ResolveTypeReference(node.TargetType);
 
+            // TryCast maps to C# 'as', which requires a reference target type
+            if (node.IsTryCast && targetType != null &&
+                (targetType.IsNumeric() || targetType.Name == "Boolean" || targetType.Name == "Char"))
+            {
+                Error($"'TryCast' target type must be a reference type, but '{targetType.Name}' is a value type. Use CType(value, {targetType.Name}) instead",
+                      node.Line, node.Column);
+            }
+
             SetNodeType(node, targetType);
         }
     }

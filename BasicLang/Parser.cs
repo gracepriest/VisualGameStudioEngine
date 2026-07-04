@@ -3873,6 +3873,27 @@ namespace BasicLang.Compiler
                 return new MyBaseExpressionNode(token.Line, token.Column);
             }
 
+            // Cast expressions: CType(expr, Type), DirectCast(expr, Type), TryCast(expr, Type)
+            // The second argument is a TYPE reference, not an expression, so these cannot
+            // be parsed as regular calls.
+            if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftParen &&
+                (Peek().Lexeme.Equals("CType", StringComparison.OrdinalIgnoreCase) ||
+                 Peek().Lexeme.Equals("DirectCast", StringComparison.OrdinalIgnoreCase) ||
+                 Peek().Lexeme.Equals("TryCast", StringComparison.OrdinalIgnoreCase)))
+            {
+                var castToken = Advance();
+                Consume(TokenType.LeftParen, $"Expected '(' after '{castToken.Lexeme}'");
+
+                var castNode = new CastExpressionNode(castToken.Line, castToken.Column);
+                castNode.Expression = ParseExpression();
+                Consume(TokenType.Comma, $"Expected ',' between value and target type in '{castToken.Lexeme}(value, Type)'");
+                castNode.TargetType = ParseTypeReference();
+                Consume(TokenType.RightParen, $"Expected ')' after target type in '{castToken.Lexeme}(value, Type)'");
+                castNode.IsTryCast = castToken.Lexeme.Equals("TryCast", StringComparison.OrdinalIgnoreCase);
+
+                return castNode;
+            }
+
             // Identifier
             if (Check(TokenType.Identifier))
             {

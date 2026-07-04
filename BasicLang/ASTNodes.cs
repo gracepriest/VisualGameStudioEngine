@@ -1492,6 +1492,9 @@ namespace BasicLang.Compiler.AST
         public ExpressionNode Expression { get; set; }
         public TypeReference TargetType { get; set; }
 
+        /// <summary>True for TryCast(expr, Type) - emits C# 'as' (null on failure)</summary>
+        public bool IsTryCast { get; set; }
+
         public CastExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
