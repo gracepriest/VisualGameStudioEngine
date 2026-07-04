@@ -1,5 +1,7 @@
 using System.Text;
 using VisualGameStudio.Core.Abstractions.Services;
+using VisualGameStudio.Core.Models;
+using VisualGameStudio.ProjectSystem.Serialization;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
@@ -11,6 +13,7 @@ public class ProjectTemplateService : IProjectTemplateService
     private readonly List<ProjectTemplate> _customTemplates = new();
     private readonly List<string> _recentTemplateIds = new();
     private readonly IGitService? _gitService;
+    private readonly SolutionSerializer _solutionSerializer = new();
 
     public ProjectTemplateService(IGitService? gitService = null)
     {
@@ -82,7 +85,7 @@ public class ProjectTemplateService : IProjectTemplateService
             }
             else if (options.AddToExistingSolution && !string.IsNullOrEmpty(options.ExistingSolutionPath))
             {
-                await AddProjectToSolutionAsync(options.ExistingSolutionPath, projectFile, cancellationToken);
+                await AddProjectToSolutionAsync(options.ExistingSolutionPath, projectFile, options.Template, cancellationToken);
                 result.SolutionPath = options.ExistingSolutionPath;
             }
 
@@ -115,9 +118,14 @@ public class ProjectTemplateService : IProjectTemplateService
             var solutionDir = Path.Combine(options.Location, options.Name);
             Directory.CreateDirectory(solutionDir);
 
-            // Create solution file
+            // Create solution file (XML, via SolutionSerializer)
             var solutionFile = Path.Combine(solutionDir, $"{options.Name}{options.SolutionType.SolutionExtension}");
-            await File.WriteAllTextAsync(solutionFile, GenerateEmptySolutionContent(options.Name), cancellationToken);
+            var emptySolution = new BasicLangSolution
+            {
+                FilePath = solutionFile,
+                SolutionName = options.Name
+            };
+            await _solutionSerializer.SaveAsync(emptySolution, cancellationToken);
             result.SolutionPath = solutionFile;
 
             // Create initial projects
@@ -266,6 +274,15 @@ public class ProjectTemplateService : IProjectTemplateService
         sb.AppendLine($"    <OutputType>{outputType switch { "exe" => "Exe", "library" => "Library", _ => "WinExe" }}</OutputType>");
         sb.AppendLine($"    <RootNamespace>{options.Namespace ?? options.Name}</RootNamespace>");
         sb.AppendLine($"    <TargetBackend>{targetBackend}</TargetBackend>");
+        // Windows desktop UI frameworks need the net*-windows TFM at build time.
+        if (options.Template.Id == "winforms-app")
+        {
+            sb.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
+        }
+        else if (options.Template.Id == "wpf-app")
+        {
+            sb.AppendLine("    <UseWPF>true</UseWPF>");
+        }
         sb.AppendLine("  </PropertyGroup>");
         sb.AppendLine("  <PropertyGroup Condition=\"'$(Configuration)' == 'Debug'\">");
         sb.AppendLine("    <OutputPath>bin\\Debug</OutputPath>");
@@ -287,9 +304,36 @@ public class ProjectTemplateService : IProjectTemplateService
         }
 
         sb.AppendLine("  </ItemGroup>");
+
+        // NuGet packages required by the template (flowed into the generated
+        // csproj by the build; ignored by older loaders).
+        var packageRefs = GetPackageReferences(options.Template.Id);
+        if (packageRefs.Count > 0)
+        {
+            sb.AppendLine("  <ItemGroup>");
+            foreach (var (packageId, version) in packageRefs)
+            {
+                sb.AppendLine($"    <PackageReference Include=\"{packageId}\" Version=\"{version}\" />");
+            }
+            sb.AppendLine("  </ItemGroup>");
+        }
+
         sb.AppendLine("</BasicLangProject>");
 
         return sb.ToString();
+    }
+
+    private static List<(string PackageId, string Version)> GetPackageReferences(string templateId)
+    {
+        return templateId switch
+        {
+            "avalonia-app" => new List<(string, string)>
+            {
+                ("Avalonia.Desktop", "11.1.0"),
+                ("Avalonia.Themes.Fluent", "11.1.0")
+            },
+            _ => new List<(string, string)>()
+        };
     }
 
     private static string GetOutputType(ProjectTemplate template)
@@ -315,6 +359,11 @@ public class ProjectTemplateService : IProjectTemplateService
             "game-app" => new List<string> { "Main.bas", "GameState.mod", "Player.cls" },
             "console-app" => new List<string> { "Main.bas", "Helpers.mod" },
             "class-library" => new List<string> { "Library.mod", "Types.cls" },
+            // GUI templates also generate UIHelpers.bas on disk; it must be a
+            // compile item or it becomes an orphan excluded from the build.
+            "winforms-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
+            "wpf-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
+            "avalonia-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
             _ => new List<string> { "Main.bas" }
         };
     }
@@ -659,7 +708,7 @@ End Sub
 
 ' Example API handler
 Function HandleHealthCheck() As String
-    Return ""{{""""status"""": """"healthy"""", """"timestamp"""": """""" & DateTime.Now.ToString() & """"""""}}""
+    Return ""{{""""status"""": """"healthy"""", """"timestamp"""": """""" & DateTime.Now.ToString() & """"""}}""
 End Function
 ";
     }
@@ -763,9 +812,7 @@ End Sub
 
     private static string GeneratePlayerClass()
     {
-        return @"Public
-
-Public Name As String
+        return @"Public Name As String
 Public X As Single = 400
 Public Y As Single = 300
 Public Speed As Single = 5.0
@@ -964,107 +1011,58 @@ End Sub
     private async Task<string> CreateSolutionFileAsync(string solutionDir, CreateProjectOptions options, string projectFile, CancellationToken cancellationToken)
     {
         var solutionFile = Path.Combine(solutionDir, $"{options.Name}{options.SolutionType.SolutionExtension}");
-        var projectRelativePath = Path.GetRelativePath(solutionDir, projectFile);
-        var content = GenerateSolutionContent(options.Name, projectRelativePath);
 
-        await File.WriteAllTextAsync(solutionFile, content, cancellationToken);
+        var solution = new BasicLangSolution
+        {
+            FilePath = solutionFile,
+            SolutionName = options.Name,
+            DefaultProject = options.Name
+        };
+        solution.Projects.Add(new SolutionProject
+        {
+            Name = options.Name,
+            RelativePath = Path.GetRelativePath(solutionDir, projectFile),
+            Type = GetSolutionProjectType(options.Template),
+            IsStartupProject = true
+        });
+
+        // Written through SolutionSerializer so the file is always in the XML
+        // format SolutionService can open.
+        await _solutionSerializer.SaveAsync(solution, cancellationToken);
         return solutionFile;
     }
 
-    private static string GenerateSolutionContent(string name, string projectRelativePath)
+    private static string GetSolutionProjectType(ProjectTemplate template)
     {
-        // Solution files use JSON format
-        var projectId = Guid.NewGuid();
-        var sb = new StringBuilder();
-        sb.AppendLine("{");
-        sb.AppendLine($"  \"name\": \"{name}\",");
-        sb.AppendLine($"  \"version\": \"1.0\",");
-        sb.AppendLine($"  \"projects\": [");
-        sb.AppendLine($"    {{");
-        sb.AppendLine($"      \"id\": \"{projectId}\",");
-        sb.AppendLine($"      \"name\": \"{name}\",");
-        sb.AppendLine($"      \"relativePath\": \"{projectRelativePath.Replace("\\", "\\\\")}\",");
-        sb.AppendLine($"      \"isStartupProject\": true");
-        sb.AppendLine($"    }}");
-        sb.AppendLine($"  ],");
-        sb.AppendLine($"  \"folders\": [],");
-        sb.AppendLine($"  \"globalProperties\": {{}}");
-        sb.AppendLine("}");
-        return sb.ToString();
+        return GetOutputType(template) switch
+        {
+            "winexe" => "WinExe",
+            "library" => "Library",
+            _ => "Exe"
+        };
     }
 
-    private static string GenerateEmptySolutionContent(string name)
+    private async Task AddProjectToSolutionAsync(string solutionPath, string projectPath, ProjectTemplate template, CancellationToken cancellationToken)
     {
-        // Solution files use JSON format - empty solution
-        var sb = new StringBuilder();
-        sb.AppendLine("{");
-        sb.AppendLine($"  \"name\": \"{name}\",");
-        sb.AppendLine($"  \"version\": \"1.0\",");
-        sb.AppendLine($"  \"projects\": [],");
-        sb.AppendLine($"  \"folders\": [],");
-        sb.AppendLine($"  \"globalProperties\": {{}}");
-        sb.AppendLine("}");
-        return sb.ToString();
-    }
-
-    private async Task AddProjectToSolutionAsync(string solutionPath, string projectPath, CancellationToken cancellationToken)
-    {
-        var content = await File.ReadAllTextAsync(solutionPath, cancellationToken);
         var projectName = Path.GetFileNameWithoutExtension(projectPath);
         var projectRelativePath = Path.GetRelativePath(Path.GetDirectoryName(solutionPath)!, projectPath);
 
-        // Parse existing JSON and add project
-        try
+        // Load-modify-save through the serializer. A corrupt or unreadable
+        // solution surfaces as an error to the caller instead of being
+        // silently replaced with a single-project solution.
+        var solution = await _solutionSerializer.LoadAsync(solutionPath, cancellationToken);
+
+        if (!solution.Projects.Any(p => p.RelativePath.Equals(projectRelativePath, StringComparison.OrdinalIgnoreCase)))
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(content);
-            var root = doc.RootElement;
-
-            var newProject = new
+            solution.Projects.Add(new SolutionProject
             {
-                id = Guid.NewGuid(),
-                name = projectName,
-                relativePath = projectRelativePath,
-                isStartupProject = false
-            };
-
-            // Simple approach: deserialize, modify, serialize
-            var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
-            var solutionData = System.Text.Json.JsonSerializer.Deserialize<SolutionJsonData>(content, options) ?? new SolutionJsonData();
-            solutionData.Projects ??= new List<ProjectJsonData>();
-            solutionData.Projects.Add(new ProjectJsonData
-            {
-                Id = Guid.NewGuid(),
                 Name = projectName,
                 RelativePath = projectRelativePath,
-                IsStartupProject = false
+                Type = GetSolutionProjectType(template)
             });
-
-            var newContent = System.Text.Json.JsonSerializer.Serialize(solutionData, options);
-            await File.WriteAllTextAsync(solutionPath, newContent, cancellationToken);
         }
-        catch
-        {
-            // If parsing fails, create new solution content
-            var newContent = GenerateSolutionContent(projectName, projectRelativePath);
-            await File.WriteAllTextAsync(solutionPath, newContent, cancellationToken);
-        }
-    }
 
-    private class SolutionJsonData
-    {
-        public string? Name { get; set; }
-        public string? Version { get; set; }
-        public List<ProjectJsonData>? Projects { get; set; }
-        public List<object>? Folders { get; set; }
-        public Dictionary<string, string>? GlobalProperties { get; set; }
-    }
-
-    private class ProjectJsonData
-    {
-        public Guid Id { get; set; }
-        public string? Name { get; set; }
-        public string? RelativePath { get; set; }
-        public bool IsStartupProject { get; set; }
+        await _solutionSerializer.SaveAsync(solution, cancellationToken);
     }
 
     private async Task CreateGitIgnoreAsync(string directory, SolutionType solutionType, CancellationToken cancellationToken)
