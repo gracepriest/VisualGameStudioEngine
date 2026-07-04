@@ -37,6 +37,13 @@ public class DebugService : IDebugService
     public DebugState State { get; private set; } = DebugState.NotStarted;
     public bool IsDebugging => State == DebugState.Running || State == DebugState.Paused;
 
+    /// <summary>
+    /// Process ID of the most recently started debug-adapter process, or null if an
+    /// adapter was never started. Deliberately retained after Stop/Dispose so callers
+    /// (diagnostics, integration tests) can verify the adapter process actually exited.
+    /// </summary>
+    public int? AdapterProcessId { get; private set; }
+
     public event EventHandler<DebugStateChangedEventArgs>? StateChanged;
     public event EventHandler<StoppedEventArgs>? Stopped;
     public event EventHandler<DebugOutputEventArgs>? OutputReceived;
@@ -105,8 +112,12 @@ public class DebugService : IDebugService
                 RedirectStandardError = true,
                 CreateNoWindow = true,
                 WorkingDirectory = config.WorkingDirectory,
-                StandardInputEncoding = Encoding.UTF8,
-                StandardOutputEncoding = Encoding.UTF8
+                // MUST be BOM-less: accessing Process.StandardInput sets AutoFlush=true,
+                // which flushes the wrapper StreamWriter and writes the encoding preamble.
+                // With Encoding.UTF8 (BOM) that injects EF BB BF into the adapter's stdin,
+                // corrupting the first Content-Length header — the adapter never replies.
+                StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
             };
 
             _debugProcess = new Process { StartInfo = startInfo };
@@ -119,10 +130,15 @@ public class DebugService : IDebugService
             };
 
             _debugProcess.Start();
+            AdapterProcessId = _debugProcess.Id;
             _debugProcess.BeginErrorReadLine();
 
             _writer = new StreamWriter(_debugProcess.StandardInput.BaseStream, new UTF8Encoding(false)) { AutoFlush = false };
-            _reader = new StreamReader(_debugProcess.StandardOutput.BaseStream, Encoding.UTF8);
+            // Latin1 maps every byte 1:1 to a char, so Content-Length (a BYTE count)
+            // can be honoured exactly; the body is re-decoded as UTF-8 afterwards.
+            // A UTF-8 StreamReader here would over-read whenever a message contains
+            // multi-byte characters, corrupting the framing of subsequent messages.
+            _reader = new StreamReader(_debugProcess.StandardOutput.BaseStream, Encoding.Latin1);
 
             _readTask = Task.Run(() => ReadMessagesAsync(_cts.Token), _cts.Token);
 
@@ -196,8 +212,12 @@ public class DebugService : IDebugService
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                StandardInputEncoding = Encoding.UTF8,
-                StandardOutputEncoding = Encoding.UTF8
+                // MUST be BOM-less: accessing Process.StandardInput sets AutoFlush=true,
+                // which flushes the wrapper StreamWriter and writes the encoding preamble.
+                // With Encoding.UTF8 (BOM) that injects EF BB BF into the adapter's stdin,
+                // corrupting the first Content-Length header — the adapter never replies.
+                StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
             };
 
             _debugProcess = new Process { StartInfo = startInfo };
@@ -210,10 +230,15 @@ public class DebugService : IDebugService
             };
 
             _debugProcess.Start();
+            AdapterProcessId = _debugProcess.Id;
             _debugProcess.BeginErrorReadLine();
 
             _writer = new StreamWriter(_debugProcess.StandardInput.BaseStream, new UTF8Encoding(false)) { AutoFlush = false };
-            _reader = new StreamReader(_debugProcess.StandardOutput.BaseStream, Encoding.UTF8);
+            // Latin1 maps every byte 1:1 to a char, so Content-Length (a BYTE count)
+            // can be honoured exactly; the body is re-decoded as UTF-8 afterwards.
+            // A UTF-8 StreamReader here would over-read whenever a message contains
+            // multi-byte characters, corrupting the framing of subsequent messages.
+            _reader = new StreamReader(_debugProcess.StandardOutput.BaseStream, Encoding.Latin1);
 
             _readTask = Task.Run(() => ReadMessagesAsync(_cts.Token), _cts.Token);
 
@@ -1081,6 +1106,9 @@ public class DebugService : IDebugService
 
         if (contentLength == 0) return null;
 
+        // Read content — contentLength is a BYTE count. The reader uses Latin1
+        // (1 byte == 1 char), so reading contentLength chars reads exactly the
+        // message body; re-decode those bytes as UTF-8 to get the real JSON.
         var buffer = new char[contentLength];
         var read = 0;
         while (read < contentLength)
@@ -1090,7 +1118,8 @@ public class DebugService : IDebugService
             read += chunk;
         }
 
-        var json = new string(buffer);
+        var bytes = Encoding.Latin1.GetBytes(buffer);
+        var json = Encoding.UTF8.GetString(bytes);
         return JsonSerializer.Deserialize<JsonElement>(json, JsonOptions);
     }
 

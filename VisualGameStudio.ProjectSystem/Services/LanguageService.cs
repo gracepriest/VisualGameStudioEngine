@@ -25,6 +25,14 @@ public class LanguageService : ILanguageService
     private readonly IOutputService _outputService;
 
     public bool IsConnected { get; private set; }
+
+    /// <summary>
+    /// Process ID of the most recently started language-server process, or null if a
+    /// server was never started. Deliberately retained after Stop/Dispose so callers
+    /// (diagnostics, integration tests) can verify the server process actually exited.
+    /// </summary>
+    public int? ServerProcessId { get; private set; }
+
     public event EventHandler<bool>? ConnectionChanged;
     public event EventHandler<DiagnosticsEventArgs>? DiagnosticsReceived;
 
@@ -80,8 +88,12 @@ public class LanguageService : ILanguageService
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                StandardInputEncoding = Encoding.UTF8,
-                StandardOutputEncoding = Encoding.UTF8
+                // MUST be BOM-less: accessing Process.StandardInput sets AutoFlush=true,
+                // which flushes the wrapper StreamWriter and writes the encoding preamble.
+                // With Encoding.UTF8 (BOM) that injects EF BB BF into the server's stdin,
+                // corrupting the first Content-Length header — the server never replies.
+                StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
             };
 
             _outputService.WriteLine($"[LSP] Starting: dotnet \"{_compilerPath}\" --lsp", OutputCategory.Debug);
@@ -96,13 +108,18 @@ public class LanguageService : ILanguageService
             };
 
             _serverProcess.Start();
+            ServerProcessId = _serverProcess.Id;
             _serverProcess.BeginErrorReadLine();
 
             _writer = new StreamWriter(_serverProcess.StandardInput.BaseStream, new UTF8Encoding(false))
             {
                 AutoFlush = false
             };
-            _reader = new StreamReader(_serverProcess.StandardOutput.BaseStream, Encoding.UTF8);
+            // Latin1 maps every byte 1:1 to a char, so Content-Length (a BYTE count)
+            // can be honoured exactly; the body is re-decoded as UTF-8 afterwards.
+            // A UTF-8 StreamReader here would over-read whenever a message contains
+            // multi-byte characters, corrupting the framing of subsequent messages.
+            _reader = new StreamReader(_serverProcess.StandardOutput.BaseStream, Encoding.Latin1);
 
             // Start reading messages
             _readTask = Task.Run(() => ReadMessagesAsync(_cts.Token), _cts.Token);
@@ -316,8 +333,11 @@ public class LanguageService : ILanguageService
 
             return ParseHover(result);
         }
-        catch
+        catch (Exception ex)
         {
+            // Don't silently mask server errors — they are indistinguishable
+            // from a legitimate "no hover here" for callers otherwise.
+            _outputService.WriteLine($"[LSP] Hover error: {ex.Message}", OutputCategory.Debug);
             return null;
         }
     }
@@ -466,7 +486,9 @@ public class LanguageService : ILanguageService
 
         if (contentLength == 0) return null;
 
-        // Read content
+        // Read content — contentLength is a BYTE count. The reader uses Latin1
+        // (1 byte == 1 char), so reading contentLength chars reads exactly the
+        // message body; re-decode those bytes as UTF-8 to get the real JSON.
         var buffer = new char[contentLength];
         var read = 0;
         while (read < contentLength)
@@ -476,7 +498,8 @@ public class LanguageService : ILanguageService
             read += chunk;
         }
 
-        var json = new string(buffer);
+        var bytes = Encoding.Latin1.GetBytes(buffer);
+        var json = Encoding.UTF8.GetString(bytes);
         return JsonSerializer.Deserialize<JsonElement>(json, JsonOptions);
     }
 

@@ -150,8 +150,12 @@ public class ExtensionHost : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
-            StandardInputEncoding = Encoding.UTF8,
-            StandardOutputEncoding = Encoding.UTF8
+            // MUST be BOM-less: accessing Process.StandardInput sets AutoFlush=true,
+            // which flushes the wrapper StreamWriter and writes the encoding preamble.
+            // With Encoding.UTF8 (BOM) that injects EF BB BF into the host's stdin,
+            // corrupting the first Content-Length header of the JSON-RPC channel.
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
         };
 
         _hostProcess = new Process { StartInfo = startInfo };
