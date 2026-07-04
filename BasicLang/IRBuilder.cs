@@ -3204,10 +3204,16 @@ namespace BasicLang.Compiler.IR
             }
             else
             {
-                // Fallback
+                // The callee is an arbitrary expression that yields a delegate,
+                // e.g. invoking the delegate returned by another call: f(a)(b).
+                // Invoke the callee VALUE rather than treating its temp name as
+                // a function name (which dropped the invocation).
                 node.Callee.Accept(this);
                 var callee = _expressionResult;
-                var call = new IRCall(tempName, callee?.Name ?? "unknown", returnType);
+                var call = new IRCall(tempName, callee?.Name ?? "unknown", returnType)
+                {
+                    CalleeValue = callee
+                };
 
                 foreach (var arg in node.Arguments)
                 {

@@ -2723,6 +2723,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
 
+                        // Invoke a delegate value directly: (calleeExpr)(args), e.g. f(a)(b)
+                        if (call.CalleeValue != null)
+                        {
+                            var calleeExpr = EmitExpression(call.CalleeValue, stack, true);
+                            return $"{calleeExpr}({string.Join(", ", argExprs)})";
+                        }
+
                         // Check if this is a standard library function
                         if (StdLibCanHandle(call.FunctionName))
                         {
@@ -2879,7 +2886,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 case IRCast cast:
                     return new[] { cast.Value };
                 case IRCall call:
-                    return call.Arguments;
+                    return call.CalleeValue != null
+                        ? call.Arguments.Concat(new[] { call.CalleeValue })
+                        : call.Arguments;
                 case IRAssignment asg:
                     return new[] { asg.Value, asg.Target };
                 case IRLoad load:
@@ -3023,6 +3032,22 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }).ToArray();
 
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            // Invoke a delegate value directly: (calleeExpr)(args), e.g. f(a)(b)
+            if (call.CalleeValue != null)
+            {
+                var calleeExpr = EmitExpression(call.CalleeValue, new HashSet<IRValue>(), true);
+                var invocation = $"{calleeExpr}({string.Join(", ", argExprs)})";
+                if (hasReturn && IsNamedDestination(call))
+                {
+                    WriteLine($"{GetValueName(call)} = {invocation};");
+                }
+                else if (!hasReturn || GetUseCount(call) == 0)
+                {
+                    WriteLine($"{invocation};");
+                }
+                return;
+            }
 
             // Check if this is an extern function call
             if (_currentModule != null && _currentModule.IsExtern(functionName))

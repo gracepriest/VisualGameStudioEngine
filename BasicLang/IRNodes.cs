@@ -558,6 +558,13 @@ namespace BasicLang.Compiler.IR
         public List<bool> ByRefArguments { get; set; }  // Track which arguments are by-ref
         public bool IsTailCall { get; set; }
 
+        /// <summary>
+        /// When set, the call target is this delegate VALUE rather than a named
+        /// function — e.g. invoking the delegate returned by another call:
+        /// f(a)(b). Backends render (calleeValue)(args) and ignore FunctionName.
+        /// </summary>
+        public IRValue CalleeValue { get; set; }
+
         public IRCall(string resultName, string functionName, TypeInfo returnType)
             : base(resultName, returnType)
         {
