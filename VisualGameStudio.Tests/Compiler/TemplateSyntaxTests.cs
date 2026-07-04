@@ -106,6 +106,24 @@ End Module";
     }
 
     [Test]
+    public void DoubledQuote_InString_IsEscapedNotTruncated()
+    {
+        // VB.NET escapes a literal quote by doubling it. "a""b" is the 3-char
+        // string a"b, not the 1-char string a.
+        var src = @"Module M
+    Function Health() As String
+        Return ""{""""status"""": """"ok""""}""
+    End Function
+End Module";
+
+        var output = CompileToCSharp(src, out var errors);
+        Assert.That(output, Is.Not.Null, "compile failed: " + string.Join("; ", errors));
+        // The generated C# must contain the escaped inner quotes, proving the
+        // string was not truncated at the first doubled quote.
+        Assert.That(output, Does.Contain("\\\"status\\\""));
+    }
+
+    [Test]
     public void ClassField_WithInitializer_Parses()
     {
         var src = @"Module M

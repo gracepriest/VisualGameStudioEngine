@@ -880,9 +880,23 @@ namespace BasicLang.Compiler
         private void ScanString(int startLine, int startColumn)
         {
             StringBuilder sb = new StringBuilder();
-            
-            while (!IsAtEnd() && Peek() != '"')
+
+            while (!IsAtEnd())
             {
+                if (Peek() == '"')
+                {
+                    // VB-style doubled-quote escape: "" inside a string is a
+                    // single literal ". A lone " closes the string.
+                    if (PeekNext() == '"')
+                    {
+                        Advance(); // consume first "
+                        Advance(); // consume second "
+                        sb.Append('"');
+                        continue;
+                    }
+                    break; // closing quote
+                }
+
                 if (Peek() == '\\')
                 {
                     Advance(); // Consume backslash
@@ -910,7 +924,7 @@ namespace BasicLang.Compiler
                     sb.Append(Advance());
                 }
             }
-            
+
             if (IsAtEnd())
             {
                 throw new LexerException(
