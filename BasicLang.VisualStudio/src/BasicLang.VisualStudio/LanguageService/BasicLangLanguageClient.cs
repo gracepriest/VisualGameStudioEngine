@@ -24,14 +24,28 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
     /// <inheritdoc />
     public IEnumerable<string>? ConfigurationSections => new[] { "basiclang" };
 
-    /// <inheritdoc />
-    public object? InitializationOptions => new
+    /// <summary>
+    /// Initialization options sent to the server with the LSP "initialize" request.
+    /// Evaluated by the LSP platform each time the server is (re)started, so a
+    /// "Restart Language Server" after changing Tools > Options > BasicLang > General
+    /// picks up the new values. Reads the thread-safe options snapshot (populated on
+    /// the UI thread by the package/options page), so this property is safe on any thread.
+    /// </summary>
+    public object? InitializationOptions
     {
-        enableSemanticHighlighting = true,
-        enableInlayHints = true,
-        enableCodeLens = true,
-        enableDiagnostics = true
-    };
+        get
+        {
+            var options = Options.GeneralOptionsPage.Snapshot;
+            return new
+            {
+                enableSemanticHighlighting = options.EnableSemanticHighlighting,
+                enableInlayHints = options.EnableInlayHints,
+                enableCodeLens = options.EnableCodeLens,
+                enableDiagnostics = options.EnableDiagnostics,
+                logLevel = options.LogLevel.ToString()
+            };
+        }
+    }
 
     /// <inheritdoc />
     public IEnumerable<string> FilesToWatch => new[]
@@ -40,8 +54,12 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
         "**/*.bas"
     };
 
-    /// <inheritdoc />
-    public bool ShowNotificationOnInitializeFailed => true;
+    /// <summary>
+    /// Show the failure info bar only for real failures. When activation returned
+    /// null because the user disabled auto-start, the LSP platform still treats it
+    /// as an initialization failure — suppress the notification for that case.
+    /// </summary>
+    public bool ShowNotificationOnInitializeFailed => !_startSuppressedByOptions;
 
     /// <inheritdoc />
     public event AsyncEventHandler<EventArgs>? StartAsync;
@@ -62,6 +80,8 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
     private Process? _serverProcess;
     private JsonRpc? _rpc;
     private bool _disposed;
+    private volatile bool _manualStartRequested;
+    private volatile bool _startSuppressedByOptions;
 
     /// <summary>
     /// Activates the language client and starts the language server.
@@ -70,11 +90,30 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
     {
         await Task.Yield();
 
+        // MEF activates this client on content-type load (e.g. VS restoring an open
+        // .bas document), which can run before the package's background autoload has
+        // primed GeneralOptionsPage.Snapshot from persisted settings. Force-load the
+        // package first so the AutoStart gate and LanguageServerPath override below
+        // see the user's real settings instead of compiled defaults.
+        await EnsureOptionsLoadedAsync(token);
+
+        // Honor "Auto-Start Language Server" from Tools > Options > BasicLang > General.
+        // An explicit "Restart Language Server" command always starts the server.
+        if (!Options.GeneralOptionsPage.Snapshot.AutoStartLanguageServer && !_manualStartRequested)
+        {
+            _startSuppressedByOptions = true;
+            Debug.WriteLine("BasicLang language server auto-start is disabled in options");
+            OutputMessage("Language server auto-start is disabled in Tools > Options > BasicLang > General. Use BasicLang > Restart Language Server to start it manually.");
+            return null;
+        }
+
+        _startSuppressedByOptions = false;
+
         var serverPath = FindLanguageServer();
         if (string.IsNullOrEmpty(serverPath))
         {
             Debug.WriteLine("BasicLang language server not found");
-            OutputMessage("BasicLang language server not found. Please ensure BasicLang is installed.");
+            OutputMessage("BasicLang language server not found. Please ensure BasicLang is installed.", Options.LogLevel.Error);
             return null;
         }
 
@@ -99,7 +138,7 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
             if (_serverProcess == null)
             {
                 Debug.WriteLine("Failed to start BasicLang language server process");
-                OutputMessage("Failed to start BasicLang language server process");
+                OutputMessage("Failed to start BasicLang language server process", Options.LogLevel.Error);
                 return null;
             }
 
@@ -123,7 +162,7 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
         catch (Exception ex)
         {
             Debug.WriteLine($"Error starting BasicLang language server: {ex.Message}");
-            OutputMessage($"Error starting BasicLang language server: {ex.Message}");
+            OutputMessage($"Error starting BasicLang language server: {ex.Message}", Options.LogLevel.Error);
             return null;
         }
     }
@@ -154,14 +193,54 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
     /// </summary>
     public Task<InitializationFailureContext?> OnServerInitializeFailedAsync(ILanguageClientInitializationInfo initializationState)
     {
+        // Not a failure: activation was intentionally suppressed because the user
+        // disabled auto-start. Don't log an error or surface a failure context.
+        if (_startSuppressedByOptions)
+        {
+            return Task.FromResult<InitializationFailureContext?>(null);
+        }
+
         var message = $"BasicLang language server initialization failed: {initializationState.StatusMessage}";
         Debug.WriteLine(message);
-        OutputMessage(message);
+        OutputMessage(message, Options.LogLevel.Error);
 
         return Task.FromResult<InitializationFailureContext?>(new InitializationFailureContext
         {
             FailureMessage = message
         });
+    }
+
+    /// <summary>
+    /// Ensures BasicLangPackage has finished loading — which primes
+    /// <see cref="Options.GeneralOptionsPage.Snapshot"/> from persisted settings —
+    /// before the snapshot is consulted. No-op once primed. Any failure falls back
+    /// to the current snapshot (compiled defaults) rather than blocking activation.
+    /// </summary>
+    private static async Task EnsureOptionsLoadedAsync(CancellationToken token)
+    {
+        if (Options.GeneralOptionsPage.SnapshotPrimed)
+            return;
+
+        try
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(token);
+
+            if (await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(Microsoft.VisualStudio.Shell.Interop.SVsShell))
+                is Microsoft.VisualStudio.Shell.Interop.IVsShell7 shell)
+            {
+                var packageGuid = Guids.Package;
+                await shell.LoadPackageAsync(ref packageGuid);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"BasicLang: failed to load package for options snapshot: {ex.Message}");
+        }
+        finally
+        {
+            // Don't keep server-start work on the UI thread.
+            await TaskScheduler.Default;
+        }
     }
 
     /// <summary>
@@ -181,30 +260,61 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
         return BasicLangExeLocator.FindBasicLangExe();
     }
 
-    /// <summary>
-    /// Outputs a message to the Visual Studio output window.
-    /// </summary>
-    private void OutputMessage(string message)
-    {
-        try
-        {
-            ThreadHelper.JoinableTaskFactory.Run(async () =>
-            {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+    private readonly object _outputLock = new object();
+    private Microsoft.VisualStudio.Threading.JoinableTask? _outputChain;
 
-                var outputWindow = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(Microsoft.VisualStudio.Shell.Interop.SVsOutputWindow)) as Microsoft.VisualStudio.Shell.Interop.IVsOutputWindow;
-                if (outputWindow != null)
+    /// <summary>
+    /// Outputs a message to the Visual Studio output window without blocking the caller.
+    ///
+    /// This used to be a synchronous <c>JoinableTaskFactory.Run</c> around a
+    /// <c>SwitchToMainThreadAsync</c>, which blocks the calling thread until the UI
+    /// thread services the switch. OutputMessage is called from LSP activation paths
+    /// that run on background threads while the UI thread may itself be blocked
+    /// waiting on that same activation — a classic deadlock. The fire-and-forget
+    /// <c>RunAsync</c> below cannot deadlock because the caller never waits on the
+    /// posted work: RunAsync returns immediately, and the main-thread switch inside
+    /// simply completes whenever the UI thread pumps. Because the work runs as a
+    /// JoinableTask of the global factory, it also remains join-inlinable and cannot
+    /// itself create a cycle. Messages are chained on the previous write so output
+    /// ordering is preserved.
+    /// </summary>
+    private void OutputMessage(string message, Options.LogLevel level = Options.LogLevel.Information)
+    {
+        // Honor the user's Tools > Options > BasicLang > General > Log Level setting.
+        var configuredLevel = Options.GeneralOptionsPage.Snapshot.LogLevel;
+        if (configuredLevel == Options.LogLevel.None || level < configuredLevel)
+            return;
+
+        lock (_outputLock)
+        {
+            var previous = _outputChain;
+            _outputChain = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                // Preserve message order; the previous link never faults (see catch below).
+                if (previous != null)
                 {
-                    var guidPane = Microsoft.VisualStudio.VSConstants.OutputWindowPaneGuid.GeneralPane_guid;
-                    outputWindow.CreatePane(ref guidPane, "BasicLang", 1, 1);
-                    outputWindow.GetPane(ref guidPane, out var pane);
-                    pane?.OutputStringThreadSafe($"[BasicLang] {message}\n");
+                    await previous.JoinAsync();
+                }
+
+                try
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+                    var outputWindow = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(Microsoft.VisualStudio.Shell.Interop.SVsOutputWindow)) as Microsoft.VisualStudio.Shell.Interop.IVsOutputWindow;
+                    if (outputWindow != null)
+                    {
+                        var guidPane = Microsoft.VisualStudio.VSConstants.OutputWindowPaneGuid.GeneralPane_guid;
+                        outputWindow.CreatePane(ref guidPane, "BasicLang", 1, 1);
+                        outputWindow.GetPane(ref guidPane, out var pane);
+                        pane?.OutputStringThreadSafe($"[BasicLang] {message}\n");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Never fault the chain; just log the failure.
+                    Debug.WriteLine($"BasicLang output window write failed: {ex.Message}");
                 }
             });
-        }
-        catch
-        {
-            // Ignore output window errors
         }
     }
 
@@ -215,6 +325,10 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
     {
         Debug.WriteLine("Restarting BasicLang language server...");
         OutputMessage("Restarting language server...");
+
+        // An explicit restart is a manual start request: it must start the server
+        // (and pick up freshly applied options) even if auto-start is disabled.
+        _manualStartRequested = true;
 
         // Stop current server
         if (StopAsync != null)

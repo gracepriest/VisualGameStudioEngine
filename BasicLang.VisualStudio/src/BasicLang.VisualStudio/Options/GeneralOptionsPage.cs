@@ -111,15 +111,102 @@ public class GeneralOptionsPage : DialogPage
     }
 
     /// <summary>
+    /// Immutable snapshot of the most recently loaded/applied General options.
+    /// Safe to read from any thread without touching the (UI-thread-affine)
+    /// <see cref="DialogPage"/> instance. Never null; starts with the page defaults
+    /// until the package loads the persisted settings.
+    /// </summary>
+    public static GeneralOptionsSnapshot Snapshot => _snapshot;
+
+    /// <summary>
+    /// True once the snapshot has been populated from persisted storage (via
+    /// <see cref="LoadSettingsFromStorage"/>). Until then <see cref="Snapshot"/>
+    /// holds compiled defaults. Consumers that can race the package autoload
+    /// (e.g. the LSP client's ActivateAsync) check this and force-load the
+    /// package before trusting the snapshot.
+    /// </summary>
+    public static bool SnapshotPrimed => _snapshotPrimed;
+
+    private static volatile bool _snapshotPrimed;
+
+    private static volatile GeneralOptionsSnapshot _snapshot = new GeneralOptionsSnapshot(
+        autoStartLanguageServer: true,
+        languageServerPath: "",
+        enableSemanticHighlighting: true,
+        enableInlayHints: true,
+        enableCodeLens: true,
+        enableDiagnostics: true,
+        logLevel: LogLevel.Information);
+
+    private void UpdateSnapshot()
+    {
+        _snapshot = new GeneralOptionsSnapshot(
+            _autoStartLanguageServer,
+            _languageServerPath,
+            _enableSemanticHighlighting,
+            _enableInlayHints,
+            _enableCodeLens,
+            _enableDiagnostics,
+            _logLevel);
+    }
+
+    /// <summary>
+    /// Called when settings are loaded from the registry (page creation, Cancel revert).
+    /// </summary>
+    public override void LoadSettingsFromStorage()
+    {
+        base.LoadSettingsFromStorage();
+        UpdateSnapshot();
+        _snapshotPrimed = true;
+    }
+
+    /// <summary>
     /// Called when the options are saved.
     /// </summary>
     protected override void OnApply(PageApplyEventArgs e)
     {
         base.OnApply(e);
 
+        if (e.ApplyBehavior == ApplyKind.Apply)
+        {
+            UpdateSnapshot();
+        }
+
         // Notify the language client of settings changes
         System.Diagnostics.Debug.WriteLine("BasicLang general options saved");
     }
+}
+
+/// <summary>
+/// Immutable, thread-safe copy of the General options page values.
+/// </summary>
+public sealed class GeneralOptionsSnapshot
+{
+    public GeneralOptionsSnapshot(
+        bool autoStartLanguageServer,
+        string languageServerPath,
+        bool enableSemanticHighlighting,
+        bool enableInlayHints,
+        bool enableCodeLens,
+        bool enableDiagnostics,
+        LogLevel logLevel)
+    {
+        AutoStartLanguageServer = autoStartLanguageServer;
+        LanguageServerPath = languageServerPath ?? "";
+        EnableSemanticHighlighting = enableSemanticHighlighting;
+        EnableInlayHints = enableInlayHints;
+        EnableCodeLens = enableCodeLens;
+        EnableDiagnostics = enableDiagnostics;
+        LogLevel = logLevel;
+    }
+
+    public bool AutoStartLanguageServer { get; }
+    public string LanguageServerPath { get; }
+    public bool EnableSemanticHighlighting { get; }
+    public bool EnableInlayHints { get; }
+    public bool EnableCodeLens { get; }
+    public bool EnableDiagnostics { get; }
+    public LogLevel LogLevel { get; }
 }
 
 /// <summary>

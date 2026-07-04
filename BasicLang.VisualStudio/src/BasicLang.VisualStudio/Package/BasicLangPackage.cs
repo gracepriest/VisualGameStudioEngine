@@ -55,6 +55,22 @@ public sealed class BasicLangPackage : AsyncPackage
         // a "package did not load correctly" gold bar on every VS launch —
         // this package autoloads in NoSolution and all solution contexts.
 
+        // Load the General options page so its persisted settings populate the
+        // thread-safe GeneralOptionsPage.Snapshot. Background-thread consumers
+        // (the LSP client's InitializationOptions and BasicLangExeLocator) read
+        // the snapshot instead of calling GetDialogPage, which requires the UI thread.
+        try
+        {
+            // LoadSettingsFromStorage is idempotent; calling it explicitly guarantees
+            // the snapshot reflects persisted settings even if the page constructor
+            // already loaded them.
+            GeneralOptions?.LoadSettingsFromStorage();
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException))
+        {
+            ActivityLog.LogError(nameof(BasicLangPackage), $"Failed to load BasicLang general options: {ex}");
+        }
+
         // Register project factory
         try
         {

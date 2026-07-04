@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Microsoft.VisualStudio.Shell;
 
 namespace BasicLang.VisualStudio.LanguageService;
 
@@ -108,28 +107,15 @@ public static class BasicLangExeLocator
     }
 
     /// <summary>
-    /// Reads the Language Server Path override from the General options page.
-    /// Returns null if the package is not loaded yet or the page cannot be read.
+    /// Reads the Language Server Path override from the General options snapshot.
+    /// The snapshot is populated on the UI thread by the package (at load time and
+    /// whenever the user applies the options page), so this is a plain field read
+    /// that is safe on any thread and cannot block or deadlock. Before the package
+    /// has loaded, the snapshot holds the defaults (empty path), which matches the
+    /// old "package not loaded yet" behavior of returning no override.
     /// </summary>
     private static string? GetOptionsOverride()
     {
-        try
-        {
-            var package = BasicLangPackage.Instance;
-            if (package == null)
-                return null;
-
-            // GetDialogPage requires the UI thread
-            return ThreadHelper.JoinableTaskFactory.Run(async () =>
-            {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                return package.GeneralOptions?.LanguageServerPath;
-            });
-        }
-        catch
-        {
-            // Tolerate any failure (package not sited, options unavailable, etc.)
-            return null;
-        }
+        return Options.GeneralOptionsPage.Snapshot.LanguageServerPath;
     }
 }
