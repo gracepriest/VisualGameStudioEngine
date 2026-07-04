@@ -1488,12 +1488,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Generate body
             if (lambdaFunc.EntryBlock != null && lambdaFunc.EntryBlock.Instructions.Count > 0)
             {
-                // Check if it's a simple expression lambda (single return statement)
+                // Check if it's a simple expression lambda: single block ending in a
+                // return whose value inlines all preceding pure value computations
                 var instructions = lambdaFunc.EntryBlock.Instructions;
-                if (instructions.Count == 1 && instructions[0] is IRReturn ret && ret.Value != null)
+                bool isExpressionLambda = lambdaFunc.Blocks.Count == 1 &&
+                    instructions.Count > 0 &&
+                    instructions[instructions.Count - 1] is IRReturn lastRet &&
+                    lastRet.Value != null &&
+                    instructions.Take(instructions.Count - 1)
+                        .All(i => i is IRValue && !(i is IRCall) && !(i is IRStore) && !(i is IRAlloca));
+
+                if (isExpressionLambda)
                 {
                     // Single expression lambda: x => x * 2
-                    sb.Append(EmitExpression(ret.Value));
+                    sb.Append(EmitExpression(((IRReturn)instructions[instructions.Count - 1]).Value));
                 }
                 else
                 {
@@ -1502,13 +1510,27 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     var oldIndent = _indentLevel;
                     _indentLevel++;
 
-                    foreach (var instr in instructions)
+                    for (int i = 0; i < instructions.Count; i++)
                     {
+                        var instr = instructions[i];
+
+                        // Skip pure value computations (temps) - they get inlined
+                        // into the expressions that consume them
+                        if (instr is IRValue && !(instr is IRCall) && !(instr is IRStore) &&
+                            !(instr is IRAlloca) && !(instr is IRAssignment))
+                        {
+                            continue;
+                        }
+
                         if (instr is IRReturn retStmt)
                         {
                             if (retStmt.Value != null)
                             {
                                 sb.Append($"{new string(' ', _indentLevel * 4)}return {EmitExpression(retStmt.Value)};\n");
+                            }
+                            else if (i == instructions.Count - 1)
+                            {
+                                // Trailing "return;" is implicit in a statement lambda
                             }
                             else
                             {
@@ -1543,10 +1565,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 case IRStore store:
                     return $"{EmitExpression(store.Address)} = {EmitExpression(store.Value)}";
                 case IRCall call:
-                    var argExprs = call.Arguments.Select(a => EmitExpression(a)).ToArray();
-                    var fn = SanitizeName(call.FunctionName);
-                    var args = string.Join(", ", argExprs);
-                    return $"{fn}({args})";
+                    // EmitExpression maps standard library calls (e.g. Print -> Console.Write)
+                    return EmitExpression(call);
                 default:
                     return EmitExpression(instr as IRValue);
             }

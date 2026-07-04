@@ -1078,7 +1078,7 @@ namespace BasicLang.Compiler.IR
 
             // Create the lambda function
             var lambdaFunc = new IRFunction(lambdaName, returnType);
-            // lambdaFunc.IsLambda = true; // Property not yet implemented
+            lambdaFunc.IsLambda = true;
 
             // Detect captured variables (variables from outer scopes)
             var capturedVars = new List<(string name, TypeInfo type)>();
@@ -1103,25 +1103,22 @@ namespace BasicLang.Compiler.IR
             // Set up lambda function context
             _currentFunction = lambdaFunc;
             _currentFunction.SourceFilePath = _sourceFilePath;
-            _currentBlock = lambdaFunc.EntryBlock;
+            _currentBlock = lambdaFunc.CreateBlock("entry");
             _locals.Clear();
 
-            // Allocate parameters as locals
-            foreach (var param in node.Parameters)
+            // Make parameters visible to the lambda body (they're declared by the
+            // lambda itself, so no allocas are emitted for them)
+            foreach (var paramVar in lambdaFunc.Parameters)
             {
-                var paramSymbol = _semanticAnalyzer.GetNodeSymbol(param);
-                var paramType = paramSymbol?.Type ?? new TypeInfo("Object", TypeKind.Class);
-                var alloca = new IRAlloca(param.Name, paramType);
-                _locals[param.Name] = alloca;
-                EmitInstruction(alloca);
+                PushVariableVersion(paramVar.Name, paramVar);
             }
 
             // Generate body
             if (node.Body != null)
             {
                 node.Body.Accept(this);
-                // Return the expression result
-                EmitInstruction(new IRReturn(_expressionResult));
+                // Return the expression result (Sub lambdas don't return a value)
+                EmitInstruction(new IRReturn(node.IsFunction ? _expressionResult : null));
             }
             else if (node.StatementBody != null)
             {
@@ -1146,7 +1143,7 @@ namespace BasicLang.Compiler.IR
             }
 
             // Store captured variables in the function metadata
-            // lambdaFunc.CapturedVariables = capturedVars; // Property not yet implemented
+            lambdaFunc.CapturedVariables = capturedVars;
 
             // Add lambda function to module
             _module.Functions.Add(lambdaFunc);
@@ -1158,6 +1155,12 @@ namespace BasicLang.Compiler.IR
             foreach (var kvp in savedLocals)
             {
                 _locals[kvp.Key] = kvp.Value;
+            }
+
+            // Remove lambda parameters from the visible variable versions
+            foreach (var paramVar in lambdaFunc.Parameters)
+            {
+                PopVariableVersion(paramVar.Name);
             }
 
             // The result is a reference to the lambda function (delegate)

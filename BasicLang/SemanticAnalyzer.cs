@@ -19,6 +19,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private bool _inStaticContext;
         private readonly ErrorContext _errorContext;
 
+        // Expected delegate type for the lambda currently being analyzed
+        // (set by variable declarations, assignments, and return statements
+        // so untyped lambda parameters can be inferred from the target type)
+        private TypeInfo _lambdaTargetType;
+
         // Module system fields
         private ModuleRegistry _moduleRegistry;
         private ModuleResolver _moduleResolver;
@@ -1109,6 +1114,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     genericType.GenericArguments.AddRange(typeArgs);
                 }
 
+                // Func(Of ...) / Action(Of ...) are delegate types - mark them so lambdas
+                // can be assigned to them and so delegate invocation is recognized
+                if (genericType != null && IsDelegateTypeName(typeRef.Name))
+                {
+                    genericType.Kind = TypeKind.Delegate;
+                }
+
                 return genericType ?? _typeManager.ObjectType;
             }
 
@@ -2114,6 +2126,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check initializer type
             if (node.Initializer != null && !node.IsAuto)
             {
+                // Let lambdas infer their parameter types from the declared type
+                if (node.Initializer is LambdaExpressionNode)
+                    _lambdaTargetType = varType;
+
                 node.Initializer.Accept(this);
                 var initType = GetNodeType(node.Initializer);
 
@@ -2819,20 +2835,42 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(LambdaExpressionNode node)
         {
-            // Track captured variables for closure generation
-            var capturedVariables = new List<Symbol>();
+            // Consume the target delegate type (if any) provided by the surrounding
+            // context (variable declaration, assignment, or return statement)
+            var targetType = _lambdaTargetType;
+            _lambdaTargetType = null;
+
             var lambdaScope = EnterScope("Lambda", ScopeKind.Function);
 
+            // Parameter types supplied by the target delegate type (Func/Action)
+            var targetParamTypes = GetDelegateParameterTypes(targetType);
+
             // Register parameters in the lambda scope and analyze their types
-            foreach (var param in node.Parameters)
+            var paramTypes = new List<TypeInfo>();
+            for (int i = 0; i < node.Parameters.Count; i++)
             {
-                var paramType = param.Type != null
-                    ? ResolveTypeReference(param.Type)
-                    : _typeManager.GetType("Object");
+                var param = node.Parameters[i];
+                TypeInfo paramType;
+                if (param.Type != null)
+                {
+                    paramType = ResolveTypeReference(param.Type);
+                }
+                else if (targetParamTypes != null && i < targetParamTypes.Count)
+                {
+                    // Infer the parameter type from the target delegate type
+                    paramType = targetParamTypes[i];
+                }
+                else
+                {
+                    Error($"Cannot infer type for lambda parameter '{param.Name}'. Add a type annotation (e.g. Function({param.Name} As Integer) ...) or assign the lambda to a typed delegate variable",
+                          param.Line > 0 ? param.Line : node.Line, param.Column > 0 ? param.Column : node.Column);
+                    paramType = _typeManager.GetType("Object");
+                }
                 var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column);
                 _currentScope.Define(paramSymbol);
                 SetNodeSymbol(param, paramSymbol);
                 SetNodeType(param, paramType);
+                paramTypes.Add(paramType);
             }
 
             // Analyze the body to discover captured variables
@@ -2855,7 +2893,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // This happens automatically through scope resolution - variables resolved
             // from parent scopes are captured variables
 
-            // Determine the delegate type
+            // Determine the delegate type (structural: Name = "Func"/"Action" with
+            // GenericArguments filled in, matching how Func(Of ...) declarations resolve)
             TypeInfo delegateType;
             if (node.IsFunction)
             {
@@ -2864,34 +2903,49 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     ? ResolveTypeReference(node.ReturnType)
                     : bodyType ?? _typeManager.GetType("Object");
 
-                if (node.Parameters.Count == 0)
-                {
-                    delegateType = new TypeInfo($"Func<{returnType.Name}>", TypeKind.Delegate);
-                }
-                else
-                {
-                    var paramTypes = string.Join(", ", node.Parameters.Select(p =>
-                        p.Type != null ? ResolveTypeReference(p.Type).Name : "object"));
-                    delegateType = new TypeInfo($"Func<{paramTypes}, {returnType.Name}>", TypeKind.Delegate);
-                }
+                delegateType = new TypeInfo("Func", TypeKind.Delegate);
+                delegateType.GenericArguments.AddRange(paramTypes);
+                delegateType.GenericArguments.Add(returnType);
             }
             else
             {
                 // Sub lambda - returns void
-                if (node.Parameters.Count == 0)
-                {
-                    delegateType = new TypeInfo("Action", TypeKind.Delegate);
-                }
-                else
-                {
-                    var paramTypes = string.Join(", ", node.Parameters.Select(p =>
-                        p.Type != null ? ResolveTypeReference(p.Type).Name : "object"));
-                    delegateType = new TypeInfo($"Action<{paramTypes}>", TypeKind.Delegate);
-                }
+                delegateType = new TypeInfo("Action", TypeKind.Delegate);
+                delegateType.GenericArguments.AddRange(paramTypes);
             }
 
             SetNodeType(node, delegateType);
             ExitScope();
+        }
+
+        /// <summary>
+        /// Extracts the parameter types from a Func/Action delegate type.
+        /// For Func(Of T1, ..., TResult) the last generic argument is the return type.
+        /// Returns null if the type is not a known delegate type.
+        /// </summary>
+        private static List<TypeInfo> GetDelegateParameterTypes(TypeInfo delegateType)
+        {
+            if (delegateType == null || delegateType.GenericArguments == null ||
+                delegateType.GenericArguments.Count == 0)
+                return null;
+
+            if (delegateType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase))
+                return delegateType.GenericArguments.Take(delegateType.GenericArguments.Count - 1).ToList();
+
+            if (delegateType.Name.Equals("Action", StringComparison.OrdinalIgnoreCase))
+                return delegateType.GenericArguments.ToList();
+
+            return null;
+        }
+
+        /// <summary>
+        /// True if the type name is a known .NET delegate type (Func/Action).
+        /// </summary>
+        private static bool IsDelegateTypeName(string name)
+        {
+            return name != null &&
+                   (name.Equals("Func", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("Action", StringComparison.OrdinalIgnoreCase));
         }
 
         public void Visit(CollectionInitializerNode node)
@@ -3824,6 +3878,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (node.Value != null)
             {
+                // Let lambdas infer their parameter types from the function return type
+                if (node.Value is LambdaExpressionNode)
+                    _lambdaTargetType = functionScope.ReturnType;
+
                 node.Value.Accept(this);
                 var returnType = GetNodeType(node.Value);
 
@@ -3878,9 +3936,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(AssignmentStatementNode node)
         {
             node.Target.Accept(this);
-            node.Value.Accept(this);
 
             var targetType = GetNodeType(node.Target);
+
+            // Let lambdas infer their parameter types from the assignment target
+            if (node.Value is LambdaExpressionNode)
+                _lambdaTargetType = targetType;
+
+            node.Value.Accept(this);
+
             var valueType = GetNodeType(node.Value);
 
             if (targetType == null || valueType == null)
@@ -4413,6 +4477,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 var elementType = GetGenericCollectionElementType(calleeType);
                 SetNodeType(node, elementType);
+                return;
+            }
+
+            // Check if this is a delegate invocation: f(...) where f is a Func/Action variable
+            if (calleeType != null && calleeType.Kind == TypeKind.Delegate &&
+                (calleeSymbol == null || calleeSymbol.Kind == SymbolKind.Variable ||
+                 calleeSymbol.Kind == SymbolKind.Parameter))
+            {
+                foreach (var arg in node.Arguments)
+                {
+                    arg.Accept(this);
+                }
+
+                // Func(Of T1, ..., TResult): last generic argument is the return type
+                var delegateReturnType = calleeType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
+                                         calleeType.GenericArguments.Count > 0
+                    ? calleeType.GenericArguments[calleeType.GenericArguments.Count - 1]
+                    : _typeManager.VoidType;
+                SetNodeType(node, delegateReturnType);
                 return;
             }
 
