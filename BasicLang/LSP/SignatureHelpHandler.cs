@@ -206,6 +206,11 @@ namespace BasicLang.Compiler.LSP
                         ActiveParameter = activeParameter
                     });
                 }
+
+                // Fall back to the member name alone so built-ins like
+                // Console.WriteLine and user methods called via an object
+                // still get signature help.
+                functionName = functionName.Substring(functionName.LastIndexOf('.') + 1);
             }
 
             // Try built-in functions first
@@ -235,7 +240,49 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // Fall back to the semantic symbol table (covers declarations the
+            // AST walk misses and pre-registered/imported functions)
+            var scopeSig = FindScopeFunctionSignature(state, functionName);
+            if (scopeSig != null)
+            {
+                return Task.FromResult(new SignatureHelp
+                {
+                    Signatures = new Container<SignatureInformation>(scopeSig),
+                    ActiveSignature = 0,
+                    ActiveParameter = activeParameter
+                });
+            }
+
             return Task.FromResult<SignatureHelp>(null);
+        }
+
+        /// <summary>
+        /// Build a signature from the semantic analyzer's symbol table
+        /// (same lookup the simple LSP server uses for hover).
+        /// </summary>
+        private SignatureInformation FindScopeFunctionSignature(DocumentState state, string name)
+        {
+            var symbol = SimpleLspServer.FindSymbolInScope(state?.SemanticAnalyzer?.GlobalScope, name);
+            if (symbol == null ||
+                (symbol.Kind != BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function &&
+                 symbol.Kind != BasicLang.Compiler.SemanticAnalysis.SymbolKind.Subroutine))
+            {
+                return null;
+            }
+
+            var label = SimpleLspServer.FormatSymbolSignature(symbol);
+            var parameters = (symbol.Parameters ?? new List<Symbol>()).Select(p => new ParameterInformation
+            {
+                Label = $"{(p.IsOptional ? "Optional " : "")}{(p.IsParamArray ? "ParamArray " : p.IsByRef ? "ByRef " : "")}{p.Name} As {p.Type?.ToString() ?? "Object"}",
+                Documentation = $"Parameter: {p.Name}"
+            }).ToList();
+
+            return new SignatureInformation
+            {
+                Label = label,
+                Documentation = symbol.Kind == BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function ? "User-defined function" : "User-defined subroutine",
+                Parameters = new Container<ParameterInformation>(parameters)
+            };
         }
 
         private (string functionName, int activeParameter) FindFunctionContext(string lineText, int position)
@@ -321,7 +368,19 @@ namespace BasicLang.Compiler.LSP
 
         private SignatureInformation FindUserFunctionSignature(ProgramNode ast, string name)
         {
-            foreach (var decl in ast.Declarations)
+            return FindInDeclarations(ast.Declarations, name);
+        }
+
+        /// <summary>
+        /// Recursively search declarations (including Module, Namespace and
+        /// Class members) for a function or subroutine with the given name.
+        /// </summary>
+        private SignatureInformation FindInDeclarations(IEnumerable<ASTNode> declarations, string name)
+        {
+            if (declarations == null)
+                return null;
+
+            foreach (var decl in declarations)
             {
                 switch (decl)
                 {
@@ -332,13 +391,21 @@ namespace BasicLang.Compiler.LSP
                         return CreateUserSubroutineSignature(sub);
 
                     case ClassNode cls:
-                        foreach (var member in cls.Members)
-                        {
-                            if (member is FunctionNode mFunc && mFunc.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-                                return CreateUserFunctionSignature(mFunc);
-                            if (member is SubroutineNode mSub && mSub.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-                                return CreateUserSubroutineSignature(mSub);
-                        }
+                        var classResult = FindInDeclarations(cls.Members, name);
+                        if (classResult != null)
+                            return classResult;
+                        break;
+
+                    case ModuleNode mod:
+                        var moduleResult = FindInDeclarations(mod.Members, name);
+                        if (moduleResult != null)
+                            return moduleResult;
+                        break;
+
+                    case NamespaceNode ns:
+                        var nsResult = FindInDeclarations(ns.Members, name);
+                        if (nsResult != null)
+                            return nsResult;
                         break;
                 }
             }

@@ -54,6 +54,8 @@ namespace BasicLang.Compiler.LSP
             ["Print"] = "**Print**(text As String)\n\nPrints text to the console without a newline.",
             ["ReadLine"] = "**ReadLine**() As String\n\nReads a line of text from the console.",
             ["ReadKey"] = "**ReadKey**() As Char\n\nReads a single key press from the console.",
+            ["WriteLine"] = "**WriteLine**(value)\n\nWrites the text representation of a value to the console, followed by a line terminator.\n\n```vb\nConsole.WriteLine(\"Hello\")\n```",
+            ["Write"] = "**Write**(value)\n\nWrites the text representation of a value to the console without a line terminator.\n\n```vb\nConsole.Write(\"Hello\")\n```",
 
             // String functions
             ["Len"] = "**Len**(str As String) As Integer\n\nReturns the length of a string.",
@@ -239,13 +241,44 @@ namespace BasicLang.Compiler.LSP
         /// </summary>
         public string GetHoverInfo(DocumentState state, string word)
         {
-            // Check built-in docs first
+            return GetHoverInfo(state, word, -1, -1);
+        }
+
+        /// <summary>
+        /// Get hover information for a word at a specific position.
+        /// The position (0-based LSP line/character) enables member-access
+        /// resolution such as Console.WriteLine.
+        /// </summary>
+        public string GetHoverInfo(DocumentState state, string word, int line, int character)
+        {
+            if (string.IsNullOrEmpty(word))
+            {
+                return null;
+            }
+
+            // 1. User-declared symbols from the semantic symbol table.
+            //    This covers locals, parameters, and functions/subs/classes
+            //    nested inside Module/Namespace blocks (same lookup the
+            //    simple LSP server uses).
+            var symbol = SimpleLspServer.FindSymbolInScope(state?.SemanticAnalyzer?.GlobalScope, word);
+            if (symbol != null && symbol.Line > 0)
+            {
+                return FormatScopeSymbolHover(symbol);
+            }
+
+            // 2. Built-in keyword/function documentation
             if (BuiltInDocs.TryGetValue(word, out var docs))
             {
                 return docs;
             }
 
-            // Check document symbols
+            // 3. Symbols without a source location (imported / pre-registered)
+            if (symbol != null)
+            {
+                return FormatScopeSymbolHover(symbol);
+            }
+
+            // 4. Fallback: walk the AST declarations (includes module members)
             if (state?.AST != null)
             {
                 foreach (var decl in state.AST.Declarations)
@@ -256,7 +289,110 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // 5. .NET member access (e.g. Console.WriteLine) when position is known
+            if (line >= 0 && character >= 0)
+            {
+                var netInfo = GetNetMemberHoverInfo(state, word, line, character);
+                if (netInfo != null)
+                    return netInfo;
+            }
+
             return null;
+        }
+
+        /// <summary>
+        /// Format hover markdown for a symbol resolved from the semantic
+        /// symbol table (e.g. "Dim x As Integer" for a local variable).
+        /// </summary>
+        private string FormatScopeSymbolHover(SemanticAnalysis.Symbol symbol)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("```vb");
+            sb.AppendLine(SimpleLspServer.FormatSymbolSignature(symbol));
+            sb.AppendLine("```");
+
+            if (symbol.Line > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"📍 Defined at line {symbol.Line}");
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Hover for .NET member access like Console.WriteLine: if the hovered
+        /// word is preceded by "Qualifier.", resolve the qualifier as a .NET
+        /// type and show the member's signature.
+        /// </summary>
+        private string GetNetMemberHoverInfo(DocumentState state, string word, int line, int character)
+        {
+            if (state?.Lines == null || line < 0 || line >= state.Lines.Length)
+                return null;
+
+            var lineText = state.Lines[line];
+            if (character < 0 || character >= lineText.Length)
+                return null;
+
+            // Find the start of the hovered word
+            int start = character;
+            while (start > 0 && (char.IsLetterOrDigit(lineText[start - 1]) || lineText[start - 1] == '_'))
+                start--;
+
+            // Must be a member access: "Qualifier.word"
+            if (start == 0 || lineText[start - 1] != '.')
+                return null;
+
+            int qualifierEnd = start - 1;
+            int qualifierStart = qualifierEnd;
+            while (qualifierStart > 0 && (char.IsLetterOrDigit(lineText[qualifierStart - 1]) || lineText[qualifierStart - 1] == '_'))
+                qualifierStart--;
+
+            if (qualifierStart >= qualifierEnd)
+                return null;
+
+            var qualifier = lineText.Substring(qualifierStart, qualifierEnd - qualifierStart);
+
+            // Resolve the qualifier as a .NET type (e.g. Console)
+            SemanticAnalysis.NetTypeInfo netType = null;
+            try
+            {
+                netType = state.TypeRegistry?.GetType(qualifier);
+                if (netType == null && state.SemanticAnalyzer != null)
+                    netType = state.SemanticAnalyzer.GetNetType(qualifier);
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (netType == null)
+                return null;
+
+            var member = netType.Members?.FirstOrDefault(m =>
+                m.Name.Equals(word, System.StringComparison.OrdinalIgnoreCase));
+            if (member == null)
+                return null;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("```vb");
+            if (member.Kind == SemanticAnalysis.NetMemberKind.Method)
+            {
+                var paramStr = string.Join(", ", member.Parameters.Select(p => $"{p.Name} As {p.Type}"));
+                var returnType = member.ReturnType;
+                var suffix = string.IsNullOrEmpty(returnType) || returnType == "Void"
+                    ? "" : $" As {returnType}";
+                sb.AppendLine($"{(string.IsNullOrEmpty(returnType) || returnType == "Void" ? "Sub" : "Function")} {qualifier}.{member.Name}({paramStr}){suffix}");
+            }
+            else
+            {
+                sb.AppendLine($"{qualifier}.{member.Name} As {member.ReturnType ?? "Object"}");
+            }
+            sb.AppendLine("```");
+            sb.AppendLine();
+            sb.AppendLine($"*.NET member of `{netType.FullName}`*");
+
+            return sb.ToString();
         }
 
         private string GetDeclarationHoverInfo(ASTNode node, string word)
@@ -284,6 +420,26 @@ namespace BasicLang.Compiler.LSP
                 case ClassNode cls:
                     // Search class members for the symbol
                     foreach (var member in cls.Members)
+                    {
+                        var memberInfo = GetDeclarationHoverInfo(member, word);
+                        if (memberInfo != null)
+                            return memberInfo;
+                    }
+                    break;
+
+                case ModuleNode mod:
+                    // Search module members for the symbol
+                    foreach (var member in mod.Members)
+                    {
+                        var memberInfo = GetDeclarationHoverInfo(member, word);
+                        if (memberInfo != null)
+                            return memberInfo;
+                    }
+                    break;
+
+                case NamespaceNode ns:
+                    // Search namespace members for the symbol
+                    foreach (var member in ns.Members)
                     {
                         var memberInfo = GetDeclarationHoverInfo(member, word);
                         if (memberInfo != null)

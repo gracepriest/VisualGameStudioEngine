@@ -36,8 +36,8 @@ namespace BasicLang.Compiler.LSP
                 return Task.FromResult<Hover>(null);
             }
 
-            // Get hover information
-            var hoverInfo = _symbolService.GetHoverInfo(state, word);
+            // Get hover information (position enables .NET member-access hover)
+            var hoverInfo = _symbolService.GetHoverInfo(state, word, request.Position.Line, request.Position.Character);
             if (hoverInfo == null)
             {
                 return Task.FromResult<Hover>(null);

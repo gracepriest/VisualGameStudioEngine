@@ -562,3 +562,129 @@ public class SymbolServiceBuiltInDocsTests
         Assert.That(result, Is.Not.Null, $"Type '{typeName}' should have documentation");
     }
 }
+
+/// <summary>
+/// Hover on user-declared symbols resolved through the semantic symbol table
+/// (locals, parameters, and functions/subs nested inside Module blocks).
+/// </summary>
+[TestFixture]
+public class SymbolServiceUserSymbolHoverTests
+{
+    private SymbolService _symbolService = null!;
+    private DocumentState _state = null!;
+
+    private const string Source = @"Module Main
+    Function AddNums(a As Integer, b As Integer) As Integer
+        Return a + b
+    End Function
+
+    Sub Greet(name As String)
+        Console.WriteLine(name)
+    End Sub
+
+    Sub Main()
+        Dim x As Integer = 5
+        Dim result As Integer = AddNums(x, 2)
+        Greet(""hi"")
+    End Sub
+End Module
+";
+
+    [SetUp]
+    public void SetUp()
+    {
+        _symbolService = new SymbolService();
+        _state = new DocumentState(DocumentUri.From("file:///hover-test.bas"), Source);
+        _state.Parse();
+    }
+
+    [Test]
+    public void GetHoverInfo_LocalVariableInModuleSub_ReturnsDeclaration()
+    {
+        var result = _symbolService.GetHoverInfo(_state, "x");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result, Does.Contain("Dim x As Integer"));
+    }
+
+    [Test]
+    public void GetHoverInfo_LocalVariableWithInitializer_ReturnsDeclaration()
+    {
+        var result = _symbolService.GetHoverInfo(_state, "result");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result, Does.Contain("Dim result As Integer"));
+    }
+
+    [Test]
+    public void GetHoverInfo_FunctionInModule_ReturnsSignature()
+    {
+        var result = _symbolService.GetHoverInfo(_state, "AddNums");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result, Does.Contain("Function AddNums(a As Integer, b As Integer) As Integer"));
+    }
+
+    [Test]
+    public void GetHoverInfo_SubroutineInModule_ReturnsSignature()
+    {
+        var result = _symbolService.GetHoverInfo(_state, "Greet");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result, Does.Contain("Sub Greet(name As String)"));
+    }
+
+    [Test]
+    public void GetHoverInfo_Parameter_ReturnsParameterInfo()
+    {
+        var result = _symbolService.GetHoverInfo(_state, "name");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result, Does.Contain("name As String"));
+    }
+
+    [Test]
+    public void GetHoverInfo_KeywordWithParsedState_StillReturnsBuiltInDocs()
+    {
+        var result = _symbolService.GetHoverInfo(_state, "Dim");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result, Does.Contain("variable"));
+    }
+
+    [Test]
+    public void GetHoverInfo_UserSymbolShadowsBuiltIn()
+    {
+        var source = @"Module Main
+    Sub Main()
+        Dim Count As Integer = 3
+    End Sub
+End Module
+";
+        var state = new DocumentState(DocumentUri.From("file:///shadow-test.bas"), source);
+        state.Parse();
+
+        var result = _symbolService.GetHoverInfo(state, "Count");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result, Does.Contain("Dim Count As Integer"));
+    }
+
+    [Test]
+    public void GetHoverInfo_UnknownSymbolWithParsedState_ReturnsNull()
+    {
+        var result = _symbolService.GetHoverInfo(_state, "totallyUnknownSymbol987");
+
+        Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public void GetHoverInfo_WriteLine_ReturnsDocumentation()
+    {
+        var result = _symbolService.GetHoverInfo(_state, "WriteLine");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result, Does.Contain("WriteLine"));
+        Assert.That(result, Does.Contain("console"));
+    }
+}

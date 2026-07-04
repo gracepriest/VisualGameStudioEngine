@@ -653,7 +653,7 @@ namespace BasicLang.Compiler.LSP
         /// (functions, classes, module-level variables) win over shadowed locals.
         /// Names are case-insensitive per BasicLang semantics.
         /// </summary>
-        private static Symbol? FindSymbolInScope(Scope? root, string name)
+        internal static Symbol? FindSymbolInScope(Scope? root, string name)
         {
             if (root == null) return null;
 
@@ -686,7 +686,7 @@ namespace BasicLang.Compiler.LSP
         /// Format a symbol's signature (kind, name, parameters, return type)
         /// in BasicLang syntax for hover display.
         /// </summary>
-        private static string FormatSymbolSignature(Symbol symbol)
+        internal static string FormatSymbolSignature(Symbol symbol)
         {
             string FormatParams(List<Symbol> parameters) =>
                 string.Join(", ", (parameters ?? new List<Symbol>()).Select(p =>
