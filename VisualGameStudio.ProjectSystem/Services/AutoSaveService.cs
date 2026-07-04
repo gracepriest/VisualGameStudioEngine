@@ -17,6 +17,7 @@ public class AutoSaveService : IAutoSaveService
     public AutoSaveMode Mode { get; set; } = AutoSaveMode.Off;
     public int DelayMilliseconds { get; set; } = 1000;
     public bool SkipOnErrors { get; set; }
+    public Func<string, bool>? HasErrorsProvider { get; set; }
 
     public event EventHandler<AutoSaveEventArgs>? DocumentAutoSaved;
 
@@ -150,6 +151,11 @@ public class AutoSaveService : IAutoSaveService
             // Skip if readonly
             if (entry.IsReadOnlyFunc()) return;
 
+            // Skip files that currently have error-severity diagnostics when
+            // files.autoSaveSkipOnErrors is enabled. Only auto-save is filtered;
+            // manual save does not go through this service.
+            if (SkipOnErrors && DocumentHasErrors(filePath)) return;
+
             var success = await entry.SaveCallback();
             DocumentAutoSaved?.Invoke(this, new AutoSaveEventArgs(filePath, success));
         }
@@ -157,6 +163,20 @@ public class AutoSaveService : IAutoSaveService
         {
             System.Diagnostics.Debug.WriteLine($"[AutoSave] Failed to save {filePath}: {ex.Message}");
             DocumentAutoSaved?.Invoke(this, new AutoSaveEventArgs(filePath, false));
+        }
+    }
+
+    private bool DocumentHasErrors(string filePath)
+    {
+        try
+        {
+            return HasErrorsProvider?.Invoke(filePath) == true;
+        }
+        catch (Exception ex)
+        {
+            // A failing error-state provider must never block auto-save.
+            System.Diagnostics.Debug.WriteLine($"[AutoSave] HasErrorsProvider failed for {filePath}: {ex.Message}");
+            return false;
         }
     }
 

@@ -47,6 +47,10 @@ public partial class MainWindow : Window
 
         DataContextChanged += OnDataContextChanged;
 
+        // Auto-save (onWindowChange): saving all dirty documents when the IDE
+        // window loses focus. Window lifetime == app lifetime, so no unsubscribe.
+        Deactivated += (_, _) => (DataContext as MainWindowViewModel)?.NotifyWindowDeactivated();
+
         // Setup hide timer for data tip
         _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _hideTimer.Tick += (s, e) =>

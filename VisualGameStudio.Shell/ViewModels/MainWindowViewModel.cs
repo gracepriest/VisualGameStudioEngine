@@ -315,6 +315,16 @@ public partial class MainWindowViewModel : ViewModelBase
     // prevents an auto-save from overlapping a manual save (and vice versa).
     private readonly HashSet<string> _documentsBeingSaved = new(StringComparer.OrdinalIgnoreCase);
 
+    // Files that currently have error-severity LSP diagnostics, keyed by file path.
+    // Updated from OnDiagnosticsReceived and read by the auto-save service's
+    // HasErrorsProvider (from timer threads), hence a concurrent dictionary.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _filesWithErrors =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // File path of the most recently active editor document tab. Used to emit
+    // auto-save "editor lost focus" notifications when the active tab changes.
+    private string? _lastActiveEditorFilePath;
+
     public MainWindowViewModel(
         IProjectService projectService,
         IBuildService buildService,
@@ -412,6 +422,14 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Subscribe to document close event
         _dockFactory.DocumentClosed += OnDocumentClosed;
+
+        // Auto-save (onFocusChange): switching document tabs counts as an editor
+        // focus change in VS Code semantics.
+        _dockFactory.ActiveDockableChanged += OnActiveDockableChangedForAutoSave;
+
+        // Auto-save (files.autoSaveSkipOnErrors): let the service query per-file
+        // error state tracked from LSP diagnostics (same source as the Problems badge).
+        _autoSaveService.HasErrorsProvider = HasErrorDiagnostics;
 
         // Subscribe to timeline diff requests
         Timeline.DiffRequested += OnTimelineDiffRequested;
@@ -681,6 +699,19 @@ public partial class MainWindowViewModel : ViewModelBase
                 doc.UpdateDiagnostics(e.Diagnostics);
             }
 
+            // Track per-file error state for auto-save (files.autoSaveSkipOnErrors)
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                if (e.Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+                {
+                    _filesWithErrors[filePath] = 0;
+                }
+                else
+                {
+                    _filesWithErrors.TryRemove(filePath, out _);
+                }
+            }
+
             // Screen reader announcement for new errors
             var errorCount = e.Diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
             if (errorCount > 0)
@@ -702,6 +733,46 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             System.Diagnostics.Debug.WriteLine($"[Diagnostics] Error processing diagnostics: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Reports whether a file currently has error-severity LSP diagnostics.
+    /// Installed as the auto-save service's HasErrorsProvider; may be called
+    /// from auto-save timer threads.
+    /// </summary>
+    private bool HasErrorDiagnostics(string filePath)
+    {
+        return !string.IsNullOrEmpty(filePath) && _filesWithErrors.ContainsKey(filePath);
+    }
+
+    /// <summary>
+    /// Auto-save (onFocusChange): when the active document tab changes, the
+    /// previously active document's editor counts as having lost focus.
+    /// Tool activations are ignored; keyboard focus moves into tool panels are
+    /// covered by the editor control's LostFocus event.
+    /// </summary>
+    private void OnActiveDockableChangedForAutoSave(object? sender, global::Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
+    {
+        if (e.Dockable is not CodeEditorDocument editorDoc) return;
+
+        var newPath = editorDoc.ViewModel?.FilePath;
+        var previousPath = _lastActiveEditorFilePath;
+        _lastActiveEditorFilePath = newPath;
+
+        if (!string.IsNullOrEmpty(previousPath) &&
+            !string.Equals(previousPath, newPath, StringComparison.OrdinalIgnoreCase))
+        {
+            _autoSaveService.NotifyEditorLostFocus(previousPath);
+        }
+    }
+
+    /// <summary>
+    /// Auto-save (onWindowChange): called by MainWindow when the IDE window is
+    /// deactivated. The service saves all dirty registered documents.
+    /// </summary>
+    public void NotifyWindowDeactivated()
+    {
+        _autoSaveService.NotifyWindowLostFocus();
     }
 
     private void OpenFileAtLine(string filePath, int line)
@@ -825,6 +896,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Stop auto-save tracking for the closed document (cancels any pending timer)
         _autoSaveService.UnregisterDocument(filePath);
+        _filesWithErrors.TryRemove(filePath, out _);
+        if (string.Equals(_lastActiveEditorFilePath, filePath, StringComparison.OrdinalIgnoreCase))
+        {
+            _lastActiveEditorFilePath = null;
+        }
 
         // Remove blame cache for closed document
         _blameCache.Remove(filePath);
@@ -1912,6 +1988,17 @@ public partial class MainWindowViewModel : ViewModelBase
             };
             document.TextChanged += onTextChangedAutoSave;
 
+            // Auto-save (VS Code "onFocusChange" behavior): the view raises
+            // EditorFocusLost when keyboard focus leaves the editor control.
+            EventHandler? onEditorFocusLostAutoSave = (s, _) =>
+            {
+                if (!string.IsNullOrEmpty(document.FilePath))
+                {
+                    _autoSaveService.NotifyEditorLostFocus(document.FilePath);
+                }
+            };
+            document.EditorFocusLost += onEditorFocusLostAutoSave;
+
             // Add code lens, semantic token, and auto-save handlers to cleanup
             var existingCleanup = _documentCleanupActions.GetValueOrDefault(filePath);
             _documentCleanupActions[filePath] = () =>
@@ -1921,6 +2008,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 document.TextChanged -= onTextChangedCodeLens;
                 document.TextChanged -= onTextChangedSemanticTokens;
                 document.TextChanged -= onTextChangedAutoSave;
+                document.EditorFocusLost -= onEditorFocusLostAutoSave;
                 semanticTokenCts?.Cancel();
                 semanticTokenCts?.Dispose();
             };
@@ -5562,6 +5650,11 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 _openDocuments.Remove(oldPath);
                 _autoSaveService.UnregisterDocument(oldPath);
+                _filesWithErrors.TryRemove(oldPath, out _);
+                if (string.Equals(_lastActiveEditorFilePath, oldPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    _lastActiveEditorFilePath = filePath;
+                }
             }
             _openDocuments[filePath] = activeDoc;
             RegisterDocumentForAutoSave(activeDoc, filePath);

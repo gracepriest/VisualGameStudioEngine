@@ -715,6 +715,25 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         IsSplitView = false;
     }
 
+    #region Editor Focus
+
+    /// <summary>
+    /// Raised when the editor control for this document loses keyboard focus
+    /// (focus moved outside the editor). Used for auto-save OnFocusChange mode.
+    /// </summary>
+    public event EventHandler? EditorFocusLost;
+
+    /// <summary>
+    /// Called by the view when the editor control loses focus to something
+    /// outside the editor. Delegates to subscribers (auto-save wiring).
+    /// </summary>
+    public void NotifyEditorFocusLost()
+    {
+        EditorFocusLost?.Invoke(this, EventArgs.Empty);
+    }
+
+    #endregion
+
     #region Diagnostics and Completion
 
     public event EventHandler<IEnumerable<DiagnosticItem>>? DiagnosticsUpdated;

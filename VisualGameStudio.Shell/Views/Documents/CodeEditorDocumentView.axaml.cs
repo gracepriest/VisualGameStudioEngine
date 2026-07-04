@@ -79,6 +79,7 @@ public partial class CodeEditorDocumentView : UserControl
             MainEditor.EditBreakpointRequested -= OnEditorEditBreakpoint;
             MainEditor.RemoveBreakpointRequested -= OnEditorRemoveBreakpoint;
             MainEditor.ToggleEnableBreakpointRequested -= OnEditorToggleEnableBreakpoint;
+            MainEditor.LostFocus -= OnEditorLostFocus;
             _highlightDebounceTimer?.Stop();
             _highlightDebounceTimer?.Dispose();
             _highlightDebounceTimer = null;
@@ -203,6 +204,30 @@ public partial class CodeEditorDocumentView : UserControl
             InitializeBreakpointSupport(_subscribedVm);
     }
 
+    /// <summary>
+    /// Forwards editor focus loss to the ViewModel for auto-save (onFocusChange mode).
+    /// LostFocus bubbles from the inner text area, so focus moves that stay inside
+    /// the editor control (search panel, completion popup) are filtered out.
+    /// </summary>
+    private void OnEditorLostFocus(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+            if (focused is Avalonia.Visual focusedVisual && MainEditor != null &&
+                Avalonia.VisualTree.VisualExtensions.IsVisualAncestorOf(MainEditor, focusedVisual))
+            {
+                return; // focus is still within the editor control
+            }
+
+            _subscribedVm?.NotifyEditorFocusLost();
+        }
+        catch
+        {
+            // Focus queries can fail during window teardown; never crash the editor.
+        }
+    }
+
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
         try
@@ -307,6 +332,9 @@ public partial class CodeEditorDocumentView : UserControl
                 MainEditor.DocumentHighlightRequested += OnEditorDocumentHighlight;
                 MainEditor.DocumentLinkClicked += OnEditorDocumentLinkClicked;
                 MainEditor.FileDropped += OnEditorFileDropped;
+
+                // Auto-save (onFocusChange): forward editor focus loss to the ViewModel
+                MainEditor.LostFocus += OnEditorLostFocus;
 
                 _editorEventsWired = true;
 

@@ -347,4 +347,229 @@ public class AutoSaveServiceTests
 
         Assert.That(await WaitForAsync(() => { lock (saved) return saved.Count == 2; }), Is.True);
     }
+
+    // ── Notify routing (mode gating) ───────────────────────────────────
+
+    [Test]
+    public async Task NotifyEditorLostFocus_InAfterDelayMode_DoesNotSave()
+    {
+        _service.Mode = AutoSaveMode.AfterDelay;
+        _service.DelayMilliseconds = 60000; // debounce far in the future
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        _service.NotifyEditorLostFocus(TestPath);
+
+        await Task.Delay(300);
+        Assert.That(saveCount, Is.Zero,
+            "Editor focus loss must not trigger a save unless the mode is OnFocusChange");
+    }
+
+    [Test]
+    public async Task NotifyWindowLostFocus_InOnFocusChangeMode_DoesNotSave()
+    {
+        _service.Mode = AutoSaveMode.OnFocusChange;
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        _service.NotifyWindowLostFocus();
+
+        await Task.Delay(300);
+        Assert.That(saveCount, Is.Zero,
+            "Window focus loss must not trigger a save unless the mode is OnWindowChange");
+    }
+
+    [Test]
+    public void NotifyEditorLostFocus_UnregisteredPath_DoesNotThrow()
+    {
+        _service.Mode = AutoSaveMode.OnFocusChange;
+        Assert.DoesNotThrow(() => _service.NotifyEditorLostFocus(@"C:\not\registered.bas"));
+        Assert.DoesNotThrow(() => _service.NotifyEditorLostFocus(""));
+    }
+
+    [Test]
+    public async Task OnFocusChange_CleanDocument_NotSaved()
+    {
+        _service.Mode = AutoSaveMode.OnFocusChange;
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => false, // not dirty
+            () => false);
+
+        _service.NotifyEditorLostFocus(TestPath);
+
+        await Task.Delay(300);
+        Assert.That(saveCount, Is.Zero);
+    }
+
+    // ── Skip on errors (files.autoSaveSkipOnErrors) ────────────────────
+
+    [Test]
+    public void LoadSettings_ReadsSkipOnErrorsKey()
+    {
+        var settings = CreatePassthroughSettings();
+        settings.Setup(s => s.Get("files.autoSaveSkipOnErrors", It.IsAny<bool>(), It.IsAny<SettingsScope>()))
+                .Returns(true);
+
+        using var service = new AutoSaveService(settings.Object);
+
+        Assert.That(service.SkipOnErrors, Is.True);
+    }
+
+    [Test]
+    public async Task SkipOnErrors_DocumentWithErrors_NotAutoSaved()
+    {
+        _service.Mode = AutoSaveMode.AfterDelay;
+        _service.DelayMilliseconds = 50;
+        _service.SkipOnErrors = true;
+        _service.HasErrorsProvider = _ => true;
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        _service.NotifyDocumentChanged(TestPath);
+
+        await Task.Delay(400);
+        Assert.That(saveCount, Is.Zero,
+            "Documents with error diagnostics must not be auto-saved when SkipOnErrors is on");
+    }
+
+    [Test]
+    public async Task SkipOnErrors_DocumentWithoutErrors_Saved()
+    {
+        _service.Mode = AutoSaveMode.AfterDelay;
+        _service.DelayMilliseconds = 50;
+        _service.SkipOnErrors = true;
+        _service.HasErrorsProvider = _ => false;
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        _service.NotifyDocumentChanged(TestPath);
+
+        Assert.That(await WaitForAsync(() => saveCount == 1), Is.True);
+    }
+
+    [Test]
+    public async Task SkipOnErrorsDisabled_DocumentWithErrors_StillSaved()
+    {
+        _service.Mode = AutoSaveMode.AfterDelay;
+        _service.DelayMilliseconds = 50;
+        _service.SkipOnErrors = false;
+        _service.HasErrorsProvider = _ => true;
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        _service.NotifyDocumentChanged(TestPath);
+
+        Assert.That(await WaitForAsync(() => saveCount == 1), Is.True,
+            "SkipOnErrors=false must not filter documents with errors");
+    }
+
+    [Test]
+    public async Task SkipOnErrors_OnFocusChange_DocumentWithErrors_NotSaved()
+    {
+        _service.Mode = AutoSaveMode.OnFocusChange;
+        _service.SkipOnErrors = true;
+        _service.HasErrorsProvider = _ => true;
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        _service.NotifyEditorLostFocus(TestPath);
+
+        await Task.Delay(300);
+        Assert.That(saveCount, Is.Zero);
+    }
+
+    [Test]
+    public async Task SkipOnErrors_OnWindowChange_SavesOnlyDocumentsWithoutErrors()
+    {
+        const string CleanPath = @"C:\test\clean.bas";
+        const string BrokenPath = @"C:\test\broken.bas";
+
+        _service.Mode = AutoSaveMode.OnWindowChange;
+        _service.SkipOnErrors = true;
+        _service.HasErrorsProvider = path =>
+            string.Equals(path, BrokenPath, StringComparison.OrdinalIgnoreCase);
+
+        var saved = new List<string>();
+        void Register(string path) => _service.RegisterDocument(path,
+            () => { lock (saved) saved.Add(path); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        Register(CleanPath);
+        Register(BrokenPath);
+
+        _service.NotifyWindowLostFocus();
+
+        Assert.That(await WaitForAsync(() => { lock (saved) return saved.Count >= 1; }), Is.True);
+        await Task.Delay(300);
+        lock (saved)
+        {
+            Assert.That(saved, Is.EquivalentTo(new[] { CleanPath }),
+                "Only the document without error diagnostics should be auto-saved");
+        }
+    }
+
+    [Test]
+    public async Task SkipOnErrors_ProviderThrows_SaveStillProceeds()
+    {
+        _service.Mode = AutoSaveMode.OnFocusChange;
+        _service.SkipOnErrors = true;
+        _service.HasErrorsProvider = _ => throw new InvalidOperationException("diagnostics unavailable");
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        _service.NotifyEditorLostFocus(TestPath);
+
+        Assert.That(await WaitForAsync(() => saveCount == 1), Is.True,
+            "A failing error-state provider must not block auto-save");
+    }
+
+    [Test]
+    public async Task SkipOnErrors_NoProviderInstalled_SavesNormally()
+    {
+        _service.Mode = AutoSaveMode.OnFocusChange;
+        _service.SkipOnErrors = true;
+        _service.HasErrorsProvider = null;
+
+        var saveCount = 0;
+        _service.RegisterDocument(TestPath,
+            () => { Interlocked.Increment(ref saveCount); return Task.FromResult(true); },
+            () => true,
+            () => false);
+
+        _service.NotifyEditorLostFocus(TestPath);
+
+        Assert.That(await WaitForAsync(() => saveCount == 1), Is.True);
+    }
 }

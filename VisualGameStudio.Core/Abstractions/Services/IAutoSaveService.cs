@@ -36,6 +36,15 @@ public interface IAutoSaveService : IDisposable
     bool SkipOnErrors { get; set; }
 
     /// <summary>
+    /// Optional callback that reports whether a file currently has error-severity
+    /// diagnostics. Installed by the shell (backed by the Problems/Error List state)
+    /// and consulted only when <see cref="SkipOnErrors"/> is enabled. Auto-save is
+    /// skipped for files the provider reports as having errors; manual save is
+    /// unaffected because it does not go through this service.
+    /// </summary>
+    Func<string, bool>? HasErrorsProvider { get; set; }
+
+    /// <summary>
     /// Notifies the service that a document was edited. Resets the per-document timer.
     /// </summary>
     /// <param name="filePath">The file path of the edited document.</param>
