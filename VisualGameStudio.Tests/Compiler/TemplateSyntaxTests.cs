@@ -124,6 +124,34 @@ End Module";
     }
 
     [Test]
+    public void SingleVariable_InitializedWithDoubleLiteral_Compiles()
+    {
+        // VB allows a numeric literal to narrow: Dim x As Single = 5.0
+        var src = @"Module M
+    Sub Run()
+        Dim speed As Single = 5.0
+        Dim half As Single = 0.5
+    End Sub
+End Module";
+
+        var output = CompileToCSharp(src, out var errors);
+        Assert.That(output, Is.Not.Null, "compile failed: " + string.Join("; ", errors));
+    }
+
+    [Test]
+    public void SingleField_InitializedWithDoubleLiteral_Compiles()
+    {
+        var src = @"Module M
+    Public Class Player
+        Public Speed As Single = 5.0
+    End Class
+End Module";
+
+        var output = CompileToCSharp(src, out var errors);
+        Assert.That(output, Is.Not.Null, "compile failed: " + string.Join("; ", errors));
+    }
+
+    [Test]
     public void ClassField_WithInitializer_Parses()
     {
         var src = @"Module M

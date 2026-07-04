@@ -303,6 +303,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// True if the name resolves to a value symbol (variable/parameter/
+        /// constant/property) rather than a type or module — used to stop a
+        /// local variable from being misread as a module reference.
+        /// </summary>
+        private bool ResolvesToValueSymbol(string name)
+        {
+            var sym = _currentScope?.Resolve(name);
+            return sym != null && (sym.Kind == SymbolKind.Variable
+                || sym.Kind == SymbolKind.Parameter
+                || sym.Kind == SymbolKind.Constant
+                || sym.Kind == SymbolKind.Property);
+        }
+
+        /// <summary>
         /// Find a compilation unit by module name
         /// </summary>
         private CompilationUnit FindModuleByName(string moduleName)
@@ -853,6 +867,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
         }
 
+        /// <summary>
+        /// A numeric literal may initialize any numeric type, including a
+        /// narrowing one (Dim x As Single = 5.0), matching VB constant
+        /// conversion. Only literals (optionally with a unary +/-) qualify.
+        /// </summary>
+        private static bool IsNumericLiteralAssignable(ExpressionNode initializer, TypeInfo target, TypeInfo source)
+        {
+            if (target == null || source == null || !target.IsNumeric() || !source.IsNumeric())
+                return false;
+
+            var expr = initializer;
+            if (expr is UnaryExpressionNode u && (u.Operator == "-" || u.Operator == "+"))
+                expr = u.Operand;
+
+            return expr is LiteralExpressionNode lit
+                && lit.Value is int or long or float or double or decimal or short or byte;
+        }
+
         private void RegisterStdLibFunction(string name, SymbolKind kind, TypeInfo returnType, (string name, TypeInfo type)[] parameters)
         {
             var symbol = new Symbol(name, kind, returnType, 0, 0)
@@ -1244,6 +1276,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // First, check if it's a type parameter in the current scope
             var symbol = _currentScope.Resolve(name);
             if (symbol != null && symbol.Kind == SymbolKind.TypeParameter)
+            {
+                return symbol.Type;
+            }
+
+            // A class/struct/interface/enum symbol in scope — including one
+            // imported from a sibling project file — carries the full type with
+            // its members. Prefer it over the permissive .NET fallback below,
+            // which would otherwise return a bare member-less TypeInfo and make
+            // cross-file field access resolve to Object.
+            if (symbol?.Type != null &&
+                (symbol.Kind == SymbolKind.Class || symbol.Kind == SymbolKind.Structure ||
+                 symbol.Kind == SymbolKind.Interface || symbol.Kind == SymbolKind.Type))
             {
                 return symbol.Type;
             }
@@ -2222,7 +2266,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 node.Initializer.Accept(this);
                 var initType = GetNodeType(node.Initializer);
 
-                if (initType != null && !varType.IsAssignableFrom(initType))
+                if (initType != null && !varType.IsAssignableFrom(initType)
+                    && !IsNumericLiteralAssignable(node.Initializer, varType, initType))
                 {
                     var errorMsg = $"Cannot assign value of type '{initType.Name}' to variable of type '{varType.Name}'";
                     var hint = GetTypeConversionHint(initType, varType);
@@ -4438,8 +4483,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(MemberAccessExpressionNode node)
         {
-            // First, check if this is a module reference (ModuleName.Symbol)
-            if (node.Object is IdentifierExpressionNode objId)
+            // First, check if this is a module reference (ModuleName.Symbol).
+            // Skip this when the identifier is a local variable/parameter: a
+            // variable named like a module/file (e.g. "player" vs class "Player"
+            // in Player.cls) is an instance, not a module reference — otherwise
+            // FindModuleByName matches the sibling unit case-insensitively.
+            if (node.Object is IdentifierExpressionNode objId && !ResolvesToValueSymbol(objId.Name))
             {
                 var moduleName = objId.Name;
 

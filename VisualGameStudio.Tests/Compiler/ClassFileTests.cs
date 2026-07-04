@@ -196,6 +196,43 @@ End Sub
     }
 
     /// <summary>
+    /// A field of a class defined in a sibling .cls file must resolve to its
+    /// declared type across files — even when the instance variable is named
+    /// like the class (player vs Player). Regression for the game template:
+    /// player.Name typed as Object and player was misread as a module.
+    /// </summary>
+    [Test]
+    public void CrossFile_InstanceFieldAccess_ResolvesFieldType()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, "Player.cls"), @"Public
+Public Name As String
+
+Public Sub New(n As String)
+    Me.Name = n
+End Sub
+");
+        var mainPath = Path.Combine(_tempDir, "Main.bas");
+        File.WriteAllText(mainPath, @"Module Main
+    Sub Main()
+        Dim player As New Player(""Hero"")
+        Dim s As String = player.Name
+    End Sub
+End Module
+");
+
+        var compiler = new BasicCompiler();
+        var result = compiler.CompileProjectFiles(new[]
+        {
+            mainPath,
+            Path.Combine(_tempDir, "Player.cls")
+        });
+
+        Assert.That(result.AllErrors, Is.Empty,
+            $"Expected no errors but got: {string.Join(", ", result.AllErrors)}");
+        Assert.That(result.Success, Is.True);
+    }
+
+    /// <summary>
     /// ModuleResolver should find .cls files when resolving module names.
     /// </summary>
     [Test]
