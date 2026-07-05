@@ -573,8 +573,11 @@ namespace BasicLang.Compiler.LSP
 
                 case ClassNode classNode:
                 {
+                    var classType = new TypeInfo(classNode.Name, TypeKind.Class);
+                    PopulateClassTypeMembers(classType, classNode, filePath);
+
                     var symbol = new Symbol(classNode.Name, SymbolKind.Class,
-                        new TypeInfo(classNode.Name, TypeKind.Class), classNode.Line, classNode.Column)
+                        classType, classNode.Line, classNode.Column)
                     {
                         Access = EffectiveAccess(classNode.Access, isModuleFile)
                     };
@@ -672,6 +675,84 @@ namespace BasicLang.Compiler.LSP
                         target.AddSymbol(symbol, access);
                     }
                     break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Record a class's non-private members on its TypeInfo so member
+        /// completion and go-to-definition work for cross-file instances
+        /// ("player." where Player lives in a sibling file).
+        /// </summary>
+        private static void PopulateClassTypeMembers(TypeInfo classType, ClassNode classNode, string filePath)
+        {
+            if (classNode.Members == null)
+                return;
+
+            foreach (var member in classNode.Members)
+            {
+                Symbol memberSymbol = null;
+
+                switch (member)
+                {
+                    case FunctionNode func when func.Access != AccessModifier.Private:
+                        memberSymbol = new Symbol(func.Name, SymbolKind.Function,
+                            ConvertTypeReference(func.ReturnType), func.Line, func.Column)
+                        {
+                            ReturnType = ConvertTypeReference(func.ReturnType),
+                            Parameters = ConvertParameters(func.Parameters),
+                            Access = func.Access
+                        };
+                        break;
+
+                    case SubroutineNode sub when sub.Access != AccessModifier.Private:
+                        memberSymbol = new Symbol(sub.Name, SymbolKind.Subroutine,
+                            new TypeInfo("Void", TypeKind.Void), sub.Line, sub.Column)
+                        {
+                            ReturnType = new TypeInfo("Void", TypeKind.Void),
+                            Parameters = ConvertParameters(sub.Parameters),
+                            Access = sub.Access
+                        };
+                        break;
+
+                    case VariableDeclarationNode field when field.Access != AccessModifier.Private:
+                        memberSymbol = new Symbol(field.Name, SymbolKind.Variable,
+                            ConvertTypeReference(field.Type), field.Line, field.Column)
+                        {
+                            Access = field.Access
+                        };
+                        break;
+
+                    case PropertyNode prop when prop.Access != AccessModifier.Private:
+                        memberSymbol = new Symbol(prop.Name, SymbolKind.Property,
+                            ConvertTypeReference(prop.PropertyType), prop.Line, prop.Column)
+                        {
+                            Access = prop.Access
+                        };
+                        break;
+
+                    case ConstantDeclarationNode constant when constant.Access != AccessModifier.Private:
+                        memberSymbol = new Symbol(constant.Name, SymbolKind.Constant,
+                            ConvertTypeReference(constant.Type), constant.Line, constant.Column)
+                        {
+                            Access = constant.Access,
+                            IsConstant = true
+                        };
+                        break;
+
+                    case EventDeclarationNode evt when evt.Access != AccessModifier.Private:
+                        memberSymbol = new Symbol(evt.Name, SymbolKind.Event,
+                            ConvertTypeReference(evt.EventType), evt.Line, evt.Column)
+                        {
+                            Access = evt.Access
+                        };
+                        break;
+                }
+
+                if (memberSymbol != null && !string.IsNullOrEmpty(memberSymbol.Name))
+                {
+                    memberSymbol.SourceFilePath = filePath;
+                    classType.Members[memberSymbol.Name] = memberSymbol;
                 }
             }
         }

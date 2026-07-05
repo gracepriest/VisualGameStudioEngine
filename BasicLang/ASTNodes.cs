@@ -11,13 +11,20 @@ namespace BasicLang.Compiler.AST
     {
         public int Line { get; set; }
         public int Column { get; set; }
-        
+
+        /// <summary>
+        /// 1-based line of the block's closing token ("End Function",
+        /// "End Sub", "End Class", "End Module"), recorded by the parser.
+        /// 0 when unknown (e.g. single-line nodes or abstract members).
+        /// </summary>
+        public int EndLine { get; set; }
+
         protected ASTNode(int line, int column)
         {
             Line = line;
             Column = column;
         }
-        
+
         public abstract void Accept(IASTVisitor visitor);
     }
     

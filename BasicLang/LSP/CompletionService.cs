@@ -402,23 +402,71 @@ namespace BasicLang.Compiler.LSP
             // User-defined classes from AST
             if (state?.AST != null)
             {
-                foreach (var decl in state.AST.Declarations)
+                foreach (var cls in EnumerateClasses(state.AST))
                 {
-                    if (decl is ClassNode cls)
+                    types.Add(new CompletionItem
                     {
-                        types.Add(new CompletionItem
-                        {
-                            Label = cls.Name,
-                            Kind = CompletionItemKind.Class,
-                            Detail = "Class",
-                            InsertText = $"{cls.Name}()",
-                            InsertTextFormat = InsertTextFormat.PlainText
-                        });
-                    }
+                        Label = cls.Name,
+                        Kind = CompletionItemKind.Class,
+                        Detail = "Class",
+                        InsertText = $"{cls.Name}()",
+                        InsertTextFormat = InsertTextFormat.PlainText
+                    });
                 }
             }
 
+            // Classes/structures defined in sibling project files
+            AddProjectTypeCompletions(state, types,
+                SemanticAnalysis.SymbolKind.Class, SemanticAnalysis.SymbolKind.Structure);
+
             return types;
+        }
+
+        /// <summary>
+        /// Add public type symbols (classes/interfaces/structures/enums) from
+        /// sibling project files to a type-context completion list (finding [7]).
+        /// </summary>
+        private void AddProjectTypeCompletions(DocumentState state, List<CompletionItem> target,
+            params SemanticAnalysis.SymbolKind[] kinds)
+        {
+            if (state?.ProjectContext?.Symbols == null)
+                return;
+
+            var wanted = new HashSet<SemanticAnalysis.SymbolKind>(kinds);
+            var seen = new HashSet<string>(target.Select(t => t.Label), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (moduleName, symbol) in state.ProjectContext.Symbols.GetAllPublicSymbols())
+            {
+                if (symbol?.Name == null || !wanted.Contains(symbol.Kind))
+                    continue;
+                if (!seen.Add(symbol.Name))
+                    continue;
+
+                var kind = symbol.Kind switch
+                {
+                    SemanticAnalysis.SymbolKind.Class => CompletionItemKind.Class,
+                    SemanticAnalysis.SymbolKind.Interface => CompletionItemKind.Interface,
+                    SemanticAnalysis.SymbolKind.Structure => CompletionItemKind.Struct,
+                    SemanticAnalysis.SymbolKind.Type when symbol.Type?.Kind == TypeKind.Enum => CompletionItemKind.Enum,
+                    _ => CompletionItemKind.Class
+                };
+
+                var detailKind = kind switch
+                {
+                    CompletionItemKind.Interface => "Interface",
+                    CompletionItemKind.Struct => "Structure",
+                    CompletionItemKind.Enum => "Enum",
+                    _ => "Class"
+                };
+
+                target.Add(new CompletionItem
+                {
+                    Label = symbol.Name,
+                    Kind = kind,
+                    Detail = $"{detailKind} {symbol.Name} — from {moduleName}",
+                    InsertText = symbol.Name
+                });
+            }
         }
 
         private CompletionItem CreateTypeCompletion(string name, string detail, string doc, string insertText)
@@ -476,6 +524,11 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // Types defined in sibling project files
+            AddProjectTypeCompletions(state, types,
+                SemanticAnalysis.SymbolKind.Class, SemanticAnalysis.SymbolKind.Structure,
+                SemanticAnalysis.SymbolKind.Interface, SemanticAnalysis.SymbolKind.Type);
+
             return types;
         }
 
@@ -510,6 +563,9 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // Interfaces defined in sibling project files
+            AddProjectTypeCompletions(state, interfaces, SemanticAnalysis.SymbolKind.Interface);
+
             return interfaces;
         }
 
@@ -542,6 +598,9 @@ namespace BasicLang.Compiler.LSP
                     }
                 }
             }
+
+            // Classes defined in sibling project files
+            AddProjectTypeCompletions(state, classes, SemanticAnalysis.SymbolKind.Class);
 
             return classes;
         }
@@ -1572,14 +1631,17 @@ namespace BasicLang.Compiler.LSP
                 cls = FindClassByName(state?.AST, cls.BaseClass);
             }
 
-            // (d) Cross-file class members
+            // (d) Cross-file class members (case-insensitive lookup)
             if (state?.ProjectContext != null)
             {
                 var (crossSymbol, _) = state.ProjectContext.FindPublicSymbol(baseTypeName);
-                if (crossSymbol?.Type?.Members != null &&
-                    crossSymbol.Type.Members.TryGetValue(memberName, out var crossMember))
+                var crossMember = crossSymbol?.Type?.Members?.Values.FirstOrDefault(m =>
+                    m.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase));
+                if (crossMember != null)
                 {
-                    return crossMember.ReturnType?.Name ?? crossMember.Type?.Name;
+                    var resultType = crossMember.ReturnType?.Name ?? crossMember.Type?.Name;
+                    if (!string.IsNullOrEmpty(resultType) && resultType != "Void")
+                        return resultType;
                 }
             }
 
@@ -2302,27 +2364,75 @@ namespace BasicLang.Compiler.LSP
         }
 
         /// <summary>
-        /// Estimate the end line of an AST node
+        /// Get the end line of an AST node. The parser records the real
+        /// closing-token line ("End Function"/"End Sub"/"End Class") in
+        /// ASTNode.EndLine; when absent (error recovery, synthesized nodes)
+        /// fall back to the deepest descendant line, then to an estimate.
         /// </summary>
         private int GetEndLine(ASTNode node)
         {
-            // For now, estimate based on node type
-            // A more accurate approach would require storing end positions in AST nodes
-            if (node is BasicLang.Compiler.AST.FunctionNode func)
+            if (node.EndLine > 0)
+                return node.EndLine;
+
+            // Stopgap: max line across descendant statements/members
+            var maxDescendant = GetMaxDescendantLine(node);
+            if (maxDescendant > node.Line)
+                return maxDescendant + 1; // + closing "End ..." line
+
+            return node.Line + 100; // Last-resort estimate
+        }
+
+        /// <summary>
+        /// Compute the maximum 1-based line of a node and its descendants
+        /// (recursing through the block structures the completion service
+        /// understands).
+        /// </summary>
+        private int GetMaxDescendantLine(ASTNode node)
+        {
+            if (node == null)
+                return 0;
+
+            int max = Math.Max(node.Line, node.EndLine);
+
+            switch (node)
             {
-                // Estimate: function line + number of statements + some buffer
-                return func.Line + (func.Body?.Statements?.Count ?? 0) + 10;
-            }
-            else if (node is BasicLang.Compiler.AST.SubroutineNode sub)
-            {
-                return sub.Line + (sub.Body?.Statements?.Count ?? 0) + 10;
-            }
-            else if (node is BasicLang.Compiler.AST.ClassNode cls)
-            {
-                return cls.Line + (cls.Members?.Count ?? 0) * 10 + 10;
+                case BasicLang.Compiler.AST.FunctionNode func:
+                    max = Math.Max(max, GetMaxDescendantLine(func.Body));
+                    break;
+                case BasicLang.Compiler.AST.SubroutineNode sub:
+                    max = Math.Max(max, GetMaxDescendantLine(sub.Body));
+                    break;
+                case BasicLang.Compiler.AST.ClassNode cls:
+                    foreach (var member in cls.Members)
+                        max = Math.Max(max, GetMaxDescendantLine(member));
+                    break;
+                case BasicLang.Compiler.AST.ModuleNode module:
+                    foreach (var member in module.Members)
+                        max = Math.Max(max, GetMaxDescendantLine(member));
+                    break;
+                case BasicLang.Compiler.AST.BlockNode block:
+                    if (block.Statements != null)
+                    {
+                        foreach (var stmt in block.Statements)
+                            max = Math.Max(max, GetMaxDescendantLine(stmt));
+                    }
+                    break;
+                case BasicLang.Compiler.AST.IfStatementNode ifNode:
+                    max = Math.Max(max, GetMaxDescendantLine(ifNode.ThenBlock));
+                    max = Math.Max(max, GetMaxDescendantLine(ifNode.ElseBlock));
+                    break;
+                case BasicLang.Compiler.AST.ForLoopNode forNode:
+                    max = Math.Max(max, GetMaxDescendantLine(forNode.Body));
+                    break;
+                case BasicLang.Compiler.AST.ForEachLoopNode forEachNode:
+                    max = Math.Max(max, GetMaxDescendantLine(forEachNode.Body));
+                    break;
+                case BasicLang.Compiler.AST.WhileLoopNode whileNode:
+                    max = Math.Max(max, GetMaxDescendantLine(whileNode.Body));
+                    break;
             }
 
-            return node.Line + 100; // Default estimate
+            return max;
         }
 
         private CompletionItem CreateMemberCompletionItem(NetMemberInfo member)

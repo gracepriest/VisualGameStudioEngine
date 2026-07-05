@@ -313,7 +313,7 @@ namespace BasicLang.Compiler
                 SkipNewlines();
             }
 
-            Consume(TokenType.EndModule, "Expected 'End Module'");
+            node.EndLine = Consume(TokenType.EndModule, "Expected 'End Module'").Line;
             return node;
         }
 
@@ -583,7 +583,7 @@ namespace BasicLang.Compiler
                     SkipNewlines();
                 }
 
-                Consume(TokenType.EndClass, "Expected 'End Class'");
+                node.EndLine = Consume(TokenType.EndClass, "Expected 'End Class'").Line;
             }
             finally
             {
@@ -899,7 +899,7 @@ namespace BasicLang.Compiler
 
             // Parse body
             node.Body = ParseBlock(TokenType.EndSub);
-            Consume(TokenType.EndSub, "Expected 'End Sub'");
+            node.EndLine = Consume(TokenType.EndSub, "Expected 'End Sub'").Line;
 
             return node;
         }
@@ -1411,7 +1411,7 @@ namespace BasicLang.Compiler
 
                     ConsumeNewlines();
                     func.Body = ParseBlock(TokenType.EndFunction);
-                    Consume(TokenType.EndFunction, "Expected 'End Function'");
+                    func.EndLine = Consume(TokenType.EndFunction, "Expected 'End Function'").Line;
 
                     node.Declaration = func;
                 }
@@ -1744,7 +1744,7 @@ namespace BasicLang.Compiler
 
             ConsumeNewlines();
             func.Body = ParseBlock(TokenType.EndFunction);
-            Consume(TokenType.EndFunction, "Expected 'End Function'");
+            func.EndLine = Consume(TokenType.EndFunction, "Expected 'End Function'").Line;
 
             node.Method = func;
             return node;
@@ -1794,7 +1794,7 @@ namespace BasicLang.Compiler
 
             ConsumeNewlines();
             func.Body = ParseBlock(TokenType.EndFunction);
-            Consume(TokenType.EndFunction, "Expected 'End Function'");
+            func.EndLine = Consume(TokenType.EndFunction, "Expected 'End Function'").Line;
 
             node.Method = func;
             return node;
@@ -1862,7 +1862,7 @@ namespace BasicLang.Compiler
                 if (!node.IsAbstract)
                 {
                     node.Body = ParseBlock(TokenType.EndFunction);
-                    Consume(TokenType.EndFunction, "Expected 'End Function'");
+                    node.EndLine = Consume(TokenType.EndFunction, "Expected 'End Function'").Line;
                 }
             }
             finally
@@ -1921,7 +1921,7 @@ namespace BasicLang.Compiler
 
                 ConsumeNewlines();
                 node.Body = ParseBlock(TokenType.EndSub);
-                Consume(TokenType.EndSub, "Expected 'End Sub'");
+                node.EndLine = Consume(TokenType.EndSub, "Expected 'End Sub'").Line;
             }
             finally
             {
