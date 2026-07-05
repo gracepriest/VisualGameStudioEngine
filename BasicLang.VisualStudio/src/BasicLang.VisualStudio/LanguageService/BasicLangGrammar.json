@@ -1,7 +1,7 @@
 {
   "name": "BasicLang",
   "scopeName": "source.basiclang",
-  "fileTypes": ["bl", "bas"],
+  "fileTypes": ["bl", "bas", "cls", "mod"],
   "patterns": [
     { "include": "#comments" },
     { "include": "#preprocessor" },

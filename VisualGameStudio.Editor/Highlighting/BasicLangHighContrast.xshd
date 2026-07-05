@@ -176,6 +176,7 @@
       <Word>End Using</Word>
       <Word>EndUsing</Word>
       <Word>Import</Word>
+      <Word>Option</Word>
     </Keywords>
 
     <!-- Modifiers -->
