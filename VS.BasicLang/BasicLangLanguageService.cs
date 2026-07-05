@@ -28,6 +28,16 @@ public static class BasicLangContentTypeDefinition
     public static FileExtensionToContentTypeDefinition? BasicLangFileExtension2;
 
     [Export]
+    [FileExtension(BasicLangConstants.ClassExtension)]
+    [ContentType(BasicLangConstants.ContentTypeName)]
+    public static FileExtensionToContentTypeDefinition? BasicLangClassExtension;
+
+    [Export]
+    [FileExtension(BasicLangConstants.ModuleExtension)]
+    [ContentType(BasicLangConstants.ContentTypeName)]
+    public static FileExtensionToContentTypeDefinition? BasicLangModuleExtension;
+
+    [Export]
     [FileExtension(BasicLangConstants.ProjectExtension)]
     [ContentType(BasicLangConstants.ContentTypeName)]
     public static FileExtensionToContentTypeDefinition? BasicLangProjectExtension;
@@ -51,7 +61,7 @@ public class BasicLangLanguageService : ILanguageClient, IDisposable
         enableCodeLens = true
     };
 
-    public IEnumerable<string> FilesToWatch => new[] { "**/*.bl", "**/*.bas", "**/*.blproj" };
+    public IEnumerable<string> FilesToWatch => new[] { "**/*.bl", "**/*.bas", "**/*.cls", "**/*.mod", "**/*.blproj" };
 
     public bool ShowNotificationOnInitializeFailed => true;
 

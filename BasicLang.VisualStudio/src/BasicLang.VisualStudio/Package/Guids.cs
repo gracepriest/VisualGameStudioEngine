@@ -46,6 +46,8 @@ public static class BasicLangConstants
     public const string ContentTypeName = "basiclang";
     public const string FileExtension = ".bl";
     public const string FileExtension2 = ".bas";
+    public const string ClassExtension = ".cls";
+    public const string ModuleExtension = ".mod";
     public const string ProjectExtension = ".blproj";
     public const string ProjectTypeCapability = "BasicLang";
 

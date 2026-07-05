@@ -51,7 +51,9 @@ public class BasicLangLanguageClient : ILanguageClient, ILanguageClientCustomMes
     public IEnumerable<string> FilesToWatch => new[]
     {
         "**/*.bl",
-        "**/*.bas"
+        "**/*.bas",
+        "**/*.cls",
+        "**/*.mod"
     };
 
     /// <summary>

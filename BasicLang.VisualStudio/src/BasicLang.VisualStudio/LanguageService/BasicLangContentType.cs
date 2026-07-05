@@ -32,4 +32,20 @@ public static class BasicLangContentTypeDefinition
     [FileExtension(BasicLangConstants.FileExtension2)]
     [ContentType(BasicLangConstants.ContentTypeName)]
     public static FileExtensionToContentTypeDefinition? BasicLangFileExtension2;
+
+    /// <summary>
+    /// Associates .cls implicit-class files with the BasicLang content type.
+    /// </summary>
+    [Export]
+    [FileExtension(BasicLangConstants.ClassExtension)]
+    [ContentType(BasicLangConstants.ContentTypeName)]
+    public static FileExtensionToContentTypeDefinition? BasicLangClassExtension;
+
+    /// <summary>
+    /// Associates .mod implicit-module files with the BasicLang content type.
+    /// </summary>
+    [Export]
+    [FileExtension(BasicLangConstants.ModuleExtension)]
+    [ContentType(BasicLangConstants.ContentTypeName)]
+    public static FileExtensionToContentTypeDefinition? BasicLangModuleExtension;
 }
