@@ -943,14 +943,15 @@ namespace BasicLang.Compiler
             }
 
             // Field declaration without Dim (e.g., "Private _name As String" or "Private items(10) As Integer")
-            // If we see an identifier followed by As or ( or [ (array), it's a field
-            if (Check(TokenType.Identifier))
+            // If we see an identifier (or a contextual soft keyword like First) followed
+            // by As or ( or [ (array), it's a field
+            if (CheckIdentifierLike())
             {
                 var nextType = PeekNext().Type;
                 if (nextType == TokenType.As || nextType == TokenType.LeftBracket || nextType == TokenType.LeftParen)
                 {
                     var token = Peek();
-                    var name = Advance().Value.ToString();
+                    var name = Advance().Lexeme;
 
                     // Parse array dimensions if present (support both [] and () syntax)
                     var arrayDimensions = new List<int>();
@@ -1088,7 +1089,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Property, "Expected 'Property'");
             var node = new PropertyNode(token.Line, token.Column);
 
-            node.Name = Consume(TokenType.Identifier, "Expected property name").Lexeme;
+            node.Name = ConsumeIdentifierLike("Expected property name").Lexeme;
 
             // Property type
             if (Match(TokenType.As))
@@ -1329,7 +1330,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Function, "Expected 'Function'");
             var node = new FunctionNode(token.Line, token.Column);
 
-            node.Name = Consume(TokenType.Identifier, "Expected function name").Lexeme;
+            node.Name = ConsumeIdentifierLike("Expected function name").Lexeme;
 
             Consume(TokenType.LeftParen, "Expected '(' after function name");
             if (!Check(TokenType.RightParen))
@@ -1356,7 +1357,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Sub, "Expected 'Sub'");
             var node = new FunctionNode(token.Line, token.Column);
 
-            node.Name = Consume(TokenType.Identifier, "Expected sub name").Lexeme;
+            node.Name = ConsumeIdentifierLike("Expected sub name").Lexeme;
 
             Consume(TokenType.LeftParen, "Expected '(' after sub name");
             if (!Check(TokenType.RightParen))
@@ -1448,7 +1449,7 @@ namespace BasicLang.Compiler
 
                 var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
                 member.Access = access;
-                member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
+                member.Name = ConsumeIdentifierLike("Expected member name").Lexeme;
                 Consume(TokenType.As, "Expected 'As'");
                 member.Type = ParseTypeReference();
                 node.Members.Add(member);
@@ -1482,7 +1483,7 @@ namespace BasicLang.Compiler
 
                 var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
                 member.Access = access;
-                member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
+                member.Name = ConsumeIdentifierLike("Expected member name").Lexeme;
                 Consume(TokenType.As, "Expected 'As'");
                 member.Type = ParseTypeReference();
                 node.Members.Add(member);
@@ -1516,7 +1517,7 @@ namespace BasicLang.Compiler
 
                 var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
                 member.Access = access;
-                member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
+                member.Name = ConsumeIdentifierLike("Expected member name").Lexeme;
                 Consume(TokenType.As, "Expected 'As'");
                 member.Type = ParseTypeReference();
                 node.Members.Add(member);
@@ -1555,7 +1556,7 @@ namespace BasicLang.Compiler
                 {
                     Advance();
                     var func = new FunctionNode(token.Line, token.Column);
-                    func.Name = Consume(TokenType.Identifier, "Expected function name").Lexeme;
+                    func.Name = ConsumeIdentifierLike("Expected function name").Lexeme;
 
                     // Generic parameters
                     if (Match(TokenType.LeftParen) && Check(TokenType.Of))
@@ -1675,7 +1676,7 @@ namespace BasicLang.Compiler
             {
                 var varNode = new VariableDeclarationNode(token.Line, token.Column);
                 varNode.IsExtern = true;
-                varNode.Name = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+                varNode.Name = ConsumeIdentifierLike("Expected variable name").Lexeme;
 
                 if (Match(TokenType.As))
                 {
@@ -1988,7 +1989,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Function, "Expected 'Function'");
             var node = new FunctionNode(token.Line, token.Column);
 
-            node.Name = Consume(TokenType.Identifier, "Expected function name").Lexeme;
+            node.Name = ConsumeIdentifierLike("Expected function name").Lexeme;
             _context.Push($"Function '{node.Name}'");
 
             try
@@ -2057,7 +2058,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Sub, "Expected 'Sub'");
             var node = new SubroutineNode(token.Line, token.Column);
 
-            node.Name = Consume(TokenType.Identifier, "Expected subroutine name").Lexeme;
+            node.Name = ConsumeIdentifierLike("Expected subroutine name").Lexeme;
             _context.Push($"Sub '{node.Name}'");
 
             try
@@ -2224,7 +2225,7 @@ namespace BasicLang.Compiler
 
             var node = new VariableDeclarationNode(token.Line, token.Column);
 
-            node.Name = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+            node.Name = ConsumeIdentifierLike("Expected variable name").Lexeme;
 
             // Array dimensions - support both [] (C#-style) and () (VB-style) syntax
             if (Match(TokenType.LeftBracket) || Match(TokenType.LeftParen))
@@ -2319,7 +2320,7 @@ namespace BasicLang.Compiler
             var node = new VariableDeclarationNode(token.Line, token.Column);
             node.IsAuto = true;
 
-            node.Name = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+            node.Name = ConsumeIdentifierLike("Expected variable name").Lexeme;
 
             // Initializer is required for Auto, but parse it optionally
             // so semantic analyzer can report a better error
@@ -2345,7 +2346,7 @@ namespace BasicLang.Compiler
 
             do
             {
-                var varName = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+                var varName = ConsumeIdentifierLike("Expected variable name").Lexeme;
                 TypeReference varType = null;
 
                 // Optional type: x As Integer
@@ -4073,8 +4074,9 @@ namespace BasicLang.Compiler
                 return castNode;
             }
 
-            // Identifier
-            if (Check(TokenType.Identifier))
+            // Identifier (soft keywords like First/Take are valid identifiers outside
+            // their query-clause positions)
+            if (Check(TokenType.Identifier) || (!IsAtEnd() && IsSoftExpressionKeyword(Peek().Type)))
             {
                 var token = Advance();
                 return new IdentifierExpressionNode(token.Line, token.Column) { Name = token.Lexeme };
@@ -4273,7 +4275,7 @@ namespace BasicLang.Compiler
 
             // From clause: From x In collection
             var fromClause = new FromClause { Line = token.Line, Column = token.Column };
-            fromClause.VariableName = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+            fromClause.VariableName = ConsumeIdentifierLike("Expected variable name").Lexeme;
             Consume(TokenType.In, "Expected 'In' after variable name");
             fromClause.Collection = ParseExpression();
             query.Clauses.Add(fromClause);
@@ -4328,7 +4330,7 @@ namespace BasicLang.Compiler
                 {
                     Advance();
                     var joinClause = new JoinClause { Line = Previous().Line, Column = Previous().Column };
-                    joinClause.VariableName = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+                    joinClause.VariableName = ConsumeIdentifierLike("Expected variable name").Lexeme;
                     Consume(TokenType.In, "Expected 'In' after variable name");
                     joinClause.Collection = ParseExpression();
                     Consume(TokenType.On, "Expected 'On' in join clause");
@@ -4347,7 +4349,7 @@ namespace BasicLang.Compiler
                 {
                     Advance();
                     var aggClause = new AggregateClause { Line = Previous().Line, Column = Previous().Column };
-                    aggClause.VariableName = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+                    aggClause.VariableName = ConsumeIdentifierLike("Expected variable name").Lexeme;
                     Consume(TokenType.In, "Expected 'In' after variable name");
                     aggClause.Collection = ParseExpression();
 
@@ -4423,7 +4425,41 @@ namespace BasicLang.Compiler
                    type == TokenType.String ||
                    type == TokenType.Integer ||
                    type == TokenType.Double ||
-                   type == TokenType.Boolean;
+                   type == TokenType.Boolean ||
+                   IsSoftNameKeyword(type);
+        }
+
+        /// <summary>
+        /// LINQ query-operator keywords are contextual: they only have meaning inside a
+        /// query expression, so they are valid as declaration and member names
+        /// (Public First As T, Function Where(...), obj.Take, ...).
+        /// </summary>
+        private static bool IsSoftNameKeyword(TokenType type) =>
+            type == TokenType.Where || type == TokenType.Ascending || type == TokenType.Descending ||
+            type == TokenType.Equals || type == TokenType.Into || type == TokenType.Let ||
+            type == TokenType.Aggregate || type == TokenType.Take || type == TokenType.Skip ||
+            type == TokenType.Distinct || type == TokenType.Any || type == TokenType.All ||
+            type == TokenType.First || type == TokenType.Last || type == TokenType.From ||
+            type == TokenType.Join || type == TokenType.On;
+
+        /// <summary>
+        /// Subset of soft keywords safe at expression-head position. Excludes tokens that
+        /// begin query expressions (From, Aggregate) or introduce clauses the query parser
+        /// consumes at expression boundaries (Let, Join, On).
+        /// </summary>
+        private static bool IsSoftExpressionKeyword(TokenType type) =>
+            type == TokenType.Where || type == TokenType.Ascending || type == TokenType.Descending ||
+            type == TokenType.Take || type == TokenType.Skip || type == TokenType.Distinct ||
+            type == TokenType.Any || type == TokenType.All || type == TokenType.First ||
+            type == TokenType.Last || type == TokenType.Into || type == TokenType.Equals;
+
+        private bool CheckIdentifierLike() =>
+            !IsAtEnd() && (Check(TokenType.Identifier) || IsSoftNameKeyword(Peek().Type));
+
+        private Token ConsumeIdentifierLike(string message)
+        {
+            if (CheckIdentifierLike()) return Advance();
+            return Consume(TokenType.Identifier, message);
         }
 
         private bool Check(TokenType type)

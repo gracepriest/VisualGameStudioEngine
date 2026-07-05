@@ -67,6 +67,57 @@ public class CompilationTests
     }
 
     // ========================================================================
+    // Keyword-named members (contextual keywords: First, Where, Take, ...)
+    // ========================================================================
+
+    [Test]
+    public void Compile_KeywordNamedFields_NotSilentlyDropped()
+    {
+        var source = @"
+Class Pair
+    Public First As Integer
+    Public Last As Integer
+End Class";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("First"));
+        Assert.That(output, Does.Contain("Last"));
+    }
+
+    [Test]
+    public void Compile_KeywordNamedMethod_Parses()
+    {
+        var source = @"
+Class Query
+    Public Function Where(x As Integer) As Integer
+        Return x
+    End Function
+End Class";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("Where"));
+    }
+
+    [Test]
+    public void Compile_KeywordNamedLocal_Parses()
+    {
+        var source = @"
+Sub Main()
+    Dim First As Integer = 1
+    Dim result As Integer = First + 1
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("First"));
+    }
+
+    // ========================================================================
     // Throw statements (IRThrow)
     // ========================================================================
 
