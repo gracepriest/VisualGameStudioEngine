@@ -281,20 +281,50 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// C++ type mapping with template support: type parameters stay bare (T),
-        /// generic instantiations map recursively (Pair(Of Integer) -> Pair&lt;int32_t&gt;).
+        /// C++ type mapping with template and reference-semantics support:
+        /// - type parameters stay bare (T)
+        /// - generic instantiations map recursively (Pair(Of Integer) -> Pair&lt;int32_t&gt;)
+        /// - class/interface values are std::shared_ptr&lt;T&gt; (BasicLang objects are references)
         /// </summary>
         protected override string MapType(TypeInfo type)
         {
             if (type == null) return base.MapType(type);
             if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
+            if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
+                return base.MapType(type);
+
+            string bare;
             if (type.GenericArguments != null && type.GenericArguments.Count > 0)
             {
-                var bare = _typeMap.TryGetValue(type.Name, out var mapped) ? mapped : SanitizeName(type.Name);
+                var baseName = _typeMap.TryGetValue(type.Name, out var mapped) ? mapped : SanitizeName(type.Name);
                 var args = string.Join(", ", type.GenericArguments.Select(MapType));
-                return $"{bare}<{args}>";
+                bare = $"{baseName}<{args}>";
             }
-            return base.MapType(type);
+            else if (type.Name != null && _typeMap.ContainsKey(type.Name))
+            {
+                // Primitive-mapped (String -> std::string, Object -> void*, ...): never wrapped
+                return base.MapType(type);
+            }
+            else
+            {
+                bare = base.MapType(type);
+            }
+
+            if (type.Kind == TypeKind.Class || type.Kind == TypeKind.Interface)
+                return $"std::shared_ptr<{bare}>";
+            return bare;
+        }
+
+        /// <summary>Member access operator for an object value: -> for shared_ptr objects and
+        /// the raw `this` pointer, . for everything else (structures, std::string, ...).</summary>
+        private string MemberAccessOp(IRValue obj)
+        {
+            if (obj is IRVariable v && v.Name == "this") return "->";
+            var kind = obj?.Type?.Kind;
+            if ((kind == TypeKind.Class || kind == TypeKind.Interface)
+                && (obj.Type.Name == null || !_typeMap.ContainsKey(obj.Type.Name)))
+                return "->";
+            return ".";
         }
 
         private string MapTypeName(string typeName)
@@ -1623,25 +1653,41 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRNewObject newObj)
         {
-            // For generic instantiations the constructor needs template arguments too:
-            // Pair<int32_t> t0 = Pair<int32_t>(...)
-            var ctorName = (newObj.Type?.GenericArguments != null && newObj.Type.GenericArguments.Count > 0)
-                ? MapType(newObj.Type)
-                : SanitizeName(newObj.ClassName);
+            // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
+            // Generic instantiations need template arguments on the constructor: Pair<int32_t>(...)
+            string bareName;
+            if (newObj.Type?.GenericArguments != null && newObj.Type.GenericArguments.Count > 0)
+            {
+                var typeArgs = string.Join(", ", newObj.Type.GenericArguments.Select(MapType));
+                bareName = $"{SanitizeName(newObj.ClassName)}<{typeArgs}>";
+            }
+            else
+            {
+                bareName = SanitizeName(newObj.ClassName);
+            }
+
             var args = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
-            var type = MapType(newObj.Type);
-            WriteLine($"{type} {newObj.Name} = {ctorName}({args});");
+            var result = GetValueName(newObj);
+            var isReferenceType = newObj.Type == null
+                || newObj.Type.Kind == TypeKind.Class
+                || newObj.Type.Kind == TypeKind.Interface;
+
+            if (isReferenceType)
+                WriteLine($"{result} = std::make_shared<{bareName}>({args});");
+            else
+                WriteLine($"{result} = {bareName}({args});");
         }
 
         public override void Visit(IRInstanceMethodCall methodCall)
         {
             var obj = GetValueName(methodCall.Object);
+            var op = MemberAccessOp(methodCall.Object);
             var methodName = SanitizeName(methodCall.MethodName);
             var args = string.Join(", ", methodCall.Arguments.Select(a => GetValueName(a)));
             if (methodCall.Type == null || methodCall.Type.Name == "Void")
-                WriteLine($"{obj}.{methodName}({args});");
+                WriteLine($"{obj}{op}{methodName}({args});");
             else
-                WriteLine($"auto {methodCall.Name} = {obj}.{methodName}({args});");
+                WriteLine($"{GetValueName(methodCall)} = {obj}{op}{methodName}({args});");
         }
 
         public override void Visit(IRBaseMethodCall baseCall)
@@ -1680,18 +1726,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRFieldAccess fieldAccess)
         {
+            // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             var obj = GetValueName(fieldAccess.Object);
+            var op = MemberAccessOp(fieldAccess.Object);
             var fieldName = SanitizeName(fieldAccess.FieldName);
-            var type = MapType(fieldAccess.Type);
-            WriteLine($"{type} {fieldAccess.Name} = {obj}.{fieldName};");
+            WriteLine($"{GetValueName(fieldAccess)} = {obj}{op}{fieldName};");
         }
 
         public override void Visit(IRFieldStore fieldStore)
         {
             var obj = GetValueName(fieldStore.Object);
+            var op = MemberAccessOp(fieldStore.Object);
             var fieldName = SanitizeName(fieldStore.FieldName);
             var value = GetValueName(fieldStore.Value);
-            WriteLine($"{obj}.{fieldName} = {value};");
+            WriteLine($"{obj}{op}{fieldName} = {value};");
         }
 
         public override void Visit(IRTupleElement tupleElement)

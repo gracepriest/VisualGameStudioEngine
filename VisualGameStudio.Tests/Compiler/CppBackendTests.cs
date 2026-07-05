@@ -202,6 +202,79 @@ End Sub";
         Assert.That(ex.Message, Does.Contain("List"));
     }
 
+    // ========================================================================
+    // Task 3: reference semantics - classes are std::shared_ptr, structures stay values
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ClassInstance_UsesSharedPtr()
+    {
+        var source = @"
+Class Person
+    Public Name As String
+End Class
+
+Sub Main()
+    Dim p As New Person()
+    p.Name = ""Alice""
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::shared_ptr<Person>"));
+        Assert.That(output, Does.Contain("std::make_shared<Person>("));
+        Assert.That(output, Does.Contain("->Name"));
+    }
+
+    [Test]
+    public void Cpp_ClassMethodCall_UsesArrow()
+    {
+        var source = @"
+Class Counter
+    Private _n As Integer
+    Public Sub Increment()
+        _n = _n + 1
+    End Sub
+End Class
+
+Sub Main()
+    Dim c As New Counter()
+    c.Increment()
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("c->Increment()"));
+    }
+
+    [Test]
+    public void Cpp_Structure_ThrowsCapabilityError_NoCodegenExistsYet()
+    {
+        // Structures generate no IR on ANY backend today (IRBuilder.Visit(StructureNode) is
+        // empty), so structure-typed values hit the permanent unmapped-type diagnostic.
+        // When structure codegen lands, this test should flip to asserting value semantics
+        // (no shared_ptr wrapper, '.' member access).
+        var source = @"
+Structure Point
+    Public X As Integer
+    Public Y As Integer
+End Structure
+
+Sub Main()
+    Dim p As Point
+    p.X = 1
+End Sub";
+
+        var ex = Assert.Throws<CppCapabilityException>(() =>
+        {
+            var output = CompileToCpp(source, out var errors);
+            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
+        });
+        Assert.That(ex.Message, Does.Contain("Point"));
+    }
+
     [Test]
     public void Cpp_PlainProceduralCode_StillCompiles()
     {

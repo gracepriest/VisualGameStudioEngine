@@ -31,6 +31,10 @@ differently than the C# backend (value vs. reference object semantics, silently 
 1. **Reference semantics**: `std::shared_ptr<Foo>` for `TypeKind.Class`/`Interface` values,
    `std::make_shared` construction, `->` member access, `nullptr` for `Nothing`.
    `TypeKind.Structure` stays a value type.
+   *Reality note (Task 3):* structures generate no IR on ANY backend today
+   (`IRBuilder.Visit(StructureNode)` is empty), so structure-typed values currently hit the
+   permanent unmapped-type diagnostic; the value-semantics rule applies when structure
+   codegen lands (flagged as separate follow-up work, out of overhaul scope).
 2. **Generics**: emit real C++ templates (`template <typename T>`). Constraints
    (`Of T As IComparable`) are dropped with a comment — parity with the C# backend today;
    C++20 concepts later. Recursive generic argument mapping: `Stack(Of Integer)` →
