@@ -376,7 +376,8 @@ public partial class MainWindowViewModel : ViewModelBase
         CallHierarchyViewModel callHierarchy,
         TypeHierarchyViewModel typeHierarchy,
         ThreadsViewModel threads,
-        TimelineViewModel timeline)
+        TimelineViewModel timeline,
+        Documents.WelcomeDocumentViewModel welcomeDocument)
     {
         _projectService = projectService;
         _buildService = buildService;
@@ -422,6 +423,23 @@ public partial class MainWindowViewModel : ViewModelBase
         TypeHierarchy = typeHierarchy;
         Threads = threads;
         Timeline = timeline;
+
+        // Wire the welcome/start page buttons. The DI container builds the
+        // singleton WelcomeDocumentViewModel with no callbacks; without this
+        // every start-page button is a silent no-op.
+        welcomeDocument.SetCallbacks(
+            openProject: path =>
+            {
+                if (string.IsNullOrEmpty(path))
+                    OpenProjectCommand.Execute(null);
+                else
+                    OpenRecentProjectCommand.Execute(path);
+            },
+            newProject: () => NewProjectCommand.Execute(null),
+            openFile: () => OpenFileCommand.Execute(null),
+            openFolder: () => OpenFolderCommand.Execute(null),
+            cloneRepository: () => ShowNotification(
+                "Clone Repository is not available yet — open a folder and use the Git panel instead.", "info"));
 
         // Setup dock layout
         _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks, threads: threads, timeline: timeline, callHierarchy: CallHierarchy);

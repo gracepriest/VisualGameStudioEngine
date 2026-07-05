@@ -9,11 +9,11 @@ namespace VisualGameStudio.Shell.ViewModels.Documents;
 public partial class WelcomeDocumentViewModel : ViewModelBase
 {
     private readonly IRecentProjectsService _recentProjectsService;
-    private readonly Action<string>? _openProject;
-    private readonly Action? _newProject;
-    private readonly Action? _openFile;
-    private readonly Action? _openFolder;
-    private readonly Action? _cloneRepository;
+    private Action<string>? _openProject;
+    private Action? _newProject;
+    private Action? _openFile;
+    private Action? _openFolder;
+    private Action? _cloneRepository;
 
     [ObservableProperty]
     private ObservableCollection<RecentProjectItem> _recentProjects = new();
@@ -80,6 +80,26 @@ public partial class WelcomeDocumentViewModel : ViewModelBase
             }
         }
         catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// Attach the action callbacks after DI construction. The container
+    /// builds this view model with the 1-arg constructor, so without this
+    /// call every start-page button (New Project, Open Project, ...) is a
+    /// silent no-op.
+    /// </summary>
+    public void SetCallbacks(
+        Action<string>? openProject,
+        Action? newProject,
+        Action? openFile,
+        Action? openFolder,
+        Action? cloneRepository)
+    {
+        _openProject = openProject;
+        _newProject = newProject;
+        _openFile = openFile;
+        _openFolder = openFolder;
+        _cloneRepository = cloneRepository;
     }
 
     private void InitializeWalkthroughItems()
