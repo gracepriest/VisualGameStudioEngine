@@ -232,7 +232,7 @@ This is the *existing* legacy logic verbatim plus (a) the directive loop up fron
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~ClassFileTests"
 ```
 
-Expected: all pass (16 existing + 3 new). If `ClsFile_PublicSubOnFirstLine_StaysPrivate` fails, the directive loop's `break` is wrong; if `ClsFile_PublicClass_AccessibleWithoutImport` fails, the legacy branch was altered — compare against the original at git HEAD.
+Expected: all pass (14 existing + 3 new = 17). If `ClsFile_PublicSubOnFirstLine_StaysPrivate` fails, the directive loop's `break` is wrong; if `ClsFile_PublicClass_AccessibleWithoutImport` fails, the legacy branch was altered — compare against the original at git HEAD.
 
 - [ ] **Step 5: Commit**
 
@@ -473,10 +473,14 @@ git commit -m "test: Option Public after code is not a directive"
 - [ ] **Step 1: Check whether any test pins the old template text**
 
 ```powershell
-Select-String -Path "VisualGameStudio.Tests\**\*.cs" -Pattern "Player.cls" -SimpleMatch
+Get-ChildItem VisualGameStudio.Tests -Recurse -Filter *.cs | Select-String -Pattern "Player.cls" -SimpleMatch
 ```
 
-If a test asserts the template content starts with bare `Public`, update that expectation in the same commit.
+(`Select-String -Path` does not support `**` recursion in Windows PowerShell 5.1.)
+Expected result: no matches — as of plan review, no test pins the template text and no
+template end-to-end test exists in the suite (nothing references `TemplateEngine`). Do
+not go hunting for one. If a match DOES appear (something landed since), update that
+expectation in the same commit.
 
 - [ ] **Step 2: Edit the template**
 
