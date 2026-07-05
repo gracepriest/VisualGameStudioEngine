@@ -174,9 +174,10 @@ namespace BasicLang.Compiler.CodeGen
         }
         
         /// <summary>
-        /// Get or generate name for IR value
+        /// Get or generate name for IR value.
+        /// Virtual so backends can intercept special values (e.g. inline lambda references).
         /// </summary>
-        protected string GetValueName(IRValue value)
+        protected virtual string GetValueName(IRValue value)
         {
             if (value is IRConstant constant)
                 return EmitConstant(constant);

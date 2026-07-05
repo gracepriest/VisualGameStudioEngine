@@ -91,20 +91,26 @@ End Function";
         Assert.That(ex.Message, Does.Contain("Yield").Or.Contain("Iterator"));
     }
 
+    // ========================================================================
+    // Task 5: lambdas -> C++ lambdas
+    // ========================================================================
+
     [Test]
-    public void Cpp_Lambda_ThrowsCapabilityError()
+    public void Cpp_LambdaAssignedToVariable_EmitsCppLambda()
     {
         var source = @"
 Sub Main()
     Dim f As Func(Of Integer, Integer) = Function(x As Integer) x * 2
+    Dim result As Integer = f(5)
 End Sub";
 
-        var ex = Assert.Throws<CppCapabilityException>(() =>
-        {
-            var output = CompileToCpp(source, out var errors);
-            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
-        });
-        Assert.That(ex.Message, Does.Contain("Lambda").IgnoreCase);
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::function<int32_t(int32_t)>"));
+        Assert.That(output, Does.Contain("[=](int32_t x)"));
+        Assert.That(output, Does.Not.Contain("__lambda_"), "no dangling lambda references:\n" + output);
+        Assert.That(output, Does.Contain("f(5)"));
     }
 
     // ========================================================================

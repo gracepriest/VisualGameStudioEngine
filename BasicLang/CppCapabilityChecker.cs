@@ -70,8 +70,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     diags.Add($"Async function '{func.Name}' — Async/Await is not yet supported by the C++ backend");
                 if (func.IsIterator)
                     diags.Add($"Iterator function '{func.Name}' — Yield is not yet supported by the C++ backend");
-                if (func.IsLambda)
-                    diags.Add($"Lambda '{func.Name}' — lambdas are not yet supported by the C++ backend");
 
                 CheckType(func.ReturnType, $"return type of '{func.Name}'", diags);
                 foreach (var p in func.Parameters)

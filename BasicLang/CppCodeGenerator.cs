@@ -14,7 +14,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// </summary>
     public class CppCodeGenerator : CodeGeneratorBase
     {
-        private readonly StringBuilder _output;
+        // Not readonly: swapped temporarily while rendering inline lambda bodies
+        private StringBuilder _output;
         private readonly CppCodeGenOptions _options;
         private readonly HashSet<IRValue> _allTemporaries;
         private readonly List<string> _headerIncludes;
@@ -148,9 +149,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine();
             }
 
-            // Get standalone functions (not class methods)
+            // Get standalone functions (not class methods; lambdas are inlined at use sites)
             var standaloneFunctions = module.Functions
-                .Where(f => !f.IsExternal && !IsClassMethod(f, module))
+                .Where(f => !f.IsExternal && !f.IsLambda && !IsClassMethod(f, module))
                 .ToList();
 
             // Generate function declarations
@@ -293,6 +294,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
 
+            // .NET delegate types: Func(Of ..., TResult) / Action(Of ...) -> std::function
+            if (type.Name == "Func" && type.GenericArguments != null && type.GenericArguments.Count > 0)
+            {
+                var funcRet = MapType(type.GenericArguments[type.GenericArguments.Count - 1]);
+                var funcParams = string.Join(", ",
+                    type.GenericArguments.Take(type.GenericArguments.Count - 1).Select(MapType));
+                return $"std::function<{funcRet}({funcParams})>";
+            }
+            if (type.Name == "Action")
+            {
+                var actionParams = string.Join(", ",
+                    (type.GenericArguments ?? new List<TypeInfo>()).Select(MapType));
+                return $"std::function<void({actionParams})>";
+            }
+
             string bare;
             if (type.GenericArguments != null && type.GenericArguments.Count > 0)
             {
@@ -313,6 +329,72 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (type.Kind == TypeKind.Class || type.Kind == TypeKind.Interface)
                 return $"std::shared_ptr<{bare}>";
             return bare;
+        }
+
+        /// <summary>
+        /// References to __lambda_N functions render as inline C++ lambda expressions
+        /// (mirrors the C# backend's inlining at use sites - CSharpBackend.cs).
+        /// </summary>
+        protected override string GetValueName(IRValue value)
+        {
+            if (value is IRVariable v && v.Name != null && v.Name.StartsWith("__lambda_"))
+            {
+                var lambdaFunc = _module?.Functions.FirstOrDefault(f => f.Name == v.Name && f.IsLambda);
+                if (lambdaFunc != null)
+                    return GenerateLambdaExpression(lambdaFunc);
+            }
+            return base.GetValueName(value);
+        }
+
+        /// <summary>
+        /// Render a lambda IRFunction as an inline C++ lambda: [=](params) -> ret { body }.
+        /// The statement visitors write through _output, so the body is rendered into a
+        /// temporary buffer while the surrounding function's emit state is saved/restored.
+        /// </summary>
+        private string GenerateLambdaExpression(IRFunction lambda)
+        {
+            var savedOutput = _output;
+            var savedFunction = _currentFunction;
+            var savedIndent = _indentLevel;
+            var savedNames = new Dictionary<IRValue, string>(_valueNames);
+            var savedDeclared = new HashSet<string>(_declaredIdentifiers, StringComparer.OrdinalIgnoreCase);
+            var savedTemps = new HashSet<IRValue>(_allTemporaries);
+
+            try
+            {
+                _output = new StringBuilder();
+                _indentLevel = 0;
+
+                var ps = string.Join(", ",
+                    lambda.Parameters.Select(p => $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                var ret = MapType(lambda.ReturnType);
+                var header = ret == "void" ? $"[=]({ps})" : $"[=]({ps}) -> {ret}";
+
+                _output.Append(header);
+                _output.Append(" {\n");
+                _indentLevel = 1;
+
+                _currentFunction = lambda;
+                InitializeFunctionContext(lambda);
+                DeclareLocalsAndTemporaries(lambda);
+                if (lambda.EntryBlock != null)
+                    GenerateBlock(lambda.EntryBlock, new HashSet<BasicBlock>());
+
+                _output.Append('}');
+                return _output.ToString();
+            }
+            finally
+            {
+                _output = savedOutput;
+                _currentFunction = savedFunction;
+                _indentLevel = savedIndent;
+                _valueNames.Clear();
+                foreach (var kv in savedNames) _valueNames[kv.Key] = kv.Value;
+                _declaredIdentifiers.Clear();
+                foreach (var d in savedDeclared) _declaredIdentifiers.Add(d);
+                _allTemporaries.Clear();
+                foreach (var t in savedTemps) _allTemporaries.Add(t);
+            }
         }
 
         /// <summary>Member access operator for an object value: -> for shared_ptr objects and
