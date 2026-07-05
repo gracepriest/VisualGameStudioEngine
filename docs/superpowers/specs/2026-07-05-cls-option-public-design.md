@@ -58,7 +58,7 @@ All changes are confined to `PreprocessClassFile` in `BasicLang/Compiler.cs` (th
 directive is consumed before lexing, so no lexer or parser changes):
 
 1. Scan leading trivia (blank lines, `'` comment lines, `Rem` comment lines) for a line
-   whose trimmed content equals `Option Public` (OrdinalIgnoreCase). Strip BOM (`﻿`) as
+   whose trimmed content equals `Option Public` (OrdinalIgnoreCase). Strip BOM (`U+FEFF`) as
    the existing code does.
 2. When found: **replace that line in place** with `Public Class <filename-stem>` and
    append `End Class` at the end of the file. Because comments are legal above a class
