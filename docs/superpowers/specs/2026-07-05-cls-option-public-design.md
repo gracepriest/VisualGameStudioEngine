@@ -36,12 +36,15 @@ Alternatives considered and rejected:
 
 ## Syntax and semantics
 
-- The directive is the line `Option Public`, case-insensitive, standalone on its own line
-  (nothing else on the line except trailing whitespace / a trailing comment is NOT
-  allowed — the whole line must be the directive).
-- It must be the **first code line** of the file: leading blank lines and `'` comment
-  lines are skipped when scanning for it. This is a deliberate improvement over the bare
-  `Public` form.
+- The directive is the line `Option Public`, case-insensitive, standalone on its own
+  line. Trailing whitespace is allowed; a trailing comment is not — the trimmed line
+  must equal `Option Public` exactly. A line like `Option Public ' make it global`
+  silently fails to match: the file wraps as `Private Class` and the stray text
+  surfaces as a parse error inside the body. Deterministic and acceptable; a targeted
+  diagnostic is a possible future nicety.
+- It must be the **first code line** of the file: leading blank lines and comment lines
+  (both `'` and `Rem`, matching the lexer's two comment forms) are skipped when scanning
+  for it. This is a deliberate improvement over the bare `Public` form.
 - Effect: the implicit wrapper becomes `Public Class <filename>` instead of
   `Private Class <filename>`. No other semantics change.
 - If the directive appears after any real code, it is not recognized as a directive; it
@@ -54,9 +57,9 @@ Alternatives considered and rejected:
 All changes are confined to `PreprocessClassFile` in `BasicLang/Compiler.cs` (the
 directive is consumed before lexing, so no lexer or parser changes):
 
-1. Scan leading trivia (blank lines, `'` comment lines) for a line whose trimmed content
-   equals `Option Public` (OrdinalIgnoreCase). Strip BOM (`﻿`) as the existing code
-   does.
+1. Scan leading trivia (blank lines, `'` comment lines, `Rem` comment lines) for a line
+   whose trimmed content equals `Option Public` (OrdinalIgnoreCase). Strip BOM (`﻿`) as
+   the existing code does.
 2. When found: **replace that line in place** with `Public Class <filename-stem>` and
    append `End Class` at the end of the file. Because comments are legal above a class
    declaration, every original line keeps its line number → `unit.LineOffset = 0`.
@@ -77,7 +80,9 @@ later bare `Public` line is ordinary code and will produce a parse error.
 - **`Types.cls` in the library template stays as-is (private)** — explicit user decision.
 - **TextMate grammars**: add `Option Public` highlighting to `vscode-basiclang` and the
   grammar copies shipped in the two VS extensions (`VS.BasicLang`,
-  `BasicLang.VisualStudio/LanguageService/BasicLangGrammar.json`).
+  `BasicLang.VisualStudio/LanguageService/BasicLangGrammar.json`). Only the grammar
+  source files are updated; rebuilding/republishing the VSIX packages is deferred to the
+  next extension release.
 - LSP completion for the directive in empty `.cls` files: **out of scope** (nice-to-have).
 
 ## Testing (TDD — tests first)
@@ -91,7 +96,8 @@ New tests in `VisualGameStudio.Tests/Compiler/ClassFileTests.cs`:
 4. `OptionPublic_PreservesLineNumbers` — an error in the body reports the original line
    (asserts `LineOffset == 0` behavior end to end).
 5. `BarePublic_StillWorks_AndWarns` — old form compiles public; stderr contains the
-   deprecation warning.
+   deprecation warning. Capturing stderr requires `Console.SetError` redirection in the
+   test (restore the original writer in a finally block).
 6. `OptionPublic_AfterCode_NotADirective` — directive below real code does not make the
    class public (and produces a parse error).
 7. Existing game-template end-to-end test updated/extended so the template still builds.
