@@ -8,20 +8,29 @@
              x:DataType="vm:OutputPanelViewModel">
 
   <UserControl.Styles>
-    <!-- Clickable output lines: underlined, hand cursor on hover -->
-    <Style Selector="ItemsControl TextBlock.clickable">
+    <!-- Compact rows: keep the old dense terminal look instead of the tall default ListBoxItem -->
+    <Style Selector="ListBox#OutputListBox ListBoxItem">
+      <Setter Property="Padding" Value="2,1"/>
+      <Setter Property="MinHeight" Value="0"/>
+    </Style>
+    <!-- Default line color, set at style level so the error/warning class styles can override it -->
+    <Style Selector="ListBox#OutputListBox TextBlock">
+      <Setter Property="Foreground" Value="#CCCCCC"/>
+    </Style>
+    <!-- Clickable output lines: underlined, hand cursor on hover (double-click navigates) -->
+    <Style Selector="ListBox#OutputListBox TextBlock.clickable">
       <Setter Property="TextDecorations" Value="Underline"/>
       <Setter Property="Cursor" Value="Hand"/>
     </Style>
-    <Style Selector="ItemsControl TextBlock.clickable:pointerover">
+    <Style Selector="ListBox#OutputListBox TextBlock.clickable:pointerover">
       <Setter Property="Opacity" Value="0.8"/>
     </Style>
     <!-- Error lines: red -->
-    <Style Selector="ItemsControl TextBlock.error">
+    <Style Selector="ListBox#OutputListBox TextBlock.error">
       <Setter Property="Foreground" Value="#F14C4C"/>
     </Style>
     <!-- Warning lines: yellow -->
-    <Style Selector="ItemsControl TextBlock.warning">
+    <Style Selector="ListBox#OutputListBox TextBlock.warning">
       <Setter Property="Foreground" Value="#CCA700"/>
     </Style>
   </UserControl.Styles>
@@ -74,30 +83,45 @@
         </DockPanel>
       </Border>
 
-      <!-- Output lines with clickable error/warning entries -->
-      <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                    VerticalScrollBarVisibility="Auto"
-                    Background="#1E1E1E"
-                    x:Name="OutputScroller">
-        <ItemsControl ItemsSource="{Binding OutputLines}"
-                      Padding="4,2"
-                      AutomationProperties.Name="Output Lines">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:OutputLine">
-              <TextBlock Text="{Binding Text}"
-                         FontFamily="Cascadia Code, Consolas, monospace"
-                         FontSize="12"
-                         Foreground="#CCCCCC"
-                         TextWrapping="NoWrap"
-                         Padding="2,1"
-                         Classes.clickable="{Binding IsClickable}"
-                         Classes.error="{Binding IsError}"
-                         Classes.warning="{Binding IsWarning}"
-                         PointerPressed="OnOutputLinePointerPressed"/>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-      </ScrollViewer>
+      <!-- Output lines: multi-selectable and copyable (Ctrl+C / Ctrl+A / right-click menu).
+           Double-click an error/warning line to navigate to the source location.
+           The ListBox provides its own (virtualizing) scrolling. -->
+      <ListBox x:Name="OutputListBox"
+               ItemsSource="{Binding OutputLines}"
+               SelectionMode="Multiple"
+               Focusable="True"
+               Background="#1E1E1E"
+               BorderThickness="0"
+               Padding="4,2"
+               ScrollViewer.HorizontalScrollBarVisibility="Auto"
+               ScrollViewer.VerticalScrollBarVisibility="Auto"
+               KeyDown="OnOutputListKeyDown"
+               PointerPressed="OnOutputListPointerPressed"
+               DoubleTapped="OnOutputListDoubleTapped"
+               AutomationProperties.Name="Output Lines">
+        <ListBox.ContextMenu>
+          <ContextMenu Opening="OnOutputContextMenuOpening">
+            <MenuItem Name="OutputCopyMenuItem" Header="Copy" InputGesture="Ctrl+C"
+                      Click="OnCopySelectedClick"/>
+            <MenuItem Name="OutputCopyAllMenuItem" Header="Copy All"
+                      Click="OnCopyAllClick"/>
+            <Separator/>
+            <MenuItem Name="OutputClearMenuItem" Header="Clear"
+                      Command="{Binding ClearCommand}"/>
+          </ContextMenu>
+        </ListBox.ContextMenu>
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:OutputLine">
+            <TextBlock Text="{Binding Text}"
+                       FontFamily="Cascadia Code, Consolas, monospace"
+                       FontSize="12"
+                       TextWrapping="NoWrap"
+                       Classes.clickable="{Binding IsClickable}"
+                       Classes.error="{Binding IsError}"
+                       Classes.warning="{Binding IsWarning}"/>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
     </DockPanel>
   </Border>
 
