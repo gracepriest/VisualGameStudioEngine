@@ -536,4 +536,25 @@ Public Value As Integer
         Assert.That(captured.ToString(), Does.Contain("deprecated"));
         Assert.That(captured.ToString(), Does.Contain("Option Public"));
     }
+
+    /// <summary>
+    /// "Option Public" below the first code line is NOT a directive: the class
+    /// wraps as Private and the stray line surfaces as an ordinary error.
+    /// </summary>
+    [Test]
+    public void OptionPublic_AfterCode_NotADirective()
+    {
+        var clsFilePath = Path.Combine(_tempDir, "NotFirst.cls");
+        File.WriteAllText(clsFilePath, @"Public Value As Integer
+Option Public
+");
+        var compiler = new BasicCompiler();
+        var result = compiler.CompileFile(clsFilePath);
+
+        // The stray "Option Public" lands inside the class body and is invalid
+        // there. The essential contract: this file must NOT compile as a clean
+        // public class.
+        Assert.That(result.AllErrors, Is.Not.Empty,
+            "Option Public below code must not be silently accepted");
+    }
 }
