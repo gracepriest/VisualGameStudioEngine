@@ -87,6 +87,14 @@ End Function
 End Sub
 ";
 
+        // NOTE: MathHelpers.bas is listed BEFORE Program.bas on purpose. The
+        // BasicLang compiler engine (BasicCompiler.CompileProjectFiles — the same
+        // engine `BasicLang.exe build` and BuildService use) compiles entry-like
+        // .bas files in project order, and a cross-file call only resolves the
+        // callee's return type if the callee compiled first. With Program.bas
+        // first, both the CLI and the IDE reject this project ("Cannot assign
+        // value of type 'Object' to variable of type 'Integer'") — a compiler
+        // order-sensitivity tracked separately.
         private const string ProjectXml =
 @"<?xml version=""1.0"" encoding=""utf-8""?>
 <BasicLangProject Version=""1.0"">
@@ -97,8 +105,8 @@ End Sub
     <TargetBackend>CSharp</TargetBackend>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include=""Program.bas"" />
     <Compile Include=""MathHelpers.bas"" />
+    <Compile Include=""Program.bas"" />
   </ItemGroup>
 </BasicLangProject>
 ";
