@@ -211,6 +211,19 @@ public class CompletionItem
     public string? InsertText { get; set; }
     public string? FilterText { get; set; }
     public string? SortText { get; set; }
+
+    /// <summary>
+    /// How <see cref="InsertText"/> should be interpreted on commit. When
+    /// <see cref="InsertTextFormat.Snippet"/>, the text contains LSP snippet
+    /// syntax ($0, $N, ${N:default}) that must be expanded into tab stops,
+    /// never inserted literally.
+    /// </summary>
+    public InsertTextFormat InsertTextFormat { get; set; } = InsertTextFormat.PlainText;
+
+    /// <summary>
+    /// When true, the server wants this item initially selected in the list.
+    /// </summary>
+    public bool Preselect { get; set; }
 }
 
 public enum CompletionItemKind

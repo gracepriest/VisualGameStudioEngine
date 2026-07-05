@@ -43,6 +43,12 @@ public partial class CodeEditorControl : UserControl
     private IndentationGuideRenderer? _indentationGuideRenderer;
     private bool _isInitialized = false;
     private CompletionWindow? _completionWindow;
+    private readonly CompletionSession _completionSession = new();
+    private DispatcherTimer? _completionDebounceTimer;
+    /// <summary>Debounce for the initial word-trigger completion request (VS Code-like).</summary>
+    private const double CompletionDebounceMilliseconds = 120;
+    /// <summary>The word the currently visible hover tooltip belongs to (null when no tooltip is shown).</summary>
+    private string? _tooltipWord;
     private BreakpointMargin? _breakpointMargin;
     private GitGutterMargin? _gitGutterMargin;
     private DiagnosticMargin? _diagnosticMargin;
@@ -564,6 +570,7 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChanged;
         _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForBrackets;
         _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForLineNumbers;
+        _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForSignatureHelp;
         _textEditor.TextArea.SelectionChanged += OnSelectionChangedForOccurrences;
 
         // Subscribe to input events for multi-cursor
@@ -1112,6 +1119,32 @@ public partial class CodeEditorControl : UserControl
             return;
         }
 
+        // Escape ends a pending completion session (request in flight, no
+        // window yet) so the late response cannot open the popup afterwards.
+        // The open-window case is handled by CompletionWindow itself.
+        if (e.Key == Key.Escape && !IsCompletionWindowOpen
+            && _completionSession.State == CompletionSession.SessionState.Requested)
+        {
+            _completionSession.End();
+            CancelCompletionDebounce();
+            // Not marking handled: Escape may also close other UI.
+        }
+
+        // Up/Down cycles signature-help overloads while the popup shows
+        // multiple signatures (and no completion window owns the keys)
+        if (_signatureHelpPopup?.IsOpen == true && !IsCompletionWindowOpen
+            && _signatureHelpData != null && _signatureHelpData.Signatures.Count > 1
+            && (e.Key == Key.Up || e.Key == Key.Down) && e.KeyModifiers == KeyModifiers.None)
+        {
+            var count = _signatureHelpData.Signatures.Count;
+            _signatureHelpActiveSignature = e.Key == Key.Down
+                ? (_signatureHelpActiveSignature + 1) % count
+                : (_signatureHelpActiveSignature - 1 + count) % count;
+            RenderSignatureHelp();
+            e.Handled = true;
+            return;
+        }
+
         // Handle Escape to close inline Find bar
         if (e.Key == Key.Escape && _inlineFindReplace?.IsVisible == true)
         {
@@ -1332,17 +1365,20 @@ public partial class CodeEditorControl : UserControl
             }
         }
 
-        // Handle Backspace dismissing completion window when prefix is fully deleted
-        if (e.Key == Key.Back && _completionWindow != null)
+        // Handle Backspace dismissing the completion session when the typed
+        // word is fully deleted (both the open window and a pending request)
+        if (e.Key == Key.Back &&
+            (_completionWindow != null || _completionSession.State == CompletionSession.SessionState.Requested))
         {
             // Schedule check after the backspace is processed
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
-                if (_completionWindow == null) return;
                 var prefix = GetCurrentWordPrefix();
                 if (string.IsNullOrEmpty(prefix))
                 {
-                    _completionWindow.Close();
+                    _completionWindow?.Close();
+                    _completionSession.End();
+                    CancelCompletionDebounce();
                 }
             }, Avalonia.Threading.DispatcherPriority.Background);
         }
@@ -1352,6 +1388,19 @@ public partial class CodeEditorControl : UserControl
 
     private void OnTextAreaTextEntering(object? sender, TextInputEventArgs e)
     {
+        // Commit characters (VS Code behavior): typing a non-identifier char
+        // while the completion window is open commits the selected item FIRST
+        // and then lets the typed character insert — so "Console.WriteL" + "("
+        // yields "WriteLine(" instead of "WriteL(".
+        if (_completionWindow != null && e.Text?.Length == 1)
+        {
+            var commitChar = e.Text[0];
+            if (!char.IsLetterOrDigit(commitChar) && commitChar != '_')
+            {
+                _completionWindow.CompletionList.RequestInsertion(e);
+            }
+        }
+
         // Surround selected text with matching pairs (VS Code-style surrounding pairs)
         if (!string.IsNullOrEmpty(e.Text) && e.Text.Length == 1
             && _textEditor?.TextArea?.Selection != null
@@ -1411,9 +1460,11 @@ public partial class CodeEditorControl : UserControl
 
         _multiCursorInputHandler?.HandleTextInput(e);
 
-        // Auto-trigger completion when typing a dot (for member access)
+        // Auto-trigger completion when typing a dot (for member access).
+        // A '.' always starts a fresh session/request (VS Code behavior).
         if (e.Text == ".")
         {
+            CancelCompletionDebounce();
             // Schedule completion trigger after the dot is inserted
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
@@ -1433,19 +1484,77 @@ public partial class CodeEditorControl : UserControl
         {
             DismissSignatureHelp();
         }
-        // Auto-trigger completion after typing 2+ identifier characters
-        else if (!string.IsNullOrEmpty(e.Text) && e.Text.Length == 1 && char.IsLetterOrDigit(e.Text[0]))
+        // Identifier characters: refilter in place while a session is active,
+        // otherwise start a new session from the FIRST character ('_' included).
+        else if (!string.IsNullOrEmpty(e.Text) && e.Text.Length == 1
+                 && (char.IsLetterOrDigit(e.Text[0]) || e.Text[0] == '_'))
         {
+            // While the completion window is open (or its one request is in
+            // flight) NO new LSP request is fired — AvaloniaEdit's
+            // CompletionList refilters the cached full list in place as the
+            // document changes.
+            if (IsCompletionWindowOpen || _completionSession.HasPendingRequest)
+            {
+                return;
+            }
+
             // Schedule check after the character is inserted
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
-                var prefix = GetCurrentWordPrefix();
-                if (prefix != null && prefix.Length >= 2)
+                if (IsCompletionWindowOpen || _completionSession.HasPendingRequest)
                 {
-                    TriggerCompletion();
+                    return;
+                }
+
+                var prefix = GetCurrentWordPrefix();
+                // Trigger from the first identifier char of a word, but not
+                // when the word starts with a digit (numeric literals).
+                if (!string.IsNullOrEmpty(prefix) && (char.IsLetter(prefix[0]) || prefix[0] == '_'))
+                {
+                    RestartCompletionDebounce();
                 }
             }, Avalonia.Threading.DispatcherPriority.Background);
         }
+    }
+
+    /// <summary>
+    /// (Re)starts the word-trigger debounce so fast typing coalesces into a
+    /// single completion request once the user pauses briefly.
+    /// </summary>
+    private void RestartCompletionDebounce()
+    {
+        if (_completionDebounceTimer == null)
+        {
+            _completionDebounceTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(CompletionDebounceMilliseconds)
+            };
+            _completionDebounceTimer.Tick += OnCompletionDebounceTick;
+        }
+
+        _completionDebounceTimer.Stop();
+        _completionDebounceTimer.Start();
+    }
+
+    private void OnCompletionDebounceTick(object? sender, EventArgs e)
+    {
+        _completionDebounceTimer?.Stop();
+
+        if (IsCompletionWindowOpen || _completionSession.HasPendingRequest)
+        {
+            return;
+        }
+
+        var prefix = GetCurrentWordPrefix();
+        if (!string.IsNullOrEmpty(prefix) && (char.IsLetter(prefix[0]) || prefix[0] == '_'))
+        {
+            TriggerCompletion();
+        }
+    }
+
+    private void CancelCompletionDebounce()
+    {
+        _completionDebounceTimer?.Stop();
     }
 
     /// <summary>
@@ -3260,15 +3369,27 @@ public partial class CodeEditorControl : UserControl
 
     private void OnTextAreaPointerMoved(object? sender, PointerEventArgs e)
     {
-        // Reset and restart the hover timer
-        _hoverTimer?.Stop();
-        HideErrorTooltip();
-
         var point = e.GetPosition(_textEditor.TextArea.TextView);
-        _lastHoverPosition = point;
 
         // Get the offset under the mouse
         var offset = GetOffsetFromPoint(point);
+        var word = offset >= 0 ? GetWordAtOffset(offset) : null;
+
+        // Keep the visible tooltip open while the pointer stays within the
+        // word it belongs to — small movements inside a word must not
+        // dismiss it (VS Code behavior).
+        if (_errorTooltip?.IsOpen == true && !string.IsNullOrWhiteSpace(word) && word == _tooltipWord)
+        {
+            _lastHoverPosition = point;
+            _lastHoverOffset = offset;
+            return;
+        }
+
+        // Pointer left the tooltip's word (or no tooltip): reset and restart
+        _hoverTimer?.Stop();
+        HideErrorTooltip();
+
+        _lastHoverPosition = point;
         _lastHoverOffset = offset;
 
         if (offset >= 0)
@@ -3277,16 +3398,22 @@ public partial class CodeEditorControl : UserControl
             var markers = _textMarkerService?.GetMarkersAtOffset(offset);
             if (markers != null && markers.Any())
             {
+                _lastHoverWord = word;
                 _hoverTimer?.Start();
                 return;
             }
 
-            // Otherwise check for word hover (for data tips)
-            var word = GetWordAtOffset(offset);
-            if (!string.IsNullOrWhiteSpace(word) && word != _lastHoverWord)
+            // Otherwise check for word hover (for data tips). The timer is
+            // restarted even when the word is unchanged so re-hovering the
+            // same word re-shows its tooltip.
+            if (!string.IsNullOrWhiteSpace(word))
             {
                 _lastHoverWord = word;
                 _hoverTimer?.Start();
+            }
+            else
+            {
+                _lastHoverWord = null;
             }
         }
         else
@@ -3370,85 +3497,140 @@ public partial class CodeEditorControl : UserControl
     }
 
     /// <summary>
+    /// Ensures the shared tooltip popup exists and returns its Border child,
+    /// whose content is swapped between error text and hover content.
+    /// </summary>
+    private Border EnsureTooltipPopup()
+    {
+        if (_errorTooltip == null)
+        {
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.Parse("#2D2D30")),
+                BorderBrush = new SolidColorBrush(Color.Parse("#3F3F46")),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3)
+            };
+
+            _errorTooltip = new Avalonia.Controls.Primitives.Popup
+            {
+                Child = border,
+                PlacementTarget = _textEditor.TextArea
+            };
+        }
+
+        return (Border)_errorTooltip.Child!;
+    }
+
+    /// <summary>
     /// Shows an error tooltip at the specified position
     /// </summary>
     private void ShowErrorTooltip(string message, Point position)
     {
         if (_textEditor == null) return;
 
-        // Create tooltip if not exists
-        if (_errorTooltip == null)
+        var border = EnsureTooltipPopup();
+
+        _errorTooltipText ??= new TextBlock
         {
-            _errorTooltipText = new TextBlock
-            {
-                Padding = new Thickness(8, 4),
-                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                MaxWidth = 400
-            };
+            Padding = new Thickness(8, 4),
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            MaxWidth = 400
+        };
 
-            var border = new Border
-            {
-                Background = new SolidColorBrush(Color.Parse("#2D2D30")),
-                BorderBrush = new SolidColorBrush(Color.Parse("#3F3F46")),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(3),
-                Child = _errorTooltipText
-            };
-
-            _errorTooltip = new Avalonia.Controls.Primitives.Popup
-            {
-                Child = border,
-                PlacementTarget = _textEditor.TextArea
-            };
-        }
-
-        _errorTooltipText!.Text = message;
+        _errorTooltipText.Text = message;
         _errorTooltipText.Foreground = new SolidColorBrush(Color.Parse("#F48771")); // Error color
+        border.Child = _errorTooltipText;
 
-        _errorTooltip.HorizontalOffset = position.X;
+        _tooltipWord = _lastHoverWord;
+        _errorTooltip!.HorizontalOffset = position.X;
         _errorTooltip.VerticalOffset = position.Y + 20;
         _errorTooltip.IsOpen = true;
     }
 
     /// <summary>
-    /// Shows a hover tooltip with LSP hover info at the current hover position
+    /// Shows a hover tooltip with LSP hover info at the current hover position.
+    /// The (markdown) contents are rendered minimally: ``` fenced blocks become
+    /// monospace code sections and **bold** becomes bold text — raw markers
+    /// are never displayed.
     /// </summary>
     public void ShowHoverTooltip(string contents)
     {
         if (_textEditor == null || string.IsNullOrWhiteSpace(contents)) return;
 
-        // Reuse the error tooltip infrastructure but with different styling
-        if (_errorTooltip == null)
-        {
-            _errorTooltipText = new TextBlock
-            {
-                Padding = new Thickness(8, 4),
-                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                MaxWidth = 400
-            };
+        var border = EnsureTooltipPopup();
+        border.Child = BuildHoverContent(contents);
 
-            var border = new Border
-            {
-                Background = new SolidColorBrush(Color.Parse("#2D2D30")),
-                BorderBrush = new SolidColorBrush(Color.Parse("#3F3F46")),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(3),
-                Child = _errorTooltipText
-            };
+        // Remember which word this tooltip belongs to so pointer movement
+        // within the word keeps it open
+        _tooltipWord = _lastHoverWord;
 
-            _errorTooltip = new Avalonia.Controls.Primitives.Popup
-            {
-                Child = border,
-                PlacementTarget = _textEditor.TextArea
-            };
-        }
-
-        _errorTooltipText!.Text = contents;
-        _errorTooltipText.Foreground = new SolidColorBrush(Color.Parse("#D4D4D4")); // Normal text color
-
-        _errorTooltip.HorizontalOffset = _lastHoverPosition.X;
+        _errorTooltip!.HorizontalOffset = _lastHoverPosition.X;
         _errorTooltip.VerticalOffset = _lastHoverPosition.Y + 20;
         _errorTooltip.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Builds the visual tree for hover contents from minimal markdown.
+    /// </summary>
+    private static Control BuildHoverContent(string contents)
+    {
+        var monospace = new FontFamily("Cascadia Code, Consolas, monospace");
+        var textBrush = new SolidColorBrush(Color.Parse("#D4D4D4"));
+
+        var panel = new StackPanel
+        {
+            Spacing = 4,
+            MaxWidth = 420,
+            Margin = new Thickness(8, 4)
+        };
+
+        foreach (var block in Utils.MarkdownLite.ParseBlocks(contents))
+        {
+            if (block.IsCode)
+            {
+                panel.Children.Add(new Border
+                {
+                    Background = new SolidColorBrush(Color.Parse("#1E1E1E")),
+                    CornerRadius = new CornerRadius(2),
+                    Padding = new Thickness(6, 4),
+                    Child = new TextBlock
+                    {
+                        Text = block.Text,
+                        FontFamily = monospace,
+                        FontSize = 12,
+                        TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                        Foreground = textBrush
+                    }
+                });
+            }
+            else
+            {
+                var textBlock = new TextBlock
+                {
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                    Foreground = textBrush
+                };
+
+                foreach (var segment in Utils.MarkdownLite.ParseInlines(block.Text))
+                {
+                    var run = new Avalonia.Controls.Documents.Run(segment.Text);
+                    if (segment.IsBold)
+                    {
+                        run.FontWeight = FontWeight.Bold;
+                    }
+                    if (segment.IsCode)
+                    {
+                        run.FontFamily = monospace;
+                    }
+                    textBlock.Inlines!.Add(run);
+                }
+
+                panel.Children.Add(textBlock);
+            }
+        }
+
+        return panel;
     }
 
     /// <summary>
@@ -3460,6 +3642,7 @@ public partial class CodeEditorControl : UserControl
         {
             _errorTooltip.IsOpen = false;
         }
+        _tooltipWord = null;
     }
 
     /// <summary>
@@ -3476,24 +3659,70 @@ public partial class CodeEditorControl : UserControl
     #region Code Completion
 
     /// <summary>
-    /// Shows the code completion window with the given items
+    /// Shows completion results for the active session. If the window is
+    /// already open the items are updated IN PLACE (never Close()+recreate,
+    /// which would flicker and reset selection). A new window is only created
+    /// when the active session requested one — stale responses arriving after
+    /// Escape/commit/caret-escape are dropped and can never reopen the popup.
     /// </summary>
     public void ShowCompletion(IEnumerable<CompletionData> completionItems)
     {
         if (_textEditor == null) return;
 
-        // Materialize the list first to check count
         var itemsList = completionItems.ToList();
 
-        // Check for matching snippets before bailing out
-        var snippetPrefix = GetCurrentWordPrefix() ?? "";
-        var hasSnippets = !string.IsNullOrEmpty(snippetPrefix) && SnippetProvider.FindByPrefix(snippetPrefix).Any();
+        // Matching built-in snippets are listed alongside server items
+        var currentPrefix = GetCurrentWordPrefix() ?? "";
+        var matchingSnippets = !string.IsNullOrEmpty(currentPrefix)
+            ? SnippetProvider.FindByPrefix(currentPrefix).ToList()
+            : new List<SnippetDefinition>();
 
-        // Don't do anything if no items and no snippets
-        if (itemsList.Count == 0 && !hasSnippets) return;
+        if (itemsList.Count == 0 && matchingSnippets.Count == 0)
+        {
+            // Connected server deliberately returned nothing: show nothing.
+            // End a pending (windowless) session so future keystrokes can
+            // start a fresh one; an open window keeps refiltering client-side.
+            if (_completionWindow == null)
+            {
+                _completionSession.End();
+            }
+            return;
+        }
 
-        // Close any existing completion window
-        _completionWindow?.Close();
+        // Window already open for this session: update the list in place
+        if (_completionWindow != null)
+        {
+            try
+            {
+                var list = _completionWindow.CompletionList;
+                list.CompletionData.Clear();
+                foreach (var snippet in matchingSnippets)
+                {
+                    list.CompletionData.Add(new SnippetCompletionData(snippet));
+                }
+                foreach (var item in itemsList)
+                {
+                    list.CompletionData.Add(item);
+                }
+                if (!string.IsNullOrEmpty(currentPrefix))
+                {
+                    list.SelectItem(currentPrefix);
+                }
+            }
+            catch (Exception)
+            {
+                // Never crash the editor over completion UI updates
+            }
+            return;
+        }
+
+        // No window open: only the session that requested these results may
+        // open one, and only if the caret is still in a plausible position.
+        if (!_completionSession.ShouldOpenWindow(_textEditor.CaretOffset, CaretLine))
+        {
+            _completionSession.End();
+            return;
+        }
 
         _completionWindow = new CompletionWindow(_textEditor.TextArea);
 
@@ -3523,14 +3752,9 @@ public partial class CodeEditorControl : UserControl
         var data = _completionWindow.CompletionList.CompletionData;
 
         // Add matching snippet completions first (they get a snippet icon)
-        var currentPrefix = GetCurrentWordPrefix() ?? "";
-        if (!string.IsNullOrEmpty(currentPrefix))
+        foreach (var snippet in matchingSnippets)
         {
-            var matchingSnippets = SnippetProvider.FindByPrefix(currentPrefix);
-            foreach (var snippet in matchingSnippets)
-            {
-                data.Add(new SnippetCompletionData(snippet));
-            }
+            data.Add(new SnippetCompletionData(snippet));
         }
 
         foreach (var item in itemsList)
@@ -3546,14 +3770,15 @@ public partial class CodeEditorControl : UserControl
             _completionWindow.Width = 400;
             _completionWindow.MaxHeight = 300;
 
-            // Get current word prefix for filtering
-            var currentWord = GetCurrentWordPrefix() ?? "";
-
             _completionWindow.Show();
+            _completionSession.WindowOpened();
 
             // Defer selection to after the visual tree is built
-            var wordToSelect = currentWord;
+            var wordToSelect = currentPrefix;
             var completionWindow = _completionWindow;
+            var preselectItem = string.IsNullOrEmpty(wordToSelect)
+                ? itemsList.FirstOrDefault(i => i.Preselect)
+                : null;
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 if (completionWindow == null || !completionWindow.IsVisible) return;
@@ -3562,6 +3787,11 @@ public partial class CodeEditorControl : UserControl
                 if (!string.IsNullOrEmpty(wordToSelect))
                 {
                     completionWindow.CompletionList.SelectItem(wordToSelect);
+                }
+                else if (preselectItem != null)
+                {
+                    // Honor the server's preselect hint when nothing is typed
+                    completionWindow.CompletionList.SelectedItem = preselectItem;
                 }
 
                 // Now try to access ListBox
@@ -3577,7 +3807,7 @@ public partial class CodeEditorControl : UserControl
                 {
                     // Try setting SelectedItem directly on CompletionList
                     var data = completionWindow.CompletionList.CompletionData;
-                    if (data != null && data.Count > 0)
+                    if (data != null && data.Count > 0 && completionWindow.CompletionList.SelectedItem == null)
                     {
                         completionWindow.CompletionList.SelectedItem = data[0];
                     }
@@ -3588,16 +3818,26 @@ public partial class CodeEditorControl : UserControl
         {
             // Silently ignore completion window errors
         }
-        _completionWindow.Closed += (s, e) => _completionWindow = null;
+        _completionWindow.Closed += (s, e) =>
+        {
+            _completionWindow = null;
+            // Escape/commit/caret-escape all end the session; a late response
+            // must never reopen the popup.
+            _completionSession.End();
+        };
     }
 
     /// <summary>
-    /// Triggers completion request at the current caret position
+    /// Starts a new completion session and fires its single LSP request at
+    /// the current caret position ('.', Ctrl+Space, or fresh word trigger).
     /// </summary>
     public void TriggerCompletion()
     {
         System.Diagnostics.Debug.WriteLine($"[Editor] TriggerCompletion called at line {CaretLine}, col {CaretColumn}");
         if (_textEditor == null) return;
+
+        CancelCompletionDebounce();
+        _completionSession.Begin(_textEditor.CaretOffset, CaretLine);
 
         var args = new CompletionRequestEventArgs(
             CaretLine,
@@ -3661,9 +3901,13 @@ public partial class CodeEditorControl : UserControl
     private Avalonia.Controls.Primitives.Popup? _signatureHelpPopup;
     private StackPanel? _signatureHelpPanel;
     private TextBlock? _signatureLabel;
+    private TextBlock? _overloadCounterLabel;
     private TextBlock? _parameterLabel;
     private TextBlock? _signatureDocLabel;
     private int _signatureHelpActiveParam;
+    private SignatureHelpDisplayData? _signatureHelpData;
+    private int _signatureHelpActiveSignature;
+    private int _signatureHelpCaretLine;
 
     /// <summary>
     /// Triggers signature help request at the current caret position
@@ -3676,43 +3920,139 @@ public partial class CodeEditorControl : UserControl
     }
 
     /// <summary>
-    /// Shows signature help popup near the cursor
+    /// Shows signature help with full overload/parameter data: the active
+    /// parameter is bolded inline in the signature, an "n of N" counter with
+    /// Up/Down cycling appears for multiple overloads.
+    /// </summary>
+    public void ShowSignatureHelp(SignatureHelpDisplayData data)
+    {
+        if (_textEditor == null || data == null || data.Signatures.Count == 0) return;
+
+        _signatureHelpData = data;
+        _signatureHelpActiveSignature = Math.Clamp(data.ActiveSignature, 0, data.Signatures.Count - 1);
+        _signatureHelpActiveParam = data.ActiveParameter;
+        _signatureHelpCaretLine = CaretLine;
+
+        RenderSignatureHelp();
+        OpenSignatureHelpPopup();
+    }
+
+    /// <summary>
+    /// Legacy single-signature entry point (kept for compatibility).
     /// </summary>
     public void ShowSignatureHelp(string signature, string? activeParameterName, string? documentation, int activeParameter, int signatureCount)
     {
-        if (_textEditor == null) return;
+        var data = new SignatureHelpDisplayData
+        {
+            ActiveSignature = 0,
+            ActiveParameter = activeParameter
+        };
+        var info = new SignatureDisplayInfo { Label = signature, Documentation = documentation };
+        if (!string.IsNullOrEmpty(activeParameterName))
+        {
+            for (var i = 0; i < activeParameter; i++)
+            {
+                info.ParameterLabels.Add("");
+                info.ParameterDocumentation.Add(null);
+            }
+            info.ParameterLabels.Add(activeParameterName!);
+            info.ParameterDocumentation.Add(null);
+        }
+        data.Signatures.Add(info);
+        ShowSignatureHelp(data);
+    }
 
+    /// <summary>
+    /// Renders the currently selected overload into the popup content.
+    /// </summary>
+    private void RenderSignatureHelp()
+    {
         EnsureSignatureHelpPopup();
 
-        if (_signatureLabel != null)
-            _signatureLabel.Text = signature;
-        if (_parameterLabel != null)
-            _parameterLabel.Text = !string.IsNullOrEmpty(activeParameterName)
-                ? $"Parameter: {activeParameterName}"
+        var data = _signatureHelpData;
+        if (data == null || data.Signatures.Count == 0) return;
+
+        var sig = data.Signatures[Math.Clamp(_signatureHelpActiveSignature, 0, data.Signatures.Count - 1)];
+        var activeParam = _signatureHelpActiveParam;
+
+        // Overload counter with cycling hint ("1 of 3")
+        if (_overloadCounterLabel != null)
+        {
+            var showCounter = data.Signatures.Count > 1;
+            _overloadCounterLabel.IsVisible = showCounter;
+            _overloadCounterLabel.Text = showCounter
+                ? $"{_signatureHelpActiveSignature + 1} of {data.Signatures.Count} ▲▼"
                 : "";
+        }
+
+        // Signature label with the ACTIVE PARAMETER bolded inline
+        if (_signatureLabel != null)
+        {
+            _signatureLabel.Inlines?.Clear();
+            var range = SignatureHelpFormatter.GetActiveParameterRange(sig.Label, sig.ParameterLabels, activeParam);
+            if (range is { } r && _signatureLabel.Inlines != null)
+            {
+                if (r.Start > 0)
+                {
+                    _signatureLabel.Inlines.Add(new Avalonia.Controls.Documents.Run(sig.Label.Substring(0, r.Start)));
+                }
+                _signatureLabel.Inlines.Add(new Avalonia.Controls.Documents.Run(sig.Label.Substring(r.Start, r.Length))
+                {
+                    FontWeight = FontWeight.Bold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(86, 156, 214))
+                });
+                var afterStart = r.Start + r.Length;
+                if (afterStart < sig.Label.Length)
+                {
+                    _signatureLabel.Inlines.Add(new Avalonia.Controls.Documents.Run(sig.Label.Substring(afterStart)));
+                }
+            }
+            else
+            {
+                _signatureLabel.Text = sig.Label;
+            }
+        }
+
+        // Parameter doc line (falls back to signature documentation)
+        var activeParamName = activeParam >= 0 && activeParam < sig.ParameterLabels.Count
+            ? sig.ParameterLabels[activeParam]
+            : null;
+        var activeParamDoc = activeParam >= 0 && activeParam < sig.ParameterDocumentation.Count
+            ? sig.ParameterDocumentation[activeParam]
+            : null;
+
+        if (_parameterLabel != null)
+        {
+            _parameterLabel.Text = !string.IsNullOrEmpty(activeParamName)
+                ? $"Parameter: {activeParamName}"
+                : "";
+            _parameterLabel.IsVisible = !string.IsNullOrEmpty(activeParamName);
+        }
+
         if (_signatureDocLabel != null)
         {
-            _signatureDocLabel.Text = documentation ?? "";
-            _signatureDocLabel.IsVisible = !string.IsNullOrEmpty(documentation);
+            var doc = activeParamDoc ?? sig.Documentation;
+            _signatureDocLabel.Text = doc ?? "";
+            _signatureDocLabel.IsVisible = !string.IsNullOrEmpty(doc);
         }
+    }
 
-        _signatureHelpActiveParam = activeParameter;
+    private void OpenSignatureHelpPopup()
+    {
+        if (_signatureHelpPopup == null || _textEditor == null) return;
 
-        if (_signatureHelpPopup != null)
+        // Position above the caret using the caret rectangle
+        var caretRect = _textEditor.TextArea.Caret.CalculateCaretRectangle();
+        var screenPos = _textEditor.TextArea.TranslatePoint(
+            new Point(caretRect.X, caretRect.Y), this);
+
+        if (screenPos.HasValue)
         {
-            // Position above the caret using the caret rectangle
-            var caretRect = _textEditor.TextArea.Caret.CalculateCaretRectangle();
-            var screenPos = _textEditor.TextArea.TranslatePoint(
-                new Point(caretRect.X, caretRect.Y), this);
-
-            if (screenPos.HasValue)
-            {
-                _signatureHelpPopup.HorizontalOffset = screenPos.Value.X;
-                _signatureHelpPopup.VerticalOffset = screenPos.Value.Y - 60;
-            }
-
-            _signatureHelpPopup.IsOpen = true;
+            _signatureHelpPopup.HorizontalOffset = screenPos.Value.X;
+            _signatureHelpPopup.VerticalOffset = screenPos.Value.Y - 60;
         }
+
+        _signatureHelpPopup.IsOpen = true;
     }
 
     /// <summary>
@@ -3722,11 +4062,39 @@ public partial class CodeEditorControl : UserControl
     {
         if (_signatureHelpPopup != null)
             _signatureHelpPopup.IsOpen = false;
+        _signatureHelpData = null;
+    }
+
+    /// <summary>
+    /// Keeps signature help in sync with caret movement while the popup is
+    /// open: leaving the line dismisses it; moving within the line re-queries
+    /// the server so the active parameter updates (not only on '('/',').
+    /// </summary>
+    private void OnCaretPositionChangedForSignatureHelp(object? sender, EventArgs e)
+    {
+        if (_signatureHelpPopup?.IsOpen != true || _textEditor == null) return;
+
+        if (CaretLine != _signatureHelpCaretLine)
+        {
+            DismissSignatureHelp();
+            return;
+        }
+
+        // Same line: recompute the active parameter server-side. An empty
+        // result (caret left the argument list) dismisses via the handler.
+        TriggerSignatureHelp();
     }
 
     private void EnsureSignatureHelpPopup()
     {
         if (_signatureHelpPopup != null) return;
+
+        _overloadCounterLabel = new TextBlock
+        {
+            FontSize = 10,
+            Foreground = new SolidColorBrush(Color.FromRgb(140, 140, 140)),
+            IsVisible = false
+        };
 
         _signatureLabel = new TextBlock
         {
@@ -3758,7 +4126,7 @@ public partial class CodeEditorControl : UserControl
         _signatureHelpPanel = new StackPanel
         {
             Background = new SolidColorBrush(Color.FromRgb(37, 37, 38)),
-            Children = { _signatureLabel, _parameterLabel, _signatureDocLabel },
+            Children = { _overloadCounterLabel, _signatureLabel, _parameterLabel, _signatureDocLabel },
             Margin = new Thickness(8, 4, 8, 4)
         };
 
@@ -3776,12 +4144,6 @@ public partial class CodeEditorControl : UserControl
             Child = border,
             IsLightDismissEnabled = true
         };
-
-        // Add to visual tree
-        if (this.Parent is Panel panel)
-        {
-            // Popup must be in the visual tree
-        }
     }
 
     #endregion
@@ -5054,6 +5416,11 @@ public partial class CodeEditorControl : UserControl
         _hoverTimer?.Stop();
         _hoverTimer?.Dispose();
         _hoverTimer = null;
+
+        // Stop the pending completion debounce; a tick after detach would
+        // fire a request against a torn-down editor.
+        _completionDebounceTimer?.Stop();
+        _completionDebounceTimer = null;
 
         _smoothScrollTimer?.Stop();
         _smoothScrollTimer = null;

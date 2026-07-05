@@ -8,6 +8,7 @@ using VisualGameStudio.Core.Abstractions.ViewModels;
 using VisualGameStudio.Core.Constants;
 using VisualGameStudio.Core.Events;
 using VisualGameStudio.Core.Models;
+using VisualGameStudio.Core.Utilities;
 using VisualGameStudio.Shell.Dock;
 using VisualGameStudio.Shell.ViewModels.Documents;
 using VisualGameStudio.Shell.ViewModels.Panels;
@@ -481,6 +482,10 @@ public partial class MainWindowViewModel : ViewModelBase
         // Subscribe to language service diagnostics for error highlighting
         _languageService.DiagnosticsReceived += OnDiagnosticsReceived;
 
+        // Re-sync open documents whenever the server (re)connects — a crashed
+        // and auto-restarted server has lost all didOpen state.
+        _languageService.ConnectionChanged += OnLanguageServiceConnectionChanged;
+
         // Start language service
         _ = _languageService.StartAsync();
 
@@ -906,9 +911,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _blameCache.Remove(filePath);
 
         // Notify LSP that the document was closed
-        if (_languageService.IsConnected &&
-            (filePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
-             filePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(filePath))
         {
             _ = _languageService.CloseDocumentAsync(filePath);
         }
@@ -918,6 +921,34 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             _ = _extensionService.NotifyDocumentClosedAsync(filePath);
         }
+    }
+
+    /// <summary>
+    /// When the language server (re)connects, re-send didOpen for every open
+    /// BasicLang document: documents opened before the initial connect were
+    /// never announced, and a crashed+restarted server has lost all state.
+    /// Also surfaces the connection state in the status bar.
+    /// </summary>
+    private void OnLanguageServiceConnectionChanged(object? sender, bool connected)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (connected)
+            {
+                foreach (var doc in _openDocuments.Values.ToList())
+                {
+                    if (doc.FilePath != null && BasicLangFileTypes.IsBasicLangSourceFile(doc.FilePath))
+                    {
+                        _ = _languageService.OpenDocumentAsync(doc.FilePath, doc.Text ?? "");
+                    }
+                }
+                StatusText = "Language server connected";
+            }
+            else
+            {
+                StatusText = "Language server disconnected — IntelliSense unavailable";
+            }
+        });
     }
 
     private async void OnTimelineDiffRequested(object? sender, TimelineItemViewModel item)
@@ -1545,10 +1576,8 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             var content = await _fileService.ReadFileAsync(filePath);
 
-            // Notify LSP about opened document
-            if (_languageService.IsConnected &&
-                (filePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
-                 filePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+            // Notify LSP about opened document (.bas/.bl/.mod/.cls/.class)
+            if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(filePath))
             {
                 await _languageService.OpenDocumentAsync(filePath, content);
             }
@@ -1760,25 +1789,51 @@ public partial class MainWindowViewModel : ViewModelBase
             };
             document.DocumentHighlightRequested += onDocHighlight;
 
-            // Wire up code completion requests
+            // Wire up code completion requests.
+            // One request per completion session: the editor only fires on a
+            // fresh trigger. The coordinator cancels the previous request when
+            // a new one starts and lets us DROP stale responses — a late
+            // response must never reach the popup.
+            var completionCoordinator = new CompletionRequestCoordinator();
             EventHandler<CompletionRequestedEventArgs>? onCompletion = async (s, e) =>
             {
+                if (e == null) return;
+
+                var (requestId, requestToken) = completionCoordinator.BeginRequest();
+
+                IReadOnlyList<CompletionItem>? completions = null;
+                var serverConnected = _languageService.IsConnected;
+                var requestFailed = false;
+
                 try
                 {
-                    if (e == null) return;
-
-                    IReadOnlyList<CompletionItem>? completions = null;
-
-                    if (_languageService.IsConnected)
+                    if (serverConnected)
                     {
                         completions = await _languageService.GetCompletionsAsync(
                             document.FilePath ?? "",
                             e.Line,
-                            e.Column);
+                            e.Column,
+                            requestToken);
                     }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Superseded by a newer request — drop silently
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    requestFailed = true;
+                    System.Diagnostics.Debug.WriteLine($"[Completion] Error: {ex.Message}");
+                }
 
+                // Stale-drop: only the most recent request may publish results
+                if (!completionCoordinator.IsCurrent(requestId) || requestToken.IsCancellationRequested) return;
+
+                try
+                {
                     // Try extension host providers if LSP returned nothing
-                    if ((completions == null || !completions.Any()) &&
+                    if ((completions == null || completions.Count == 0) &&
                         document.FilePath != null &&
                         _extensionService.HasExtensionProviders(GetLanguageIdForFile(document.FilePath)))
                     {
@@ -1788,30 +1843,42 @@ public partial class MainWindowViewModel : ViewModelBase
                         {
                             completions = ParseExtensionCompletions(extResult.Value);
                         }
+
+                        if (!completionCoordinator.IsCurrent(requestId)) return;
                     }
 
-                    // Provide completions (either from LSP, extension, or fallback)
-                    if (completions?.Any() == true)
+                    if (completions != null && completions.Count > 0)
                     {
                         // Filter to type-only completions after "As " keyword
                         completions = FilterCompletionsForContext(document, e.Line, e.Column, completions);
                         document.ProvideCompletions(completions);
                     }
+                    else if (!serverConnected || requestFailed)
+                    {
+                        // Hard-coded fallback ONLY when the server is down or
+                        // the request errored — a connected server returning
+                        // zero items deliberately scoped the context, so
+                        // substituting a keyword dump would be wrong.
+                        var fallbackCompletions = GetFallbackCompletions();
+                        var filtered = FilterCompletionsForContext(document, e.Line, e.Column, fallbackCompletions);
+                        document.ProvideCompletions(filtered);
+                    }
                     else
                     {
-                        // Fallback to basic completions when LSP is not available or returns nothing
-                        var fallbackCompletions = GetFallbackCompletions();
-                        if (fallbackCompletions.Any())
-                        {
-                            // Filter fallback completions too
-                            var filtered = FilterCompletionsForContext(document, e.Line, e.Column, fallbackCompletions);
-                            document.ProvideCompletions(filtered);
-                        }
+                        // Connected server, zero items: publish the empty list
+                        // so the editor closes/declines the session cleanly.
+                        document.ProvideCompletions(Array.Empty<CompletionItem>());
                     }
                 }
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"[Completion] Error: {ex.Message}");
+                    // Always publish so the editor's completion session ends
+                    // instead of blocking future word triggers.
+                    if (completionCoordinator.IsCurrent(requestId))
+                    {
+                        try { document.ProvideCompletions(Array.Empty<CompletionItem>()); } catch { }
+                    }
                 }
             };
             document.CompletionRequested += onCompletion;
@@ -1824,11 +1891,10 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     var version = System.Threading.Interlocked.Increment(ref documentVersion);
 
-                    if (_languageService.IsConnected && document.FilePath != null &&
-                        (document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
-                         document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+                    if (_languageService.IsConnected &&
+                        BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath))
                     {
-                        await _languageService.ChangeDocumentAsync(document.FilePath, newText, version);
+                        await _languageService.ChangeDocumentAsync(document.FilePath!, newText, version);
                     }
 
                     // Notify extension host (for all file types)
@@ -1868,6 +1934,8 @@ public partial class MainWindowViewModel : ViewModelBase
             // Register cleanup action to unsubscribe all handlers on document close
             _documentCleanupActions[filePath] = () =>
             {
+                // Cancel any in-flight completion request for the closing doc
+                completionCoordinator.CancelAll();
                 document.CaretPositionChanged -= onCaretChanged;
                 document.AddToWatchRequested -= OnAddToWatchRequested;
                 document.DataTipEvaluationRequested -= OnDataTipEvaluationRequested;
@@ -2155,11 +2223,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task NotifyLspDocumentSavedAsync(CodeEditorDocumentViewModel doc)
     {
-        if (_languageService.IsConnected && doc.FilePath != null &&
-            (doc.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
-             doc.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(doc.FilePath))
         {
-            try { await _languageService.SaveDocumentAsync(doc.FilePath, doc.Text); }
+            try { await _languageService.SaveDocumentAsync(doc.FilePath!, doc.Text); }
             catch { }
         }
     }
@@ -6796,9 +6862,7 @@ $"""
     {
         try
         {
-            if (_languageService.IsConnected &&
-                (filePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) ||
-                 filePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)))
+            if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(filePath))
             {
                 await DocumentOutline.UpdateOutlineFromLspAsync(filePath, _languageService);
             }
@@ -6822,8 +6886,7 @@ $"""
         try
         {
             if (!_languageService.IsConnected || document.FilePath == null) return;
-            if (!document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) &&
-                !document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)) return;
+            if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
 
             var lenses = await _languageService.GetCodeLensAsync(document.FilePath);
             if (lenses.Count > 0)
@@ -6855,8 +6918,7 @@ $"""
         try
         {
             if (!_languageService.IsConnected || document.FilePath == null) return;
-            if (!document.FilePath.EndsWith(".bas", StringComparison.OrdinalIgnoreCase) &&
-                !document.FilePath.EndsWith(".bl", StringComparison.OrdinalIgnoreCase)) return;
+            if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
 
             var result = await _languageService.GetSemanticTokensAsync(document.FilePath, cancellationToken);
             if (cancellationToken.IsCancellationRequested) return;

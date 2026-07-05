@@ -391,21 +391,30 @@ public partial class CodeEditorDocumentView : UserControl
 
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            var sig = e.Help.Signatures[Math.Min(e.Help.ActiveSignature, e.Help.Signatures.Count - 1)];
-            var activeParam = e.Help.ActiveParameter;
-            var paramName = activeParam >= 0 && activeParam < sig.Parameters.Count
-                ? sig.Parameters[activeParam].Label
-                : null;
-            var paramDoc = activeParam >= 0 && activeParam < sig.Parameters.Count
-                ? sig.Parameters[activeParam].Documentation
-                : null;
+            // Pass ALL overloads with their parameter labels so the editor can
+            // bold the active parameter inline and cycle overloads (Up/Down).
+            var data = new SignatureHelpDisplayData
+            {
+                ActiveSignature = e.Help.ActiveSignature,
+                ActiveParameter = e.Help.ActiveParameter
+            };
 
-            MainEditor?.ShowSignatureHelp(
-                sig.Label,
-                paramName,
-                paramDoc ?? sig.Documentation,
-                activeParam,
-                e.Help.Signatures.Count);
+            foreach (var sig in e.Help.Signatures)
+            {
+                var info = new SignatureDisplayInfo
+                {
+                    Label = sig.Label,
+                    Documentation = sig.Documentation
+                };
+                foreach (var p in sig.Parameters)
+                {
+                    info.ParameterLabels.Add(p.Label);
+                    info.ParameterDocumentation.Add(p.Documentation);
+                }
+                data.Signatures.Add(info);
+            }
+
+            MainEditor?.ShowSignatureHelp(data);
         });
     }
 
@@ -546,20 +555,49 @@ public partial class CodeEditorDocumentView : UserControl
     {
         if (MainEditor == null) return;
 
-        // Convert CompletionItem to CompletionData for AvaloniaEdit
-        // Materialize the list immediately to avoid deferred execution issues
-        var completionDataList = completions.Select(c => new CompletionData(
-            c.Label,
-            c.Detail,
-            ConvertCompletionKind(c.Kind),
-            c.InsertText ?? c.Label
-        )).ToList();
+        // Order by the server-provided rank (SortText) instead of discarding it
+        var ordered = Core.Utilities.CompletionItemOrdering.OrderByServerRank(completions);
+
+        // Convert CompletionItem to CompletionData for AvaloniaEdit,
+        // threading through documentation, snippet format, filter text and
+        // preselect. Materialize immediately to avoid deferred execution.
+        var completionDataList = new List<CompletionData>(ordered.Count);
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var c = ordered[i];
+            var data = new CompletionData(
+                c.Label,
+                BuildCompletionDescription(c.Detail, c.Documentation),
+                ConvertCompletionKind(c.Kind),
+                c.InsertText ?? c.Label,
+                isSnippet: c.InsertTextFormat == Core.Abstractions.Services.InsertTextFormat.Snippet,
+                filterText: c.FilterText,
+                sortText: c.SortText,
+                preselect: c.Preselect)
+            {
+                // AvaloniaEdit picks the HIGHEST Priority among equal-quality
+                // matches — encode the server rank so its best match wins.
+                Priority = ordered.Count - i
+            };
+            completionDataList.Add(data);
+        }
 
         // Ensure we're on the UI thread
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             MainEditor?.ShowCompletion(completionDataList);
         });
+    }
+
+    /// <summary>
+    /// Combines Detail and Documentation into the tooltip text shown for the
+    /// selected completion item ("Detail\n\nDocumentation").
+    /// </summary>
+    private static string? BuildCompletionDescription(string? detail, string? documentation)
+    {
+        if (string.IsNullOrWhiteSpace(documentation)) return detail;
+        if (string.IsNullOrWhiteSpace(detail)) return documentation;
+        return detail + "\n\n" + documentation;
     }
 
     private static Editor.Completion.CompletionItemKind ConvertCompletionKind(Core.Abstractions.Services.CompletionItemKind kind)

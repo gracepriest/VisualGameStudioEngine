@@ -64,13 +64,102 @@ public class CompletionDataTests
     }
 
     [Test]
-    public void Content_ReturnsTextBlock()
+    public void Content_ShowsKindGlyphAndLabel()
     {
-        var data = new CompletionData("TestItem", "Description");
+        var data = new CompletionData("TestItem", "Description", CompletionItemKind.Method);
 
-        Assert.That(data.Content, Is.InstanceOf<TextBlock>());
-        var textBlock = (TextBlock)data.Content;
-        Assert.That(textBlock.Text, Is.EqualTo("TestItem"));
+        // Content is a panel with a colored kind glyph followed by the label
+        Assert.That(data.Content, Is.InstanceOf<StackPanel>());
+        var panel = (StackPanel)data.Content;
+        Assert.That(panel.Children, Has.Count.EqualTo(2));
+        var glyph = (TextBlock)panel.Children[0];
+        var label = (TextBlock)panel.Children[1];
+        Assert.That(glyph.Text, Is.Not.Empty);
+        Assert.That(glyph.Foreground, Is.Not.Null, "glyph is colored per kind");
+        Assert.That(label.Text, Is.EqualTo("TestItem"));
+    }
+
+    [Test]
+    public void Content_LabelUsesThemeForeground_NotHardCodedBrush()
+    {
+        var data = new CompletionData("TestItem");
+
+        var panel = (StackPanel)data.Content;
+        var label = (TextBlock)panel.Children[1];
+        // Foreground left unset so the list item inherits the theme's text color
+        Assert.That(label.IsSet(TextBlock.ForegroundProperty), Is.False);
+    }
+
+    [Test]
+    public void Content_DisplaysLabelEvenWhenFilterTextDiffers()
+    {
+        var data = new CompletionData("If...Else", filterText: "IfElse");
+
+        var panel = (StackPanel)data.Content;
+        var label = (TextBlock)panel.Children[1];
+        Assert.That(label.Text, Is.EqualTo("If...Else"));
+    }
+
+    [Test]
+    public void FilterText_WhenProvided_IsUsedAsMatchingText()
+    {
+        // AvaloniaEdit's CompletionList filters on ICompletionData.Text
+        var data = new CompletionData("If...Else", filterText: "IfElse");
+
+        Assert.That(data.Text, Is.EqualTo("IfElse"));
+        Assert.That(data.Label, Is.EqualTo("If...Else"));
+    }
+
+    [Test]
+    public void FilterText_WhenAbsent_TextEqualsLabel()
+    {
+        var data = new CompletionData("Trim");
+
+        Assert.That(data.Text, Is.EqualTo("Trim"));
+        Assert.That(data.Label, Is.EqualTo("Trim"));
+    }
+
+    [Test]
+    public void IsSnippet_DefaultsToFalse()
+    {
+        var data = new CompletionData("Trim");
+
+        Assert.That(data.IsSnippet, Is.False);
+    }
+
+    [Test]
+    public void IsSnippet_CanBeSet()
+    {
+        var data = new CompletionData("Sub", insertText: "Sub ${1:Name}()\n\t$0\nEnd Sub", isSnippet: true);
+
+        Assert.That(data.IsSnippet, Is.True);
+    }
+
+    [Test]
+    public void Preselect_DefaultsToFalse_AndCanBeSet()
+    {
+        Assert.That(new CompletionData("a").Preselect, Is.False);
+        Assert.That(new CompletionData("a", preselect: true).Preselect, Is.True);
+    }
+
+    [Test]
+    public void SortText_IsCarriedThrough()
+    {
+        var data = new CompletionData("Trim", sortText: "08904_Trim");
+
+        Assert.That(data.SortText, Is.EqualTo("08904_Trim"));
+    }
+
+    [Test]
+    public void Priority_CanBeOverriddenWithServerRank()
+    {
+        var data = new CompletionData("Trim", kind: CompletionItemKind.Method);
+        var defaultPriority = data.Priority;
+
+        data.Priority = 500;
+
+        Assert.That(data.Priority, Is.EqualTo(500));
+        Assert.That(defaultPriority, Is.Not.EqualTo(500));
     }
 
     [Test]
