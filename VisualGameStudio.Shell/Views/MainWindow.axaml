@@ -148,14 +148,20 @@
         <MenuItem Header="Open F_older..." Command="{Binding OpenFolderCommand}"/>
         <MenuItem Header="Open _Workspace..." Command="{Binding OpenWorkspaceCommand}"/>
         <MenuItem Header="Open _Recent" ItemsSource="{Binding RecentProjectMenuItems}">
-          <MenuItem.Styles>
-            <Style Selector="MenuItem">
+          <!-- ItemContainerTheme is the supported Avalonia pattern for
+               data-driven menu items. The previous MenuItem.Styles approach
+               also matched the "Open Recent" host itself and did not reach
+               the generated containers - the submenu rendered empty. -->
+          <MenuItem.ItemContainerTheme>
+            <ControlTheme TargetType="MenuItem" BasedOn="{StaticResource {x:Type MenuItem}}"
+                          x:DataType="vm:RecentProjectMenuItem">
               <Setter Property="Header" Value="{Binding Header}"/>
               <Setter Property="Command" Value="{Binding Command}"/>
               <Setter Property="CommandParameter" Value="{Binding CommandParameter}"/>
               <Setter Property="IsEnabled" Value="{Binding IsEnabled}"/>
-            </Style>
-          </MenuItem.Styles>
+              <Setter Property="ToolTip.Tip" Value="{Binding ToolTip}"/>
+            </ControlTheme>
+          </MenuItem.ItemContainerTheme>
         </MenuItem>
         <Separator/>
         <MenuItem Header="Add _New Project to Solution..." Command="{Binding AddNewProjectToSolutionCommand}" IsEnabled="{Binding HasSolutionOpen}"/>
