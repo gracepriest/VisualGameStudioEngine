@@ -792,6 +792,11 @@ namespace BasicLang.Compiler.LSP
                     column = cls.Column;
                     break;
 
+                case PropertyNode prop when prop.Name.Equals(word, System.StringComparison.OrdinalIgnoreCase):
+                    line = prop.Line;
+                    column = prop.Column;
+                    break;
+
                 case VariableDeclarationNode varDecl when varDecl.Name.Equals(word, System.StringComparison.OrdinalIgnoreCase):
                     line = varDecl.Line;
                     column = varDecl.Column;
@@ -800,6 +805,42 @@ namespace BasicLang.Compiler.LSP
                 case ConstantDeclarationNode constDecl when constDecl.Name.Equals(word, System.StringComparison.OrdinalIgnoreCase):
                     line = constDecl.Line;
                     column = constDecl.Column;
+                    break;
+
+                // Recurse into containers so declarations INSIDE the implicit
+                // ModuleNode/ClassNode of .mod/.cls documents (and explicit
+                // Module/Class blocks in .bas files) are reachable.
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                    {
+                        var memberLocation = FindDeclarationLocation(state, member, word);
+                        if (memberLocation != null)
+                            return memberLocation;
+                    }
+                    if (module.Name != null &&
+                        module.Name.Equals(word, System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        line = module.Line;
+                        column = module.Column;
+                    }
+                    break;
+
+                case ClassNode clsContainer:
+                    foreach (var member in clsContainer.Members)
+                    {
+                        var memberLocation = FindDeclarationLocation(state, member, word);
+                        if (memberLocation != null)
+                            return memberLocation;
+                    }
+                    break;
+
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                    {
+                        var memberLocation = FindDeclarationLocation(state, member, word);
+                        if (memberLocation != null)
+                            return memberLocation;
+                    }
                     break;
             }
 
@@ -888,6 +929,32 @@ namespace BasicLang.Compiler.LSP
                         Range = new LspRange(new Position(cls.Line - 1, 0), new Position(cls.Line + 50, 0)),
                         SelectionRange = new LspRange(new Position(cls.Line - 1, 0), new Position(cls.Line - 1, cls.Name.Length + 7)),
                         Children = classChildren.Count > 0 ? classChildren : null
+                    };
+
+                case ModuleNode module:
+                    // Includes the implicit ModuleNode synthesized for .mod
+                    // documents — its position is line 1 (the file start), so
+                    // the outline maps it to line 0 with the real end line.
+                    var moduleChildren = new List<DocumentSymbol>();
+                    foreach (var member in module.Members)
+                    {
+                        var memberSymbol = CreateDocumentSymbol(member);
+                        if (memberSymbol != null)
+                            moduleChildren.Add(memberSymbol);
+                    }
+                    var moduleStartLine = System.Math.Max(0, module.Line - 1);
+                    var moduleEndLine = module.EndLine > 0
+                        ? System.Math.Max(moduleStartLine, module.EndLine - 1)
+                        : module.Line + 50;
+                    return new DocumentSymbol
+                    {
+                        Name = module.Name,
+                        Kind = SymbolKind.Module,
+                        Range = new LspRange(new Position(moduleStartLine, 0), new Position(moduleEndLine, 100)),
+                        SelectionRange = new LspRange(
+                            new Position(moduleStartLine, 0),
+                            new Position(moduleStartLine, (module.Name?.Length ?? 1) + 7)),
+                        Children = moduleChildren.Count > 0 ? moduleChildren : null
                     };
 
                 case VariableDeclarationNode varDecl:

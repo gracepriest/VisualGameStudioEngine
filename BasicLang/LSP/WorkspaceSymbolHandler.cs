@@ -185,6 +185,31 @@ namespace BasicLang.Compiler.LSP
                         });
                     }
                     break;
+
+                case ModuleNode module:
+                    // Explicit Module blocks and the implicit ModuleNode of
+                    // .mod documents (synthesized at line 1, which maps to a
+                    // sane 0-based position).
+                    if (!string.IsNullOrEmpty(module.Name) && MatchesQuery(module.Name, query) && module.Line > 0)
+                    {
+                        symbols.Add(new WorkspaceSymbol
+                        {
+                            Name = module.Name,
+                            Kind = SymbolKind.Module,
+                            Location = new Location
+                            {
+                                Uri = document.Uri,
+                                Range = CreateRange(module.Line, module.Column, module.Name.Length)
+                            },
+                            ContainerName = null
+                        });
+                    }
+
+                    foreach (var member in module.Members)
+                    {
+                        symbols.AddRange(GetSymbolsFromDeclaration(document, member, query));
+                    }
+                    break;
             }
 
             return symbols;

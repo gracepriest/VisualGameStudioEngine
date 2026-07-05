@@ -591,9 +591,59 @@ namespace BasicLang.Compiler.LSP
                 });
             }
 
+            // Compiler parity: Using/Import directives inside .mod/.cls files
+            // fail the build (the compiler wraps the WHOLE source and the
+            // wrapped parser rejects them), so the editor must error too.
+            AddImplicitContainerDirectiveDiagnostics(diagnostics);
+
             // Publish complete results with single reference swaps
             SemanticAnalyzer = analyzer;
             Diagnostics = diagnostics;
+        }
+
+        /// <summary>
+        /// The LSP parse hoists Using/Import out of a .mod/.cls document so
+        /// IntelliSense keeps working, but the COMPILER wraps the entire source
+        /// in the implicit Module/Class (PreprocessModFile/PreprocessClassFile)
+        /// and ParseModuleMember/ParseClassMember reject the directives —
+        /// "Unexpected token in module/class". Report an equivalent, actionable
+        /// error on those lines so the editor predicts the build.
+        /// </summary>
+        private void AddImplicitContainerDirectiveDiagnostics(List<Diagnostic> diagnostics)
+        {
+            if (AST?.Declarations == null)
+                return;
+
+            var kind = ImplicitContainer.GetKind(FilePath ?? Uri?.Path, Content);
+            if (kind == ImplicitContainerKind.None)
+                return;
+
+            var fileKind = kind == ImplicitContainerKind.Module ? ".mod" : ".cls";
+            var container = kind == ImplicitContainerKind.Module ? "Module" : "Class";
+
+            foreach (var decl in AST.Declarations)
+            {
+                string directive = decl switch
+                {
+                    UsingDirectiveNode => "Using",
+                    BasicLang.Compiler.AST.ImportDirectiveNode => "Import",
+                    _ => null
+                };
+                if (directive == null)
+                    continue;
+
+                var line = decl.Line > 0 ? decl.Line : 1;
+                var column = decl.Column > 0 ? decl.Column : 1;
+                diagnostics.Add(new Diagnostic
+                {
+                    Message = $"'{directive}' is not supported in {fileKind} files — the compiler wraps the whole file in an implicit {container}. Move the directive to a .bas/.bl file.",
+                    Severity = DiagnosticSeverity.Error,
+                    Line = line,
+                    Column = column,
+                    EndLine = line,
+                    EndColumn = column + directive.Length
+                });
+            }
         }
 
         /// <summary>

@@ -25,9 +25,17 @@ namespace BasicLang.Compiler.LSP
     internal static class ImplicitContainer
     {
         /// <summary>
-        /// Determine the implicit container for a document. Returns None when
-        /// the file is a regular source file or already carries an explicit
-        /// Module/Class header (matching the compiler's checks).
+        /// Determine the implicit container for a document.
+        ///
+        /// Compiler parity:
+        /// - .mod with an explicit Module header is parsed unwrapped. The
+        ///   compiler technically double-wraps it (PreprocessModFile warns and
+        ///   wraps anyway), but nested modules parse and compile, so both
+        ///   sides accept the file and the flat parse keeps positions exact.
+        /// - .cls is ALWAYS wrapped — PreprocessClassFile wraps unconditionally,
+        ///   so an explicit Class header nests inside the implicit class and
+        ///   the build fails with "Class 'X' is already defined". Wrapping here
+        ///   reproduces that exact diagnostic in the editor.
         /// </summary>
         public static ImplicitContainerKind GetKind(string filePath, string content)
         {
@@ -50,9 +58,7 @@ namespace BasicLang.Compiler.LSP
 
                 case ".cls":
                 case ".class":
-                    return HasExplicitClassHeader(content)
-                        ? ImplicitContainerKind.None
-                        : ImplicitContainerKind.Class;
+                    return ImplicitContainerKind.Class;
 
                 default:
                     return ImplicitContainerKind.None;
@@ -93,15 +99,6 @@ namespace BasicLang.Compiler.LSP
             if (!trimmed.StartsWith(keyword, StringComparison.OrdinalIgnoreCase))
                 return false;
             return trimmed.Length == keyword.Length || char.IsWhiteSpace(trimmed[keyword.Length]);
-        }
-
-        private static bool HasExplicitClassHeader(string content)
-        {
-            var trimmed = (content ?? string.Empty).TrimStart('﻿').TrimStart();
-            return System.Text.RegularExpressions.Regex.IsMatch(
-                trimmed,
-                @"^(?:(?:Public|Private|Friend|MustInherit)\s+)*Class\s",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
     }
 }

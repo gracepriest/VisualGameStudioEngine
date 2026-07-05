@@ -160,4 +160,39 @@ public class CrossFileMemberCompletionTests
         Assert.That(result.Any(c => c.Label == "ToUpper"), Is.True,
             "'player.Name.' must resolve the field type String through the cross-file class");
     }
+
+    // ------------------------------------------------------------------
+    // [13] 'Me.' must include members inherited from a CROSS-FILE base
+    //      class (previously only 'MyBase.' had the project-symbol
+    //      fallback).
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void MeDot_WithCrossFileBaseClass_IncludesInheritedMembers()
+    {
+        WriteFile("Animal.bas",
+            "Public Class Animal\n" +
+            "    Public Sub Speak()\n" +
+            "    End Sub\n" +
+            "End Class\n");
+        var dogSource =
+            "Public Class Dog\n" +          // line 0
+            "    Inherits Animal\n" +       // line 1
+            "    Public Sub Fetch()\n" +    // line 2
+            "    End Sub\n" +               // line 3
+            "    Public Sub Test()\n" +     // line 4
+            "        Me.\n" +               // line 5
+            "    End Sub\n" +               // line 6
+            "End Class\n";                  // line 7
+        var dogPath = WriteFile("Dog.bas", dogSource);
+
+        var state = OpenDocument(dogPath, dogSource);
+        Assert.That(state.ProjectContext, Is.Not.Null, "expected an implicit sibling project");
+
+        var result = _completionService.GetCompletions(state, 5, "        Me.".Length);
+
+        Assert.That(result.Any(c => c.Label == "Fetch"), Is.True, "expected own method 'Fetch'");
+        Assert.That(result.Any(c => c.Label == "Speak"), Is.True,
+            "'Me.' must include members inherited from a cross-file base class (parity with 'MyBase.')");
+    }
 }

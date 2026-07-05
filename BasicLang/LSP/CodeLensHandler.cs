@@ -194,8 +194,11 @@ namespace BasicLang.Compiler.LSP
                 new Position(cls.Line - 1, 0),
                 new Position(cls.Line - 1, 100));
 
-            // Count references to this class
-            int refCount = CountReferences(state, cls.Name);
+            // Count references to this class. The implicit class of a .cls
+            // document has NO declaration token in the source (the ClassNode is
+            // synthesized from the file name), so nothing must be subtracted.
+            int refCount = CountReferences(state, cls.Name,
+                subtractDeclaration: !IsImplicitContainerClass(state, cls));
 
             // Add reference count lens
             codeLenses.Add(new CodeLens
@@ -225,7 +228,34 @@ namespace BasicLang.Compiler.LSP
             }
         }
 
-        private int CountReferences(DocumentState state, string name)
+        /// <summary>
+        /// True when the ClassNode is the implicit container synthesized for a
+        /// .cls/.class document (named after the file, no declaration token).
+        /// </summary>
+        private static bool IsImplicitContainerClass(DocumentState state, ClassNode cls)
+        {
+            var path = state?.FilePath ?? state?.Uri?.Path;
+            if (path == null || cls?.Name == null)
+                return false;
+
+            if (ImplicitContainer.GetKind(path, state.SourceCode) != ImplicitContainerKind.Class)
+                return false;
+
+            string name;
+            try
+            {
+                name = System.IO.Path.GetFileNameWithoutExtension(path);
+            }
+            catch
+            {
+                return false;
+            }
+
+            return !string.IsNullOrEmpty(name) &&
+                   name.Equals(cls.Name, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private int CountReferences(DocumentState state, string name, bool subtractDeclaration = true)
         {
             if (state?.Tokens == null || string.IsNullOrEmpty(name))
                 return 0;
@@ -241,8 +271,9 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
-            // Subtract 1 for the declaration itself
-            return Math.Max(0, count - 1);
+            // Subtract 1 for the declaration's own name token — unless the
+            // container is implicit and no such token exists in the source.
+            return subtractDeclaration ? Math.Max(0, count - 1) : count;
         }
     }
 }
