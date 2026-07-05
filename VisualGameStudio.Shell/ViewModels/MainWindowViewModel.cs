@@ -1719,7 +1719,12 @@ public partial class MainWindowViewModel : ViewModelBase
                 try
                 {
                     if (e == null || document.FilePath == null) return;
-                    var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
+                    // BasicLang LSP hover only for BasicLang source files —
+                    // the server answers unknown URIs as if they were
+                    // BasicLang. Other file types go to extension providers.
+                    var hover = BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)
+                        ? await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column)
+                        : null;
 
                     // Try extension host providers if built-in LSP returned nothing
                     if (hover == null &&
@@ -1748,6 +1753,8 @@ public partial class MainWindowViewModel : ViewModelBase
                 try
                 {
                     if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
+                    // BasicLang signature help only in BasicLang source files
+                    if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
                     var help = await _languageService.GetSignatureHelpAsync(document.FilePath, e.Line, e.Column);
                     document.ProvideSignatureHelp(help);
                 }
@@ -1803,11 +1810,17 @@ public partial class MainWindowViewModel : ViewModelBase
 
                 IReadOnlyList<CompletionItem>? completions = null;
                 var serverConnected = _languageService.IsConnected;
+                // The BasicLang LSP/fallback list belongs ONLY in BasicLang
+                // source files: the server answers unknown URIs with its full
+                // keyword/snippet dump, so an ungated request pops BasicLang
+                // IntelliSense in .txt/.json/.html files. Non-BasicLang files
+                // still get extension-host completions below.
+                var isBasicLangDocument = BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath);
                 var requestFailed = false;
 
                 try
                 {
-                    if (serverConnected)
+                    if (serverConnected && isBasicLangDocument)
                     {
                         completions = await _languageService.GetCompletionsAsync(
                             document.FilePath ?? "",
@@ -1853,12 +1866,13 @@ public partial class MainWindowViewModel : ViewModelBase
                         completions = FilterCompletionsForContext(document, e.Line, e.Column, completions);
                         document.ProvideCompletions(completions);
                     }
-                    else if (!serverConnected || requestFailed)
+                    else if (isBasicLangDocument && (!serverConnected || requestFailed))
                     {
-                        // Hard-coded fallback ONLY when the server is down or
-                        // the request errored — a connected server returning
-                        // zero items deliberately scoped the context, so
-                        // substituting a keyword dump would be wrong.
+                        // Hard-coded fallback ONLY for BasicLang files, and
+                        // only when the server is down or the request errored
+                        // — a connected server returning zero items
+                        // deliberately scoped the context, and a keyword dump
+                        // never belongs in non-BasicLang files.
                         var fallbackCompletions = GetFallbackCompletions();
                         var filtered = FilterCompletionsForContext(document, e.Line, e.Column, fallbackCompletions);
                         document.ProvideCompletions(filtered);
@@ -7251,83 +7265,12 @@ $"""
 
     /// <summary>
     /// Parses completion items from extension host JSON response.
+    /// Delegates to the shared (unit-tested) parser, which handles the
+    /// vscode.SnippetString object form of insertText, insertTextFormat, and
+    /// guards each item so one malformed entry can't drop the rest.
     /// </summary>
     private static IReadOnlyList<CompletionItem> ParseExtensionCompletions(System.Text.Json.JsonElement json)
-    {
-        var completions = new List<CompletionItem>();
-        try
-        {
-            // Extension host returns either a CompletionList {items: [...]} or an array
-            System.Text.Json.JsonElement items;
-            if (json.ValueKind == System.Text.Json.JsonValueKind.Object &&
-                json.TryGetProperty("items", out items))
-            {
-                // CompletionList format
-            }
-            else if (json.ValueKind == System.Text.Json.JsonValueKind.Array)
-            {
-                items = json;
-            }
-            else
-            {
-                return completions;
-            }
-
-            foreach (var item in items.EnumerateArray())
-            {
-                var label = item.TryGetProperty("label", out var lbl)
-                    ? (lbl.ValueKind == System.Text.Json.JsonValueKind.String ? lbl.GetString() : lbl.TryGetProperty("label", out var inner) ? inner.GetString() : null)
-                    : null;
-                if (string.IsNullOrEmpty(label)) continue;
-
-                var kind = item.TryGetProperty("kind", out var k) ? k.GetInt32() : 0;
-                var detail = item.TryGetProperty("detail", out var d) ? d.GetString() : null;
-                var insertText = item.TryGetProperty("insertText", out var it) ? it.GetString() : label;
-
-                completions.Add(new CompletionItem
-                {
-                    Label = label!,
-                    InsertText = insertText ?? label!,
-                    Detail = detail,
-                    Kind = MapExtensionCompletionKind(kind),
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[ExtCompletion] Parse error: {ex.Message}");
-        }
-        return completions;
-    }
-
-    private static CompletionItemKind MapExtensionCompletionKind(int kind) => kind switch
-    {
-        1 => CompletionItemKind.Method,
-        2 => CompletionItemKind.Function,
-        3 => CompletionItemKind.Constructor,
-        4 => CompletionItemKind.Field,
-        5 => CompletionItemKind.Variable,
-        6 => CompletionItemKind.Class,
-        7 => CompletionItemKind.Interface,
-        8 => CompletionItemKind.Module,
-        9 => CompletionItemKind.Property,
-        10 => CompletionItemKind.Unit,
-        11 => CompletionItemKind.Value,
-        12 => CompletionItemKind.Enum,
-        13 => CompletionItemKind.Keyword,
-        14 => CompletionItemKind.Snippet,
-        15 => CompletionItemKind.Color,
-        16 => CompletionItemKind.File,
-        17 => CompletionItemKind.Reference,
-        18 => CompletionItemKind.Folder,
-        19 => CompletionItemKind.EnumMember,
-        20 => CompletionItemKind.Constant,
-        21 => CompletionItemKind.Struct,
-        22 => CompletionItemKind.Event,
-        23 => CompletionItemKind.Operator,
-        24 => CompletionItemKind.TypeParameter,
-        _ => CompletionItemKind.Text,
-    };
+        => VisualGameStudio.Core.Utilities.ExtensionCompletionParsing.Parse(json);
 
     /// <summary>
     /// Parses hover info from extension host JSON response.

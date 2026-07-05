@@ -20,17 +20,25 @@ public class LanguageService : ILanguageService
     private int _requestId;
     private readonly Dictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
     private readonly object _lock = new();
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
+    /// <summary>Frame serializer whose waits (lock AND write) are all token-bounded.</summary>
+    private readonly LspFrameWriter _frameWriter = new();
     private readonly string _compilerPath;
     private readonly IOutputService _outputService;
 
-    /// <summary>Default per-request timeout so a hung/dead server can never leave callers awaiting forever.</summary>
+    /// <summary>
+    /// Default per-request timeout so a hung/dead server can never leave
+    /// callers awaiting forever. It covers BOTH the stdin write (a wedged
+    /// server that stops draining stdin leaves the pipe full and the write
+    /// blocked) and the wait for the response.
+    /// </summary>
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(10);
-    private const int MaxRestartAttempts = 3;
 
     /// <summary>True while a deliberate Stop/Dispose is in progress — suppresses crash recovery.</summary>
     private volatile bool _stopping;
-    private int _restartAttempts;
+    /// <summary>True once disposed — the service must never start a server again.</summary>
+    private volatile bool _disposed;
+    /// <summary>Restart budget: refunded only after a connection survives the stability window.</summary>
+    private readonly RestartPolicy _restartPolicy = new();
     /// <summary>Interlocked guard so a single crash (read-loop EOF + Process.Exited) is handled once.</summary>
     private int _disconnectHandled;
 
@@ -72,11 +80,23 @@ public class LanguageService : ILanguageService
         }
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken = default)
+    public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        if (IsConnected) return;
+        // A disposed service must never start a server again — and only an
+        // EXPLICIT (user-initiated) start clears a previous Stop. Auto-restart
+        // goes through StartCoreAsync so an in-flight restart racing a
+        // Stop/Dispose cannot erase the shutdown request and resurrect the
+        // server (orphaned dotnet child processes after IDE exit).
+        if (_disposed) return Task.CompletedTask;
 
         _stopping = false;
+        return StartCoreAsync(cancellationToken);
+    }
+
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    {
+        if (IsConnected) return;
+        if (_stopping || _disposed) return;
 
         try
         {
@@ -155,9 +175,18 @@ public class LanguageService : ILanguageService
                 return;
             }
 
+            // A Stop/Dispose that arrived during the multi-second handshake
+            // wins: tear the fresh connection down instead of announcing it.
+            if (_stopping || _disposed)
+            {
+                CleanupConnection();
+                return;
+            }
+
             // Arm crash detection for this connection before announcing it
             Interlocked.Exchange(ref _disconnectHandled, 0);
             IsConnected = true;
+            _restartPolicy.OnConnected(DateTime.UtcNow);
             ConnectionChanged?.Invoke(this, true);
             _outputService.WriteLine("Language server connected", OutputCategory.Build);
         }
@@ -577,6 +606,10 @@ public class LanguageService : ILanguageService
         if (Interlocked.Exchange(ref _disconnectHandled, 1) == 1) return;
 
         IsConnected = false;
+        // Refunds the restart budget only if this connection proved stable —
+        // a server crashing shortly after every reconnect must exhaust the
+        // budget instead of entering an endless kill/spawn cycle.
+        _restartPolicy.OnDisconnected(DateTime.UtcNow);
         FailPendingRequests();
         try { ConnectionChanged?.Invoke(this, false); } catch { }
         _outputService.WriteError(
@@ -587,37 +620,39 @@ public class LanguageService : ILanguageService
     }
 
     /// <summary>
-    /// Bounded auto-restart with exponential backoff (1s, 2s, 4s).
+    /// Bounded auto-restart with exponential backoff (1s, 2s, 4s). The
+    /// attempt budget is NOT refunded on a successful reconnect — only a
+    /// connection that survives <see cref="RestartPolicy.StabilityWindow"/>
+    /// earns it back (see <see cref="HandleServerDisconnect"/>), so a
+    /// crash-after-every-reconnect loop terminates at the cap.
     /// </summary>
     private async Task TryRestartAsync()
     {
-        while (!_stopping && _restartAttempts < MaxRestartAttempts)
+        while (!_stopping && !_disposed && _restartPolicy.CanAttempt)
         {
-            _restartAttempts++;
-            var delay = TimeSpan.FromSeconds(Math.Pow(2, _restartAttempts - 1));
+            var delay = _restartPolicy.BeginAttempt();
             _outputService.WriteLine(
-                $"[LSP] Restarting language server in {delay.TotalSeconds:0}s (attempt {_restartAttempts}/{MaxRestartAttempts})...",
+                $"[LSP] Restarting language server in {delay.TotalSeconds:0}s (attempt {_restartPolicy.Attempts}/{RestartPolicy.MaxAttempts})...",
                 OutputCategory.Build);
 
             try { await Task.Delay(delay); } catch { return; }
-            if (_stopping) return;
+            if (_stopping || _disposed) return;
 
             CleanupConnection();
 
-            try { await StartAsync(); } catch { }
+            try { await StartCoreAsync(CancellationToken.None); } catch { }
 
             if (IsConnected)
             {
-                _restartAttempts = 0;
                 _outputService.WriteLine("[LSP] Language server restarted successfully.", OutputCategory.Build);
                 return;
             }
         }
 
-        if (!_stopping)
+        if (!_stopping && !_disposed)
         {
             _outputService.WriteError(
-                $"[LSP] Language server could not be restarted after {MaxRestartAttempts} attempts. Restart the IDE to re-enable IntelliSense.",
+                $"[LSP] Language server could not be restarted after {RestartPolicy.MaxAttempts} attempts. Restart the IDE to re-enable IntelliSense.",
                 OutputCategory.Build);
         }
     }
@@ -748,13 +783,16 @@ public class LanguageService : ILanguageService
         try
         {
             var request = new { jsonrpc = "2.0", id, method, @params = parms };
-            await SendMessageAsync(request);
 
-            // Per-request timeout: if the server never answers (hung or dead),
-            // fail the await instead of hanging the caller forever.
+            // Per-request timeout, armed BEFORE the write: a wedged server
+            // that stops draining its stdin blocks the write itself (full OS
+            // pipe), so the timeout must cover the write phase too — never
+            // only the wait for the response.
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(DefaultRequestTimeout);
             using var ctr = timeoutCts.Token.Register(() => tcs.TrySetCanceled(cancellationToken));
+
+            await SendMessageAsync(request, timeoutCts.Token);
             return await tcs.Task;
         }
         finally
@@ -771,27 +809,30 @@ public class LanguageService : ILanguageService
     private async Task SendNotificationAsync(string method, object parms)
     {
         var notification = new { jsonrpc = "2.0", method, @params = parms };
-        await SendMessageAsync(notification);
-    }
 
-    private async Task SendMessageAsync(object message)
-    {
-        if (_writer == null) return;
-
-        await _writeLock.WaitAsync();
+        // Notifications get the same write timeout: one didChange blocked on
+        // a full pipe must not hang its sender (and every queued sender)
+        // forever while the wedged process stays alive.
+        using var timeoutCts = new CancellationTokenSource(DefaultRequestTimeout);
         try
         {
-            // Re-check after acquiring lock (another thread may have nulled it)
-            var writer = _writer;
-            if (writer == null) return;
+            await SendMessageAsync(notification, timeoutCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // The server stopped reading stdin — drop the notification.
+        }
+    }
 
+    private async Task SendMessageAsync(object message, CancellationToken cancellationToken = default)
+    {
+        var writer = _writer;
+        if (writer == null) return;
+
+        try
+        {
             var json = JsonSerializer.Serialize(message, JsonOptions);
-            var content = Encoding.UTF8.GetBytes(json);
-
-            var header = $"Content-Length: {content.Length}\r\n\r\n";
-            await writer.WriteAsync(header);
-            await writer.WriteAsync(json);
-            await writer.FlushAsync();
+            await _frameWriter.WriteFrameAsync(writer, json, cancellationToken);
         }
         catch (IOException)
         {
@@ -803,10 +844,6 @@ public class LanguageService : ILanguageService
         {
             _writer = null;
             IsConnected = false;
-        }
-        finally
-        {
-            _writeLock.Release();
         }
     }
 
@@ -2070,6 +2107,7 @@ public class LanguageService : ILanguageService
         // Synchronous cleanup only — blocking on StopAsync() here could stall
         // (or deadlock) the UI thread, and previously always burned the full
         // wait timeout because the shutdown response could never be read.
+        _disposed = true;
         _stopping = true;
         IsConnected = false;
         _cts?.Cancel();
@@ -2094,6 +2132,6 @@ public class LanguageService : ILanguageService
             _serverProcess = null;
         }
 
-        _writeLock.Dispose();
+        _frameWriter.Dispose();
     }
 }

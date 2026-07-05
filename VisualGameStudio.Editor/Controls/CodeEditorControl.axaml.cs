@@ -571,6 +571,7 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForBrackets;
         _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForLineNumbers;
         _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForSignatureHelp;
+        _textEditor.TextArea.Caret.PositionChanged += OnCaretPositionChangedForCompletion;
         _textEditor.TextArea.SelectionChanged += OnSelectionChangedForOccurrences;
 
         // Subscribe to input events for multi-cursor
@@ -1119,11 +1120,11 @@ public partial class CodeEditorControl : UserControl
             return;
         }
 
-        // Escape ends a pending completion session (request in flight, no
-        // window yet) so the late response cannot open the popup afterwards.
-        // The open-window case is handled by CompletionWindow itself.
-        if (e.Key == Key.Escape && !IsCompletionWindowOpen
-            && _completionSession.State == CompletionSession.SessionState.Requested)
+        // Escape ends the completion session: both a pending one (request in
+        // flight, no window yet) and one whose window is open (AvaloniaEdit
+        // closes the window itself) — so a late response can never (re)open
+        // the popup after the user dismissed it.
+        if (e.Key == Key.Escape && _completionSession.State != CompletionSession.SessionState.None)
         {
             _completionSession.End();
             CancelCompletionDebounce();
@@ -1388,23 +1389,52 @@ public partial class CodeEditorControl : UserControl
 
     private void OnTextAreaTextEntering(object? sender, TextInputEventArgs e)
     {
-        // Commit characters (VS Code behavior): typing a non-identifier char
-        // while the completion window is open commits the selected item FIRST
-        // and then lets the typed character insert — so "Console.WriteL" + "("
-        // yields "WriteLine(" instead of "WriteL(".
+        // Typed-character behavior while the completion window is open.
+        // Server items are frequently block SNIPPETS ('For' carries a whole
+        // For...Next body, methods carry "Name($0)"), so ordinary typing must
+        // never commit them: only '.' and '(' commit — inserting the selected
+        // item's identifier WORD only, never the snippet body — and every
+        // other non-identifier char (space, '=', ...) closes the window
+        // WITHOUT committing. Enter/Tab keep full snippet-commit semantics
+        // via AvaloniaEdit's own completion list handling.
         if (_completionWindow != null && e.Text?.Length == 1)
         {
-            var commitChar = e.Text[0];
-            if (!char.IsLetterOrDigit(commitChar) && commitChar != '_')
+            switch (CompletionCommitRules.GetActionForTypedChar(e.Text[0]))
             {
-                _completionWindow.CompletionList.RequestInsertion(e);
+                case CompletionCommitRules.TypedCharAction.CommitWord:
+                    var commitWord = GetSelectedCompletionCommitWord();
+                    if (commitWord != null)
+                    {
+                        // "Console.WriteL" + '(' => "WriteLine" + the '(' the
+                        // user typed; "name" + '.' => "name" + '.'
+                        CommitCompletionWord(commitWord);
+                    }
+                    else
+                    {
+                        // Selected item has no identifier-like word (e.g.
+                        // "If...Else"): a typed char never commits it.
+                        _completionWindow.Close();
+                    }
+                    break;
+
+                case CompletionCommitRules.TypedCharAction.CloseWithoutCommit:
+                    // 'For' + space => "For " — the word stays as typed.
+                    _completionWindow.Close();
+                    break;
             }
+            // Deliberately NOT handled: the typed character itself inserts
+            // normally after the commit/close.
         }
 
-        // Surround selected text with matching pairs (VS Code-style surrounding pairs)
+        // Surround selected text with matching pairs (VS Code-style surrounding
+        // pairs). Never fires while a snippet is in placeholder mode (stacked
+        // input handler active): the "selection" is then the placeholder the
+        // user is expected to TYPE OVER — wrapping it in ()/"" would corrupt
+        // the snippet (e.g. "WriteLine((value))" after an Enter-commit + '(').
         if (!string.IsNullOrEmpty(e.Text) && e.Text.Length == 1
             && _textEditor?.TextArea?.Selection != null
             && !_textEditor.TextArea.Selection.IsEmpty
+            && _textEditor.TextArea.StackedInputHandlers.IsEmpty
             && SurroundingPairs.TryGetValue(e.Text[0], out var closingPair))
         {
             var selection = _textEditor.TextArea.Selection;
@@ -1465,10 +1495,15 @@ public partial class CodeEditorControl : UserControl
         if (e.Text == ".")
         {
             CancelCompletionDebounce();
+            // End any previous word session NOW, synchronously: its in-flight
+            // response must never open a popup positioned after the dot (the
+            // deferred member trigger below runs at Background priority, so a
+            // stale response could otherwise sneak in first).
+            _completionSession.End();
             // Schedule completion trigger after the dot is inserted
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
-                TriggerCompletion();
+                TriggerCompletion(CompletionSession.CompletionTriggerKind.MemberAccess);
             }, Avalonia.Threading.DispatcherPriority.Background);
         }
         // Auto-trigger signature help when typing ( or ,
@@ -1548,7 +1583,7 @@ public partial class CodeEditorControl : UserControl
         var prefix = GetCurrentWordPrefix();
         if (!string.IsNullOrEmpty(prefix) && (char.IsLetter(prefix[0]) || prefix[0] == '_'))
         {
-            TriggerCompletion();
+            TriggerCompletion(CompletionSession.CompletionTriggerKind.Word);
         }
     }
 
@@ -1759,6 +1794,44 @@ public partial class CodeEditorControl : UserControl
     private void OnCaretPositionChangedForLineNumbers(object? sender, EventArgs e)
     {
         _currentLineNumberMargin?.InvalidateLineNumbers();
+    }
+
+    /// <summary>
+    /// Dismisses a pending (windowless) completion session when the caret
+    /// moves in a way that is NOT continued typing at the request position —
+    /// a mouse click further along the line, Home/End, arrows, a typed '.'
+    /// etc. Without this, a late LSP response opens the popup wherever the
+    /// user navigated to (and Enter could then silently replace the word
+    /// under the caret). The open-window case is handled by the
+    /// CompletionWindow itself.
+    /// </summary>
+    private void OnCaretPositionChangedForCompletion(object? sender, EventArgs e)
+    {
+        if (_completionSession.State != CompletionSession.SessionState.Requested) return;
+        if (_textEditor?.Document == null) return;
+
+        if (!_completionSession.IsCaretConsistentWithTyping(
+                _textEditor.CaretOffset, CaretLine, GetTextSinceSessionTrigger()))
+        {
+            _completionSession.End();
+        }
+    }
+
+    /// <summary>
+    /// The document text between the active session's trigger offset and the
+    /// caret, or null when that range is no longer valid (caret before the
+    /// trigger, document shrank, ...).
+    /// </summary>
+    private string? GetTextSinceSessionTrigger()
+    {
+        if (_textEditor?.Document == null) return null;
+
+        var document = _textEditor.Document;
+        var start = _completionSession.TriggerOffset;
+        var caret = _textEditor.CaretOffset;
+        if (start < 0 || caret < start || caret > document.TextLength) return null;
+
+        return document.GetText(start, caret - start);
     }
 
     private void OnSelectionChangedForOccurrences(object? sender, EventArgs e)
@@ -3671,21 +3744,28 @@ public partial class CodeEditorControl : UserControl
 
         var itemsList = completionItems.ToList();
 
-        // Matching built-in snippets are listed alongside server items
+        // Matching built-in statement snippets accompany word/invoked
+        // sessions in BasicLang documents only. The SESSION'S recorded
+        // trigger kind decides — never the arrival-time text: the user may
+        // have typed a word during the LSP round trip of a '.' session, and
+        // statement snippets are meaningless in a member-access list.
         var currentPrefix = GetCurrentWordPrefix() ?? "";
-        var matchingSnippets = !string.IsNullOrEmpty(currentPrefix)
+        var includeEditorSnippets =
+            _completionSession.TriggerKind != CompletionSession.CompletionTriggerKind.MemberAccess
+            && IsBasicLangDocument();
+        var matchingSnippets = includeEditorSnippets && !string.IsNullOrEmpty(currentPrefix)
             ? SnippetProvider.FindByPrefix(currentPrefix).ToList()
             : new List<SnippetDefinition>();
 
         if (itemsList.Count == 0 && matchingSnippets.Count == 0)
         {
-            // Connected server deliberately returned nothing: show nothing.
-            // End a pending (windowless) session so future keystrokes can
-            // start a fresh one; an open window keeps refiltering client-side.
-            if (_completionWindow == null)
-            {
-                _completionSession.End();
-            }
+            // The LATEST session's response is empty: show nothing. With one
+            // request per session, a window still open here belongs to an
+            // OLDER session whose list is now wrong-context (e.g. a stale
+            // pre-dot word list sitting at a member-access position) — close
+            // it rather than leave it refiltering stale items.
+            _completionWindow?.Close();
+            _completionSession.End();
             return;
         }
 
@@ -3717,8 +3797,10 @@ public partial class CodeEditorControl : UserControl
         }
 
         // No window open: only the session that requested these results may
-        // open one, and only if the caret is still in a plausible position.
-        if (!_completionSession.ShouldOpenWindow(_textEditor.CaretOffset, CaretLine))
+        // open one, and only when the caret movement since the trigger is
+        // consistent with continued typing (same line, forward, identifier
+        // chars only) — never at a position the user navigated to.
+        if (!_completionSession.ShouldOpenWindow(_textEditor.CaretOffset, CaretLine, GetTextSinceSessionTrigger()))
         {
             _completionSession.End();
             return;
@@ -3818,26 +3900,51 @@ public partial class CodeEditorControl : UserControl
         {
             // Silently ignore completion window errors
         }
-        _completionWindow.Closed += (s, e) =>
+        var openedWindow = _completionWindow;
+        openedWindow.Closed += (s, e) =>
         {
-            _completionWindow = null;
-            // Escape/commit/caret-escape all end the session; a late response
-            // must never reopen the popup.
-            _completionSession.End();
+            // Ownership guard: only clean up after the window THIS session
+            // opened. If the Closed event is dispatched late — after a
+            // typed-char commit already closed this window and a '.' began a
+            // NEW member session — it must not null a newer window or kill
+            // the newer (Requested) session.
+            if (_completionWindow == openedWindow)
+            {
+                _completionWindow = null;
+            }
+            if (_completionSession.State == CompletionSession.SessionState.Open)
+            {
+                // Escape/commit/caret-escape all end the displayed session; a
+                // late response must never reopen the popup.
+                _completionSession.End();
+            }
         };
     }
 
     /// <summary>
     /// Starts a new completion session and fires its single LSP request at
-    /// the current caret position ('.', Ctrl+Space, or fresh word trigger).
+    /// the current caret position (Ctrl+Space / programmatic — see the
+    /// trigger-kind overload for '.' and word triggers).
     /// </summary>
     public void TriggerCompletion()
+    {
+        TriggerCompletion(CompletionSession.CompletionTriggerKind.Invoked);
+    }
+
+    /// <summary>
+    /// Starts a new completion session of the given kind and fires its single
+    /// LSP request at the current caret position. The kind is recorded on the
+    /// session so the response is composed for the context that REQUESTED it
+    /// (member-access lists never get statement snippets prepended, even when
+    /// the user typed a word during the round trip).
+    /// </summary>
+    private void TriggerCompletion(CompletionSession.CompletionTriggerKind triggerKind)
     {
         System.Diagnostics.Debug.WriteLine($"[Editor] TriggerCompletion called at line {CaretLine}, col {CaretColumn}");
         if (_textEditor == null) return;
 
         CancelCompletionDebounce();
-        _completionSession.Begin(_textEditor.CaretOffset, CaretLine);
+        _completionSession.Begin(_textEditor.CaretOffset, CaretLine, triggerKind);
 
         var args = new CompletionRequestEventArgs(
             CaretLine,
@@ -3851,6 +3958,64 @@ public partial class CodeEditorControl : UserControl
     /// Returns true if a completion window is currently shown
     /// </summary>
     public bool IsCompletionWindowOpen => _completionWindow != null;
+
+    /// <summary>
+    /// True when the current document should get BasicLang completion UI
+    /// (statement snippets etc.). Editors without a file path (new/unsaved)
+    /// count as BasicLang, matching the highlighting default.
+    /// </summary>
+    private bool IsBasicLangDocument()
+    {
+        return string.IsNullOrEmpty(_documentFilePath)
+               || Core.Utilities.BasicLangFileTypes.IsBasicLangSourceFile(_documentFilePath);
+    }
+
+    /// <summary>
+    /// The identifier word a typed-character commit ('.'/'(') would insert
+    /// for the currently selected completion item, or null when the item has
+    /// no identifier-like word (then a typed char must not commit at all).
+    /// </summary>
+    private string? GetSelectedCompletionCommitWord()
+    {
+        var selected = _completionWindow?.CompletionList?.SelectedItem;
+        return selected switch
+        {
+            CompletionData data => CompletionCommitRules.GetCommitWord(data.Label, data.Text),
+            SnippetCompletionData snippet => CompletionCommitRules.GetCommitWord(snippet.Text, null),
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Word-only commit for typed commit characters: replaces the completion
+    /// window's segment with the given identifier and closes the window. The
+    /// snippet body / full InsertText is deliberately NOT used — expanding a
+    /// block snippet from a typed '(' or '.' corrupts the line; full snippet
+    /// commit stays reserved for Enter/Tab.
+    /// </summary>
+    private void CommitCompletionWord(string word)
+    {
+        var window = _completionWindow;
+        if (window == null || _textEditor?.Document == null) return;
+
+        try
+        {
+            var document = _textEditor.Document;
+            var start = Math.Clamp(window.StartOffset, 0, document.TextLength);
+            var end = Math.Clamp(window.EndOffset, start, document.TextLength);
+
+            document.Replace(start, end - start, word);
+            _textEditor.CaretOffset = start + word.Length;
+        }
+        catch (Exception)
+        {
+            // Never corrupt typing over completion UI bookkeeping
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 
     /// <summary>
     /// Tries to expand a snippet at the current caret position.
@@ -3872,23 +4037,15 @@ public partial class CodeEditorControl : UserControl
         var caretOffset = _textEditor.CaretOffset;
         var prefixStart = caretOffset - prefix.Length;
 
-        // Get the indentation of the current line
-        var line = document.GetLineByOffset(prefixStart);
-        var lineTextBeforePrefix = document.GetText(line.Offset, prefixStart - line.Offset);
-        var indent = "";
-        foreach (var c in lineTextBeforePrefix)
-        {
-            if (c == ' ' || c == '\t') indent += c;
-            else break;
-        }
-
         // Remove the typed prefix text
         document.Remove(prefixStart, prefix.Length);
         _textEditor.CaretOffset = prefixStart;
 
         // Build and insert the AvaloniaEdit Snippet with interactive tab-stops.
-        // Tab/Shift+Tab cycles between placeholders; Escape/Enter exits snippet mode.
-        var snippet = snippetDef.BuildSnippet(indent);
+        // Tab/Shift+Tab cycles between placeholders; Escape/Enter exits snippet
+        // mode. Continuation-line indentation is applied by AvaloniaEdit's
+        // InsertionContext on insert, so the snippet itself carries none.
+        var snippet = snippetDef.BuildSnippet();
         snippet.Insert(_textEditor.TextArea);
 
         return true;

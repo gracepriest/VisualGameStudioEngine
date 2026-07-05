@@ -76,17 +76,17 @@ public class SnippetDefinition
     /// entries that support Tab/Shift+Tab cycling between placeholder positions.
     /// Repeated tab-stop numbers (e.g. multiple ${1:Name}) use SnippetBoundElement
     /// so editing one updates all linked occurrences.
+    ///
+    /// Continuation lines deliberately carry NO manual indentation:
+    /// AvaloniaEdit's InsertionContext re-applies the insertion line's leading
+    /// whitespace after every newline inside a snippet element, so baking the
+    /// indent in here would double-indent every body line and misalign the
+    /// closing End block whenever a multi-line snippet is committed at a
+    /// non-zero indentation level.
     /// </summary>
-    public Snippet BuildSnippet(string currentIndent)
+    public Snippet BuildSnippet()
     {
-        var lines = new List<string>();
-        foreach (var line in BodyLines)
-        {
-            var prefix = lines.Count == 0 ? "" : currentIndent;
-            lines.Add(prefix + line);
-        }
-
-        var raw = string.Join(Environment.NewLine, lines);
+        var raw = string.Join(Environment.NewLine, BodyLines);
 
         // Parse the raw text into a sequence of snippet elements.
         // We scan for $0, $N, ${N:text} patterns and split around them.
