@@ -476,4 +476,29 @@ End Module
             $"Expected no errors but got: {string.Join(", ", result.AllErrors)}");
         Assert.That(result.Success, Is.True);
     }
+
+    /// <summary>
+    /// The directive line is replaced in place by the class header, so every
+    /// line keeps its original number and LineOffset is 0 (diagnostics and the
+    /// debugger SourceMapper need no adjustment).
+    /// </summary>
+    [Test]
+    public void OptionPublic_PreservesLineNumbers()
+    {
+        var clsFilePath = Path.Combine(_tempDir, "LineCheck.cls");
+        File.WriteAllText(clsFilePath, "' banner\r\nOption Public\r\nPublic Value As Integer\r\n");
+
+        var compiler = new BasicCompiler();
+        var result = compiler.CompileFile(clsFilePath);
+
+        Assert.That(result.AllErrors, Is.Empty,
+            $"Expected no errors but got: {string.Join(", ", result.AllErrors)}");
+        var unit = result.Units[0];
+        Assert.That(unit.LineOffset, Is.EqualTo(0));
+
+        var lines = unit.SourceCode.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+        Assert.That(lines[0], Is.EqualTo("' banner"), "comment must stay on line 1");
+        Assert.That(lines[1], Is.EqualTo("Public Class LineCheck"), "directive line replaced in place");
+        Assert.That(lines[2], Is.EqualTo("Public Value As Integer"), "body lines must not shift");
+    }
 }
