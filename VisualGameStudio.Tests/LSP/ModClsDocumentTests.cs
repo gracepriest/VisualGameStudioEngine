@@ -2,6 +2,11 @@ using NUnit.Framework;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler.LSP;
 using OmniSharp.Extensions.LanguageServer.Protocol;
+using DocumentSymbol = OmniSharp.Extensions.LanguageServer.Protocol.Models.DocumentSymbol;
+using LspSymbolKind = OmniSharp.Extensions.LanguageServer.Protocol.Models.SymbolKind;
+using CodeLensParams = OmniSharp.Extensions.LanguageServer.Protocol.Models.CodeLensParams;
+using TextDocumentIdentifier = OmniSharp.Extensions.LanguageServer.Protocol.Models.TextDocumentIdentifier;
+using WorkspaceSymbolParams = OmniSharp.Extensions.LanguageServer.Protocol.Models.WorkspaceSymbolParams;
 
 namespace VisualGameStudio.Tests.LSP;
 
@@ -317,5 +322,178 @@ public class ModClsDocumentTests
 
         Assert.That(result.Any(c => c.Label == "AddNums"), Is.True,
             "functions from a sibling .mod file must complete");
+    }
+
+    // ------------------------------------------------------------------
+    // [21] Compiler parity: PreprocessModFile/PreprocessClassFile wrap the
+    // WHOLE source, so Using/Import inside a .mod/.cls fails the build
+    // ("Unexpected token in module/class"). The editor must predict that.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ModFile_LeadingUsing_ReportsCompilerParityError()
+    {
+        var source =
+            "Using System\n" +                          // 1-based line 1
+            "Public Function AddNums(a As Integer, b As Integer) As Integer\n" +
+            "    Return a + b\n" +
+            "End Function\n";
+        var state = CreateParsedState(source, "MathUtils.mod");
+
+        var errors = Errors(state).ToList();
+        Assert.That(errors.Any(d => d.Line == 1 && d.Message.Contains(".mod")), Is.True,
+            "the compiler rejects 'Using' inside .mod files — the editor must report it on line 1; got: " + Dump(state));
+    }
+
+    [Test]
+    public void ModFile_Import_ReportsCompilerParityError()
+    {
+        var source =
+            "Import Helper\n" +      // 1-based line 1
+            "Public Sub Go()\n" +
+            "End Sub\n";
+        var state = CreateParsedState(source, "MathUtils.mod");
+
+        var errors = Errors(state).ToList();
+        Assert.That(errors.Any(d => d.Line == 1 && d.Message.Contains(".mod")), Is.True,
+            "the compiler rejects 'Import' inside .mod files — the editor must report it on line 1; got: " + Dump(state));
+    }
+
+    [Test]
+    public void ClsFile_LeadingUsing_ReportsCompilerParityError()
+    {
+        var source =
+            "Using System\n" +       // 1-based line 1
+            "Public Sub Go()\n" +
+            "End Sub\n";
+        var state = CreateParsedState(source, "Player.cls");
+
+        var errors = Errors(state).ToList();
+        Assert.That(errors.Any(d => d.Line == 1 && d.Message.Contains(".cls")), Is.True,
+            "the compiler rejects 'Using' inside .cls files — the editor must report it on line 1; got: " + Dump(state));
+    }
+
+    // ------------------------------------------------------------------
+    // [22] Compiler parity: PreprocessClassFile wraps UNCONDITIONALLY, so a
+    // .cls with an explicit Class header nests and the build fails with
+    // "Class 'X' is already defined". The editor must show the same error.
+    // (The .mod side legitimately skips wrapping an explicit Module header:
+    // the compiler's double-wrap of nested modules still compiles.)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ClsFile_WithExplicitClassHeader_ReportsClassAlreadyDefined()
+    {
+        var source =
+            "Public Class Player\n" +
+            "    Public Sub Jump()\n" +
+            "    End Sub\n" +
+            "End Class\n";
+        var state = CreateParsedState(source, "Player.cls");
+
+        var errors = Errors(state).ToList();
+        Assert.That(errors.Any(d => d.Message.Contains("already defined")), Is.True,
+            "compiler parity: an explicit Class header in a .cls file fails the build with 'already defined'; got: " + Dump(state));
+    }
+
+    // ------------------------------------------------------------------
+    // [20] Document outline for .mod files (implicit ModuleNode)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ModFile_DocumentOutline_ListsModuleWithMembers()
+    {
+        var state = CreateParsedState(BareModSource, "MathHelpers.mod");
+        var symbolService = new SymbolService();
+
+        var symbols = symbolService.GetDocumentSymbols(state);
+
+        Assert.That(symbols, Is.Not.Empty, "outline must not be empty for a .mod file");
+        var module = symbols.FirstOrDefault(s => s.Name == "MathHelpers");
+        Assert.That(module, Is.Not.Null, "expected the implicit module node in the outline");
+        Assert.That(module!.Kind, Is.EqualTo(LspSymbolKind.Module));
+        Assert.That(module.Range.Start.Line, Is.EqualTo(0), "the synthetic module position must map to line 0");
+        var children = module.Children?.ToList() ?? new List<DocumentSymbol>();
+        Assert.That(children.Any(c => c.Name == "AddNums"), Is.True, "module functions must appear as children");
+        Assert.That(children.Any(c => c.Name == "Announce"), Is.True, "module subs must appear as children");
+    }
+
+    // ------------------------------------------------------------------
+    // [23] Same-file go-to-definition inside .mod/.cls documents
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ModFile_SameFile_GoToDefinition_FindsFunction()
+    {
+        var state = CreateParsedState(BareModSource, "MathHelpers.mod");
+        var symbolService = new SymbolService();
+
+        var location = symbolService.FindDefinition(state, "Announce");
+
+        Assert.That(location, Is.Not.Null, "same-file go-to-definition must work inside .mod documents");
+        Assert.That(location!.Range.Start.Line, Is.EqualTo(4), "'Announce' is declared on 1-based line 5");
+    }
+
+    [Test]
+    public void ClsFile_SameFile_GoToDefinition_FindsClassMember()
+    {
+        var state = CreateParsedState(BareClsSource, "Player.cls");
+        var symbolService = new SymbolService();
+
+        var location = symbolService.FindDefinition(state, "GetHealth");
+
+        Assert.That(location, Is.Not.Null, "same-file go-to-definition must find class members in .cls documents");
+        Assert.That(location!.Range.Start.Line, Is.EqualTo(6), "'GetHealth' is declared on 1-based line 7");
+    }
+
+    // ------------------------------------------------------------------
+    // [24] CodeLens reference count for the implicit class in .cls files
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ClsFile_ImplicitClass_CodeLensReferenceCount_IsNotUnderstated()
+    {
+        var source =
+            "Public Function Clone() As Player\n" +   // 1 genuine reference to 'Player'
+            "    Return Nothing\n" +
+            "End Function\n";
+        var path = Path.Combine(_rootDir, "Player.cls");
+        File.WriteAllText(path, source);
+        var uri = DocumentUri.FromFileSystemPath(path);
+        _documentManager.UpdateDocument(uri, source);
+
+        var handler = new CodeLensHandler(_documentManager);
+        var lenses = handler.Handle(
+            new CodeLensParams { TextDocument = new TextDocumentIdentifier(uri) },
+            CancellationToken.None).Result;
+
+        Assert.That(lenses, Is.Not.Null);
+        var classLens = lenses!.FirstOrDefault(l =>
+            l.Command?.Name == "basiclang.showReferences" &&
+            l.Command.Arguments != null &&
+            l.Command.Arguments.Any(a => a?.ToString() == "Player"));
+        Assert.That(classLens, Is.Not.Null, "expected a reference-count lens for the implicit class");
+        Assert.That(classLens!.Command!.Title, Is.EqualTo("1 reference"),
+            "the implicit class has no declaration token in the source — the genuine reference must not be subtracted");
+    }
+
+    // ------------------------------------------------------------------
+    // [25] Workspace symbol search sees symbols declared in .mod files
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ModFile_WorkspaceSymbolSearch_FindsModuleFunctions()
+    {
+        var path = Path.Combine(_rootDir, "MathHelpers.mod");
+        File.WriteAllText(path, BareModSource);
+        var uri = DocumentUri.FromFileSystemPath(path);
+        _documentManager.UpdateDocument(uri, BareModSource);
+
+        var handler = new WorkspaceSymbolHandler(_documentManager);
+        var symbols = handler.Handle(new WorkspaceSymbolParams { Query = "AddNums" }, CancellationToken.None).Result;
+
+        Assert.That(symbols, Is.Not.Null);
+        Assert.That(symbols!.Any(s => s.Name == "AddNums"), Is.True,
+            "workspace symbol search must see functions declared in .mod files");
     }
 }

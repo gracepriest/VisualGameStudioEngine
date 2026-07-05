@@ -256,4 +256,114 @@ public class CompletionContextTests
         Assert.That(string.CompareOrdinal(trim!.SortText, length!.SortText), Is.LessThan(0),
             "'Trim' must rank before 'Length' for prefix 'Tr'");
     }
+
+    // ------------------------------------------------------------------
+    // [11] A '.' in member position with an unresolvable receiver must
+    //      yield an EMPTY list (client shows nothing) — never the General
+    //      keyword dump.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Dot_AfterUnresolvableReceiver_ReturnsEmptyList()
+    {
+        var source = "Sub Main()\n    Dim x = New List(Of Integer)().\nEnd Sub";
+        var state = CreateParsedState(source);
+
+        var result = _completionService.GetCompletions(state, 1, "    Dim x = New List(Of Integer)().".Length);
+
+        Assert.That(result, Is.Empty,
+            "an unresolvable receiver before '.' must yield an empty list, not the General keyword dump");
+    }
+
+    [Test]
+    public void Dot_AfterNumericLiteral_ReturnsEmptyList()
+    {
+        // Typing a decimal literal: "Dim d = 1." must not open a keyword popup.
+        var source = "Sub Main()\n    Dim d = 1.\nEnd Sub";
+        var state = CreateParsedState(source);
+
+        var result = _completionService.GetCompletions(state, 1, "    Dim d = 1.".Length);
+
+        Assert.That(result, Is.Empty,
+            "a numeric-literal receiver before '.' must yield an empty list, not keywords");
+    }
+
+    [Test]
+    public void Dot_AfterStringLiteral_DoesNotReturnGeneralKeywords()
+    {
+        var source = "Sub Main()\n    Dim n = \"hello\".\nEnd Sub";
+        var state = CreateParsedState(source);
+
+        var result = _completionService.GetCompletions(state, 1, "    Dim n = \"hello\".".Length);
+
+        Assert.That(result.Any(c => c.Kind == CompletionItemKind.Keyword), Is.False,
+            "keywords must never be offered right after a member-access dot");
+    }
+
+    // ------------------------------------------------------------------
+    // [12] Receiver-chain extraction must skip string literals while
+    //      scanning balanced parens.
+    // ------------------------------------------------------------------
+
+    private static DocumentState CreateManagedState(string sourceCode, string fileName = "test.bas")
+    {
+        var manager = new DocumentManager();
+        var uri = DocumentUri.From($"file:///{fileName}");
+        return manager.UpdateDocument(uri, sourceCode);
+    }
+
+    [Test]
+    public void MemberAccess_ParensInsideStringArguments_StillResolvesChain()
+    {
+        var source = "Sub Main()\n" +
+                     "    Dim s As String\n" +
+                     "    Dim r = s.Replace(\"(\", \"\").\n" +
+                     "End Sub";
+        var state = CreateManagedState(source);
+
+        var result = _completionService.GetCompletions(state, 2, "    Dim r = s.Replace(\"(\", \"\").".Length);
+
+        Assert.That(result.Any(c => c.Label == "ToUpper"), Is.True,
+            "parens inside string arguments must not break receiver-chain extraction");
+        Assert.That(result.Any(c => c.Kind == CompletionItemKind.Keyword), Is.False,
+            "keywords must not leak into member completion");
+    }
+
+    // ------------------------------------------------------------------
+    // [14] Keyword contexts (As/New/Of) must not fire inside comments or
+    //      unclosed string literals — no completions there at all.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void AsKeyword_InsideComment_ProducesNoCompletions()
+    {
+        var source = "Sub Main()\n    Dim x = 5 ' stored as \nEnd Sub";
+        var state = CreateParsedState(source);
+
+        var result = _completionService.GetCompletions(state, 1, "    Dim x = 5 ' stored as ".Length);
+
+        Assert.That(result, Is.Empty, "no completions inside a comment");
+    }
+
+    [Test]
+    public void AsKeyword_InsideUnclosedString_ProducesNoCompletions()
+    {
+        var source = "Sub Main()\n    MsgBox(\"Save as \nEnd Sub";
+        var state = CreateParsedState(source);
+
+        var result = _completionService.GetCompletions(state, 1, "    MsgBox(\"Save as ".Length);
+
+        Assert.That(result, Is.Empty, "no completions inside an unclosed string literal");
+    }
+
+    [Test]
+    public void NewKeyword_InsideComment_ProducesNoCompletions()
+    {
+        var source = "Sub Main()\n    result = compute() ' retry new \nEnd Sub";
+        var state = CreateParsedState(source);
+
+        var result = _completionService.GetCompletions(state, 1, "    result = compute() ' retry new ".Length);
+
+        Assert.That(result, Is.Empty, "no completions inside a comment");
+    }
 }

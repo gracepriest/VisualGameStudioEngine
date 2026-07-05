@@ -18,7 +18,8 @@ namespace BasicLang.Compiler.LSP
         AsType,         // After "As " - show types
         MemberAccess,   // After "." - show members
         Implements,     // After "Implements " - show interfaces
-        Inherits        // After "Inherits " - show classes
+        Inherits,       // After "Inherits " - show classes
+        None            // Inside a comment/string literal - show nothing
     }
 
     /// <summary>
@@ -118,6 +119,11 @@ namespace BasicLang.Compiler.LSP
                         // Show classes for inheritance
                         completions.AddRange(GetClassCompletions(state));
                         return ApplyFuzzyFilter(completions, triggerContext.FilterPrefix);
+
+                    case CompletionContextType.None:
+                        // Inside a comment or an unclosed string literal — the
+                        // client is contract-bound to show nothing.
+                        return completions;
                 }
             }
 
@@ -636,6 +642,16 @@ namespace BasicLang.Compiler.LSP
 
             // Get the text before the cursor
             var beforeCursor = currentLine.Substring(0, character);
+
+            // Inside a comment or an unclosed string literal no completion
+            // context applies: keyword/member contexts must not fire on prose
+            // ("' stored as ", "MsgBox(\"Save as ") and the client shows nothing.
+            if (IsInsideCommentOrString(beforeCursor))
+            {
+                context.ContextType = CompletionContextType.None;
+                return context;
+            }
+
             var trimmedBefore = beforeCursor.TrimEnd();
 
             // Extract any partial identifier the user is typing (for ranking)
@@ -674,14 +690,25 @@ namespace BasicLang.Compiler.LSP
                 {
                     var beforeDot = trimmedBefore.Substring(0, dotIndex).TrimEnd();
                     var chain = ExtractReceiverChain(beforeDot);
+                    context.ContextType = CompletionContextType.MemberAccess;
                     if (chain != null && chain.Count > 0)
                     {
-                        context.ContextType = CompletionContextType.MemberAccess;
                         context.ReceiverChain = chain;
                         context.ObjectName = chain[chain.Count - 1].Name;
                         context.FilterPrefix = afterDot.Length == 0 ? null : afterDot;
-                        return context;
                     }
+                    else
+                    {
+                        // Unresolvable receiver (numeric/string literal, complex
+                        // expression): STAY in member-access position with no
+                        // receiver so the completion list is EMPTY — the client
+                        // then shows nothing. Falling through to the General
+                        // context would offer keywords right after a dot.
+                        context.ReceiverChain = null;
+                        context.ObjectName = null;
+                        context.FilterPrefix = null;
+                    }
+                    return context;
                 }
             }
 
@@ -758,6 +785,29 @@ namespace BasicLang.Compiler.LSP
         }
 
         /// <summary>
+        /// True when the cursor (at the end of <paramref name="beforeCursor"/>)
+        /// sits inside a ' comment or an unclosed string literal. Doubled
+        /// quotes ("") toggle twice, so escaped quotes are handled naturally.
+        /// </summary>
+        private static bool IsInsideCommentOrString(string beforeCursor)
+        {
+            var inString = false;
+            for (int i = 0; i < beforeCursor.Length; i++)
+            {
+                var c = beforeCursor[i];
+                if (c == '"')
+                {
+                    inString = !inString;
+                }
+                else if (c == '\'' && !inString)
+                {
+                    return true; // everything after ' is a comment
+                }
+            }
+            return inString; // unterminated string literal
+        }
+
+        /// <summary>
         /// Parse the receiver expression to the left of a member-access dot into
         /// a chain of segments, scanning right-to-left through '.' hops and
         /// balanced argument lists. "obj.GetName().Trim" yields
@@ -780,11 +830,23 @@ namespace BasicLang.Compiler.LSP
                 bool isCall = false;
                 if (text[i] == ')')
                 {
-                    // Skip the balanced argument list (call args, indexer, or (Of T))
+                    // Skip the balanced argument list (call args, indexer, or
+                    // (Of T)). String literals are skipped whole so parens
+                    // inside string arguments (Replace("(", "")) don't distort
+                    // the depth count; doubled quotes ("") are two adjacent
+                    // literal chunks and skip correctly too.
                     int depth = 1;
                     i--;
                     while (i >= 0 && depth > 0)
                     {
+                        if (text[i] == '"')
+                        {
+                            i--;
+                            while (i >= 0 && text[i] != '"') i--;
+                            if (i < 0) return null; // unterminated literal
+                            i--;
+                            continue;
+                        }
                         if (text[i] == ')') depth++;
                         else if (text[i] == '(') depth--;
                         i--;
@@ -1136,10 +1198,84 @@ namespace BasicLang.Compiler.LSP
             if (typeRef.GenericArguments != null && typeRef.GenericArguments.Count > 0)
             {
                 var args = string.Join(", ", typeRef.GenericArguments.Select(a => GetTypeNameFromTypeRef(a)));
-                return $"{name}(Of {args})";
+                name = $"{name}(Of {args})";
+            }
+
+            // Keep the array marker ("Dim arr() As Integer" is an Integer())
+            // so element-type extraction (indexing, For Each) can see it.
+            if (typeRef.IsArray || (typeRef.ArrayDimensions != null && typeRef.ArrayDimensions.Count > 0))
+            {
+                name += "()";
             }
 
             return name;
+        }
+
+        /// <summary>
+        /// The type produced by INDEXING a value of the given type:
+        /// "Integer()" -> "Integer"; "List(Of String)" -> "String";
+        /// "Dictionary(Of String, Integer)" -> "Integer" (the value type);
+        /// "String" -> "Char". Returns null when the type is not indexable.
+        /// </summary>
+        private static string GetIndexedElementTypeName(string collectionTypeName)
+        {
+            if (string.IsNullOrEmpty(collectionTypeName))
+                return null;
+
+            var typeName = collectionTypeName.Trim();
+
+            // Arrays: "Integer()" / "Integer[]"
+            if (typeName.EndsWith("()") || typeName.EndsWith("[]"))
+                return typeName.Substring(0, typeName.Length - 2).Trim();
+
+            // Generic collections: "List(Of T)" -> T; dictionaries -> value type
+            var ofIndex = typeName.IndexOf("(Of ", StringComparison.OrdinalIgnoreCase);
+            if (ofIndex > 0)
+            {
+                var closeIndex = typeName.LastIndexOf(')');
+                if (closeIndex > ofIndex)
+                {
+                    var baseName = typeName.Substring(0, ofIndex).Trim();
+                    var args = SplitTopLevelTypeArguments(
+                        typeName.Substring(ofIndex + 4, closeIndex - ofIndex - 4));
+
+                    if (args.Count == 1)
+                        return args[0];
+                    if (args.Count > 1 &&
+                        baseName.EndsWith("Dictionary", StringComparison.OrdinalIgnoreCase))
+                        return args[args.Count - 1]; // indexer yields the VALUE type
+                }
+                return null;
+            }
+
+            // String indexing yields a Char
+            if (typeName.Equals("String", StringComparison.OrdinalIgnoreCase))
+                return "Char";
+
+            return null;
+        }
+
+        /// <summary>
+        /// Split a generic argument list on top-level commas only
+        /// ("String, List(Of Integer)" -> ["String", "List(Of Integer)"]).
+        /// </summary>
+        private static List<string> SplitTopLevelTypeArguments(string text)
+        {
+            var result = new List<string>();
+            int depth = 0, start = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+                if (c == '(') depth++;
+                else if (c == ')') depth--;
+                else if (c == ',' && depth == 0)
+                {
+                    result.Add(text.Substring(start, i - start).Trim());
+                    start = i + 1;
+                }
+            }
+            result.Add(text.Substring(start).Trim());
+            return result;
         }
 
         /// <summary>
@@ -1434,6 +1570,20 @@ namespace BasicLang.Compiler.LSP
         /// </summary>
         private string ResolveChainRootTypeName(DocumentState state, ReceiverSegment root, int line, int character)
         {
+            // Me/MyBase as chain root ("Me.Name.", "MyBase.GetItems().") — seed
+            // the chain with the enclosing class type; the next hop resolves
+            // the member on it (base members included via the member walk).
+            if (root.Name.Equals("Me", StringComparison.OrdinalIgnoreCase) ||
+                root.Name.Equals("MyBase", StringComparison.OrdinalIgnoreCase))
+            {
+                var enclosing = FindEnclosingClass(state?.AST, line + 1);
+                if (enclosing == null)
+                    return null;
+                return root.Name.Equals("MyBase", StringComparison.OrdinalIgnoreCase)
+                    ? enclosing.BaseClass
+                    : enclosing.Name;
+            }
+
             if (!root.IsCall)
             {
                 var variableType = ResolveVariableTypeName(state, root.Name, line, character, out _);
@@ -1465,6 +1615,17 @@ namespace BasicLang.Compiler.LSP
             var func = FindFunctionByName(state?.AST, root.Name);
             if (func?.ReturnType != null)
                 return GetTypeNameFromTypeRef(func.ReturnType);
+
+            // Indexed VARIABLE root: "arr(0)." / "dict(\"k\")." — parenthesized
+            // access on a variable is BASIC array/indexer syntax, so the result
+            // is the collection's element (or dictionary value) type.
+            var collectionType = ResolveVariableTypeName(state, root.Name, line, character, out _);
+            if (!string.IsNullOrEmpty(collectionType))
+            {
+                var elementType = GetIndexedElementTypeName(collectionType);
+                if (!string.IsNullOrEmpty(elementType))
+                    return elementType;
+            }
 
             // Constructor call: "New Person()." — the result is the class itself
             if (FindClassByName(state?.AST, root.Name) != null)
@@ -1939,6 +2100,12 @@ namespace BasicLang.Compiler.LSP
             var current = startClass;
             var visitedClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // The first base-class hop that does not resolve in THIS file's AST
+            // (a cross-file base) — for both Me and MyBase, at any depth.
+            var unresolvedBaseClass = startClass == null && isMyBase
+                ? enclosingClass.BaseClass
+                : null;
+
             while (current != null && visitedClasses.Add(current.Name))
             {
                 var isOwnClass = !isMyBase && ReferenceEquals(current, enclosingClass);
@@ -1950,13 +2117,16 @@ namespace BasicLang.Compiler.LSP
                         yield return item;
                 }
 
-                current = FindClassByName(state.AST, current.BaseClass);
+                var next = FindClassByName(state.AST, current.BaseClass);
+                if (next == null && !string.IsNullOrEmpty(current.BaseClass))
+                    unresolvedBaseClass = current.BaseClass;
+                current = next;
             }
 
             // Cross-file base class: fall back to the project symbol table
-            if (startClass == null && isMyBase && !string.IsNullOrEmpty(enclosingClass.BaseClass))
+            if (!string.IsNullOrEmpty(unresolvedBaseClass))
             {
-                foreach (var item in GetProjectClassMemberCompletions(state, enclosingClass.BaseClass, seen))
+                foreach (var item in GetProjectClassMemberCompletions(state, unresolvedBaseClass, seen))
                     yield return item;
             }
         }
