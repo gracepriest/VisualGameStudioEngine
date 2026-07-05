@@ -383,8 +383,22 @@ namespace BasicLang.Compiler
 
             SkipNewlines();
 
-            // Compiler parity: "Public" alone on the first line sets the access
-            if (Check(TokenType.Public) &&
+            // Compiler parity: the "Option Public" directive as the first code
+            // line makes the class public (PreprocessClassFile replaces it in
+            // place); the bare "Public" first line is the deprecated legacy form.
+            if (Check(TokenType.Identifier) &&
+                string.Equals(Peek().Lexeme, "Option", StringComparison.OrdinalIgnoreCase) &&
+                PeekNext().Type == TokenType.Public &&
+                (_current + 2 >= _tokens.Count ||
+                 _tokens[_current + 2].Type == TokenType.Newline ||
+                 _tokens[_current + 2].Type == TokenType.EOF))
+            {
+                Advance(); // Option
+                Advance(); // Public
+                node.Access = AccessModifier.Public;
+                SkipNewlines();
+            }
+            else if (Check(TokenType.Public) &&
                 (PeekNext().Type == TokenType.Newline || PeekNext().Type == TokenType.EOF))
             {
                 Advance();

@@ -225,6 +225,62 @@ public class ModClsDocumentTests
         Assert.That(cls.Members.OfType<SubroutineNode>().Any(s => s.Name == "Go"), Is.True);
     }
 
+    [Test]
+    public void ClsFile_WithOptionPublicDirective_MakesClassPublic()
+    {
+        // Compiler parity (PreprocessClassFile): "Option Public" as the first
+        // code line makes the implicit class public and is consumed — it must
+        // not surface as a parse error or shift any diagnostic line.
+        var source =
+            "Option Public\n" +                // 1-based line 1 (directive)
+            "Private _x As Integer\n" +        // line 2
+            "Public Sub Go()\n" +              // line 3
+            "End Sub\n";                       // line 4
+        var state = CreateParsedState(source, "Thing.cls");
+
+        Assert.That(Errors(state), Is.Empty, "unexpected diagnostics: " + Dump(state));
+        var cls = state.AST!.Declarations.OfType<ClassNode>().FirstOrDefault();
+        Assert.That(cls, Is.Not.Null);
+        Assert.That(cls!.Access, Is.EqualTo(AccessModifier.Public));
+        Assert.That(cls.Members.OfType<SubroutineNode>().Any(s => s.Name == "Go"), Is.True);
+    }
+
+    [Test]
+    public void ClsFile_OptionPublicAfterLeadingComments_StillApplies()
+    {
+        // The compiler skips blank lines and comment lines when looking for
+        // the directive; the LSP must match.
+        var source =
+            "' player entity\n" +
+            "\n" +
+            "Option Public\n" +
+            "Public Sub Go()\n" +
+            "End Sub\n";
+        var state = CreateParsedState(source, "Thing.cls");
+
+        Assert.That(Errors(state), Is.Empty, "unexpected diagnostics: " + Dump(state));
+        var cls = state.AST!.Declarations.OfType<ClassNode>().FirstOrDefault();
+        Assert.That(cls, Is.Not.Null);
+        Assert.That(cls!.Access, Is.EqualTo(AccessModifier.Public));
+    }
+
+    [Test]
+    public void ClsFile_OptionPublic_DiagnosticsStillLandOnCorrectLine()
+    {
+        var source =
+            "Option Public\n" +                 // 1-based line 1
+            "Public Sub Heal()\n" +             // line 2
+            "    Dim h As Integer\n" +          // line 3
+            "    h = missingThing\n" +          // line 4  <-- error here
+            "End Sub\n";
+        var state = CreateParsedState(source, "Player.cls");
+
+        var errors = Errors(state).ToList();
+        Assert.That(errors, Is.Not.Empty, "expected an error for the undefined identifier");
+        Assert.That(errors.Any(d => d.Line == 4), Is.True,
+            "the diagnostic must land on line 4 (directive consumed, no line shift); got: " + Dump(state));
+    }
+
     // ------------------------------------------------------------------
     // Cross-file: sibling .cls/.mod symbols reach other documents
     // ------------------------------------------------------------------
