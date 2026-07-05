@@ -59,36 +59,60 @@ public class CppBackendTests
     // Task 1: capability diagnostics - unsupported features are hard errors
     // ========================================================================
 
+    // ========================================================================
+    // Task 6: async (Task emulation) + yield (C++20 coroutines)
+    // ========================================================================
+
     [Test]
-    public void Cpp_AsyncFunction_ThrowsCapabilityError()
+    public void Cpp_AsyncFunction_EmitsTaskEmulation()
     {
         var source = @"
-Async Function GetValue() As Integer
+Async Function GetValue() As Task(Of Integer)
     Return 42
 End Function";
 
-        var ex = Assert.Throws<CppCapabilityException>(() =>
-        {
-            var output = CompileToCpp(source, out var errors);
-            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
-        });
-        Assert.That(ex.Message, Does.Contain("Async"));
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("BasicLang::Task<int32_t> GetValue()"));
+        Assert.That(output, Does.Not.Contain("#warning"));
     }
 
     [Test]
-    public void Cpp_IteratorYield_ThrowsCapabilityError()
+    public void Cpp_AwaitExpression_UsesTaskGet()
+    {
+        var source = @"
+Async Function GetValue() As Task(Of Integer)
+    Return 42
+End Function
+
+Async Function Caller() As Task(Of Integer)
+    Dim x As Integer = Await GetValue()
+    Return x
+End Function";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain(".get()"));
+        Assert.That(output, Does.Not.Contain("#warning"));
+    }
+
+    [Test]
+    public void Cpp_IteratorYield_EmitsCoroutine()
     {
         var source = @"
 Iterator Function Numbers() As IEnumerable(Of Integer)
     Yield 1
+    Yield 2
 End Function";
 
-        var ex = Assert.Throws<CppCapabilityException>(() =>
-        {
-            var output = CompileToCpp(source, out var errors);
-            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
-        });
-        Assert.That(ex.Message, Does.Contain("Yield").Or.Contain("Iterator"));
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("BasicLang::Generator<int32_t> Numbers()"));
+        Assert.That(output, Does.Contain("co_yield 1"));
+        Assert.That(output, Does.Not.Contain("#warning"));
     }
 
     // ========================================================================

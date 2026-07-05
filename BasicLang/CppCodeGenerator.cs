@@ -215,10 +215,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         private void GenerateHeader(IRModule module)
         {
+            var hasAsync = module.Functions.Any(f => f.IsAsync);
+            var hasIterators = module.Functions.Any(f => f.IsIterator);
+
             WriteLine("#pragma once");
+            if (hasIterators)
+                WriteLine("// requires -std=c++20 (coroutines)");
 
             // Collect unique includes
             var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional" };
+            if (hasIterators)
+            {
+                includes.Add("coroutine");
+                includes.Add("exception");
+            }
             foreach (var inc in _headerIncludes)
             {
                 includes.Add(inc);
@@ -232,6 +242,90 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine();
             WriteLine("using namespace std;");
             WriteLine();
+
+            if (hasAsync || hasIterators)
+                EmitRuntimePreamble(hasAsync, hasIterators);
+        }
+
+        /// <summary>
+        /// Runtime support types for async (synchronous Task&lt;T&gt; emulation - type-correct,
+        /// no scheduler) and iterators (C++20 coroutine Generator&lt;T&gt;).
+        /// </summary>
+        private void EmitRuntimePreamble(bool hasAsync, bool hasIterators)
+        {
+            WriteLine("namespace BasicLang {");
+            Indent();
+
+            if (hasAsync)
+            {
+                WriteLine("// Synchronous Task<T> emulation: type-correct, no scheduler");
+                WriteLine("template <typename T> struct Task {");
+                Indent();
+                WriteLine("T Value;");
+                WriteLine("T get() const { return Value; }");
+                Unindent();
+                WriteLine("};");
+                WriteLine("template <> struct Task<void> { void get() const { } };");
+                WriteLine();
+            }
+
+            if (hasIterators)
+            {
+                WriteLine("template <typename T> struct Generator {");
+                Indent();
+                WriteLine("struct promise_type {");
+                Indent();
+                WriteLine("T current;");
+                WriteLine("Generator get_return_object() { return Generator{ std::coroutine_handle<promise_type>::from_promise(*this) }; }");
+                WriteLine("std::suspend_always initial_suspend() noexcept { return {}; }");
+                WriteLine("std::suspend_always final_suspend() noexcept { return {}; }");
+                WriteLine("std::suspend_always yield_value(T v) { current = v; return {}; }");
+                WriteLine("void return_void() {}");
+                WriteLine("void unhandled_exception() { std::terminate(); }");
+                Unindent();
+                WriteLine("};");
+                WriteLine("std::coroutine_handle<promise_type> h;");
+                WriteLine("explicit Generator(std::coroutine_handle<promise_type> handle) : h(handle) {}");
+                WriteLine("Generator(Generator&& other) noexcept : h(other.h) { other.h = nullptr; }");
+                WriteLine("Generator(const Generator&) = delete;");
+                WriteLine("~Generator() { if (h) h.destroy(); }");
+                WriteLine("struct iterator {");
+                Indent();
+                WriteLine("std::coroutine_handle<promise_type> h;");
+                WriteLine("iterator& operator++() { h.resume(); return *this; }");
+                WriteLine("T operator*() const { return h.promise().current; }");
+                WriteLine("bool operator!=(std::default_sentinel_t) const { return !h.done(); }");
+                Unindent();
+                WriteLine("};");
+                WriteLine("iterator begin() { h.resume(); return iterator{ h }; }");
+                WriteLine("std::default_sentinel_t end() { return {}; }");
+                Unindent();
+                WriteLine("};");
+            }
+
+            Unindent();
+            WriteLine("}");
+            WriteLine();
+        }
+
+        /// <summary>
+        /// Return type for a function signature: iterators return BasicLang::Generator&lt;T&gt;,
+        /// async functions return BasicLang::Task&lt;T&gt; (wrapping bare declared types).
+        /// </summary>
+        private string MapReturnType(IRFunction function)
+        {
+            if (function.IsIterator)
+            {
+                var element = (function.ReturnType?.GenericArguments != null && function.ReturnType.GenericArguments.Count > 0)
+                    ? MapType(function.ReturnType.GenericArguments[0])
+                    : "int32_t";
+                return $"BasicLang::Generator<{element}>";
+            }
+
+            var mapped = MapType(function.ReturnType);
+            if (function.IsAsync && !mapped.StartsWith("BasicLang::Task<"))
+                return mapped == "void" ? "BasicLang::Task<void>" : $"BasicLang::Task<{mapped}>";
+            return mapped;
         }
 
         private void GenerateEnum(IREnum irEnum)
@@ -293,6 +387,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
+
+            // Task(Of T) -> synchronous BasicLang::Task<T> emulation
+            if (type.Name == "Task")
+            {
+                if (type.GenericArguments != null && type.GenericArguments.Count > 0)
+                    return $"BasicLang::Task<{MapType(type.GenericArguments[0])}>";
+                return "BasicLang::Task<void>";
+            }
 
             // .NET delegate types: Func(Of ..., TResult) / Action(Of ...) -> std::function
             if (type.Name == "Func" && type.GenericArguments != null && type.GenericArguments.Count > 0)
@@ -968,7 +1070,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         private void GenerateFunctionDeclaration(IRFunction function)
         {
-            var returnType = MapType(function.ReturnType);
+            var returnType = MapReturnType(function);
             var functionName = SanitizeName(function.Name);
 
             var parameters = string.Join(", ",
@@ -1008,7 +1110,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             InitializeFunctionContext(function);
 
             // Generate signature
-            var returnType = MapType(function.ReturnType);
+            var returnType = MapReturnType(function);
             var functionName = SanitizeName(function.Name);
             var parameters = string.Join(", ",
                 function.Parameters.Select(p => FormatParameter(p.Type, GetValueName(p))));
@@ -1604,6 +1706,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRReturn ret)
         {
+            // Coroutines must end with co_return, never a plain return
+            if (_currentFunction != null && _currentFunction.IsIterator)
+            {
+                WriteLine("co_return;");
+                return;
+            }
+
+            // Async functions wrap the value in the Task<T> emulation struct
+            if (_currentFunction != null && _currentFunction.IsAsync)
+            {
+                if (ret.Value != null)
+                    WriteLine($"return {MapReturnType(_currentFunction)}{{ {GetValueName(ret.Value)} }};");
+                else
+                    WriteLine("return {};");
+                return;
+            }
+
             if (ret.Value != null)
             {
                 var value = GetValueName(ret.Value);
@@ -1722,17 +1841,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRAwait awaitInst)
         {
-            // C++ doesn't have native async/await - emit compiler warning
-            WriteLine($"#warning \"await is not supported in C++ backend - expression '{awaitInst.Expression?.Name ?? "expression"}' will be evaluated synchronously\"");
+            // Synchronous Task<T> emulation: awaiting just unwraps the value
+            WriteLine($"{GetValueName(awaitInst)} = {GetValueName(awaitInst.Expression)}.get();");
         }
 
         public override void Visit(IRYield yieldInst)
         {
-            // C++ doesn't have native yield - emit compiler warning
+            // C++20 coroutine (BasicLang::Generator<T> in the runtime preamble)
             if (yieldInst.IsBreak)
-                WriteLine("#warning \"yield break is not supported in C++ backend - iterator will not function correctly\"");
+                WriteLine("co_return;");
             else
-                WriteLine($"#warning \"yield return is not supported in C++ backend - value '{yieldInst.Value?.Name ?? "value"}' will not be yielded\"");
+                WriteLine($"co_yield {GetValueName(yieldInst.Value)};");
         }
 
         public override void Visit(IRNewObject newObj)

@@ -66,12 +66,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             foreach (var func in module.Functions)
             {
-                if (func.IsAsync)
-                    diags.Add($"Async function '{func.Name}' — Async/Await is not yet supported by the C++ backend");
-                if (func.IsIterator)
-                    diags.Add($"Iterator function '{func.Name}' — Yield is not yet supported by the C++ backend");
-
-                CheckType(func.ReturnType, $"return type of '{func.Name}'", diags);
+                // Iterator return types (IEnumerable(Of T)) lower to BasicLang::Generator<T>
+                if (!func.IsIterator)
+                    CheckType(func.ReturnType, $"return type of '{func.Name}'", diags);
                 foreach (var p in func.Parameters)
                     CheckType(p.Type, $"parameter '{p.Name}' of '{func.Name}'", diags);
                 foreach (var lv in func.LocalVariables)
@@ -97,12 +94,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                             foreach (var i in cc.Block.Instructions) CheckInstruction(i, funcName, diags);
                     if (tc.FinallyBlock != null)
                         foreach (var i in tc.FinallyBlock.Instructions) CheckInstruction(i, funcName, diags);
-                    break;
-                case IRAwait:
-                    diags.Add($"Await in '{funcName}' — Async/Await is not yet supported by the C++ backend");
-                    break;
-                case IRYield:
-                    diags.Add($"Yield in '{funcName}' — Yield is not yet supported by the C++ backend");
                     break;
             }
         }
@@ -132,6 +123,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var name = type.Name;
             if (string.IsNullOrEmpty(name) || MappedTypeNames.Contains(name)) return;
             if (CppExceptionTypes.IsNetException(name)) return; // mapped to std::runtime_error
+            if (name.Equals("Task", StringComparison.OrdinalIgnoreCase)) return; // BasicLang::Task<T>
+            if (name.Equals("Func", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Action", StringComparison.OrdinalIgnoreCase)) return; // std::function
 
             if (name.Equals("Object", StringComparison.OrdinalIgnoreCase))
             {
