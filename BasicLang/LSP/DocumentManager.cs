@@ -45,6 +45,11 @@ namespace BasicLang.Compiler.LSP
         {
             TypeRegistry = new TypeRegistry();
 
+            // Preload core .NET types from the running runtime so member
+            // completion for Console/String/List/... works even when no SDK
+            // reference assemblies are found on disk (finding [15]).
+            TypeRegistry.PreloadCoreTypes();
+
             // Try to load cached index first
             if (!TypeRegistry.LoadIndexFromCache())
             {

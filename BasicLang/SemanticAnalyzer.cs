@@ -383,6 +383,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return _typeRegistry?.GetType(typeName);
         }
 
+        /// <summary>
+        /// Resolve the type of a member on a .NET type (public wrapper over
+        /// LookupNetTypeMember so IntelliSense can resolve method-chain
+        /// receivers like "s.Trim()." without duplicating the compiler's
+        /// return-type knowledge).
+        /// </summary>
+        public TypeInfo ResolveNetMemberType(string typeName, string memberName)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(memberName))
+                return null;
+
+            return LookupNetTypeMember(typeName, memberName);
+        }
+
         public bool Analyze(ProgramNode program)
         {
             _errors.Clear();
