@@ -501,4 +501,39 @@ End Module
         Assert.That(lines[1], Is.EqualTo("Public Class LineCheck"), "directive line replaced in place");
         Assert.That(lines[2], Is.EqualTo("Public Value As Integer"), "body lines must not shift");
     }
+
+    /// <summary>
+    /// The legacy bare "Public" first line still compiles as a public class,
+    /// but emits a deprecation warning on stderr pointing at Option Public.
+    /// </summary>
+    [Test]
+    [NonParallelizable]
+    public void BarePublic_StillWorks_AndWarns()
+    {
+        var clsFilePath = Path.Combine(_tempDir, "OldStyle.cls");
+        File.WriteAllText(clsFilePath, @"Public
+Public Value As Integer
+");
+        var originalError = Console.Error;
+        var captured = new StringWriter();
+        CompilationResult result;
+        try
+        {
+            Console.SetError(captured);
+            var compiler = new BasicCompiler();
+            result = compiler.CompileFile(clsFilePath);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        Assert.That(result.AllErrors, Is.Empty,
+            $"Expected no errors but got: {string.Join(", ", result.AllErrors)}");
+        var classNode = result.Units[0].AST.Declarations.OfType<ClassNode>().FirstOrDefault();
+        Assert.That(classNode.Access, Is.EqualTo(BasicLang.Compiler.AST.AccessModifier.Public),
+            "bare Public must keep working");
+        Assert.That(captured.ToString(), Does.Contain("deprecated"));
+        Assert.That(captured.ToString(), Does.Contain("Option Public"));
+    }
 }
