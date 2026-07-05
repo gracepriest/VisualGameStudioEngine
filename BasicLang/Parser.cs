@@ -317,6 +317,171 @@ namespace BasicLang.Compiler
             return node;
         }
 
+        /// <summary>
+        /// Parse a whole token stream as the BODY of an implicit Module named
+        /// <paramref name="moduleName"/> (the .mod file semantics) WITHOUT
+        /// altering source text or line numbers: the ModuleNode wrapper is
+        /// synthesized in the AST. Leading Using/Import directives stay at
+        /// program level.
+        /// </summary>
+        public ProgramNode ParseAsImplicitModule(string moduleName)
+        {
+            var program = new ProgramNode(1, 1);
+            var module = new ModuleNode(1, 1) { Name = moduleName };
+
+            while (!IsAtEnd())
+            {
+                SkipNewlines();
+                if (IsAtEnd())
+                    break;
+
+                try
+                {
+                    if (Check(TokenType.Using))
+                    {
+                        program.Declarations.Add(ParseUsing());
+                    }
+                    else if (Check(TokenType.Import))
+                    {
+                        program.Declarations.Add(ParseImport());
+                    }
+                    else
+                    {
+                        var member = ParseModuleMember();
+                        if (member != null)
+                        {
+                            module.Members.Add(member);
+                        }
+                    }
+                }
+                catch (ParseException ex)
+                {
+                    RecordError(ex.Message, ex.Token, ex.Suggestion);
+                    Synchronize();
+                }
+
+                SkipNewlines();
+            }
+
+            module.EndLine = LastTokenLine();
+            program.Declarations.Add(module);
+            return program;
+        }
+
+        /// <summary>
+        /// Parse a whole token stream as the BODY of an implicit Class named
+        /// <paramref name="className"/> (the .cls file semantics) WITHOUT
+        /// altering source text or line numbers. Mirrors the compiler's
+        /// PreprocessClassFile: a standalone "Public" first line makes the
+        /// class public (default is Private); leading Inherits/Implements
+        /// clauses apply to the implicit class.
+        /// </summary>
+        public ProgramNode ParseAsImplicitClass(string className)
+        {
+            var program = new ProgramNode(1, 1);
+            var node = new ClassNode(1, 1) { Name = className };
+
+            SkipNewlines();
+
+            // Compiler parity: "Public" alone on the first line sets the access
+            if (Check(TokenType.Public) &&
+                (PeekNext().Type == TokenType.Newline || PeekNext().Type == TokenType.EOF))
+            {
+                Advance();
+                node.Access = AccessModifier.Public;
+                SkipNewlines();
+            }
+
+            // Leading Using/Import directives stay at program level
+            while (Check(TokenType.Using) || Check(TokenType.Import))
+            {
+                try
+                {
+                    if (Check(TokenType.Using))
+                        program.Declarations.Add(ParseUsing());
+                    else
+                        program.Declarations.Add(ParseImport());
+                }
+                catch (ParseException ex)
+                {
+                    RecordError(ex.Message, ex.Token, ex.Suggestion);
+                    Synchronize();
+                }
+                SkipNewlines();
+            }
+
+            // Inheritance clause
+            if (Match(TokenType.Inherits))
+            {
+                try
+                {
+                    node.BaseClass = Consume(TokenType.Identifier, "Expected base class name").Lexeme;
+                    ConsumeNewlines();
+                }
+                catch (ParseException ex)
+                {
+                    RecordError(ex.Message, ex.Token, ex.Suggestion);
+                    Synchronize();
+                }
+            }
+
+            // Interface clauses
+            while (Match(TokenType.Implements))
+            {
+                try
+                {
+                    do
+                    {
+                        node.Interfaces.Add(Consume(TokenType.Identifier, "Expected interface name").Lexeme);
+                    } while (Match(TokenType.Comma));
+                    ConsumeNewlines();
+                }
+                catch (ParseException ex)
+                {
+                    RecordError(ex.Message, ex.Token, ex.Suggestion);
+                    Synchronize();
+                }
+            }
+
+            // Class members until end of file
+            while (!IsAtEnd())
+            {
+                SkipNewlines();
+                if (IsAtEnd())
+                    break;
+
+                try
+                {
+                    var member = ParseClassMember();
+                    if (member != null)
+                    {
+                        node.Members.Add(member);
+                    }
+                }
+                catch (ParseException ex)
+                {
+                    RecordError(ex.Message, ex.Token, ex.Suggestion);
+                    Synchronize();
+                }
+
+                SkipNewlines();
+            }
+
+            node.EndLine = LastTokenLine();
+            program.Declarations.Add(node);
+            return program;
+        }
+
+        private int LastTokenLine()
+        {
+            for (int i = _tokens.Count - 1; i >= 0; i--)
+            {
+                if (_tokens[i].Line > 0)
+                    return _tokens[i].Line;
+            }
+            return 1;
+        }
+
         private ASTNode ParseModuleMember()
         {
             // Handle attribute syntax <Extension>

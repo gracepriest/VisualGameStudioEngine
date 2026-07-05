@@ -2359,6 +2359,28 @@ namespace BasicLang.Compiler.LSP
                     }
                 }
             }
+            else if (node is BasicLang.Compiler.AST.ModuleNode module)
+            {
+                // Module blocks (including the implicit Module of .mod files)
+                if (line >= module.Line && line <= GetEndLine(module))
+                {
+                    foreach (var childScope in parentScope.Children)
+                    {
+                        if (childScope.Name == module.Name && childScope.Kind == ScopeKind.Module)
+                        {
+                            foreach (var member in module.Members)
+                            {
+                                var innerScope = FindScopeContainingPosition(childScope, member, line);
+                                if (innerScope != null && innerScope != childScope)
+                                {
+                                    return innerScope;
+                                }
+                            }
+                            return childScope;
+                        }
+                    }
+                }
+            }
 
             return null;
         }
@@ -3045,13 +3067,15 @@ namespace BasicLang.Compiler.LSP
                 scope = scope.Parent;
             }
 
-            // Also add top-level declarations from AST (in case semantic analysis didn't capture everything)
+            // Also add top-level declarations from AST (in case semantic analysis didn't capture everything).
+            // Declarations nested in Module/Namespace blocks (including the implicit
+            // Module of .mod files) are flattened in.
             if (state.AST != null)
             {
                 // Convert LSP line (0-based) to AST line (1-based)
                 int astLine = line + 1;
 
-                foreach (var decl in state.AST.Declarations)
+                foreach (var decl in FlattenContainerDeclarations(state.AST.Declarations))
                 {
                     if (decl is BasicLang.Compiler.AST.FunctionNode func)
                     {
@@ -3185,6 +3209,31 @@ namespace BasicLang.Compiler.LSP
                     {
                         yield return item;
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Flatten declarations by descending into Module and Namespace blocks
+        /// (module members behave like top-level declarations for completion)
+        /// </summary>
+        private IEnumerable<ASTNode> FlattenContainerDeclarations(IEnumerable<ASTNode> declarations)
+        {
+            foreach (var decl in declarations)
+            {
+                switch (decl)
+                {
+                    case BasicLang.Compiler.AST.ModuleNode module when module.Members != null:
+                        foreach (var nested in FlattenContainerDeclarations(module.Members))
+                            yield return nested;
+                        break;
+                    case BasicLang.Compiler.AST.NamespaceNode ns when ns.Members != null:
+                        foreach (var nested in FlattenContainerDeclarations(ns.Members))
+                            yield return nested;
+                        break;
+                    default:
+                        yield return decl;
+                        break;
                 }
             }
         }

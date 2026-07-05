@@ -430,7 +430,9 @@ namespace BasicLang.Compiler.LSP
                 var lexer = new Lexer(content);
                 var tokens = lexer.Tokenize();
                 var parser = new Parser(tokens);
-                ast = parser.Parse();
+                // .mod/.cls siblings parse with their implicit Module/Class
+                // wrapper (AST-synthesized, so symbol lines match the file)
+                ast = ImplicitContainer.Parse(parser, path, content);
             }
             catch
             {
