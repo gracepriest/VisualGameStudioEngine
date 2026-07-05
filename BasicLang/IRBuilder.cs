@@ -2677,12 +2677,15 @@ namespace BasicLang.Compiler.IR
         public void Visit(ThrowStatementNode node)
         {
             TrackSourceLine(node);
-            EmitInstruction(new IRComment("Throw exception"));
             if (node.Exception != null)
             {
                 node.Exception.Accept(this);
-                // In a real implementation, we would emit an IR instruction for throw
-                // For now, we just emit a comment as the backends will handle this specially
+                EmitInstruction(new IRThrow(_expressionResult));
+            }
+            else
+            {
+                // Bare Throw inside a Catch block: rethrow
+                EmitInstruction(new IRThrow(null));
             }
         }
 

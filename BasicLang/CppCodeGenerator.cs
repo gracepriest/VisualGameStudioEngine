@@ -849,9 +849,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
-            // Declare temporaries with proper typing (skip void types)
+            // Declare temporaries with proper typing (skip void types; exception objects
+            // are consumed at the throw site and never materialize as C++ values)
             var tempsByType = _allTemporaries
                 .Where(t => t.Type?.Name != "Void" && MapType(t.Type) != "void")
+                .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name))
                 .GroupBy(t => MapType(t.Type))
                 .ToList();
 
@@ -1653,6 +1655,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRNewObject newObj)
         {
+            // Exception objects are consumed at the throw site (std::runtime_error);
+            // there is no C++ class to construct here.
+            if (CppExceptionTypes.IsNetException(newObj.ClassName)) return;
+
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             // Generic instantiations need template arguments on the constructor: Pair<int32_t>(...)
             string bareName;
@@ -1756,31 +1762,85 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("try");
             WriteLine("{");
             Indent();
-            foreach (var inst in tryCatch.TryBlock.Instructions)
-            {
-                if (inst is IRBranch or IRConditionalBranch) continue;
-                inst.Accept(this);
-            }
+            EmitBlockInstructions(tryCatch.TryBlock);
             Unindent();
             WriteLine("}");
 
             foreach (var catchClause in tryCatch.CatchClauses)
             {
-                var exType = catchClause.ExceptionType?.Name ?? "std::exception";
+                var exType = MapCatchType(catchClause.ExceptionType?.Name);
                 var varName = !string.IsNullOrEmpty(catchClause.VariableName)
                     ? SanitizeName(catchClause.VariableName)
                     : "ex";
                 WriteLine($"catch (const {exType}& {varName})");
                 WriteLine("{");
                 Indent();
-                foreach (var inst in catchClause.Block.Instructions)
-                {
-                    if (inst is IRBranch or IRConditionalBranch) continue;
-                    inst.Accept(this);
-                }
+                EmitBlockInstructions(catchClause.Block);
                 Unindent();
                 WriteLine("}");
             }
+
+            if (tryCatch.FinallyBlock != null)
+            {
+                // Exceptional path: run the finally body, then rethrow.
+                // Known limitation: Return inside Try bypasses the finally body.
+                WriteLine("catch (...)");
+                WriteLine("{");
+                Indent();
+                WriteLine("{");
+                Indent();
+                EmitBlockInstructions(tryCatch.FinallyBlock);
+                Unindent();
+                WriteLine("}");
+                WriteLine("throw;");
+                Unindent();
+                WriteLine("}");
+
+                // Normal path; braces scope the duplicated body against redeclarations.
+                WriteLine("{");
+                Indent();
+                EmitBlockInstructions(tryCatch.FinallyBlock);
+                Unindent();
+                WriteLine("}");
+            }
+        }
+
+        private void EmitBlockInstructions(BasicBlock block)
+        {
+            if (block == null) return;
+            foreach (var inst in block.Instructions)
+            {
+                if (inst is IRBranch or IRConditionalBranch) continue;
+                inst.Accept(this);
+            }
+        }
+
+        /// <summary>Base Exception catches everything (std::exception); specific .NET
+        /// exception types map to std::runtime_error (what our throws produce).</summary>
+        private string MapCatchType(string netExceptionName)
+        {
+            if (netExceptionName == null || netExceptionName.Equals("Exception", StringComparison.OrdinalIgnoreCase))
+                return "std::exception";
+            return "std::runtime_error";
+        }
+
+        public override void Visit(IRThrow throwInst)
+        {
+            if (throwInst.Exception == null)
+            {
+                WriteLine("throw;");
+                return;
+            }
+
+            // Throw New Exception("msg"): unwrap the message, throw std::runtime_error
+            if (throwInst.Exception is IRNewObject newEx && CppExceptionTypes.IsNetException(newEx.ClassName))
+            {
+                var msg = newEx.Arguments.Count > 0 ? GetValueName(newEx.Arguments[0]) : "\"exception\"";
+                WriteLine($"throw std::runtime_error({msg});");
+                return;
+            }
+
+            WriteLine($"throw std::runtime_error({GetValueName(throwInst.Exception)});");
         }
 
         public override void Visit(IRInlineCode inlineCode)

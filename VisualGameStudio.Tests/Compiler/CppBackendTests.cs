@@ -92,27 +92,6 @@ End Function";
     }
 
     [Test]
-    public void Cpp_TryFinally_ThrowsCapabilityError()
-    {
-        var source = @"
-Sub Main()
-    Dim x As Integer = 0
-    Try
-        x = 1
-    Finally
-        x = 2
-    End Try
-End Sub";
-
-        var ex = Assert.Throws<CppCapabilityException>(() =>
-        {
-            var output = CompileToCpp(source, out var errors);
-            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
-        });
-        Assert.That(ex.Message, Does.Contain("Finally"));
-    }
-
-    [Test]
     public void Cpp_Lambda_ThrowsCapabilityError()
     {
         var source = @"
@@ -273,6 +252,78 @@ End Sub";
             Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
         });
         Assert.That(ex.Message, Does.Contain("Point"));
+    }
+
+    // ========================================================================
+    // Task 4: throw + finally + exception type mapping
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ThrowStatement_EmitsCppThrow()
+    {
+        var source = @"
+Sub Fail()
+    Throw New Exception(""boom"")
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("throw std::runtime_error("));
+        Assert.That(output, Does.Contain("boom"));
+    }
+
+    [Test]
+    public void Cpp_TryCatchTyped_MapsExceptionType()
+    {
+        var source = @"
+Sub Main()
+    Try
+        Dim x As Integer = 1
+    Catch ex As Exception
+        Dim y As Integer = 2
+    End Try
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("catch (const std::exception& ex)"));
+    }
+
+    [Test]
+    public void Cpp_TryFinally_EmitsFinallyOnBothPaths()
+    {
+        var source = @"
+Sub Main()
+    Dim n As Integer = 0
+    Try
+        n = 1
+    Finally
+        n = 2
+    End Try
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // exceptional path: catch(...) { finally; throw; }
+        Assert.That(output, Does.Contain("catch (...)"));
+        Assert.That(output, Does.Contain("throw;"));
+        // finally body appears on both the exceptional and the normal path
+        Assert.That(CountOccurrences(output, "n = 2;"), Is.EqualTo(2),
+            "finally body should be emitted twice (exceptional + normal path):\n" + output);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0, index = 0;
+        while ((index = haystack.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += needle.Length;
+        }
+        return count;
     }
 
     [Test]

@@ -67,6 +67,26 @@ public class CompilationTests
     }
 
     // ========================================================================
+    // Throw statements (IRThrow)
+    // ========================================================================
+
+    [Test]
+    public void Compile_ThrowStatement_EmitsThrow()
+    {
+        var source = @"
+Sub Fail()
+    Throw New Exception(""boom"")
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("throw"));
+        Assert.That(output, Does.Contain("boom"));
+    }
+
+    // ========================================================================
     // Variable declarations and types
     // ========================================================================
 

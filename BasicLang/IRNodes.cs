@@ -69,6 +69,10 @@ namespace BasicLang.Compiler.IR
         void Visit(IRInlineCode inlineCode);
         void Visit(IRForEach forEach);
         void Visit(IRIndexerAccess indexer);
+
+        // Default no-op so existing visitors (pretty-printer, LLVM, MSIL) are unaffected;
+        // backends that support exceptions override this.
+        void Visit(IRThrow throwInst) { }
     }
     
     // ============================================================================
@@ -904,6 +908,22 @@ namespace BasicLang.Compiler.IR
             }
             return result;
         }
+    }
+
+    /// <summary>
+    /// Throw statement: throw Exception, or a bare rethrow when Exception is null.
+    /// </summary>
+    public class IRThrow : IRInstruction
+    {
+        public IRValue Exception { get; set; }
+
+        public IRThrow(IRValue exception)
+        {
+            Exception = exception;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+        public override string ToString() => Exception == null ? "rethrow" : $"throw {Exception.Name}";
     }
 
     /// <summary>

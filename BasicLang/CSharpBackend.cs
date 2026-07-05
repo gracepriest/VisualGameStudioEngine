@@ -3185,6 +3185,18 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
         }
 
+        public void Visit(IRThrow throwInst)
+        {
+            if (throwInst.Exception == null)
+            {
+                WriteLine("throw;");
+                return;
+            }
+
+            var exception = EmitExpression(throwInst.Exception);
+            WriteLine($"throw {exception};");
+        }
+
         public void Visit(IRBranch branch)
         {
             // Handled structurally in GenerateStructuredBlock - no direct goto emission

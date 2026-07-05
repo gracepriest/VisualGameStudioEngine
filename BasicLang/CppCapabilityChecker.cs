@@ -7,6 +7,23 @@ using BasicLang.Compiler.SemanticAnalysis;
 namespace BasicLang.Compiler.CodeGen.CPlusPlus
 {
     /// <summary>
+    /// .NET exception type names the C++ backend maps onto std::runtime_error /
+    /// std::exception. Shared by the capability checker and the code generator.
+    /// </summary>
+    public static class CppExceptionTypes
+    {
+        private static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Exception", "SystemException", "ApplicationException", "ArgumentException",
+            "ArgumentNullException", "InvalidOperationException", "NotImplementedException",
+            "NullReferenceException", "IndexOutOfRangeException", "FormatException",
+            "OverflowException", "DivideByZeroException"
+        };
+
+        public static bool IsNetException(string name) => name != null && Names.Contains(name);
+    }
+
+    /// <summary>
     /// Thrown when an IRModule uses features the C++ backend cannot lower to correct C++.
     /// </summary>
     public class CppCapabilityException : Exception
@@ -75,8 +92,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             switch (inst)
             {
                 case IRTryCatch tc:
-                    if (tc.FinallyBlock != null)
-                        diags.Add($"Try/Finally in '{funcName}' — Finally blocks are not yet supported by the C++ backend");
                     if (tc.TryBlock != null)
                         foreach (var i in tc.TryBlock.Instructions) CheckInstruction(i, funcName, diags);
                     foreach (var cc in tc.CatchClauses)
@@ -118,6 +133,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             var name = type.Name;
             if (string.IsNullOrEmpty(name) || MappedTypeNames.Contains(name)) return;
+            if (CppExceptionTypes.IsNetException(name)) return; // mapped to std::runtime_error
 
             if (name.Equals("Object", StringComparison.OrdinalIgnoreCase))
             {

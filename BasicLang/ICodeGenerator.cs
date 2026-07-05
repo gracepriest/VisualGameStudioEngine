@@ -157,6 +157,9 @@ namespace BasicLang.Compiler.CodeGen
         public abstract void Visit(IRForEach forEach);
         public abstract void Visit(IRIndexerAccess indexer);
 
+        /// <summary>Virtual no-op: backends without exception support (LLVM, MSIL) ignore throws.</summary>
+        public virtual void Visit(IRThrow throwInst) { }
+
         /// <summary>
         /// Map IR type to target language type
         /// </summary>
