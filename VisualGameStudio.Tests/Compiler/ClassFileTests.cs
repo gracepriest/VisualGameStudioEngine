@@ -367,4 +367,76 @@ End Sub
         // Should be Private because "Public Sub" is not the same as just "Public"
         Assert.That(classNode.Access, Is.EqualTo(BasicLang.Compiler.AST.AccessModifier.Private));
     }
+
+    /// <summary>
+    /// "Option Public" as the first code line makes the implicit class public.
+    /// </summary>
+    [Test]
+    public void OptionPublic_MakesClassPublic()
+    {
+        var clsFilePath = Path.Combine(_tempDir, "GlobalThing.cls");
+        File.WriteAllText(clsFilePath, @"Option Public
+Public Value As Integer
+
+Sub New()
+    Me.Value = 7
+End Sub
+");
+        var compiler = new BasicCompiler();
+        var result = compiler.CompileFile(clsFilePath);
+
+        Assert.That(result.AllErrors, Is.Empty,
+            $"Expected no errors but got: {string.Join(", ", result.AllErrors)}");
+        Assert.That(result.Success, Is.True);
+        var classNode = result.Units[0].AST.Declarations.OfType<ClassNode>().FirstOrDefault();
+        Assert.That(classNode, Is.Not.Null, "Expected a ClassNode in the AST");
+        Assert.That(classNode.Name, Is.EqualTo("GlobalThing"));
+        Assert.That(classNode.Access, Is.EqualTo(BasicLang.Compiler.AST.AccessModifier.Public));
+    }
+
+    /// <summary>
+    /// The directive is honored below leading blank lines and comment lines
+    /// (both ' and Rem forms) — unlike the legacy bare "Public" marker.
+    /// </summary>
+    [Test]
+    public void OptionPublic_AfterLeadingComments_Works()
+    {
+        var clsFilePath = Path.Combine(_tempDir, "Banner.cls");
+        File.WriteAllText(clsFilePath, @"' File header banner
+Rem legacy-style comment
+
+Option Public
+Public Value As Integer
+");
+        var compiler = new BasicCompiler();
+        var result = compiler.CompileFile(clsFilePath);
+
+        Assert.That(result.AllErrors, Is.Empty,
+            $"Expected no errors but got: {string.Join(", ", result.AllErrors)}");
+        var classNode = result.Units[0].AST.Declarations.OfType<ClassNode>().FirstOrDefault();
+        Assert.That(classNode, Is.Not.Null);
+        Assert.That(classNode.Access, Is.EqualTo(BasicLang.Compiler.AST.AccessModifier.Public));
+    }
+
+    /// <summary>
+    /// The directive is case-insensitive, like all BasicLang keywords.
+    /// </summary>
+    [Test]
+    public void OptionPublic_IsCaseInsensitive()
+    {
+        foreach (var variant in new[] { "OPTION PUBLIC", "option public", "Option public" })
+        {
+            var clsFilePath = Path.Combine(_tempDir, "Case" + variant.GetHashCode().ToString("X") + ".cls");
+            File.WriteAllText(clsFilePath, variant + "\nPublic Value As Integer\n");
+
+            var compiler = new BasicCompiler();
+            var result = compiler.CompileFile(clsFilePath);
+
+            Assert.That(result.AllErrors, Is.Empty,
+                $"Variant '{variant}' failed: {string.Join(", ", result.AllErrors)}");
+            var classNode = result.Units[0].AST.Declarations.OfType<ClassNode>().FirstOrDefault();
+            Assert.That(classNode.Access, Is.EqualTo(BasicLang.Compiler.AST.AccessModifier.Public),
+                $"Variant '{variant}' did not produce a public class");
+        }
+    }
 }

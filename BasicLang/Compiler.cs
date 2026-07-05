@@ -697,7 +697,9 @@ namespace BasicLang.Compiler
 
         /// <summary>
         /// Preprocess a .cls/.class file by wrapping its contents in an implicit Class block.
-        /// The filename becomes the class name. Private by default unless the first line is "Public".
+        /// The filename becomes the class name. Private by default; the "Option Public"
+        /// directive on the first code line (or the deprecated bare "Public" first line)
+        /// makes the class public.
         /// </summary>
         private void PreprocessClassFile(CompilationUnit unit)
         {
@@ -711,12 +713,43 @@ namespace BasicLang.Compiler
 
             var source = unit.SourceCode ?? string.Empty;
             var className = Path.GetFileNameWithoutExtension(unit.FilePath);
-            // Strip BOM (U+FEFF) which is not considered whitespace in .NET Core/5+
+
+            // "Option Public" directive: the first code line (leading blank lines and
+            // ' / Rem comment lines are skipped) may be exactly "Option Public".
+            // The directive line is replaced in place by the class header so every
+            // line keeps its original number (LineOffset = 0); comments above the
+            // directive legally remain above the class declaration.
+            var lines = source.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var content = lines[i].TrimEnd('\r');
+                if (i == 0)
+                    content = content.TrimStart('\uFEFF');
+                content = content.Trim();
+
+                if (content.Length == 0 || content.StartsWith("'"))
+                    continue;
+                if (content.Equals("Rem", StringComparison.OrdinalIgnoreCase) ||
+                    content.StartsWith("Rem ", StringComparison.OrdinalIgnoreCase) ||
+                    content.StartsWith("Rem\t", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (content.Equals("Option Public", StringComparison.OrdinalIgnoreCase))
+                {
+                    lines[i] = $"Public Class {className}";
+                    unit.SourceCode = string.Join("\n", lines) + "\nEnd Class\n";
+                    unit.LineOffset = 0;
+                    return;
+                }
+
+                break; // first code line is not the directive \u2014 legacy handling below
+            }
+
+            // Legacy: bare "Public" keyword as the first content of the file (deprecated).
             var trimmed = source.TrimStart('\uFEFF').TrimStart();
             string accessModifier = "Private";
             string body = source;
 
-            // Check if file starts with "Public" keyword on its own line
             if (trimmed.StartsWith("Public", StringComparison.OrdinalIgnoreCase))
             {
                 var afterPublic = trimmed.Substring(6);
@@ -726,6 +759,8 @@ namespace BasicLang.Compiler
                     var firstLine = trimmed.Split('\n')[0].Trim().TrimEnd('\r');
                     if (firstLine.Equals("Public", StringComparison.OrdinalIgnoreCase))
                     {
+                        Console.Error.WriteLine(
+                            $"Warning: '{Path.GetFileName(unit.FilePath)}': bare 'Public' first line is deprecated \u2014 use 'Option Public'");
                         accessModifier = "Public";
                         var newlineIndex = trimmed.IndexOf('\n');
                         body = newlineIndex >= 0 ? trimmed.Substring(newlineIndex + 1) : string.Empty;
