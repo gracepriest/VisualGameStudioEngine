@@ -70,6 +70,10 @@
     "keywords": {
       "patterns": [
         {
+          "name": "keyword.other.option.basiclang",
+          "match": "(?i)^\\s*(Option Public)\\b"
+        },
+        {
           "name": "keyword.control.basiclang",
           "match": "(?i)\\b(If|Then|Else|ElseIf|End\\s+If|Select|Case|End\\s+Select|For|To|Step|Next|Each|In|While|End\\s+While|Do|Loop|Until|Continue|Exit|Return|GoTo|On\\s+Error|Resume|Throw)\\b"
         },

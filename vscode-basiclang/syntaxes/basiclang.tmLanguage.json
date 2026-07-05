@@ -246,6 +246,10 @@
     "keywords": {
       "patterns": [
         {
+          "name": "keyword.other.option.basiclang",
+          "match": "(?i)^\\s*(Option Public)\\b"
+        },
+        {
           "name": "keyword.control.basiclang",
           "match": "(?i)(?<!\\.)\\b(If|Then|ElseIf|Else|End\\s+If|Select|Case|End\\s+Select|For|To|Step|Next|Each|In|While|Wend|Do|Loop|Until|Exit|Return|Throw)\\b"
         },
