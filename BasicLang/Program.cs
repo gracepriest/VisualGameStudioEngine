@@ -25,7 +25,9 @@ namespace BasicLang.Compiler.Driver
     /// </summary>
     class Program
     {
-        static async Task<int> Main(string[] args)
+        // 'internal' (rather than the default private) so the test suite can drive
+        // the CLI entry point directly; C# permits an internal Main entry point.
+        internal static async Task<int> Main(string[] args)
         {
             // Check for LSP mode
             if (args.Contains("--lsp") || args.Contains("--language-server"))
@@ -149,9 +151,13 @@ namespace BasicLang.Compiler.Driver
                 return 0;
             }
 
-            // Check for file argument (compile a file)
+            // Check for file argument (compile a file). ModuleResolver.IsSourceFile
+            // is the single source of truth for compilable source extensions
+            // (.bas/.bl/.basic/.mod/.cls/.class) — routing through it keeps the CLI
+            // in sync so class files (.cls/.class) are no longer silently ignored.
+            // .blproj is a project file, not a source file, so it is checked separately.
             var fileArg = args.FirstOrDefault(a => !a.StartsWith("-") &&
-                (a.EndsWith(".bas") || a.EndsWith(".bl") || a.EndsWith(".basic") || a.EndsWith(".mod") || a.EndsWith(".blproj")));
+                (ModuleResolver.IsSourceFile(a) || a.EndsWith(".blproj")));
 
             if (fileArg != null)
             {
@@ -171,6 +177,22 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
+            // A positional argument we couldn't interpret as a subcommand or a
+            // compilable file/project is almost always a user mistake (typo'd
+            // extension, wrong command). Report it and show usage instead of
+            // silently running the demo pipeline — that "success with the wrong
+            // action" behaviour was confusing (e.g. `BasicLang.exe Thing.cls`
+            // used to land here before .cls was recognised).
+            var unrecognizedArg = args.FirstOrDefault(a => !a.StartsWith("-"));
+            if (unrecognizedArg != null)
+            {
+                Console.Error.WriteLine($"Error: unrecognized argument '{unrecognizedArg}' (not a command, compilable file, or option).");
+                Console.Error.WriteLine();
+                PrintUsage();
+                return 2;
+            }
+
+            // No positional arguments at all: run the multi-target transpiler showcase.
             Console.WriteLine("=".PadRight(70, '='));
             Console.WriteLine("BasicLang Multi-Target Transpiler - Complete Pipeline Demo");
             Console.WriteLine("=".PadRight(70, '='));

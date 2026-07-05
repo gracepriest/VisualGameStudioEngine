@@ -16,6 +16,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Expose the internal CLI entry point (Program) to the test suite -->
+    <InternalsVisibleTo Include="VisualGameStudio.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- LSP Server dependencies -->
     <PackageReference Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
