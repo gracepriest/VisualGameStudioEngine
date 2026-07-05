@@ -240,7 +240,7 @@ Public Sub ResetGame()
     IsGameOver = False
 End Sub
 ",
-                    ["Player.cls"] = @"Public
+                    ["Player.cls"] = @"Option Public
 
 Public Name As String
 Public X As Single = 400
