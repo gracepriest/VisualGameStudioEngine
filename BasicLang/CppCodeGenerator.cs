@@ -285,9 +285,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 Unindent();
                 WriteLine("};");
                 WriteLine("std::coroutine_handle<promise_type> h;");
+                WriteLine("Generator() : h(nullptr) {}");
                 WriteLine("explicit Generator(std::coroutine_handle<promise_type> handle) : h(handle) {}");
                 WriteLine("Generator(Generator&& other) noexcept : h(other.h) { other.h = nullptr; }");
                 WriteLine("Generator(const Generator&) = delete;");
+                WriteLine("Generator& operator=(Generator&& other) noexcept { if (this != &other) { if (h) h.destroy(); h = other.h; other.h = nullptr; } return *this; }");
                 WriteLine("~Generator() { if (h) h.destroy(); }");
                 WriteLine("struct iterator {");
                 Indent();
@@ -388,6 +390,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
 
+            // IEnumerable(Of T) -> the coroutine generator (iterators are its only producer)
+            if (type.Name == "IEnumerable" && type.GenericArguments != null && type.GenericArguments.Count > 0)
+                return $"BasicLang::Generator<{MapType(type.GenericArguments[0])}>";
+
             // Task(Of T) -> synchronous BasicLang::Task<T> emulation
             if (type.Name == "Task")
             {
@@ -445,6 +451,22 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 if (lambdaFunc != null)
                     return GenerateLambdaExpression(lambdaFunc);
             }
+
+            // The IRBuilder names result values after their assignment target (an IRAwait
+            // named "x" for `Dim x = Await ...`, an IRBinaryOp named "total" for
+            // `total = total + i`). The base implementation ignores .Name for
+            // non-variables and invents a fresh temp, which both loses the assignment
+            // and references an undeclared identifier. Honor the destination name.
+            if (value != null && !(value is IRVariable) && !(value is IRConstant)
+                && !string.IsNullOrEmpty(value.Name)
+                && _declaredIdentifiers.Contains(value.Name)
+                && !_valueNames.ContainsKey(value))
+            {
+                var name = SanitizeName(value.Name);
+                _valueNames[value] = name;
+                return name;
+            }
+
             return base.GetValueName(value);
         }
 
@@ -458,6 +480,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var savedOutput = _output;
             var savedFunction = _currentFunction;
             var savedIndent = _indentLevel;
+            var savedTempCounter = _tempCounter;
             var savedNames = new Dictionary<IRValue, string>(_valueNames);
             var savedDeclared = new HashSet<string>(_declaredIdentifiers, StringComparer.OrdinalIgnoreCase);
             var savedTemps = new HashSet<IRValue>(_allTemporaries);
@@ -479,8 +502,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _currentFunction = lambda;
                 InitializeFunctionContext(lambda);
                 DeclareLocalsAndTemporaries(lambda);
-                if (lambda.EntryBlock != null)
-                    GenerateBlock(lambda.EntryBlock, new HashSet<BasicBlock>());
+                GenerateFunctionBody(lambda);
 
                 _output.Append('}');
                 return _output.ToString();
@@ -490,6 +512,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _output = savedOutput;
                 _currentFunction = savedFunction;
                 _indentLevel = savedIndent;
+                _tempCounter = savedTempCounter;
                 _valueNames.Clear();
                 foreach (var kv in savedNames) _valueNames[kv.Key] = kv.Value;
                 _declaredIdentifiers.Clear();
@@ -782,9 +805,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _currentFunction = ctor.Implementation;
                 InitializeFunctionContext(ctor.Implementation);
                 DeclareLocalsAndTemporaries(ctor.Implementation);
-
-                if (ctor.Implementation.EntryBlock != null)
-                    GenerateBlock(ctor.Implementation.EntryBlock, new HashSet<BasicBlock>());
+                GenerateFunctionBody(ctor.Implementation);
 
                 _currentFunction = null;
             }
@@ -867,9 +888,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _currentFunction = prop.Getter;
                 InitializeFunctionContext(prop.Getter);
                 DeclareLocalsAndTemporaries(prop.Getter);
-
-                if (prop.Getter.EntryBlock != null)
-                    GenerateBlock(prop.Getter.EntryBlock, new HashSet<BasicBlock>());
+                GenerateFunctionBody(prop.Getter);
 
                 _currentFunction = null;
                 Unindent();
@@ -891,9 +910,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _currentFunction = prop.Setter;
                 InitializeFunctionContext(prop.Setter);
                 DeclareLocalsAndTemporaries(prop.Setter);
-
-                if (prop.Setter.EntryBlock != null)
-                    GenerateBlock(prop.Setter.EntryBlock, new HashSet<BasicBlock>());
+                GenerateFunctionBody(prop.Setter);
 
                 _currentFunction = null;
                 Unindent();
@@ -971,9 +988,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _currentFunction = method.Implementation;
                 InitializeFunctionContext(method.Implementation);
                 DeclareLocalsAndTemporaries(method.Implementation);
-
-                if (method.Implementation.EntryBlock != null)
-                    GenerateBlock(method.Implementation.EntryBlock, new HashSet<BasicBlock>());
+                GenerateFunctionBody(method.Implementation);
 
                 _currentFunction = null;
             }
@@ -1130,33 +1145,81 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Generate body
             if (function.EntryBlock != null)
             {
-                GenerateBlock(function.EntryBlock, new HashSet<BasicBlock>());
+                GenerateFunctionBody(function);
             }
 
             Unindent();
             WriteLine("}");
         }
         
+        /// <summary>C++ labels cannot contain dots (block names like "if0.then" do).</summary>
+        private string LabelName(string blockName) => blockName.Replace('.', '_');
+
+        /// <summary>
+        /// Emit a function body: the entry block, then every remaining block in creation
+        /// order. BasicBlock.Successors is only populated by the ControlFlowGraph analysis
+        /// pass (which codegen does not run), so successor-walking alone would silently
+        /// drop every non-entry block (any If branch, loop continuation, post-Try code).
+        /// Blocks consumed inline by structured statements (try/catch/finally bodies,
+        /// foreach bodies) are excluded.
+        /// </summary>
+        private void GenerateFunctionBody(IRFunction function)
+        {
+            var visited = new HashSet<BasicBlock>();
+            var consumed = CollectInlineEmittedBlocks(function);
+            if (function.EntryBlock != null)
+                GenerateBlock(function.EntryBlock, visited);
+            foreach (var block in function.Blocks)
+            {
+                if (block == null || visited.Contains(block) || consumed.Contains(block)) continue;
+                GenerateBlock(block, visited);
+            }
+        }
+
+        private HashSet<BasicBlock> CollectInlineEmittedBlocks(IRFunction function)
+        {
+            var consumed = new HashSet<BasicBlock>();
+            foreach (var block in function.Blocks)
+            {
+                foreach (var inst in block.Instructions)
+                {
+                    switch (inst)
+                    {
+                        case IRTryCatch tc:
+                            if (tc.TryBlock != null) consumed.Add(tc.TryBlock);
+                            foreach (var cc in tc.CatchClauses)
+                                if (cc.Block != null) consumed.Add(cc.Block);
+                            if (tc.FinallyBlock != null) consumed.Add(tc.FinallyBlock);
+                            break;
+                        case IRForEach fe:
+                            if (fe.BodyBlock != null) consumed.Add(fe.BodyBlock);
+                            break;
+                    }
+                }
+            }
+            return consumed;
+        }
+
         private void GenerateBlock(BasicBlock block, HashSet<BasicBlock> visited)
         {
             if (visited.Contains(block)) return;
             visited.Add(block);
-            
-            // Label (if needed)
+
+            // Label (if needed); trailing ';' keeps a label at block end valid C++
             if (block.Predecessors.Count > 1 || block != _currentFunction.EntryBlock)
             {
                 Unindent();
-                WriteLine($"{block.Name}:");
+                WriteLine($"{LabelName(block.Name)}: ;");
                 Indent();
             }
-            
+
             // Instructions
             foreach (var instruction in block.Instructions)
             {
                 instruction.Accept(this);
             }
-            
-            // Process successors
+
+            // Process successors (populated only when a CFG pass has run; see GenerateFunctionBody)
             foreach (var successor in block.Successors.Where(s => !visited.Contains(s)))
             {
                 GenerateBlock(successor, visited);
@@ -1736,7 +1799,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRBranch branch)
         {
-            WriteLine($"goto {branch.Target.Name};");
+            WriteLine($"goto {LabelName(branch.Target.Name)};");
         }
         
         public override void Visit(IRConditionalBranch condBranch)
@@ -1745,12 +1808,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             
             WriteLine($"if ({condition}) {{");
             Indent();
-            WriteLine($"goto {condBranch.TrueTarget.Name};");
+            WriteLine($"goto {LabelName(condBranch.TrueTarget.Name)};");
             Unindent();
             WriteLine("}");
             WriteLine($"else {{");
             Indent();
-            WriteLine($"goto {condBranch.FalseTarget.Name};");
+            WriteLine($"goto {LabelName(condBranch.FalseTarget.Name)};");
             Unindent();
             WriteLine("}");
         }
@@ -1765,10 +1828,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             foreach (var (caseValue, target) in switchInst.Cases)
             {
                 var caseVal = GetValueName(caseValue);
-                WriteLine($"case {caseVal}: goto {target.Name};");
+                WriteLine($"case {caseVal}: goto {LabelName(target.Name)};");
             }
             
-            WriteLine($"default: goto {switchInst.DefaultTarget.Name};");
+            WriteLine($"default: goto {LabelName(switchInst.DefaultTarget.Name)};");
             
             Unindent();
             WriteLine("}");
@@ -1813,7 +1876,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public override void Visit(IRLabel label)
         {
             Unindent();
-            WriteLine($"{label.Name}:");
+            WriteLine($"{LabelName(label.Name)}: ;");
             Indent();
         }
         
@@ -1841,8 +1904,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRAwait awaitInst)
         {
-            // Synchronous Task<T> emulation: awaiting just unwraps the value
-            WriteLine($"{GetValueName(awaitInst)} = {GetValueName(awaitInst.Expression)}.get();");
+            // Synchronous Task<T> emulation: awaiting just unwraps the value.
+            // Await over a direct call embeds the IRCall in the IRAwait without emitting
+            // it as a block instruction (IRBuilder.Visit(AwaitExpressionNode)) - render
+            // the call inline here.
+            string task;
+            if (awaitInst.Expression is IRCall embeddedCall)
+            {
+                var args = string.Join(", ", embeddedCall.Arguments.Select(GetValueName));
+                task = $"{SanitizeName(embeddedCall.FunctionName)}({args})";
+            }
+            else
+            {
+                task = GetValueName(awaitInst.Expression);
+            }
+            WriteLine($"{GetValueName(awaitInst)} = {task}.get();");
         }
 
         public override void Visit(IRYield yieldInst)
@@ -2073,14 +2149,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("{");
             Indent();
 
-            // Emit body block instructions
-            if (forEach.BodyBlock != null)
-            {
-                foreach (var instruction in forEach.BodyBlock.Instructions)
-                {
-                    instruction.Accept(this);
-                }
-            }
+            // Emit body block instructions (skipping block-terminator branches:
+            // the range-for supplies the loop structure)
+            EmitBlockInstructions(forEach.BodyBlock);
 
             Unindent();
             WriteLine("}");

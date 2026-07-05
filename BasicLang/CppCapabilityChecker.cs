@@ -124,6 +124,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (string.IsNullOrEmpty(name) || MappedTypeNames.Contains(name)) return;
             if (CppExceptionTypes.IsNetException(name)) return; // mapped to std::runtime_error
             if (name.Equals("Task", StringComparison.OrdinalIgnoreCase)) return; // BasicLang::Task<T>
+            if (name.Equals("IEnumerable", StringComparison.OrdinalIgnoreCase)
+                && type.GenericArguments != null && type.GenericArguments.Count > 0) return; // BasicLang::Generator<T>
             if (name.Equals("Func", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("Action", StringComparison.OrdinalIgnoreCase)) return; // std::function
 

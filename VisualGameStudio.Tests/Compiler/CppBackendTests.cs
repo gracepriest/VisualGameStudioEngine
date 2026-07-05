@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using NUnit.Framework;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
@@ -343,6 +344,153 @@ End Sub";
         // finally body appears on both the exceptional and the normal path
         Assert.That(CountOccurrences(output, "n = 2;"), Is.EqualTo(2),
             "finally body should be emitted twice (exceptional + normal path):\n" + output);
+    }
+
+    // ========================================================================
+    // Task 7: end-to-end - generated C++ must be accepted by a real C++ compiler
+    // ========================================================================
+
+    [Test]
+    public void Cpp_EndToEnd_GeneratedCodeIsValidCpp()
+    {
+        // One representative program exercising templates, shared_ptr classes,
+        // throw/catch/finally, lambdas, async Task emulation, and coroutine yield.
+        var source = @"
+Class Pair(Of T)
+    Public ItemA As T
+    Public ItemB As T
+End Class
+
+Class Person
+    Public Name As String
+    Public Sub Rename(newName As String)
+        Name = newName
+    End Sub
+End Class
+
+Template Function Max(Of T)(a As T, b As T) As T
+    If a > b Then
+        Return a
+    End If
+    Return b
+End Function
+
+Function Add(a As Integer, b As Integer) As Integer
+    Return a + b
+End Function
+
+Iterator Function Numbers() As IEnumerable(Of Integer)
+    Yield 1
+    Yield 2
+End Function
+
+Async Function GetValueAsync() As Task(Of Integer)
+    Return 42
+End Function
+
+Async Function CallerAsync() As Task(Of Integer)
+    Dim x As Integer = Await GetValueAsync()
+    Return x
+End Function
+
+Sub Main()
+    Dim p As New Person()
+    p.Rename(""Alice"")
+    Dim pair As New Pair(Of Integer)()
+    pair.ItemA = 1
+    Dim f As Func(Of Integer, Integer) = Function(x As Integer) x * 2
+    Dim doubled As Integer = f(21)
+    Dim total As Integer = Add(doubled, 0)
+    For Each i In Numbers()
+        total = total + i
+    Next
+    Dim n As Integer = 0
+    Try
+        Throw New Exception(""boom"")
+    Catch ex As Exception
+        n = 1
+    Finally
+        n = 2
+    End Try
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+
+        var compiler = FindCppCompiler();
+        if (compiler == null)
+            Assert.Ignore("No C++ compiler available (clang++/g++/MSVC) - structural assertions only");
+
+        var tmp = Path.Combine(Path.GetTempPath(), $"blcpp_{Guid.NewGuid():N}.cpp");
+        File.WriteAllText(tmp, output);
+        try
+        {
+            var (exe, argsTemplate) = compiler.Value;
+            var psi = new ProcessStartInfo(exe, string.Format(argsTemplate, tmp))
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit(120000);
+
+            Assert.That(proc.ExitCode, Is.EqualTo(0),
+                $"generated C++ failed to compile:\n{stdout}\n{stderr}\n--- generated code ---\n{output}");
+        }
+        finally
+        {
+            File.Delete(tmp);
+        }
+    }
+
+    /// <summary>Probe for a C++ compiler: clang++/g++ on PATH, then MSVC via vswhere +
+    /// vcvars64.bat. Returns (executable, args template with {0} = source path).</summary>
+    private static (string exe, string argsTemplate)? FindCppCompiler()
+    {
+        foreach (var (exe, args) in new[]
+        {
+            ("clang++", "-std=c++20 -fsyntax-only \"{0}\""),
+            ("g++", "-std=c++20 -fsyntax-only \"{0}\"")
+        })
+        {
+            try
+            {
+                using var probe = Process.Start(new ProcessStartInfo(exe, "--version")
+                { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+                probe.WaitForExit(10000);
+                if (probe.ExitCode == 0) return (exe, args);
+            }
+            catch { /* not on PATH */ }
+        }
+
+        var vswhere = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            "Microsoft Visual Studio", "Installer", "vswhere.exe");
+        if (File.Exists(vswhere))
+        {
+            try
+            {
+                using var p = Process.Start(new ProcessStartInfo(vswhere,
+                    "-latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath")
+                { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+                var installPath = p.StandardOutput.ReadToEnd().Trim();
+                p.WaitForExit(15000);
+                if (!string.IsNullOrEmpty(installPath))
+                {
+                    var vcvars = Path.Combine(installPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
+                    if (File.Exists(vcvars))
+                        return ("cmd.exe", "/s /c \"\"" + vcvars + "\" >nul && cl /nologo /std:c++20 /EHsc /Zs \"{0}\"\"");
+                }
+            }
+            catch { /* vswhere probe failed */ }
+        }
+
+        return null;
     }
 
     private static int CountOccurrences(string haystack, string needle)

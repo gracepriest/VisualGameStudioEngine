@@ -122,6 +122,36 @@ dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
 4. **Add game engine features**: Edit C++ in `VisualGameStudioEngine/`, update `RaylibWrapper/`
 5. **Update IDE binaries**: Copy from build output to `IDE/` folder
 
+## C++ Backend Overhaul (July 2026)
+
+Seven-task overhaul (plan: `docs/superpowers/plans/2026-07-05-cpp-backend-overhaul.md`,
+spec: `docs/superpowers/specs/2026-07-05-cpp-backend-overhaul-decisions.md`):
+
+- **Capability diagnostics**: `CppCapabilityChecker` runs before codegen and throws
+  `CppCapabilityException` for constructs the backend can't lower. Permanent diagnostics:
+  unmapped .NET types (List, Dictionary, DateTime, ...) and `Object`.
+- **Generics**: real C++ templates (`template <typename T>`); constraints dropped with a
+  comment; `Pair(Of Integer)` → `Pair<int32_t>` recursively.
+- **Reference semantics**: classes/interfaces are `std::shared_ptr<T>` +
+  `std::make_shared` + `->` access; String/structures stay values.
+- **Exceptions**: `IRThrow` IR node (new; C# backend also emits real throws now);
+  `Throw New Exception("msg")` → `throw std::runtime_error(msg)`; catch types map to
+  `std::exception`/`std::runtime_error`; Finally emitted on both paths
+  (limitation: `Return` inside `Try` bypasses Finally).
+- **Lambdas**: inlined as `[=](params) -> ret { ... }`; `Func`/`Action` →
+  `std::function<...>`.
+- **Async/Yield**: synchronous `BasicLang::Task<T>` emulation (no scheduler);
+  iterators are real C++20 coroutines (`BasicLang::Generator<T>`, `co_yield`).
+  Generated code targets `-std=c++20`.
+- **Block walker fix**: `BasicBlock.Successors` is only populated by the CFG analysis
+  pass, so codegen emits all `function.Blocks` in creation order (labels mangled
+  `if0.then` → `if0_then`); previously every non-entry block (If branches, post-Try
+  code) was silently dropped.
+- **E2E test**: `CppBackendTests.Cpp_EndToEnd_GeneratedCodeIsValidCpp` compiles
+  generated C++ with a real compiler (clang++/g++/MSVC via vswhere) when available.
+- **Known gaps**: structures generate no IR on any backend (separate follow-up);
+  .NET API surface (List, Console, s.Trim(), ...) undesigned for C++.
+
 ## Recent Bug Fixes (January 2026)
 
 ### For Loop Improvements

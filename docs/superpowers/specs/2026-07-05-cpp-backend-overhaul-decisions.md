@@ -1,5 +1,8 @@
 # C++ Backend Overhaul — Design Decisions (Spec)
 
+> **Status: SHIPPED 2026-07-05** — all 7 tasks landed on master; E2E test compiles the
+> generated C++ with MSVC. See git log `feat(cpp-backend)` commits for the trail.
+
 Decisions locked during brainstorming (side-chat session, 2026-07-05). This spec is the
 authority for the implementation plan `docs/superpowers/plans/2026-07-05-cpp-backend-overhaul.md`.
 
