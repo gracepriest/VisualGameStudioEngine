@@ -934,7 +934,7 @@ Sub ShowMessage(message As String)
 End Sub
 
 Sub ShowError(message As String)
-    PrintLine(""Error: "" + message)
+    PrintLine(""Error: "" & message)
 End Sub
 ";
         await File.WriteAllTextAsync(formFile, formContent, cancellationToken);
@@ -968,7 +968,7 @@ Sub ShowMessage(message As String)
 End Sub
 
 Sub ShowError(message As String)
-    PrintLine(""Error: "" + message)
+    PrintLine(""Error: "" & message)
 End Sub
 ";
         await File.WriteAllTextAsync(windowFile, windowContent, cancellationToken);
@@ -1002,7 +1002,7 @@ Sub ShowMessage(message As String)
 End Sub
 
 Sub ShowError(message As String)
-    PrintLine(""Error: "" + message)
+    PrintLine(""Error: "" & message)
 End Sub
 ";
         await File.WriteAllTextAsync(windowFile, windowContent, cancellationToken);

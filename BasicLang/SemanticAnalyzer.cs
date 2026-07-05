@@ -2545,34 +2545,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(UsingDirectiveNode node)
         {
-            // Track .NET namespaces for type resolution
-            if (node.IsNetNamespace)
-            {
-                _netNamespaces.Add(node.Namespace);
-
-                // Load types from the TypeRegistry if configured
-                if (_typeRegistry != null)
-                {
-                    _typeRegistry.LoadNamespace(node.Namespace);
-                }
-            }
-
             // Track the using directive for module resolution
+            UsingInfo usingInfo = null;
             if (_moduleRegistry != null && _currentUnit != null)
             {
-                var usingInfo = new UsingInfo(node.Namespace, node.Line, node.Column, node.IsNetNamespace, node.Alias);
+                usingInfo = new UsingInfo(node.Namespace, node.Line, node.Column, node.IsNetNamespace, node.Alias);
                 _currentUnit.Usings.Add(usingInfo);
+            }
 
-                // If this is a .NET namespace, don't try to resolve as BasicLang files
-                if (node.IsNetNamespace)
-                {
-                    // .NET namespaces are passed through to the backend
-                    // No file resolution needed
-                    return;
-                }
-
+            if (!node.IsNetNamespace)
+            {
                 // Resolve namespace and import symbols (for BasicLang modules)
-                var files = _moduleResolver?.ResolveNamespace(node.Namespace, _currentUnit.FilePath);
+                var files = usingInfo != null
+                    ? _moduleResolver?.ResolveNamespace(node.Namespace, _currentUnit.FilePath)
+                    : null;
                 if (files != null && files.Count > 0)
                 {
                     usingInfo.ResolvedPaths.AddRange(files);
@@ -2582,8 +2568,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     {
                         ImportSymbolsFromFile(file, node.Line, node.Column);
                     }
+                    return;
+                }
+
+                // Not a resolvable BasicLang module — treat it as an external
+                // .NET namespace root (e.g. 'Using Avalonia'). The parser only
+                // whitelists System/Microsoft/Windows/Mono as single-word .NET
+                // namespaces, so third-party roots land here; dropping them
+                // silently made the generated C# fail with CS0246 on every
+                // type from that namespace.
+                node.IsNetNamespace = true;
+                if (usingInfo != null)
+                {
+                    usingInfo.IsNetNamespace = true;
                 }
             }
+
+            // Track .NET namespaces for type resolution; passed through to the
+            // backend which emits the C# using directive.
+            _netNamespaces.Add(node.Namespace);
+            _typeRegistry?.LoadNamespace(node.Namespace);
         }
 
         public void Visit(ImportDirectiveNode node)
