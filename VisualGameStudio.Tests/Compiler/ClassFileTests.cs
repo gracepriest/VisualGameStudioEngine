@@ -10,7 +10,8 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <summary>
 /// Tests for .cls/.class file support (implicit class files).
 /// .cls/.class files are automatically wrapped in a Class block where the filename
-/// becomes the class name. Private by default; use "Public" on the first line for global access.
+/// becomes the class name. Private by default; use "Option Public" as the first code line
+/// for global access (bare "Public" on line 1 still works but is deprecated and warns).
 /// Other files must use "Import ClassName" to access private .cls classes.
 /// </summary>
 [TestFixture]
@@ -531,6 +532,7 @@ Public Value As Integer
         Assert.That(result.AllErrors, Is.Empty,
             $"Expected no errors but got: {string.Join(", ", result.AllErrors)}");
         var classNode = result.Units[0].AST.Declarations.OfType<ClassNode>().FirstOrDefault();
+        Assert.That(classNode, Is.Not.Null, "expected a ClassNode");
         Assert.That(classNode.Access, Is.EqualTo(BasicLang.Compiler.AST.AccessModifier.Public),
             "bare Public must keep working");
         Assert.That(captured.ToString(), Does.Contain("deprecated"));

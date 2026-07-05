@@ -614,3 +614,9 @@ ItemTemplates/BasicLang.ItemTemplates.vstman
 6. Start VS 2022
 
 **Debugging**: If issues persist, run `devenv.exe /log` and check `%APPDATA%\Microsoft\VisualStudio\17.0_*\ActivityLog.xml`
+
+### .cls Option Public Directive (July 2026)
+- **`Option Public` directive**: first code line of a .cls file (comments/blank lines may precede) makes the implicit class public — clearer than the legacy bare `Public` line
+- Bare `Public` first line still works but emits a deprecation warning
+- Directive line is replaced in place by the class header, so `LineOffset = 0` (no diagnostic/debugger shifts)
+- Spec: `docs/superpowers/specs/2026-07-05-cls-option-public-design.md`
