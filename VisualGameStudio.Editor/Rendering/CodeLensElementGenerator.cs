@@ -12,9 +12,14 @@ using VisualGameStudio.Editor.TextMarkers;
 namespace VisualGameStudio.Editor.Rendering;
 
 /// <summary>
-/// A VisualLineElementGenerator that inserts CodeLens panels above lines that have CodeLens items.
-/// Each CodeLens panel displays clickable text items (e.g., "2 references | Run | Debug")
-/// separated by " | " delimiters, styled with a smaller italic font in gray/blue.
+/// A VisualLineElementGenerator that renders CodeLens items as an end-of-line inlay
+/// (JetBrains-style): the lens panel appears AFTER the last character of the declaration
+/// line, separated by a small margin. Each panel displays clickable text items
+/// (e.g., "2 references | Run | Debug") styled with a smaller italic gray/blue font.
+///
+/// The lens is deliberately never inserted before the first character of the line:
+/// a start-of-line inline object displaces the first token, inflates the line height,
+/// and intercepts mouse interaction where the first word starts.
 ///
 /// Works with <see cref="CodeLensManager"/> which provides the data, and fires
 /// <see cref="CodeLensClicked"/> when a user clicks on a CodeLens item.
@@ -25,14 +30,14 @@ public class CodeLensElementGenerator : VisualLineElementGenerator
     private readonly CodeLensManager _manager;
 
     /// <summary>
-    /// Height of the CodeLens row above the target code line (pixels).
-    /// </summary>
-    private const double LensRowHeight = 20;
-
-    /// <summary>
     /// Font size for CodeLens text (px).
     /// </summary>
     private const double LensFontSize = 11;
+
+    /// <summary>
+    /// Horizontal gap between the end of the code line and the lens panel (px).
+    /// </summary>
+    private const double LensLeftMargin = 12;
 
     /// <summary>
     /// Fired when a CodeLens item is clicked.
@@ -52,9 +57,30 @@ public class CodeLensElementGenerator : VisualLineElementGenerator
     }
 
     /// <summary>
-    /// Scans forward from <paramref name="startOffset"/> looking for the first document offset
-    /// that sits at the beginning of a line which has CodeLens items.
-    /// Returns -1 when no more interested offsets exist in the current visual line.
+    /// Pure mapping from a generator query to the offset the lens anchors to.
+    /// Returns the line's END offset (the position after the last character, before the
+    /// line delimiter) when the line should display a lens, otherwise -1.
+    ///
+    /// Rules:
+    /// - lines without lenses are not interesting;
+    /// - empty lines are skipped (nothing to annotate; a lens-only visual line would
+    ///   degrade caret navigation);
+    /// - queries past the end offset (inside the line delimiter — AvaloniaEdit re-asks at
+    ///   offset + 1 after constructing a zero-length element) are not interesting.
+    /// The result is always &gt;= the line's first character offset, never before it.
+    /// </summary>
+    public static int ComputeInterestedOffset(int startOffset, int lineOffset, int lineEndOffset, bool lineHasLenses)
+    {
+        if (!lineHasLenses) return -1;
+        if (lineEndOffset <= lineOffset) return -1;  // empty line
+        if (startOffset > lineEndOffset) return -1;  // already past the anchor
+        return lineEndOffset;
+    }
+
+    /// <summary>
+    /// Returns the first offset &gt;= <paramref name="startOffset"/> where this generator
+    /// wants to insert an element: the END offset of a lens-bearing line.
+    /// Returns -1 when there is no interested offset in the queried region.
     /// </summary>
     public override int GetFirstInterestedOffset(int startOffset)
     {
@@ -63,26 +89,18 @@ public class CodeLensElementGenerator : VisualLineElementGenerator
         var document = CurrentContext.Document;
         if (document == null) return -1;
 
-        // Find the line that contains startOffset
         var line = document.GetLineByOffset(startOffset);
         if (line == null) return -1;
 
-        // We are only interested in the very start of lines that have CodeLens.
-        // If startOffset is at the beginning of such a line, return it.
-        if (line.Offset == startOffset && _manager.HasLensesForLine(line.LineNumber))
-        {
-            return startOffset;
-        }
-
-        // Otherwise, check the next line (element generators are called per visual line,
-        // so we only need to check the current line's start offset).
-        return -1;
+        return ComputeInterestedOffset(
+            startOffset, line.Offset, line.EndOffset,
+            _manager.HasLensesForLine(line.LineNumber));
     }
 
     /// <summary>
-    /// Constructs the visual element to insert at the given offset.
-    /// Returns an <see cref="InlineObjectElement"/> wrapping a <see cref="CodeLensPanel"/>
-    /// that displays the CodeLens items for this line.
+    /// Constructs the visual element to insert at the given offset (the line's end offset).
+    /// Returns a <see cref="CodeLensInlineElement"/> wrapping a <see cref="CodeLensPanel"/>
+    /// that displays the CodeLens items for this line after the line's text.
     /// </summary>
     public override VisualLineElement? ConstructElement(int offset)
     {
@@ -90,54 +108,78 @@ public class CodeLensElementGenerator : VisualLineElementGenerator
         if (document == null) return null;
 
         var line = document.GetLineByOffset(offset);
-        if (line == null || line.Offset != offset) return null;
+        if (line == null || line.EndOffset != offset || line.Length == 0) return null;
 
         var lenses = _manager.GetLensesForLine(line.LineNumber);
         if (lenses.Count == 0) return null;
 
-        // Build the CodeLens panel control
-        var panel = new CodeLensPanel(lenses, LensFontSize, LensRowHeight);
+        // Build the CodeLens panel control. It sizes to its own text (no forced
+        // width/height) so it does not inflate the visual line.
+        var panel = new CodeLensPanel(lenses, LensFontSize, LensLeftMargin);
         panel.ItemClicked += (_, args) => CodeLensClicked?.Invoke(this, args);
 
-        // Measure the panel so AvalonEdit knows its size
+        // Measure the panel so AvaloniaEdit knows its size.
         panel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
 
-        // Create an inline object element spanning 0 document characters.
-        // documentLength = 0 means the element is inserted without consuming any text.
-        var element = new InlineObjectElement(0, panel)
-        {
-            // This element sits before the first character of the line.
-        };
-
-        return element;
+        return new CodeLensInlineElement(panel);
     }
+}
+
+/// <summary>
+/// The inline object element used for CodeLens inlays. It spans 0 document characters
+/// (inserted at the line's end offset without consuming text) and is invisible to the
+/// caret:
+/// - <see cref="GetNextCaretPosition"/> returns -1 so the element itself contributes no
+///   caret stops (otherwise Left/Right would need an extra key press at end of line and
+///   the caret would render after the lens);
+/// - <see cref="HandlesLineBorders"/> is true so the implicit end-of-line caret stop
+///   AFTER this element (at VisualLength) is suppressed; the last caret stop on the line
+///   remains the boundary after the last text character, i.e. before the lens.
+/// Typing at the line end inserts text at the same document offset the lens is anchored
+/// to; since the element consumes no characters the edit is unaffected and the lens is
+/// simply re-generated after the new text on the next redraw.
+/// </summary>
+public class CodeLensInlineElement : InlineObjectElement
+{
+    public CodeLensInlineElement(Control element)
+        : base(0, element)
+    {
+    }
+
+    /// <inheritdoc/>
+    public override int GetNextCaretPosition(int visualColumn, LogicalDirection direction, CaretPositioningMode mode)
+        => -1;
+
+    /// <inheritdoc/>
+    public override bool HandlesLineBorders => true;
 }
 
 /// <summary>
 /// An Avalonia control that renders a row of CodeLens items separated by " | ".
 /// Each item is a clickable TextBlock styled with a smaller italic blue font.
-/// The entire panel has a fixed height and sits above the code line.
+/// The panel sizes naturally to its content and carries a left margin that separates
+/// it from the end of the code line.
 /// </summary>
 internal class CodeLensPanel : Panel
 {
     private readonly IReadOnlyList<CodeLensItem> _lenses;
     private readonly double _fontSize;
-    private readonly double _rowHeight;
+    private readonly double _leftMargin;
 
     /// <summary>
     /// Fired when one of the CodeLens items is clicked.
     /// </summary>
     public event EventHandler<CodeLensClickedEventArgs>? ItemClicked;
 
-    public CodeLensPanel(IReadOnlyList<CodeLensItem> lenses, double fontSize, double rowHeight)
+    public CodeLensPanel(IReadOnlyList<CodeLensItem> lenses, double fontSize, double leftMargin)
     {
         _lenses = lenses;
         _fontSize = fontSize;
-        _rowHeight = rowHeight;
+        _leftMargin = leftMargin;
 
-        // Transparent background so clicks pass through to the text view where there is no text
+        // Transparent background so the panel's own area produces no visuals;
+        // clicks that miss the lens text bubble up to the text view as usual.
         Background = Brushes.Transparent;
-        Height = _rowHeight;
         IsHitTestVisible = true;
         ClipToBounds = false;
 
@@ -150,7 +192,7 @@ internal class CodeLensPanel : Panel
         {
             Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 0, 2)
+            Margin = new Thickness(_leftMargin, 0, 0, 0)
         };
 
         for (int i = 0; i < _lenses.Count; i++)
@@ -226,15 +268,5 @@ internal class CodeLensPanel : Panel
             });
             e.Handled = true;
         }
-    }
-
-    /// <summary>
-    /// Override MeasureOverride to ensure the panel reports the correct desired size.
-    /// </summary>
-    protected override Size MeasureOverride(Size availableSize)
-    {
-        var result = base.MeasureOverride(availableSize);
-        // Ensure minimum height for the CodeLens row
-        return new Size(Math.Max(result.Width, 50), Math.Max(result.Height, _rowHeight));
     }
 }
