@@ -118,6 +118,31 @@ End Sub";
     }
 
     // ========================================================================
+    // Structures (value types)
+    // ========================================================================
+
+    [Test]
+    public void Compile_Structure_EmitsStruct()
+    {
+        var source = @"
+Structure Point
+    Public X As Integer
+    Public Y As Integer
+End Structure
+
+Sub Main()
+    Dim p As Point
+    p.X = 1
+End Sub";
+
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("struct Point"));
+        Assert.That(output, Does.Contain("X"));
+    }
+
+    // ========================================================================
     // Throw statements (IRThrow)
     // ========================================================================
 

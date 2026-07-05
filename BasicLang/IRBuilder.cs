@@ -951,7 +951,28 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(StructureNode node)
         {
-            // Structures don't generate IR directly
+            // Structures lower to an IRClass flagged IsStruct: backends emit value types
+            var irStruct = new IRClass(node.Name)
+            {
+                Namespace = _currentNamespace,
+                IsStruct = true
+            };
+
+            foreach (var member in node.Members)
+            {
+                var fieldType = _semanticAnalyzer.GetNodeType(member)
+                                ?? new TypeInfo(member.Type?.Name ?? "Object", TypeKind.Structure);
+                irStruct.Fields.Add(new IRField
+                {
+                    Name = member.Name,
+                    Type = fieldType,
+                    Access = MapAccessModifier(member.Access),
+                    IsStatic = member.IsStatic,
+                    Initializer = BuildConstantFieldInitializer(member.Initializer, fieldType)
+                });
+            }
+
+            _module.Classes[node.Name] = irStruct;
         }
 
         public void Visit(UnionNode node)

@@ -914,7 +914,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             var abstractMod = irClass.IsAbstract ? "abstract " : "";
-            var classDecl = $"public {abstractMod}class {className}{genericParams}";
+            var kindKeyword = irClass.IsStruct ? "struct" : "class";
+            var classDecl = $"public {abstractMod}{kindKeyword} {className}{genericParams}";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
             {
                 classDecl += $" : {SanitizeName(irClass.BaseClass)}";

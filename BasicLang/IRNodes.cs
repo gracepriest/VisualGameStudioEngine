@@ -1350,6 +1350,8 @@ namespace BasicLang.Compiler.IR
         public List<string> GenericParameters { get; set; }
         public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints
         public bool IsAbstract { get; set; }
+        /// <summary>True for BasicLang Structure declarations: value semantics on all backends.</summary>
+        public bool IsStruct { get; set; }
 
         public IRClass(string name)
         {

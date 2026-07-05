@@ -63,7 +63,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 {
                     var fwdTemplate = TemplatePrefix(irClass.GenericParameters);
                     if (fwdTemplate != null) WriteLine(fwdTemplate);
-                    WriteLine($"class {SanitizeName(irClass.Name)};");
+                    WriteLine($"{(irClass.IsStruct ? "struct" : "class")} {SanitizeName(irClass.Name)};");
                 }
                 WriteLine();
             }
@@ -639,7 +639,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 EmitConstraintsComment(irClass.GenericTypeParams);
                 WriteLine(classTemplate);
             }
-            WriteLine($"class {className}{inheritance}");
+            WriteLine($"{(irClass.IsStruct ? "struct" : "class")} {className}{inheritance}");
             WriteLine("{");
 
             // Private members

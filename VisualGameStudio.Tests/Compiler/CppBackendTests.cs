@@ -260,12 +260,8 @@ End Sub";
     }
 
     [Test]
-    public void Cpp_Structure_ThrowsCapabilityError_NoCodegenExistsYet()
+    public void Cpp_Structure_ValueSemantics()
     {
-        // Structures generate no IR on ANY backend today (IRBuilder.Visit(StructureNode) is
-        // empty), so structure-typed values hit the permanent unmapped-type diagnostic.
-        // When structure codegen lands, this test should flip to asserting value semantics
-        // (no shared_ptr wrapper, '.' member access).
         var source = @"
 Structure Point
     Public X As Integer
@@ -277,12 +273,13 @@ Sub Main()
     p.X = 1
 End Sub";
 
-        var ex = Assert.Throws<CppCapabilityException>(() =>
-        {
-            var output = CompileToCpp(source, out var errors);
-            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
-        });
-        Assert.That(ex.Message, Does.Contain("Point"));
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("struct Point"));
+        Assert.That(output, Does.Contain("int32_t X;"));
+        Assert.That(output, Does.Not.Contain("shared_ptr<Point>"));
+        Assert.That(output, Does.Contain("p.X = 1"));
     }
 
     // ========================================================================
@@ -356,6 +353,11 @@ End Sub";
         // One representative program exercising templates, shared_ptr classes,
         // throw/catch/finally, lambdas, async Task emulation, and coroutine yield.
         var source = @"
+Structure Vec2
+    Public X As Integer
+    Public Y As Integer
+End Structure
+
 Class Pair(Of T)
     Public ItemA As T
     Public ItemB As T
@@ -394,6 +396,9 @@ Async Function CallerAsync() As Task(Of Integer)
 End Function
 
 Sub Main()
+    Dim v As Vec2
+    v.X = 3
+    v.Y = 4
     Dim p As New Person()
     p.Rename(""Alice"")
     Dim pair As New Pair(Of Integer)()

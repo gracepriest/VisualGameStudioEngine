@@ -149,8 +149,11 @@ spec: `docs/superpowers/specs/2026-07-05-cpp-backend-overhaul-decisions.md`):
   code) was silently dropped.
 - **E2E test**: `CppBackendTests.Cpp_EndToEnd_GeneratedCodeIsValidCpp` compiles
   generated C++ with a real compiler (clang++/g++/MSVC via vswhere) when available.
-- **Known gaps**: structures generate no IR on any backend (separate follow-up);
-  .NET API surface (List, Console, s.Trim(), ...) undesigned for C++.
+- **Known gaps**: .NET API surface (List, Console, s.Trim(), ...) undesigned for C++.
+- **Follow-ups landed (same day)**: Structures now lower to `IRClass.IsStruct` and emit
+  as value types (`struct`) on the C# and C++ backends ('.' access, no shared_ptr);
+  LINQ keywords (First, Where, Take, ...) are contextual — usable as member/variable
+  names instead of being silently dropped by the parser.
 
 ## Recent Bug Fixes (January 2026)
 
