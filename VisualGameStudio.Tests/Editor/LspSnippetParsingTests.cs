@@ -35,7 +35,7 @@ public class LspSnippetParsingTests
     {
         var def = SnippetDefinition.FromInsertText("WriteLine($0)");
 
-        var snippet = def.BuildSnippet("");
+        var snippet = def.BuildSnippet();
 
         Assert.That(snippet.Elements[0], Is.InstanceOf<SnippetTextElement>());
         Assert.That(((SnippetTextElement)snippet.Elements[0]).Text, Is.EqualTo("WriteLine("));
@@ -49,7 +49,7 @@ public class LspSnippetParsingTests
     {
         var def = SnippetDefinition.FromInsertText("List(Of ${1:Type})");
 
-        var snippet = def.BuildSnippet("");
+        var snippet = def.BuildSnippet();
 
         var replaceable = snippet.Elements.OfType<SnippetReplaceableTextElement>().Single();
         Assert.That(replaceable.Text, Is.EqualTo("Type"));
@@ -62,7 +62,7 @@ public class LspSnippetParsingTests
         // both must parse as tab stops, never remain literal "${0}" text.
         var def = SnippetDefinition.FromInsertText("If ${1} Then\n\t${0}\nEnd If");
 
-        var snippet = def.BuildSnippet("");
+        var snippet = def.BuildSnippet();
 
         Assert.That(snippet.Elements.OfType<SnippetCaretElement>().Count(), Is.EqualTo(1), "${0} must be the caret");
         Assert.That(snippet.Elements.OfType<SnippetReplaceableTextElement>().Count(), Is.EqualTo(1), "${1} must be a tab stop");
@@ -77,7 +77,7 @@ public class LspSnippetParsingTests
     {
         var def = SnippetDefinition.FromInsertText("Property ${1:Name}\n_${1:Name} = value");
 
-        var snippet = def.BuildSnippet("");
+        var snippet = def.BuildSnippet();
 
         var replaceables = snippet.Elements.OfType<SnippetReplaceableTextElement>().ToList();
         var bound = snippet.Elements.OfType<SnippetBoundElement>().ToList();
@@ -87,11 +87,16 @@ public class LspSnippetParsingTests
     }
 
     [Test]
-    public void BuildSnippet_MultiLine_AppliesIndentToContinuationLines()
+    public void BuildSnippet_MultiLine_DoesNotAddManualIndent_EditorAutoIndentsOnInsert()
     {
+        // AvaloniaEdit's InsertionContext already re-applies the insertion
+        // line's leading whitespace after every newline inside a snippet
+        // element. BuildSnippet must therefore NOT prepend the current indent
+        // itself — doing both double-indented every continuation line of every
+        // multi-line snippet committed at a non-zero indentation level.
         var def = SnippetDefinition.FromInsertText("Sub ${1:Name}()\n\t$0\nEnd Sub");
 
-        var snippet = def.BuildSnippet("    ");
+        var snippet = def.BuildSnippet();
 
         var text = string.Join("", snippet.Elements
             .Select(el => el switch
@@ -104,8 +109,12 @@ public class LspSnippetParsingTests
             }));
 
         Assert.That(text, Does.Contain("Sub Name()"));
-        Assert.That(text, Does.Contain(Environment.NewLine + "    \t"));
-        Assert.That(text, Does.Contain(Environment.NewLine + "    End Sub"));
+        Assert.That(text, Does.Contain(Environment.NewLine + "\t"),
+            "the body keeps only its own relative indent");
+        Assert.That(text, Does.Contain(Environment.NewLine + "End Sub"),
+            "continuation lines carry no manual indent — the editor re-adds it on insert");
+        Assert.That(text, Does.Not.Contain(Environment.NewLine + " "),
+            "no manual indentation may be baked into continuation lines");
     }
 
     [Test]
@@ -113,7 +122,7 @@ public class LspSnippetParsingTests
     {
         var def = SnippetDefinition.FromInsertText("Console.ReadLine()");
 
-        var snippet = def.BuildSnippet("");
+        var snippet = def.BuildSnippet();
 
         Assert.That(snippet.Elements, Has.Count.EqualTo(1));
         Assert.That(((SnippetTextElement)snippet.Elements[0]).Text, Is.EqualTo("Console.ReadLine()"));

@@ -85,21 +85,14 @@ public class CompletionData : ICompletionData
         {
             // Expand LSP snippet syntax ($0, $N, ${N:default}) into a real
             // AvaloniaEdit snippet with tab stops — never insert raw markers.
+            // Continuation-line indentation is applied by AvaloniaEdit's own
+            // InsertionContext on insert, so the snippet carries none itself.
             var document = textArea.Document;
-            var line = document.GetLineByOffset(completionSegment.Offset);
-            var lineText = document.GetText(line.Offset, completionSegment.Offset - line.Offset);
-            var indent = "";
-            foreach (var c in lineText)
-            {
-                if (c is ' ' or '\t') indent += c;
-                else break;
-            }
-
             var insertOffset = completionSegment.Offset;
             document.Remove(completionSegment);
             textArea.Caret.Offset = insertOffset;
 
-            var snippet = SnippetDefinition.FromInsertText(InsertText).BuildSnippet(indent);
+            var snippet = SnippetDefinition.FromInsertText(InsertText).BuildSnippet();
             snippet.Insert(textArea);
             return;
         }

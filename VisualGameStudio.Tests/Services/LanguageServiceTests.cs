@@ -140,6 +140,21 @@ public class LanguageServiceTests
             _service.Dispose();
         });
     }
+
+    [Test]
+    public async Task StartAsync_AfterDispose_DoesNotResurrectServer()
+    {
+        // An in-flight auto-restart executing StartAsync after Dispose used to
+        // clear the _stopping flag and spawn fresh server processes after
+        // shutdown — a disposed service must never start anything again.
+        _service.Dispose();
+
+        await _service.StartAsync();
+
+        Assert.That(_service.IsConnected, Is.False);
+        Assert.That(_service.ServerProcessId, Is.Null,
+            "no server process may be spawned by a disposed service");
+    }
 }
 
 [TestFixture]

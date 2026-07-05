@@ -24,6 +24,19 @@ public class CompletionSession
         Open
     }
 
+    /// <summary>What started the session — decides list composition (e.g. member-access lists never get statement snippets).</summary>
+    public enum CompletionTriggerKind
+    {
+        /// <summary>Typing the first identifier character of a word (debounced).</summary>
+        Word,
+
+        /// <summary>Typing '.' — a member-access list.</summary>
+        MemberAccess,
+
+        /// <summary>Explicit request (Ctrl+Space or programmatic).</summary>
+        Invoked
+    }
+
     /// <summary>
     /// How long a Requested session blocks fresh word triggers before it is
     /// considered lost (response never arrived). Slightly above the LSP
@@ -42,6 +55,9 @@ public class CompletionSession
     /// <summary>Caret line at the moment the session's request was fired.</summary>
     public int TriggerLine { get; private set; }
 
+    /// <summary>What started this session ('.', word typing, Ctrl+Space).</summary>
+    public CompletionTriggerKind TriggerKind { get; private set; }
+
     /// <summary>
     /// True while this session has a request in flight that should suppress
     /// new word triggers. A session whose response never arrived expires
@@ -56,11 +72,12 @@ public class CompletionSession
     }
 
     /// <summary>Starts a new session (fresh trigger) and records the trigger point.</summary>
-    public void Begin(int caretOffset, int caretLine)
+    public void Begin(int caretOffset, int caretLine, CompletionTriggerKind triggerKind = CompletionTriggerKind.Word)
     {
         State = SessionState.Requested;
         TriggerOffset = caretOffset;
         TriggerLine = caretLine;
+        TriggerKind = triggerKind;
         _beganAtUtc = DateTime.UtcNow;
     }
 
@@ -81,14 +98,38 @@ public class CompletionSession
 
     /// <summary>
     /// Whether completion results arriving now are allowed to open a NEW
-    /// window: only when this session requested them and the caret is still
-    /// in a plausible position (same line, at or after the trigger point).
-    /// A dismissed or moved-away session always answers false.
+    /// window: only when this session requested them and the caret movement
+    /// since the trigger is consistent with CONTINUED TYPING at the request
+    /// position. A dismissed or moved-away session always answers false.
     /// </summary>
-    public bool ShouldOpenWindow(int caretOffset, int caretLine)
+    /// <param name="textSinceTrigger">
+    /// The document text between <see cref="TriggerOffset"/> and the caret,
+    /// or null when the caller cannot reconstruct it (invalid offsets).
+    /// </param>
+    public bool ShouldOpenWindow(int caretOffset, int caretLine, string? textSinceTrigger)
     {
         return State == SessionState.Requested
-               && caretLine == TriggerLine
-               && caretOffset >= TriggerOffset;
+               && IsCaretConsistentWithTyping(caretOffset, caretLine, textSinceTrigger);
+    }
+
+    /// <summary>
+    /// Whether the caret position still matches continued typing at the
+    /// trigger point: same line, at or after the trigger offset, and ONLY
+    /// identifier characters typed in between. A mouse click further along
+    /// the line, a '.' starting member access, Home/End navigation etc. all
+    /// answer false — a pending session must be invalidated for those, so a
+    /// late response can never open the popup where the user navigated to.
+    /// </summary>
+    public bool IsCaretConsistentWithTyping(int caretOffset, int caretLine, string? textSinceTrigger)
+    {
+        if (caretLine != TriggerLine || caretOffset < TriggerOffset) return false;
+        if (textSinceTrigger == null) return false;
+
+        foreach (var c in textSinceTrigger)
+        {
+            if (!char.IsLetterOrDigit(c) && c != '_') return false;
+        }
+
+        return true;
     }
 }

@@ -60,24 +60,16 @@ public class SnippetCompletionData : ICompletionData
     {
         var document = textArea.Document;
 
-        // Get the indentation of the line where the snippet is being inserted
-        var line = document.GetLineByOffset(completionSegment.Offset);
-        var lineText = document.GetText(line.Offset, completionSegment.Offset - line.Offset);
-        var indent = "";
-        foreach (var c in lineText)
-        {
-            if (c == ' ' || c == '\t') indent += c;
-            else break;
-        }
-
         // Remove the completion segment text (the typed prefix) so the snippet
         // insertion replaces it cleanly
         document.Remove(completionSegment);
         textArea.Caret.Offset = completionSegment.Offset;
 
         // Build and insert the AvaloniaEdit Snippet with interactive tab-stops.
-        // Tab/Shift+Tab cycles between placeholders; Escape/Enter exits snippet mode.
-        var snippet = _snippet.BuildSnippet(indent);
+        // Tab/Shift+Tab cycles between placeholders; Escape/Enter exits snippet
+        // mode. Continuation-line indentation is applied by AvaloniaEdit's
+        // InsertionContext on insert, so the snippet itself carries none.
+        var snippet = _snippet.BuildSnippet();
         snippet.Insert(textArea);
     }
 }
