@@ -213,6 +213,11 @@ public class TypeInfo
         public bool IsImported { get; set; }
         public string SourceModule { get; set; }
 
+        // File that declares this symbol (set for project-wide/cross-file
+        // symbols so hover/definition can point at the actual defining file
+        // even when several files contribute to one module)
+        public string SourceFilePath { get; set; }
+
         // For external library symbols
         public bool IsPublic { get; set; }
         public string ExternLibrary { get; set; }

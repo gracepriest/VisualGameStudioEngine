@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.AST;
+using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 using LspRange = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
 
@@ -278,6 +279,13 @@ namespace BasicLang.Compiler.LSP
                 return FormatScopeSymbolHover(symbol);
             }
 
+            // 3.5 Cross-file: public symbols from sibling files in the same project
+            var projectHover = GetProjectSymbolHover(state, word);
+            if (projectHover != null)
+            {
+                return projectHover;
+            }
+
             // 4. Fallback: walk the AST declarations (includes module members)
             if (state?.AST != null)
             {
@@ -318,6 +326,67 @@ namespace BasicLang.Compiler.LSP
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Hover for symbols defined in sibling files of the same project
+        /// (cross-file context). Shows the signature plus the defining file.
+        /// </summary>
+        private string GetProjectSymbolHover(DocumentState state, string word)
+        {
+            var context = state?.ProjectContext;
+            if (context?.Symbols == null)
+                return null;
+
+            // A symbol exported by any project file (prefer files other than
+            // the current one — its own symbols were handled by the scope walk)
+            var (symbol, module) = context.FindPublicSymbol(word, state.FilePath);
+            if (symbol == null)
+            {
+                (symbol, module) = context.FindPublicSymbol(word);
+            }
+
+            if (symbol != null)
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("```vb");
+                sb.AppendLine(SimpleLspServer.FormatSymbolSignature(symbol));
+                sb.AppendLine("```");
+                sb.AppendLine();
+
+                // Several files can contribute to one module (file-level decls
+                // + a same-named Module block) — prefer the symbol's own file.
+                var definingPath = symbol.SourceFilePath ?? module?.FilePath;
+                var fileName = definingPath != null
+                    ? System.IO.Path.GetFileName(definingPath)
+                    : module?.ModuleName;
+                if (!string.IsNullOrEmpty(fileName))
+                {
+                    sb.AppendLine(symbol.Line > 0
+                        ? $"📍 Defined in {fileName} (line {symbol.Line})"
+                        : $"📍 Defined in {fileName}");
+                }
+
+                return sb.ToString();
+            }
+
+            // Hover over a module name itself (e.g. `Import MathUtils` / `MathUtils.Add`)
+            if (context.Symbols.HasModule(word))
+            {
+                var mod = context.Symbols.GetModule(word);
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("```vb");
+                sb.AppendLine($"Module {mod?.ModuleName ?? word}");
+                sb.AppendLine("```");
+                if (mod?.FilePath != null)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine($"📍 Defined in {System.IO.Path.GetFileName(mod.FilePath)}");
+                }
+                return sb.ToString();
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -668,14 +737,34 @@ namespace BasicLang.Compiler.LSP
         /// </summary>
         public Location FindDefinition(DocumentState state, string word)
         {
-            if (state?.AST == null)
-                return null;
-
-            foreach (var decl in state.AST.Declarations)
+            if (state?.AST != null)
             {
-                var location = FindDeclarationLocation(state, decl, word);
-                if (location != null)
-                    return location;
+                foreach (var decl in state.AST.Declarations)
+                {
+                    var location = FindDeclarationLocation(state, decl, word);
+                    if (location != null)
+                        return location;
+                }
+            }
+
+            // Cross-file: definition in a sibling file of the same project
+            var context = state?.ProjectContext;
+            if (context != null)
+            {
+                var (symbol, module) = context.FindPublicSymbol(word, state.FilePath);
+                // Prefer the symbol's own defining file over the module's
+                // (several files can contribute to one module name).
+                var definingPath = symbol?.SourceFilePath ?? module?.FilePath;
+                if (symbol != null && symbol.Line > 0 && definingPath != null)
+                {
+                    return new Location
+                    {
+                        Uri = DocumentUri.FromFileSystemPath(definingPath),
+                        Range = new LspRange(
+                            new Position(symbol.Line - 1, System.Math.Max(0, symbol.Column - 1)),
+                            new Position(symbol.Line - 1, System.Math.Max(0, symbol.Column - 1) + word.Length))
+                    };
+                }
             }
 
             return null;

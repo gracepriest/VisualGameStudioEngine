@@ -516,6 +516,31 @@ namespace BasicLang.Compiler.Driver
                     var csprojPath = Path.Combine(outputDir, outputFileName + ".csproj");
                     var csFileName = outputFileName + ".cs";
 
+                    // Games use the engine via RaylibWrapper/FrameworkWrapper.
+                    // Auto-inject the managed wrapper reference (hint-pathed to
+                    // the compiler's own directory, where RaylibWrapper.dll and
+                    // the native engine ship) so the generated C# resolves
+                    // without the author wiring up engine references by hand.
+                    var compilerBaseDir = AppContext.BaseDirectory;
+                    var usesEngine = EngineDeployment.UsesEngine(generatedCode);
+                    if (usesEngine &&
+                        !project.AssemblyReferences.Any(EngineDeployment.IsWrapperReference))
+                    {
+                        if (EngineDeployment.WrapperExists(compilerBaseDir))
+                        {
+                            project.AssemblyReferences.Add(EngineDeployment.GetEngineReference(compilerBaseDir));
+                        }
+                        else
+                        {
+                            // Without the wrapper the C# build will fail on the
+                            // engine types — say why up front instead of leaving
+                            // the user a cryptic CS0246/MSB3245.
+                            Console.ForegroundColor = ConsoleColor.Yellow;
+                            Console.WriteLine($"  Warning: this program uses the game engine, but {EngineDeployment.WrapperDllName} was not found next to the compiler ({compilerBaseDir}). Install the engine runtime beside BasicLang.exe or add an explicit assembly reference to the project.");
+                            Console.ResetColor();
+                        }
+                    }
+
                     // Build assembly references section
                     var referencesSection = new System.Text.StringBuilder();
                     if (project.AssemblyReferences.Count > 0)
@@ -647,6 +672,28 @@ namespace BasicLang.Compiler.Driver
                         Console.WriteLine($"  Generated C# file: {outputPath}");
                         Console.WriteLine("  Review the generated code to diagnose the issue.");
                         Console.ResetColor();
+                    }
+                    else if (usesEngine)
+                    {
+                        // Build succeeded and the program uses the engine: copy the
+                        // native engine DLL(s) next to the built game so the
+                        // wrapper's P/Invoke resolves at runtime. They are not
+                        // managed references, so the build won't copy them for us.
+                        foreach (var nativeDll in EngineDeployment.GetNativeDllPaths(compilerBaseDir))
+                        {
+                            try
+                            {
+                                var dest = Path.Combine(outputDir, Path.GetFileName(nativeDll));
+                                File.Copy(nativeDll, dest, overwrite: true);
+                                Console.WriteLine($"  Deployed engine runtime: {Path.GetFileName(nativeDll)}");
+                            }
+                            catch (Exception copyEx)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine($"  Warning: could not deploy {Path.GetFileName(nativeDll)}: {copyEx.Message}");
+                                Console.ResetColor();
+                            }
+                        }
                     }
                 }
 

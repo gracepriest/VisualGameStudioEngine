@@ -39,6 +39,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private ProjectSymbolTable _projectSymbols;
         private string _currentModuleName;
 
+        // Module names the caller couldn't index but can't prove unresolvable
+        // (unparseable sibling, module-named subdirectory) — never error on these
+        private HashSet<string> _indeterminateImports;
+
         // Imported modules for shorthand access (no prefix needed)
         private readonly HashSet<string> _importedModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -181,8 +185,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public void ConfigureProjectSymbols(ProjectSymbolTable projectSymbols, string currentModuleName)
         {
+            ConfigureProjectSymbols(projectSymbols, currentModuleName, null);
+        }
+
+        /// <summary>
+        /// Configure the project-wide symbol table for cross-file resolution.
+        /// <paramref name="indeterminateImports"/> names modules the caller
+        /// could not index but cannot prove unresolvable (e.g. a sibling file
+        /// that is transiently unparseable, or a module-named subdirectory the
+        /// compiler's resolver would find) — imports of those must not error.
+        /// </summary>
+        public void ConfigureProjectSymbols(ProjectSymbolTable projectSymbols, string currentModuleName,
+            IEnumerable<string> indeterminateImports)
+        {
             _projectSymbols = projectSymbols;
             _currentModuleName = currentModuleName;
+            _indeterminateImports = indeterminateImports != null
+                ? new HashSet<string>(indeterminateImports, StringComparer.OrdinalIgnoreCase)
+                : null;
         }
 
         /// <summary>
@@ -2567,8 +2587,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Verify the module exists in the project symbol table
             if (_projectSymbols != null && !_projectSymbols.HasModule(node.Module))
             {
-                // Module not found in project - might be an external library or not compiled yet
-                // Don't error here, let the module registry handle it if available
+                // Module not found in project. When a module registry is
+                // configured (multi-file compiler pipeline) it resolves imports
+                // below and reports its own error. Without one (LSP / project
+                // symbol table analysis) the import is unresolvable — unless the
+                // caller marked it indeterminate (unparseable sibling, module-
+                // named subdirectory), in which case erroring would flag valid
+                // code the compiler accepts.
+                if (_moduleRegistry == null &&
+                    (_indeterminateImports == null || !_indeterminateImports.Contains(node.Module)))
+                {
+                    Error($"Cannot resolve import '{node.Module}'", node.Line, node.Column);
+                }
             }
 
             // Track the import directive for module resolution (legacy support)

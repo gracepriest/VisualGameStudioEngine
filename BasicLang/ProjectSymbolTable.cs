@@ -155,6 +155,34 @@ namespace BasicLang.Compiler
         }
 
         /// <summary>
+        /// Merge another module's symbols into this one without overwriting
+        /// existing entries. Used when several sources contribute to the same
+        /// module name (e.g. a file-level declaration set and an explicit
+        /// Module block sharing the name).
+        /// </summary>
+        public void MergeFrom(ModuleSymbols other)
+        {
+            if (other == null || ReferenceEquals(other, this))
+                return;
+
+            foreach (var kvp in other._publicSymbols)
+            {
+                if (!_publicSymbols.ContainsKey(kvp.Key))
+                    _publicSymbols[kvp.Key] = kvp.Value;
+            }
+            foreach (var kvp in other._friendSymbols)
+            {
+                if (!_friendSymbols.ContainsKey(kvp.Key))
+                    _friendSymbols[kvp.Key] = kvp.Value;
+            }
+            foreach (var kvp in other._privateSymbols)
+            {
+                if (!_privateSymbols.ContainsKey(kvp.Key))
+                    _privateSymbols[kvp.Key] = kvp.Value;
+            }
+        }
+
+        /// <summary>
         /// Get a public symbol by name
         /// </summary>
         public Symbol GetPublicSymbol(string name)

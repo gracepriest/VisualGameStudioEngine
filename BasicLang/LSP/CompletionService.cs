@@ -264,6 +264,18 @@ namespace BasicLang.Compiler.LSP
                 modules.Add(mod);
             }
 
+            // Add modules known to the document's project context
+            if (state?.ProjectContext?.Symbols != null)
+            {
+                foreach (var mod in state.ProjectContext.Symbols.GetModuleNames())
+                {
+                    if (!mod.Equals(state.ModuleName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        modules.Add(mod);
+                    }
+                }
+            }
+
             // Add modules found in current file's directory (scan for .bas files)
             var filePath = state?.Uri?.GetFileSystemPath();
             if (!string.IsNullOrEmpty(filePath))
@@ -2241,6 +2253,24 @@ namespace BasicLang.Compiler.LSP
                     }
                 }
             }
+
+            // Cross-file: public symbols exported by sibling files of the same project
+            if (state.ProjectContext?.Symbols != null)
+            {
+                foreach (var (moduleName, symbol) in state.ProjectContext.Symbols.GetAllPublicSymbols())
+                {
+                    if (symbol?.Name == null || addedSymbols.Contains(symbol.Name))
+                        continue;
+
+                    addedSymbols.Add(symbol.Name);
+
+                    var item = CreateSymbolCompletionItem(symbol, moduleName);
+                    if (item != null)
+                    {
+                        yield return item;
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -2349,7 +2379,7 @@ namespace BasicLang.Compiler.LSP
         /// <summary>
         /// Create a completion item from a symbol
         /// </summary>
-        private CompletionItem CreateSymbolCompletionItem(Symbol symbol)
+        private CompletionItem CreateSymbolCompletionItem(Symbol symbol, string originModule = null)
         {
             var kind = symbol.Kind switch
             {
@@ -2400,6 +2430,12 @@ namespace BasicLang.Compiler.LSP
             // Preselect variables and parameters as they are most commonly needed
             var preselect = symbol.Kind == SemanticAnalysis.SymbolKind.Variable
                          || symbol.Kind == SemanticAnalysis.SymbolKind.Parameter;
+
+            // Cross-file symbols carry the module they come from
+            if (!string.IsNullOrEmpty(originModule))
+            {
+                detail = $"{detail} — from {originModule}";
+            }
 
             return new CompletionItem
             {

@@ -18,6 +18,7 @@ namespace BasicLang.Compiler.LSP
     {
         private readonly ConcurrentDictionary<DocumentUri, DocumentState> _documents;
         private readonly ConcurrentDictionary<string, CachedParseResult> _parseCache;
+        private readonly LspProjectContextProvider _projectContextProvider;
         private readonly int _maxCacheEntries;
         private readonly object _cacheLock = new object();
 
@@ -30,6 +31,7 @@ namespace BasicLang.Compiler.LSP
         {
             _documents = new ConcurrentDictionary<DocumentUri, DocumentState>();
             _parseCache = new ConcurrentDictionary<string, CachedParseResult>();
+            _projectContextProvider = new LspProjectContextProvider();
             _maxCacheEntries = maxCacheEntries;
 
             // Initialize TypeRegistry with auto-detected .NET SDK path
@@ -87,12 +89,25 @@ namespace BasicLang.Compiler.LSP
         /// </summary>
         public DocumentState UpdateDocument(DocumentUri uri, string content)
         {
+            // Resolve the document's project (nearest .blproj or sibling files)
+            // so semantic analysis can see cross-file symbols.
+            var projectContext = GetProjectContext(uri, content);
+
             // Check if document exists and content hasn't changed
             if (_documents.TryGetValue(uri, out var existingState))
             {
                 if (existingState.ContentHash == ComputeHash(content))
                 {
-                    // Content unchanged, return cached state
+                    if (projectContext?.Stamp == existingState.ProjectStamp)
+                    {
+                        // Content and project both unchanged, return cached state
+                        return existingState;
+                    }
+
+                    // A sibling project file changed: keep the parse, re-run
+                    // semantic analysis against the fresh project symbol table.
+                    existingState.SetProjectContext(projectContext);
+                    existingState.ReRunSemanticAnalysis();
                     return existingState;
                 }
             }
@@ -100,6 +115,7 @@ namespace BasicLang.Compiler.LSP
             // Create new state and try to use cached parse results
             var state = new DocumentState(uri, content);
             state.TypeRegistry = TypeRegistry; // Share TypeRegistry across documents
+            state.SetProjectContext(projectContext);
             var contentHash = state.ContentHash;
 
             // Check parse cache
@@ -207,6 +223,75 @@ namespace BasicLang.Compiler.LSP
         {
             return _documents.Values;
         }
+
+        /// <summary>
+        /// Resolve the project context for a document. Returns null for
+        /// documents that don't map to a file on disk (unsaved/virtual docs).
+        /// </summary>
+        private LspProjectContext GetProjectContext(DocumentUri uri, string content)
+        {
+            try
+            {
+                var filePath = DocumentState.TryGetFileSystemPath(uri);
+                if (filePath == null)
+                    return null;
+
+                return _projectContextProvider.GetContext(filePath, content, GetOpenDocumentContent);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Return the open-editor content for a file path, or null if the file
+        /// is not open (the project provider then reads it from disk).
+        /// </summary>
+        private string GetOpenDocumentContent(string filePath)
+        {
+            foreach (var doc in _documents.Values)
+            {
+                if (doc.FilePath != null &&
+                    string.Equals(doc.FilePath, filePath, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return doc.Content;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// After a document changed, re-run semantic analysis for the OTHER
+        /// open documents in the same project so their diagnostics reflect the
+        /// new cross-file symbols. Returns the refreshed documents (so callers
+        /// can republish diagnostics).
+        /// </summary>
+        public List<DocumentState> RefreshOpenProjectSiblings(DocumentUri changedUri)
+        {
+            var refreshed = new List<DocumentState>();
+
+            var changed = GetDocument(changedUri);
+            var context = changed?.ProjectContext;
+            if (context == null)
+                return refreshed;
+
+            foreach (var other in _documents.Values)
+            {
+                if (other.Uri == changedUri)
+                    continue;
+                if (other.FilePath == null || !context.ContainsFile(other.FilePath))
+                    continue;
+                if (other.ProjectStamp == context.Stamp)
+                    continue;
+
+                other.SetProjectContext(context);
+                other.ReRunSemanticAnalysis();
+                refreshed.Add(other);
+            }
+
+            return refreshed;
+        }
     }
 
     /// <summary>
@@ -243,6 +328,27 @@ namespace BasicLang.Compiler.LSP
         public TypeRegistry TypeRegistry { get; set; }
 
         /// <summary>
+        /// File-system path of the document (null for unsaved/virtual docs)
+        /// </summary>
+        public string FilePath { get; }
+
+        /// <summary>
+        /// Module name derived from the file name (BasicLang module semantics)
+        /// </summary>
+        public string ModuleName { get; }
+
+        /// <summary>
+        /// Project the document belongs to (cross-file symbols), or null for
+        /// single-file analysis.
+        /// </summary>
+        public LspProjectContext ProjectContext { get; private set; }
+
+        /// <summary>
+        /// Stamp of the project context the last semantic analysis ran against.
+        /// </summary>
+        public string ProjectStamp { get; private set; }
+
+        /// <summary>
         /// Alias for Content property (for CompletionService compatibility)
         /// </summary>
         public string SourceCode => Content;
@@ -256,6 +362,56 @@ namespace BasicLang.Compiler.LSP
             Tokens = new List<Token>();
             Diagnostics = new List<Diagnostic>();
             ParsedAt = DateTime.UtcNow;
+            FilePath = TryGetFileSystemPath(uri);
+            ModuleName = FilePath != null
+                ? System.IO.Path.GetFileNameWithoutExtension(FilePath)
+                : null;
+        }
+
+        /// <summary>
+        /// Convert a document URI to a local file path, or null when the URI
+        /// doesn't refer to the file system.
+        /// </summary>
+        internal static string TryGetFileSystemPath(DocumentUri uri)
+        {
+            try
+            {
+                if (uri == null)
+                    return null;
+                if (!string.Equals(uri.Scheme, "file", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                var path = uri.GetFileSystemPath();
+                return string.IsNullOrEmpty(path) ? null : System.IO.Path.GetFullPath(path);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Attach the project context used by the next semantic analysis run.
+        /// </summary>
+        public void SetProjectContext(LspProjectContext context)
+        {
+            ProjectContext = context;
+            ProjectStamp = context?.Stamp;
+        }
+
+        /// <summary>
+        /// Re-run semantic analysis (e.g. after a sibling project file changed)
+        /// keeping the existing parse results.
+        /// </summary>
+        public void ReRunSemanticAnalysis()
+        {
+            if (AST == null || !ParseSuccessful)
+                return;
+
+            // All diagnostics on a successfully parsed document come from
+            // semantic analysis; RunSemanticAnalysis publishes a fresh list by
+            // reference swap, so a list concurrently enumerated by another LSP
+            // thread (hover/completion/publish) is never mutated under it.
+            RunSemanticAnalysis();
         }
 
         private static string ComputeContentHash(string content)
@@ -330,30 +486,42 @@ namespace BasicLang.Compiler.LSP
         }
 
         /// <summary>
-        /// Run semantic analysis on the parsed AST
+        /// Run semantic analysis on the parsed AST.
+        /// Results (analyzer + diagnostics) are built on locals and published
+        /// by reference swap only when complete, so concurrent readers on other
+        /// LSP threads see either the previous snapshot or the new one — never
+        /// a half-built analyzer or a list mutated mid-enumeration.
         /// </summary>
         private void RunSemanticAnalysis()
         {
             if (AST == null) return;
 
+            var diagnostics = new List<Diagnostic>();
+            var analyzer = new SemanticAnalyzer();
             try
             {
-                SemanticAnalyzer = new SemanticAnalyzer();
-
                 // Configure TypeRegistry for .NET IntelliSense
                 if (TypeRegistry != null)
                 {
-                    SemanticAnalyzer.ConfigureTypeRegistry(TypeRegistry);
+                    analyzer.ConfigureTypeRegistry(TypeRegistry);
                 }
 
-                SemanticSuccessful = SemanticAnalyzer.Analyze(AST);
+                // Cross-file symbols: analyze against the project-wide symbol
+                // table so Import directives and sibling-file references resolve.
+                if (ProjectContext?.Symbols != null && !string.IsNullOrEmpty(ModuleName))
+                {
+                    analyzer.ConfigureProjectSymbols(ProjectContext.Symbols, ModuleName,
+                        ProjectContext.IndeterminateImports);
+                }
 
-                // Note: Even if SemanticSuccessful is false, the SemanticAnalyzer
-                // still contains useful scope/symbol information for IntelliSense.
+                var succeeded = analyzer.Analyze(AST);
+
+                // Note: Even if analysis failed, the SemanticAnalyzer still
+                // contains useful scope/symbol information for IntelliSense.
                 // We keep the analyzer instance to provide partial completions.
 
                 // Collect semantic errors
-                foreach (var error in SemanticAnalyzer.Errors)
+                foreach (var error in analyzer.Errors)
                 {
                     var diag = new Diagnostic
                     {
@@ -379,17 +547,18 @@ namespace BasicLang.Compiler.LSP
                         }
                     }
 
-                    Diagnostics.Add(diag);
+                    diagnostics.Add(diag);
                 }
 
                 // Detect unused local variables by scanning symbol table scopes
-                DetectUnusedSymbols();
+                DetectUnusedSymbols(analyzer, diagnostics);
 
+                SemanticSuccessful = succeeded;
             }
             catch (Exception ex)
             {
-                // Even on exception, try to keep partial semantic info
-                Diagnostics.Add(new Diagnostic
+                // Even on exception, keep the partial semantic info gathered so far
+                diagnostics.Add(new Diagnostic
                 {
                     Message = $"Semantic analysis error: {ex.Message}",
                     Severity = DiagnosticSeverity.Error,
@@ -397,6 +566,10 @@ namespace BasicLang.Compiler.LSP
                     Column = 1
                 });
             }
+
+            // Publish complete results with single reference swaps
+            SemanticAnalyzer = analyzer;
+            Diagnostics = diagnostics;
         }
 
         /// <summary>
@@ -458,17 +631,19 @@ namespace BasicLang.Compiler.LSP
         /// <summary>
         /// Detect unused local variables and imports by scanning symbol scopes
         /// and checking if names appear in source beyond their declaration.
+        /// Operates on the in-flight analyzer/diagnostics locals so results are
+        /// only published when the whole analysis pass completes.
         /// </summary>
-        private void DetectUnusedSymbols()
+        private void DetectUnusedSymbols(SemanticAnalyzer analyzer, List<Diagnostic> diagnostics)
         {
-            if (SemanticAnalyzer?.GlobalScope == null || Content == null)
+            if (analyzer?.GlobalScope == null || Content == null)
                 return;
 
             try
             {
                 // Collect local variables from all scopes (skip global-level functions, classes, etc.)
                 var localVariables = new List<Symbol>();
-                CollectLocalVariables(SemanticAnalyzer.GlobalScope, localVariables);
+                CollectLocalVariables(analyzer.GlobalScope, localVariables);
 
                 foreach (var variable in localVariables)
                 {
@@ -496,14 +671,14 @@ namespace BasicLang.Compiler.LSP
                     if (referenceCount == 0)
                     {
                         // Check if we already have a diagnostic for this variable at the same location
-                        bool alreadyReported = Diagnostics.Any(d =>
+                        bool alreadyReported = diagnostics.Any(d =>
                             d.Line == variable.Line &&
                             d.Column == variable.Column &&
                             d.Tags.Contains(DiagnosticTag.Unnecessary));
 
                         if (!alreadyReported)
                         {
-                            Diagnostics.Add(new Diagnostic
+                            diagnostics.Add(new Diagnostic
                             {
                                 Message = $"Variable '{variable.Name}' is declared but never used",
                                 Severity = DiagnosticSeverity.Hint,
@@ -536,7 +711,7 @@ namespace BasicLang.Compiler.LSP
 
                             if (!isUsed)
                             {
-                                Diagnostics.Add(new Diagnostic
+                                diagnostics.Add(new Diagnostic
                                 {
                                     Message = $"Import '{usingDir.Namespace}' is not used",
                                     Severity = DiagnosticSeverity.Hint,

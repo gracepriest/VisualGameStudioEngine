@@ -41,6 +41,7 @@ namespace BasicLang.Compiler.LSP
 
             var state = _documentManager.UpdateDocument(uri, content);
             _diagnosticsService.PublishDiagnostics(_server, state);
+            RefreshProjectSiblings(uri);
 
             return Unit.Task;
         }
@@ -57,7 +58,22 @@ namespace BasicLang.Compiler.LSP
                 _diagnosticsService.PublishDiagnostics(_server, state);
             }
 
+            RefreshProjectSiblings(uri);
+
             return Unit.Task;
+        }
+
+        /// <summary>
+        /// A change in one project file can add/remove symbols other files
+        /// depend on — re-analyze open sibling documents and republish their
+        /// diagnostics.
+        /// </summary>
+        private void RefreshProjectSiblings(DocumentUri uri)
+        {
+            foreach (var sibling in _documentManager.RefreshOpenProjectSiblings(uri))
+            {
+                _diagnosticsService.PublishDiagnostics(_server, sibling);
+            }
         }
 
         public override Task<Unit> Handle(DidCloseTextDocumentParams request, CancellationToken cancellationToken)
@@ -85,6 +101,7 @@ namespace BasicLang.Compiler.LSP
             {
                 state = _documentManager.UpdateDocument(uri, request.Text);
                 _diagnosticsService.PublishDiagnostics(_server, state);
+                RefreshProjectSiblings(uri);
             }
 
             return Unit.Task;
