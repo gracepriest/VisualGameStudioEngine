@@ -820,40 +820,6 @@ namespace BasicLang.Compiler.LSP
         }
 
         /// <summary>
-        /// Check if cursor is after a specific keyword
-        /// </summary>
-        private bool IsAfterKeyword(string lineLower, string keyword)
-        {
-            // Check for "keyword " at end or "keyword partial" where partial is what user is typing
-            var keywordWithSpace = keyword + " ";
-            var lastKeywordIndex = lineLower.LastIndexOf(keywordWithSpace);
-            if (lastKeywordIndex >= 0)
-            {
-                // Make sure keyword is at a word boundary (start of line or after space/operator)
-                if (lastKeywordIndex == 0 || !char.IsLetterOrDigit(lineLower[lastKeywordIndex - 1]))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Extract the text after a keyword (what user is typing)
-        /// </summary>
-        private string ExtractAfterKeyword(string line, string keyword)
-        {
-            var keywordWithSpace = keyword + " ";
-            var lastIndex = line.LastIndexOf(keywordWithSpace, StringComparison.OrdinalIgnoreCase);
-            if (lastIndex >= 0)
-            {
-                var afterKeyword = line.Substring(lastIndex + keywordWithSpace.Length).Trim();
-                return string.IsNullOrEmpty(afterKeyword) ? null : afterKeyword;
-            }
-            return null;
-        }
-
-        /// <summary>
         /// Extract the last identifier from a string (simple identifier only)
         /// </summary>
         private string ExtractLastIdentifier(string text)
@@ -877,58 +843,6 @@ namespace BasicLang.Compiler.LSP
             }
 
             return result.Length > 0 ? result.ToString() : null;
-        }
-
-        /// <summary>
-        /// Extract the last identifier or method call from text
-        /// Handles: "obj", "obj.Method()", "obj.Method().Property", "New List(Of String)"
-        /// </summary>
-        private string ExtractLastIdentifierOrCall(string text)
-        {
-            if (string.IsNullOrEmpty(text))
-                return null;
-
-            text = text.TrimEnd();
-
-            // Handle method calls ending with ) - find the matching (
-            if (text.EndsWith(")"))
-            {
-                int parenDepth = 1;
-                int i = text.Length - 2;
-                while (i >= 0 && parenDepth > 0)
-                {
-                    if (text[i] == ')') parenDepth++;
-                    else if (text[i] == '(') parenDepth--;
-                    i--;
-                }
-
-                // Now extract the identifier before the (
-                if (i >= 0)
-                {
-                    var beforeParen = text.Substring(0, i + 1).TrimEnd();
-                    return ExtractLastIdentifier(beforeParen);
-                }
-            }
-
-            // Handle generic type instantiation: "New List(Of String)"
-            if (text.EndsWith(")") || text.Contains("(Of "))
-            {
-                // Try to find the type name
-                var newIndex = text.LastIndexOf("New ", StringComparison.OrdinalIgnoreCase);
-                if (newIndex >= 0)
-                {
-                    var afterNew = text.Substring(newIndex + 4).Trim();
-                    var parenIndex = afterNew.IndexOf('(');
-                    if (parenIndex > 0)
-                    {
-                        return afterNew.Substring(0, parenIndex).Trim();
-                    }
-                    return ExtractLastIdentifier(afterNew);
-                }
-            }
-
-            // Simple identifier
-            return ExtractLastIdentifier(text);
         }
 
         /// <summary>
@@ -1815,7 +1729,7 @@ namespace BasicLang.Compiler.LSP
                 foreach (var member in netType.Members)
                 {
                     if (member.IsStatic) continue; // instance receiver: no statics
-                    results.Add(CreateMemberCompletionItem(member));
+                    results.Add(CreateMemberCompletionItem(member, netType.FullName ?? netType.Name));
                 }
                 return results;
             }
@@ -1882,7 +1796,7 @@ namespace BasicLang.Compiler.LSP
                 foreach (var member in netType.Members)
                 {
                     if (!member.IsStatic) continue; // type receiver: statics only
-                    yield return CreateMemberCompletionItem(member);
+                    yield return CreateMemberCompletionItem(member, netType.FullName ?? netType.Name);
                 }
                 yield break;
             }
@@ -2457,7 +2371,7 @@ namespace BasicLang.Compiler.LSP
             return max;
         }
 
-        private CompletionItem CreateMemberCompletionItem(NetMemberInfo member)
+        private CompletionItem CreateMemberCompletionItem(NetMemberInfo member, string containingTypeName = null)
         {
             var kind = member.Kind switch
             {
@@ -2487,14 +2401,41 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // Stash the receiver type + member name so completionItem/resolve
+            // can attach full documentation lazily (finding [18])
+            Newtonsoft.Json.Linq.JToken data = null;
+            if (!string.IsNullOrEmpty(containingTypeName))
+            {
+                data = new Newtonsoft.Json.Linq.JObject
+                {
+                    ["type"] = containingTypeName,
+                    ["member"] = member.Name
+                };
+            }
+
             return new CompletionItem
             {
                 Label = member.Name,
                 Kind = kind,
                 Detail = detail,
+                Documentation = BuildMemberDocumentation(member, containingTypeName),
                 InsertTextFormat = member.Kind == NetMemberKind.Method ? InsertTextFormat.Snippet : InsertTextFormat.PlainText,
-                InsertText = insertText
+                InsertText = insertText,
+                Data = data
             };
+        }
+
+        /// <summary>
+        /// Build the documentation shown for a .NET member completion item
+        /// </summary>
+        internal static StringOrMarkupContent BuildMemberDocumentation(NetMemberInfo member, string containingTypeName)
+        {
+            var origin = string.IsNullOrEmpty(containingTypeName) ? "" : $"\n\nMember of `{containingTypeName}`";
+            return new StringOrMarkupContent(new MarkupContent
+            {
+                Kind = MarkupKind.Markdown,
+                Value = $"```basiclang\n{member.GetSignature()}\n```{origin}"
+            });
         }
 
         private CompletionItemKind GetCompletionKind(SemanticAnalysis.SymbolKind kind)
@@ -2598,6 +2539,7 @@ namespace BasicLang.Compiler.LSP
                     Label = label,
                     Kind = CompletionItemKind.Keyword,
                     Detail = detail,
+                    Documentation = detail,
                     InsertTextFormat = InsertTextFormat.Snippet,
                     InsertText = snippet,
                     SortText = $"3_{label}"
@@ -3002,6 +2944,7 @@ namespace BasicLang.Compiler.LSP
                     Label = name,
                     Kind = CompletionItemKind.Function,
                     Detail = $"{detail} -> {returnType}",
+                    Documentation = $"{detail}\n\nReturns: {returnType}",
                     InsertTextFormat = InsertTextFormat.Snippet,
                     InsertText = snippet,
                     SortText = $"1_{name}"
