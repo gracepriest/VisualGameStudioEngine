@@ -742,7 +742,7 @@ namespace BasicLang.Compiler
                     return;
                 }
 
-                break; // first code line is not the directive \u2014 legacy handling below
+                break; // first code line is not the directive — legacy handling below
             }
 
             // Legacy: bare "Public" keyword as the first content of the file (deprecated).
@@ -760,7 +760,7 @@ namespace BasicLang.Compiler
                     if (firstLine.Equals("Public", StringComparison.OrdinalIgnoreCase))
                     {
                         Console.Error.WriteLine(
-                            $"Warning: '{Path.GetFileName(unit.FilePath)}': bare 'Public' first line is deprecated \u2014 use 'Option Public'");
+                            $"Warning: '{Path.GetFileName(unit.FilePath)}': bare 'Public' first line is deprecated — use 'Option Public'");
                         accessModifier = "Public";
                         var newlineIndex = trimmed.IndexOf('\n');
                         body = newlineIndex >= 0 ? trimmed.Substring(newlineIndex + 1) : string.Empty;

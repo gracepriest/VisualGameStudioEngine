@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
+using System;
 using System.IO;
 using System.Linq;
 
@@ -435,8 +436,44 @@ Public Value As Integer
             Assert.That(result.AllErrors, Is.Empty,
                 $"Variant '{variant}' failed: {string.Join(", ", result.AllErrors)}");
             var classNode = result.Units[0].AST.Declarations.OfType<ClassNode>().FirstOrDefault();
+            Assert.That(classNode, Is.Not.Null, $"Variant '{variant}' did not produce a ClassNode");
             Assert.That(classNode.Access, Is.EqualTo(BasicLang.Compiler.AST.AccessModifier.Public),
                 $"Variant '{variant}' did not produce a public class");
         }
+    }
+
+    /// <summary>
+    /// A .cls class made public via Option Public is usable from a sibling file
+    /// with no Import statement (project-files compilation).
+    /// </summary>
+    [Test]
+    public void OptionPublic_CrossFile_NoImportNeeded()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, "Enemy.cls"), @"Option Public
+Public Name As String
+
+Public Sub New(n As String)
+    Me.Name = n
+End Sub
+");
+        var mainPath = Path.Combine(_tempDir, "Main.bas");
+        File.WriteAllText(mainPath, @"Module Main
+    Sub Main()
+        Dim e As New Enemy(""Slime"")
+        Dim s As String = e.Name
+    End Sub
+End Module
+");
+
+        var compiler = new BasicCompiler();
+        var result = compiler.CompileProjectFiles(new[]
+        {
+            mainPath,
+            Path.Combine(_tempDir, "Enemy.cls")
+        });
+
+        Assert.That(result.AllErrors, Is.Empty,
+            $"Expected no errors but got: {string.Join(", ", result.AllErrors)}");
+        Assert.That(result.Success, Is.True);
     }
 }
