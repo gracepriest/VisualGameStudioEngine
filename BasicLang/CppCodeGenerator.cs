@@ -38,6 +38,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override string Generate(IRModule module)
         {
+            var capabilityDiags = new CppCapabilityChecker().Check(module);
+            if (capabilityDiags.Count > 0)
+                throw new CppCapabilityException(capabilityDiags);
+
             _module = module;
             _output.Clear();
             _valueNames.Clear();
