@@ -14,6 +14,9 @@ public class DiagnosticItem
 
     public string Location => FilePath != null ? $"{Path.GetFileName(FilePath)}({Line},{Column})" : "";
 
+    /// <summary>File name without directory, for compact Error List display.</summary>
+    public string FileName => FilePath != null ? Path.GetFileName(FilePath) : "";
+
     public override string ToString()
     {
         return $"{Severity} {Id}: {Message} at {Location}";

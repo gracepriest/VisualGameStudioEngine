@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Panels"
+             xmlns:models="using:VisualGameStudio.Core.Models"
              mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="200"
              x:Class="VisualGameStudio.Shell.Views.Panels.ErrorListView"
              x:DataType="vm:ErrorListViewModel">
@@ -49,7 +50,16 @@
           <DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="80"/>
           <DataGridTextColumn Header="Code" Binding="{Binding Id}" Width="80"/>
           <DataGridTextColumn Header="Description" Binding="{Binding Message}" Width="*"/>
-          <DataGridTextColumn Header="File" Binding="{Binding FilePath}" Width="150"/>
+          <DataGridTemplateColumn Header="File" Width="150">
+            <DataGridTemplateColumn.CellTemplate>
+              <DataTemplate x:DataType="models:DiagnosticItem">
+                <TextBlock Text="{Binding FileName}"
+                           ToolTip.Tip="{Binding FilePath}"
+                           VerticalAlignment="Center"
+                           Margin="4,0"/>
+              </DataTemplate>
+            </DataGridTemplateColumn.CellTemplate>
+          </DataGridTemplateColumn>
           <DataGridTextColumn Header="Line" Binding="{Binding Line}" Width="60"/>
           <DataGridTextColumn Header="Column" Binding="{Binding Column}" Width="60"/>
         </DataGrid.Columns>

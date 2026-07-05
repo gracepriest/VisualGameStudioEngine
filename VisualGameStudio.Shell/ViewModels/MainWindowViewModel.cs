@@ -322,6 +322,13 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _filesWithErrors =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Per-file diagnostics store behind the Error List. LSP publishDiagnostics
+    // is per-document (one file's full set per notification, empty = clean), so
+    // rendering a payload directly would wipe every other file's errors; the
+    // aggregator keeps file -> diagnostics and the Error List shows the union.
+    // Build results live in a separate keyspace so they coexist with LSP ones.
+    private readonly DiagnosticsAggregator _diagnosticsAggregator = new();
+
     // File path of the most recently active editor document tab. Used to emit
     // auto-save "editor lost focus" notifications when the active tab changes.
     private string? _lastActiveEditorFilePath;
@@ -690,15 +697,28 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             if (e?.Diagnostics == null) return;
 
-            // Forward diagnostics to the error list
-            ErrorList.UpdateDiagnostics(e.Diagnostics);
+            // LanguageService already sends a decoded local path in Uri, but be
+            // robust to raw (possibly percent-encoded) file:// URIs too — the
+            // old Replace("file:///", ...) conversion silently corrupted paths
+            // with spaces (%20) and other encoded characters.
+            var uri = e.Uri ?? "";
+            var filePath = VisualGameStudio.ProjectSystem.Services.LanguageService.UriToPath(uri);
+
+            // Aggregate per file, then show the union of all files' diagnostics.
+            // e.Diagnostics is ONE file's complete set (empty = file is clean);
+            // pushing it directly would let the last file to publish wipe the
+            // whole Error List.
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                _diagnosticsAggregator.SetFileDiagnostics(filePath, e.Diagnostics);
+                ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
+            }
 
             // Reset error cycling index when diagnostics change
             _currentDiagnosticIndex = -1;
 
             // Forward to the specific document for error highlighting
-            var uri = e.Uri ?? "";
-            var filePath = uri.Replace("file:///", "").Replace("/", "\\");
+            // (_openDocuments is keyed case-insensitively).
             if (!string.IsNullOrEmpty(filePath) && _openDocuments.TryGetValue(filePath, out var doc))
             {
                 doc.UpdateDiagnostics(e.Diagnostics);
@@ -1002,6 +1022,10 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             settingsSvc.SetWorkspacePath(null);
         }
+
+        // Drop the closed project's diagnostics from the Error List
+        _diagnosticsAggregator.Clear();
+        ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
     }
 
     private void OnBuildCompleted(object? sender, BuildCompletedEventArgs e)
@@ -1045,8 +1069,10 @@ public partial class MainWindowViewModel : ViewModelBase
             _dockFactory.ActivateTool("ErrorList");
         }
 
-        // Update error list
-        ErrorList.UpdateDiagnostics(result.Diagnostics);
+        // Update error list: build results replace the previous build's entries
+        // but coexist with LSP diagnostics instead of clobbering them.
+        _diagnosticsAggregator.SetBuildDiagnostics(result.Diagnostics);
+        ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
 
         // Reset error cycling index when diagnostics change
         _currentDiagnosticIndex = -1;
@@ -4113,12 +4139,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task NavigateToLocationAsync(LocationInfo location)
     {
-        // Convert URI to file path if needed
-        var filePath = location.Uri;
-        if (filePath.StartsWith("file:///"))
-        {
-            filePath = new Uri(filePath).LocalPath;
-        }
+        // Convert URI to file path if needed (decodes percent-encoding; plain
+        // paths pass through unchanged)
+        var filePath = VisualGameStudio.ProjectSystem.Services.LanguageService.UriToPath(location.Uri);
 
         await OpenFileAsync(filePath);
         var doc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
@@ -6977,9 +7000,7 @@ $"""
                                 r.Line != info.Line || !string.Equals(r.Uri, document.FilePath, StringComparison.OrdinalIgnoreCase));
                             if (firstRef != null)
                             {
-                                var refPath = firstRef.Uri;
-                                if (refPath.StartsWith("file:///", StringComparison.OrdinalIgnoreCase))
-                                    refPath = Uri.UnescapeDataString(refPath.Substring(8));
+                                var refPath = VisualGameStudio.ProjectSystem.Services.LanguageService.UriToPath(firstRef.Uri);
                                 await OpenFileAsync(refPath);
                                 var refDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
                                 refDoc?.NavigateTo(firstRef.Line);
@@ -7003,9 +7024,7 @@ $"""
                             document.FilePath, info.Line, 1);
                         if (def != null)
                         {
-                            var defPath = def.Uri;
-                            if (defPath.StartsWith("file:///", StringComparison.OrdinalIgnoreCase))
-                                defPath = Uri.UnescapeDataString(defPath.Substring(8));
+                            var defPath = VisualGameStudio.ProjectSystem.Services.LanguageService.UriToPath(def.Uri);
                             await OpenFileAsync(defPath);
                             var defDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
                             defDoc?.NavigateTo(def.Line);

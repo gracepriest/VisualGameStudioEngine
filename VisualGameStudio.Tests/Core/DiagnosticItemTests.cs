@@ -157,6 +157,22 @@ public class DiagnosticItemTests
     }
 
     [Test]
+    public void FileName_WithFilePath_ReturnsNameOnly()
+    {
+        var diagnostic = new DiagnosticItem { FilePath = @"C:\Very\Long\Path\To\MyFile.bas" };
+
+        Assert.That(diagnostic.FileName, Is.EqualTo("MyFile.bas"));
+    }
+
+    [Test]
+    public void FileName_WithoutFilePath_ReturnsEmptyString()
+    {
+        var diagnostic = new DiagnosticItem();
+
+        Assert.That(diagnostic.FileName, Is.EqualTo(""));
+    }
+
+    [Test]
     public void ToString_ReturnsFormattedString()
     {
         var diagnostic = new DiagnosticItem
