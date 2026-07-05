@@ -30,6 +30,28 @@ namespace BasicLang.Compiler.LSP
         public bool IsMemberAccess => ContextType == CompletionContextType.MemberAccess;
         public string ObjectName { get; set; }
         public string FilterPrefix { get; set; }
+
+        /// <summary>
+        /// For member access: the receiver expression parsed into segments,
+        /// e.g. "s.Trim()." yields [s, Trim()]. Null outside member access.
+        /// </summary>
+        public List<ReceiverSegment> ReceiverChain { get; set; }
+    }
+
+    /// <summary>
+    /// One segment of a member-access receiver chain: an identifier, optionally
+    /// followed by a call/index argument list ("Trim()" has IsCall = true).
+    /// </summary>
+    public class ReceiverSegment
+    {
+        public string Name { get; }
+        public bool IsCall { get; }
+
+        public ReceiverSegment(string name, bool isCall)
+        {
+            Name = name;
+            IsCall = isCall;
+        }
     }
 
     /// <summary>
@@ -66,8 +88,9 @@ namespace BasicLang.Compiler.LSP
                 switch (triggerContext.ContextType)
                 {
                     case CompletionContextType.MemberAccess:
-                        // Get member completions for the object type
-                        var memberCompletions = GetMemberCompletions(state, triggerContext.ObjectName, line, character).ToList();
+                        // Get member completions for the receiver (resolving
+                        // method chains like "s.Trim()." left-to-right)
+                        var memberCompletions = GetMemberCompletionsForContext(state, triggerContext, line, character).ToList();
                         completions.AddRange(memberCompletions);
                         return ApplyFuzzyFilter(completions, triggerContext.FilterPrefix);
 
@@ -126,37 +149,77 @@ namespace BasicLang.Compiler.LSP
         }
 
         /// <summary>
-        /// Apply fuzzy filtering with scoring
+        /// VS Code contract: the server returns the FULL candidate set and the
+        /// client filters in place as the user types. This method therefore
+        /// never drops items — fuzzy scoring is used solely to compute SortText
+        /// ranking (best matches first when a prefix exists). Every item also
+        /// gets a FilterText (a clean identifier token) so client-side prefix
+        /// filtering behaves for multi-word labels like "Do While".
         /// </summary>
         private List<CompletionItem> ApplyFuzzyFilter(List<CompletionItem> completions, string filterPrefix)
         {
-            if (string.IsNullOrEmpty(filterPrefix))
-                return completions;
+            var hasPrefix = !string.IsNullOrEmpty(filterPrefix);
+            var result = new List<CompletionItem>(completions.Count);
 
-            var scored = completions
-                .Select(c => new { Item = c, Score = CalculateFuzzyScore(c.Label, filterPrefix) })
-                .Where(x => x.Score > 0)
-                .OrderByDescending(x => x.Score)
-                .ThenBy(x => x.Item.Label.Length)
-                .Select(x =>
+            foreach (var item in completions)
+            {
+                var filterText = !string.IsNullOrEmpty(item.FilterText)
+                    ? item.FilterText
+                    : DeriveFilterText(item.Label);
+
+                string sortText;
+                if (hasPrefix)
                 {
-                    // Create new item with sort text based on score (lower = better for VS Code sorting)
-                    return new CompletionItem
-                    {
-                        Label = x.Item.Label,
-                        Kind = x.Item.Kind,
-                        Detail = x.Item.Detail,
-                        Documentation = x.Item.Documentation,
-                        InsertText = x.Item.InsertText,
-                        InsertTextFormat = x.Item.InsertTextFormat,
-                        SortText = $"{(10000 - x.Score):D5}_{x.Item.Label}",
-                        FilterText = x.Item.FilterText,
-                        Data = x.Item.Data
-                    };
-                })
-                .ToList();
+                    var score = CalculateFuzzyScore(item.Label, filterPrefix);
+                    // Lower sorts first; score-0 items rank last but are KEPT.
+                    sortText = $"{(10000 - Math.Min(score, 9999)):D5}_{item.Label}";
+                }
+                else
+                {
+                    // No prefix: keep the item's existing ordering hint, or fall
+                    // back to its label (alphabetical).
+                    sortText = string.IsNullOrEmpty(item.SortText) ? item.Label : item.SortText;
+                }
 
-            return scored;
+                result.Add(new CompletionItem
+                {
+                    Label = item.Label,
+                    Kind = item.Kind,
+                    Detail = item.Detail,
+                    Documentation = item.Documentation,
+                    InsertText = item.InsertText,
+                    InsertTextFormat = item.InsertTextFormat,
+                    SortText = sortText,
+                    FilterText = filterText,
+                    Data = item.Data,
+                    Preselect = item.Preselect
+                });
+            }
+
+            if (hasPrefix)
+            {
+                result.Sort((a, b) => string.CompareOrdinal(a.SortText, b.SortText));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Derive a clean identifier token to filter on: the leading run of
+        /// identifier characters ("Do While" -> "Do", "If...Else" -> "If",
+        /// "List(Of" -> "List"). Falls back to the label itself when it does
+        /// not start with an identifier character.
+        /// </summary>
+        private static string DeriveFilterText(string label)
+        {
+            if (string.IsNullOrEmpty(label))
+                return label;
+
+            int end = 0;
+            while (end < label.Length && (char.IsLetterOrDigit(label[end]) || label[end] == '_'))
+                end++;
+
+            return end > 0 ? label.Substring(0, end) : label;
         }
 
         /// <summary>
@@ -339,23 +402,71 @@ namespace BasicLang.Compiler.LSP
             // User-defined classes from AST
             if (state?.AST != null)
             {
-                foreach (var decl in state.AST.Declarations)
+                foreach (var cls in EnumerateClasses(state.AST))
                 {
-                    if (decl is ClassNode cls)
+                    types.Add(new CompletionItem
                     {
-                        types.Add(new CompletionItem
-                        {
-                            Label = cls.Name,
-                            Kind = CompletionItemKind.Class,
-                            Detail = "Class",
-                            InsertText = $"{cls.Name}()",
-                            InsertTextFormat = InsertTextFormat.PlainText
-                        });
-                    }
+                        Label = cls.Name,
+                        Kind = CompletionItemKind.Class,
+                        Detail = "Class",
+                        InsertText = $"{cls.Name}()",
+                        InsertTextFormat = InsertTextFormat.PlainText
+                    });
                 }
             }
 
+            // Classes/structures defined in sibling project files
+            AddProjectTypeCompletions(state, types,
+                SemanticAnalysis.SymbolKind.Class, SemanticAnalysis.SymbolKind.Structure);
+
             return types;
+        }
+
+        /// <summary>
+        /// Add public type symbols (classes/interfaces/structures/enums) from
+        /// sibling project files to a type-context completion list (finding [7]).
+        /// </summary>
+        private void AddProjectTypeCompletions(DocumentState state, List<CompletionItem> target,
+            params SemanticAnalysis.SymbolKind[] kinds)
+        {
+            if (state?.ProjectContext?.Symbols == null)
+                return;
+
+            var wanted = new HashSet<SemanticAnalysis.SymbolKind>(kinds);
+            var seen = new HashSet<string>(target.Select(t => t.Label), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (moduleName, symbol) in state.ProjectContext.Symbols.GetAllPublicSymbols())
+            {
+                if (symbol?.Name == null || !wanted.Contains(symbol.Kind))
+                    continue;
+                if (!seen.Add(symbol.Name))
+                    continue;
+
+                var kind = symbol.Kind switch
+                {
+                    SemanticAnalysis.SymbolKind.Class => CompletionItemKind.Class,
+                    SemanticAnalysis.SymbolKind.Interface => CompletionItemKind.Interface,
+                    SemanticAnalysis.SymbolKind.Structure => CompletionItemKind.Struct,
+                    SemanticAnalysis.SymbolKind.Type when symbol.Type?.Kind == TypeKind.Enum => CompletionItemKind.Enum,
+                    _ => CompletionItemKind.Class
+                };
+
+                var detailKind = kind switch
+                {
+                    CompletionItemKind.Interface => "Interface",
+                    CompletionItemKind.Struct => "Structure",
+                    CompletionItemKind.Enum => "Enum",
+                    _ => "Class"
+                };
+
+                target.Add(new CompletionItem
+                {
+                    Label = symbol.Name,
+                    Kind = kind,
+                    Detail = $"{detailKind} {symbol.Name} — from {moduleName}",
+                    InsertText = symbol.Name
+                });
+            }
         }
 
         private CompletionItem CreateTypeCompletion(string name, string detail, string doc, string insertText)
@@ -413,6 +524,11 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // Types defined in sibling project files
+            AddProjectTypeCompletions(state, types,
+                SemanticAnalysis.SymbolKind.Class, SemanticAnalysis.SymbolKind.Structure,
+                SemanticAnalysis.SymbolKind.Interface, SemanticAnalysis.SymbolKind.Type);
+
             return types;
         }
 
@@ -447,6 +563,9 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // Interfaces defined in sibling project files
+            AddProjectTypeCompletions(state, interfaces, SemanticAnalysis.SymbolKind.Interface);
+
             return interfaces;
         }
 
@@ -479,6 +598,9 @@ namespace BasicLang.Compiler.LSP
                     }
                 }
             }
+
+            // Classes defined in sibling project files
+            AddProjectTypeCompletions(state, classes, SemanticAnalysis.SymbolKind.Class);
 
             return classes;
         }
@@ -516,116 +638,185 @@ namespace BasicLang.Compiler.LSP
             var beforeCursor = currentLine.Substring(0, character);
             var trimmedBefore = beforeCursor.TrimEnd();
 
-            // Extract any partial identifier the user is typing (for filtering)
-            if (trimmedBefore.Length > 0 && !trimmedBefore.EndsWith(".") && !trimmedBefore.EndsWith(" "))
+            // Extract any partial identifier the user is typing (for ranking)
+            if (trimmedBefore.Length > 0 && !trimmedBefore.EndsWith(".") &&
+                beforeCursor.Length == trimmedBefore.Length)
             {
                 context.FilterPrefix = ExtractLastIdentifier(trimmedBefore);
             }
 
-            // Check for context-specific keywords (case-insensitive)
-            var beforeLower = trimmedBefore.ToLowerInvariant();
-
-            // Check for "Import " context
-            if (IsAfterKeyword(beforeLower, "import"))
+            // 1) Import statement: the whole line is an Import context
+            //    (checked first so dotted namespaces like "Import System.IO"
+            //    keep completing module/namespace names).
+            var lineStart = beforeCursor.TrimStart();
+            var importMatch = System.Text.RegularExpressions.Regex.Match(
+                lineStart, @"^import\s+(.*)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (importMatch.Success)
             {
                 context.ContextType = CompletionContextType.Import;
-                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "Import");
+                var partial = importMatch.Groups[1].Value.Trim();
+                context.FilterPrefix = string.IsNullOrEmpty(partial) ? null : partial;
                 return context;
             }
 
-            // Check for "New " context
-            if (IsAfterKeyword(beforeLower, "new"))
-            {
-                context.ContextType = CompletionContextType.New;
-                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "New");
-                return context;
-            }
-
-            // Check for "As " context (type annotation)
-            if (IsAfterKeyword(beforeLower, "as"))
-            {
-                context.ContextType = CompletionContextType.AsType;
-                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "As");
-                return context;
-            }
-
-            // Check for "Implements " context
-            if (IsAfterKeyword(beforeLower, "implements"))
-            {
-                context.ContextType = CompletionContextType.Implements;
-                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "Implements");
-                return context;
-            }
-
-            // Check for "Inherits " context
-            if (IsAfterKeyword(beforeLower, "inherits"))
-            {
-                context.ContextType = CompletionContextType.Inherits;
-                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "Inherits");
-                return context;
-            }
-
-            // Check for "Of " context (generic type parameter)
-            if (IsAfterKeyword(beforeLower, "of"))
-            {
-                context.ContextType = CompletionContextType.AsType;
-                context.FilterPrefix = ExtractAfterKeyword(trimmedBefore, "Of");
-                return context;
-            }
-
-            // Look for member access pattern: identifier followed by dot
+            // 2) Member access — the dot check runs FIRST so a trailing '.'
+            //    always wins over keywords appearing earlier in the line
+            //    (e.g. "Dim s As String = other.").
             var dotIndex = trimmedBefore.LastIndexOf('.');
             if (dotIndex >= 0)
             {
                 var afterDot = trimmedBefore.Substring(dotIndex + 1).Trim();
-                var beforeDot = trimmedBefore.Substring(0, dotIndex).TrimEnd();
 
-                var objectName = ExtractLastIdentifierOrCall(beforeDot);
-
-                if (!string.IsNullOrEmpty(objectName))
+                // Only a member position when the text after the last dot is
+                // empty or a single partial identifier
+                if (afterDot.Length == 0 || IsPartialIdentifier(afterDot))
                 {
-                    context.ContextType = CompletionContextType.MemberAccess;
-                    context.ObjectName = objectName;
-                    context.FilterPrefix = string.IsNullOrEmpty(afterDot) ? null : afterDot;
-                    return context;
+                    var beforeDot = trimmedBefore.Substring(0, dotIndex).TrimEnd();
+                    var chain = ExtractReceiverChain(beforeDot);
+                    if (chain != null && chain.Count > 0)
+                    {
+                        context.ContextType = CompletionContextType.MemberAccess;
+                        context.ReceiverChain = chain;
+                        context.ObjectName = chain[chain.Count - 1].Name;
+                        context.FilterPrefix = afterDot.Length == 0 ? null : afterDot;
+                        return context;
+                    }
                 }
+            }
+
+            // 3) Keyword contexts — only when the keyword is the LAST complete
+            //    token before the cursor (followed by nothing or a single
+            //    partial identifier). Checked against the UNTRIMMED text so
+            //    "Dim x As " activates at the trigger point. "New" runs before
+            //    "As" so the VB idiom "Dim x As New " lands in the New context.
+            if (TryMatchKeywordContext(beforeCursor, "new", out var newPrefix))
+            {
+                context.ContextType = CompletionContextType.New;
+                context.FilterPrefix = newPrefix;
+                return context;
+            }
+
+            if (TryMatchKeywordContext(beforeCursor, "implements", out var implementsPrefix))
+            {
+                context.ContextType = CompletionContextType.Implements;
+                context.FilterPrefix = implementsPrefix;
+                return context;
+            }
+
+            if (TryMatchKeywordContext(beforeCursor, "inherits", out var inheritsPrefix))
+            {
+                context.ContextType = CompletionContextType.Inherits;
+                context.FilterPrefix = inheritsPrefix;
+                return context;
+            }
+
+            if (TryMatchKeywordContext(beforeCursor, "as", out var asPrefix))
+            {
+                context.ContextType = CompletionContextType.AsType;
+                context.FilterPrefix = asPrefix;
+                return context;
+            }
+
+            if (TryMatchKeywordContext(beforeCursor, "of", out var ofPrefix))
+            {
+                context.ContextType = CompletionContextType.AsType;
+                context.FilterPrefix = ofPrefix;
+                return context;
             }
 
             return context;
         }
 
         /// <summary>
-        /// Check if cursor is after a specific keyword
+        /// Check whether <paramref name="beforeCursor"/> ends with
+        /// "&lt;keyword&gt; " optionally followed by a single partial identifier
+        /// (the type name being typed). The keyword must sit at a word boundary.
         /// </summary>
-        private bool IsAfterKeyword(string lineLower, string keyword)
+        private static bool TryMatchKeywordContext(string beforeCursor, string keyword, out string filterPrefix)
         {
-            // Check for "keyword " at end or "keyword partial" where partial is what user is typing
-            var keywordWithSpace = keyword + " ";
-            var lastKeywordIndex = lineLower.LastIndexOf(keywordWithSpace);
-            if (lastKeywordIndex >= 0)
-            {
-                // Make sure keyword is at a word boundary (start of line or after space/operator)
-                if (lastKeywordIndex == 0 || !char.IsLetterOrDigit(lineLower[lastKeywordIndex - 1]))
-                {
-                    return true;
-                }
-            }
-            return false;
+            filterPrefix = null;
+            var match = System.Text.RegularExpressions.Regex.Match(
+                beforeCursor,
+                @"(?:^|[^A-Za-z0-9_.])" + keyword + @"\s+([A-Za-z_][A-Za-z0-9_]*)?$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+                return false;
+
+            var partial = match.Groups[1].Value;
+            filterPrefix = string.IsNullOrEmpty(partial) ? null : partial;
+            return true;
         }
 
         /// <summary>
-        /// Extract the text after a keyword (what user is typing)
+        /// True when the text is a single partial identifier (no spaces or operators)
         /// </summary>
-        private string ExtractAfterKeyword(string line, string keyword)
+        private static bool IsPartialIdentifier(string text)
         {
-            var keywordWithSpace = keyword + " ";
-            var lastIndex = line.LastIndexOf(keywordWithSpace, StringComparison.OrdinalIgnoreCase);
-            if (lastIndex >= 0)
+            return System.Text.RegularExpressions.Regex.IsMatch(text, @"^[A-Za-z_][A-Za-z0-9_]*$");
+        }
+
+        /// <summary>
+        /// Parse the receiver expression to the left of a member-access dot into
+        /// a chain of segments, scanning right-to-left through '.' hops and
+        /// balanced argument lists. "obj.GetName().Trim" yields
+        /// [obj, GetName(), Trim]. Returns null when the receiver is not a
+        /// chain of identifiers/calls (e.g. a numeric literal "3.").
+        /// </summary>
+        private static List<ReceiverSegment> ExtractReceiverChain(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return null;
+
+            var segments = new List<ReceiverSegment>();
+            int i = text.Length - 1;
+
+            while (i >= 0)
             {
-                var afterKeyword = line.Substring(lastIndex + keywordWithSpace.Length).Trim();
-                return string.IsNullOrEmpty(afterKeyword) ? null : afterKeyword;
+                while (i >= 0 && char.IsWhiteSpace(text[i])) i--;
+                if (i < 0) break;
+
+                bool isCall = false;
+                if (text[i] == ')')
+                {
+                    // Skip the balanced argument list (call args, indexer, or (Of T))
+                    int depth = 1;
+                    i--;
+                    while (i >= 0 && depth > 0)
+                    {
+                        if (text[i] == ')') depth++;
+                        else if (text[i] == '(') depth--;
+                        i--;
+                    }
+                    if (depth > 0) return null; // unbalanced
+                    isCall = true;
+                    while (i >= 0 && char.IsWhiteSpace(text[i])) i--;
+                }
+
+                // Collect the identifier before the (optional) argument list
+                int end = i;
+                while (i >= 0 && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i--;
+                if (end == i)
+                    return null; // no identifier where one was expected
+
+                var name = text.Substring(i + 1, end - i);
+                if (char.IsDigit(name[0]))
+                    return null; // numeric literal, not a receiver
+
+                segments.Insert(0, new ReceiverSegment(name, isCall));
+
+                // Continue through a '.' hop, otherwise the chain root is found
+                while (i >= 0 && char.IsWhiteSpace(text[i])) i--;
+                if (i >= 0 && text[i] == '.')
+                {
+                    i--;
+                    continue;
+                }
+                break;
             }
-            return null;
+
+            return segments.Count > 0 ? segments : null;
         }
 
         /// <summary>
@@ -655,58 +846,6 @@ namespace BasicLang.Compiler.LSP
         }
 
         /// <summary>
-        /// Extract the last identifier or method call from text
-        /// Handles: "obj", "obj.Method()", "obj.Method().Property", "New List(Of String)"
-        /// </summary>
-        private string ExtractLastIdentifierOrCall(string text)
-        {
-            if (string.IsNullOrEmpty(text))
-                return null;
-
-            text = text.TrimEnd();
-
-            // Handle method calls ending with ) - find the matching (
-            if (text.EndsWith(")"))
-            {
-                int parenDepth = 1;
-                int i = text.Length - 2;
-                while (i >= 0 && parenDepth > 0)
-                {
-                    if (text[i] == ')') parenDepth++;
-                    else if (text[i] == '(') parenDepth--;
-                    i--;
-                }
-
-                // Now extract the identifier before the (
-                if (i >= 0)
-                {
-                    var beforeParen = text.Substring(0, i + 1).TrimEnd();
-                    return ExtractLastIdentifier(beforeParen);
-                }
-            }
-
-            // Handle generic type instantiation: "New List(Of String)"
-            if (text.EndsWith(")") || text.Contains("(Of "))
-            {
-                // Try to find the type name
-                var newIndex = text.LastIndexOf("New ", StringComparison.OrdinalIgnoreCase);
-                if (newIndex >= 0)
-                {
-                    var afterNew = text.Substring(newIndex + 4).Trim();
-                    var parenIndex = afterNew.IndexOf('(');
-                    if (parenIndex > 0)
-                    {
-                        return afterNew.Substring(0, parenIndex).Trim();
-                    }
-                    return ExtractLastIdentifier(afterNew);
-                }
-            }
-
-            // Simple identifier
-            return ExtractLastIdentifier(text);
-        }
-
-        /// <summary>
         /// Find a variable's type by searching the AST
         /// </summary>
         private string FindVariableTypeInAST(BasicLang.Compiler.AST.ProgramNode ast, string variableName, int beforeLine)
@@ -722,24 +861,24 @@ namespace BasicLang.Compiler.LSP
                 // Check module-level variables
                 if (decl is BasicLang.Compiler.AST.ModuleNode module)
                 {
-                    var type = FindVariableInModule(module, variableName, astLine);
+                    var type = FindVariableInModule(ast, module, variableName, astLine);
                     if (type != null) return type;
                 }
                 // Check class members
                 else if (decl is BasicLang.Compiler.AST.ClassNode classNode)
                 {
-                    var type = FindVariableInClass(classNode, variableName, astLine);
+                    var type = FindVariableInClass(ast, classNode, variableName, astLine);
                     if (type != null) return type;
                 }
                 // Check function bodies
                 else if (decl is BasicLang.Compiler.AST.FunctionNode func)
                 {
-                    var type = FindVariableInFunction(func, variableName, astLine);
+                    var type = FindVariableInFunction(ast, func, variableName, astLine);
                     if (type != null) return type;
                 }
                 else if (decl is BasicLang.Compiler.AST.SubroutineNode sub)
                 {
-                    var type = FindVariableInSub(sub, variableName, astLine);
+                    var type = FindVariableInSub(ast, sub, variableName, astLine);
                     if (type != null) return type;
                 }
                 // Check top-level variable declarations
@@ -755,7 +894,7 @@ namespace BasicLang.Compiler.LSP
             return null;
         }
 
-        private string FindVariableInClass(BasicLang.Compiler.AST.ClassNode classNode, string variableName, int astLine)
+        private string FindVariableInClass(BasicLang.Compiler.AST.ProgramNode ast, BasicLang.Compiler.AST.ClassNode classNode, string variableName, int astLine)
         {
             if (classNode?.Members == null) return null;
 
@@ -770,19 +909,19 @@ namespace BasicLang.Compiler.LSP
                 }
                 else if (member is BasicLang.Compiler.AST.FunctionNode func)
                 {
-                    var type = FindVariableInFunction(func, variableName, astLine);
+                    var type = FindVariableInFunction(ast, func, variableName, astLine);
                     if (type != null) return type;
                 }
                 else if (member is BasicLang.Compiler.AST.SubroutineNode sub)
                 {
-                    var type = FindVariableInSub(sub, variableName, astLine);
+                    var type = FindVariableInSub(ast, sub, variableName, astLine);
                     if (type != null) return type;
                 }
             }
             return null;
         }
 
-        private string FindVariableInModule(BasicLang.Compiler.AST.ModuleNode module, string variableName, int astLine)
+        private string FindVariableInModule(BasicLang.Compiler.AST.ProgramNode ast, BasicLang.Compiler.AST.ModuleNode module, string variableName, int astLine)
         {
             if (module?.Members == null) return null;
 
@@ -797,19 +936,24 @@ namespace BasicLang.Compiler.LSP
                 }
                 else if (member is BasicLang.Compiler.AST.FunctionNode func)
                 {
-                    var type = FindVariableInFunction(func, variableName, astLine);
+                    var type = FindVariableInFunction(ast, func, variableName, astLine);
                     if (type != null) return type;
                 }
                 else if (member is BasicLang.Compiler.AST.SubroutineNode sub)
                 {
-                    var type = FindVariableInSub(sub, variableName, astLine);
+                    var type = FindVariableInSub(ast, sub, variableName, astLine);
+                    if (type != null) return type;
+                }
+                else if (member is BasicLang.Compiler.AST.ClassNode cls)
+                {
+                    var type = FindVariableInClass(ast, cls, variableName, astLine);
                     if (type != null) return type;
                 }
             }
             return null;
         }
 
-        private string FindVariableInFunction(BasicLang.Compiler.AST.FunctionNode func, string variableName, int astLine)
+        private string FindVariableInFunction(BasicLang.Compiler.AST.ProgramNode ast, BasicLang.Compiler.AST.FunctionNode func, string variableName, int astLine)
         {
             // Only search if cursor is inside this function
             if (astLine < func.Line) return null;
@@ -829,13 +973,13 @@ namespace BasicLang.Compiler.LSP
             // Check body
             if (func.Body != null)
             {
-                return FindVariableInBlock(func.Body, variableName, astLine);
+                return FindVariableInBlock(ast, func.Body, variableName, astLine);
             }
 
             return null;
         }
 
-        private string FindVariableInSub(BasicLang.Compiler.AST.SubroutineNode sub, string variableName, int astLine)
+        private string FindVariableInSub(BasicLang.Compiler.AST.ProgramNode ast, BasicLang.Compiler.AST.SubroutineNode sub, string variableName, int astLine)
         {
             // Only search if cursor is inside this sub
             if (astLine < sub.Line)
@@ -856,13 +1000,13 @@ namespace BasicLang.Compiler.LSP
             // Check body
             if (sub.Body != null)
             {
-                return FindVariableInBlock(sub.Body, variableName, astLine);
+                return FindVariableInBlock(ast, sub.Body, variableName, astLine);
             }
 
             return null;
         }
 
-        private string FindVariableInBlock(BasicLang.Compiler.AST.BlockNode block, string variableName, int astLine)
+        private string FindVariableInBlock(BasicLang.Compiler.AST.ProgramNode ast, BasicLang.Compiler.AST.BlockNode block, string variableName, int astLine)
         {
             if (block?.Statements == null)
                 return null;
@@ -888,7 +1032,7 @@ namespace BasicLang.Compiler.LSP
                     {
                         return "Integer"; // For loops typically use Integer
                     }
-                    var type = FindVariableInBlock(forNode.Body, variableName, astLine);
+                    var type = FindVariableInBlock(ast, forNode.Body, variableName, astLine);
                     if (type != null) return type;
                 }
                 else if (stmt is BasicLang.Compiler.AST.ForEachLoopNode forEachNode && forEachNode.Body != null)
@@ -896,31 +1040,88 @@ namespace BasicLang.Compiler.LSP
                     // Check loop variable
                     if (forEachNode.Variable != null && forEachNode.Variable.Equals(variableName, StringComparison.OrdinalIgnoreCase))
                     {
-                        // Try to infer element type from collection
-                        return "Variant";
+                        // Explicit "For Each n As Integer In ..." — declared type wins
+                        if (forEachNode.VariableType != null)
+                        {
+                            return GetTypeNameFromTypeRef(forEachNode.VariableType);
+                        }
+
+                        // Infer the element type from the collection's declared type
+                        var inferred = InferForEachElementTypeName(ast, forEachNode, astLine);
+                        return inferred ?? "Variant";
                     }
-                    var type = FindVariableInBlock(forEachNode.Body, variableName, astLine);
+                    var type = FindVariableInBlock(ast, forEachNode.Body, variableName, astLine);
                     if (type != null) return type;
                 }
                 else if (stmt is BasicLang.Compiler.AST.IfStatementNode ifNode)
                 {
                     if (ifNode.ThenBlock != null)
                     {
-                        var type = FindVariableInBlock(ifNode.ThenBlock, variableName, astLine);
+                        var type = FindVariableInBlock(ast, ifNode.ThenBlock, variableName, astLine);
                         if (type != null) return type;
                     }
                     if (ifNode.ElseBlock != null)
                     {
-                        var type = FindVariableInBlock(ifNode.ElseBlock, variableName, astLine);
+                        var type = FindVariableInBlock(ast, ifNode.ElseBlock, variableName, astLine);
                         if (type != null) return type;
                     }
                 }
                 else if (stmt is BasicLang.Compiler.AST.WhileLoopNode whileNode && whileNode.Body != null)
                 {
-                    var type = FindVariableInBlock(whileNode.Body, variableName, astLine);
+                    var type = FindVariableInBlock(ast, whileNode.Body, variableName, astLine);
                     if (type != null) return type;
                 }
             }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Infer the element type of a For Each collection: for an identifier
+        /// collection, resolve its declared type and extract the generic
+        /// argument ("List(Of String)" -> "String").
+        /// </summary>
+        private string InferForEachElementTypeName(BasicLang.Compiler.AST.ProgramNode ast, BasicLang.Compiler.AST.ForEachLoopNode forEachNode, int astLine)
+        {
+            if (ast == null || forEachNode?.Collection == null)
+                return null;
+
+            if (forEachNode.Collection is BasicLang.Compiler.AST.IdentifierExpressionNode id)
+            {
+                // FindVariableTypeInAST takes a 0-based LSP line
+                var collectionTypeName = FindVariableTypeInAST(ast, id.Name, astLine - 1);
+                return ExtractElementTypeName(collectionTypeName);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Extract an element type name from a collection type name:
+        /// "List(Of String)" -> "String"; "String()" -> "String". Returns null
+        /// when no single element type can be determined.
+        /// </summary>
+        private static string ExtractElementTypeName(string collectionTypeName)
+        {
+            if (string.IsNullOrEmpty(collectionTypeName))
+                return null;
+
+            var ofIndex = collectionTypeName.IndexOf("(Of ", StringComparison.OrdinalIgnoreCase);
+            if (ofIndex >= 0)
+            {
+                var closeIndex = collectionTypeName.LastIndexOf(')');
+                if (closeIndex > ofIndex)
+                {
+                    var inner = collectionTypeName.Substring(ofIndex + 4, closeIndex - ofIndex - 4).Trim();
+                    // Multi-argument generics (Dictionary) have no single element type
+                    if (inner.Length > 0 && !inner.Contains(','))
+                        return inner;
+                }
+                return null;
+            }
+
+            if (collectionTypeName.EndsWith("()"))
+                return collectionTypeName.Substring(0, collectionTypeName.Length - 2).Trim();
 
             return null;
         }
@@ -1024,140 +1225,374 @@ namespace BasicLang.Compiler.LSP
             "System.Threading.Tasks"
         };
 
-        // Hardcoded common .NET types for fallback when TypeRegistry can't load assemblies
-        private static readonly Dictionary<string, List<(string Name, string Detail, CompletionItemKind Kind)>> WellKnownTypes =
-            new Dictionary<string, List<(string, string, CompletionItemKind)>>(StringComparer.OrdinalIgnoreCase)
+        // Hardcoded common .NET types for fallback when TypeRegistry can't load assemblies.
+        // IsStatic tags Shared members so they can be excluded on instance receivers
+        // (and instance members excluded on type receivers).
+        private static readonly Dictionary<string, List<(string Name, string Detail, CompletionItemKind Kind, bool IsStatic)>> WellKnownTypes =
+            new Dictionary<string, List<(string, string, CompletionItemKind, bool)>>(StringComparer.OrdinalIgnoreCase)
             {
-                ["MessageBox"] = new List<(string, string, CompletionItemKind)>
+                ["MessageBox"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("Show", "Shows a message box with text", CompletionItemKind.Method),
-                    ("OK", "OK button", CompletionItemKind.EnumMember),
-                    ("OKCancel", "OK and Cancel buttons", CompletionItemKind.EnumMember),
-                    ("YesNo", "Yes and No buttons", CompletionItemKind.EnumMember),
-                    ("YesNoCancel", "Yes, No, and Cancel buttons", CompletionItemKind.EnumMember),
-                    ("RetryCancel", "Retry and Cancel buttons", CompletionItemKind.EnumMember),
-                    ("AbortRetryIgnore", "Abort, Retry, and Ignore buttons", CompletionItemKind.EnumMember),
+                    ("Show", "Shows a message box with text", CompletionItemKind.Method, true),
+                    ("OK", "OK button", CompletionItemKind.EnumMember, true),
+                    ("OKCancel", "OK and Cancel buttons", CompletionItemKind.EnumMember, true),
+                    ("YesNo", "Yes and No buttons", CompletionItemKind.EnumMember, true),
+                    ("YesNoCancel", "Yes, No, and Cancel buttons", CompletionItemKind.EnumMember, true),
+                    ("RetryCancel", "Retry and Cancel buttons", CompletionItemKind.EnumMember, true),
+                    ("AbortRetryIgnore", "Abort, Retry, and Ignore buttons", CompletionItemKind.EnumMember, true),
                 },
-                ["MessageBoxButtons"] = new List<(string, string, CompletionItemKind)>
+                ["MessageBoxButtons"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("OK", "OK button only", CompletionItemKind.EnumMember),
-                    ("OKCancel", "OK and Cancel buttons", CompletionItemKind.EnumMember),
-                    ("YesNo", "Yes and No buttons", CompletionItemKind.EnumMember),
-                    ("YesNoCancel", "Yes, No, and Cancel buttons", CompletionItemKind.EnumMember),
-                    ("RetryCancel", "Retry and Cancel buttons", CompletionItemKind.EnumMember),
-                    ("AbortRetryIgnore", "Abort, Retry, and Ignore buttons", CompletionItemKind.EnumMember),
+                    ("OK", "OK button only", CompletionItemKind.EnumMember, true),
+                    ("OKCancel", "OK and Cancel buttons", CompletionItemKind.EnumMember, true),
+                    ("YesNo", "Yes and No buttons", CompletionItemKind.EnumMember, true),
+                    ("YesNoCancel", "Yes, No, and Cancel buttons", CompletionItemKind.EnumMember, true),
+                    ("RetryCancel", "Retry and Cancel buttons", CompletionItemKind.EnumMember, true),
+                    ("AbortRetryIgnore", "Abort, Retry, and Ignore buttons", CompletionItemKind.EnumMember, true),
                 },
-                ["MessageBoxIcon"] = new List<(string, string, CompletionItemKind)>
+                ["MessageBoxIcon"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("None", "No icon", CompletionItemKind.EnumMember),
-                    ("Information", "Information icon", CompletionItemKind.EnumMember),
-                    ("Warning", "Warning icon", CompletionItemKind.EnumMember),
-                    ("Error", "Error icon", CompletionItemKind.EnumMember),
-                    ("Question", "Question icon", CompletionItemKind.EnumMember),
-                    ("Asterisk", "Asterisk icon", CompletionItemKind.EnumMember),
-                    ("Exclamation", "Exclamation icon", CompletionItemKind.EnumMember),
-                    ("Hand", "Hand icon", CompletionItemKind.EnumMember),
-                    ("Stop", "Stop icon", CompletionItemKind.EnumMember),
+                    ("None", "No icon", CompletionItemKind.EnumMember, true),
+                    ("Information", "Information icon", CompletionItemKind.EnumMember, true),
+                    ("Warning", "Warning icon", CompletionItemKind.EnumMember, true),
+                    ("Error", "Error icon", CompletionItemKind.EnumMember, true),
+                    ("Question", "Question icon", CompletionItemKind.EnumMember, true),
+                    ("Asterisk", "Asterisk icon", CompletionItemKind.EnumMember, true),
+                    ("Exclamation", "Exclamation icon", CompletionItemKind.EnumMember, true),
+                    ("Hand", "Hand icon", CompletionItemKind.EnumMember, true),
+                    ("Stop", "Stop icon", CompletionItemKind.EnumMember, true),
                 },
-                ["DialogResult"] = new List<(string, string, CompletionItemKind)>
+                ["DialogResult"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("OK", "OK was clicked", CompletionItemKind.EnumMember),
-                    ("Cancel", "Cancel was clicked", CompletionItemKind.EnumMember),
-                    ("Yes", "Yes was clicked", CompletionItemKind.EnumMember),
-                    ("No", "No was clicked", CompletionItemKind.EnumMember),
-                    ("Abort", "Abort was clicked", CompletionItemKind.EnumMember),
-                    ("Retry", "Retry was clicked", CompletionItemKind.EnumMember),
-                    ("Ignore", "Ignore was clicked", CompletionItemKind.EnumMember),
-                    ("None", "Nothing returned yet", CompletionItemKind.EnumMember),
+                    ("OK", "OK was clicked", CompletionItemKind.EnumMember, true),
+                    ("Cancel", "Cancel was clicked", CompletionItemKind.EnumMember, true),
+                    ("Yes", "Yes was clicked", CompletionItemKind.EnumMember, true),
+                    ("No", "No was clicked", CompletionItemKind.EnumMember, true),
+                    ("Abort", "Abort was clicked", CompletionItemKind.EnumMember, true),
+                    ("Retry", "Retry was clicked", CompletionItemKind.EnumMember, true),
+                    ("Ignore", "Ignore was clicked", CompletionItemKind.EnumMember, true),
+                    ("None", "Nothing returned yet", CompletionItemKind.EnumMember, true),
                 },
-                ["Console"] = new List<(string, string, CompletionItemKind)>
+                ["Console"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("WriteLine", "Writes a line to the console", CompletionItemKind.Method),
-                    ("Write", "Writes to the console", CompletionItemKind.Method),
-                    ("ReadLine", "Reads a line from the console", CompletionItemKind.Method),
-                    ("ReadKey", "Reads a key from the console", CompletionItemKind.Method),
-                    ("Clear", "Clears the console", CompletionItemKind.Method),
+                    ("WriteLine", "Writes a line to the console", CompletionItemKind.Method, true),
+                    ("Write", "Writes to the console", CompletionItemKind.Method, true),
+                    ("ReadLine", "Reads a line from the console", CompletionItemKind.Method, true),
+                    ("ReadKey", "Reads a key from the console", CompletionItemKind.Method, true),
+                    ("Clear", "Clears the console", CompletionItemKind.Method, true),
                 },
-                ["Math"] = new List<(string, string, CompletionItemKind)>
+                ["Math"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("Abs", "Returns the absolute value", CompletionItemKind.Method),
-                    ("Max", "Returns the maximum of two values", CompletionItemKind.Method),
-                    ("Min", "Returns the minimum of two values", CompletionItemKind.Method),
-                    ("Sqrt", "Returns the square root", CompletionItemKind.Method),
-                    ("Pow", "Returns a number raised to a power", CompletionItemKind.Method),
-                    ("Round", "Rounds a value", CompletionItemKind.Method),
-                    ("Floor", "Returns the floor of a value", CompletionItemKind.Method),
-                    ("Ceiling", "Returns the ceiling of a value", CompletionItemKind.Method),
-                    ("Sin", "Returns the sine", CompletionItemKind.Method),
-                    ("Cos", "Returns the cosine", CompletionItemKind.Method),
-                    ("Tan", "Returns the tangent", CompletionItemKind.Method),
-                    ("PI", "The value of PI", CompletionItemKind.Constant),
-                    ("E", "The value of E", CompletionItemKind.Constant),
+                    ("Abs", "Returns the absolute value", CompletionItemKind.Method, true),
+                    ("Max", "Returns the maximum of two values", CompletionItemKind.Method, true),
+                    ("Min", "Returns the minimum of two values", CompletionItemKind.Method, true),
+                    ("Sqrt", "Returns the square root", CompletionItemKind.Method, true),
+                    ("Pow", "Returns a number raised to a power", CompletionItemKind.Method, true),
+                    ("Round", "Rounds a value", CompletionItemKind.Method, true),
+                    ("Floor", "Returns the floor of a value", CompletionItemKind.Method, true),
+                    ("Ceiling", "Returns the ceiling of a value", CompletionItemKind.Method, true),
+                    ("Sin", "Returns the sine", CompletionItemKind.Method, true),
+                    ("Cos", "Returns the cosine", CompletionItemKind.Method, true),
+                    ("Tan", "Returns the tangent", CompletionItemKind.Method, true),
+                    ("PI", "The value of PI", CompletionItemKind.Constant, true),
+                    ("E", "The value of E", CompletionItemKind.Constant, true),
                 },
-                ["String"] = new List<(string, string, CompletionItemKind)>
+                ["String"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("Length", "Gets the length of the string", CompletionItemKind.Property),
-                    ("Substring", "Returns a substring", CompletionItemKind.Method),
-                    ("ToUpper", "Converts to uppercase", CompletionItemKind.Method),
-                    ("ToLower", "Converts to lowercase", CompletionItemKind.Method),
-                    ("Trim", "Removes whitespace", CompletionItemKind.Method),
-                    ("Contains", "Checks if string contains a value", CompletionItemKind.Method),
-                    ("StartsWith", "Checks if string starts with a value", CompletionItemKind.Method),
-                    ("EndsWith", "Checks if string ends with a value", CompletionItemKind.Method),
-                    ("Replace", "Replaces occurrences", CompletionItemKind.Method),
-                    ("Split", "Splits the string", CompletionItemKind.Method),
-                    ("IndexOf", "Finds the index of a value", CompletionItemKind.Method),
-                    ("IsNullOrEmpty", "Checks if null or empty", CompletionItemKind.Method),
-                    ("Join", "Joins strings", CompletionItemKind.Method),
-                    ("Format", "Formats a string", CompletionItemKind.Method),
+                    ("Length", "Gets the length of the string", CompletionItemKind.Property, false),
+                    ("Substring", "Returns a substring", CompletionItemKind.Method, false),
+                    ("ToUpper", "Converts to uppercase", CompletionItemKind.Method, false),
+                    ("ToLower", "Converts to lowercase", CompletionItemKind.Method, false),
+                    ("Trim", "Removes whitespace", CompletionItemKind.Method, false),
+                    ("Contains", "Checks if string contains a value", CompletionItemKind.Method, false),
+                    ("StartsWith", "Checks if string starts with a value", CompletionItemKind.Method, false),
+                    ("EndsWith", "Checks if string ends with a value", CompletionItemKind.Method, false),
+                    ("Replace", "Replaces occurrences", CompletionItemKind.Method, false),
+                    ("Split", "Splits the string", CompletionItemKind.Method, false),
+                    ("IndexOf", "Finds the index of a value", CompletionItemKind.Method, false),
+                    ("IsNullOrEmpty", "Checks if null or empty", CompletionItemKind.Method, true),
+                    ("Join", "Joins strings", CompletionItemKind.Method, true),
+                    ("Format", "Formats a string", CompletionItemKind.Method, true),
                 },
-                ["List"] = new List<(string, string, CompletionItemKind)>
+                ["List"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("Add", "Adds an item", CompletionItemKind.Method),
-                    ("Remove", "Removes an item", CompletionItemKind.Method),
-                    ("Clear", "Clears the list", CompletionItemKind.Method),
-                    ("Count", "Gets the count", CompletionItemKind.Property),
-                    ("Contains", "Checks if list contains an item", CompletionItemKind.Method),
-                    ("IndexOf", "Finds the index of an item", CompletionItemKind.Method),
-                    ("Insert", "Inserts an item at index", CompletionItemKind.Method),
-                    ("RemoveAt", "Removes item at index", CompletionItemKind.Method),
-                    ("Sort", "Sorts the list", CompletionItemKind.Method),
-                    ("Reverse", "Reverses the list", CompletionItemKind.Method),
-                    ("ToArray", "Converts to array", CompletionItemKind.Method),
-                    ("First", "Gets first item", CompletionItemKind.Method),
-                    ("Last", "Gets last item", CompletionItemKind.Method),
-                    ("FirstOrDefault", "Gets first item or default", CompletionItemKind.Method),
-                    ("LastOrDefault", "Gets last item or default", CompletionItemKind.Method),
-                    ("Where", "Filters items", CompletionItemKind.Method),
-                    ("Select", "Projects items", CompletionItemKind.Method),
-                    ("OrderBy", "Orders items", CompletionItemKind.Method),
-                    ("Any", "Checks if any items match", CompletionItemKind.Method),
-                    ("All", "Checks if all items match", CompletionItemKind.Method),
+                    ("Add", "Adds an item", CompletionItemKind.Method, false),
+                    ("Remove", "Removes an item", CompletionItemKind.Method, false),
+                    ("Clear", "Clears the list", CompletionItemKind.Method, false),
+                    ("Count", "Gets the count", CompletionItemKind.Property, false),
+                    ("Contains", "Checks if list contains an item", CompletionItemKind.Method, false),
+                    ("IndexOf", "Finds the index of an item", CompletionItemKind.Method, false),
+                    ("Insert", "Inserts an item at index", CompletionItemKind.Method, false),
+                    ("RemoveAt", "Removes item at index", CompletionItemKind.Method, false),
+                    ("Sort", "Sorts the list", CompletionItemKind.Method, false),
+                    ("Reverse", "Reverses the list", CompletionItemKind.Method, false),
+                    ("ToArray", "Converts to array", CompletionItemKind.Method, false),
+                    ("First", "Gets first item", CompletionItemKind.Method, false),
+                    ("Last", "Gets last item", CompletionItemKind.Method, false),
+                    ("FirstOrDefault", "Gets first item or default", CompletionItemKind.Method, false),
+                    ("LastOrDefault", "Gets last item or default", CompletionItemKind.Method, false),
+                    ("Where", "Filters items", CompletionItemKind.Method, false),
+                    ("Select", "Projects items", CompletionItemKind.Method, false),
+                    ("OrderBy", "Orders items", CompletionItemKind.Method, false),
+                    ("Any", "Checks if any items match", CompletionItemKind.Method, false),
+                    ("All", "Checks if all items match", CompletionItemKind.Method, false),
                 },
-                ["Dictionary"] = new List<(string, string, CompletionItemKind)>
+                ["Dictionary"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("Add", "Adds a key-value pair", CompletionItemKind.Method),
-                    ("Remove", "Removes a key", CompletionItemKind.Method),
-                    ("Clear", "Clears the dictionary", CompletionItemKind.Method),
-                    ("Count", "Gets the count", CompletionItemKind.Property),
-                    ("ContainsKey", "Checks if dictionary contains a key", CompletionItemKind.Method),
-                    ("ContainsValue", "Checks if dictionary contains a value", CompletionItemKind.Method),
-                    ("TryGetValue", "Tries to get value by key", CompletionItemKind.Method),
-                    ("Keys", "Gets all keys", CompletionItemKind.Property),
-                    ("Values", "Gets all values", CompletionItemKind.Property),
+                    ("Add", "Adds a key-value pair", CompletionItemKind.Method, false),
+                    ("Remove", "Removes a key", CompletionItemKind.Method, false),
+                    ("Clear", "Clears the dictionary", CompletionItemKind.Method, false),
+                    ("Count", "Gets the count", CompletionItemKind.Property, false),
+                    ("ContainsKey", "Checks if dictionary contains a key", CompletionItemKind.Method, false),
+                    ("ContainsValue", "Checks if dictionary contains a value", CompletionItemKind.Method, false),
+                    ("TryGetValue", "Tries to get value by key", CompletionItemKind.Method, false),
+                    ("Keys", "Gets all keys", CompletionItemKind.Property, false),
+                    ("Values", "Gets all values", CompletionItemKind.Property, false),
                 },
-                ["File"] = new List<(string, string, CompletionItemKind)>
+                ["File"] = new List<(string, string, CompletionItemKind, bool)>
                 {
-                    ("ReadAllText", "Reads all text from a file", CompletionItemKind.Method),
-                    ("WriteAllText", "Writes all text to a file", CompletionItemKind.Method),
-                    ("Exists", "Checks if file exists", CompletionItemKind.Method),
-                    ("Delete", "Deletes a file", CompletionItemKind.Method),
-                    ("Copy", "Copies a file", CompletionItemKind.Method),
-                    ("Move", "Moves a file", CompletionItemKind.Method),
-                    ("ReadAllLines", "Reads all lines from a file", CompletionItemKind.Method),
-                    ("WriteAllLines", "Writes all lines to a file", CompletionItemKind.Method),
+                    ("ReadAllText", "Reads all text from a file", CompletionItemKind.Method, true),
+                    ("WriteAllText", "Writes all text to a file", CompletionItemKind.Method, true),
+                    ("Exists", "Checks if file exists", CompletionItemKind.Method, true),
+                    ("Delete", "Deletes a file", CompletionItemKind.Method, true),
+                    ("Copy", "Copies a file", CompletionItemKind.Method, true),
+                    ("Move", "Moves a file", CompletionItemKind.Method, true),
+                    ("ReadAllLines", "Reads all lines from a file", CompletionItemKind.Method, true),
+                    ("WriteAllLines", "Writes all lines to a file", CompletionItemKind.Method, true),
                 },
             };
+
+        /// <summary>
+        /// Create a completion item from a well-known fallback table entry
+        /// </summary>
+        private static CompletionItem CreateWellKnownMemberItem((string Name, string Detail, CompletionItemKind Kind, bool IsStatic) member)
+        {
+            var insertText = member.Name;
+            if (member.Kind == CompletionItemKind.Method)
+            {
+                insertText = $"{member.Name}($0)";
+            }
+
+            return new CompletionItem
+            {
+                Label = member.Name,
+                Kind = member.Kind,
+                Detail = member.Detail,
+                Documentation = member.Detail,
+                InsertText = insertText,
+                InsertTextFormat = member.Kind == CompletionItemKind.Method ? InsertTextFormat.Snippet : InsertTextFormat.PlainText
+            };
+        }
+
+        /// <summary>
+        /// Member completions for a member-access trigger context. Simple
+        /// receivers ("s.") go through the classic variable/type resolution;
+        /// chains and call receivers ("s.Trim().", "GetName().",
+        /// "New Person().") are resolved left-to-right through member return
+        /// types, reusing the compiler's LookupNetTypeMember knowledge.
+        /// </summary>
+        private IEnumerable<CompletionItem> GetMemberCompletionsForContext(DocumentState state, TriggerContext triggerContext, int line, int character)
+        {
+            var chain = triggerContext.ReceiverChain;
+            if (chain == null || chain.Count == 0)
+                return GetMemberCompletions(state, triggerContext.ObjectName, line, character);
+
+            // Plain identifier receiver: classic path (variable, then type)
+            if (chain.Count == 1 && !chain[0].IsCall)
+                return GetMemberCompletions(state, chain[0].Name, line, character);
+
+            // Chain / call receiver: resolve to the result type, then list its
+            // instance members
+            var resultTypeName = ResolveChainResultTypeName(state, chain, line, character);
+            if (string.IsNullOrEmpty(resultTypeName))
+                return Enumerable.Empty<CompletionItem>();
+
+            return GetInstanceMemberCompletionsForType(state, resultTypeName);
+        }
+
+        /// <summary>
+        /// Resolve a receiver chain (e.g. [s, Trim(), ToUpper()]) to the type
+        /// name of its final expression, hopping through member return types.
+        /// </summary>
+        private string ResolveChainResultTypeName(DocumentState state, List<ReceiverSegment> chain, int line, int character)
+        {
+            var currentTypeName = ResolveChainRootTypeName(state, chain[0], line, character);
+
+            for (int i = 1; i < chain.Count && !string.IsNullOrEmpty(currentTypeName); i++)
+            {
+                currentTypeName = ResolveMemberTypeName(state, currentTypeName, chain[i].Name);
+            }
+
+            return currentTypeName;
+        }
+
+        /// <summary>
+        /// Resolve the type of the first chain segment: a variable's declared
+        /// type, a function's return type (for call roots), a constructed class
+        /// ("New Person()"), or the segment name itself when it denotes a type
+        /// (static chains like "String.Format(x).").
+        /// </summary>
+        private string ResolveChainRootTypeName(DocumentState state, ReceiverSegment root, int line, int character)
+        {
+            if (!root.IsCall)
+            {
+                var variableType = ResolveVariableTypeName(state, root.Name, line, character, out _);
+                if (!string.IsNullOrEmpty(variableType))
+                    return variableType;
+
+                // Not a variable — assume a type name; the next hop validates it
+                return root.Name;
+            }
+
+            // Call root: a function's return type (analyzer scope covers both
+            // user functions and the registered stdlib)
+            if (state?.SemanticAnalyzer != null)
+            {
+                var scope = GetScopeAtPosition(state, line, character);
+                var symbol = scope?.Resolve(root.Name)
+                    ?? state.SemanticAnalyzer.GlobalScope?.Resolve(root.Name);
+                if (symbol != null &&
+                    (symbol.Kind == SemanticAnalysis.SymbolKind.Function ||
+                     symbol.Kind == SemanticAnalysis.SymbolKind.Subroutine) &&
+                    symbol.ReturnType != null &&
+                    symbol.ReturnType.Kind != TypeKind.Void)
+                {
+                    return symbol.ReturnType.Name;
+                }
+            }
+
+            // AST-declared function (works when semantic analysis failed)
+            var func = FindFunctionByName(state?.AST, root.Name);
+            if (func?.ReturnType != null)
+                return GetTypeNameFromTypeRef(func.ReturnType);
+
+            // Constructor call: "New Person()." — the result is the class itself
+            if (FindClassByName(state?.AST, root.Name) != null)
+                return root.Name;
+            if (state?.TypeRegistry?.GetType(root.Name) != null)
+                return root.Name;
+
+            // Cross-file function or class
+            if (state?.ProjectContext != null)
+            {
+                var (crossSymbol, _) = state.ProjectContext.FindPublicSymbol(root.Name);
+                if (crossSymbol != null)
+                {
+                    if (crossSymbol.Kind == SemanticAnalysis.SymbolKind.Class)
+                        return crossSymbol.Name;
+                    if (crossSymbol.Kind == SemanticAnalysis.SymbolKind.Function && crossSymbol.ReturnType != null)
+                        return crossSymbol.ReturnType.Name;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Resolve the type name of a member accessed on a type: reuses the
+        /// compiler's LookupNetTypeMember (via the analyzer), then TypeRegistry
+        /// reflection, then user-defined classes (local and cross-file).
+        /// </summary>
+        private string ResolveMemberTypeName(DocumentState state, string typeName, string memberName)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(memberName))
+                return null;
+
+            var baseTypeName = typeName;
+            var genericStart = baseTypeName.IndexOf('(');
+            if (genericStart > 0)
+                baseTypeName = baseTypeName.Substring(0, genericStart).Trim();
+
+            // (a) Compiler knowledge: registry members + String/StringBuilder
+            //     return-type fallbacks (SemanticAnalyzer.LookupNetTypeMember)
+            var memberType = state?.SemanticAnalyzer?.ResolveNetMemberType(baseTypeName, memberName);
+            if (memberType != null)
+                return memberType.Name;
+
+            // (b) TypeRegistry reflection (also tries generic name forms)
+            if (state?.TypeRegistry != null)
+            {
+                foreach (var tryName in GetPossibleTypeNames(baseTypeName, typeName))
+                {
+                    var netType = state.TypeRegistry.GetType(tryName);
+                    if (netType == null) continue;
+
+                    var member = netType.Members.FirstOrDefault(m =>
+                        m.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase));
+                    if (!string.IsNullOrEmpty(member?.ReturnType))
+                        return member.ReturnType;
+                    break;
+                }
+            }
+
+            // (c) User-defined class members (walk the base chain)
+            var cls = FindClassByName(state?.AST, baseTypeName);
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (cls != null && visited.Add(cls.Name))
+            {
+                foreach (var member in cls.Members)
+                {
+                    switch (member)
+                    {
+                        case BasicLang.Compiler.AST.FunctionNode fn when fn.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase):
+                            return fn.ReturnType != null ? GetTypeNameFromTypeRef(fn.ReturnType) : null;
+                        case BasicLang.Compiler.AST.VariableDeclarationNode field when field.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase):
+                            return GetTypeNameFromTypeRef(field.Type);
+                        case BasicLang.Compiler.AST.PropertyNode prop when prop.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase):
+                            return GetTypeNameFromTypeRef(prop.PropertyType);
+                    }
+                }
+                cls = FindClassByName(state?.AST, cls.BaseClass);
+            }
+
+            // (d) Cross-file class members (case-insensitive lookup)
+            if (state?.ProjectContext != null)
+            {
+                var (crossSymbol, _) = state.ProjectContext.FindPublicSymbol(baseTypeName);
+                var crossMember = crossSymbol?.Type?.Members?.Values.FirstOrDefault(m =>
+                    m.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase));
+                if (crossMember != null)
+                {
+                    var resultType = crossMember.ReturnType?.Name ?? crossMember.Type?.Name;
+                    if (!string.IsNullOrEmpty(resultType) && resultType != "Void")
+                        return resultType;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Find a function declaration by name (top level or inside modules)
+        /// </summary>
+        private FunctionNode FindFunctionByName(BasicLang.Compiler.AST.ProgramNode ast, string functionName)
+        {
+            if (ast?.Declarations == null || string.IsNullOrEmpty(functionName))
+                return null;
+
+            return FindFunctionIn(ast.Declarations, functionName);
+        }
+
+        private FunctionNode FindFunctionIn(IEnumerable<ASTNode> declarations, string functionName)
+        {
+            foreach (var decl in declarations)
+            {
+                switch (decl)
+                {
+                    case FunctionNode func when func.Name.Equals(functionName, StringComparison.OrdinalIgnoreCase):
+                        return func;
+                    case BasicLang.Compiler.AST.ModuleNode module when module.Members != null:
+                        var fromModule = FindFunctionIn(module.Members, functionName);
+                        if (fromModule != null) return fromModule;
+                        break;
+                    case BasicLang.Compiler.AST.NamespaceNode ns when ns.Members != null:
+                        var fromNs = FindFunctionIn(ns.Members, functionName);
+                        if (fromNs != null) return fromNs;
+                        break;
+                }
+            }
+            return null;
+        }
 
         /// <summary>
         /// Get member completions for a type
@@ -1167,23 +1602,190 @@ namespace BasicLang.Compiler.LSP
             if (string.IsNullOrEmpty(objectName))
                 yield break;
 
-            // Try to get type from SemanticAnalyzer first
-            NetTypeInfo netType = null;
-            if (state?.SemanticAnalyzer != null)
+            // "Me." / "MyBase." — members of the enclosing class (and its bases)
+            if (objectName.Equals("Me", StringComparison.OrdinalIgnoreCase) ||
+                objectName.Equals("MyBase", StringComparison.OrdinalIgnoreCase))
             {
-                netType = state.SemanticAnalyzer.GetNetType(objectName);
+                foreach (var item in GetSelfMemberCompletions(state, objectName, line))
+                    yield return item;
+                yield break;
             }
 
-            // If not found via SemanticAnalyzer, try TypeRegistry directly
-            // This handles cases where parsing failed (incomplete code like "MessageBox.")
+            // 1) Resolve as a VARIABLE first — a variable shadows a type name,
+            //    and instance receivers must never be offered static members.
+            var variableTypeName = ResolveVariableTypeName(state, objectName, line, character, out var variableSymbol);
+            if (!string.IsNullOrEmpty(variableTypeName))
+            {
+                var instanceItems = GetInstanceMemberCompletionsForType(state, variableTypeName).ToList();
+
+                // Merge user-defined type members tracked by the semantic analyzer
+                if (variableSymbol?.Type?.Members != null && variableSymbol.Type.Members.Count > 0)
+                {
+                    var known = new HashSet<string>(instanceItems.Select(i => i.Label), StringComparer.OrdinalIgnoreCase);
+                    foreach (var memberKvp in variableSymbol.Type.Members)
+                    {
+                        if (memberKvp.Key.StartsWith(".")) continue; // ".ctor0" entries
+                        if (!known.Add(memberKvp.Key)) continue;
+                        instanceItems.Add(new CompletionItem
+                        {
+                            Label = memberKvp.Key,
+                            Kind = GetCompletionKind(memberKvp.Value.Kind),
+                            Detail = DescribeSymbol(memberKvp.Value),
+                            InsertText = memberKvp.Key
+                        });
+                    }
+                }
+
+                foreach (var item in instanceItems)
+                    yield return item;
+                yield break;
+            }
+
+            // 2) Resolve as a TYPE receiver — only static members are offered
+            foreach (var item in GetTypeReceiverMemberCompletions(state, objectName, line, character))
+                yield return item;
+        }
+
+        /// <summary>
+        /// Resolve the declared type name of a variable/parameter receiver, via
+        /// the AST first (works when semantic analysis failed) and then the
+        /// semantic analyzer's scope chain. Returns null when the name is not a
+        /// variable.
+        /// </summary>
+        private string ResolveVariableTypeName(DocumentState state, string objectName, int line, int character, out Symbol variableSymbol)
+        {
+            variableSymbol = null;
+
+            string typeName = null;
+            if (state?.AST != null)
+            {
+                typeName = FindVariableTypeInAST(state.AST, objectName, line);
+            }
+
+            if (state?.SemanticAnalyzer != null)
+            {
+                var currentScope = GetScopeAtPosition(state, line, character);
+                var resolved = currentScope?.Resolve(objectName)
+                    ?? state.SemanticAnalyzer.GlobalScope?.Resolve(objectName);
+
+                if (resolved != null && resolved.Type != null &&
+                    (resolved.Kind == SemanticAnalysis.SymbolKind.Variable ||
+                     resolved.Kind == SemanticAnalysis.SymbolKind.Parameter ||
+                     resolved.Kind == SemanticAnalysis.SymbolKind.Constant ||
+                     resolved.Kind == SemanticAnalysis.SymbolKind.Property))
+                {
+                    variableSymbol = resolved;
+                    typeName ??= resolved.Type.Name;
+                }
+            }
+
+            return typeName;
+        }
+
+        /// <summary>
+        /// List the INSTANCE members of a type given its (BasicLang) name.
+        /// Resolution order: TypeRegistry reflection, semantic analyzer,
+        /// well-known fallback tables, user-defined classes in this file,
+        /// classes defined in sibling project files.
+        /// </summary>
+        private IEnumerable<CompletionItem> GetInstanceMemberCompletionsForType(DocumentState state, string typeName)
+        {
+            var results = new List<CompletionItem>();
+            if (string.IsNullOrEmpty(typeName) ||
+                typeName.Equals("Variant", StringComparison.OrdinalIgnoreCase))
+                return results;
+
+            // Extract base type name ("List(Of String)" -> "List", "List<String>" -> "List")
+            var baseTypeName = typeName;
+            var genericStart = baseTypeName.IndexOf('(');
+            if (genericStart > 0)
+                baseTypeName = baseTypeName.Substring(0, genericStart).Trim();
+            var angleStart = baseTypeName.IndexOf('<');
+            if (angleStart > 0)
+                baseTypeName = baseTypeName.Substring(0, angleStart).Trim();
+
+            // (a) TypeRegistry reflection — full real member sets
+            NetTypeInfo netType = null;
+            if (state?.TypeRegistry != null)
+            {
+                foreach (var tryName in GetPossibleTypeNames(baseTypeName, typeName))
+                {
+                    netType = state.TypeRegistry.GetType(tryName);
+                    if (netType != null) break;
+                }
+            }
+
+            // (b) Semantic analyzer lookup (may consult more assemblies)
+            if (netType == null && state?.SemanticAnalyzer != null)
+            {
+                netType = state.SemanticAnalyzer.GetNetType(baseTypeName)
+                    ?? (MapBasicTypeToNetType(baseTypeName) is string mapped && mapped != null
+                        ? state.SemanticAnalyzer.GetNetType(mapped)
+                        : null);
+            }
+
+            if (netType != null)
+            {
+                foreach (var member in netType.Members)
+                {
+                    if (member.IsStatic) continue; // instance receiver: no statics
+                    results.Add(CreateMemberCompletionItem(member, netType.FullName ?? netType.Name));
+                }
+                return results;
+            }
+
+            // (c) Well-known fallback tables (statics excluded)
+            if (WellKnownTypes.TryGetValue(baseTypeName, out var wellKnownMembers))
+            {
+                foreach (var member in wellKnownMembers)
+                {
+                    if (member.IsStatic) continue;
+                    results.Add(CreateWellKnownMemberItem(member));
+                }
+                if (results.Count > 0)
+                    return results;
+            }
+
+            // (d) User-defined class in this file (walk the base-class chain)
+            var localClass = FindClassByName(state?.AST, baseTypeName);
+            if (localClass != null)
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var current = localClass;
+                while (current != null && visited.Add(current.Name))
+                {
+                    foreach (var member in current.Members)
+                    {
+                        var item = CreateAstMemberCompletionItem(member, includePrivate: false);
+                        if (item != null && seen.Add(item.Label))
+                            results.Add(item);
+                    }
+                    current = FindClassByName(state?.AST, current.BaseClass);
+                }
+                if (results.Count > 0)
+                    return results;
+            }
+
+            // (e) Class defined in a sibling project file
+            results.AddRange(GetProjectClassMemberCompletions(state, baseTypeName));
+            return results;
+        }
+
+        /// <summary>
+        /// Member completions for a TYPE receiver ("Console.", "String.",
+        /// "MyClass."). Only static/shared members are offered — instance
+        /// members require an instance receiver.
+        /// </summary>
+        private IEnumerable<CompletionItem> GetTypeReceiverMemberCompletions(DocumentState state, string objectName, int line, int character)
+        {
+            // (a) .NET type via analyzer/TypeRegistry
+            NetTypeInfo netType = state?.SemanticAnalyzer?.GetNetType(objectName);
             if (netType == null && state?.TypeRegistry != null)
             {
-                // Try TypeRegistry directly - try both original case and PascalCase
-                // Note: Namespaces are pre-loaded at initialization, not here (for performance)
                 netType = state.TypeRegistry.GetType(objectName);
-                if (netType == null)
+                if (netType == null && objectName.Length > 0)
                 {
-                    // Try PascalCase (first letter uppercase)
                     var pascalCase = char.ToUpper(objectName[0]) + objectName.Substring(1);
                     netType = state.TypeRegistry.GetType(pascalCase);
                 }
@@ -1193,195 +1795,375 @@ namespace BasicLang.Compiler.LSP
             {
                 foreach (var member in netType.Members)
                 {
-                    // For static types, only show static members
-                    if (netType.IsStatic && !member.IsStatic)
-                        continue;
-
-                    yield return CreateMemberCompletionItem(member);
+                    if (!member.IsStatic) continue; // type receiver: statics only
+                    yield return CreateMemberCompletionItem(member, netType.FullName ?? netType.Name);
                 }
                 yield break;
             }
-            else
+
+            // (b) Well-known fallback (statics only)
+            if (WellKnownTypes.TryGetValue(objectName, out var wellKnownMembers))
             {
-                // Fallback to well-known types if TypeRegistry lookup failed
-                if (WellKnownTypes.TryGetValue(objectName, out var wellKnownMembers))
+                foreach (var member in wellKnownMembers)
                 {
-                    foreach (var member in wellKnownMembers)
-                    {
-                        var insertText = member.Name;
-                        if (member.Kind == CompletionItemKind.Method)
-                        {
-                            insertText = $"{member.Name}($0)";
-                        }
-
-                        yield return new CompletionItem
-                        {
-                            Label = member.Name,
-                            Kind = member.Kind,
-                            Detail = member.Detail,
-                            InsertText = insertText,
-                            InsertTextFormat = member.Kind == CompletionItemKind.Method ? InsertTextFormat.Snippet : InsertTextFormat.PlainText
-                        };
-                    }
-                    yield break;
+                    if (!member.IsStatic) continue;
+                    yield return CreateWellKnownMemberItem(member);
                 }
-            }
-
-            // Try to look up variable type from AST if semantic analyzer is not available or failed
-            string variableTypeName = null;
-
-            // First, try AST-based lookup (works even when semantic analysis fails)
-            if (state?.AST != null)
-            {
-                variableTypeName = FindVariableTypeInAST(state.AST, objectName, line);
-            }
-
-            // If we found a type from AST, try to get completions for it
-            if (!string.IsNullOrEmpty(variableTypeName))
-            {
-                // Extract base type name (handle generics like "List(Of String)" -> "List")
-                var baseTypeName = variableTypeName;
-                var genericStart = variableTypeName.IndexOf('(');
-                if (genericStart > 0)
-                {
-                    baseTypeName = variableTypeName.Substring(0, genericStart).Trim();
-                }
-
-                // Try TypeRegistry first - this gives us REAL members via reflection
-                if (state?.TypeRegistry != null)
-                {
-                    // Try different name formats for generic types
-                    // BasicLang: Dictionary -> .NET: Dictionary`2
-                    var typeNamesToTry = GetPossibleTypeNames(baseTypeName, variableTypeName);
-
-                    foreach (var tryName in typeNamesToTry)
-                    {
-                        netType = state.TypeRegistry.GetType(tryName);
-                        if (netType != null)
-                        {
-                            foreach (var member in netType.Members)
-                            {
-                                if (member.IsStatic) continue; // Instance access, skip static members
-                                yield return CreateMemberCompletionItem(member);
-                            }
-                            yield break;
-                        }
-                    }
-                }
-
-                // Fallback to well-known types (hardcoded)
-                if (WellKnownTypes.TryGetValue(baseTypeName, out var wellKnownMembers))
-                {
-                    foreach (var member in wellKnownMembers)
-                    {
-                        var insertText = member.Name;
-                        if (member.Kind == CompletionItemKind.Method)
-                        {
-                            insertText = $"{member.Name}($0)";
-                        }
-
-                        yield return new CompletionItem
-                        {
-                            Label = member.Name,
-                            Kind = member.Kind,
-                            Detail = member.Detail,
-                            InsertText = insertText,
-                            InsertTextFormat = member.Kind == CompletionItemKind.Method ? InsertTextFormat.Snippet : InsertTextFormat.PlainText
-                        };
-                    }
-                    yield break;
-                }
-            }
-
-            // If we don't have a SemanticAnalyzer, we're done
-            if (state?.SemanticAnalyzer == null)
                 yield break;
+            }
 
-            // Find the scope at the current position and resolve the variable from there
-            var currentScope = GetScopeAtPosition(state, line, character);
-
-            // Check if it's a variable with a known type - search from current scope up the chain
-            var symbol = currentScope?.Resolve(objectName) ?? state.SemanticAnalyzer.GlobalScope?.Resolve(objectName);
-
-            if (symbol != null && symbol.Type != null)
+            // (c) User-defined class in this file: shared members only
+            var localClass = FindClassByName(state?.AST, objectName);
+            if (localClass != null)
             {
-                // Try to get .NET type members
-                var typeName = symbol.Type.Name;
-                netType = state.SemanticAnalyzer.GetNetType(typeName);
-
-                // Also try without generic parameters (e.g., "List" instead of "List<String>")
-                if (netType == null && typeName.Contains("<"))
+                foreach (var member in localClass.Members)
                 {
-                    var baseTypeName = typeName.Substring(0, typeName.IndexOf('<'));
-                    netType = state.SemanticAnalyzer.GetNetType(baseTypeName);
-                }
-
-                // Try loading from TypeRegistry if still not found
-                if (netType == null && state.TypeRegistry != null)
-                {
-                    netType = state.TypeRegistry.GetType(typeName);
-                    if (netType == null)
+                    var isShared = member switch
                     {
-                        // Try common type mappings
-                        var mappedType = MapBasicTypeToNetType(typeName);
-                        if (mappedType != null)
-                        {
-                            netType = state.TypeRegistry.GetType(mappedType);
-                        }
-                    }
-                }
+                        BasicLang.Compiler.AST.VariableDeclarationNode f => f.IsStatic,
+                        BasicLang.Compiler.AST.PropertyNode p => p.IsStatic,
+                        BasicLang.Compiler.AST.FunctionNode fn => fn.IsStatic,
+                        BasicLang.Compiler.AST.SubroutineNode s => s.IsStatic,
+                        BasicLang.Compiler.AST.ConstantDeclarationNode => true,
+                        _ => false
+                    };
+                    if (!isShared) continue;
 
-                if (netType != null)
+                    var item = CreateAstMemberCompletionItem(member, includePrivate: false);
+                    if (item != null)
+                        yield return item;
+                }
+                yield break;
+            }
+
+            // (d) Enum declared in this file: its members
+            var localEnum = FindEnumByName(state?.AST, objectName);
+            if (localEnum != null)
+            {
+                foreach (var enumMember in localEnum.Members)
                 {
-                    foreach (var member in netType.Members)
+                    yield return new CompletionItem
                     {
-                        // For instance variables, show instance members
-                        if (member.IsStatic)
-                            continue;
-
-                        yield return CreateMemberCompletionItem(member);
-                    }
+                        Label = enumMember.Name,
+                        Kind = CompletionItemKind.EnumMember,
+                        Detail = $"{localEnum.Name}.{enumMember.Name}",
+                        InsertText = enumMember.Name
+                    };
                 }
-                else
-                {
-                    // Fallback to well-known types based on the variable's type
-                    if (WellKnownTypes.TryGetValue(typeName, out var wellKnownMembers))
-                    {
-                        foreach (var member in wellKnownMembers)
-                        {
-                            var insertText = member.Name;
-                            if (member.Kind == CompletionItemKind.Method)
-                            {
-                                insertText = $"{member.Name}($0)";
-                            }
+                yield break;
+            }
 
-                            yield return new CompletionItem
-                            {
-                                Label = member.Name,
-                                Kind = member.Kind,
-                                Detail = member.Detail,
-                                InsertText = insertText,
-                                InsertTextFormat = member.Kind == CompletionItemKind.Method ? InsertTextFormat.Snippet : InsertTextFormat.PlainText
-                            };
-                        }
-                    }
-                }
+            // (e) Any symbol the analyzer resolved whose type carries members
+            //     (covers analyzer-registered enums/classes and imports)
+            if (state?.SemanticAnalyzer != null)
+            {
+                var currentScope = GetScopeAtPosition(state, line, character);
+                var symbol = currentScope?.Resolve(objectName)
+                    ?? state.SemanticAnalyzer.GlobalScope?.Resolve(objectName);
 
-                // Also check user-defined type members
-                if (symbol.Type.Members != null)
+                if (symbol?.Type?.Members != null && symbol.Type.Members.Count > 0)
                 {
                     foreach (var memberKvp in symbol.Type.Members)
                     {
+                        if (memberKvp.Key.StartsWith(".")) continue; // ".ctor0" entries
                         yield return new CompletionItem
                         {
                             Label = memberKvp.Key,
                             Kind = GetCompletionKind(memberKvp.Value.Kind),
-                            Detail = $"{memberKvp.Value.Name} As {memberKvp.Value.Type?.Name ?? "Object"}",
+                            Detail = DescribeSymbol(memberKvp.Value),
                             InsertText = memberKvp.Key
                         };
                     }
+                    yield break;
                 }
             }
+
+            // (f) Class/enum defined in a sibling project file
+            foreach (var item in GetProjectClassMemberCompletions(state, objectName))
+                yield return item;
+        }
+
+        /// <summary>
+        /// Find an enum declaration by name anywhere in the file
+        /// </summary>
+        private EnumNode FindEnumByName(BasicLang.Compiler.AST.ProgramNode ast, string enumName)
+        {
+            if (ast?.Declarations == null || string.IsNullOrEmpty(enumName))
+                return null;
+
+            return FindEnumIn(ast.Declarations, enumName);
+        }
+
+        private EnumNode FindEnumIn(IEnumerable<ASTNode> declarations, string enumName)
+        {
+            foreach (var decl in declarations)
+            {
+                switch (decl)
+                {
+                    case EnumNode en when en.Name.Equals(enumName, StringComparison.OrdinalIgnoreCase):
+                        return en;
+                    case BasicLang.Compiler.AST.ModuleNode module when module.Members != null:
+                        var fromModule = FindEnumIn(module.Members, enumName);
+                        if (fromModule != null) return fromModule;
+                        break;
+                    case BasicLang.Compiler.AST.NamespaceNode ns when ns.Members != null:
+                        var fromNs = FindEnumIn(ns.Members, enumName);
+                        if (fromNs != null) return fromNs;
+                        break;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Member completions for "Me." / "MyBase." — find the enclosing class
+        /// at the cursor position and emit its members (walking the base-class
+        /// chain; for MyBase the own class's members are excluded).
+        /// </summary>
+        private IEnumerable<CompletionItem> GetSelfMemberCompletions(DocumentState state, string objectName, int line)
+        {
+            if (state?.AST == null)
+                yield break;
+
+            int astLine = line + 1; // LSP 0-based -> AST 1-based
+            var enclosingClass = FindEnclosingClass(state.AST, astLine);
+            if (enclosingClass == null)
+                yield break;
+
+            var isMyBase = objectName.Equals("MyBase", StringComparison.OrdinalIgnoreCase);
+            var startClass = isMyBase
+                ? FindClassByName(state.AST, enclosingClass.BaseClass)
+                : enclosingClass;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var current = startClass;
+            var visitedClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            while (current != null && visitedClasses.Add(current.Name))
+            {
+                var isOwnClass = !isMyBase && ReferenceEquals(current, enclosingClass);
+
+                foreach (var member in current.Members)
+                {
+                    var item = CreateAstMemberCompletionItem(member, includePrivate: isOwnClass);
+                    if (item != null && seen.Add(item.Label))
+                        yield return item;
+                }
+
+                current = FindClassByName(state.AST, current.BaseClass);
+            }
+
+            // Cross-file base class: fall back to the project symbol table
+            if (startClass == null && isMyBase && !string.IsNullOrEmpty(enclosingClass.BaseClass))
+            {
+                foreach (var item in GetProjectClassMemberCompletions(state, enclosingClass.BaseClass, seen))
+                    yield return item;
+            }
+        }
+
+        /// <summary>
+        /// Emit member completions for a class defined in another project file,
+        /// using the members collected into the class symbol's TypeInfo.
+        /// </summary>
+        private IEnumerable<CompletionItem> GetProjectClassMemberCompletions(
+            DocumentState state, string className, HashSet<string> seen = null)
+        {
+            if (state?.ProjectContext == null || string.IsNullOrEmpty(className))
+                yield break;
+
+            var (symbol, _) = state.ProjectContext.FindPublicSymbol(className);
+            if (symbol?.Type?.Members == null)
+                yield break;
+
+            foreach (var memberKvp in symbol.Type.Members)
+            {
+                if (memberKvp.Key.StartsWith(".")) // constructor entries like ".ctor0"
+                    continue;
+                if (seen != null && !seen.Add(memberKvp.Key))
+                    continue;
+
+                var member = memberKvp.Value;
+                yield return new CompletionItem
+                {
+                    Label = member.Name,
+                    Kind = GetCompletionKind(member.Kind),
+                    Detail = DescribeSymbol(member),
+                    InsertText = member.Name
+                };
+            }
+        }
+
+        private static string DescribeSymbol(Symbol member)
+        {
+            return member.Kind switch
+            {
+                SemanticAnalysis.SymbolKind.Function =>
+                    $"Function {member.Name}({string.Join(", ", member.Parameters.Select(p => $"{p.Name} As {p.Type?.Name ?? "Variant"}"))}) As {member.ReturnType?.Name ?? "Void"}",
+                SemanticAnalysis.SymbolKind.Subroutine =>
+                    $"Sub {member.Name}({string.Join(", ", member.Parameters.Select(p => $"{p.Name} As {p.Type?.Name ?? "Variant"}"))})",
+                SemanticAnalysis.SymbolKind.Property => $"Property {member.Name} As {member.Type?.Name ?? "Object"}",
+                _ => $"{member.Name} As {member.Type?.Name ?? "Variant"}"
+            };
+        }
+
+        /// <summary>
+        /// Find the innermost class containing the given 1-based AST line.
+        /// </summary>
+        private ClassNode FindEnclosingClass(BasicLang.Compiler.AST.ProgramNode ast, int astLine)
+        {
+            ClassNode best = null;
+            foreach (var cls in EnumerateClasses(ast))
+            {
+                if (astLine >= cls.Line && astLine <= GetEndLine(cls))
+                {
+                    // Innermost = greatest start line still containing the position
+                    if (best == null || cls.Line > best.Line)
+                        best = cls;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Find a class declaration by name anywhere in the file (top level or
+        /// nested inside modules/namespaces).
+        /// </summary>
+        private ClassNode FindClassByName(BasicLang.Compiler.AST.ProgramNode ast, string className)
+        {
+            if (string.IsNullOrEmpty(className))
+                return null;
+
+            foreach (var cls in EnumerateClasses(ast))
+            {
+                if (cls.Name.Equals(className, StringComparison.OrdinalIgnoreCase))
+                    return cls;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Enumerate all class declarations in the file, including those nested
+        /// inside Module and Namespace blocks.
+        /// </summary>
+        private IEnumerable<ClassNode> EnumerateClasses(BasicLang.Compiler.AST.ProgramNode ast)
+        {
+            if (ast?.Declarations == null)
+                yield break;
+
+            foreach (var cls in EnumerateClassesIn(ast.Declarations))
+                yield return cls;
+        }
+
+        private IEnumerable<ClassNode> EnumerateClassesIn(IEnumerable<ASTNode> declarations)
+        {
+            foreach (var decl in declarations)
+            {
+                switch (decl)
+                {
+                    case ClassNode cls:
+                        yield return cls;
+                        break;
+                    case BasicLang.Compiler.AST.ModuleNode module when module.Members != null:
+                        foreach (var nested in EnumerateClassesIn(module.Members))
+                            yield return nested;
+                        break;
+                    case BasicLang.Compiler.AST.NamespaceNode ns when ns.Members != null:
+                        foreach (var nested in EnumerateClassesIn(ns.Members))
+                            yield return nested;
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Create a completion item for a class member AST node (field, method,
+        /// property, constant or event). Returns null for members that should
+        /// not be offered (constructors, private members of other classes).
+        /// </summary>
+        private CompletionItem CreateAstMemberCompletionItem(ASTNode member, bool includePrivate)
+        {
+            switch (member)
+            {
+                case BasicLang.Compiler.AST.VariableDeclarationNode field:
+                    if (!includePrivate && field.Access == AccessModifier.Private) return null;
+                    return new CompletionItem
+                    {
+                        Label = field.Name,
+                        Kind = CompletionItemKind.Field,
+                        Detail = $"{field.Name} As {field.Type?.Name ?? "Variant"}",
+                        InsertText = field.Name
+                    };
+
+                case BasicLang.Compiler.AST.PropertyNode prop:
+                    if (!includePrivate && prop.Access == AccessModifier.Private) return null;
+                    return new CompletionItem
+                    {
+                        Label = prop.Name,
+                        Kind = CompletionItemKind.Property,
+                        Detail = $"Property {prop.Name} As {prop.PropertyType?.Name ?? "Object"}",
+                        InsertText = prop.Name
+                    };
+
+                case BasicLang.Compiler.AST.FunctionNode func:
+                    if (!includePrivate && func.Access == AccessModifier.Private) return null;
+                    return new CompletionItem
+                    {
+                        Label = func.Name,
+                        Kind = CompletionItemKind.Method,
+                        Detail = $"Function {func.Name}({DescribeParameters(func.Parameters)}) As {func.ReturnType?.Name ?? "Void"}",
+                        InsertText = BuildMethodInsertText(func.Name, func.Parameters),
+                        InsertTextFormat = InsertTextFormat.Snippet
+                    };
+
+                case BasicLang.Compiler.AST.SubroutineNode sub:
+                    if (!includePrivate && sub.Access == AccessModifier.Private) return null;
+                    return new CompletionItem
+                    {
+                        Label = sub.Name,
+                        Kind = CompletionItemKind.Method,
+                        Detail = $"Sub {sub.Name}({DescribeParameters(sub.Parameters)})",
+                        InsertText = BuildMethodInsertText(sub.Name, sub.Parameters),
+                        InsertTextFormat = InsertTextFormat.Snippet
+                    };
+
+                case BasicLang.Compiler.AST.ConstantDeclarationNode constant:
+                    if (!includePrivate && constant.Access == AccessModifier.Private) return null;
+                    return new CompletionItem
+                    {
+                        Label = constant.Name,
+                        Kind = CompletionItemKind.Constant,
+                        Detail = $"Const {constant.Name} As {constant.Type?.Name ?? "Variant"}",
+                        InsertText = constant.Name
+                    };
+
+                case BasicLang.Compiler.AST.EventDeclarationNode evt:
+                    if (!includePrivate && evt.Access == AccessModifier.Private) return null;
+                    return new CompletionItem
+                    {
+                        Label = evt.Name,
+                        Kind = CompletionItemKind.Event,
+                        Detail = $"Event {evt.Name}",
+                        InsertText = evt.Name
+                    };
+
+                default:
+                    return null;
+            }
+        }
+
+        private static string DescribeParameters(List<ParameterNode> parameters)
+        {
+            if (parameters == null || parameters.Count == 0)
+                return string.Empty;
+            return string.Join(", ", parameters.Select(p => $"{p.Name} As {p.Type?.Name ?? "Variant"}"));
+        }
+
+        private static string BuildMethodInsertText(string name, List<ParameterNode> parameters)
+        {
+            if (parameters == null || parameters.Count == 0)
+                return $"{name}()";
+            var placeholders = parameters.Select((p, i) => $"${{{i + 1}:{p.Name}}}");
+            return $"{name}({string.Join(", ", placeholders)})";
         }
 
         /// <summary>
@@ -1491,35 +2273,105 @@ namespace BasicLang.Compiler.LSP
                     }
                 }
             }
+            else if (node is BasicLang.Compiler.AST.ModuleNode module)
+            {
+                // Module blocks (including the implicit Module of .mod files)
+                if (line >= module.Line && line <= GetEndLine(module))
+                {
+                    foreach (var childScope in parentScope.Children)
+                    {
+                        if (childScope.Name == module.Name && childScope.Kind == ScopeKind.Module)
+                        {
+                            foreach (var member in module.Members)
+                            {
+                                var innerScope = FindScopeContainingPosition(childScope, member, line);
+                                if (innerScope != null && innerScope != childScope)
+                                {
+                                    return innerScope;
+                                }
+                            }
+                            return childScope;
+                        }
+                    }
+                }
+            }
 
             return null;
         }
 
         /// <summary>
-        /// Estimate the end line of an AST node
+        /// Get the end line of an AST node. The parser records the real
+        /// closing-token line ("End Function"/"End Sub"/"End Class") in
+        /// ASTNode.EndLine; when absent (error recovery, synthesized nodes)
+        /// fall back to the deepest descendant line, then to an estimate.
         /// </summary>
         private int GetEndLine(ASTNode node)
         {
-            // For now, estimate based on node type
-            // A more accurate approach would require storing end positions in AST nodes
-            if (node is BasicLang.Compiler.AST.FunctionNode func)
-            {
-                // Estimate: function line + number of statements + some buffer
-                return func.Line + (func.Body?.Statements?.Count ?? 0) + 10;
-            }
-            else if (node is BasicLang.Compiler.AST.SubroutineNode sub)
-            {
-                return sub.Line + (sub.Body?.Statements?.Count ?? 0) + 10;
-            }
-            else if (node is BasicLang.Compiler.AST.ClassNode cls)
-            {
-                return cls.Line + (cls.Members?.Count ?? 0) * 10 + 10;
-            }
+            if (node.EndLine > 0)
+                return node.EndLine;
 
-            return node.Line + 100; // Default estimate
+            // Stopgap: max line across descendant statements/members
+            var maxDescendant = GetMaxDescendantLine(node);
+            if (maxDescendant > node.Line)
+                return maxDescendant + 1; // + closing "End ..." line
+
+            return node.Line + 100; // Last-resort estimate
         }
 
-        private CompletionItem CreateMemberCompletionItem(NetMemberInfo member)
+        /// <summary>
+        /// Compute the maximum 1-based line of a node and its descendants
+        /// (recursing through the block structures the completion service
+        /// understands).
+        /// </summary>
+        private int GetMaxDescendantLine(ASTNode node)
+        {
+            if (node == null)
+                return 0;
+
+            int max = Math.Max(node.Line, node.EndLine);
+
+            switch (node)
+            {
+                case BasicLang.Compiler.AST.FunctionNode func:
+                    max = Math.Max(max, GetMaxDescendantLine(func.Body));
+                    break;
+                case BasicLang.Compiler.AST.SubroutineNode sub:
+                    max = Math.Max(max, GetMaxDescendantLine(sub.Body));
+                    break;
+                case BasicLang.Compiler.AST.ClassNode cls:
+                    foreach (var member in cls.Members)
+                        max = Math.Max(max, GetMaxDescendantLine(member));
+                    break;
+                case BasicLang.Compiler.AST.ModuleNode module:
+                    foreach (var member in module.Members)
+                        max = Math.Max(max, GetMaxDescendantLine(member));
+                    break;
+                case BasicLang.Compiler.AST.BlockNode block:
+                    if (block.Statements != null)
+                    {
+                        foreach (var stmt in block.Statements)
+                            max = Math.Max(max, GetMaxDescendantLine(stmt));
+                    }
+                    break;
+                case BasicLang.Compiler.AST.IfStatementNode ifNode:
+                    max = Math.Max(max, GetMaxDescendantLine(ifNode.ThenBlock));
+                    max = Math.Max(max, GetMaxDescendantLine(ifNode.ElseBlock));
+                    break;
+                case BasicLang.Compiler.AST.ForLoopNode forNode:
+                    max = Math.Max(max, GetMaxDescendantLine(forNode.Body));
+                    break;
+                case BasicLang.Compiler.AST.ForEachLoopNode forEachNode:
+                    max = Math.Max(max, GetMaxDescendantLine(forEachNode.Body));
+                    break;
+                case BasicLang.Compiler.AST.WhileLoopNode whileNode:
+                    max = Math.Max(max, GetMaxDescendantLine(whileNode.Body));
+                    break;
+            }
+
+            return max;
+        }
+
+        private CompletionItem CreateMemberCompletionItem(NetMemberInfo member, string containingTypeName = null)
         {
             var kind = member.Kind switch
             {
@@ -1549,14 +2401,41 @@ namespace BasicLang.Compiler.LSP
                 }
             }
 
+            // Stash the receiver type + member name so completionItem/resolve
+            // can attach full documentation lazily (finding [18])
+            Newtonsoft.Json.Linq.JToken data = null;
+            if (!string.IsNullOrEmpty(containingTypeName))
+            {
+                data = new Newtonsoft.Json.Linq.JObject
+                {
+                    ["type"] = containingTypeName,
+                    ["member"] = member.Name
+                };
+            }
+
             return new CompletionItem
             {
                 Label = member.Name,
                 Kind = kind,
                 Detail = detail,
+                Documentation = BuildMemberDocumentation(member, containingTypeName),
                 InsertTextFormat = member.Kind == NetMemberKind.Method ? InsertTextFormat.Snippet : InsertTextFormat.PlainText,
-                InsertText = insertText
+                InsertText = insertText,
+                Data = data
             };
+        }
+
+        /// <summary>
+        /// Build the documentation shown for a .NET member completion item
+        /// </summary>
+        internal static StringOrMarkupContent BuildMemberDocumentation(NetMemberInfo member, string containingTypeName)
+        {
+            var origin = string.IsNullOrEmpty(containingTypeName) ? "" : $"\n\nMember of `{containingTypeName}`";
+            return new StringOrMarkupContent(new MarkupContent
+            {
+                Kind = MarkupKind.Markdown,
+                Value = $"```basiclang\n{member.GetSignature()}\n```{origin}"
+            });
         }
 
         private CompletionItemKind GetCompletionKind(SemanticAnalysis.SymbolKind kind)
@@ -1660,6 +2539,7 @@ namespace BasicLang.Compiler.LSP
                     Label = label,
                     Kind = CompletionItemKind.Keyword,
                     Detail = detail,
+                    Documentation = detail,
                     InsertTextFormat = InsertTextFormat.Snippet,
                     InsertText = snippet,
                     SortText = $"3_{label}"
@@ -2064,6 +2944,7 @@ namespace BasicLang.Compiler.LSP
                     Label = name,
                     Kind = CompletionItemKind.Function,
                     Detail = $"{detail} -> {returnType}",
+                    Documentation = $"{detail}\n\nReturns: {returnType}",
                     InsertTextFormat = InsertTextFormat.Snippet,
                     InsertText = snippet,
                     SortText = $"1_{name}"
@@ -2129,13 +3010,15 @@ namespace BasicLang.Compiler.LSP
                 scope = scope.Parent;
             }
 
-            // Also add top-level declarations from AST (in case semantic analysis didn't capture everything)
+            // Also add top-level declarations from AST (in case semantic analysis didn't capture everything).
+            // Declarations nested in Module/Namespace blocks (including the implicit
+            // Module of .mod files) are flattened in.
             if (state.AST != null)
             {
                 // Convert LSP line (0-based) to AST line (1-based)
                 int astLine = line + 1;
 
-                foreach (var decl in state.AST.Declarations)
+                foreach (var decl in FlattenContainerDeclarations(state.AST.Declarations))
                 {
                     if (decl is BasicLang.Compiler.AST.FunctionNode func)
                     {
@@ -2269,6 +3152,31 @@ namespace BasicLang.Compiler.LSP
                     {
                         yield return item;
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Flatten declarations by descending into Module and Namespace blocks
+        /// (module members behave like top-level declarations for completion)
+        /// </summary>
+        private IEnumerable<ASTNode> FlattenContainerDeclarations(IEnumerable<ASTNode> declarations)
+        {
+            foreach (var decl in declarations)
+            {
+                switch (decl)
+                {
+                    case BasicLang.Compiler.AST.ModuleNode module when module.Members != null:
+                        foreach (var nested in FlattenContainerDeclarations(module.Members))
+                            yield return nested;
+                        break;
+                    case BasicLang.Compiler.AST.NamespaceNode ns when ns.Members != null:
+                        foreach (var nested in FlattenContainerDeclarations(ns.Members))
+                            yield return nested;
+                        break;
+                    default:
+                        yield return decl;
+                        break;
                 }
             }
         }

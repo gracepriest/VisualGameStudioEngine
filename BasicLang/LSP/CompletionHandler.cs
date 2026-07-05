@@ -1,5 +1,8 @@
+using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
 using OmniSharp.Extensions.LanguageServer.Protocol.Document;
@@ -30,12 +33,44 @@ namespace BasicLang.Compiler.LSP
                 request.Position.Line,
                 request.Position.Character);
 
-            return Task.FromResult(new CompletionList(completions));
+            // VS Code contract: the FULL candidate set for the context is
+            // returned (the client filters in place), so the list is complete
+            return Task.FromResult(new CompletionList(completions, isIncomplete: false));
         }
 
         public override Task<CompletionItem> Handle(CompletionItem request, CancellationToken cancellationToken)
         {
-            // Resolve additional completion item details if needed
+            // completionItem/resolve: attach documentation lazily from the
+            // type+member stashed in CompletionItem.Data at list-creation time
+            try
+            {
+                if (request.Documentation == null && request.Data is JObject data)
+                {
+                    var typeName = data["type"]?.ToString();
+                    var memberName = data["member"]?.ToString();
+
+                    if (!string.IsNullOrEmpty(typeName) && !string.IsNullOrEmpty(memberName))
+                    {
+                        var netType = _documentManager.TypeRegistry?.GetType(typeName);
+                        var member = netType?.Members?.FirstOrDefault(m =>
+                            m.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase));
+
+                        if (member != null)
+                        {
+                            request = request with
+                            {
+                                Documentation = CompletionService.BuildMemberDocumentation(member, typeName),
+                                Detail = request.Detail ?? member.GetSignature()
+                            };
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Resolution is best-effort — echo the item back unchanged
+            }
+
             return Task.FromResult(request);
         }
 

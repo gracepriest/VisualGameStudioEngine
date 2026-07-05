@@ -45,6 +45,11 @@ namespace BasicLang.Compiler.LSP
         {
             TypeRegistry = new TypeRegistry();
 
+            // Preload core .NET types from the running runtime so member
+            // completion for Console/String/List/... works even when no SDK
+            // reference assemblies are found on disk (finding [15]).
+            TypeRegistry.PreloadCoreTypes();
+
             // Try to load cached index first
             if (!TypeRegistry.LoadIndexFromCache())
             {
@@ -116,10 +121,13 @@ namespace BasicLang.Compiler.LSP
             var state = new DocumentState(uri, content);
             state.TypeRegistry = TypeRegistry; // Share TypeRegistry across documents
             state.SetProjectContext(projectContext);
-            var contentHash = state.ContentHash;
+
+            // The parse result depends on the file extension (.mod/.cls get an
+            // implicit container), so the cache key must include it
+            var cacheKey = GetParseCacheKey(uri, state.ContentHash);
 
             // Check parse cache
-            if (_parseCache.TryGetValue(contentHash, out var cachedResult))
+            if (_parseCache.TryGetValue(cacheKey, out var cachedResult))
             {
                 // Use cached parse result
                 state.ApplyCachedResult(cachedResult);
@@ -132,12 +140,26 @@ namespace BasicLang.Compiler.LSP
                 // Cache the result if parsing was successful
                 if (state.ParseSuccessful)
                 {
-                    CacheParseResult(contentHash, state);
+                    CacheParseResult(cacheKey, state);
                 }
             }
 
             _documents[uri] = state;
             return state;
+        }
+
+        private static string GetParseCacheKey(DocumentUri uri, string contentHash)
+        {
+            string extension = null;
+            try
+            {
+                extension = System.IO.Path.GetExtension(uri?.Path)?.ToLowerInvariant();
+            }
+            catch
+            {
+                // No extension — plain key
+            }
+            return $"{extension}:{contentHash}";
         }
 
         private void CacheParseResult(string contentHash, DocumentState state)
@@ -455,9 +477,11 @@ namespace BasicLang.Compiler.LSP
                 var lexer = new Lexer(Content);
                 Tokens = lexer.Tokenize();
 
-                // Parsing
+                // Parsing — .mod/.cls documents get their implicit Module/Class
+                // wrapper synthesized in the AST (no source text wrapping, so
+                // line numbers stay exact)
                 var parser = new Parser(Tokens);
-                AST = parser.Parse();
+                AST = ImplicitContainer.Parse(parser, FilePath ?? Uri?.Path, Content);
                 ParseSuccessful = true;
 
                 // Semantic analysis

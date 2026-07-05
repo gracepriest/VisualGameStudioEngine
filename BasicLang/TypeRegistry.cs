@@ -169,6 +169,104 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// Preload a curated set of core .NET types from the RUNNING runtime via
+        /// reflection so member completion works out of the box ("Console.",
+        /// "String.", "List." etc.) without requiring SDK reference assemblies
+        /// on disk. Covers System, System.Collections.Generic, System.Text,
+        /// System.IO and System.Linq essentials.
+        /// </summary>
+        public void PreloadCoreTypes()
+        {
+            var coreTypes = new[]
+            {
+                // System primitives and core types
+                typeof(object), typeof(string), typeof(int), typeof(long), typeof(short),
+                typeof(byte), typeof(float), typeof(double), typeof(decimal), typeof(bool),
+                typeof(char), typeof(Console), typeof(Math), typeof(DateTime), typeof(TimeSpan),
+                typeof(Random), typeof(Convert), typeof(Environment), typeof(Guid),
+                typeof(Exception), typeof(Array), typeof(Enum), typeof(Version), typeof(Uri),
+                typeof(ConsoleColor), typeof(ConsoleKeyInfo), typeof(StringComparison),
+                typeof(DayOfWeek),
+
+                // System.Collections.Generic
+                typeof(System.Collections.Generic.List<>),
+                typeof(System.Collections.Generic.Dictionary<,>),
+                typeof(System.Collections.Generic.HashSet<>),
+                typeof(System.Collections.Generic.Queue<>),
+                typeof(System.Collections.Generic.Stack<>),
+                typeof(System.Collections.Generic.LinkedList<>),
+                typeof(System.Collections.Generic.SortedDictionary<,>),
+                typeof(System.Collections.Generic.KeyValuePair<,>),
+                typeof(System.Collections.Generic.IEnumerable<>),
+                typeof(System.Collections.Generic.IList<>),
+                typeof(System.Collections.Generic.IDictionary<,>),
+
+                // System.Text
+                typeof(System.Text.StringBuilder),
+                typeof(System.Text.Encoding),
+                typeof(System.Text.RegularExpressions.Regex),
+
+                // System.IO
+                typeof(System.IO.File), typeof(System.IO.Directory), typeof(System.IO.Path),
+                typeof(System.IO.FileInfo), typeof(System.IO.DirectoryInfo),
+                typeof(System.IO.StreamReader), typeof(System.IO.StreamWriter),
+                typeof(System.IO.MemoryStream), typeof(System.IO.Stream),
+                typeof(System.IO.FileStream), typeof(System.IO.TextReader),
+                typeof(System.IO.TextWriter),
+
+                // System.Linq / diagnostics
+                typeof(System.Linq.Enumerable),
+                typeof(System.Diagnostics.Stopwatch),
+                typeof(System.Threading.Tasks.Task),
+                typeof(System.Threading.Tasks.Task<>)
+            };
+
+            foreach (var type in coreTypes)
+            {
+                RegisterRuntimeType(type);
+            }
+        }
+
+        /// <summary>
+        /// Register a single runtime type (and index it by full, simple and —
+        /// for generics — bare name) so GetType lookups resolve it.
+        /// </summary>
+        private void RegisterRuntimeType(Type type)
+        {
+            try
+            {
+                if (type.FullName != null && _typesByName.ContainsKey(type.FullName))
+                    return;
+
+                var info = CreateNetTypeInfo(type);
+                var ns = type.Namespace ?? string.Empty;
+
+                if (!_loadedTypes.ContainsKey(ns))
+                    _loadedTypes[ns] = new List<NetTypeInfo>();
+                _loadedTypes[ns].Add(info);
+
+                if (type.FullName != null)
+                    _typesByName[type.FullName] = info;
+                if (!_typesByName.ContainsKey(type.Name))
+                    _typesByName[type.Name] = info;
+
+                // Generic definitions: also index by the bare name ("List" -> List`1)
+                if (type.IsGenericTypeDefinition)
+                {
+                    var bareName = type.Name.Split('`')[0];
+                    if (!_typesByName.ContainsKey(bareName))
+                        _typesByName[bareName] = info;
+                }
+
+                _loadedNamespaces.Add(ns);
+            }
+            catch
+            {
+                // Best-effort preload — never fail initialization
+            }
+        }
+
+        /// <summary>
         /// Load types for a specific namespace (called when Using statement is encountered)
         /// </summary>
         public bool LoadNamespace(string namespaceName)
