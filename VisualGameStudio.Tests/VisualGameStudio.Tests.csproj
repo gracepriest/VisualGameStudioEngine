@@ -34,6 +34,10 @@
     <ProjectReference Include="..\VisualGameStudio.Core\VisualGameStudio.Core.csproj" />
     <ProjectReference Include="..\VisualGameStudio.Editor\VisualGameStudio.Editor.csproj" />
     <ProjectReference Include="..\VisualGameStudio.ProjectSystem\VisualGameStudio.ProjectSystem.csproj" />
+    <!-- Ships RaylibWrapper.dll next to the test host so in-process game builds
+         resolve the engine wrapper exactly like the IDE/BasicLang.exe deployments
+         (EngineDeployment probes the process base directory). -->
+    <ProjectReference Include="..\RaylibWrapper\RaylibWrapper.vbproj" />
   </ItemGroup>
 
 </Project>

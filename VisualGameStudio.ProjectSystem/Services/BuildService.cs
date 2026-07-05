@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Linq;
 using BasicLang.Compiler;
-using BasicLang.Compiler.AST;
 using BasicLang.Compiler.SemanticAnalysis;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Models;
@@ -343,7 +342,7 @@ public class BuildService : IBuildService
                 return result;
             }
 
-            // Try to use the BasicLang compiler API directly
+            // Delegate to the real BasicLang compiler engine (same as `BasicLang.exe build`)
             result = await CompileWithBasicLangApiAsync(project, sourceFiles, _buildCts.Token);
 
             stopwatch.Stop();
@@ -399,6 +398,15 @@ public class BuildService : IBuildService
         return result;
     }
 
+    /// <summary>
+    /// Compiles the project with the SAME engine the CLI uses
+    /// (<see cref="BasicCompiler.CompileProjectFiles"/>), mirroring
+    /// BasicLang/Program.cs's `build` command: restore NuGet packages, compile all
+    /// project files as one program (.mod/.cls implicit wrapping, sibling imports,
+    /// combined IR, optimization all handled by the compiler), generate
+    /// backend-appropriate output, and — for the C# backend — run `dotnet build`
+    /// with CLI-parity csproj generation and game-engine deployment.
+    /// </summary>
     private async Task<BuildResult> CompileWithBasicLangApiAsync(
         BasicLangProject project,
         List<ProjectItem> sourceFiles,
@@ -409,23 +417,11 @@ public class BuildService : IBuildService
 
         try
         {
-            int totalFiles = sourceFiles.Count;
-            int processedFiles = 0;
-
-            // ========== PHASE 1: Parse all files and collect symbols ==========
-            _outputService.WriteLine($"Phase 1: Parsing {totalFiles} file(s)...", OutputCategory.Build);
-            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Parsing source files...", 10));
-
-            var compilationUnits = new List<CompilationUnit>();
-            var projectSymbolTable = new ProjectSymbolTable();
-            var allErrors = new List<DiagnosticItem>();
-
+            // ---------- Resolve source files ----------
+            var absoluteSourcePaths = new List<string>();
             foreach (var sourceFile in sourceFiles)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
                 var filePath = Path.Combine(project.ProjectDirectory, sourceFile.Include);
-
                 if (!File.Exists(filePath))
                 {
                     result.Diagnostics.Add(new DiagnosticItem
@@ -435,238 +431,291 @@ public class BuildService : IBuildService
                         FilePath = filePath,
                         Severity = DiagnosticSeverity.Error
                     });
+                    _outputService.WriteError($"Source file not found: {sourceFile.Include}", OutputCategory.Build);
                     continue;
                 }
 
-                // Read and parse the source file
-                var sourceCode = await File.ReadAllTextAsync(filePath, cancellationToken);
-                var unit = new CompilationUnit(filePath) { SourceCode = sourceCode };
-
-                var parseResult = ParseSourceFile(unit, filePath);
-                if (parseResult.Errors.Count > 0)
-                {
-                    allErrors.AddRange(parseResult.Errors);
-                    foreach (var err in parseResult.Errors)
-                    {
-                        var prefix = err.Severity == DiagnosticSeverity.Error ? "error" : "warning";
-                        _outputService.WriteLine($"  {err.Location}: {prefix} {err.Id}: {err.Message}", OutputCategory.Build);
-                    }
-                }
-
-                if (parseResult.AST != null)
-                {
-                    unit.AST = parseResult.AST;
-                    compilationUnits.Add(unit);
-                    _outputService.WriteLine($"  Parsed: {sourceFile.Include}", OutputCategory.Build);
-                }
-
-                processedFiles++;
+                absoluteSourcePaths.Add(filePath);
             }
 
-            // Check for parse errors
-            if (allErrors.Any(e => e.Severity == DiagnosticSeverity.Error))
+            if (result.ErrorCount > 0)
             {
-                result.Diagnostics.AddRange(allErrors);
                 result.Success = false;
                 return result;
             }
 
-            // ========== PHASE 2: Collect symbols from all files ==========
-            _outputService.WriteLine($"Phase 2: Collecting symbols...", OutputCategory.Build);
-            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Collecting symbols...", 30));
+            // The CLI project model (BasicLang.Compiler.ProjectSystem.ProjectFile)
+            // carries data the IDE model does not: PackageReferences, assembly
+            // references, UseWindowsForms/UseWPF, TargetFramework. Load it from the
+            // same .blproj for parity with `BasicLang.exe build`.
+            var cliProject = TryLoadCliProject(project.FilePath);
 
-            foreach (var unit in compilationUnits)
+            // ---------- Phase 1: restore NuGet packages (CLI parity) ----------
+            var restoredAssemblies = new List<string>();
+            if (cliProject != null && cliProject.PackageReferences.Count > 0)
             {
-                CollectModuleSymbols(unit, projectSymbolTable);
-            }
+                _outputService.WriteLine($"Restoring {cliProject.PackageReferences.Count} NuGet package(s)...", OutputCategory.Build);
+                BuildProgress?.Invoke(this, new BuildProgressEventArgs("Restoring packages...", 5));
 
-            var moduleNames = projectSymbolTable.GetModuleNames().ToList();
-            _outputService.WriteLine($"  Found {moduleNames.Count} module(s): {string.Join(", ", moduleNames)}", OutputCategory.Build);
+                var packageManager = new BasicLang.Compiler.ProjectSystem.PackageManager();
+                var restoreResult = await packageManager.RestoreAsync(cliProject, config.Name);
 
-            // ========== PHASE 3: Semantic analysis with shared symbol table ==========
-            _outputService.WriteLine($"Phase 3: Semantic analysis...", OutputCategory.Build);
-            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Analyzing...", 50));
-
-            var analyzers = new List<SemanticAnalyzer>();
-            foreach (var unit in compilationUnits)
-            {
-                var analyzer = new SemanticAnalyzer();
-                // Configure the analyzer with the project symbol table for cross-file references
-                analyzer.ConfigureProjectSymbols(projectSymbolTable, unit.ModuleName);
-                analyzer.Analyze(unit.AST);
-
-                if (analyzer.Errors.Any(e => e.Severity == ErrorSeverity.Error))
-                {
-                    foreach (var error in analyzer.Errors.Where(e => e.Severity == ErrorSeverity.Error))
-                    {
-                        result.Diagnostics.Add(new DiagnosticItem
-                        {
-                            Id = "BL3001",
-                            Message = error.Message,
-                            FilePath = unit.FilePath,
-                            Line = error.Line,
-                            Column = error.Column,
-                            Severity = DiagnosticSeverity.Error
-                        });
-                        _outputService.WriteLine($"  {unit.FilePath}({error.Line},{error.Column}): error BL3001: {error.Message}", OutputCategory.Build);
-                    }
-                }
-
-                foreach (var warning in analyzer.Errors.Where(e => e.Severity == ErrorSeverity.Warning))
+                foreach (var error in restoreResult.Errors)
                 {
                     result.Diagnostics.Add(new DiagnosticItem
                     {
-                        Id = "BL3002",
-                        Message = warning.Message,
-                        FilePath = unit.FilePath,
-                        Line = warning.Line,
-                        Column = warning.Column,
-                        Severity = DiagnosticSeverity.Warning
-                    });
-                }
-
-                unit.Symbols = analyzer.GlobalScope;
-                analyzers.Add(analyzer);
-            }
-
-            result.Success = result.ErrorCount == 0;
-
-            if (!result.Success)
-            {
-                return result;
-            }
-
-            // ========== PHASE 4: IR generation and code output ==========
-            _outputService.WriteLine($"Phase 4: Generating code...", OutputCategory.Build);
-            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Generating code...", 70));
-
-            // Generate IR for each module and merge
-            var allIRModules = new List<BasicLang.Compiler.IR.IRModule>();
-            for (int i = 0; i < compilationUnits.Count; i++)
-            {
-                var unit = compilationUnits[i];
-                var analyzer = analyzers[i];
-
-                try
-                {
-                    var irBuilder = new BasicLang.Compiler.IR.IRBuilder(analyzer);
-                    irBuilder.Build(unit.AST, unit.ModuleName, unit.FilePath);
-                    allIRModules.Add(irBuilder.Module);
-                    unit.IR = irBuilder.Module;
-                }
-                catch (Exception ex)
-                {
-                    result.Success = false;
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL4001",
-                        Message = $"IR generation error: {ex.Message}",
-                        FilePath = unit.FilePath,
+                        Id = "BL0020",
+                        Message = $"Package restore failed: {error}",
+                        FilePath = project.FilePath,
                         Severity = DiagnosticSeverity.Error
                     });
-                    _outputService.WriteError($"  IR error in {unit.ModuleName}: {ex.Message}", OutputCategory.Build);
+                    _outputService.WriteError($"  Package restore: {error}", OutputCategory.Build);
+                }
+
+                if (!restoreResult.Success)
+                {
+                    result.Success = false;
+                    return result;
+                }
+
+                foreach (var package in restoreResult.RestoredPackages)
+                {
+                    _outputService.WriteLine($"  Restored {package.Name} {package.Version}", OutputCategory.Build);
+                }
+
+                restoredAssemblies.AddRange(restoreResult.ResolvedAssemblies);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // ---------- Phase 2: compile with the real compiler engine ----------
+            _outputService.WriteLine($"Compiling {absoluteSourcePaths.Count} file(s)...", OutputCategory.Build);
+            foreach (var path in absoluteSourcePaths)
+            {
+                _outputService.WriteLine($"  Compiling {Path.GetFileName(path)}...", OutputCategory.Build);
+            }
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Parsing and analyzing sources...", 20));
+
+            var backend = GetBackendId(project.TargetBackend);
+            var outputDir = Path.Combine(project.ProjectDirectory, config.OutputPath);
+
+            var compilerOptions = new CompilerOptions
+            {
+                TargetBackend = backend,
+                OutputPath = outputDir,
+                OptimizeAggressive = config.Optimize
+            };
+
+            // Resolved package assemblies join the compiler search paths (CLI parity)
+            foreach (var assembly in restoredAssemblies)
+            {
+                var dir = Path.GetDirectoryName(assembly);
+                if (!string.IsNullOrEmpty(dir) && !compilerOptions.SearchPaths.Contains(dir))
+                {
+                    compilerOptions.SearchPaths.Add(dir);
                 }
             }
 
-            if (!result.Success)
+            // Compile all project files as ONE program: the compiler handles
+            // .mod/.cls preprocessing, compile order, implicit sibling imports,
+            // combined IR and optimization internally — exactly like the CLI.
+            var compiler = new BasicCompiler(compilerOptions);
+            var compilation = await Task.Run(() => compiler.CompileProjectFiles(absoluteSourcePaths), cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            MapCompilerDiagnostics(compiler, compilation, result);
+
+            if (!compilation.Success || compilation.CombinedIR == null)
             {
+                result.Success = false;
+                if (result.ErrorCount == 0)
+                {
+                    result.Diagnostics.Add(new DiagnosticItem
+                    {
+                        Id = "BL9998",
+                        Message = "Compilation failed but the compiler reported no diagnostics",
+                        FilePath = project.FilePath,
+                        Severity = DiagnosticSeverity.Error
+                    });
+                }
                 return result;
             }
 
-            // Merge IR modules into combined output
-            var mergedIR = MergeIRModules(allIRModules, project.Name);
+            // ---------- Phase 3: backend code generation (CLI parity) ----------
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs($"Generating {backend} code...", 60));
+            _outputService.WriteLine($"Generating {backend} output...", OutputCategory.Build);
 
-            // Apply optimizations
-            var pipeline = new BasicLang.Compiler.IR.Optimization.OptimizationPipeline();
-            pipeline.AddStandardPasses();
-            pipeline.Run(mergedIR);
-
-            // Generate C# code
-            var generator = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator();
-            var csharpCode = generator.Generate(mergedIR);
-
-            result.GeneratedCode = csharpCode;
-            result.GeneratedFileName = $"{project.Name}.cs";
-
-            _outputService.WriteLine($"  Generated {result.GeneratedFileName}", OutputCategory.Build);
-
-            // If we have errors, the build failed
-            result.Success = result.ErrorCount == 0;
-
-            if (result.Success && !string.IsNullOrEmpty(result.GeneratedCode))
+            string generatedCode;
+            string extension;
+            try
             {
-                // Create output directory
-                var outputDir = Path.Combine(project.ProjectDirectory, config.OutputPath);
-                if (!Directory.Exists(outputDir))
+                switch (backend)
                 {
-                    Directory.CreateDirectory(outputDir);
+                    case "cpp":
+                        generatedCode = new BasicLang.Compiler.CodeGen.CPlusPlus.CppCodeGenerator().Generate(compilation.CombinedIR);
+                        extension = ".cpp";
+                        break;
+                    case "llvm":
+                        generatedCode = new BasicLang.Compiler.CodeGen.LLVM.LLVMCodeGenerator().Generate(compilation.CombinedIR);
+                        extension = ".ll";
+                        break;
+                    case "msil":
+                        generatedCode = new BasicLang.Compiler.CodeGen.MSIL.MSILCodeGenerator().Generate(compilation.CombinedIR);
+                        extension = ".il";
+                        break;
+                    default: // csharp
+                        generatedCode = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator().Generate(compilation.CombinedIR);
+                        extension = ".cs";
+                        break;
                 }
-                result.OutputPath = outputDir;
-
-                BuildProgress?.Invoke(this, new BuildProgressEventArgs("Generating output...", 80));
-
-                // Write generated C# code
-                var csFilePath = Path.Combine(outputDir, result.GeneratedFileName ?? "Program.cs");
-                File.WriteAllText(csFilePath, result.GeneratedCode);
-                _outputService.WriteLine($"Generated: {csFilePath}", OutputCategory.Build);
-
-                // Create temporary csproj for compilation
-                var csprojPath = Path.Combine(outputDir, $"{project.Name}.csproj");
-                var csprojContent = GenerateCsprojContent(result.GeneratedCode, Path.GetFileName(csFilePath), project, outputDir);
-                File.WriteAllText(csprojPath, csprojContent);
-                _outputService.WriteLine($"Generated csproj: {csprojPath}", OutputCategory.Build);
-
-                // Check for library/app type mismatches and warn
-                CheckForMismatchWarnings(result.GeneratedCode, project);
-
-                BuildProgress?.Invoke(this, new BuildProgressEventArgs("Compiling C#...", 90));
-
-                // Compile to executable using dotnet build
-                var buildProcess = new System.Diagnostics.Process
+            }
+            catch (BasicLang.Compiler.CodeGen.CPlusPlus.CppCapabilityException capEx)
+            {
+                // The C++ backend refuses constructs it cannot lower — report each
+                // capability diagnostic instead of a bare exception message.
+                result.Success = false;
+                foreach (var diagnostic in capEx.Diagnostics)
                 {
-                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    result.Diagnostics.Add(new DiagnosticItem
                     {
-                        FileName = "dotnet",
-                        Arguments = $"build \"{csprojPath}\" -c {config.Name} --nologo -v q",
-                        WorkingDirectory = outputDir,
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true
-                    }
+                        Id = "BL6001",
+                        Message = $"C++ backend: {diagnostic}",
+                        FilePath = project.FilePath,
+                        Severity = DiagnosticSeverity.Error
+                    });
+                    _outputService.WriteError($"  C++ backend: {diagnostic}", OutputCategory.Build);
+                }
+                return result;
+            }
+            catch (Exception genEx)
+            {
+                result.Success = false;
+                result.Diagnostics.Add(new DiagnosticItem
+                {
+                    Id = "BL4001",
+                    Message = $"Code generation error: {genEx.Message}",
+                    FilePath = project.FilePath,
+                    Severity = DiagnosticSeverity.Error
+                });
+                _outputService.WriteError($"  Code generation error: {genEx.Message}", OutputCategory.Build);
+                return result;
+            }
+
+            result.GeneratedCode = generatedCode;
+            result.GeneratedFileName = $"{project.Name}{extension}";
+
+            Directory.CreateDirectory(outputDir);
+            result.OutputPath = outputDir;
+
+            var generatedFilePath = Path.Combine(outputDir, result.GeneratedFileName);
+            await File.WriteAllTextAsync(generatedFilePath, generatedCode, cancellationToken);
+            _outputService.WriteLine($"Generated: {generatedFilePath}", OutputCategory.Build);
+
+            // ---------- Non-.NET backends stop here (no dotnet build) ----------
+            if (backend != "csharp")
+            {
+                var toolchainHint = backend switch
+                {
+                    "cpp" => $"Generated C++ source: {generatedFilePath} — compile it with a C++ toolchain (clang++/g++/MSVC, -std=c++20).",
+                    "llvm" => $"Generated LLVM IR: {generatedFilePath} — compile it with the LLVM toolchain (llc/clang).",
+                    "msil" => $"Generated MSIL: {generatedFilePath} — assemble it with ilasm.",
+                    _ => $"Generated output: {generatedFilePath}."
                 };
+                _outputService.WriteLine(toolchainHint, OutputCategory.Build);
+                _outputService.WriteLine($"Output directory: {outputDir}", OutputCategory.Build);
 
-                buildProcess.Start();
-                var buildOutput = buildProcess.StandardOutput.ReadToEnd();
-                var buildError = buildProcess.StandardError.ReadToEnd();
-                buildProcess.WaitForExit();
+                BuildProgress?.Invoke(this, new BuildProgressEventArgs("Output generated", 90));
+                result.Success = true;
+                return result;
+            }
 
-                if (buildProcess.ExitCode != 0)
+            // ---------- Phase 4: C# backend — csproj + dotnet build (CLI parity) ----------
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Generating output...", 75));
+
+            // Assembly references: the .blproj's explicit references, plus the
+            // auto-injected game-engine wrapper when the program uses the engine
+            // (hint-pathed next to the IDE/compiler binaries), exactly like the CLI.
+            var assemblyReferences = cliProject != null
+                ? new List<BasicLang.Compiler.ProjectSystem.AssemblyReference>(cliProject.AssemblyReferences)
+                : project.References
+                    .Where(r => !r.IsProjectReference)
+                    .Select(r => new BasicLang.Compiler.ProjectSystem.AssemblyReference { Name = r.Name, HintPath = r.Path })
+                    .ToList();
+
+            var usesEngine = BasicLang.Compiler.ProjectSystem.EngineDeployment.UsesEngine(generatedCode);
+            var engineBaseDir = FindEngineBaseDir();
+
+            if (usesEngine && !assemblyReferences.Any(BasicLang.Compiler.ProjectSystem.EngineDeployment.IsWrapperReference))
+            {
+                if (engineBaseDir != null)
                 {
-                    result.Success = false;
-                    // Show both stdout and stderr for better error diagnostics
-                    var errorMessage = !string.IsNullOrWhiteSpace(buildError) ? buildError : buildOutput;
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL5001",
-                        Message = $"C# compilation failed: {errorMessage}",
-                        Severity = DiagnosticSeverity.Error
-                    });
-                    _outputService.WriteLine($"Build error: {errorMessage}", OutputCategory.Build);
+                    assemblyReferences.Add(BasicLang.Compiler.ProjectSystem.EngineDeployment.GetEngineReference(engineBaseDir));
+                    _outputService.WriteLine($"Added engine reference: {BasicLang.Compiler.ProjectSystem.EngineDeployment.WrapperDllName} ({engineBaseDir})", OutputCategory.Build);
                 }
                 else
                 {
-                    // Find the executable (now directly in output directory)
-                    var exePath = Path.Combine(outputDir, $"{project.Name}.exe");
-                    if (File.Exists(exePath))
+                    // Without the wrapper the C# build will fail on the engine types —
+                    // say why up front instead of leaving a cryptic CS0246/MSB3245.
+                    var warning = $"This program uses the game engine, but {BasicLang.Compiler.ProjectSystem.EngineDeployment.WrapperDllName} was not found next to the IDE binaries. Install the engine runtime beside the IDE or add an explicit assembly reference to the project.";
+                    result.Diagnostics.Add(new DiagnosticItem
                     {
-                        result.ExecutablePath = exePath;
-                        _outputService.WriteLine($"Executable: {exePath}", OutputCategory.Build);
-                    }
+                        Id = "BL0030",
+                        Message = warning,
+                        FilePath = project.FilePath,
+                        Severity = DiagnosticSeverity.Warning
+                    });
+                    _outputService.WriteError($"Warning: {warning}", OutputCategory.Build);
+                }
+            }
+
+            var csprojPath = Path.Combine(outputDir, $"{project.Name}.csproj");
+            var csprojContent = GenerateCsprojContent(
+                Path.GetFileName(generatedFilePath), project, cliProject, generatedCode, assemblyReferences);
+            await File.WriteAllTextAsync(csprojPath, csprojContent, cancellationToken);
+            _outputService.WriteLine($"Generated csproj: {csprojPath}", OutputCategory.Build);
+
+            // Check for library/app type mismatches and warn
+            CheckForMismatchWarnings(generatedCode, project);
+
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Compiling C#...", 85));
+
+            var (exitCode, buildOutput) = await RunDotnetBuildAsync(csprojPath, config.Name, outputDir, cancellationToken);
+
+            if (exitCode != 0)
+            {
+                result.Success = false;
+                result.Diagnostics.Add(new DiagnosticItem
+                {
+                    Id = "BL5001",
+                    Message = $"C# compilation failed: {buildOutput}",
+                    Severity = DiagnosticSeverity.Error
+                });
+                _outputService.WriteLine($"Build error: {buildOutput}", OutputCategory.Build);
+            }
+            else
+            {
+                result.Success = true;
+
+                // Find the executable (directly in the output directory)
+                var exePath = Path.Combine(outputDir, $"{project.Name}.exe");
+                if (File.Exists(exePath))
+                {
+                    result.ExecutablePath = exePath;
+                    _outputService.WriteLine($"Executable: {exePath}", OutputCategory.Build);
                 }
 
-                _outputService.WriteLine($"Output directory: {outputDir}", OutputCategory.Build);
+                // Build succeeded and the program uses the engine: copy the native
+                // engine DLL(s) next to the built game so the wrapper's P/Invoke
+                // resolves at runtime (they are not managed references, so the
+                // build won't copy them for us) — same as the CLI.
+                if (usesEngine)
+                {
+                    DeployNativeEngine(outputDir);
+                }
             }
+
+            _outputService.WriteLine($"Output directory: {outputDir}", OutputCategory.Build);
         }
         catch (OperationCanceledException)
         {
@@ -686,610 +735,114 @@ public class BuildService : IBuildService
         return result;
     }
 
-    /// <summary>
-    /// Parse a source file and return the AST with any errors
-    /// </summary>
-    private (ProgramNode AST, List<DiagnosticItem> Errors) ParseSourceFile(CompilationUnit unit, string filePath)
+    /// <summary>Maps the IDE's backend enum to the compiler's backend identifier.</summary>
+    private static string GetBackendId(TargetBackend backend) => backend switch
     {
-        var errors = new List<DiagnosticItem>();
-        ProgramNode ast = null;
+        TargetBackend.Cpp => "cpp",
+        TargetBackend.LLVM => "llvm",
+        TargetBackend.MSIL => "msil",
+        _ => "csharp"
+    };
 
+    /// <summary>
+    /// Loads the CLI's project model from the .blproj (PackageReferences, assembly
+    /// references, UseWindowsForms/UseWPF, TargetFramework). Returns null when the
+    /// project only exists in memory or the file cannot be parsed by the CLI loader.
+    /// </summary>
+    private BasicLang.Compiler.ProjectSystem.ProjectFile? TryLoadCliProject(string projectFilePath)
+    {
         try
         {
-            var lexer = new BasicLang.Compiler.Lexer(unit.SourceCode);
-            var tokens = lexer.Tokenize();
-
-            // Check for lexer errors
-            foreach (var token in tokens.Where(t => t.Type == BasicLang.Compiler.TokenType.Unknown))
-            {
-                errors.Add(new DiagnosticItem
-                {
-                    Id = "BL1001",
-                    Message = $"Unknown token: {token.Value}",
-                    FilePath = filePath,
-                    Line = token.Line,
-                    Column = token.Column,
-                    Severity = DiagnosticSeverity.Error
-                });
-            }
-
-            try
-            {
-                var parser = new BasicLang.Compiler.Parser(tokens);
-                ast = parser.Parse();
-
-                foreach (var error in parser.Errors)
-                {
-                    errors.Add(new DiagnosticItem
-                    {
-                        Id = "BL2001",
-                        Message = error.Message,
-                        FilePath = filePath,
-                        Line = error.Token?.Line ?? 0,
-                        Column = error.Token?.Column ?? 0,
-                        Severity = DiagnosticSeverity.Error
-                    });
-                }
-            }
-            catch (BasicLang.Compiler.TooManyErrorsException tooManyEx)
-            {
-                // Add the actual parse errors that were collected before hitting the limit
-                foreach (var error in tooManyEx.CollectedErrors.Take(10))
-                {
-                    errors.Add(new DiagnosticItem
-                    {
-                        Id = "BL2001",
-                        Message = error.Message,
-                        FilePath = filePath,
-                        Line = error.Token?.Line ?? 0,
-                        Column = error.Token?.Column ?? 0,
-                        Severity = DiagnosticSeverity.Error
-                    });
-                }
-
-                // Add a summary message if there are more errors
-                if (tooManyEx.CollectedErrors.Count > 10)
-                {
-                    errors.Add(new DiagnosticItem
-                    {
-                        Id = "BL2000",
-                        Message = $"... and {tooManyEx.CollectedErrors.Count - 10} more parse errors",
-                        FilePath = filePath,
-                        Severity = DiagnosticSeverity.Error
-                    });
-                }
-            }
+            if (string.IsNullOrEmpty(projectFilePath) || !File.Exists(projectFilePath))
+                return null;
+            return BasicLang.Compiler.ProjectSystem.ProjectFile.Load(projectFilePath);
         }
         catch (Exception ex)
         {
-            errors.Add(new DiagnosticItem
-            {
-                Id = "BL9000",
-                Message = ex.Message,
-                FilePath = filePath,
-                Severity = DiagnosticSeverity.Error
-            });
-        }
-
-        return (ast, errors);
-    }
-
-    /// <summary>
-    /// Collect public/friend symbols from a compilation unit into the project symbol table
-    /// </summary>
-    private void CollectModuleSymbols(CompilationUnit unit, ProjectSymbolTable projectSymbolTable)
-    {
-        var extension = Path.GetExtension(unit.FilePath).ToLowerInvariant();
-        var isModuleFile = extension == ".mod"; // .mod files are public by default
-        var moduleSymbols = new ModuleSymbols(unit.ModuleName, unit.FilePath) { IsModuleFile = isModuleFile };
-
-        // Walk the AST and collect top-level declarations
-        foreach (var declaration in unit.AST.Declarations)
-        {
-            // Handle Module nodes by processing their members
-            // Register using the actual module name from the AST, not the filename
-            if (declaration is ModuleNode moduleNode)
-            {
-                // Create a separate module entry for the explicit Module declaration
-                var explicitModuleSymbols = new ModuleSymbols(moduleNode.Name, unit.FilePath) { IsModuleFile = isModuleFile };
-                CollectDeclarationSymbols(moduleNode.Members, explicitModuleSymbols, isModuleFile);
-                projectSymbolTable.RegisterModule(moduleNode.Name, explicitModuleSymbols);
-                continue;
-            }
-
-            switch (declaration)
-            {
-                case FunctionNode func:
-                    var funcAccess = isModuleFile && func.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public  // .mod files default to public
-                        : func.Access;
-                    if (funcAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        funcAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(func.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function, ConvertTypeReference(func.ReturnType), func.Line, func.Column);
-                        // Copy function parameters
-                        symbol.Parameters = func.Parameters?.Select(p => new Symbol(p.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Parameter, ConvertTypeReference(p.Type), p.Line, p.Column)).ToList()
-                            ?? new List<Symbol>();
-                        symbol.ReturnType = ConvertTypeReference(func.ReturnType);
-                        symbol.Access = (BasicLang.Compiler.AST.AccessModifier)(int)funcAccess;
-                        moduleSymbols.AddSymbol(symbol, funcAccess);
-                    }
-                    break;
-
-                case VariableDeclarationNode varDecl:
-                    var varAccess = isModuleFile && varDecl.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : varDecl.Access;
-                    if (varAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        varAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(varDecl.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Variable, ConvertTypeReference(varDecl.Type), varDecl.Line, varDecl.Column);
-                        moduleSymbols.AddSymbol(symbol, varAccess);
-                    }
-                    break;
-
-                case ConstantDeclarationNode constDecl:
-                    var constAccess = isModuleFile && constDecl.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : constDecl.Access;
-                    if (constAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        constAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(constDecl.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Constant, null, constDecl.Line, constDecl.Column);
-                        moduleSymbols.AddSymbol(symbol, constAccess);
-                    }
-                    break;
-
-                case ClassNode classNode:
-                    var classAccess = isModuleFile && classNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : classNode.Access;
-                    if (classAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        classAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(classNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Class, new TypeInfo(classNode.Name, TypeKind.Class), classNode.Line, classNode.Column);
-                        moduleSymbols.AddSymbol(symbol, classAccess);
-                    }
-                    break;
-
-                case StructureNode structNode:
-                    var structAccess = isModuleFile && structNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : structNode.Access;
-                    if (structAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        structAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(structNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Structure, new TypeInfo(structNode.Name, TypeKind.Structure), structNode.Line, structNode.Column);
-                        moduleSymbols.AddSymbol(symbol, structAccess);
-                    }
-                    break;
-
-                case EnumNode enumNode:
-                    var enumAccess = isModuleFile && enumNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : enumNode.Access;
-                    if (enumAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        enumAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(enumNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Type, new TypeInfo(enumNode.Name, TypeKind.Enum), enumNode.Line, enumNode.Column);
-                        moduleSymbols.AddSymbol(symbol, enumAccess);
-                    }
-                    break;
-
-                case SubroutineNode sub:
-                    var subAccess = isModuleFile && sub.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public  // .mod files default to public
-                        : sub.Access;
-                    if (subAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        subAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(sub.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function, new TypeInfo("Void", TypeKind.Primitive), sub.Line, sub.Column);
-                        // Copy subroutine parameters
-                        symbol.Parameters = sub.Parameters?.Select(p => new Symbol(p.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Parameter, ConvertTypeReference(p.Type), p.Line, p.Column)).ToList()
-                            ?? new List<Symbol>();
-                        symbol.ReturnType = new TypeInfo("Void", TypeKind.Primitive);
-                        symbol.Access = (BasicLang.Compiler.AST.AccessModifier)(int)subAccess;
-                        moduleSymbols.AddSymbol(symbol, subAccess);
-                    }
-                    break;
-            }
-        }
-
-        projectSymbolTable.RegisterModule(unit.ModuleName, moduleSymbols);
-    }
-
-    /// <summary>
-    /// Helper to collect symbols from a list of declarations (used for module members)
-    /// </summary>
-    private void CollectDeclarationSymbols(IEnumerable<ASTNode> declarations, ModuleSymbols moduleSymbols, bool isModuleFile)
-    {
-        foreach (var declaration in declarations)
-        {
-            switch (declaration)
-            {
-                case FunctionNode func:
-                    var funcAccess = isModuleFile && func.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : func.Access;
-                    if (funcAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        funcAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(func.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function, ConvertTypeReference(func.ReturnType), func.Line, func.Column);
-                        symbol.Parameters = func.Parameters?.Select(p => new Symbol(p.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Parameter, ConvertTypeReference(p.Type), p.Line, p.Column)).ToList()
-                            ?? new List<Symbol>();
-                        symbol.ReturnType = ConvertTypeReference(func.ReturnType);
-                        symbol.Access = (BasicLang.Compiler.AST.AccessModifier)(int)funcAccess;
-                        moduleSymbols.AddSymbol(symbol, funcAccess);
-                    }
-                    break;
-
-                case SubroutineNode sub:
-                    var subAccess = isModuleFile && sub.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : sub.Access;
-                    if (subAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        subAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(sub.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Function, new TypeInfo("Void", TypeKind.Primitive), sub.Line, sub.Column);
-                        symbol.Parameters = sub.Parameters?.Select(p => new Symbol(p.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Parameter, ConvertTypeReference(p.Type), p.Line, p.Column)).ToList()
-                            ?? new List<Symbol>();
-                        symbol.ReturnType = new TypeInfo("Void", TypeKind.Primitive);
-                        symbol.Access = (BasicLang.Compiler.AST.AccessModifier)(int)subAccess;
-                        moduleSymbols.AddSymbol(symbol, subAccess);
-                    }
-                    break;
-
-                case VariableDeclarationNode varDecl:
-                    var varAccess = isModuleFile && varDecl.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : varDecl.Access;
-                    if (varAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        varAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(varDecl.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Variable, ConvertTypeReference(varDecl.Type), varDecl.Line, varDecl.Column);
-                        moduleSymbols.AddSymbol(symbol, varAccess);
-                    }
-                    break;
-
-                case ConstantDeclarationNode constDecl:
-                    var constAccess = isModuleFile && constDecl.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : constDecl.Access;
-                    if (constAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        constAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(constDecl.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Constant, null, constDecl.Line, constDecl.Column);
-                        moduleSymbols.AddSymbol(symbol, constAccess);
-                    }
-                    break;
-
-                case ClassNode classNode:
-                    var classAccess = isModuleFile && classNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : classNode.Access;
-                    if (classAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        classAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(classNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Class, new TypeInfo(classNode.Name, TypeKind.Class), classNode.Line, classNode.Column);
-                        moduleSymbols.AddSymbol(symbol, classAccess);
-                    }
-                    break;
-
-                case StructureNode structNode:
-                    var structAccess = isModuleFile && structNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : structNode.Access;
-                    if (structAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        structAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(structNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Structure, new TypeInfo(structNode.Name, TypeKind.Structure), structNode.Line, structNode.Column);
-                        moduleSymbols.AddSymbol(symbol, structAccess);
-                    }
-                    break;
-
-                case EnumNode enumNode:
-                    var enumAccess = isModuleFile && enumNode.Access == BasicLang.Compiler.AST.AccessModifier.Private
-                        ? BasicLang.Compiler.AST.AccessModifier.Public
-                        : enumNode.Access;
-                    if (enumAccess == BasicLang.Compiler.AST.AccessModifier.Public ||
-                        enumAccess == BasicLang.Compiler.AST.AccessModifier.Friend)
-                    {
-                        var symbol = new Symbol(enumNode.Name, BasicLang.Compiler.SemanticAnalysis.SymbolKind.Type, new TypeInfo(enumNode.Name, TypeKind.Enum), enumNode.Line, enumNode.Column);
-                        moduleSymbols.AddSymbol(symbol, enumAccess);
-                    }
-                    break;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Convert AST TypeReference to SemanticAnalysis TypeInfo
-    /// </summary>
-    private TypeInfo ConvertTypeReference(TypeReference typeRef)
-    {
-        if (typeRef == null)
+            _outputService.WriteLine($"Note: could not read extended project settings from {Path.GetFileName(projectFilePath)}: {ex.Message}", OutputCategory.Build);
             return null;
+        }
+    }
 
-        // Simple conversion - determine TypeKind from the type name
-        var kind = typeRef.Name.ToLowerInvariant() switch
+    /// <summary>
+    /// Maps compiler errors/warnings into Error List diagnostics with the best
+    /// file attribution available:
+    /// - errors recorded on a compilation unit carry that unit's file path;
+    /// - unattributed errors (parse failures live only in AllErrors) fall back to
+    ///   the single failed unit when it is unambiguous, otherwise no file path.
+    /// </summary>
+    private void MapCompilerDiagnostics(BasicCompiler compiler, CompilationResult compilation, BuildResult result)
+    {
+        // Registry.Modules also has units when compilation aborted before
+        // CompilationResult.Units was populated (e.g. parse errors).
+        var units = compiler.Registry.Modules.ToList();
+
+        var attributed = new HashSet<SemanticError>(ReferenceEqualityComparer.Instance);
+        foreach (var unit in units)
         {
-            "integer" or "int" or "int32" => TypeKind.Primitive,
-            "long" or "int64" => TypeKind.Primitive,
-            "short" or "int16" => TypeKind.Primitive,
-            "byte" => TypeKind.Primitive,
-            "single" or "float" => TypeKind.Primitive,
-            "double" => TypeKind.Primitive,
-            "decimal" => TypeKind.Primitive,
-            "boolean" or "bool" => TypeKind.Primitive,
-            "string" => TypeKind.Primitive,
-            "char" => TypeKind.Primitive,
-            "object" => TypeKind.Class,
-            "void" => TypeKind.Void,
-            _ => TypeKind.UserDefinedType
+            foreach (var error in unit.Errors)
+            {
+                if (attributed.Add(error))
+                {
+                    AddCompilerDiagnostic(result, error, unit.FilePath);
+                }
+            }
+        }
+
+        // Parse errors and infrastructure errors are only in AllErrors. If exactly
+        // one unit failed without per-unit errors, they can only belong to it.
+        var orphans = compilation.AllErrors.Where(e => !attributed.Contains(e)).ToList();
+        string? fallbackPath = null;
+        var unattributedFailedUnits = units
+            .Where(u => u.Status == CompilationStatus.Error && u.Errors.Count == 0)
+            .ToList();
+        if (unattributedFailedUnits.Count == 1)
+        {
+            fallbackPath = unattributedFailedUnits[0].FilePath;
+        }
+
+        foreach (var error in orphans)
+        {
+            AddCompilerDiagnostic(result, error, fallbackPath);
+        }
+    }
+
+    private void AddCompilerDiagnostic(BuildResult result, SemanticError error, string? filePath)
+    {
+        var isError = error.Severity == ErrorSeverity.Error;
+        var item = new DiagnosticItem
+        {
+            Id = string.IsNullOrEmpty(error.ErrorCode) ? (isError ? "BL3001" : "BL3002") : error.ErrorCode,
+            Message = error.Message,
+            FilePath = filePath,
+            Line = error.Line,
+            Column = error.Column,
+            Severity = isError ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning
         };
+        result.Diagnostics.Add(item);
 
-        return new TypeInfo(typeRef.Name, kind);
+        var location = filePath != null ? $"{filePath}({error.Line},{error.Column})" : $"({error.Line},{error.Column})";
+        var kind = isError ? "error" : "warning";
+        _outputService.WriteLine($"  {location}: {kind} {item.Id}: {error.Message}", OutputCategory.Build);
     }
 
     /// <summary>
-    /// Merge multiple IR modules into a single module
+    /// Generates the temporary .csproj for the C# backend with CLI parity:
+    /// TargetFramework and UseWindowsForms/UseWPF from the .blproj (with the
+    /// net*-windows TFM adjustment), PackageReferences flowed through, and the
+    /// project's assembly references (including the auto-injected engine wrapper).
+    /// Output-layout properties keep the executable directly in the IDE's
+    /// configured output directory.
     /// </summary>
-    private BasicLang.Compiler.IR.IRModule MergeIRModules(List<BasicLang.Compiler.IR.IRModule> modules, string projectName)
-    {
-        if (modules.Count == 0)
-            return new BasicLang.Compiler.IR.IRModule(projectName);
-
-        if (modules.Count == 1)
-            return modules[0];
-
-        // Create a merged module
-        var merged = new BasicLang.Compiler.IR.IRModule(projectName);
-
-        foreach (var module in modules)
-        {
-            // Merge functions - preserve ModuleName if already set (from explicit Module blocks)
-            foreach (var func in module.Functions)
-            {
-                func.ModuleName ??= module.Name;
-                merged.Functions.Add(func);
-            }
-
-            // Merge global variables - preserve ModuleName if already set (from explicit Module blocks)
-            foreach (var kvp in module.GlobalVariables)
-            {
-                var globalVar = kvp.Value;
-                globalVar.ModuleName ??= module.Name;
-                // Use the actual module name for the key (supports explicit Module blocks)
-                var actualModuleName = globalVar.ModuleName ?? module.Name;
-                var key = kvp.Key.Contains(".")
-                    ? kvp.Key
-                    : $"{actualModuleName}.{kvp.Key}";
-                merged.GlobalVariables[key] = globalVar;
-            }
-
-            // Merge types
-            foreach (var kvp in module.Types)
-            {
-                if (!merged.Types.ContainsKey(kvp.Key))
-                {
-                    merged.Types[kvp.Key] = kvp.Value;
-                }
-            }
-
-            // Merge classes
-            foreach (var kvp in module.Classes)
-            {
-                if (!merged.Classes.ContainsKey(kvp.Key))
-                {
-                    merged.Classes[kvp.Key] = kvp.Value;
-                }
-            }
-
-            // Merge enums
-            foreach (var kvp in module.Enums)
-            {
-                if (!merged.Enums.ContainsKey(kvp.Key))
-                {
-                    merged.Enums[kvp.Key] = kvp.Value;
-                }
-            }
-
-            // Merge .NET usings
-            foreach (var using_ in module.NetUsings)
-            {
-                if (!merged.NetUsings.Any(u => u.Namespace == using_.Namespace))
-                {
-                    merged.NetUsings.Add(using_);
-                }
-            }
-
-            // Merge namespaces
-            foreach (var ns in module.Namespaces)
-            {
-                if (!merged.Namespaces.Contains(ns))
-                {
-                    merged.Namespaces.Add(ns);
-                }
-            }
-        }
-
-        return merged;
-    }
-
-    private BuildResult CompileSource(string sourceCode, string filePath, BasicLangProject project, BuildConfiguration config)
-    {
-        var result = new BuildResult { Success = true };
-
-        try
-        {
-            // Use BasicLang compiler
-            var lexer = new BasicLang.Compiler.Lexer(sourceCode);
-            var tokens = lexer.Tokenize();
-
-            // Check for lexer errors
-            foreach (var token in tokens.Where(t => t.Type == BasicLang.Compiler.TokenType.Unknown))
-            {
-                result.Diagnostics.Add(new DiagnosticItem
-                {
-                    Id = "BL1001",
-                    Message = $"Unknown token: {token.Value}",
-                    FilePath = filePath,
-                    Line = token.Line,
-                    Column = token.Column,
-                    Severity = DiagnosticSeverity.Error
-                });
-            }
-
-            // Parse
-            BasicLang.Compiler.AST.ProgramNode ast;
-            try
-            {
-                var parser = new BasicLang.Compiler.Parser(tokens);
-                ast = parser.Parse();
-
-                // Check for parser errors
-                foreach (var error in parser.Errors)
-                {
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL2001",
-                        Message = error.Message,
-                        FilePath = filePath,
-                        Line = error.Token?.Line ?? 0,
-                        Column = error.Token?.Column ?? 0,
-                        Severity = DiagnosticSeverity.Error
-                    });
-                }
-            }
-            catch (BasicLang.Compiler.TooManyErrorsException tooManyEx)
-            {
-                // Add the actual parse errors that were collected before hitting the limit
-                result.Success = false;
-                foreach (var error in tooManyEx.CollectedErrors.Take(10))
-                {
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL2001",
-                        Message = error.Message,
-                        FilePath = filePath,
-                        Line = error.Token?.Line ?? 0,
-                        Column = error.Token?.Column ?? 0,
-                        Severity = DiagnosticSeverity.Error
-                    });
-                }
-
-                // Add a summary message if there are more errors
-                if (tooManyEx.CollectedErrors.Count > 10)
-                {
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL2000",
-                        Message = $"... and {tooManyEx.CollectedErrors.Count - 10} more parse errors",
-                        FilePath = filePath,
-                        Severity = DiagnosticSeverity.Error
-                    });
-                }
-                return result;
-            }
-
-            if (result.ErrorCount > 0)
-            {
-                result.Success = false;
-                return result;
-            }
-
-            // Semantic analysis
-            var analyzer = new BasicLang.Compiler.SemanticAnalysis.SemanticAnalyzer();
-            analyzer.Analyze(ast);
-
-            foreach (var error in analyzer.Errors.Where(e => e.Severity == BasicLang.Compiler.SemanticAnalysis.ErrorSeverity.Error))
-            {
-                result.Diagnostics.Add(new DiagnosticItem
-                {
-                    Id = "BL3001",
-                    Message = error.Message,
-                    FilePath = filePath,
-                    Line = error.Line,
-                    Column = error.Column,
-                    Severity = DiagnosticSeverity.Error
-                });
-            }
-
-            // Check for warnings (SemanticErrors with Warning severity)
-            foreach (var warning in analyzer.Errors.Where(e => e.Severity == BasicLang.Compiler.SemanticAnalysis.ErrorSeverity.Warning))
-            {
-                result.Diagnostics.Add(new DiagnosticItem
-                {
-                    Id = "BL3002",
-                    Message = warning.Message,
-                    FilePath = filePath,
-                    Line = warning.Line,
-                    Column = warning.Column,
-                    Severity = DiagnosticSeverity.Warning
-                });
-            }
-
-            result.Success = result.ErrorCount == 0;
-
-            // Generate C# code if no errors
-            if (result.Success)
-            {
-                try
-                {
-                    // Build IR
-                    var irBuilder = new BasicLang.Compiler.IR.IRBuilder(analyzer);
-                    irBuilder.Build(ast, "main", filePath);
-                    var irModule = irBuilder.Module;
-
-                    // Apply optimizations
-                    var pipeline = new BasicLang.Compiler.IR.Optimization.OptimizationPipeline();
-                    pipeline.AddStandardPasses();
-                    pipeline.Run(irModule);
-
-                    // Generate C# code
-                    var generator = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator();
-                    var csharpCode = generator.Generate(irModule);
-
-                    // Store generated code for later use
-                    result.GeneratedCode = csharpCode;
-                    result.GeneratedFileName = Path.GetFileNameWithoutExtension(filePath) + ".cs";
-                }
-                catch (Exception ex)
-                {
-                    result.Success = false;
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL4001",
-                        Message = $"Code generation error: {ex.Message}",
-                        FilePath = filePath,
-                        Severity = DiagnosticSeverity.Error
-                    });
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            result.Success = false;
-            result.Diagnostics.Add(new DiagnosticItem
-            {
-                Id = "BL9000",
-                Message = ex.Message,
-                FilePath = filePath,
-                Severity = DiagnosticSeverity.Error
-            });
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Generate .csproj content with appropriate framework references based on the project settings
-    /// </summary>
-    private string GenerateCsprojContent(string generatedCode, string csFileName, BasicLangProject project, string outputDir)
+    private string GenerateCsprojContent(
+        string csFileName,
+        BasicLangProject project,
+        BasicLang.Compiler.ProjectSystem.ProjectFile? cliProject,
+        string generatedCode,
+        List<BasicLang.Compiler.ProjectSystem.AssemblyReference> assemblyReferences)
     {
         var sb = new System.Text.StringBuilder();
 
-        // Detect which namespaces are used (case-insensitive)
         var codeUpper = generatedCode.ToUpperInvariant();
         bool usesWindowsForms = codeUpper.Contains("USING SYSTEM.WINDOWS.FORMS;");
         bool usesWpf = codeUpper.Contains("USING SYSTEM.WINDOWS;") &&
@@ -1298,11 +851,6 @@ public class BuildService : IBuildService
         bool usesDrawing = codeUpper.Contains("USING SYSTEM.DRAWING;");
         bool usesAspNet = codeUpper.Contains("USING MICROSOFT.ASPNETCORE;");
 
-        // Detect if game framework is used (FrameworkWrapper calls)
-        bool usesGameFramework = generatedCode.Contains("FrameworkWrapper.");
-
-        // Use project's OutputType setting instead of auto-detecting
-        string sdk = "Microsoft.NET.Sdk";
         string outputType = project.OutputType switch
         {
             OutputType.WinExe => "WinExe",
@@ -1310,33 +858,44 @@ public class BuildService : IBuildService
             _ => "Exe"
         };
 
-        // For WinExe, enable Windows Forms or WPF based on what's used
-        bool enableWindowsForms = project.OutputType == OutputType.WinExe && (usesWindowsForms || !usesWpf);
-        bool enableWpf = project.OutputType == OutputType.WinExe && usesWpf;
-
-        if (usesAspNet)
+        // UI framework flags come from the .blproj (CLI parity). Legacy projects
+        // without the flags keep the old behavior: WinExe implies a UI framework
+        // detected from the generated code.
+        bool enableWindowsForms = cliProject?.UseWindowsForms ?? false;
+        bool enableWpf = cliProject?.UseWpf ?? false;
+        if (!enableWindowsForms && !enableWpf && project.OutputType == OutputType.WinExe)
         {
-            sdk = "Microsoft.NET.Sdk.Web";
+            enableWpf = usesWpf;
+            enableWindowsForms = usesWindowsForms || !usesWpf;
         }
+
+        // Windows desktop UI frameworks need the net*-windows TFM or the
+        // WinForms/WPF types won't resolve (CLI parity).
+        var targetFramework = cliProject?.TargetFramework;
+        if (string.IsNullOrEmpty(targetFramework))
+            targetFramework = "net8.0";
+        if ((enableWindowsForms || enableWpf) && !targetFramework.Contains("-windows"))
+            targetFramework += "-windows";
+
+        string sdk = usesAspNet ? "Microsoft.NET.Sdk.Web" : "Microsoft.NET.Sdk";
 
         sb.AppendLine($@"<Project Sdk=""{sdk}"">");
         sb.AppendLine("  <PropertyGroup>");
         sb.AppendLine($"    <OutputType>{outputType}</OutputType>");
-        sb.AppendLine("    <TargetFramework>net8.0-windows</TargetFramework>");
+        sb.AppendLine($"    <TargetFramework>{targetFramework}</TargetFramework>");
         sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
         sb.AppendLine("    <Nullable>disable</Nullable>");
+        sb.AppendLine($"    <AssemblyName>{project.Name}</AssemblyName>");
         sb.AppendLine("    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>");
         sb.AppendLine("    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>");
         sb.AppendLine("    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>");
         sb.AppendLine("    <OutputPath>.\\</OutputPath>");
 
-        // Add Windows Forms support
         if (enableWindowsForms)
         {
             sb.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
         }
 
-        // Add WPF support
         if (enableWpf)
         {
             sb.AppendLine("    <UseWPF>true</UseWPF>");
@@ -1344,29 +903,49 @@ public class BuildService : IBuildService
 
         sb.AppendLine("  </PropertyGroup>");
 
-        // Add compile items
+        // Compile items
         sb.AppendLine("  <ItemGroup>");
         sb.AppendLine($"    <Compile Include=\"{csFileName}\" />");
         sb.AppendLine("  </ItemGroup>");
 
-        // Add package references for System.Drawing if needed (for non-Windows Forms projects)
-        if (usesDrawing && !usesWindowsForms)
+        // Assembly references (explicit .blproj references + injected engine wrapper)
+        if (assemblyReferences.Count > 0)
         {
             sb.AppendLine("  <ItemGroup>");
-            sb.AppendLine("    <PackageReference Include=\"System.Drawing.Common\" Version=\"8.0.0\" />");
+            foreach (var reference in assemblyReferences)
+            {
+                if (!string.IsNullOrEmpty(reference.HintPath))
+                {
+                    sb.AppendLine($"    <Reference Include=\"{reference.Name}\">");
+                    sb.AppendLine($"      <HintPath>{reference.HintPath}</HintPath>");
+                    sb.AppendLine("    </Reference>");
+                }
+                else
+                {
+                    sb.AppendLine($"    <Reference Include=\"{reference.Name}\" />");
+                }
+            }
             sb.AppendLine("  </ItemGroup>");
         }
 
-        // Add RaylibWrapper.dll reference for game projects
-        if (usesGameFramework)
-        {
-            // Copy the framework DLLs to output directory
-            CopyGameFrameworkDlls(outputDir);
+        // NuGet package references from the .blproj (CLI parity), plus
+        // System.Drawing.Common when the code draws without WinForms.
+        var packageReferences = cliProject?.PackageReferences
+            ?? new List<BasicLang.Compiler.ProjectSystem.PackageReference>();
+        var needsDrawingPackage = usesDrawing && !enableWindowsForms &&
+            !packageReferences.Any(p => p.Name.Equals("System.Drawing.Common", StringComparison.OrdinalIgnoreCase));
 
+        if (packageReferences.Count > 0 || needsDrawingPackage)
+        {
             sb.AppendLine("  <ItemGroup>");
-            sb.AppendLine("    <Reference Include=\"RaylibWrapper\">");
-            sb.AppendLine("      <HintPath>RaylibWrapper.dll</HintPath>");
-            sb.AppendLine("    </Reference>");
+            foreach (var package in packageReferences)
+            {
+                sb.AppendLine($"    <PackageReference Include=\"{package.Name}\" Version=\"{package.Version}\" />");
+            }
+            if (needsDrawingPackage)
+            {
+                sb.AppendLine("    <PackageReference Include=\"System.Drawing.Common\" Version=\"8.0.0\" />");
+            }
             sb.AppendLine("  </ItemGroup>");
         }
 
@@ -1375,100 +954,134 @@ public class BuildService : IBuildService
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Copy game framework DLLs to the output directory
-    /// </summary>
-    private void CopyGameFrameworkDlls(string outputDir)
+    private static async Task<(int ExitCode, string Output)> RunDotnetBuildAsync(
+        string csprojPath, string configurationName, string workingDirectory, CancellationToken cancellationToken)
     {
-        // Find the RaylibWrapper.dll and VisualGameStudioEngine.dll
-        var ideDir = AppDomain.CurrentDomain.BaseDirectory;
-
-        // Possible locations for RaylibWrapper.dll
-        // ideDir is typically: <repo>/VisualGameStudio.Shell/bin/<config>/net8.0/ (4 levels deep)
-        // or <repo>/IDE/ (1 level deep)
-        var possibleRaylibPaths = new[]
+        using var buildProcess = new Process
         {
-            Path.Combine(ideDir, "RaylibWrapper.dll"),
-            Path.Combine(ideDir, "..", "RaylibWrapper", "bin", "Release", "net8.0", "RaylibWrapper.dll"),
-            Path.Combine(ideDir, "..", "RaylibWrapper", "bin", "Debug", "net8.0", "RaylibWrapper.dll"),
-            Path.Combine(ideDir, "..", "..", "..", "RaylibWrapper", "bin", "Release", "net8.0", "RaylibWrapper.dll"),
-            Path.Combine(ideDir, "..", "..", "..", "RaylibWrapper", "bin", "Debug", "net8.0", "RaylibWrapper.dll"),
-            // From Shell/bin/<config>/net8.0/ → repo root is 4 levels up
-            Path.Combine(ideDir, "..", "..", "..", "..", "RaylibWrapper", "bin", "Release", "net8.0", "RaylibWrapper.dll"),
-            Path.Combine(ideDir, "..", "..", "..", "..", "RaylibWrapper", "bin", "Debug", "net8.0", "RaylibWrapper.dll"),
-            Path.Combine(ideDir, "..", "..", "..", "..", "IDE", "RaylibWrapper.dll"),
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"build \"{csprojPath}\" -c {configurationName} --nologo -v q",
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
         };
 
-        // Possible locations for VisualGameStudioEngine.dll (native)
-        var possibleEnginePaths = new[]
-        {
-            Path.Combine(ideDir, "VisualGameStudioEngine.dll"),
-            Path.Combine(ideDir, "..", "x64", "Release", "VisualGameStudioEngine.dll"),
-            Path.Combine(ideDir, "..", "x64", "Debug", "VisualGameStudioEngine.dll"),
-            Path.Combine(ideDir, "..", "..", "..", "x64", "Release", "VisualGameStudioEngine.dll"),
-            Path.Combine(ideDir, "..", "..", "..", "x64", "Debug", "VisualGameStudioEngine.dll"),
-            // From Shell/bin/<config>/net8.0/ → repo root is 4 levels up
-            Path.Combine(ideDir, "..", "..", "..", "..", "x64", "Release", "VisualGameStudioEngine.dll"),
-            Path.Combine(ideDir, "..", "..", "..", "..", "x64", "Debug", "VisualGameStudioEngine.dll"),
-            Path.Combine(ideDir, "..", "..", "..", "..", "IDE", "VisualGameStudioEngine.dll"),
-        };
+        buildProcess.Start();
+        var stdoutTask = buildProcess.StandardOutput.ReadToEndAsync();
+        var stderrTask = buildProcess.StandardError.ReadToEndAsync();
 
-        // Copy RaylibWrapper.dll
-        string raylibSource = null;
-        foreach (var path in possibleRaylibPaths)
+        try
         {
-            if (File.Exists(path))
-            {
-                raylibSource = path;
-                break;
-            }
+            await buildProcess.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            try { buildProcess.Kill(entireProcessTree: true); } catch { }
+            throw;
         }
 
-        if (raylibSource != null)
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        // Show both stdout and stderr for better error diagnostics
+        var output = !string.IsNullOrWhiteSpace(stderr) ? stderr : stdout;
+        return (buildProcess.ExitCode, output);
+    }
+
+    /// <summary>
+    /// Finds the directory where the game-engine wrapper (RaylibWrapper.dll)
+    /// ships. The primary location is the running process's base directory (the
+    /// IDE folder — same model as the CLI resolving next to BasicLang.exe), with
+    /// dev-tree fallbacks for running from build output.
+    /// </summary>
+    private static string? FindEngineBaseDir()
+    {
+        foreach (var dir in CandidateEngineDirs())
         {
-            var destPath = Path.Combine(outputDir, "RaylibWrapper.dll");
-            try
-            {
-                File.Copy(raylibSource, destPath, true);
-                _outputService.WriteLine($"Copied: RaylibWrapper.dll", OutputCategory.Build);
-            }
-            catch (Exception ex)
-            {
-                _outputService.WriteError($"Failed to copy RaylibWrapper.dll: {ex.Message}", OutputCategory.Build);
-            }
+            if (BasicLang.Compiler.ProjectSystem.EngineDeployment.WrapperExists(dir))
+                return Path.GetFullPath(dir);
         }
-        else
+        return null;
+    }
+
+    private static IEnumerable<string> CandidateEngineDirs()
+    {
+        // Primary: next to the running binaries (IDE folder — CLI parity).
+        var baseDir = AppContext.BaseDirectory;
+        yield return baseDir;
+
+        // Dev-tree fallbacks. Base dir is typically
+        // <repo>/<Project>/bin/<Config>/net8.0/ (repo root is 4 levels up)
+        // but historic layouts at 1 and 3 levels up are probed too.
+        foreach (var levelsUp in new[] { "..", @"..\..\..", @"..\..\..\.." })
         {
-            _outputService.WriteError("RaylibWrapper.dll not found - game may not run correctly", OutputCategory.Build);
+            yield return Path.Combine(baseDir, levelsUp, "RaylibWrapper", "bin", "Release", "net8.0");
+            yield return Path.Combine(baseDir, levelsUp, "RaylibWrapper", "bin", "Debug", "net8.0");
         }
 
-        // Copy VisualGameStudioEngine.dll (native engine)
-        string engineSource = null;
-        foreach (var path in possibleEnginePaths)
+        yield return Path.Combine(baseDir, "..", "..", "..", "..", "IDE");
+    }
+
+    /// <summary>
+    /// Candidate directories for the NATIVE engine DLL (VisualGameStudioEngine.dll).
+    /// It ships next to the wrapper in deployed layouts but lives in x64/<Config>
+    /// in the dev tree.
+    /// </summary>
+    private static IEnumerable<string> CandidateNativeEngineDirs()
+    {
+        foreach (var dir in CandidateEngineDirs())
+            yield return dir;
+
+        var baseDir = AppContext.BaseDirectory;
+        foreach (var levelsUp in new[] { "..", @"..\..\..", @"..\..\..\.." })
         {
-            if (File.Exists(path))
+            yield return Path.Combine(baseDir, levelsUp, "x64", "Release");
+            yield return Path.Combine(baseDir, levelsUp, "x64", "Debug");
+        }
+    }
+
+    /// <summary>
+    /// Copies the native engine DLL(s) next to the built game (CLI parity —
+    /// managed references are copied by msbuild, the native P/Invoke target is not).
+    /// </summary>
+    private void DeployNativeEngine(string outputDir)
+    {
+        var deployedAny = false;
+
+        foreach (var dir in CandidateNativeEngineDirs())
+        {
+            var nativeDlls = BasicLang.Compiler.ProjectSystem.EngineDeployment.GetNativeDllPaths(dir);
+            if (nativeDlls.Count == 0)
+                continue;
+
+            foreach (var nativeDll in nativeDlls)
             {
-                engineSource = path;
-                break;
+                try
+                {
+                    var dest = Path.Combine(outputDir, Path.GetFileName(nativeDll));
+                    File.Copy(nativeDll, dest, overwrite: true);
+                    _outputService.WriteLine($"Deployed engine runtime: {Path.GetFileName(nativeDll)}", OutputCategory.Build);
+                }
+                catch (Exception copyEx)
+                {
+                    _outputService.WriteError($"Warning: could not deploy {Path.GetFileName(nativeDll)}: {copyEx.Message}", OutputCategory.Build);
+                }
             }
+
+            deployedAny = true;
+            break;
         }
 
-        if (engineSource != null)
+        if (!deployedAny)
         {
-            var destPath = Path.Combine(outputDir, "VisualGameStudioEngine.dll");
-            try
-            {
-                File.Copy(engineSource, destPath, true);
-                _outputService.WriteLine($"Copied: VisualGameStudioEngine.dll", OutputCategory.Build);
-            }
-            catch (Exception ex)
-            {
-                _outputService.WriteError($"Failed to copy VisualGameStudioEngine.dll: {ex.Message}", OutputCategory.Build);
-            }
-        }
-        else
-        {
-            _outputService.WriteError("VisualGameStudioEngine.dll not found - game may not run correctly", OutputCategory.Build);
+            _outputService.WriteError(
+                "Warning: native engine DLL (VisualGameStudioEngine.dll) not found — the game may not run until it is placed next to the executable.",
+                OutputCategory.Build);
         }
     }
 
