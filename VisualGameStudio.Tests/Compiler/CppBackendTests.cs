@@ -128,20 +128,62 @@ End Sub";
         Assert.That(ex.Message, Does.Contain("Lambda").IgnoreCase);
     }
 
+    // ========================================================================
+    // Task 2: generics -> real C++ templates
+    // ========================================================================
+
     [Test]
-    public void Cpp_GenericClass_ThrowsCapabilityError()
+    public void Cpp_TemplateFunction_EmitsCppTemplate()
     {
         var source = @"
-Class Stack(Of T)
-    Private _top As T
+Template Function Max(Of T)(a As T, b As T) As T
+    If a > b Then
+        Return a
+    End If
+    Return b
+End Function";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("template <typename T>"));
+        Assert.That(output, Does.Match(@"T\s+Max\(const T& a, const T& b\)"));
+    }
+
+    [Test]
+    public void Cpp_GenericClass_EmitsCppTemplate()
+    {
+        var source = @"
+Class Pair(Of T)
+    Public ItemA As T
+    Public ItemB As T
 End Class";
 
-        var ex = Assert.Throws<CppCapabilityException>(() =>
-        {
-            var output = CompileToCpp(source, out var errors);
-            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
-        });
-        Assert.That(ex.Message, Does.Contain("generic").IgnoreCase);
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("template <typename T>"));
+        Assert.That(output, Does.Contain("class Pair"));
+        Assert.That(output, Does.Contain("T ItemA;"));
+        Assert.That(output, Does.Contain("T ItemB;"));
+    }
+
+    [Test]
+    public void Cpp_GenericInstantiation_EmitsTemplateArguments()
+    {
+        var source = @"
+Class Pair(Of T)
+    Public ItemA As T
+End Class
+
+Sub Main()
+    Dim p As New Pair(Of Integer)()
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("Pair<int32_t>"));
     }
 
     [Test]

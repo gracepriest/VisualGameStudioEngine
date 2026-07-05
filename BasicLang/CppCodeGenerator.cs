@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
+using GenericTypeParameter = BasicLang.Compiler.AST.GenericTypeParameter;
 
 namespace BasicLang.Compiler.CodeGen.CPlusPlus
 {
@@ -59,6 +60,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("// Forward declarations");
                 foreach (var irClass in module.Classes.Values)
                 {
+                    var fwdTemplate = TemplatePrefix(irClass.GenericParameters);
+                    if (fwdTemplate != null) WriteLine(fwdTemplate);
                     WriteLine($"class {SanitizeName(irClass.Name)};");
                 }
                 WriteLine();
@@ -267,6 +270,33 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"using {delegateName} = std::function<{returnType}({paramTypes})>;");
         }
 
+        /// <summary>
+        /// "template &lt;typename T, typename U&gt;" prefix line, or null when not generic.
+        /// </summary>
+        private string TemplatePrefix(List<string> genericParams)
+        {
+            if (genericParams == null || genericParams.Count == 0)
+                return null;
+            return "template <" + string.Join(", ", genericParams.Select(p => $"typename {SanitizeName(p)}")) + ">";
+        }
+
+        /// <summary>
+        /// C++ type mapping with template support: type parameters stay bare (T),
+        /// generic instantiations map recursively (Pair(Of Integer) -> Pair&lt;int32_t&gt;).
+        /// </summary>
+        protected override string MapType(TypeInfo type)
+        {
+            if (type == null) return base.MapType(type);
+            if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
+            if (type.GenericArguments != null && type.GenericArguments.Count > 0)
+            {
+                var bare = _typeMap.TryGetValue(type.Name, out var mapped) ? mapped : SanitizeName(type.Name);
+                var args = string.Join(", ", type.GenericArguments.Select(MapType));
+                return $"{bare}<{args}>";
+            }
+            return base.MapType(type);
+        }
+
         private string MapTypeName(string typeName)
         {
             if (string.IsNullOrEmpty(typeName)) return "void*";
@@ -366,6 +396,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             var inheritance = baseList.Count > 0 ? " : " + string.Join(", ", baseList) : "";
 
+            var classTemplate = TemplatePrefix(irClass.GenericParameters);
+            if (classTemplate != null)
+            {
+                EmitConstraintsComment(irClass.GenericTypeParams);
+                WriteLine(classTemplate);
+            }
             WriteLine($"class {className}{inheritance}");
             WriteLine("{");
 
@@ -706,9 +742,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (method.Implementation != null)
             {
                 paramList = string.Join(", ", method.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    FormatParameter(p.Type, SanitizeName(p.Name))));
             }
 
+            var methodTemplate = TemplatePrefix(method.GenericParameters);
+            if (methodTemplate != null) WriteLine(methodTemplate);
             WriteLine($"{virtualMod}{staticMod}{returnType} {methodName}({paramList}){overrideMod}");
             WriteLine("{");
             Indent();
@@ -818,11 +856,36 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var returnType = MapType(function.ReturnType);
             var functionName = SanitizeName(function.Name);
-            
+
             var parameters = string.Join(", ",
-                function.Parameters.Select(p => $"{MapType(p.Type)} {GetValueName(p)}"));
-            
+                function.Parameters.Select(p => FormatParameter(p.Type, GetValueName(p))));
+
+            var fnTemplate = TemplatePrefix(function.GenericParameters);
+            if (fnTemplate != null) WriteLine(fnTemplate);
             WriteLine($"{returnType} {functionName}({parameters});");
+        }
+
+        /// <summary>
+        /// Format one parameter: type parameters pass by const-ref (safe for any T),
+        /// everything else keeps its existing by-value form.
+        /// </summary>
+        private string FormatParameter(TypeInfo type, string name)
+        {
+            var paramType = MapType(type);
+            if (type != null && type.Kind == TypeKind.TypeParameter)
+                return $"const {paramType}& {name}";
+            return $"{paramType} {name}";
+        }
+
+        /// <summary>Constraints are dropped for C++ (parity with C# backend today); leave a trace.</summary>
+        private void EmitConstraintsComment(List<GenericTypeParameter> typeParams)
+        {
+            if (typeParams == null) return;
+            foreach (var tp in typeParams)
+            {
+                if (tp.Constraints != null && tp.Constraints.Count > 0)
+                    WriteLine($"// constraints dropped: {tp.Name} As {string.Join(", ", tp.Constraints)}");
+            }
         }
         
         private void GenerateFunction(IRFunction function)
@@ -834,8 +897,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var returnType = MapType(function.ReturnType);
             var functionName = SanitizeName(function.Name);
             var parameters = string.Join(", ",
-                function.Parameters.Select(p => $"{MapType(p.Type)} {GetValueName(p)}"));
+                function.Parameters.Select(p => FormatParameter(p.Type, GetValueName(p))));
 
+            var fnTemplate = TemplatePrefix(function.GenericParameters);
+            if (fnTemplate != null)
+            {
+                EmitConstraintsComment(function.GenericTypeParams);
+                WriteLine(fnTemplate);
+            }
             WriteLine($"{returnType} {functionName}({parameters})");
             WriteLine("{");
             Indent();
@@ -1554,10 +1623,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRNewObject newObj)
         {
-            var className = SanitizeName(newObj.ClassName);
+            // For generic instantiations the constructor needs template arguments too:
+            // Pair<int32_t> t0 = Pair<int32_t>(...)
+            var ctorName = (newObj.Type?.GenericArguments != null && newObj.Type.GenericArguments.Count > 0)
+                ? MapType(newObj.Type)
+                : SanitizeName(newObj.ClassName);
             var args = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
             var type = MapType(newObj.Type);
-            WriteLine($"{type} {newObj.Name} = {className}({args});");
+            WriteLine($"{type} {newObj.Name} = {ctorName}({args});");
         }
 
         public override void Visit(IRInstanceMethodCall methodCall)

@@ -55,8 +55,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     diags.Add($"Iterator function '{func.Name}' — Yield is not yet supported by the C++ backend");
                 if (func.IsLambda)
                     diags.Add($"Lambda '{func.Name}' — lambdas are not yet supported by the C++ backend");
-                if (func.GenericParameters != null && func.GenericParameters.Count > 0)
-                    diags.Add($"Function '{func.Name}' — generic functions are not yet supported by the C++ backend");
 
                 CheckType(func.ReturnType, $"return type of '{func.Name}'", diags);
                 foreach (var p in func.Parameters)
@@ -67,12 +65,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 foreach (var block in func.Blocks)
                     foreach (var inst in block.Instructions)
                         CheckInstruction(inst, func.Name, diags);
-            }
-
-            foreach (var irClass in module.Classes.Values)
-            {
-                if (irClass.GenericParameters != null && irClass.GenericParameters.Count > 0)
-                    diags.Add($"Class '{irClass.Name}' — generic classes are not yet supported by the C++ backend");
             }
 
             return diags.Distinct().ToList();
