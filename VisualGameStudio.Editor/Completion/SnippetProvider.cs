@@ -15,6 +15,18 @@ public class SnippetDefinition
     public string Description { get; set; } = "";
 
     /// <summary>
+    /// Creates a snippet definition from a raw LSP insertText body
+    /// (insertTextFormat = Snippet), e.g. "Sub ${1:Name}()\n\t$0\nEnd Sub".
+    /// </summary>
+    public static SnippetDefinition FromInsertText(string insertText)
+    {
+        return new SnippetDefinition
+        {
+            BodyLines = (insertText ?? "").Replace("\r\n", "\n").Split('\n')
+        };
+    }
+
+    /// <summary>
     /// Expands the snippet body into final text, stripping tab-stop markers.
     /// Returns the text and the offset of the final cursor position ($0 or end of text).
     /// </summary>
@@ -29,6 +41,10 @@ public class SnippetDefinition
         }
 
         var raw = string.Join(Environment.NewLine, lines);
+
+        // Normalize the braced no-default form ${N} to $N so both spellings
+        // (used by LSP servers and the built-in snippet set) are handled below
+        raw = Regex.Replace(raw, @"\$\{(\d+)\}", "$$$1");
 
         // Strip tab-stop markers: ${N:defaultText} -> defaultText, $N -> ""
         // First handle ${N:text} placeholders - keep the default text
@@ -80,8 +96,8 @@ public class SnippetDefinition
         // Subsequent occurrences of the same number become SnippetBoundElement linked to the first.
         var tabStopElements = new Dictionary<int, SnippetReplaceableTextElement>();
 
-        // Regex matches ${N:text} or $N patterns
-        var pattern = new Regex(@"\$\{(\d+):([^}]*)\}|\$(\d+)");
+        // Regex matches ${N:text}, ${N} or $N patterns (all LSP snippet tab-stop forms)
+        var pattern = new Regex(@"\$\{(\d+)(?::([^}]*))?\}|\$(\d+)");
 
         int lastIndex = 0;
         foreach (Match match in pattern.Matches(raw))

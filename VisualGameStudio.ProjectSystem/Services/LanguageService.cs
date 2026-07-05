@@ -24,6 +24,16 @@ public class LanguageService : ILanguageService
     private readonly string _compilerPath;
     private readonly IOutputService _outputService;
 
+    /// <summary>Default per-request timeout so a hung/dead server can never leave callers awaiting forever.</summary>
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(10);
+    private const int MaxRestartAttempts = 3;
+
+    /// <summary>True while a deliberate Stop/Dispose is in progress — suppresses crash recovery.</summary>
+    private volatile bool _stopping;
+    private int _restartAttempts;
+    /// <summary>Interlocked guard so a single crash (read-loop EOF + Process.Exited) is handled once.</summary>
+    private int _disconnectHandled;
+
     public bool IsConnected { get; private set; }
 
     /// <summary>
@@ -66,6 +76,8 @@ public class LanguageService : ILanguageService
     {
         if (IsConnected) return;
 
+        _stopping = false;
+
         try
         {
             _cts = new CancellationTokenSource();
@@ -98,7 +110,7 @@ public class LanguageService : ILanguageService
 
             _outputService.WriteLine($"[LSP] Starting: dotnet \"{_compilerPath}\" --lsp", OutputCategory.Debug);
 
-            _serverProcess = new Process { StartInfo = startInfo };
+            _serverProcess = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             _serverProcess.ErrorDataReceived += (s, e) =>
             {
                 if (!string.IsNullOrEmpty(e.Data))
@@ -106,6 +118,8 @@ public class LanguageService : ILanguageService
                     _outputService.WriteLine($"{e.Data}", OutputCategory.Build);
                 }
             };
+            // Detect server crashes even when the read loop is idle
+            _serverProcess.Exited += OnServerProcessExited;
 
             _serverProcess.Start();
             ServerProcessId = _serverProcess.Id;
@@ -137,10 +151,12 @@ public class LanguageService : ILanguageService
             catch (OperationCanceledException)
             {
                 _outputService.WriteError("[LSP] Initialize timed out after 10 seconds", OutputCategory.Build);
-                await StopAsync();
+                CleanupConnection();
                 return;
             }
 
+            // Arm crash detection for this connection before announcing it
+            Interlocked.Exchange(ref _disconnectHandled, 0);
             IsConnected = true;
             ConnectionChanged?.Invoke(this, true);
             _outputService.WriteLine("Language server connected", OutputCategory.Build);
@@ -148,12 +164,15 @@ public class LanguageService : ILanguageService
         catch (Exception ex)
         {
             _outputService.WriteError($"Failed to start language server: {ex.Message}", OutputCategory.Build);
-            await StopAsync();
+            CleanupConnection();
         }
     }
 
     public async Task StopAsync()
     {
+        // Deliberate stop: suppress crash-recovery (read-loop EOF and
+        // Process.Exited will fire as we tear the connection down).
+        _stopping = true;
         IsConnected = false;
         ConnectionChanged?.Invoke(this, false);
 
@@ -289,18 +308,19 @@ public class LanguageService : ILanguageService
 
     public async Task<IReadOnlyList<CompletionItem>> GetCompletionsAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
     {
-        _outputService.WriteLine($"[LSP] GetCompletionsAsync: uri={uri}, line={line}, col={column}", OutputCategory.Build);
+        // NOTE: these traces run on every completion keystroke — they must go
+        // to the Debug output category, never the user's Build pane.
+        _outputService.WriteLine($"[LSP] GetCompletionsAsync: uri={uri}, line={line}, col={column}", OutputCategory.Debug);
 
         if (!IsConnected)
         {
-            _outputService.WriteLine($"[LSP] Not connected, returning empty", OutputCategory.Build);
+            _outputService.WriteLine($"[LSP] Not connected, returning empty", OutputCategory.Debug);
             return Array.Empty<CompletionItem>();
         }
 
         try
         {
             var lspUri = PathToUri(uri);
-            _outputService.WriteLine($"[LSP] Sending completion request...", OutputCategory.Build);
 
             var result = await SendRequestAsync("textDocument/completion", new
             {
@@ -309,12 +329,18 @@ public class LanguageService : ILanguageService
             }, cancellationToken);
 
             var completions = ParseCompletions(result);
-            _outputService.WriteLine($"[LSP] Received {completions.Count} completions", OutputCategory.Build);
+            _outputService.WriteLine($"[LSP] Received {completions.Count} completions", OutputCategory.Debug);
             return completions;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Caller-initiated cancellation (a newer request superseded this
+            // one) — let the caller distinguish it from an empty result.
+            throw;
         }
         catch (Exception ex)
         {
-            _outputService.WriteLine($"[LSP] Completion error: {ex.Message}", OutputCategory.Build);
+            _outputService.WriteLine($"[LSP] Completion error: {ex.Message}", OutputCategory.Debug);
             return Array.Empty<CompletionItem>();
         }
     }
@@ -444,6 +470,8 @@ public class LanguageService : ILanguageService
 
     private async Task ReadMessagesAsync(CancellationToken cancellationToken)
     {
+        var disconnected = false;
+
         while (!cancellationToken.IsCancellationRequested && _reader != null)
         {
             try
@@ -458,10 +486,31 @@ public class LanguageService : ILanguageService
             {
                 break;
             }
+            catch (EndOfStreamException)
+            {
+                // Server stdout closed (crash/exit) — do NOT keep spinning
+                disconnected = true;
+                break;
+            }
+            catch (IOException)
+            {
+                disconnected = true;
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                disconnected = true;
+                break;
+            }
             catch (Exception ex)
             {
                 _outputService.WriteLine($"[LSP] Read error: {ex.Message}", OutputCategory.Debug);
             }
+        }
+
+        if (disconnected && !cancellationToken.IsCancellationRequested)
+        {
+            HandleServerDisconnect("server output stream closed");
         }
     }
 
@@ -474,7 +523,12 @@ public class LanguageService : ILanguageService
         while (true)
         {
             var line = await _reader.ReadLineAsync(cancellationToken);
-            if (line == null) return null;
+            if (line == null)
+            {
+                // null from ReadLineAsync means END OF STREAM, not an empty
+                // message — the server process is gone.
+                throw new EndOfStreamException("LSP server stdout reached end of stream");
+            }
             if (line.Length == 0) break;
 
             if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
@@ -494,13 +548,109 @@ public class LanguageService : ILanguageService
         while (read < contentLength)
         {
             var chunk = await _reader.ReadAsync(buffer.AsMemory(read, contentLength - read), cancellationToken);
-            if (chunk == 0) return null;
+            if (chunk == 0)
+            {
+                throw new EndOfStreamException("LSP server stdout closed mid-message");
+            }
             read += chunk;
         }
 
         var bytes = Encoding.Latin1.GetBytes(buffer);
         var json = Encoding.UTF8.GetString(bytes);
         return JsonSerializer.Deserialize<JsonElement>(json, JsonOptions);
+    }
+
+    private void OnServerProcessExited(object? sender, EventArgs e)
+    {
+        HandleServerDisconnect("server process exited");
+    }
+
+    /// <summary>
+    /// Handles an unexpected loss of the language server: marks the service
+    /// disconnected, fails all pending requests so awaiting callers do not
+    /// hang, notifies the user, and starts a bounded auto-restart.
+    /// Safe to call from multiple detection paths — only the first wins.
+    /// </summary>
+    private void HandleServerDisconnect(string reason)
+    {
+        if (_stopping) return;
+        if (Interlocked.Exchange(ref _disconnectHandled, 1) == 1) return;
+
+        IsConnected = false;
+        FailPendingRequests();
+        try { ConnectionChanged?.Invoke(this, false); } catch { }
+        _outputService.WriteError(
+            $"[LSP] Language server connection lost ({reason}). IntelliSense is temporarily unavailable.",
+            OutputCategory.Build);
+
+        _ = Task.Run(TryRestartAsync);
+    }
+
+    /// <summary>
+    /// Bounded auto-restart with exponential backoff (1s, 2s, 4s).
+    /// </summary>
+    private async Task TryRestartAsync()
+    {
+        while (!_stopping && _restartAttempts < MaxRestartAttempts)
+        {
+            _restartAttempts++;
+            var delay = TimeSpan.FromSeconds(Math.Pow(2, _restartAttempts - 1));
+            _outputService.WriteLine(
+                $"[LSP] Restarting language server in {delay.TotalSeconds:0}s (attempt {_restartAttempts}/{MaxRestartAttempts})...",
+                OutputCategory.Build);
+
+            try { await Task.Delay(delay); } catch { return; }
+            if (_stopping) return;
+
+            CleanupConnection();
+
+            try { await StartAsync(); } catch { }
+
+            if (IsConnected)
+            {
+                _restartAttempts = 0;
+                _outputService.WriteLine("[LSP] Language server restarted successfully.", OutputCategory.Build);
+                return;
+            }
+        }
+
+        if (!_stopping)
+        {
+            _outputService.WriteError(
+                $"[LSP] Language server could not be restarted after {MaxRestartAttempts} attempts. Restart the IDE to re-enable IntelliSense.",
+                OutputCategory.Build);
+        }
+    }
+
+    /// <summary>
+    /// Tears down the current server process/streams without the shutdown
+    /// handshake. Used for failed starts and pre-restart cleanup; deliberate
+    /// stops go through <see cref="StopAsync"/>.
+    /// </summary>
+    private void CleanupConnection()
+    {
+        _cts?.Cancel();
+
+        try { _writer?.Dispose(); } catch { }
+        try { _reader?.Dispose(); } catch { }
+        _writer = null;
+        _reader = null;
+
+        var process = _serverProcess;
+        _serverProcess = null;
+        if (process != null)
+        {
+            try { process.Exited -= OnServerProcessExited; } catch { }
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill();
+                }
+            }
+            catch { }
+            try { process.Dispose(); } catch { }
+        }
     }
 
     private void ProcessMessage(JsonElement message)
@@ -600,7 +750,11 @@ public class LanguageService : ILanguageService
             var request = new { jsonrpc = "2.0", id, method, @params = parms };
             await SendMessageAsync(request);
 
-            using var ctr = cancellationToken.Register(() => tcs.TrySetCanceled());
+            // Per-request timeout: if the server never answers (hung or dead),
+            // fail the await instead of hanging the caller forever.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(DefaultRequestTimeout);
+            using var ctr = timeoutCts.Token.Register(() => tcs.TrySetCanceled(cancellationToken));
             return await tcs.Task;
         }
         finally
@@ -656,38 +810,69 @@ public class LanguageService : ILanguageService
         }
     }
 
-    private static string PathToUri(string path)
+    /// <summary>
+    /// Converts a local file path to a fully percent-encoded file:// URI.
+    /// Uses System.Uri so '#', '%', spaces and non-ASCII characters round-trip
+    /// correctly (RFC 3986) instead of silently corrupting document identity.
+    /// Public and static for testability.
+    /// </summary>
+    public static string PathToUri(string path)
     {
-        if (path.StartsWith("file://")) return path;
-        return "file:///" + path.Replace("\\", "/").Replace(" ", "%20");
+        if (string.IsNullOrEmpty(path)) return path;
+        if (path.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) return path;
+
+        try
+        {
+            return new Uri(path).AbsoluteUri;
+        }
+        catch (UriFormatException)
+        {
+            // Relative/opaque input — fall back to the legacy best-effort form
+            return "file:///" + path.Replace("\\", "/").Replace(" ", "%20");
+        }
     }
 
-    private static string UriToPath(string uri)
+    /// <summary>
+    /// Converts a file:// URI back to a local file path, decoding all
+    /// percent-encoded characters. Non-file URIs pass through unchanged.
+    /// Public and static for testability.
+    /// </summary>
+    public static string UriToPath(string uri)
     {
-        if (!uri.StartsWith("file:///")) return uri;
-        return uri.Substring(8).Replace("/", "\\").Replace("%20", " ");
+        if (string.IsNullOrEmpty(uri)) return uri;
+        if (!uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return uri;
+
+        try
+        {
+            return new Uri(uri).LocalPath;
+        }
+        catch (UriFormatException)
+        {
+            // Legacy space-only encoded form
+            return uri.StartsWith("file:///") ? uri.Substring(8).Replace("/", "\\").Replace("%20", " ") : uri;
+        }
     }
 
-    private IReadOnlyList<CompletionItem> ParseCompletions(JsonElement result)
+    /// <summary>
+    /// Parses an LSP textDocument/completion result (CompletionItem[] or
+    /// CompletionList) into the Core model, including insertTextFormat and
+    /// preselect. Public and static for testability.
+    /// </summary>
+    public static IReadOnlyList<CompletionItem> ParseCompletions(JsonElement result)
     {
         var items = new List<CompletionItem>();
-
-        _outputService.WriteLine($"[LSP Client] ParseCompletions: result.ValueKind={result.ValueKind}", OutputCategory.Debug);
 
         JsonElement itemsArray;
         if (result.ValueKind == JsonValueKind.Array)
         {
             itemsArray = result;
-            _outputService.WriteLine($"[LSP Client] Result is array with {result.GetArrayLength()} items", OutputCategory.Debug);
         }
-        else if (result.TryGetProperty("items", out var arr))
+        else if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty("items", out var arr))
         {
             itemsArray = arr;
-            _outputService.WriteLine($"[LSP Client] Result has 'items' property with {arr.GetArrayLength()} items", OutputCategory.Debug);
         }
         else
         {
-            _outputService.WriteLine($"[LSP Client] Result has no items - raw: {result.ToString()?.Substring(0, Math.Min(200, result.ToString()?.Length ?? 0))}", OutputCategory.Debug);
             return items;
         }
 
@@ -703,7 +888,13 @@ public class LanguageService : ILanguageService
                 Kind = item.TryGetProperty("kind", out var k) ? (CompletionItemKind)k.GetInt32() : CompletionItemKind.Text,
                 InsertText = item.TryGetProperty("insertText", out var it) ? it.GetString() : null,
                 FilterText = item.TryGetProperty("filterText", out var ft) ? ft.GetString() : null,
-                SortText = item.TryGetProperty("sortText", out var st) ? st.GetString() : null
+                SortText = item.TryGetProperty("sortText", out var st) ? st.GetString() : null,
+                InsertTextFormat = item.TryGetProperty("insertTextFormat", out var itf)
+                                   && itf.ValueKind == JsonValueKind.Number
+                                   && itf.GetInt32() == (int)InsertTextFormat.Snippet
+                    ? InsertTextFormat.Snippet
+                    : InsertTextFormat.PlainText,
+                Preselect = item.TryGetProperty("preselect", out var ps) && ps.ValueKind == JsonValueKind.True
             });
         }
 
@@ -1879,6 +2070,7 @@ public class LanguageService : ILanguageService
         // Synchronous cleanup only — blocking on StopAsync() here could stall
         // (or deadlock) the UI thread, and previously always burned the full
         // wait timeout because the shutdown response could never be read.
+        _stopping = true;
         IsConnected = false;
         _cts?.Cancel();
         FailPendingRequests();
