@@ -30,6 +30,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         // inline as expressions by GetValueName and must NOT also emit a standalone
         // statement, so chained opaque access collapses to one C++ expression.
         private readonly HashSet<IRValue> _inlinedForeignCalls = new HashSet<IRValue>();
+        // Foreign ::-qualified locals that carry an initializer: their standalone
+        // declaration is suppressed and the type is emitted at the first assignment, so
+        // `Dim it As some::type = expr` becomes a single `some::type it = expr;`. Foreign
+        // types may be non-default-constructible or non-assignable, so declare-then-assign
+        // (the default local path) can fail to compile. Consumed here as a work set — a
+        // name is removed once its combined decl-init has been emitted.
+        private readonly HashSet<string> _foreignLocalsInitInline =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _foreignLocalTypeByName =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private bool _usesFramework;
         private readonly HashSet<string> _frameworkFunctionsUsed;
         private IRModule _module;
@@ -515,11 +525,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return base.MapType(type);
 
             // Foreign C++ passthrough type (::-qualified) — emit verbatim, value semantics.
+            // A ForeignSuffix (e.g. "::iterator") applies AFTER the <...> instantiation:
+            // std::vector(Of Integer)::iterator -> std::vector<int32_t>::iterator.
             if (type.Name != null && type.Name.Contains("::"))
             {
+                var suffix = type.ForeignSuffix ?? "";
                 if (type.GenericArguments != null && type.GenericArguments.Count > 0)
-                    return $"{type.Name}<{string.Join(", ", type.GenericArguments.Select(MapType))}>";
-                return type.Name;
+                    return $"{type.Name}<{string.Join(", ", type.GenericArguments.Select(MapType))}>{suffix}";
+                return type.Name + suffix;
             }
             // Everyday collections -> BasicLang wrappers (value types, never shared_ptr).
             // Match case-insensitively (VB-style) but always emit the canonical capitalized name.
@@ -1207,6 +1220,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     _declaredIdentifiers.Add(field.Name);
             }
 
+            // Foreign ::-qualified locals that are written by an assignment/store in the
+            // body carry an initializer: suppress their standalone declaration and emit the
+            // type at the first write (some::type it = expr;). Foreign types may be
+            // non-default-constructible / non-assignable, so declare-then-assign can fail.
+            _foreignLocalsInitInline.Clear();
+            _foreignLocalTypeByName.Clear();
+            var foreignLocalNames = new HashSet<string>(
+                function.LocalVariables.Where(l => l.Type?.Kind == TypeKind.Foreign)
+                                       .Select(l => l.Name),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var local in function.LocalVariables.Where(l => l.Type?.Kind == TypeKind.Foreign))
+                _foreignLocalTypeByName[local.Name] = MapType(local.Type);
+
             // Collect temporaries (values that aren't named destinations)
             _dateTimeValues.Clear();
             _inlinedForeignCalls.Clear();
@@ -1219,11 +1245,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     if (instruction is IRFieldAccess fa && IsDateTimeNowAccess(fa))
                         _dateTimeValues.Add(fa);
 
-                    // A member access whose receiver is a foreign ::-qualified instance
-                    // method call inlines that inner call (m.foo().bar() → one expression).
-                    var receiver = ForeignCallReceiverOf(instruction);
-                    if (receiver != null)
-                        _inlinedForeignCalls.Add(receiver);
+                    // A write to a foreign local is its initializer — declare-at-first-write.
+                    var writtenLocal = AssignmentTargetName(instruction);
+                    if (writtenLocal != null && foreignLocalNames.Contains(writtenLocal))
+                        _foreignLocalsInitInline.Add(writtenLocal);
+
+                    // Any operand that is a foreign ::-qualified instance method call is
+                    // consumed inline at that use site (as a member-access receiver, a call
+                    // argument, a store value, a condition, ...). GetValueName renders it
+                    // inline; recording it here suppresses the duplicate standalone
+                    // statement, so the opaque call runs EXACTLY ONCE — never as both an
+                    // inline expression AND a discarded `expr;` statement.
+                    foreach (var operand in EnumerateOperands(instruction))
+                    {
+                        if (operand is IRInstanceMethodCall foreignCall
+                            && foreignCall.Type?.Kind == TypeKind.Foreign)
+                            _inlinedForeignCalls.Add(foreignCall);
+                    }
 
                     if (instruction is IRValue value && !(value is IRConstant))
                     {
@@ -1237,22 +1275,106 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// If <paramref name="instruction"/> accesses a member of a foreign ::-qualified
-        /// instance method call (i.e. its receiver is itself such a call), return that
-        /// inner call — it will be rendered inline rather than as a standalone statement.
+        /// The name of the local an instruction WRITES to (an IRAssignment target or an
+        /// IRStore into an IRVariable address), or null. Used to detect a foreign local's
+        /// initializer so its declaration can be folded into the first write.
         /// </summary>
-        private static IRValue ForeignCallReceiverOf(IRInstruction instruction)
+        private static string AssignmentTargetName(IRInstruction instruction) => instruction switch
         {
-            IRValue receiver = instruction switch
+            IRAssignment asn when asn.Target is IRVariable tv => tv.Name,
+            IRStore st when st.Address is IRVariable sv => sv.Name,
+            _ => null
+        };
+
+        /// <summary>
+        /// Enumerate the direct IRValue operands an instruction CONSUMES — the sites where a
+        /// foreign ::-qualified call value flows into another expression. Used to decide which
+        /// foreign calls are rendered inline (and so must not also emit a standalone
+        /// statement). Supersedes the old receiver-only ForeignCallReceiverOf scan by covering
+        /// argument, store, return, condition, cast, and arithmetic positions too.
+        /// </summary>
+        private static IEnumerable<IRValue> EnumerateOperands(IRInstruction instruction)
+        {
+            switch (instruction)
             {
-                IRInstanceMethodCall mc => mc.Object,
-                IRFieldAccess fa => fa.Object,
-                IRFieldStore fs => fs.Object,
-                _ => null
-            };
-            return receiver is IRInstanceMethodCall inner && inner.Type?.Kind == TypeKind.Foreign
-                ? receiver
-                : null;
+                case IRInstanceMethodCall mc:
+                    if (mc.Object != null) yield return mc.Object;
+                    foreach (var a in mc.Arguments) yield return a;
+                    break;
+                case IRCall call:
+                    if (call.CalleeValue != null) yield return call.CalleeValue;
+                    foreach (var a in call.Arguments) yield return a;
+                    break;
+                case IRBaseMethodCall bc:
+                    foreach (var a in bc.Arguments) yield return a;
+                    break;
+                case IRNewObject no:
+                    foreach (var a in no.Arguments) yield return a;
+                    break;
+                case IRFieldAccess fa:
+                    if (fa.Object != null) yield return fa.Object;
+                    break;
+                case IRFieldStore fs:
+                    if (fs.Object != null) yield return fs.Object;
+                    if (fs.Value != null) yield return fs.Value;
+                    break;
+                case IRStore st:
+                    if (st.Value != null) yield return st.Value;
+                    if (st.Address != null) yield return st.Address;
+                    break;
+                case IRAssignment asn:
+                    if (asn.Value != null) yield return asn.Value;
+                    break;
+                case IRReturn ret:
+                    if (ret.Value != null) yield return ret.Value;
+                    break;
+                case IRBinaryOp bin:
+                    if (bin.Left != null) yield return bin.Left;
+                    if (bin.Right != null) yield return bin.Right;
+                    break;
+                case IRCompare cmp:
+                    if (cmp.Left != null) yield return cmp.Left;
+                    if (cmp.Right != null) yield return cmp.Right;
+                    break;
+                case IRUnaryOp un:
+                    if (un.Operand != null) yield return un.Operand;
+                    break;
+                case IRCast cast:
+                    if (cast.Value != null) yield return cast.Value;
+                    break;
+                case IRConditionalBranch cbr:
+                    if (cbr.Condition != null) yield return cbr.Condition;
+                    break;
+                case IRSwitch sw:
+                    if (sw.Value != null) yield return sw.Value;
+                    break;
+                case IRIndexerAccess ia:
+                    if (ia.Collection != null) yield return ia.Collection;
+                    foreach (var i in ia.Indices) yield return i;
+                    break;
+                case IRIndexerStore ist:
+                    if (ist.Collection != null) yield return ist.Collection;
+                    foreach (var i in ist.Indices) yield return i;
+                    if (ist.Value != null) yield return ist.Value;
+                    break;
+                case IRArrayStore ast:
+                    if (ast.Array != null) yield return ast.Array;
+                    if (ast.Index != null) yield return ast.Index;
+                    if (ast.Value != null) yield return ast.Value;
+                    break;
+                case IRThrow th:
+                    if (th.Exception != null) yield return th.Exception;
+                    break;
+                case IRYield y:
+                    if (y.Value != null) yield return y.Value;
+                    break;
+                case IRAwait aw:
+                    if (aw.Expression != null) yield return aw.Expression;
+                    break;
+                case IRForEach fe:
+                    if (fe.Collection != null) yield return fe.Collection;
+                    break;
+            }
         }
 
         private static bool IsDateTimeNowAccess(IRFieldAccess fieldAccess) =>
@@ -1274,6 +1396,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // std types, and we can't know a foreign type's initializer shape anyway.
                     if (local.Type?.Kind == TypeKind.Foreign)
                     {
+                        // A foreign local with an initializer is declared at its first write
+                        // (some::type it = expr;) — skip the standalone declaration here.
+                        if (_foreignLocalsInitInline.Contains(local.Name))
+                            continue;
                         WriteLine($"{localType} {localName};");
                     }
                     else
@@ -1569,8 +1695,22 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var value = GetValueName(assignment.Value);
             var target = GetValueName(assignment.Target);
-            
-            WriteLine($"{target} = {value};");
+
+            WriteLine($"{ForeignInitDeclPrefix(assignment.Target?.Name)}{target} = {value};");
+        }
+
+        /// <summary>
+        /// If <paramref name="name"/> is a foreign local whose declaration was deferred to
+        /// its initializer, return its C++ type + space (so the write becomes a combined
+        /// `some::type name = expr;`) and consume the pending flag so later writes are plain
+        /// assignments. Otherwise return "".
+        /// </summary>
+        private string ForeignInitDeclPrefix(string name)
+        {
+            if (name != null && _foreignLocalsInitInline.Remove(name)
+                && _foreignLocalTypeByName.TryGetValue(name, out var cppType))
+                return cppType + " ";
+            return "";
         }
         
         public override void Visit(IRLoad load)
@@ -1589,7 +1729,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (store.Address is IRVariable variable)
             {
                 var varName = SanitizeName(variable.Name);
-                WriteLine($"{varName} = {value};");
+                WriteLine($"{ForeignInitDeclPrefix(variable.Name)}{varName} = {value};");
                 return;
             }
 
@@ -2299,8 +2439,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // type, not a real C++ type). It is rendered inline by RenderForeignMethodCall.
             if (methodCall.Type?.Kind == TypeKind.Foreign)
             {
-                // When this call feeds an outer member access (the inner m.foo() in
-                // m.foo().bar()) it is inlined there — don't also emit it as a statement.
+                // When this call's result is CONSUMED anywhere (an outer member access
+                // like m.foo().bar(), a call argument like WriteLine(m.try_lock()), a
+                // store, a condition, ...) it is rendered inline at that use site — so
+                // don't ALSO emit it as a standalone statement, or the opaque call would
+                // run twice. Emit the standalone `expr;` only when the result is discarded.
                 if (_inlinedForeignCalls.Contains(methodCall))
                     return;
                 WriteLine($"{RenderForeignMethodCall(methodCall)};");

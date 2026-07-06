@@ -2535,11 +2535,15 @@ namespace BasicLang.Compiler
                 // The '::' segments are stitched into one type-name string; the Task-2
                 // MapType foreign branch (name.Contains("::")) emits them verbatim.
                 var typeNameBuilder = new System.Text.StringBuilder();
+                // Track whether this is a ::-qualified (foreign C++) name. Only foreign
+                // segments accept keyword-spelled names verbatim (e.g. std::string::iterator,
+                // ns::First); a plain/dotted .NET name keeps the stricter identifier rule.
+                bool isForeign = Check(TokenType.ScopeResolution);
                 if (Match(TokenType.ScopeResolution))
                 {
                     // Leading '::' — a global-scope-qualified name.
                     typeNameBuilder.Append("::");
-                    typeNameBuilder.Append(Consume(TokenType.Identifier, "Expected type name after '::'").Lexeme);
+                    typeNameBuilder.Append(ConsumeForeignNameSegment("Expected type name after '::'").Lexeme);
                 }
                 else
                 {
@@ -2550,12 +2554,21 @@ namespace BasicLang.Compiler
                     if (Match(TokenType.Dot))
                     {
                         typeNameBuilder.Append('.');
-                        typeNameBuilder.Append(Consume(TokenType.Identifier, "Expected type name after '.'").Lexeme);
+                        // A '.' segment in a foreign name (std::string::iterator has none,
+                        // but System::foo.bar could) still accepts keyword names verbatim.
+                        typeNameBuilder.Append(isForeign
+                            ? ConsumeForeignNameSegment("Expected type name after '.'").Lexeme
+                            : Consume(TokenType.Identifier, "Expected type name after '.'").Lexeme);
                     }
                     else if (Match(TokenType.ScopeResolution))
                     {
+                        isForeign = true;
                         typeNameBuilder.Append("::");
-                        typeNameBuilder.Append(Consume(TokenType.Identifier, "Expected type name after '::'").Lexeme);
+                        // C++ segment after '::' — accept ANY word-like token (identifier OR
+                        // keyword). C++ identifiers are unrelated to BasicLang keywords, so
+                        // names like 'iterator'/'First'/'Where' must pass through verbatim
+                        // instead of throwing (which would Synchronize away the statement).
+                        typeNameBuilder.Append(ConsumeForeignNameSegment("Expected type name after '::'").Lexeme);
                     }
                     else
                     {
@@ -2597,6 +2610,34 @@ namespace BasicLang.Compiler
                 } while (Match(TokenType.Comma));
 
                 Consume(TokenType.RightParen, "Expected ')' after generic arguments");
+
+                // A ::-qualified segment AFTER the generic arguments applies to the
+                // instantiated type: std::vector(Of Integer)::iterator ->
+                // std::vector<int32_t>::iterator. Stitch it into ForeignSuffix (foreign
+                // C++ names only; accepts keyword-spelled segments like 'iterator').
+                if (typeName.Contains("::"))
+                {
+                    var suffix = new System.Text.StringBuilder();
+                    while (true)
+                    {
+                        if (Match(TokenType.ScopeResolution))
+                        {
+                            suffix.Append("::");
+                            suffix.Append(ConsumeForeignNameSegment("Expected type name after '::'").Lexeme);
+                        }
+                        else if (Match(TokenType.Dot))
+                        {
+                            suffix.Append("::");
+                            suffix.Append(ConsumeForeignNameSegment("Expected type name after '.'").Lexeme);
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                    if (suffix.Length > 0)
+                        type.ForeignSuffix = suffix.ToString();
+                }
             }
 
             // Nullable type: Integer?
@@ -4500,6 +4541,28 @@ namespace BasicLang.Compiler
         private Token ConsumeIdentifierLike(string message)
         {
             if (CheckIdentifierLike()) return Advance();
+            return Consume(TokenType.Identifier, message);
+        }
+
+        /// <summary>
+        /// Consume one segment of a foreign ::-qualified (C++) type name. C++ identifiers
+        /// are unrelated to BasicLang keywords, so ANY word-like token is accepted verbatim
+        /// via its .Lexeme — an identifier OR a keyword whose spelling happens to collide
+        /// (iterator, First, Where, string, ...). Punctuation, operators, and literals are
+        /// rejected (their lexemes don't start with a letter/underscore) so we never swallow
+        /// '(', '::', '.', '&lt;', etc. Without this, a keyword-spelled segment threw a
+        /// ParseException that ParseBlock caught and Synchronize()'d, silently dropping the
+        /// whole statement.
+        /// </summary>
+        private Token ConsumeForeignNameSegment(string message)
+        {
+            var lexeme = Peek().Lexeme;
+            if (!IsAtEnd() && !string.IsNullOrEmpty(lexeme) &&
+                (char.IsLetter(lexeme[0]) || lexeme[0] == '_'))
+            {
+                return Advance();
+            }
+            // Fall back to the standard identifier error for a genuinely bad token.
             return Consume(TokenType.Identifier, message);
         }
 

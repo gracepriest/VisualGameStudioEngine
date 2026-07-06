@@ -327,4 +327,117 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Does.Contain("m.foo().bar()"));
     }
+
+    // ==================================================================
+    // Bug 1 — keyword-colliding C++ name segments must not drop the statement.
+    // A '::'/'.' segment whose spelling collides with a BasicLang keyword
+    // (iterator, First, Where, Take, ...) previously threw a ParseException in
+    // the stitch loop (Consume(Identifier)); ParseBlock caught it and
+    // Synchronize()'d away the whole statement. Foreign C++ segments must
+    // accept ANY word-like token verbatim.
+    // ==================================================================
+
+    [Test]
+    public void Cpp_ForeignType_KeywordSegment_Iterator_ParsesVerbatim()
+    {
+        var source = @"
+#CppInclude <string>
+Sub Main()
+    Dim it As std::string::iterator
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::string::iterator it"),
+            "a C++ segment named like a BasicLang keyword ('iterator') must be emitted verbatim");
+    }
+
+    [Test]
+    public void Cpp_ForeignType_SoftKeywordSegment_First_Parses()
+    {
+        // 'First' is a LINQ soft-keyword; as a foreign C++ segment it must pass through.
+        var source = @"
+#CppInclude <foo.h>
+Sub Main()
+    Dim x As ns::First
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("ns::First x"));
+    }
+
+    // ==================================================================
+    // Bug 2 — a foreign call consumed as an argument must emit exactly once.
+    // Previously the call was emitted BOTH as a standalone statement AND
+    // inline at the consumption site (double side effect).
+    // ==================================================================
+
+    [Test]
+    public void Cpp_ForeignCall_InArgumentPosition_EmittedExactlyOnce()
+    {
+        var source = @"
+#CppInclude <mutex>
+Sub Main()
+    Dim m As std::mutex
+    Console.WriteLine(m.try_lock())
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+
+        // Exactly one occurrence of the call.
+        var calls = output!.Split(new[] { "m.try_lock()" }, System.StringSplitOptions.None).Length - 1;
+        Assert.That(calls, Is.EqualTo(1),
+            "a foreign call consumed as an argument must be emitted once, not duplicated");
+        // The standalone `m.try_lock();` statement must NOT appear when the result is consumed.
+        Assert.That(output, Does.Not.Contain("m.try_lock();"),
+            "no standalone side-effecting statement when the foreign result is consumed inline");
+    }
+
+    // ==================================================================
+    // Bug 3 — a foreign result may be captured in a typed foreign local.
+    // Foreign<->Foreign assignment is opaquely compatible; the local with an
+    // initializer must emit a single `type name = expr;` (foreign types may be
+    // non-default-constructible / non-assignable).
+    // ==================================================================
+
+    [Test]
+    public void Cpp_ForeignResult_CapturedInTypedLocal_CompilesAndRuns()
+    {
+        var source = @"
+#CppInclude <vector>
+Sub Main()
+    Dim v As std::vector(Of Integer)
+    v.push_back(10)
+    v.push_back(20)
+    Dim n As std::size_t = v.size()
+    Console.WriteLine(""ok"")
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // Single-line init, not declare-then-assign (foreign types may be non-assignable).
+        Assert.That(output, Does.Match(@"std::size_t n = v\.size\(\);"),
+            "a foreign local with an initializer must emit `type name = expr;` in one line");
+        // No bare default declaration `std::size_t n;` on its own line.
+        Assert.That(output, Does.Not.Match(@"std::size_t n;\s"),
+            "no separate default declaration when the foreign local has an initializer");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        Assert.That(VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(output, compiler.Value).Replace("\r\n", "\n"),
+            Is.EqualTo("ok\n"));
+    }
+
+    [Test]
+    public void Cpp_ForeignTemplatedIteratorType_PostGenericScope_MapsCorrectly()
+    {
+        // std::vector(Of Integer)::iterator -> std::vector<int32_t>::iterator:
+        // a ::-qualified segment AFTER the generic arguments.
+        var source = @"
+#CppInclude <vector>
+Sub Main()
+    Dim it As std::vector(Of Integer)::iterator
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>::iterator it"));
+    }
 }

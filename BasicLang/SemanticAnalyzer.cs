@@ -1687,6 +1687,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     foreignType.GenericArguments.AddRange(
                         typeRef.GenericArguments.Select(ResolveTypeReference));
                 }
+                foreignType.ForeignSuffix = typeRef.ForeignSuffix;
                 if (typeRef.IsNullable)
                 {
                     foreignType.IsNullable = true;

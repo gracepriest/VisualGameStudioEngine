@@ -214,6 +214,14 @@ namespace BasicLang.Compiler.AST
         public List<TypeReference> TupleElementTypes { get; set; }
         public List<string> TupleElementNames { get; set; }
 
+        /// <summary>
+        /// A ::-qualified suffix that follows the generic arguments of a foreign C++ type,
+        /// e.g. the "::iterator" in std::vector(Of Integer)::iterator. Carried separately
+        /// from Name because it applies AFTER the &lt;...&gt; instantiation
+        /// (std::vector&lt;int32_t&gt;::iterator). Null/empty for ordinary types.
+        /// </summary>
+        public string ForeignSuffix { get; set; }
+
         public TypeReference(string name)
         {
             Name = name;

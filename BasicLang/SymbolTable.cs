@@ -28,6 +28,9 @@ public class TypeInfo
         public bool IsFixedLengthString { get; set; }
         public int FixedStringLength { get; set; } // For fixed-length strings
         public bool IsAbstract { get; set; } // For abstract classes
+        // A ::-qualified suffix for a foreign C++ type that follows its generic args,
+        // e.g. "::iterator" in std::vector(Of Integer)::iterator -> std::vector<int32_t>::iterator.
+        public string ForeignSuffix { get; set; }
         public Dictionary<string, Symbol> Members { get; set; }
 
         public TypeInfo(string name, TypeKind kind)
@@ -76,6 +79,13 @@ public class TypeInfo
 
             // Object can accept any type (boxing)
             if (Name == "Object")
+                return true;
+
+            // Foreign ::-qualified C++ types are opaque: a Foreign value is assignable to
+            // a Foreign variable (e.g. Dim it As std::vector(Of Integer)::iterator = v.begin(),
+            // where v.begin() is typed as the synthetic Foreign "…::begin"). The compiler
+            // can't see the real C++ types, so it never compares their names here.
+            if (Kind == TypeKind.Foreign && other != null && other.Kind == TypeKind.Foreign)
                 return true;
 
             // Numeric conversions
