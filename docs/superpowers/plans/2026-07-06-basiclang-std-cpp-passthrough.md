@@ -28,7 +28,7 @@
 
 **Create:**
 - `BasicLang/Compiler/CodeGen/CPlusPlus/CppCollectionsRuntime.cs` — `public static class CppCollectionsRuntime { public const string Source = @"…"; }`. Single source of truth for the `BasicLang::List/Dictionary/HashSet` C++ wrapper text. Emitted by the preamble AND compiled directly by the unit test (no duplication).
-- `BasicLang/Compiler/CodeGen/ForeignFeatureChecker.cs` — `ForeignFeatureChecker.Check(IRModule)` + `ForeignFeatureException`; rejects `#CppInclude` headers / `TypeKind.Foreign` types on non-C++ backends.
+- `BasicLang/Compiler/CodeGen/ForeignFeatureChecker.cs` — `ForeignFeatureChecker.Check(IRModule, string backendName)` + `ForeignFeatureException`; rejects `#CppInclude` headers / `TypeKind.Foreign` types on non-C++ backends.
 - `VisualGameStudio.Tests/Native/CppCollectionsRuntimeTests.cs` — compiles `CppCollectionsRuntime.Source` + a test `main` with a real compiler and asserts runtime behavior (semantics-in-isolation).
 - `VisualGameStudio.Tests/Compiler/CppCollectionTests.cs` — codegen string-asserts + C++ compile-and-run E2E for collections.
 - `VisualGameStudio.Tests/Compiler/CppPassthroughTests.cs` — `#CppInclude` + `::` foreign-type codegen + E2E.
@@ -39,7 +39,8 @@
 - `BasicLang/CppCapabilityChecker.cs` — allow `List`/`Dictionary`/`HashSet` and `::` foreign types.
 - `BasicLang/CppCodeGenerator.cs` — `MapType` branches (collections + foreign), `MemberAccessOp` guard, `Visit(IRNewObject)` collection value-init, `.Count`/`.Keys`/`.Values` + indexer lowering, `usesCollections` preamble gate + includes, `#CppInclude` token emission, `CppCodeGenOptions.CppIncludes`.
 - `BasicLang/Preprocessor.cs` — `#CppInclude` dispatch branch + `_cppIncludes` collection + `CppIncludes` accessor.
-- `BasicLang/Compiler.cs` — read `_preprocessor.CppIncludes` after `Process`, thread into `CppCodeGenOptions.CppIncludes`.
+- `BasicLang/IRNodes.cs` — add `List<string> CppIncludes` to `IRModule` (init in ctor like `NetUsings`). **This is the chosen carrier for `#CppInclude` headers (module route), added in Task 4** — it avoids hunting the generator construction site AND is exactly what `ForeignFeatureChecker` reads in Task 6.
+- `BasicLang/Compiler.cs` — read `_preprocessor.CppIncludes` after `Process` and populate `irModule.CppIncludes` (the C++ generator and the guard both read the module).
 - `BasicLang/SemanticAnalyzer.cs` — `ResolveTypeName` `::`→`Foreign`; `Visit(MemberAccessExpressionNode)` opaque-Foreign branch; extend `GetCommonMethodReturnType` with collection member return types.
 - `BasicLang/CSharpBackend.cs`, `BasicLang/LLVMBackend.cs`, `BasicLang/MSILBackend.cs` — call `ForeignFeatureChecker.Check` at the top of `Generate`.
 - (If needed) `BasicLang/Lexer`/`Parser`/`ASTNodes.cs` — accept `::` in type-name tokens (verified in Task 5 Step 1).
@@ -532,9 +533,35 @@ Let users pull in C++ headers. Distinct from the existing `#Include` source-spli
 
 **Files:**
 - Modify: `BasicLang/Preprocessor.cs` (fields 14-20, dispatch 79-134)
-- Modify: `BasicLang/Compiler.cs` (313-326)
-- Modify: `BasicLang/CppCodeGenerator.cs` (ctor 35-44, `GenerateHeader` include loop 242-245, `CppCodeGenOptions` 2583-2589)
+- Modify: `BasicLang/IRNodes.cs` (`IRModule` 1107-1139 — `CppIncludes` list)
+- Modify: `BasicLang/Compiler.cs` (313-326 + the `IRBuilder.Build` site)
+- Modify: `BasicLang/CppCodeGenerator.cs` (`GenerateHeader` include loop 242-245)
 - Test: `VisualGameStudio.Tests/Compiler/CppPassthroughTests.cs`, `ForeignFeatureGuardTests.cs`
+
+- [ ] **Step 0: Preprocessor-aware test helper (REQUIRED for all passthrough tests)**
+
+The `CompileToCpp` helper from Task 2 runs Lexer→Parser→SemanticAnalyzer→IRBuilder→CppCodeGenerator but **NOT the Preprocessor** — so `#CppInclude` (collected in the Preprocessor) would never reach codegen through it. Add a `CompileToCppFull` helper in `CppPassthroughTests.cs` that runs the preprocessor first and threads the collected headers onto the module, mirroring `Compiler.cs`:
+
+```csharp
+private string CompileToCppFull(string source, out List<string> errors)
+{
+    errors = new List<string>();
+    var pre = new Preprocessor();
+    var processed = pre.Process(source, "test.bas");
+    if (pre.Errors.Count > 0) { foreach (var e in pre.Errors) errors.Add(e.Message); return null; }
+
+    var tokens = new Lexer(processed).Tokenize();
+    var ast = new Parser(tokens).Parse();
+    var analyzer = new SemanticAnalyzer();
+    if (!analyzer.Analyze(ast)) { foreach (var e in analyzer.Errors) errors.Add(e.Message); return null; }
+
+    var irModule = new IRBuilder(analyzer).Build(ast, "TestModule");
+    irModule.CppIncludes.AddRange(pre.CppIncludes);   // what Compiler.cs does (Step 4)
+    return new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false }).Generate(irModule);
+}
+```
+
+Use `CompileToCppFull` (not `CompileToCpp`) for every `#CppInclude`/foreign-type test in Tasks 4 and 5.
 
 - [ ] **Step 1: Failing test — `#CppInclude` reaches the generated C++; `#Include` is untouched**
 
@@ -543,7 +570,7 @@ Let users pull in C++ headers. Distinct from the existing `#Include` source-spli
 public void Cpp_CppInclude_EmitsRealInclude()
 {
     var source = "#CppInclude <mutex>\nSub Main()\nEnd Sub";
-    var output = CompileToCpp(source, out var errors);
+    var output = CompileToCppFull(source, out var errors);   // preprocessor-aware helper (Step 0)
     Assert.That(errors, Is.Empty, string.Join("; ", errors));
     Assert.That(output, Does.Contain("#include <mutex>"));
 }
@@ -571,18 +598,22 @@ else if (trimmedLine.StartsWith("#CppInclude", StringComparison.OrdinalIgnoreCas
 
 (Store the full delimited token so angle vs quoted survives to emission.)
 
-- [ ] **Step 3: `CppCodeGenOptions.CppIncludes` + generator plumbing**
+- [ ] **Step 3: Carry the headers on `IRModule` (the module route — chosen default)**
 
-`CppCodeGenerator.cs`: add `public List<string> CppIncludes { get; set; } = new List<string>();` to `CppCodeGenOptions` (2583-2589). Add field `private readonly List<string> _cppIncludeTokens;` and seed it in the ctor (35-44): `_cppIncludeTokens = new List<string>(_options.CppIncludes);`. In `GenerateHeader` after the angle-only loop (242-245), add:
+Use the **module** as the carrier, not `CppCodeGenOptions`. This avoids hunting the generator construction site (which varies across `BackendRegistry.cs`/`MultiTargetCompiler.cs`/`Program.cs`) and is exactly what `ForeignFeatureChecker` reads in Task 6 — one carrier, both consumers.
+
+`IRNodes.cs` `IRModule` (1107-1139): add `public List<string> CppIncludes { get; set; }` and initialize it in the ctor alongside `NetUsings` (`CppIncludes = new List<string>();`).
+
+`CppCodeGenerator.GenerateHeader` (after the angle-only include loop, 242-245): read from the module (already available in `GenerateHeader(IRModule module)`):
 
 ```csharp
-foreach (var tok in _cppIncludeTokens)
-    WriteLine($"#include {tok}");   // tok is already <...> or "..."
+foreach (var tok in module.CppIncludes)   // tok is already <...> or "..."
+    WriteLine($"#include {tok}");
 ```
 
-- [ ] **Step 4: Compiler threads preprocessor headers into options**
+- [ ] **Step 4: Compiler populates `irModule.CppIncludes` from the preprocessor**
 
-`Compiler.cs`: after the `_preprocessor.Process` / error-read block (313-326), accumulate `_preprocessor.CppIncludes` into a compile-scoped list, and where the `CppCodeGenerator`/`CppCodeGenOptions` is constructed for a C++ build, set `options.CppIncludes = collectedCppHeaders`. (Find the C++ construction site — `BackendRegistry.cs`, `MultiTargetCompiler.cs`, or `Program.cs` per the anchor notes — and pass the list through. If the generator is built in a registry without compiler state, add the headers to the `IRModule` as a new `List<string> CppIncludes` and read them in the generator instead; pick whichever site already has both the module and options.)
+`Compiler.cs`: after the `_preprocessor.Process` / error-read block (313-326), accumulate `_preprocessor.CppIncludes` into a compile-scoped list; after the IR module is built (find the `IRBuilder.Build(...)` call in the same compile path), set `irModule.CppIncludes.AddRange(collectedCppHeaders)`. Because the generator reads `module.CppIncludes` directly (Step 3), no `CppCodeGenOptions` change and no generator-construction-site hunt is needed. (`ForeignFeatureChecker` in Task 6 reads the same `module.CppIncludes`.)
 
 - [ ] **Step 5: Run Step 1 test — expect PASS.** Add a quoted-header test (`#CppInclude "grid.h"` → `#include "grid.h"`). Implement until green.
 
@@ -620,7 +651,7 @@ Sub Main()
     m.unlock()
     Console.WriteLine(""ok"")
 End Sub";
-    var output = CompileToCpp(source, out var errors);
+    var output = CompileToCppFull(source, out var errors);   // preprocessor-aware (Task 4 Step 0)
     Assert.That(errors, Is.Empty, string.Join("; ", errors));
     Assert.That(output, Does.Contain("std::mutex m"));    // value, not shared_ptr
     Assert.That(output, Does.Contain("m.lock()"));         // opaque passthrough with '.'
@@ -669,7 +700,7 @@ Non-C++ backends must reject `#CppInclude`/foreign types cleanly (never silent g
 **Files:**
 - Create: `BasicLang/Compiler/CodeGen/ForeignFeatureChecker.cs`
 - Modify: `BasicLang/CSharpBackend.cs` (Generate 153), `BasicLang/LLVMBackend.cs` (Generate 110), `BasicLang/MSILBackend.cs` (Generate 70)
-- Modify: `BasicLang/IRNodes.cs` (add `List<string> CppIncludes` to `IRModule` if not already added in Task 4)
+- (`IRModule.CppIncludes` already added in Task 4 Step 3 — no IRNodes change here.)
 - Test: `VisualGameStudio.Tests/Compiler/ForeignFeatureGuardTests.cs`
 - Docs: `docs/BasicLang-Reference.md`
 
@@ -700,6 +731,8 @@ public void Include_SourceSplicing_StillWorks()
 
 (Add LLVM/MSIL variants using their generators.) Run: expect FAIL — no guard exists yet.
 
+**Helper note:** the `ForeignType` tests resolve `std::mutex` in the SemanticAnalyzer, so a plain Lexer→Parser→Semantic→IRBuilder→backend pipeline helper suffices (no preprocessor). The `CppInclude` tests need `module.CppIncludes` populated, so they must run the **preprocessor** first (mirror `CompileToCppFull` from Task 4 Step 0, swapping the C++ generator for the target backend's `Generate`). Assert the guard by wrapping the backend `Generate(module)` call in `Assert.Throws<ForeignFeatureException>` — call the generator directly rather than the top-level `Compiler`, which may convert the throw into an error-result.
+
 - [ ] **Step 2: Shared `ForeignFeatureChecker` + exception**
 
 Create `ForeignFeatureChecker.cs` mirroring `CppCapabilityChecker`/`CppCapabilityException` (CppCapabilityChecker.cs:29-38):
@@ -726,7 +759,7 @@ public static class ForeignFeatureChecker
 }
 ```
 
-(Requires `IRModule.CppIncludes` — add it in `IRNodes.cs` `IRModule` (1107-1139), init in ctor like `NetUsings`, if Task 4 routed headers via options rather than the module. If Task 4 used the module route, it already exists.)
+(`IRModule.CppIncludes` already exists — it was added in Task 4 Step 3 as the header carrier. The `Foreign`-type walk must reuse the same recursion shape as `ModuleUsesCollections` / `CppCapabilityChecker.CheckType`, checking `t.Kind == TypeKind.Foreign` across function return/param/local types and class fields.)
 
 - [ ] **Step 3: Call the guard from the three non-C++ `Generate` entries**
 
