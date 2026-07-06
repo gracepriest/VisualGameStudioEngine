@@ -1,3 +1,4 @@
+using System.IO;
 using NUnit.Framework;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
@@ -16,6 +17,51 @@ namespace VisualGameStudio.Tests.Compiler;
 [TestFixture]
 public class CppPassthroughTests
 {
+    private string _tempDir = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), "BasicLang_CppPassthrough_" + Path.GetRandomFileName());
+        Directory.CreateDirectory(_tempDir);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        if (Directory.Exists(_tempDir))
+        {
+            try { Directory.Delete(_tempDir, true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// END-TO-END helper: drive the REAL BasicCompiler through CompileFile (which runs
+    /// the Preprocessor AND the CombineIRModules -> CombinedIR.CppIncludes.AddRange wiring
+    /// in Compiler.cs), then feed the resulting <c>CombinedIR</c> to the C++ backend.
+    /// This exercises the actual compiler join that the manual CompileToCppFull helper
+    /// bypasses. Returns generated C++ (or null with populated errors on failure).
+    /// </summary>
+    private string? CompileFileToCpp(string source, out List<string> errors)
+    {
+        errors = new List<string>();
+
+        var path = Path.Combine(_tempDir, "Program.bas");
+        File.WriteAllText(path, source);
+
+        // Fresh compiler per compile - the module registry is stateful.
+        var result = new BasicCompiler().CompileFile(path);
+        if (result.AllErrors.Count > 0 || result.CombinedIR == null)
+        {
+            foreach (var e in result.AllErrors) errors.Add(e.Message);
+            if (result.CombinedIR == null) errors.Add("CombinedIR was null");
+            return null;
+        }
+
+        // Generate from the SAME module instance the real compiler populated.
+        return new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false }).Generate(result.CombinedIR);
+    }
+
     /// <summary>
     /// Helper: compile BasicLang source to C++ output, running the Preprocessor FIRST
     /// so that <c>#CppInclude</c> directives (collected during preprocessing) are
@@ -125,5 +171,70 @@ public class CppPassthroughTests
         Assert.That(string.Join("; ", pre.Errors.ConvertAll(e => e.Message)),
             Does.Contain("Cannot find include file"),
             "#Include of a missing file should error via the splicer, unchanged");
+    }
+
+    // ------------------------------------------------------------------
+    // END-TO-END: drive the REAL compiler (BasicCompiler.CompileFile), which
+    // runs the Preprocessor and the Compiler.cs CombineIRModules ->
+    // CombinedIR.CppIncludes.AddRange wiring. Proves the full join that the
+    // manual CompileToCppFull helper bypasses.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Cpp_CppInclude_EndToEndThroughRealCompiler_EmitsInclude()
+    {
+        var source = "#CppInclude <mutex>\nSub Main()\nEnd Sub";
+        var output = CompileFileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("#include <mutex>"),
+            "#CppInclude must survive the real compiler's CombineIRModules -> CombinedIR.CppIncludes join");
+    }
+
+    // ------------------------------------------------------------------
+    // Conditional gating: #CppInclude inside an INACTIVE #IfDef/#IfNDef block
+    // must NOT be collected; inside an ACTIVE block it must be. Only the
+    // header COLLECTION is gated - the directive line is still commented out.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Preprocessor_CppInclude_InInactiveConditional_NotCollected()
+    {
+        // WINDOWS is defined, so the #IfNDef WINDOWS block is INACTIVE.
+        var pre = new Preprocessor();
+        pre.Define("WINDOWS");
+        pre.Process("#IfNDef WINDOWS\n#CppInclude <unistd.h>\n#EndIf\nSub Main()\nEnd Sub", "test.bas");
+
+        Assert.That(pre.Errors, Is.Empty, string.Join("; ", pre.Errors.ConvertAll(e => e.Message)));
+        Assert.That(pre.CppIncludes, Is.Empty,
+            "#CppInclude inside an inactive conditional block must not be collected");
+    }
+
+    [Test]
+    public void Preprocessor_CppInclude_InActiveConditional_Collected()
+    {
+        // WINDOWS is NOT defined, so the #IfNDef WINDOWS block is ACTIVE.
+        var pre = new Preprocessor();
+        pre.Process("#IfNDef WINDOWS\n#CppInclude <unistd.h>\n#EndIf\nSub Main()\nEnd Sub", "test.bas");
+
+        Assert.That(pre.Errors, Is.Empty, string.Join("; ", pre.Errors.ConvertAll(e => e.Message)));
+        Assert.That(pre.CppIncludes, Has.Count.EqualTo(1));
+        Assert.That(pre.CppIncludes[0], Is.EqualTo("<unistd.h>"),
+            "#CppInclude inside an active conditional block must be collected");
+    }
+
+    // ------------------------------------------------------------------
+    // Dedup: duplicate #CppInclude lines emit exactly one #include line.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Cpp_DuplicateCppIncludes_EmittedOnce()
+    {
+        var source = "#CppInclude <mutex>\n#CppInclude <mutex>\nSub Main()\nEnd Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+
+        var occurrences = output!.Split(new[] { "#include <mutex>" }, System.StringSplitOptions.None).Length - 1;
+        Assert.That(occurrences, Is.EqualTo(1),
+            "duplicate #CppInclude <mutex> lines must produce exactly one #include <mutex>");
     }
 }

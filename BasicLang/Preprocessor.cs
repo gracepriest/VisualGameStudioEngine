@@ -132,14 +132,21 @@ namespace BasicLang.Compiler
                 // C++ #include; distinct from #Include which splices BasicLang source).
                 else if (trimmedLine.StartsWith("#CppInclude", StringComparison.OrdinalIgnoreCase))
                 {
-                    var angle = Regex.Match(trimmedLine, @"#CppInclude\s+<([^>]+)>", RegexOptions.IgnoreCase);
-                    var quote = Regex.Match(trimmedLine, "#CppInclude\\s+\"([^\"]+)\"", RegexOptions.IgnoreCase);
-                    if (angle.Success)
-                        _cppIncludes.Add("<" + angle.Groups[1].Value + ">");
-                    else if (quote.Success)
-                        _cppIncludes.Add("\"" + quote.Groups[1].Value + "\"");
-                    else
-                        _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #CppInclude syntax: {trimmedLine}" });
+                    // Only collect the header when inside an active conditional block, so
+                    // platform-gated headers (e.g. #IfNDef WINDOWS ... #CppInclude <unistd.h>)
+                    // are skipped when the guard is inactive. The directive line is always
+                    // commented out (regardless of conditional state) to preserve line numbers.
+                    if (IsConditionalActive())
+                    {
+                        var angle = Regex.Match(trimmedLine, @"#CppInclude\s+<([^>]+)>", RegexOptions.IgnoreCase);
+                        var quote = Regex.Match(trimmedLine, "#CppInclude\\s+\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                        if (angle.Success)
+                            _cppIncludes.Add("<" + angle.Groups[1].Value + ">");
+                        else if (quote.Success)
+                            _cppIncludes.Add("\"" + quote.Groups[1].Value + "\"");
+                        else
+                            _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #CppInclude syntax: {trimmedLine}" });
+                    }
                     result.AppendLine($"' {line}"); // Comment the directive out of the BasicLang source
                 }
                 else

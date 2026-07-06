@@ -253,7 +253,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // User #CppInclude passthrough headers. Each token already carries its
             // delimiters (<...> or "...") so angle-vs-quote form survives to emission.
-            foreach (var tok in module.CppIncludes)
+            // Distinct() removes duplicate/repeated headers while preserving first-seen order.
+            foreach (var tok in module.CppIncludes.Distinct())
             {
                 WriteLine($"#include {tok}");
             }
