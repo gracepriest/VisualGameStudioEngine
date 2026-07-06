@@ -13,7 +13,8 @@ the C++ standard library. Two concrete gaps:
 
 1. **No portable collections.** `List(Of T)`, `Dictionary(Of K, V)`, `HashSet(Of T)` are
    `TypeKind.Class` names the C++ capability checker rejects with
-   `".NET type 'List' — no C++ mapping exists"` (CppCapabilityChecker.cs:141). They work on
+   `".NET type '{name}' ({where}) — no C++ mapping exists for this type"`
+   (CppCapabilityChecker.cs:141; e.g. for `List`). They work on
    the C# backend but cannot lower to C++ at all. Real game/tool code needs data structures.
 2. **No C++ std passthrough.** There is no analog to "all of .NET is just there on C#." A
    user cannot pull in a C++ header and write `Dim m As std::mutex`. The two existing foreign
@@ -95,6 +96,11 @@ full-platform passthrough (all of .NET on C#; all of `std::` on C++).
    emission. On any other backend → clean capability error. The existing `#Include`
    source-splicer is left completely untouched. Routed in `Preprocessor.cs` alongside the
    sibling `#`-directives.
+   *Backend-awareness note (the preprocessor runs before codegen):* the preprocessor is
+   invoked from `Compiler.cs` with the target backend already known, so `#CppInclude` is
+   resolved backend-aware at preprocess time — on a non-C++ target it raises the clean error
+   there; on C++ it records the header name for `_headerIncludes`. (Exact plumbing — direct
+   backend check vs. a normalized marker the backend rejects — settled in the plan.)
 
 9. **Foreign types = any `::`-qualified type name** (`std::mutex`, `std::deque`,
    `mylib::Widget`, `::GlobalThing` where a leading `::` denotes the C++ global namespace).
