@@ -141,6 +141,12 @@ namespace BasicLang.Compiler
                 {
                     result.CombinedIR = CombineIRModules(compilationOrder);
 
+                    // Thread #CppInclude passthrough headers (collected during
+                    // preprocessing across all units) onto the module the C++
+                    // backend generates from.
+                    if (result.CombinedIR != null)
+                        result.CombinedIR.CppIncludes.AddRange(_preprocessor.CppIncludes);
+
                     // Apply optimizations
                     if (result.CombinedIR != null)
                     {
@@ -263,6 +269,12 @@ namespace BasicLang.Compiler
                 // dependencies), not just the entry file's closure.
                 var allModuleIds = _registry.Modules.Select(u => u.Id).ToList();
                 result.CombinedIR = CombineIRModules(allModuleIds);
+
+                // Thread #CppInclude passthrough headers (collected during
+                // preprocessing across all units) onto the module the C++
+                // backend generates from.
+                if (result.CombinedIR != null)
+                    result.CombinedIR.CppIncludes.AddRange(_preprocessor.CppIncludes);
 
                 if (result.CombinedIR != null)
                 {

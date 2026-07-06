@@ -251,6 +251,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"#include <{include}>");
             }
 
+            // User #CppInclude passthrough headers. Each token already carries its
+            // delimiters (<...> or "...") so angle-vs-quote form survives to emission.
+            foreach (var tok in module.CppIncludes)
+            {
+                WriteLine($"#include {tok}");
+            }
+
             WriteLine();
             WriteLine("using namespace std;");
             WriteLine();

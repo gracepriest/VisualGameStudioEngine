@@ -1155,6 +1155,13 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public List<NetUsingDirective> NetUsings { get; set; }
 
+        /// <summary>
+        /// C++ headers from #CppInclude directives, as fully delimited tokens
+        /// (e.g. "&lt;mutex&gt;" or "\"grid.h\""). Emitted verbatim as #include lines
+        /// by the C++ backend. Ignored by all other backends.
+        /// </summary>
+        public List<string> CppIncludes { get; set; }
+
         public IRModule(string name)
         {
             Name = name;
@@ -1168,6 +1175,7 @@ namespace BasicLang.Compiler.IR
             Delegates = new Dictionary<string, IRDelegate>(StringComparer.OrdinalIgnoreCase);
             Namespaces = new List<string>();
             NetUsings = new List<NetUsingDirective>();
+            CppIncludes = new List<string>();
         }
 
         public IRFunction CreateFunction(string name, TypeInfo returnType)
