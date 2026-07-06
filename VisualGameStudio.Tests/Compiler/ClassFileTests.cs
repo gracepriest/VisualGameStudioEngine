@@ -444,6 +444,37 @@ Public Value As Integer
     }
 
     /// <summary>
+    /// Non-canonical forms are NOT the directive: the exact-match rule
+    /// (ModuleResolver.TryGetOptionPublicDirectiveLine, shared with the LSP)
+    /// requires the first code line to equal "Option Public" exactly. Extra
+    /// whitespace or a trailing comment leaves the line in the class body,
+    /// where it fails to parse — so the build must not silently succeed with a
+    /// public class. This pins the compiler side of the LSP parity fix.
+    /// </summary>
+    [Test]
+    public void OptionPublic_NonCanonicalForms_AreRejected()
+    {
+        foreach (var firstLine in new[] { "Option  Public", "Option\tPublic", "Option Public ' export it" })
+        {
+            var clsFilePath = Path.Combine(_tempDir, "NonCanon" + firstLine.GetHashCode().ToString("X") + ".cls");
+            File.WriteAllText(clsFilePath, firstLine + "\nPublic Value As Integer\n");
+
+            var compiler = new BasicCompiler();
+            var result = compiler.CompileFile(clsFilePath);
+
+            Assert.That(result.Success, Is.False,
+                $"'{firstLine}' is not the canonical directive; the build must not silently succeed");
+
+            var classNode = result.Units.FirstOrDefault()?.AST?.Declarations.OfType<ClassNode>().FirstOrDefault();
+            if (classNode != null)
+            {
+                Assert.That(classNode.Access, Is.EqualTo(BasicLang.Compiler.AST.AccessModifier.Private),
+                    $"'{firstLine}' must not be treated as a public-class directive");
+            }
+        }
+    }
+
+    /// <summary>
     /// A .cls class made public via Option Public is usable from a sibling file
     /// with no Import statement (project-files compilation).
     /// </summary>

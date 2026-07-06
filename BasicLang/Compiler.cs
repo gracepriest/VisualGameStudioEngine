@@ -714,35 +714,20 @@ namespace BasicLang.Compiler
             var source = unit.SourceCode ?? string.Empty;
             var className = Path.GetFileNameWithoutExtension(unit.FilePath);
 
-            // "Option Public" directive: the first code line (leading blank lines and
-            // ' / Rem comment lines are skipped) may be exactly "Option Public".
-            // The directive line is replaced in place by the class header so every
-            // line keeps its original number (LineOffset = 0); comments above the
-            // directive legally remain above the class declaration.
-            var lines = source.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            // "Option Public" directive: when the first code line is exactly
+            // "Option Public", replace that line in place with the class header
+            // so every line keeps its original number (LineOffset = 0); comments
+            // above the directive legally remain above the class declaration.
+            // The exact-match rule lives in ModuleResolver so the LSP's
+            // implicit-class parser applies the identical rule and the editor
+            // agrees with the build on which forms make the class public.
+            if (ModuleResolver.TryGetOptionPublicDirectiveLine(source, out int directiveLine))
             {
-                var content = lines[i].TrimEnd('\r');
-                if (i == 0)
-                    content = content.TrimStart('\uFEFF');
-                content = content.Trim();
-
-                if (content.Length == 0 || content.StartsWith("'"))
-                    continue;
-                if (content.Equals("Rem", StringComparison.OrdinalIgnoreCase) ||
-                    content.StartsWith("Rem ", StringComparison.OrdinalIgnoreCase) ||
-                    content.StartsWith("Rem\t", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                if (content.Equals("Option Public", StringComparison.OrdinalIgnoreCase))
-                {
-                    lines[i] = $"Public Class {className}";
-                    unit.SourceCode = string.Join("\n", lines) + "\nEnd Class\n";
-                    unit.LineOffset = 0;
-                    return;
-                }
-
-                break; // first code line is not the directive — legacy handling below
+                var lines = source.Split('\n');
+                lines[directiveLine] = $"Public Class {className}";
+                unit.SourceCode = string.Join("\n", lines) + "\nEnd Class\n";
+                unit.LineOffset = 0;
+                return;
             }
 
             // Legacy: bare "Public" keyword as the first content of the file (deprecated).

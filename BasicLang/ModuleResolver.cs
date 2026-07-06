@@ -28,6 +28,67 @@ namespace BasicLang.Compiler
             return ClassFileExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// Determine whether a .cls source begins with the canonical
+        /// <c>Option Public</c> directive: the FIRST code line (leading blank
+        /// lines and <c>'</c> / <c>Rem</c> comment lines are skipped) must equal
+        /// <c>"Option Public"</c> EXACTLY — single space, case-insensitive, with
+        /// no trailing text.
+        ///
+        /// This is the single source of truth for the rule shared by the
+        /// compiler (BasicCompiler.PreprocessClassFile, which replaces the
+        /// directive line with the class header) and the LSP implicit-class
+        /// parser (via <see cref="Compiler.ImplicitContainer"/>). Keeping both
+        /// on this one method guarantees the editor and <c>BasicLang.exe build</c>
+        /// agree on which forms make the implicit class public — non-canonical
+        /// forms such as <c>"Option  Public"</c> (extra whitespace) or
+        /// <c>"Option Public ' note"</c> (trailing comment) are rejected by both.
+        /// </summary>
+        /// <param name="lineIndex">
+        /// 0-based index of the directive line when the method returns true; -1 otherwise.
+        /// </param>
+        public static bool TryGetOptionPublicDirectiveLine(string source, out int lineIndex)
+        {
+            lineIndex = -1;
+            if (string.IsNullOrEmpty(source))
+                return false;
+
+            var lines = source.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var content = lines[i].TrimEnd('\r');
+                if (i == 0)
+                    content = content.TrimStart((char)0xFEFF); // strip UTF-8 BOM
+                content = content.Trim();
+
+                if (content.Length == 0 || content.StartsWith("'"))
+                    continue;
+                if (content.Equals("Rem", StringComparison.OrdinalIgnoreCase) ||
+                    content.StartsWith("Rem ", StringComparison.OrdinalIgnoreCase) ||
+                    content.StartsWith("Rem\t", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (content.Equals("Option Public", StringComparison.OrdinalIgnoreCase))
+                {
+                    lineIndex = i;
+                    return true;
+                }
+
+                // First code line is not the directive — not present.
+                return false;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// True when the .cls source's first code line is exactly the canonical
+        /// <c>Option Public</c> directive. See
+        /// <see cref="TryGetOptionPublicDirectiveLine"/> for the exact rule.
+        /// </summary>
+        public static bool HasOptionPublicDirective(string source) =>
+            TryGetOptionPublicDirectiveLine(source, out _);
+
         public IReadOnlyList<string> SearchPaths => _searchPaths;
 
         public ModuleResolver()

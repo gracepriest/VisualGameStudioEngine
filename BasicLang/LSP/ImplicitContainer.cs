@@ -88,9 +88,14 @@ namespace BasicLang.Compiler.LSP
             if (string.IsNullOrEmpty(name))
                 return parser.Parse();
 
+            // Compiler parity: whether the ".cls" is public is decided from the
+            // RAW source (ModuleResolver owns the exact-match rule shared with
+            // PreprocessClassFile), not from the parser's normalized token stream
+            // which hides the extra whitespace / trailing comments that make the
+            // compiler reject a non-canonical "Option Public" line.
             return kind == ImplicitContainerKind.Module
                 ? parser.ParseAsImplicitModule(name)
-                : parser.ParseAsImplicitClass(name);
+                : parser.ParseAsImplicitClass(name, ModuleResolver.HasOptionPublicDirective(content));
         }
 
         private static bool StartsWithKeyword(string content, string keyword)

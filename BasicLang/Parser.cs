@@ -376,7 +376,17 @@ namespace BasicLang.Compiler
         /// class public (default is Private); leading Inherits/Implements
         /// clauses apply to the implicit class.
         /// </summary>
-        public ProgramNode ParseAsImplicitClass(string className)
+        /// <param name="hasOptionPublicDirective">
+        /// Whether the raw source's first code line is exactly the canonical
+        /// "Option Public" directive, as determined by
+        /// <see cref="ModuleResolver.HasOptionPublicDirective"/>. The parser
+        /// works on a normalized token stream that hides extra whitespace and
+        /// drops comments, so it CANNOT tell "Option Public" apart from the
+        /// compiler-rejected "Option  Public" / "Option Public ' note" forms on
+        /// its own — the caller decides from the raw text so the editor and
+        /// <c>BasicLang.exe build</c> agree.
+        /// </param>
+        public ProgramNode ParseAsImplicitClass(string className, bool hasOptionPublicDirective)
         {
             var program = new ProgramNode(1, 1);
             var node = new ClassNode(1, 1) { Name = className };
@@ -386,7 +396,11 @@ namespace BasicLang.Compiler
             // Compiler parity: the "Option Public" directive as the first code
             // line makes the class public (PreprocessClassFile replaces it in
             // place); the bare "Public" first line is the deprecated legacy form.
-            if (Check(TokenType.Identifier) &&
+            // Honor the directive only when the raw source matches the compiler's
+            // exact-match rule — the token check alone would also accept the
+            // non-canonical forms the build rejects.
+            if (hasOptionPublicDirective &&
+                Check(TokenType.Identifier) &&
                 string.Equals(Peek().Lexeme, "Option", StringComparison.OrdinalIgnoreCase) &&
                 PeekNext().Type == TokenType.Public &&
                 (_current + 2 >= _tokens.Count ||

@@ -287,6 +287,54 @@ public class ModClsDocumentTests
     }
 
     // ------------------------------------------------------------------
+    // Compiler parity: NON-canonical "Option Public" forms must be rejected.
+    // The compiler's authority (PreprocessClassFile) requires the first code
+    // line to EQUAL "Option Public" exactly (single space, no trailing text).
+    // Token normalization hides double spaces and drops trailing comments, so
+    // a naive token check would silently make the editor's class public while
+    // `BasicLang.exe build` fails on the same file. These pin that the LSP
+    // does NOT honor the directive for forms the compiler rejects.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ClsFile_OptionPublicWithExtraSpaces_NotTreatedAsPublicDirective()
+    {
+        // "Option  Public" (two spaces) is not the canonical directive: the
+        // compiler leaves it in the body and the build fails. The LSP must not
+        // silently mark the class public.
+        var source =
+            "Option  Public\n" +               // non-canonical: double space
+            "Private _x As Integer\n" +
+            "Public Sub Go()\n" +
+            "End Sub\n";
+        var state = CreateParsedState(source, "Thing.cls");
+
+        var cls = state.AST!.Declarations.OfType<ClassNode>().FirstOrDefault();
+        Assert.That(cls, Is.Not.Null);
+        Assert.That(cls!.Access, Is.EqualTo(AccessModifier.Private),
+            "a non-canonical 'Option  Public' (double space) must NOT make the class public; got: " + Dump(state));
+    }
+
+    [Test]
+    public void ClsFile_OptionPublicWithTrailingComment_NotTreatedAsPublicDirective()
+    {
+        // "Option Public ' note" is not the canonical directive: the trailing
+        // comment means the trimmed line no longer equals "Option Public", so
+        // the compiler rejects it. The lexer drops the comment token, so the
+        // LSP must consult the raw source to match.
+        var source =
+            "Option Public ' export it\n" +    // non-canonical: trailing comment
+            "Public Sub Go()\n" +
+            "End Sub\n";
+        var state = CreateParsedState(source, "Thing.cls");
+
+        var cls = state.AST!.Declarations.OfType<ClassNode>().FirstOrDefault();
+        Assert.That(cls, Is.Not.Null);
+        Assert.That(cls!.Access, Is.EqualTo(AccessModifier.Private),
+            "a non-canonical 'Option Public <comment>' must NOT make the class public; got: " + Dump(state));
+    }
+
+    // ------------------------------------------------------------------
     // Cross-file: sibling .cls/.mod symbols reach other documents
     // ------------------------------------------------------------------
 
