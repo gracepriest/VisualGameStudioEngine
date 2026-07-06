@@ -45,21 +45,31 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// </summary>
     public class CppCapabilityChecker
     {
-        // Types CppTypeMapper can map (keep in sync with CppTypeMapper.InitializeTypeMappings)
+        // Primitives the C++ backend can lower. INVARIANT: this must be exactly the key
+        // set of CppTypeMapper._typeMap (TypeMapper.cs InitializeTypeMappings), MINUS
+        // 'Object' — which IS a _typeMap key (mapped to void*) but is deliberately
+        // rejected below because void* erasure is unsound. Any name NOT in this set,
+        // not a supported generic (List/Dictionary/HashSet/Task/IEnumerable/Func/Action),
+        // and not a '::' foreign type is rejected (via the class-kind check or the
+        // UnmappedNetTypes list). Note: SByte and Decimal are NOT mapped by CppTypeMapper,
+        // so they must NOT appear here — they are rejected via UnmappedNetTypes.
         private static readonly HashSet<string> MappedTypeNames = new(StringComparer.OrdinalIgnoreCase)
         {
             "Integer", "Long", "Single", "Double", "String", "Boolean", "Char", "Void",
-            "Byte", "Short", "SByte", "UByte", "UShort", "UInteger", "ULong", "Decimal"
+            "Byte", "Short", "UByte", "UShort", "UInteger", "ULong"
         };
 
-        // Common .NET types the C++ backend has NO mapping for. Rejected regardless of
-        // TypeKind — the semantic analyzer sometimes leaves these as Kind.Primitive in
-        // signature positions (e.g. an interface method's `As DateTime` return), where
-        // the class-kind gate below would otherwise let them slip past. Listing them
-        // explicitly (like 'Object') keeps the rejection Kind-independent with zero
-        // false-positive risk: none of these has any valid C++ lowering anywhere.
+        // .NET types the C++ backend has NO mapping for. Rejected regardless of TypeKind —
+        // the semantic analyzer sometimes leaves these as Kind.Primitive in signature
+        // positions (e.g. an interface method's `As DateTime` return), where the class-kind
+        // gate below would otherwise let them slip past. Listing them explicitly (like
+        // 'Object') keeps the rejection Kind-independent with zero false-positive risk:
+        // none of these has any valid C++ lowering. Decimal and SByte are here because
+        // CppTypeMapper does not map them — without a clean rejection, `Dim x As Decimal`
+        // would emit a bare, undefined C++ type `Decimal` (silent miscompile).
         private static readonly HashSet<string> UnmappedNetTypes = new(StringComparer.OrdinalIgnoreCase)
         {
+            "Decimal", "SByte",
             "DateTime", "DateTimeOffset", "TimeSpan", "Guid", "StringBuilder", "Regex",
             "Uri", "Stream", "FileInfo", "DirectoryInfo"
         };

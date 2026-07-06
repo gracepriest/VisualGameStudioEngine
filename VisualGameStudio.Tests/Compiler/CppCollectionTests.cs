@@ -503,4 +503,31 @@ Sub Main()
 End Sub";
         Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
     }
+
+    [Test]
+    public void Cpp_DecimalLocal_StillRejected()
+    {
+        // Decimal is NOT mapped by CppTypeMapper — it must be rejected cleanly. If it
+        // were (wrongly) in MappedTypeNames it would pass the check and then MapType
+        // would emit a bare, UNDEFINED C++ type `Decimal` (silent miscompile).
+        var source = @"
+Sub Main()
+    Dim x As Decimal
+End Sub";
+        Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
+    }
+
+    [Test]
+    public void Cpp_InterfaceMethodDecimalReturnType_StillRejected()
+    {
+        // Same, in an interface signature position (M1 context): Decimal has no C++
+        // mapping, so a `Function Foo() As Decimal` on an interface must reject cleanly.
+        var source = @"
+Interface IMoney
+    Function Balance() As Decimal
+End Interface
+Sub Main()
+End Sub";
+        Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
+    }
 }
