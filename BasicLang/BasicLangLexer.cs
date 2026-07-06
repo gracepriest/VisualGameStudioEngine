@@ -299,6 +299,7 @@ namespace BasicLang.Compiler
         Comma,
         Dot,
         Colon,
+        ScopeResolution,   // '::' — C++ scope operator, e.g. std::mutex (foreign passthrough types)
         Semicolon,
         Apostrophe,
         Caret,
@@ -625,7 +626,15 @@ namespace BasicLang.Compiler
                 case '}': AddToken(TokenType.RightBrace, "}", null, startLine, startColumn); break;
                 case ',': AddToken(TokenType.Comma, ",", null, startLine, startColumn); break;
                 case '.': AddToken(TokenType.Dot, ".", null, startLine, startColumn); break;
-                case ':': AddToken(TokenType.Colon, ":", null, startLine, startColumn); break;
+                case ':':
+                    // '::' is the C++ scope operator (foreign ::-qualified type names,
+                    // e.g. std::mutex). A single ':' remains a statement separator / label
+                    // colon — only the doubled form becomes ScopeResolution.
+                    if (Match(':'))
+                        AddToken(TokenType.ScopeResolution, "::", null, startLine, startColumn);
+                    else
+                        AddToken(TokenType.Colon, ":", null, startLine, startColumn);
+                    break;
                 case ';': AddToken(TokenType.Semicolon, ";", null, startLine, startColumn); break;
                 case '^': AddToken(TokenType.Caret, "^", null, startLine, startColumn); break;
                 case '~': AddToken(TokenType.BitwiseNot, "~", null, startLine, startColumn); break;

@@ -2526,14 +2526,41 @@ namespace BasicLang.Compiler
             {
                 typeName = Advance().Lexeme;
             }
-            else if (Check(TokenType.Identifier))
+            else if (Check(TokenType.Identifier) || Check(TokenType.ScopeResolution))
             {
-                // Parse potentially dotted type name (e.g., System.IO.File, System.Text.StringBuilder)
-                var typeNameBuilder = new System.Text.StringBuilder(Advance().Lexeme);
-                while (Match(TokenType.Dot))
+                // Parse a potentially dotted (.NET) or ::-qualified (foreign C++) type name.
+                //   System.IO.File          -> "System.IO.File"
+                //   std::unordered_map      -> "std::unordered_map"
+                //   ::GlobalType            -> "::GlobalType"   (leading global scope)
+                // The '::' segments are stitched into one type-name string; the Task-2
+                // MapType foreign branch (name.Contains("::")) emits them verbatim.
+                var typeNameBuilder = new System.Text.StringBuilder();
+                if (Match(TokenType.ScopeResolution))
                 {
-                    typeNameBuilder.Append('.');
-                    typeNameBuilder.Append(Consume(TokenType.Identifier, "Expected type name after '.'").Lexeme);
+                    // Leading '::' — a global-scope-qualified name.
+                    typeNameBuilder.Append("::");
+                    typeNameBuilder.Append(Consume(TokenType.Identifier, "Expected type name after '::'").Lexeme);
+                }
+                else
+                {
+                    typeNameBuilder.Append(Advance().Lexeme);
+                }
+                while (true)
+                {
+                    if (Match(TokenType.Dot))
+                    {
+                        typeNameBuilder.Append('.');
+                        typeNameBuilder.Append(Consume(TokenType.Identifier, "Expected type name after '.'").Lexeme);
+                    }
+                    else if (Match(TokenType.ScopeResolution))
+                    {
+                        typeNameBuilder.Append("::");
+                        typeNameBuilder.Append(Consume(TokenType.Identifier, "Expected type name after '::'").Lexeme);
+                    }
+                    else
+                    {
+                        break;
+                    }
                 }
                 typeName = typeNameBuilder.ToString();
             }

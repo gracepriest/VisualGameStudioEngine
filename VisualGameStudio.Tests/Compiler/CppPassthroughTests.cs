@@ -237,4 +237,94 @@ public class CppPassthroughTests
         Assert.That(occurrences, Is.EqualTo(1),
             "duplicate #CppInclude <mutex> lines must produce exactly one #include <mutex>");
     }
+
+    // ==================================================================
+    // Task 5 — ::-qualified opaque foreign C++ types.
+    //
+    // SPIKE FINDING (recorded per task instructions):
+    //   The lexer tokenizes ':' as a single TokenType.Colon; there is NO
+    //   multi-char '::' handling (BasicLangLexer.cs ScanToken). The Parser's
+    //   ParseTypeReference only stitches identifiers across TokenType.Dot,
+    //   so a bare "std::mutex" would parse the type name as just "std" and
+    //   leave "::mutex" dangling as Colon/Colon tokens (statement separators).
+    //   => a lexer + parser change WAS required. See ScopeResolution token in
+    //   BasicLangLexer.cs (emitted only for '::', so single ':' statement
+    //   separators / For-loop colons are untouched) and the "::" stitch loop
+    //   in Parser.ParseTypeReference. Confirmed by Cpp_Spike_ScopeResolution_*.
+    // ==================================================================
+
+    [Test]
+    public void Cpp_Spike_ScopeResolution_ParsesAsSingleTypeName()
+    {
+        // Probe: does "Dim m As std::mutex" carry "std::mutex" as one type name?
+        var source = "#CppInclude <mutex>\nSub Main()\nDim m As std::mutex\nEnd Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::mutex m"),
+            "the '::'-qualified name must survive lexing+parsing as a single type name");
+    }
+
+    [Test]
+    public void Cpp_ForeignType_OpaquePassthrough_CompilesAndRuns()
+    {
+        var source = @"
+#CppInclude <mutex>
+Sub Main()
+    Dim m As std::mutex
+    m.lock()
+    m.unlock()
+    Console.WriteLine(""ok"")
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::mutex m"));    // value decl, not shared_ptr
+        Assert.That(output, Does.Contain("m.lock()"));         // opaque passthrough with '.'
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        Assert.That(VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(output, compiler.Value).Replace("\r\n", "\n"), Is.EqualTo("ok\n"));
+    }
+
+    [Test]
+    public void Cpp_ForeignTemplateType_MapsAngleBrackets()
+    {
+        var source = @"
+#CppInclude <deque>
+Sub Main()
+    Dim q As std::deque(Of Integer)
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::deque<int32_t>"));
+    }
+
+    [Test]
+    public void Cpp_ForeignType_NoCapabilityError_OnCppBackend()
+    {
+        // A ::-qualified foreign type must NOT trip the C++ capability checker
+        // (which permanently rejects unmapped .NET types like List/Dictionary).
+        var source = @"
+#CppInclude <mutex>
+Sub Main()
+    Dim m As std::mutex
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+    }
+
+    [Test]
+    public void Cpp_ForeignType_ChainedMemberAccess_StaysOpaque()
+    {
+        // a.b.c on a foreign receiver must remain opaque all the way down
+        // (no "type does not have a member" error at any link).
+        var source = @"
+#CppInclude <mutex>
+Sub Main()
+    Dim m As std::mutex
+    m.foo().bar()
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("m.foo().bar()"));
+    }
 }

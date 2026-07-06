@@ -1673,6 +1673,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return tupleType;
             }
 
+            // ::-qualified foreign C++ passthrough type (e.g. std::mutex,
+            // std::deque(Of Integer), ::GlobalType). Handled here — ahead of the
+            // pointer/array/generic/type-manager paths — so a foreign name never
+            // degrades to Object via CreateGenericType/IsNetType. Generic arguments
+            // are resolved recursively and carried on the TypeInfo so the C++
+            // backend's MapType foreign branch emits std::deque<int32_t>.
+            if (typeRef.Name != null && typeRef.Name.Contains("::"))
+            {
+                var foreignType = new TypeInfo(typeRef.Name, TypeKind.Foreign);
+                if (typeRef.GenericArguments.Count > 0)
+                {
+                    foreignType.GenericArguments.AddRange(
+                        typeRef.GenericArguments.Select(ResolveTypeReference));
+                }
+                if (typeRef.IsNullable)
+                {
+                    foreignType.IsNullable = true;
+                }
+                return foreignType;
+            }
+
             // Handle pointer types
             if (typeRef.IsPointer)
             {
@@ -1755,6 +1776,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private TypeInfo ResolveTypeName(string name)
         {
+            // ::-qualified foreign C++ passthrough type (e.g. std::mutex, ::GlobalType).
+            // These are opaque: the compiler never checks their members and the C++
+            // backend emits them verbatim as value types (CppCodeGenerator.MapType's
+            // foreign branch). Resolve BEFORE any scope/type-manager lookup so a stray
+            // symbol named "std" can never shadow the foreign name.
+            if (name != null && name.Contains("::"))
+            {
+                return new TypeInfo(name, TypeKind.Foreign);
+            }
+
             // First, check if it's a type parameter in the current scope
             var symbol = _currentScope.Resolve(name);
             if (symbol != null && symbol.Kind == SymbolKind.TypeParameter)
@@ -5179,6 +5210,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else if (ResolveCollectionMemberType(objectType, node.MemberName) is { } collMemberType)
             {
                 SetNodeType(node, collMemberType);
+            }
+            else if (objectType.Kind == TypeKind.Foreign)
+            {
+                // Opaque member access on a ::-qualified foreign C++ type. The compiler
+                // never checks these members (it can't see the C++ type); it types the
+                // access as another Foreign so the C++ backend emits it verbatim with '.'
+                // and chained access (a.b.c / m.foo().bar()) stays opaque recursively.
+                SetNodeType(node, new TypeInfo(objectType.Name + "::" + node.MemberName, TypeKind.Foreign));
             }
             else if (IsNetType(objectType.Name))
             {

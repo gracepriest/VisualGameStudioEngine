@@ -25,6 +25,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         // The IR types them as Object, so the generator tracks them itself to
         // declare the temps correctly and route ToString to FormatTime.
         private readonly HashSet<IRValue> _dateTimeValues = new HashSet<IRValue>();
+        // Foreign ::-qualified instance method calls that are the RECEIVER of another
+        // member access (e.g. the inner m.foo() in m.foo().bar()). These are rendered
+        // inline as expressions by GetValueName and must NOT also emit a standalone
+        // statement, so chained opaque access collapses to one C++ expression.
+        private readonly HashSet<IRValue> _inlinedForeignCalls = new HashSet<IRValue>();
         private bool _usesFramework;
         private readonly HashSet<string> _frameworkFunctionsUsed;
         private IRModule _module;
@@ -586,6 +591,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 if (lambdaFunc != null)
                     return GenerateLambdaExpression(lambdaFunc);
             }
+
+            // A foreign ::-qualified instance method call has no valid C++ temp type,
+            // so anything consuming its value renders the call inline as an expression
+            // (this is how m.foo().bar() and any foreign-result use stay opaque).
+            if (value is IRInstanceMethodCall foreignCall && foreignCall.Type?.Kind == TypeKind.Foreign)
+                return RenderForeignMethodCall(foreignCall);
 
             // The IRBuilder names result values after their assignment target (an IRAwait
             // named "x" for `Dim x = Await ...`, an IRBinaryOp named "total" for
@@ -1198,6 +1209,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // Collect temporaries (values that aren't named destinations)
             _dateTimeValues.Clear();
+            _inlinedForeignCalls.Clear();
             foreach (var block in function.Blocks)
             {
                 foreach (var instruction in block.Instructions)
@@ -1206,6 +1218,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // ToString → FormatTime routing (IR types them as Object).
                     if (instruction is IRFieldAccess fa && IsDateTimeNowAccess(fa))
                         _dateTimeValues.Add(fa);
+
+                    // A member access whose receiver is a foreign ::-qualified instance
+                    // method call inlines that inner call (m.foo().bar() → one expression).
+                    var receiver = ForeignCallReceiverOf(instruction);
+                    if (receiver != null)
+                        _inlinedForeignCalls.Add(receiver);
 
                     if (instruction is IRValue value && !(value is IRConstant))
                     {
@@ -1216,6 +1234,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// If <paramref name="instruction"/> accesses a member of a foreign ::-qualified
+        /// instance method call (i.e. its receiver is itself such a call), return that
+        /// inner call — it will be rendered inline rather than as a standalone statement.
+        /// </summary>
+        private static IRValue ForeignCallReceiverOf(IRInstruction instruction)
+        {
+            IRValue receiver = instruction switch
+            {
+                IRInstanceMethodCall mc => mc.Object,
+                IRFieldAccess fa => fa.Object,
+                IRFieldStore fs => fs.Object,
+                _ => null
+            };
+            return receiver is IRInstanceMethodCall inner && inner.Type?.Kind == TypeKind.Foreign
+                ? receiver
+                : null;
         }
 
         private static bool IsDateTimeNowAccess(IRFieldAccess fieldAccess) =>
@@ -1232,15 +1269,29 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var localName = SanitizeName(local.Name);
                 if (localType != "void")
                 {
-                    var defaultVal = GetDefaultValue(local.Type);
-                    WriteLine($"{localType} {localName} = {defaultVal};");
+                    // Foreign ::-qualified types (e.g. std::mutex) are opaque: default-construct
+                    // with a plain declaration. A copy-list-init `= {}` would break non-copyable
+                    // std types, and we can't know a foreign type's initializer shape anyway.
+                    if (local.Type?.Kind == TypeKind.Foreign)
+                    {
+                        WriteLine($"{localType} {localName};");
+                    }
+                    else
+                    {
+                        var defaultVal = GetDefaultValue(local.Type);
+                        WriteLine($"{localType} {localName} = {defaultVal};");
+                    }
                 }
             }
 
             // Declare temporaries with proper typing (skip void types; exception objects
-            // are consumed at the throw site and never materialize as C++ values)
+            // are consumed at the throw site and never materialize as C++ values).
+            // Foreign ::-qualified result temps are skipped too: a foreign member call's
+            // pseudo-type (e.g. "std::mutex::lock") is not a real C++ type, so it can't be
+            // declared — Visit(IRInstanceMethodCall) emits those calls as bare statements.
             var tempsByType = _allTemporaries
                 .Where(t => t.Type?.Name != "Void" && MapType(t.Type) != "void")
+                .Where(t => t.Type?.Kind != TypeKind.Foreign)
                 .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name))
                 .GroupBy(t => _dateTimeValues.Contains(t) ? "std::time_t" : MapType(t.Type))
                 .ToList();
@@ -2243,6 +2294,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRInstanceMethodCall methodCall)
         {
+            // A foreign ::-qualified member call is opaque: the compiler can't know whether
+            // it returns void or a value (its result type is a synthetic "T::member" Foreign
+            // type, not a real C++ type). It is rendered inline by RenderForeignMethodCall.
+            if (methodCall.Type?.Kind == TypeKind.Foreign)
+            {
+                // When this call feeds an outer member access (the inner m.foo() in
+                // m.foo().bar()) it is inlined there — don't also emit it as a statement.
+                if (_inlinedForeignCalls.Contains(methodCall))
+                    return;
+                WriteLine($"{RenderForeignMethodCall(methodCall)};");
+                return;
+            }
+
             var obj = GetValueName(methodCall.Object);
 
             // .NET-surface shim: ToString has no C++ counterpart — lower it by
@@ -2264,6 +2328,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"{obj}{op}{methodName}({args});");
             else
                 WriteLine($"{GetValueName(methodCall)} = {obj}{op}{methodName}({args});");
+        }
+
+        /// <summary>
+        /// Render a foreign ::-qualified instance method call as an inline C++ expression
+        /// (obj.method(args)). Chained calls collapse recursively: the receiver of an
+        /// inlined inner foreign call is itself rendered inline, so m.foo().bar() emits
+        /// as a single opaque expression rather than being split across temp statements.
+        /// </summary>
+        private string RenderForeignMethodCall(IRInstanceMethodCall methodCall)
+        {
+            var obj = methodCall.Object is IRInstanceMethodCall innerForeign
+                      && innerForeign.Type?.Kind == TypeKind.Foreign
+                ? RenderForeignMethodCall(innerForeign)
+                : GetValueName(methodCall.Object);
+            var op = MemberAccessOp(methodCall.Object);
+            var methodName = SanitizeName(methodCall.MethodName);
+            var args = string.Join(", ", methodCall.Arguments.Select(a => GetValueName(a)));
+            return $"{obj}{op}{methodName}({args})";
         }
 
         /// <summary>
