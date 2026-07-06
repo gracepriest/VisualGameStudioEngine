@@ -53,24 +53,11 @@ namespace BasicLang.Compiler.CodeGen
             }
 
             // (2) ::-qualified foreign types, and (3, LLVM/MSIL only) collections.
-            // Walk every type surface (function return/params/locals + class fields,
-            // recursing generic arguments and array element types).
-            foreach (var func in module.Functions ?? Enumerable.Empty<IRFunction>())
-            {
-                CheckType(func.ReturnType, backendName, rejectCollections);
-                if (func.Parameters != null)
-                    foreach (var p in func.Parameters)
-                        CheckType(p.Type, backendName, rejectCollections);
-                if (func.LocalVariables != null)
-                    foreach (var lv in func.LocalVariables)
-                        CheckType(lv.Type, backendName, rejectCollections);
-            }
-
-            if (module.Classes != null)
-                foreach (var cls in module.Classes.Values)
-                    if (cls.Fields != null)
-                        foreach (var fld in cls.Fields)
-                            CheckType(fld.Type, backendName, rejectCollections);
+            // Walk EVERY type-bearing position in the module (functions, globals,
+            // class members, interface signatures) via the shared ModuleTypeWalker,
+            // recursing generic arguments and array element types at each one.
+            foreach (var type in ModuleTypeWalker.AllTypes(module))
+                CheckType(type, backendName, rejectCollections);
         }
 
         private static void CheckType(TypeInfo type, string backendName, bool rejectCollections)

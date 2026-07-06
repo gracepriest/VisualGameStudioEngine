@@ -79,6 +79,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         CheckInstruction(inst, func.Name, diags);
             }
 
+            // Module-scope globals: a file-scope `Dim g As DateTime` (or any unmapped
+            // .NET type) must be rejected just like a function local would be. This
+            // position was previously unchecked — keep in sync with ForeignFeatureChecker
+            // / CppCodeGenerator.ModuleUsesCollections (all must visit globals).
+            if (module.GlobalVariables != null)
+                foreach (var gv in module.GlobalVariables.Values)
+                    CheckType(gv.Type, $"global '{gv.Name}'", diags);
+
+            // Class field types (also previously unchecked at module level).
+            if (module.Classes != null)
+                foreach (var cls in module.Classes.Values)
+                    if (cls.Fields != null)
+                        foreach (var fld in cls.Fields)
+                            CheckType(fld.Type, $"field '{fld.Name}' of '{cls.Name}'", diags);
+
             return diags.Distinct().ToList();
         }
 

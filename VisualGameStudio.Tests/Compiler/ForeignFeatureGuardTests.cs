@@ -191,6 +191,75 @@ public class ForeignFeatureGuardTests
     }
 
     // ------------------------------------------------------------------
+    // FILE-SCOPE (module global) bypass regression: a Dim moved from inside a
+    // Sub to module scope becomes an IRModule.GlobalVariable, which the type walk
+    // must also visit. Otherwise LLVM/MSIL silently emit broken code.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void LLVM_ModuleGlobalCollection_ThrowsCleanError()
+    {
+        // Module-level Dim -> IRModule.GlobalVariables. The declared List type must
+        // still trip the guard even though no function local carries it.
+        var module = BuildModule(
+            "Dim g As List(Of Integer)\nSub Main()\nEnd Sub",
+            runPreprocessor: false);
+        Assert.That(module.GlobalVariables, Is.Not.Empty,
+            "sanity: a module-level Dim must land in GlobalVariables");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("List"));
+    }
+
+    [Test]
+    public void MSIL_ModuleGlobalCollection_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Dim g As List(Of Integer)\nSub Main()\nEnd Sub",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("List"));
+    }
+
+    [Test]
+    public void LLVM_ModuleGlobalForeignType_ThrowsCleanError()
+    {
+        // Module-level ::-qualified foreign type global.
+        var module = BuildModule(
+            "#CppInclude <mutex>\nDim g As std::mutex\nSub Main()\ng.lock()\nEnd Sub",
+            runPreprocessor: true);
+
+        // (#CppInclude is present too, but this asserts the foreign-type-in-global
+        // walk specifically; either reject reason is acceptable so long as it throws.)
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+    }
+
+    [Test]
+    public void LLVM_ModuleGlobalForeignType_NoCppInclude_ThrowsCleanError()
+    {
+        // Foreign-type global WITHOUT #CppInclude, so the ONLY thing that can trip
+        // the guard is the GlobalVariables type walk (proves the global walk, not
+        // the CppIncludes check, is what rejects).
+        var module = BuildModule(
+            "Dim g As std::mutex\nSub Main()\ng.lock()\nEnd Sub",
+            runPreprocessor: false);
+        Assert.That(module.CppIncludes, Is.Empty, "sanity: no #CppInclude present");
+        Assert.That(module.GlobalVariables, Is.Not.Empty);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("std::mutex"));
+    }
+
+    // ------------------------------------------------------------------
     // REGRESSION: the plain #Include source splicer is UNTOUCHED by the guard.
     // The guard only rejects #CppInclude / :: foreign / collections; a #Include
     // of a BasicLang source file must still textually splice its content in.

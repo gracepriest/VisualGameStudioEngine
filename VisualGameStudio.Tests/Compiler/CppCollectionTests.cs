@@ -416,4 +416,59 @@ End Sub";
         Assert.That(output, Does.Contain(".Get("));  // read lowers to throwing .Get(k)
         Assert.That(CompileRun(output), Is.EqualTo("CAUGHT\n"));
     }
+
+    // ========================================================================
+    // FILE-SCOPE (module global) coverage: a collection declared at module scope
+    // lands in IRModule.GlobalVariables — a position ModuleUsesCollections used to
+    // miss, so the wrapper preamble was omitted and the emitted global referenced
+    // an undefined type (broken C++).
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ModuleGlobalCollection_EmitsWrapperPreamble()
+    {
+        // The List type appears ONLY on a module-level global (no function local
+        // carries it) — the preamble must still be emitted.
+        var source = @"
+Dim g As List(Of Integer)
+Sub Main()
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("BasicLang::List<int32_t>"));
+        Assert.That(output, Does.Contain("class List"),
+            "a file-scope collection global must still trigger the wrapper preamble");
+    }
+
+    [Test]
+    public void Cpp_ModuleGlobalCollection_CompilesAndRuns()
+    {
+        // End-to-end: a module-global List is populated and read inside Main.
+        // Before the ModuleUsesCollections globals fix this produced C++ that
+        // referenced BasicLang::List with no preamble and failed to compile.
+        var source = @"
+Dim g As List(Of Integer)
+Sub Main()
+    g.Add(10)
+    g.Add(20)
+    Console.WriteLine(g.Count)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("class List"));
+        Assert.That(CompileRun(output), Is.EqualTo("2\n"));
+    }
+
+    [Test]
+    public void Cpp_ModuleGlobalUnmappedType_StillRejected()
+    {
+        // A file-scope `Dim g As DateTime` global (unmapped .NET type) must still
+        // trip the C++ capability checker — the globals position was previously
+        // unchecked and would have bypassed the rejection.
+        var source = @"
+Dim g As DateTime
+Sub Main()
+End Sub";
+        Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
+    }
 }

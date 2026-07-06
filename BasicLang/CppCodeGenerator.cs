@@ -306,22 +306,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return IsColl(t.ElementType);
             }
 
-            foreach (var f in module.Functions)
-            {
-                if (IsColl(f.ReturnType)) return true;
-                if (f.Parameters.Any(p => IsColl(p.Type))) return true;
-                if (f.LocalVariables.Any(lv => IsColl(lv.Type))) return true;
+            // Every type-bearing position in the module (functions, GLOBALS, class
+            // members, interfaces) via the shared walker — keep in sync with
+            // ForeignFeatureChecker / CppCapabilityChecker. Previously this missed
+            // module.GlobalVariables, so a file-scope `Dim g As List(Of Integer)`
+            // emitted `BasicLang::List<...> g;` with no runtime preamble (broken C++).
+            if (ModuleTypeWalker.AllTypes(module).Any(IsColl)) return true;
 
-                // Fallback: `New List(...)` construction in the body.
+            // Fallback: `New List(...)` construction in a function body (a temporary/
+            // local may not carry the collection type on its declared local).
+            foreach (var f in module.Functions)
                 foreach (var block in f.Blocks)
                     foreach (var instr in block.Instructions)
                         if (instr is IRNewObject no
                             && (no.ClassName == "List" || no.ClassName == "Dictionary" || no.ClassName == "HashSet"))
                             return true;
-            }
-
-            foreach (var c in module.Classes.Values)
-                if (c.Fields.Any(fld => IsColl(fld.Type))) return true;
 
             return false;
         }
