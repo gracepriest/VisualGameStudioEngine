@@ -64,6 +64,11 @@ public class CppCollectionsRuntimeTests
         var stdout = CppCompile.CompileAndRun(program, compiler!.Value);
         var normalized = stdout.Replace("\r\n", "\n");
 
-        Assert.That(normalized, Is.EqualTo("3 20 1\n2 1 1 2 1\n1\n1 0 1 1\n"));
+        var expected =
+            "3 20 1\n" +       // List: Count() [1] Contains(20)
+            "2 1 1 2 1\n" +    // Dictionary: Count() ContainsKey("a") TryGetValue ok, got, Get("a")
+            "1\n" +            // Dictionary: Get("missing") threw
+            "1 0 1 1\n";       // HashSet: Add(5) Add(5) Contains(5) Count()
+        Assert.That(normalized, Is.EqualTo(expected));
     }
 }
