@@ -274,7 +274,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             bool IsColl(TypeInfo t)
             {
                 if (t == null) return false;
-                if (t.Name == "List" || t.Name == "Dictionary" || t.Name == "HashSet") return true;
+                // Case-insensitive: BasicLang is VB-style and TypeInfo.Name preserves source
+                // casing, so `list`/`LIST` must match the same as `List`.
+                if (string.Equals(t.Name, "List", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(t.Name, "Dictionary", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(t.Name, "HashSet", StringComparison.OrdinalIgnoreCase)) return true;
                 if (t.GenericArguments != null && t.GenericArguments.Any(IsColl)) return true;
                 return IsColl(t.ElementType);
             }
@@ -346,6 +350,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private void EmitRuntimePreamble(bool hasAsync, bool hasIterators, bool usesCollections)
         {
+            // Only open the async/iterator namespace when there is something to put in it;
+            // otherwise a collections-only module would emit an empty `namespace BasicLang { }`.
+            if (hasAsync || hasIterators)
+            {
             WriteLine("namespace BasicLang {");
             Indent();
 
@@ -401,6 +409,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             Unindent();
             WriteLine("}");
             WriteLine();
+            }
 
             // The collections runtime opens its OWN `namespace BasicLang { … }`, so it is
             // emitted OUTSIDE the block just closed above (a sibling namespace re-open) to
@@ -500,11 +509,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return type.Name;
             }
             // Everyday collections -> BasicLang wrappers (value types, never shared_ptr).
-            if (type.Name == "List" && type.GenericArguments?.Count > 0)
+            // Match case-insensitively (VB-style) but always emit the canonical capitalized name.
+            if (string.Equals(type.Name, "List", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 0)
                 return $"BasicLang::List<{MapType(type.GenericArguments[0])}>";
-            if (type.Name == "Dictionary" && type.GenericArguments?.Count > 1)
+            if (string.Equals(type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 1)
                 return $"BasicLang::Dictionary<{MapType(type.GenericArguments[0])}, {MapType(type.GenericArguments[1])}>";
-            if (type.Name == "HashSet" && type.GenericArguments?.Count > 0)
+            if (string.Equals(type.Name, "HashSet", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 0)
                 return $"BasicLang::HashSet<{MapType(type.GenericArguments[0])}>";
 
             // IEnumerable(Of T) -> the coroutine generator (iterators are its only producer)
@@ -2177,7 +2187,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // Everyday collections construct as VALUE types (BasicLang::List<int32_t> etc.),
             // never std::make_shared — MapType routes the wrapper name and value semantics.
-            if (newObj.ClassName == "List" || newObj.ClassName == "Dictionary" || newObj.ClassName == "HashSet")
+            if (string.Equals(newObj.ClassName, "List", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(newObj.ClassName, "Dictionary", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(newObj.ClassName, "HashSet", StringComparison.OrdinalIgnoreCase))
             {
                 var cppType = MapType(newObj.Type);   // BasicLang::List<int32_t> etc.
                 var ctorArgs = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));

@@ -72,6 +72,23 @@ End Sub";
     }
 
     [Test]
+    public void Cpp_ListLocal_LowercaseName_StillMapsToCanonicalWrapper()
+    {
+        // BasicLang is case-insensitive; `list` must map exactly like `List` — never fall
+        // through to std::shared_ptr<list<...>> (an undefined type) with no preamble.
+        var source = @"
+Sub Main()
+    Dim l As New list(Of Integer)()
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("BasicLang::List<int32_t>"));
+        Assert.That(output, Does.Contain("class List"));                     // preamble emitted
+        Assert.That(output, Does.Not.Contain("std::shared_ptr<list"));
+        Assert.That(output, Does.Not.Contain("std::make_shared<list"));
+    }
+
+    [Test]
     public void Cpp_DictionaryLocal_MapsToBasicLangDictionaryValue()
     {
         var source = @"
