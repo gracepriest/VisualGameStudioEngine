@@ -52,7 +52,7 @@ public class CppCollectionTests
     /// Returns null and populates errors list if a pipeline stage fails.
     /// CppCapabilityException from the generator propagates to the caller.
     /// </summary>
-    private string CompileToCpp(string source, out List<string> errors)
+    private string? CompileToCpp(string source, out List<string> errors)
     {
         errors = new List<string>();
 
@@ -211,6 +211,51 @@ End Sub";
     }
 
     [Test]
+    public void Cpp_MultipleElseIf_NoDuplicateLabels_CompileAndRun()
+    {
+        // Regression: ElseIf blocks used FIXED names ("elseif.then"/"elseif.else"), so a
+        // function with two+ ElseIf clauses (here: one 3-branch chain PLUS a second If/ElseIf
+        // statement) emitted duplicate `elseif_then:`/`elseif_else:` C++ labels -> C2045
+        // "label redefined". This program only compiles-and-runs once each ElseIf label is
+        // unique. Classify() must return one number per input to prove the branches are wired
+        // correctly (not just that it compiles).
+        var source = @"
+Function Classify(n As Integer) As Integer
+    If n < 0 Then
+        Return 1
+    ElseIf n = 0 Then
+        Return 2
+    ElseIf n < 10 Then
+        Return 3
+    Else
+        Return 4
+    End If
+End Function
+
+Function Parity(n As Integer) As Integer
+    If n = 0 Then
+        Return 100
+    ElseIf n Mod 2 = 0 Then
+        Return 200
+    Else
+        Return 300
+    End If
+End Function
+
+Sub Main()
+    Console.WriteLine(Classify(-5))
+    Console.WriteLine(Classify(0))
+    Console.WriteLine(Classify(7))
+    Console.WriteLine(Classify(42))
+    Console.WriteLine(Parity(4))
+    Console.WriteLine(Parity(3))
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("1\n2\n3\n4\n200\n300\n"));
+    }
+
+    [Test]
     public void Cpp_ListIndexerWrite_CompileAndRun()
     {
         // `l(i) = v` (paren-indexed WRITE) used to be silently dropped (Spike 1b).
@@ -284,7 +329,7 @@ End Sub";
     /// Compile BasicLang source to a RUNNABLE C# program (with a Main entry point) via the
     /// same pipeline, for the C# portability test.
     /// </summary>
-    private string CompileToCSharp(string source, out List<string> errors)
+    private string? CompileToCSharp(string source, out List<string> errors)
     {
         errors = new List<string>();
 

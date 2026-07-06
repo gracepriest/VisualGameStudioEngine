@@ -164,6 +164,7 @@ namespace BasicLang.Compiler.CodeGen
         /// Virtual: collection-indexer write (`coll[i] = v`). Backends that don't yet lower
         /// this (LLVM, MSIL) inherit the no-op; C++ overrides for List/Dictionary semantics.
         /// </summary>
+        // TODO(Task 6): LLVM/MSIL silently drop collection indexed writes until ForeignFeatureChecker rejects collections on those backends.
         public virtual void Visit(IRIndexerStore indexerStore) { }
 
         /// <summary>

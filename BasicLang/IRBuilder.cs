@@ -2051,14 +2051,19 @@ namespace BasicLang.Compiler.IR
             {
                 _currentBlock = elseBlock;
 
-                // Handle elseif chain
+                // Handle elseif chain. Reuse this If's id plus a per-clause index so each
+                // ElseIf gets a UNIQUE label: without it, two ElseIf clauses (in one chain or
+                // across two If statements) both emit `elseif_then:`/`elseif_else:` C++ labels
+                // -> C2045 "label redefined" (same class of bug as the loop/Try labels).
+                int elseIfIdx = 0;
                 foreach (var (elseIfCond, elseIfBlock) in node.ElseIfClauses)
                 {
                     elseIfCond.Accept(this);
                     var elseIfCondition = _expressionResult;
 
-                    var elseIfThen = _currentFunction.CreateBlock("elseif.then");
-                    var elseIfNext = _currentFunction.CreateBlock("elseif.else");
+                    var elseIfThen = _currentFunction.CreateBlock($"if{ifId}.elseif{elseIfIdx}.then");
+                    var elseIfNext = _currentFunction.CreateBlock($"if{ifId}.elseif{elseIfIdx}.else");
+                    elseIfIdx++;
 
                     EmitInstruction(new IRConditionalBranch(elseIfCondition, elseIfThen, elseIfNext));
 

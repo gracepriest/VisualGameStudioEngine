@@ -76,6 +76,7 @@ namespace BasicLang.Compiler.IR
 
         // Default no-op so visitors that don't yet lower collection-indexer writes
         // (pretty-printer, LLVM, MSIL) are unaffected; C++ and C# backends override this.
+        // TODO(Task 6): LLVM/MSIL silently drop collection indexed writes until ForeignFeatureChecker rejects collections on those backends.
         void Visit(IRIndexerStore indexerStore) { }
     }
     
