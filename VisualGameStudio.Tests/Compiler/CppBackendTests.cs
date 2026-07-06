@@ -625,6 +625,25 @@ Sub Main()
     Finally
         n = 2
     End Try
+    ' Collections: member calls, .Count/.Values, indexer read/write, For Each.
+    Dim list As New List(Of Integer)()
+    list.Add(1)
+    list.Add(2)
+    list(0) = 10
+    Dim listSum As Integer = 0
+    For Each e In list
+        listSum = listSum + e
+    Next
+    Dim listCount As Integer = list.Count
+    Dim map As New Dictionary(Of String, Integer)()
+    map.Add(""a"", 1)
+    map(""b"") = 2
+    Dim mapVal As Integer = map(""a"")
+    Dim hasKey As Boolean = map.ContainsKey(""b"")
+    Dim mapCount As Integer = map.Count
+    Dim setv As New HashSet(Of Integer)()
+    Dim added As Boolean = setv.Add(5)
+    Dim seen As Boolean = setv.Contains(5)
 End Sub";
 
         var output = CompileToCpp(source, out var errors);

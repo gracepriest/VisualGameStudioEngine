@@ -2019,6 +2019,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
+            // Concrete collection member return types (List/Dictionary/HashSet). These make
+            // typed assignments faithful — e.g. `l.Add(x)` is Void (not Object, which would
+            // otherwise force a bogus temp), `d.ContainsKey(k)` is Boolean, etc.
+            if (lowerTypeName is "list" or "dictionary" or "hashset")
+            {
+                switch (lowerMethodName)
+                {
+                    case "add":
+                        // List.Add / Dictionary.Add return Void; HashSet.Add returns Boolean.
+                        return lowerTypeName == "hashset" ? _typeManager.BooleanType : _typeManager.VoidType;
+                    case "clear":
+                    case "insert":
+                    case "removeat":
+                        return _typeManager.VoidType;
+                    case "count":
+                    case "indexof":
+                        return _typeManager.IntegerType;
+                    case "contains":
+                    case "containskey":
+                    case "trygetvalue":
+                        return _typeManager.BooleanType;
+                    case "remove":
+                        // Dictionary/HashSet Remove return Boolean; List.Remove returns Void.
+                        return lowerTypeName == "list" ? _typeManager.VoidType : _typeManager.BooleanType;
+                }
+            }
+
             // Common collection methods
             if (lowerMethodName == "count" || lowerMethodName == "length")
                 return _typeManager.IntegerType;
@@ -2031,6 +2058,48 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return _typeManager.BooleanType;
 
             return null;
+        }
+
+        /// <summary>
+        /// Resolve the type of a member on a List/Dictionary/HashSet receiver, using the
+        /// receiver's generic arguments where needed (Keys -> List(Of K), Values -> List(Of V)).
+        /// Returns null when the receiver isn't a collection or the member isn't recognized,
+        /// so the caller falls through to the generic .NET lookup.
+        /// </summary>
+        private TypeInfo ResolveCollectionMemberType(TypeInfo receiver, string memberName)
+        {
+            if (receiver?.Name == null) return null;
+            var lowerType = receiver.Name.ToLowerInvariant();
+            if (lowerType is not ("list" or "dictionary" or "hashset")) return null;
+
+            var lowerMember = memberName.ToLowerInvariant();
+            var genArgs = receiver.GenericArguments;
+
+            switch (lowerMember)
+            {
+                case "count":
+                    return _typeManager.IntegerType;
+                case "keys":
+                    // Dictionary(Of K, V).Keys -> List(Of K)
+                    if (lowerType == "dictionary" && genArgs != null && genArgs.Count >= 1)
+                        return MakeListOf(genArgs[0]);
+                    return null;
+                case "values":
+                    // Dictionary(Of K, V).Values -> List(Of V)
+                    if (lowerType == "dictionary" && genArgs != null && genArgs.Count >= 2)
+                        return MakeListOf(genArgs[1]);
+                    return null;
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>Build a List(Of element) TypeInfo carrying the element generic argument.</summary>
+        private TypeInfo MakeListOf(TypeInfo element)
+        {
+            var listType = new TypeInfo("List", TypeKind.Class);
+            listType.GenericArguments = new List<TypeInfo> { element };
+            return listType;
         }
 
         /// <summary>
@@ -5103,6 +5172,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 SetNodeSymbol(node, memberSymbol);
                 SetNodeType(node, memberSymbol.Type);
+            }
+            // Collection members (List/Dictionary/HashSet) — resolved with access to the
+            // receiver's generic arguments so Keys/Values yield List(Of K)/List(Of V), letting
+            // typed assignments and For Each infer element types instead of degrading to Object.
+            else if (ResolveCollectionMemberType(objectType, node.MemberName) is { } collMemberType)
+            {
+                SetNodeType(node, collMemberType);
             }
             else if (IsNetType(objectType.Name))
             {

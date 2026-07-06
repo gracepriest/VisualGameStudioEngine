@@ -654,6 +654,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string MemberAccessOp(IRValue obj)
         {
             if (obj is IRVariable v && v.Name == "this") return "->";
+
+            // Collections (BasicLang::List/Dictionary/HashSet) and any already-qualified
+            // C++ type (name contains "::") are VALUE types: member access is `.`, never `->`.
+            // Matching is case-INSENSITIVE (BasicLang is case-insensitive; Task 2 relies on this).
+            var tn = obj?.Type?.Name;
+            if (tn != null && (string.Equals(tn, "List", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tn, "Dictionary", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(tn, "HashSet", StringComparison.OrdinalIgnoreCase)
+                || tn.Contains("::")))
+                return ".";
+
             var kind = obj?.Type?.Kind;
             if ((kind == TypeKind.Class || kind == TypeKind.Interface)
                 && (obj.Type.Name == null || !_typeMap.ContainsKey(obj.Type.Name)))
@@ -2348,6 +2359,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            // Collection property bridge: `.Count`/`.Keys`/`.Values` on a List/Dictionary/HashSet
+            // arrive as an IRFieldAccess (no call syntax in the source), but the C++ wrappers
+            // expose these as METHODS. Rewrite to a zero-arg call: `recv.Count()`.
+            if (fieldAccess.Object?.Type?.Name is not null
+                && (string.Equals(fieldAccess.Object.Type.Name, "List", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(fieldAccess.Object.Type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(fieldAccess.Object.Type.Name, "HashSet", StringComparison.OrdinalIgnoreCase))
+                && (fieldAccess.FieldName is "Count" or "Keys" or "Values"))
+            {
+                var recv = GetValueName(fieldAccess.Object);
+                WriteLine($"{result} = {recv}.{SanitizeName(fieldAccess.FieldName)}();");
+                return;
+            }
+
             var obj = GetValueName(fieldAccess.Object);
             var op = MemberAccessOp(fieldAccess.Object);
             var fieldName = SanitizeName(fieldAccess.FieldName);
@@ -2501,7 +2526,28 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var indices = string.Join("][", indexer.Indices.Select(i => GetValueName(i)));
             var result = GetValueName(indexer);
 
-            WriteLine($"{result} = {collection}[{indices}];");
+            // Dictionary read -> .Get(k), which throws on a missing key (.NET-faithful:
+            // `dict[missing]` throws KeyNotFoundException). List/array reads keep operator[].
+            if (indexer.Collection?.Type?.Name is not null
+                && string.Equals(indexer.Collection.Type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase))
+                WriteLine($"{result} = {collection}.Get({indices});");
+            else
+                WriteLine($"{result} = {collection}[{indices}];");
+        }
+
+        public override void Visit(IRIndexerStore indexerStore)
+        {
+            var collection = GetValueName(indexerStore.Collection);
+            var indices = string.Join("][", indexerStore.Indices.Select(i => GetValueName(i)));
+            var value = GetValueName(indexerStore.Value);
+
+            // Dictionary write -> .Set(k, v) (insert-or-update, matching .NET `dict[k] = v`).
+            // List/array writes use operator[] which returns a mutable reference.
+            if (indexerStore.Collection?.Type?.Name is not null
+                && string.Equals(indexerStore.Collection.Type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase))
+                WriteLine($"{collection}.Set({indices}, {value});");
+            else
+                WriteLine($"{collection}[{indices}] = {value};");
         }
 
         #endregion

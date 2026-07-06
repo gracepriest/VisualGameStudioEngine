@@ -73,6 +73,10 @@ namespace BasicLang.Compiler.IR
         // Default no-op so existing visitors (pretty-printer, LLVM, MSIL) are unaffected;
         // backends that support exceptions override this.
         void Visit(IRThrow throwInst) { }
+
+        // Default no-op so visitors that don't yet lower collection-indexer writes
+        // (pretty-printer, LLVM, MSIL) are unaffected; C++ and C# backends override this.
+        void Visit(IRIndexerStore indexerStore) { }
     }
     
     // ============================================================================
@@ -844,6 +848,33 @@ namespace BasicLang.Compiler.IR
         {
             var indices = string.Join(", ", Indices.Select(i => i?.Name ?? "?"));
             return $"{Name} = {Collection?.Name}[{indices}]";
+        }
+    }
+
+    /// <summary>
+    /// IR Indexer store - represents `collection[index] = value` / `dictionary[key] = value`.
+    /// Distinct from <see cref="IRArrayStore"/> (raw fixed arrays) so backends can lower the
+    /// write faithfully per collection kind (e.g. C++ Dictionary -> .Set(k,v), List -> [i]=v).
+    /// </summary>
+    public class IRIndexerStore : IRInstruction
+    {
+        public IRValue Collection { get; set; }
+        public List<IRValue> Indices { get; set; }
+        public IRValue Value { get; set; }
+
+        public IRIndexerStore(IRValue collection, IRValue value)
+        {
+            Collection = collection;
+            Value = value;
+            Indices = new List<IRValue>();
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString()
+        {
+            var indices = string.Join(", ", Indices.Select(i => i?.Name ?? "?"));
+            return $"{Collection?.Name}[{indices}] = {Value?.Name}";
         }
     }
 

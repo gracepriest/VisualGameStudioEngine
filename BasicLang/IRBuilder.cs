@@ -2330,11 +2330,12 @@ namespace BasicLang.Compiler.IR
         public void Visit(ForLoopNode node)
         {
             TrackSourceLine(node);
-            // Create loop blocks
-            var condBlock = _currentFunction.CreateBlock("for.cond");
-            var bodyBlock = _currentFunction.CreateBlock("for.body");
-            var incBlock = _currentFunction.CreateBlock("for.inc");
-            var endBlock = _currentFunction.CreateBlock("for.end");
+            // Create loop blocks (suffix keeps labels unique per loop — see ForEachLoopNode).
+            var forId = _forCounter++;
+            var condBlock = _currentFunction.CreateBlock($"for{forId}.cond");
+            var bodyBlock = _currentFunction.CreateBlock($"for{forId}.body");
+            var incBlock = _currentFunction.CreateBlock($"for{forId}.inc");
+            var endBlock = _currentFunction.CreateBlock($"for{forId}.end");
 
             // Initialize loop variable
             node.Start.Accept(this);
@@ -2427,9 +2428,13 @@ namespace BasicLang.Compiler.IR
 
             // Note: Don't add loop variable to LocalVariables - the foreach statement declares it
 
-            // Create body and end blocks
-            var bodyBlock = _currentFunction.CreateBlock("foreach.body");
-            var endBlock = _currentFunction.CreateBlock("foreach.end");
+            // Create body and end blocks. The suffix makes labels unique per loop: without it,
+            // two For Each loops in one function both emit a `foreach_end:` C++ label (C2045
+            // "label redefined"). Backends that emit labels from block names (e.g. C++) rely on
+            // this uniqueness; block Id alone isn't part of the emitted label.
+            var suffix = _foreachCounter++;
+            var bodyBlock = _currentFunction.CreateBlock($"foreach{suffix}.body");
+            var endBlock = _currentFunction.CreateBlock($"foreach{suffix}.end");
 
             // Emit IRForEach instruction
             var forEach = new IRForEach(node.Variable, elemType, collection, bodyBlock, endBlock);
@@ -2501,9 +2506,10 @@ namespace BasicLang.Compiler.IR
         public void Visit(WhileLoopNode node)
         {
             TrackSourceLine(node);
-            var condBlock = _currentFunction.CreateBlock("while.cond");
-            var bodyBlock = _currentFunction.CreateBlock("while.body");
-            var endBlock = _currentFunction.CreateBlock("while.end");
+            var whileId = _whileCounter++;
+            var condBlock = _currentFunction.CreateBlock($"while{whileId}.cond");
+            var bodyBlock = _currentFunction.CreateBlock($"while{whileId}.body");
+            var endBlock = _currentFunction.CreateBlock($"while{whileId}.end");
 
             EmitInstruction(new IRBranch(condBlock));
 
@@ -2531,9 +2537,10 @@ namespace BasicLang.Compiler.IR
         public void Visit(DoLoopNode node)
         {
             TrackSourceLine(node);
-            var condBlock = _currentFunction.CreateBlock("do.cond");
-            var bodyBlock = _currentFunction.CreateBlock("do.body");
-            var endBlock = _currentFunction.CreateBlock("do.end");
+            var doId = _doCounter++;
+            var condBlock = _currentFunction.CreateBlock($"do{doId}.cond");
+            var bodyBlock = _currentFunction.CreateBlock($"do{doId}.body");
+            var endBlock = _currentFunction.CreateBlock($"do{doId}.end");
 
             if (node.IsConditionAtStart && node.Condition != null)
             {
@@ -2605,16 +2612,18 @@ namespace BasicLang.Compiler.IR
         public void Visit(TryStatementNode node)
         {
             TrackSourceLine(node);
-            // Create all blocks first
-            var tryBlock = _currentFunction.CreateBlock("try.body");
-            var endBlock = _currentFunction.CreateBlock("try.end");
+            // Create all blocks first (suffix keeps labels unique per Try — see ForEachLoopNode).
+            var tryId = _tryCounter++;
+            var tryBlock = _currentFunction.CreateBlock($"try{tryId}.body");
+            var endBlock = _currentFunction.CreateBlock($"try{tryId}.end");
 
             // Create catch blocks and build IRCatchClause list
             var catchClauses = new List<IRCatchClause>();
             var catchBlockList = new List<(CatchClauseNode clause, BasicBlock block)>();
+            int catchIdx = 0;
             foreach (var catchClause in node.CatchClauses)
             {
-                var catchBlock = _currentFunction.CreateBlock("catch.body");
+                var catchBlock = _currentFunction.CreateBlock($"try{tryId}.catch{catchIdx++}");
                 var exceptionType = catchClause.ExceptionType != null
                     ? new TypeInfo(catchClause.ExceptionType.Name, TypeKind.Class)
                     : new TypeInfo("Exception", TypeKind.Class);
@@ -2626,7 +2635,7 @@ namespace BasicLang.Compiler.IR
             BasicBlock finallyBlock = null;
             if (node.FinallyBlock != null)
             {
-                finallyBlock = _currentFunction.CreateBlock("finally.body");
+                finallyBlock = _currentFunction.CreateBlock($"try{tryId}.finally");
             }
 
             // Emit the try-catch instruction in the current block
@@ -2849,22 +2858,78 @@ namespace BasicLang.Compiler.IR
             }
             else if (node.Target is ArrayAccessExpressionNode arrayExpr)
             {
-                // Handle array element assignment
-                arrayExpr.Array.Accept(this);
-                var array = _expressionResult;
-
-                // Get element pointer
-                var gepTemp = _currentFunction.GetNextTempName();
-                var gep = new IRGetElementPtr(gepTemp, array, value.Type);
-                foreach (var index in arrayExpr.Indices)
+                // Bracket-indexed write: `x[i] = v`. If the receiver is an indexable generic
+                // collection (List/Dictionary), lower to IRIndexerStore so backends can honor
+                // per-collection write semantics (e.g. Dictionary insert-or-update). Otherwise
+                // it's a raw array store via element pointer.
+                var arrayType = _semanticAnalyzer.GetNodeType(arrayExpr.Array);
+                if (arrayType != null && IsIndexableGenericType(arrayType))
                 {
-                    index.Accept(this);
-                    gep.Indices.Add(_expressionResult);
+                    arrayExpr.Array.Accept(this);
+                    var collection = _expressionResult;
+                    var indexerStore = new IRIndexerStore(collection, value);
+                    foreach (var index in arrayExpr.Indices)
+                    {
+                        index.Accept(this);
+                        indexerStore.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(indexerStore);
                 }
-                EmitInstruction(gep);
+                else
+                {
+                    // Handle array element assignment
+                    arrayExpr.Array.Accept(this);
+                    var array = _expressionResult;
 
-                // Store to pointer
-                EmitInstruction(new IRStore(value, gep));
+                    // Get element pointer
+                    var gepTemp = _currentFunction.GetNextTempName();
+                    var gep = new IRGetElementPtr(gepTemp, array, value.Type);
+                    foreach (var index in arrayExpr.Indices)
+                    {
+                        index.Accept(this);
+                        gep.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(gep);
+
+                    // Store to pointer
+                    EmitInstruction(new IRStore(value, gep));
+                }
+            }
+            else if (node.Target is CallExpressionNode callTarget && callTarget.Arguments.Count > 0)
+            {
+                // VB-style paren-indexed write: `coll(i) = v` / `dict(k) = v`. Because VB uses
+                // PARENS for indexing, the parser produces a CallExpressionNode on the LHS.
+                // When the callee is an indexable generic collection, lower to IRIndexerStore.
+                // (Without this, such assignments were silently DROPPED — see Spike 1b.)
+                var calleeType = _semanticAnalyzer.GetNodeType(callTarget.Callee);
+                if (calleeType != null && IsIndexableGenericType(calleeType))
+                {
+                    callTarget.Callee.Accept(this);
+                    var collection = _expressionResult;
+                    var indexerStore = new IRIndexerStore(collection, value);
+                    foreach (var index in callTarget.Arguments)
+                    {
+                        index.Accept(this);
+                        indexerStore.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(indexerStore);
+                }
+                else
+                {
+                    // Not a known indexable target: fall back to array-style store so behavior
+                    // is at least defined (raw array element pointer + store).
+                    callTarget.Callee.Accept(this);
+                    var array = _expressionResult;
+                    var gepTemp = _currentFunction.GetNextTempName();
+                    var gep = new IRGetElementPtr(gepTemp, array, value.Type);
+                    foreach (var index in callTarget.Arguments)
+                    {
+                        index.Accept(this);
+                        gep.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(gep);
+                    EmitInstruction(new IRStore(value, gep));
+                }
             }
         }
 

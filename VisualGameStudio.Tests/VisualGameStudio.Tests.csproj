@@ -27,6 +27,9 @@
     <PackageReference Include="Moq" Version="4.20.70" />
     <PackageReference Include="Avalonia" Version="11.1.0" />
     <PackageReference Include="Avalonia.AvaloniaEdit" Version="11.1.0" />
+    <!-- Roslyn: compile-and-run the C# the backend generates, proving the SAME BasicLang
+         source that runs on the C++ backend also runs on the C# backend (Task 3 portability). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
   </ItemGroup>
 
   <ItemGroup>

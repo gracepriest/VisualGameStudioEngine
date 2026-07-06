@@ -2908,6 +2908,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return newObject.Arguments;
                 case IRIndexerAccess indexerAccess:
                     return new[] { indexerAccess.Collection }.Concat(indexerAccess.Indices);
+                case IRIndexerStore indexerStore:
+                    return new[] { indexerStore.Collection }
+                        .Concat(indexerStore.Indices)
+                        .Append(indexerStore.Value);
                 case IRFieldAccess fieldAccess:
                     return new[] { fieldAccess.Object };
                 case IRAssignment asg:
@@ -3356,6 +3360,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : GetValueName(arrayStore.Index);
             var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(arrayStore.Value);
             WriteLine($"{arrayName}[{indexVal}] = {valueVal};");
+        }
+
+        public void Visit(IRIndexerStore indexerStore)
+        {
+            // In C#, both List<T> and Dictionary<K,V> writes are `collection[index] = value`
+            // (Dictionary's indexer setter inserts-or-updates), so a single form is faithful.
+            var collection = GetValueName(indexerStore.Collection);
+            var indices = string.Join(", ", indexerStore.Indices.Select(i =>
+                i is IRConstant ic ? EmitConstant(ic) : GetValueName(i)));
+            var value = indexerStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(indexerStore.Value);
+            WriteLine($"{collection}[{indices}] = {value};");
         }
 
         public void Visit(IRAwait awaitInst)

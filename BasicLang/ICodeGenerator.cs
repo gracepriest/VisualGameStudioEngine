@@ -161,6 +161,12 @@ namespace BasicLang.Compiler.CodeGen
         public virtual void Visit(IRThrow throwInst) { }
 
         /// <summary>
+        /// Virtual: collection-indexer write (`coll[i] = v`). Backends that don't yet lower
+        /// this (LLVM, MSIL) inherit the no-op; C++ overrides for List/Dictionary semantics.
+        /// </summary>
+        public virtual void Visit(IRIndexerStore indexerStore) { }
+
+        /// <summary>
         /// Map IR type to target language type
         /// </summary>
         protected virtual string MapType(TypeInfo type)
