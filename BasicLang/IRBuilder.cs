@@ -394,6 +394,14 @@ namespace BasicLang.Compiler.IR
 
                 if (node.Initializer != null)
                 {
+                    // KNOWN GAP (pre-existing): a module-scope initializer that lowers to
+                    // an IRNewObject (e.g. `Dim g As New List(...)()` at file scope) calls
+                    // _currentFunction.GetNextTempName() inside Visit(NewExpressionNode)
+                    // while _currentFunction is null here -> NullReferenceException. This
+                    // should produce a clean diagnostic ("module-scope New initializers are
+                    // not supported") rather than crash the IR builder. Unrelated to the
+                    // C++ stdlib work; declaration-only globals (`Dim g As List(Of Integer)`)
+                    // build fine. Fixing the crash is out of scope here.
                     // Evaluate the initializer and store it
                     node.Initializer.Accept(this);
                     globalVar.InitialValue = _expressionResult;

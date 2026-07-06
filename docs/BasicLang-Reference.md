@@ -918,6 +918,15 @@ constructs with a clean compile error before any code is generated:
 - **LLVM** and **MSIL** reject both the passthrough features and collections
   (collection lowering is not yet implemented on those backends).
 
+### Known limitations
+
+- A module-scope declaration **with** a `New` initializer — e.g.
+  `Dim g As New List(Of Integer)()` at file scope — should produce a clean
+  diagnostic but currently crashes the IR builder (`_currentFunction` is null when
+  the initializer is a `New` expression). This is a pre-existing IR-builder gap,
+  unrelated to the C++ standard-library work. Declaration-only globals
+  (`Dim g As List(Of Integer)`, initialized inside a `Sub`) build correctly.
+
 ---
 
 ## Multi-File Projects

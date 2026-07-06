@@ -49,7 +49,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private static readonly HashSet<string> MappedTypeNames = new(StringComparer.OrdinalIgnoreCase)
         {
             "Integer", "Long", "Single", "Double", "String", "Boolean", "Char", "Void",
-            "Byte", "Short", "UByte", "UShort", "UInteger", "ULong"
+            "Byte", "Short", "SByte", "UByte", "UShort", "UInteger", "ULong", "Decimal"
+        };
+
+        // Common .NET types the C++ backend has NO mapping for. Rejected regardless of
+        // TypeKind — the semantic analyzer sometimes leaves these as Kind.Primitive in
+        // signature positions (e.g. an interface method's `As DateTime` return), where
+        // the class-kind gate below would otherwise let them slip past. Listing them
+        // explicitly (like 'Object') keeps the rejection Kind-independent with zero
+        // false-positive risk: none of these has any valid C++ lowering anywhere.
+        private static readonly HashSet<string> UnmappedNetTypes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "DateTime", "DateTimeOffset", "TimeSpan", "Guid", "StringBuilder", "Regex",
+            "Uri", "Stream", "FileInfo", "DirectoryInfo"
         };
 
         private HashSet<string> _userDefinedNames;
@@ -79,20 +91,64 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         CheckInstruction(inst, func.Name, diags);
             }
 
+            // Positions beyond module.Functions. The pre-existing Functions loop
+            // already covers everything lowered into a function body — property
+            // getters/setters, method impls, and ctor impls all become IRFunctions —
+            // so the remaining gaps are the type positions that DON'T lower to a
+            // function: module globals, class fields, and pure signatures (interface
+            // members + abstract class methods with no impl). Walking these directly
+            // (keeping per-position labels) covers the same set of positions as
+            // ModuleTypeWalker.AllTypes — keep in sync with ForeignFeatureChecker /
+            // CppCodeGenerator.ModuleUsesCollections.
+
             // Module-scope globals: a file-scope `Dim g As DateTime` (or any unmapped
-            // .NET type) must be rejected just like a function local would be. This
-            // position was previously unchecked — keep in sync with ForeignFeatureChecker
-            // / CppCodeGenerator.ModuleUsesCollections (all must visit globals).
+            // .NET type) must be rejected just like a function local would be.
             if (module.GlobalVariables != null)
                 foreach (var gv in module.GlobalVariables.Values)
                     CheckType(gv.Type, $"global '{gv.Name}'", diags);
 
-            // Class field types (also previously unchecked at module level).
             if (module.Classes != null)
                 foreach (var cls in module.Classes.Values)
+                {
+                    // Class field types.
                     if (cls.Fields != null)
                         foreach (var fld in cls.Fields)
                             CheckType(fld.Type, $"field '{fld.Name}' of '{cls.Name}'", diags);
+
+                    // Abstract method SIGNATURES with no impl function — these never
+                    // appear in module.Functions, so the Functions loop misses them.
+                    // (Concrete methods lower to an IRFunction and are covered there.)
+                    if (cls.Methods != null)
+                        foreach (var m in cls.Methods)
+                        {
+                            if (m.Implementation != null) continue;
+                            CheckType(m.ReturnType, $"return type of '{cls.Name}.{m.Name}'", diags);
+                            if (m.Parameters != null)
+                                foreach (var p in m.Parameters)
+                                    CheckType(p.Type, $"parameter '{p.Name}' of '{cls.Name}.{m.Name}'", diags);
+                        }
+                }
+
+            // Pure interface signatures: method return/parameter types and property
+            // types. An interface carries no impl body, so nothing lowers to a
+            // function; without this walk a `Function Foo() As DateTime` on an
+            // interface degrades to a raw C++ compiler error instead of a clean
+            // BasicLang diagnostic.
+            if (module.Interfaces != null)
+                foreach (var iface in module.Interfaces.Values)
+                {
+                    if (iface.Methods != null)
+                        foreach (var m in iface.Methods)
+                        {
+                            CheckType(m.ReturnType, $"interface method '{iface.Name}.{m.Name}' return", diags);
+                            if (m.Parameters != null)
+                                foreach (var p in m.Parameters)
+                                    CheckType(p.Type, $"parameter '{p.Name}' of interface method '{iface.Name}.{m.Name}'", diags);
+                        }
+                    if (iface.Properties != null)
+                        foreach (var prop in iface.Properties)
+                            CheckType(prop.Type, $"interface property '{iface.Name}.{prop.Name}'", diags);
+                }
 
             return diags.Distinct().ToList();
         }
@@ -147,6 +203,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (name.Equals("Object", StringComparison.OrdinalIgnoreCase))
             {
                 diags.Add($"'Object' ({where}) — 'Object' has no C++ mapping");
+                return;
+            }
+
+            // Known unmapped .NET types are rejected regardless of Kind (the analyzer
+            // may leave them as Kind.Primitive in signature positions).
+            if (UnmappedNetTypes.Contains(name))
+            {
+                diags.Add($".NET type '{name}' ({where}) — no C++ mapping exists for this type");
                 return;
             }
 
