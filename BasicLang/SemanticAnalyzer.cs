@@ -252,8 +252,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// cross-file visibility, mirroring the compiled path: .cls/.class
         /// units expose only their class, .mod units promote their module
         /// members to the top level, and other files expose their own
-        /// top-level declarations (members nested in an explicit Module block
-        /// stay module-qualified, exactly as after full compilation).
+        /// top-level declarations. (Function/sub members nested in explicit
+        /// Module/Namespace/Class blocks are additionally flattened by
+        /// RegisterSiblingDeclarationSignature, mirroring the compiled path's
+        /// pass-1 flattening.)
         /// </summary>
         private static IEnumerable<ASTNode> EnumerateSiblingTopLevelDeclarations(CompilationUnit unit)
         {
@@ -389,41 +391,52 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// always visible (compiled-path parity); fields require Public;
         /// constants mirror the compiled path, where constant symbols carry
         /// the default (public) symbol access and are therefore exported.
+        /// Members of explicit Module/Namespace/Class blocks are flattened to
+        /// the top level exactly like the compiled path: its in-file pass 1
+        /// (RegisterDeclarations) registers every nested function/sub
+        /// signature straight into the unit's GLOBAL scope before any scope
+        /// is entered, and CollectExportedSymbols then exports them — which
+        /// is precisely why cross-file calls into explicit Module blocks work
+        /// when the callee compiles first.
         /// </summary>
         private void RegisterSiblingDeclarationSignature(ASTNode decl, CompilationUnit unit)
         {
             switch (decl)
             {
                 case FunctionNode func:
-                {
-                    if (GlobalScope.Resolve(func.Name) != null) return;
-                    var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
-                    GlobalScope.Define(new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
-                    {
-                        IsImported = true,
-                        IsSiblingSignature = true,
-                        SourceModule = unit.ModuleName,
-                        ReturnType = returnType,
-                        Parameters = BuildSiblingSignatureParameters(func.Parameters),
-                        Access = func.Access
-                    });
+                    RegisterSiblingFunctionSignature(func, unit, applyDeclaredAccess: true);
                     break;
-                }
 
                 case SubroutineNode sub:
-                {
-                    if (GlobalScope.Resolve(sub.Name) != null) return;
-                    GlobalScope.Define(new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
-                    {
-                        IsImported = true,
-                        IsSiblingSignature = true,
-                        SourceModule = unit.ModuleName,
-                        ReturnType = _typeManager.VoidType,
-                        Parameters = BuildSiblingSignatureParameters(sub.Parameters),
-                        Access = sub.Access
-                    });
+                    RegisterSiblingSubroutineSignature(sub, unit, applyDeclaredAccess: true);
                     break;
-                }
+
+                case ModuleNode moduleNode:
+                    // The compiled path also exports the Module symbol itself
+                    // (Visit(ModuleNode) defines it in the global scope).
+                    if (!string.IsNullOrEmpty(moduleNode.Name) && GlobalScope.Resolve(moduleNode.Name) == null)
+                    {
+                        GlobalScope.Define(new Symbol(moduleNode.Name, SymbolKind.Module, null, 0, 0)
+                        {
+                            IsImported = true,
+                            IsSiblingSignature = true,
+                            SourceModule = unit.ModuleName
+                        });
+                    }
+                    RegisterSiblingContainerMemberSignatures(moduleNode.Members, unit);
+                    break;
+
+                case NamespaceNode namespaceNode:
+                    RegisterSiblingContainerMemberSignatures(namespaceNode.Members, unit);
+                    break;
+
+                // .cls/.class units export ONLY their class symbol (Compiler.
+                // CollectExportedSymbols IsClassFile filter), so their method
+                // signatures must not be flattened. For every other file the
+                // compiled path flattens class-member signatures globally.
+                case ClassNode classNode when !unit.IsClassFile:
+                    RegisterSiblingContainerMemberSignatures(classNode.Members, unit);
+                    break;
 
                 case VariableDeclarationNode field when field.Access == AccessModifier.Public:
                 {
@@ -454,9 +467,89 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
 
                 // ClassNode shells were registered in pass 1; anything else
-                // (structures, enums, interfaces, explicit Module blocks, ...)
-                // keeps its current cross-file behavior.
+                // (structures, enums, interfaces, ...) keeps its current
+                // cross-file behavior.
             }
+        }
+
+        /// <summary>
+        /// Flatten the function/sub signatures nested in a Module, Namespace
+        /// or Class block of a pending sibling into the global scope, exactly
+        /// mirroring RegisterDeclaration's recursion for completed units.
+        /// Fields and constants inside these containers are NOT flattened —
+        /// the compiled path's pass 1 only registers functions/subs, so
+        /// registering more here would make code compile caller-first that
+        /// fails callee-first. Declared access is not applied: the compiled
+        /// path's pass-1 signatures keep the default (public) symbol access
+        /// because pass 2 re-declares the member inside its container scope
+        /// and never touches the flattened global signature.
+        /// </summary>
+        private void RegisterSiblingContainerMemberSignatures(IEnumerable<ASTNode> members, CompilationUnit unit)
+        {
+            if (members == null) return;
+
+            foreach (var member in members)
+            {
+                switch (member)
+                {
+                    case FunctionNode func:
+                        RegisterSiblingFunctionSignature(func, unit, applyDeclaredAccess: false);
+                        break;
+                    case SubroutineNode sub:
+                        RegisterSiblingSubroutineSignature(sub, unit, applyDeclaredAccess: false);
+                        break;
+                    case ModuleNode nestedModule:
+                        RegisterSiblingContainerMemberSignatures(nestedModule.Members, unit);
+                        break;
+                    case ClassNode nestedClass:
+                        RegisterSiblingContainerMemberSignatures(nestedClass.Members, unit);
+                        break;
+                    case NamespaceNode nestedNamespace:
+                        RegisterSiblingContainerMemberSignatures(nestedNamespace.Members, unit);
+                        break;
+                }
+            }
+        }
+
+        private void RegisterSiblingFunctionSignature(FunctionNode func, CompilationUnit unit, bool applyDeclaredAccess)
+        {
+            if (string.IsNullOrEmpty(func.Name)) return;
+            if (GlobalScope.Resolve(func.Name) != null) return;
+
+            var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
+            var symbol = new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
+            {
+                IsImported = true,
+                IsSiblingSignature = true,
+                SourceModule = unit.ModuleName,
+                ReturnType = returnType,
+                Parameters = BuildSiblingSignatureParameters(func.Parameters)
+            };
+            if (applyDeclaredAccess)
+            {
+                symbol.Access = func.Access;
+            }
+            GlobalScope.Define(symbol);
+        }
+
+        private void RegisterSiblingSubroutineSignature(SubroutineNode sub, CompilationUnit unit, bool applyDeclaredAccess)
+        {
+            if (string.IsNullOrEmpty(sub.Name)) return;
+            if (GlobalScope.Resolve(sub.Name) != null) return;
+
+            var symbol = new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
+            {
+                IsImported = true,
+                IsSiblingSignature = true,
+                SourceModule = unit.ModuleName,
+                ReturnType = _typeManager.VoidType,
+                Parameters = BuildSiblingSignatureParameters(sub.Parameters)
+            };
+            if (applyDeclaredAccess)
+            {
+                symbol.Access = sub.Access;
+            }
+            GlobalScope.Define(symbol);
         }
 
         private List<Symbol> BuildSiblingSignatureParameters(List<ParameterNode> parameters)
@@ -4945,6 +5038,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
                                 errorMsg += $". Available members: {string.Join(", ", memberNames)}";
                             Error(errorMsg, node.Line, node.Column);
                             SetNodeType(node, _typeManager.ObjectType);
+                            return;
+                        }
+                    }
+                    else if (unit != null && unit != _currentUnit)
+                    {
+                        // Parsed-but-not-yet-compiled sibling: its declaration
+                        // signatures were flattened into the global scope by
+                        // the implicit-import signature pass, so a qualified
+                        // ModuleName.Member resolves regardless of compile
+                        // order. An unresolved member falls through to the
+                        // permissive path WITHOUT erroring — signature
+                        // coverage is narrower than a completed unit's
+                        // exports, and a false error here would be worse than
+                        // the pre-existing permissive typing.
+                        var signature = GlobalScope.Resolve(node.MemberName);
+                        if (signature != null && signature.IsSiblingSignature &&
+                            !string.IsNullOrEmpty(signature.SourceModule) &&
+                            signature.SourceModule.Equals(unit.ModuleName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            SetNodeSymbol(node, signature);
+                            SetNodeType(node, signature.Type);
                             return;
                         }
                     }
