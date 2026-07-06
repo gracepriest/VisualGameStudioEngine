@@ -51,6 +51,15 @@ public partial class CreateProjectViewModel : ObservableObject
     [ObservableProperty]
     private bool _hasError;
 
+    /// <summary>
+    /// Warn-but-allow hint when the project name contains XML/MSBuild-special
+    /// characters (';', '&amp;', '%', ...). Such names build fine — the csproj
+    /// generators escape them via MSBuildText — but a keyboard-mash name is
+    /// usually a mistake worth flagging before it sticks. Null when clean.
+    /// </summary>
+    [ObservableProperty]
+    private string? _nameWarning;
+
     [ObservableProperty]
     private string _searchText = "";
 
@@ -122,6 +131,14 @@ public partial class CreateProjectViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(CanCreate));
         ClearError();
+
+        // Same classifier the build layer escapes with, so this hint can never
+        // drift from what actually happens at build time.
+        var specials = BasicLang.Compiler.ProjectSystem.MSBuildText.FindSpecialCharacters(value);
+        NameWarning = specials.Length == 0
+            ? null
+            : $"The name contains special characters ({string.Join(" ", specials.ToCharArray())}) — " +
+              "it will build fine, but a simpler name is easier to work with.";
     }
 
     partial void OnLocationChanged(string value)

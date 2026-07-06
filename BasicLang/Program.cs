@@ -550,13 +550,13 @@ namespace BasicLang.Compiler.Driver
                         {
                             if (!string.IsNullOrEmpty(asmRef.HintPath))
                             {
-                                referencesSection.AppendLine($@"    <Reference Include=""{asmRef.Name}"">
-      <HintPath>{asmRef.HintPath}</HintPath>
+                                referencesSection.AppendLine($@"    <Reference Include=""{MSBuildText.EscapeValue(asmRef.Name)}"">
+      <HintPath>{MSBuildText.EscapeValue(asmRef.HintPath)}</HintPath>
     </Reference>");
                             }
                             else
                             {
-                                referencesSection.AppendLine($@"    <Reference Include=""{asmRef.Name}"" />");
+                                referencesSection.AppendLine($@"    <Reference Include=""{MSBuildText.EscapeValue(asmRef.Name)}"" />");
                             }
                         }
                         referencesSection.AppendLine("  </ItemGroup>");
@@ -569,7 +569,7 @@ namespace BasicLang.Compiler.Driver
                         packageSection.AppendLine("  <ItemGroup>");
                         foreach (var pkg in project.PackageReferences)
                         {
-                            packageSection.AppendLine($@"    <PackageReference Include=""{pkg.Name}"" Version=""{pkg.Version}"" />");
+                            packageSection.AppendLine($@"    <PackageReference Include=""{MSBuildText.EscapeValue(pkg.Name)}"" Version=""{MSBuildText.EscapeValue(pkg.Version)}"" />");
                         }
                         packageSection.AppendLine("  </ItemGroup>");
                     }
@@ -596,17 +596,23 @@ namespace BasicLang.Compiler.Driver
                     if (project.UseWpf)
                         uiFrameworkProps.AppendLine("    <UseWPF>true</UseWPF>");
 
+                    // User-controlled values are XML/MSBuild-escaped: ';' in a
+                    // project name splits derived item paths (MSB4094), '&'
+                    // breaks the XML load (MSB4025).
                     var csprojContent = $@"<Project Sdk=""Microsoft.NET.Sdk"">
   <PropertyGroup>
     <OutputType>{outputTypeValue}</OutputType>
     <TargetFramework>{targetFramework}</TargetFramework>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
-    <AssemblyName>{outputFileName}</AssemblyName>
+    <AssemblyName>{MSBuildText.EscapeValue(outputFileName)}</AssemblyName>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <OutputPath>.\</OutputPath>
 {uiFrameworkProps}  </PropertyGroup>
   <ItemGroup>
-    <Compile Include=""{csFileName}"" />
+    <Compile Include=""{MSBuildText.EscapeValue(csFileName)}"" />
   </ItemGroup>
 {referencesSection}{packageSection}</Project>";
                     File.WriteAllText(csprojPath, csprojContent);
@@ -617,7 +623,13 @@ namespace BasicLang.Compiler.Driver
                         StartInfo = new System.Diagnostics.ProcessStartInfo
                         {
                             FileName = "dotnet",
-                            Arguments = $"build \"{csprojPath}\" -c {configuration} -o \"{outputDir}\" --nologo -v q",
+                            // No `-o "<dir>"`: dotnet turns -o into the OutputPath
+                            // PROPERTY, and MSBuild's command-line property parser
+                            // splits values on ';' — a project directory containing
+                            // ';' dies with MSB1006. The output location is set
+                            // inside the generated csproj instead (escaped), and the
+                            // csproj already lives in outputDir (IDE-pipeline parity).
+                            Arguments = $"build \"{csprojPath}\" -c {configuration} --nologo -v q",
                             UseShellExecute = false,
                             RedirectStandardOutput = true,
                             RedirectStandardError = true,

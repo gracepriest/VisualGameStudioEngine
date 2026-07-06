@@ -142,6 +142,17 @@
                         <TextBlock Text="Project name" FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding ProjectName}"
                                  Watermark="Enter project name"/>
+                        <!-- Warn-but-allow: special characters build fine (escaped), but flag likely mistakes -->
+                        <Border Background="#33806000"
+                                CornerRadius="4"
+                                Padding="8"
+                                Margin="0,4,0,0"
+                                IsVisible="{Binding NameWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Text="{Binding NameWarning}"
+                                       Foreground="#E5C07B"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"/>
+                        </Border>
                     </StackPanel>
 
                     <!-- Location -->

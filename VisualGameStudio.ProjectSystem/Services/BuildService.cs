@@ -5,6 +5,7 @@ using BasicLang.Compiler.SemanticAnalysis;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Models;
 using VisualGameStudio.ProjectSystem.Serialization;
+using MSBuildText = BasicLang.Compiler.ProjectSystem.MSBuildText;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
@@ -885,7 +886,9 @@ public class BuildService : IBuildService
         sb.AppendLine($"    <TargetFramework>{targetFramework}</TargetFramework>");
         sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
         sb.AppendLine("    <Nullable>disable</Nullable>");
-        sb.AppendLine($"    <AssemblyName>{project.Name}</AssemblyName>");
+        // User-controlled values are XML/MSBuild-escaped: ';' in a project name
+        // splits derived item paths (MSB4094), '&' breaks the XML load (MSB4025).
+        sb.AppendLine($"    <AssemblyName>{MSBuildText.EscapeValue(project.Name)}</AssemblyName>");
         sb.AppendLine("    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>");
         sb.AppendLine("    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>");
         sb.AppendLine("    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>");
@@ -905,7 +908,7 @@ public class BuildService : IBuildService
 
         // Compile items
         sb.AppendLine("  <ItemGroup>");
-        sb.AppendLine($"    <Compile Include=\"{csFileName}\" />");
+        sb.AppendLine($"    <Compile Include=\"{MSBuildText.EscapeValue(csFileName)}\" />");
         sb.AppendLine("  </ItemGroup>");
 
         // Assembly references (explicit .blproj references + injected engine wrapper)
@@ -916,13 +919,13 @@ public class BuildService : IBuildService
             {
                 if (!string.IsNullOrEmpty(reference.HintPath))
                 {
-                    sb.AppendLine($"    <Reference Include=\"{reference.Name}\">");
-                    sb.AppendLine($"      <HintPath>{reference.HintPath}</HintPath>");
+                    sb.AppendLine($"    <Reference Include=\"{MSBuildText.EscapeValue(reference.Name)}\">");
+                    sb.AppendLine($"      <HintPath>{MSBuildText.EscapeValue(reference.HintPath)}</HintPath>");
                     sb.AppendLine("    </Reference>");
                 }
                 else
                 {
-                    sb.AppendLine($"    <Reference Include=\"{reference.Name}\" />");
+                    sb.AppendLine($"    <Reference Include=\"{MSBuildText.EscapeValue(reference.Name)}\" />");
                 }
             }
             sb.AppendLine("  </ItemGroup>");
@@ -940,7 +943,7 @@ public class BuildService : IBuildService
             sb.AppendLine("  <ItemGroup>");
             foreach (var package in packageReferences)
             {
-                sb.AppendLine($"    <PackageReference Include=\"{package.Name}\" Version=\"{package.Version}\" />");
+                sb.AppendLine($"    <PackageReference Include=\"{MSBuildText.EscapeValue(package.Name)}\" Version=\"{MSBuildText.EscapeValue(package.Version)}\" />");
             }
             if (needsDrawingPackage)
             {

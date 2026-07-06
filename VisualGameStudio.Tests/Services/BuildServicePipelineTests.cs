@@ -242,6 +242,61 @@ End Function
     }
 
     // ------------------------------------------------------------------
+    // 5. hostile project names: MSBuild/XML special characters
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Build_ProjectNameWithMsBuildSpecialChars_Builds()
+    {
+        // Regression: a project named ";k;lk;lkl;k;l" failed with MSB4094 —
+        // the generated csproj embedded the raw name into <AssemblyName> and
+        // <Compile Include>, and MSBuild split the derived obj\Debug\<name>.dll
+        // path on the ';' list separator (multiple items into Csc's single-item
+        // OutputAssembly). '&' additionally breaks the XML layer, '%' and the
+        // apostrophe are MSBuild escape/quote characters. All are legal Windows
+        // file-name characters, so the build layer must escape them.
+        const string name = "A;B & C's 100%";
+
+        var projectDir = Path.Combine(_rootDir, name);
+        Directory.CreateDirectory(projectDir);
+
+        const string mainSource =
+@"Sub Main()
+    PrintLine(""hostile name ok"")
+End Sub
+";
+        // NOTE: '&' must be XML-escaped inside the .blproj itself.
+        var projectXml =
+@"<?xml version=""1.0"" encoding=""utf-8""?>
+<BasicLangProject Version=""1.0"">
+  <PropertyGroup>
+    <ProjectName>" + System.Security.SecurityElement.Escape(name) + @"</ProjectName>
+    <OutputType>Exe</OutputType>
+    <TargetBackend>CSharp</TargetBackend>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""Main.bas"" />
+  </ItemGroup>
+</BasicLangProject>
+";
+
+        var projectFile = Path.Combine(projectDir, name + ".blproj");
+        File.WriteAllText(projectFile, projectXml);
+        File.WriteAllText(Path.Combine(projectDir, "Main.bas"), mainSource);
+
+        var project = await new ProjectSerializer().LoadAsync(projectFile);
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.True,
+            "project with MSBuild/XML-special characters in its name failed to build " +
+            "(raw name leaked into the generated csproj?).\n" + Describe(result, output));
+        Assert.That(result.ExecutablePath, Is.Not.Null.And.Not.Empty,
+            "build succeeded but reported no executable.\n" + Describe(result, output));
+        Assert.That(File.Exists(result.ExecutablePath), Is.True,
+            $"Reported executable does not exist: {result.ExecutablePath}");
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
