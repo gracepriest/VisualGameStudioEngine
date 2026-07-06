@@ -16,7 +16,7 @@ the C++ standard library. Two concrete gaps:
    `".NET type 'List' — no C++ mapping exists"` (CppCapabilityChecker.cs:141). They work on
    the C# backend but cannot lower to C++ at all. Real game/tool code needs data structures.
 2. **No C++ std passthrough.** There is no analog to "all of .NET is just there on C#." A
-   user cannot `#include <mutex>` and write `Dim m As std::mutex`. The two existing foreign
+   user cannot pull in a C++ header and write `Dim m As std::mutex`. The two existing foreign
    passthrough mechanisms (`Extern`/inline, below) bind *one function or block* at a time —
    they are not a general "use any std type" surface.
 
@@ -35,7 +35,9 @@ full-platform passthrough (all of .NET on C#; all of `std::` on C++).
 | Per-backend passthrough #1 — `Extern` with per-platform implementation | `ExternDeclarationNode.GetImplementation(platform)` (ASTNodes.cs:889 / IRNodes.cs:1204); spliced by C++ backend (CppCodeGenerator.cs:1501) |
 | Per-backend passthrough #2 — language-tagged inline code blocks | `InlineCodeNode` (ASTNodes.cs:1591) → `IRInlineCode` (IRNodes.cs:732) → emitted (CppCodeGenerator.cs:2370); tag captured by lexer (`InlineCodeValue`, BasicLangLexer.cs:344) |
 | Analyzer already types collection members on the C# path (so the everyday layer only needs C++ codegen work) | `LookupNetTypeMember` / `GetStringMethodReturnType` / `GetCommonMethodReturnType` / `IsIndexableGenericType` + `IRIndexerAccess` (per CLAUDE.md "Recent Bug Fixes") |
-| Existing `#`-directive family to extend for `#include` | conditional-compilation preprocessor `#IfDef`/`#IfNDef`/`#Else`/`#EndIf` runs before lexer/parser in `Compiler.cs` (per CLAUDE.md) |
+| **`#Include` is already taken** — it does VB-style *source-file splicing*, not C++ header emission, and owns **both** delimiter forms | `Preprocessor.cs:80` dispatches `#Include` case-insensitively; `ProcessInclude` (Preprocessor.cs:153) parses `#Include "file.bas"` **and** `#Include <file.bh>` (angle = system-path source include, line 166–169), with include guards (`_includedFiles`, line 203) |
+| C++ header-emission plumbing **already exists** — only the wiring from a user directive is missing | `_headerIncludes` list declared and seeded internally (CppCodeGenerator.cs:21/40/237), emitted deduped (HashSet, line 231) and ordered at file top; no user-directive path feeds it yet |
+| `TypeKind` enum's home (for the new `Foreign` value) | `enum TypeKind` (SymbolTable.cs:161) |
 
 ## Locked decisions
 
@@ -85,10 +87,14 @@ full-platform passthrough (all of .NET on C#; all of `std::` on C++).
 
 ### Layer 2 — Full C++ std passthrough (C++ backend only)
 
-8. **`#include` directive** joins the `#`-preprocessor family:
-   `#include <mutex>` (system) and `#include "mygrid.h"` (local). On C++ → real `#include`
-   emitted at file top, **deduped and ordered**. On any other backend → clean capability
-   error.
+8. **`#CppInclude` directive** — a **new, distinct** directive (NOT `#include`/`#Include`,
+   which already means VB-style source-file splicing; see audit table). Syntax:
+   `#CppInclude <mutex>` (system header) and `#CppInclude "mygrid.h"` (local header). On C++ →
+   emits a real `#include` at file top by feeding the **existing** `_headerIncludes` list
+   (already deduped + ordered — CppCodeGenerator.cs:231/237); the work is *wiring*, not new
+   emission. On any other backend → clean capability error. The existing `#Include`
+   source-splicer is left completely untouched. Routed in `Preprocessor.cs` alongside the
+   sibling `#`-directives.
 
 9. **Foreign types = any `::`-qualified type name** (`std::mutex`, `std::deque`,
    `mylib::Widget`, `::GlobalThing` where a leading `::` denotes the C++ global namespace).
@@ -98,7 +104,7 @@ full-platform passthrough (all of .NET on C#; all of `std::` on C++).
      `std::map<std::string, std::vector<int32_t>>`). Angle brackets never enter the grammar.
    - **Member access is unchecked passthrough:** `m.lock()` → `m.lock()` verbatim; result is
      `Foreign` (usable, not deeply checked). The C++ compiler is the type checker — we do not
-     re-derive C++'s type system. Documented tradeoff: past the `#include`, you get C++'s
+     re-derive C++'s type system. Documented tradeoff: past the `#CppInclude`, you get C++'s
      error messages, not BasicLang's.
    - **Value semantics:** foreign types emit as plain value locals (`std::mutex m;`), **not**
      `shared_ptr` like BasicLang classes. Heap/ownership is opt-in via explicit
@@ -116,16 +122,16 @@ full-platform passthrough (all of .NET on C#; all of `std::` on C++).
 
 12. **Backend honesty matrix (never silent garbage):**
     - **C++** — collections + passthrough fully work, compile-and-run.
-    - **C#** — collections already work natively; `#include` / `std::` foreign types →
+    - **C#** — collections already work natively; `#CppInclude` / `std::` foreign types →
       clean *"C++ passthrough requires the C++ backend"* error.
-    - **LLVM / MSIL** — collections, `#include`, foreign types → clean *"not yet supported on
-      <backend>"* error.
+    - **LLVM / MSIL** — collections, `#CppInclude`, foreign types → clean *"not yet supported
+      on <backend>"* error.
 
 13. **Error handling:**
     - Unknown collection method → normal BasicLang semantic diagnostic (analyzer already
       knows the member set).
-    - Bad `#include` / foreign-type typo → surfaced from the C++ compiler through the build
-      (the accepted cost of opaque passthrough).
+    - Bad `#CppInclude` / foreign-type typo → surfaced from the C++ compiler through the
+      build (the accepted cost of opaque passthrough).
     - Passthrough on the wrong backend → clean capability error (decision 12).
 
 14. **Process:** TDD (NUnit), one commit per green task, full `dotnet test` suite as the gate
@@ -137,10 +143,12 @@ full-platform passthrough (all of .NET on C#; all of `std::` on C++).
       toolchain via `CppToolchain` at `-std=c++20`. Extends the `Cpp_EndToEnd` pattern.
     - **E2E portability (C#)** — the *same* collection source compiles + runs on C# → proves
       the everyday layer is truly portable.
-    - **Passthrough E2E** — `#include <mutex>` + `Dim m As std::mutex` + `m.lock()`/
+    - **Passthrough E2E** — `#CppInclude <mutex>` + `Dim m As std::mutex` + `m.lock()`/
       `m.unlock()` builds and runs.
-    - **Capability-error tests** — collections / `#include` / foreign types on C#/LLVM/MSIL
-      assert the clean diagnostic.
+    - **Capability-error tests** — collections / `#CppInclude` / foreign types on
+      C#/LLVM/MSIL assert the clean diagnostic. Include a test that a plain `#Include` of a
+      BasicLang source file still splices correctly (regression guard on the un-touched
+      directive).
     - **Codegen string-asserts** — `List(Of Integer)` → `BasicLang::List<int32_t>`;
       `std::deque(Of Integer)` → `std::deque<int32_t>`.
 
@@ -149,16 +157,22 @@ full-platform passthrough (all of .NET on C#; all of `std::` on C++).
 - `BasicLang/CppCapabilityChecker.cs` — allow-list for collections + `Foreign` types.
 - `BasicLang/CppCodeGenerator.cs` (+ type mapper) — collection/foreign type mapping, wrapper
   preamble emission (usage-gated), property-bridge rule, Dictionary indexer read/write,
-  `#include` emission, foreign passthrough (value semantics, `(Of …)` → `<…>`, opaque
+  wiring `#CppInclude` targets into the **existing** `_headerIncludes` list (CppCodeGenerator.cs:21/40/231/237 —
+  emission already exists), foreign passthrough (value semantics, `(Of …)` → `<…>`, opaque
   members).
-- `BasicLang/BasicLangLexer.cs` / `Parser` / `ASTNodes.cs` — `#include` directive;
-  `::`-qualified type-name parsing (incl. leading `::`); `(Of …)` on qualified names.
+- `BasicLang/Preprocessor.cs` — recognize the new `#CppInclude` directive (route to C++ header
+  collection on C++; clean error elsewhere) **without altering** the existing `#Include`
+  source-splicer (Preprocessor.cs:80/153).
+- `BasicLang/SymbolTable.cs` — add `Foreign` to `enum TypeKind` (SymbolTable.cs:161).
+- `BasicLang/BasicLangLexer.cs` / `Parser` / `ASTNodes.cs` — `::`-qualified type-name parsing
+  (incl. leading `::`); `(Of …)` on qualified names. (The `#CppInclude` directive is handled
+  in the preprocessor, ahead of the lexer.)
 - `BasicLang/SemanticAnalyzer.cs` — `TypeKind.Foreign` recognition, opaque member access,
   non-C++ backend guards; confirm collection member typing on the C++ path.
-- `BasicLang/IRNodes.cs` / `IRBuilder.cs` — IR for the `#include` directive and foreign types
-  as needed.
+- `BasicLang/IRNodes.cs` / `IRBuilder.cs` — IR for foreign types as needed (the `#CppInclude`
+  target may be carried as codegen state rather than an IR node — settled in the plan).
 - `BasicLang/CSharpBackend.cs`, `BasicLang/LLVMBackend.cs`, `BasicLang/MSILBackend.cs` — clean
-  errors for `#include` / foreign types (decision 12).
+  errors for `#CppInclude` / foreign types (decision 12).
 - `VisualGameStudio.Tests/` — the test set in decision 14.
 
 ## Out of scope (explicit follow-ups)
@@ -178,7 +192,12 @@ full-platform passthrough (all of .NET on C#; all of `std::` on C++).
    emission (usage-gated) + auto-includes.
 3. Member/indexer/property lowering (property-bridge, indexer read/write, `TryGetValue`,
    `Keys`/`Values`, `For Each`); C++ E2E compile-and-run + C# portability E2E.
-4. `#include` directive: lexer/parser/IR + C++ emission (dedup/order) + non-C++ clean errors.
+   *Budget a short investigation spike first* to confirm the IR shape of `.Count`/`.Keys`/
+   `.Values` (MemberAccess vs parameterless Call — decision 6) so the property-bridge rule
+   isn't blocked mid-task.
+4. `#CppInclude` directive: recognize in `Preprocessor.cs` (distinct from `#Include`) → wire
+   targets into the existing `_headerIncludes` emission + non-C++ clean errors. Regression
+   test that plain `#Include` source-splicing still works.
 5. `Foreign` types: `::`-qualified parsing, `TypeKind.Foreign`, opaque members, value
    semantics, `(Of …)` → `<…>`; capability allow-list; passthrough E2E.
 6. Cross-backend clean-error tests (C#/LLVM/MSIL); docs (BasicLang reference); IDE binary
