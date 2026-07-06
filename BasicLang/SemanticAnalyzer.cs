@@ -121,8 +121,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>
         /// Register sibling project units whose public symbols are visible to
-        /// this unit without an explicit Import. Only already-compiled units
-        /// (with populated ExportedSymbols) contribute symbols.
+        /// this unit without an explicit Import. Already-compiled units
+        /// contribute their full-fidelity ExportedSymbols; units that are only
+        /// parsed contribute declaration signatures read from their ASTs, so
+        /// cross-file resolution does not depend on project compile order.
         /// </summary>
         public void AddImplicitImports(IEnumerable<CompilationUnit> units)
         {
@@ -137,12 +139,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// Pull the exported symbols of every implicit sibling unit into the
-        /// global scope so unqualified and qualified cross-file references
-        /// resolve. Mirrors ImportSymbolsFromFile but needs no Import directive.
+        /// Pull the symbols of every implicit sibling unit into the global
+        /// scope so unqualified and qualified cross-file references resolve.
+        /// Completed units contribute their full-fidelity exported symbols;
+        /// parsed-but-not-yet-compiled units contribute declaration signatures
+        /// collected from their ASTs, making resolution independent of the
+        /// project's compile order (mutual references between two files
+        /// included). Mirrors ImportSymbolsFromFile but needs no Import
+        /// directive.
         /// </summary>
         private void ImportImplicitProjectSymbols()
         {
+            // Full-fidelity symbols first: Define() keeps the first symbol
+            // registered under a name, so completed units win over the
+            // signature-level fallback below.
             foreach (var unit in _implicitImportUnits)
             {
                 if (unit == null || !unit.IsComplete) continue;
@@ -178,6 +188,351 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     GlobalScope.Define(importedSymbol);
                 }
             }
+
+            RegisterPendingSiblingSignatures();
+        }
+
+        /// <summary>
+        /// Signature-level fallback for siblings that are parsed but not yet
+        /// compiled: register their declaration signatures (functions/subs
+        /// with parameter and return types, classes with members, public
+        /// module-level fields and constants) straight from their ASTs. The
+        /// exported-symbol filter of Compiler.CollectExportedSymbols is
+        /// mirrored so a sibling is equally visible whether it compiles
+        /// before or after the current unit.
+        /// </summary>
+        private void RegisterPendingSiblingSignatures()
+        {
+            var pendingUnits = _implicitImportUnits
+                .Where(u => u != null && !u.IsComplete && u.AST?.Declarations != null)
+                .ToList();
+            if (pendingUnits.Count == 0) return;
+
+            // Pass 1: class shells, so any sibling signature can reference any
+            // sibling class (mutual references included).
+            var pendingClasses = new List<(ClassNode Node, TypeInfo Type)>();
+            foreach (var unit in pendingUnits)
+            {
+                if (!string.IsNullOrEmpty(unit.ModuleName))
+                {
+                    _importedModules.Add(unit.ModuleName);
+                }
+
+                foreach (var decl in EnumerateSiblingTopLevelDeclarations(unit))
+                {
+                    if (decl is ClassNode classNode)
+                    {
+                        var classType = RegisterSiblingClassShell(classNode, unit);
+                        if (classType != null)
+                        {
+                            pendingClasses.Add((classNode, classType));
+                        }
+                    }
+                }
+            }
+
+            // Pass 2: class members, now that every sibling class shell exists.
+            foreach (var (classNode, classType) in pendingClasses)
+            {
+                PopulateSiblingClassMembers(classNode, classType);
+            }
+
+            // Pass 3: functions, subs and public module-level fields/constants.
+            foreach (var unit in pendingUnits)
+            {
+                foreach (var decl in EnumerateSiblingTopLevelDeclarations(unit))
+                {
+                    RegisterSiblingDeclarationSignature(decl, unit);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The top-level declarations of a parsed sibling that participate in
+        /// cross-file visibility, mirroring the compiled path: .cls/.class
+        /// units expose only their class, .mod units promote their module
+        /// members to the top level, and other files expose their own
+        /// top-level declarations (members nested in an explicit Module block
+        /// stay module-qualified, exactly as after full compilation).
+        /// </summary>
+        private static IEnumerable<ASTNode> EnumerateSiblingTopLevelDeclarations(CompilationUnit unit)
+        {
+            foreach (var decl in unit.AST.Declarations)
+            {
+                if (unit.IsClassFile)
+                {
+                    if (decl is ClassNode)
+                        yield return decl;
+                    continue;
+                }
+
+                if (unit.IsModFile && decl is ModuleNode moduleNode)
+                {
+                    foreach (var member in moduleNode.Members)
+                        yield return member;
+                    continue;
+                }
+
+                yield return decl;
+            }
+        }
+
+        /// <summary>
+        /// Define an imported class symbol with an empty TypeInfo for a class
+        /// declared in a not-yet-compiled sibling. Members are populated in a
+        /// second pass. Returns null when the name is already taken (stdlib,
+        /// a completed sibling, or an earlier pending sibling wins).
+        /// </summary>
+        private TypeInfo RegisterSiblingClassShell(ClassNode classNode, CompilationUnit unit)
+        {
+            if (string.IsNullOrEmpty(classNode.Name)) return null;
+            if (GlobalScope.Resolve(classNode.Name) != null) return null;
+
+            var classType = new TypeInfo(classNode.Name, TypeKind.Class);
+            classType.IsAbstract = classNode.IsAbstract;
+
+            var symbol = new Symbol(classNode.Name, SymbolKind.Class, classType, 0, 0)
+            {
+                IsImported = true,
+                IsSiblingSignature = true,
+                SourceModule = unit.ModuleName
+            };
+            GlobalScope.Define(symbol);
+            return classType;
+        }
+
+        /// <summary>
+        /// Record a pending sibling class's non-private members (methods,
+        /// constructors, fields, properties, constants) on its TypeInfo so
+        /// cross-file member access and constructor validation resolve.
+        /// </summary>
+        private void PopulateSiblingClassMembers(ClassNode classNode, TypeInfo classType)
+        {
+            if (classNode.Members == null) return;
+
+            foreach (var member in classNode.Members)
+            {
+                switch (member)
+                {
+                    case FunctionNode func when func.Access != AccessModifier.Private:
+                    {
+                        var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
+                        classType.Members[func.Name] = new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
+                        {
+                            ReturnType = returnType,
+                            Parameters = BuildSiblingSignatureParameters(func.Parameters),
+                            Access = func.Access
+                        };
+                        break;
+                    }
+
+                    case SubroutineNode sub when sub.Access != AccessModifier.Private:
+                    {
+                        classType.Members[sub.Name] = new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
+                        {
+                            ReturnType = _typeManager.VoidType,
+                            Parameters = BuildSiblingSignatureParameters(sub.Parameters),
+                            Access = sub.Access
+                        };
+                        break;
+                    }
+
+                    case ConstructorNode ctor:
+                    {
+                        var ctorSymbol = new Symbol(".ctor", SymbolKind.Function, classType, 0, 0)
+                        {
+                            ReturnType = classType,
+                            Parameters = BuildSiblingSignatureParameters(ctor.Parameters),
+                            Access = ctor.Access
+                        };
+                        classType.Members[$".ctor{ctor.Parameters.Count}"] = ctorSymbol;
+                        break;
+                    }
+
+                    case VariableDeclarationNode field when field.Access != AccessModifier.Private:
+                    {
+                        classType.Members[field.Name] = new Symbol(field.Name, SymbolKind.Variable,
+                            ResolveSiblingSignatureType(field.Type) ?? _typeManager.ObjectType, 0, 0)
+                        {
+                            Access = field.Access
+                        };
+                        break;
+                    }
+
+                    case PropertyNode prop when prop.Access != AccessModifier.Private:
+                    {
+                        classType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property,
+                            ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType, 0, 0)
+                        {
+                            Access = prop.Access
+                        };
+                        break;
+                    }
+
+                    case ConstantDeclarationNode constant when constant.Access != AccessModifier.Private:
+                    {
+                        classType.Members[constant.Name] = new Symbol(constant.Name, SymbolKind.Constant,
+                            ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType, 0, 0)
+                        {
+                            Access = constant.Access,
+                            IsConstant = true
+                        };
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Register one top-level declaration of a pending sibling as an
+        /// imported signature symbol. Functions, subroutines and classes are
+        /// always visible (compiled-path parity); fields require Public;
+        /// constants mirror the compiled path, where constant symbols carry
+        /// the default (public) symbol access and are therefore exported.
+        /// </summary>
+        private void RegisterSiblingDeclarationSignature(ASTNode decl, CompilationUnit unit)
+        {
+            switch (decl)
+            {
+                case FunctionNode func:
+                {
+                    if (GlobalScope.Resolve(func.Name) != null) return;
+                    var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
+                    GlobalScope.Define(new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
+                    {
+                        IsImported = true,
+                        IsSiblingSignature = true,
+                        SourceModule = unit.ModuleName,
+                        ReturnType = returnType,
+                        Parameters = BuildSiblingSignatureParameters(func.Parameters),
+                        Access = func.Access
+                    });
+                    break;
+                }
+
+                case SubroutineNode sub:
+                {
+                    if (GlobalScope.Resolve(sub.Name) != null) return;
+                    GlobalScope.Define(new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
+                    {
+                        IsImported = true,
+                        IsSiblingSignature = true,
+                        SourceModule = unit.ModuleName,
+                        ReturnType = _typeManager.VoidType,
+                        Parameters = BuildSiblingSignatureParameters(sub.Parameters),
+                        Access = sub.Access
+                    });
+                    break;
+                }
+
+                case VariableDeclarationNode field when field.Access == AccessModifier.Public:
+                {
+                    if (GlobalScope.Resolve(field.Name) != null) return;
+                    GlobalScope.Define(new Symbol(field.Name, SymbolKind.Variable,
+                        ResolveSiblingSignatureType(field.Type) ?? _typeManager.ObjectType, 0, 0)
+                    {
+                        IsImported = true,
+                        IsSiblingSignature = true,
+                        SourceModule = unit.ModuleName,
+                        Access = field.Access
+                    });
+                    break;
+                }
+
+                case ConstantDeclarationNode constant:
+                {
+                    if (GlobalScope.Resolve(constant.Name) != null) return;
+                    GlobalScope.Define(new Symbol(constant.Name, SymbolKind.Constant,
+                        ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType, 0, 0)
+                    {
+                        IsImported = true,
+                        IsSiblingSignature = true,
+                        SourceModule = unit.ModuleName,
+                        IsConstant = true
+                    });
+                    break;
+                }
+
+                // ClassNode shells were registered in pass 1; anything else
+                // (structures, enums, interfaces, explicit Module blocks, ...)
+                // keeps its current cross-file behavior.
+            }
+        }
+
+        private List<Symbol> BuildSiblingSignatureParameters(List<ParameterNode> parameters)
+        {
+            var result = new List<Symbol>();
+            if (parameters == null) return result;
+
+            foreach (var param in parameters)
+            {
+                var paramType = ResolveSiblingSignatureType(param.Type) ?? _typeManager.ObjectType;
+                result.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, 0, 0)
+                {
+                    IsOptional = param.IsOptional || param.DefaultValue != null,
+                    IsByRef = param.IsByRef,
+                    IsParamArray = param.IsParamArray
+                });
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Resolve a type reference for a sibling signature without ever
+        /// reporting diagnostics against the current unit (the sibling's own
+        /// compilation reports its errors). Prefers class shells already
+        /// registered from siblings, then the type manager, then a permissive
+        /// named TypeInfo (parity with ResolveTypeName's .NET fallback).
+        /// </summary>
+        private TypeInfo ResolveSiblingSignatureType(TypeReference typeRef)
+        {
+            if (typeRef == null) return null;
+
+            if (typeRef.IsArray)
+            {
+                var elementType = ResolveSiblingSignatureTypeName(typeRef.Name);
+                int arraySize = typeRef.ArrayDimensions.Count > 0 ? typeRef.ArrayDimensions[0] : 0;
+                return _typeManager.CreateArrayType(elementType, typeRef.ArrayDimensions.Count, arraySize);
+            }
+
+            if (typeRef.GenericArguments.Count > 0)
+            {
+                var typeArgs = typeRef.GenericArguments
+                    .Select(ResolveSiblingSignatureType)
+                    .Select(t => t ?? _typeManager.ObjectType)
+                    .ToList();
+                var genericType = _typeManager.CreateGenericType(typeRef.Name, typeArgs);
+                if (genericType == null)
+                {
+                    genericType = new TypeInfo(typeRef.Name, TypeKind.Class);
+                    genericType.GenericArguments.AddRange(typeArgs);
+                }
+                if (IsDelegateTypeName(typeRef.Name))
+                {
+                    genericType.Kind = TypeKind.Delegate;
+                }
+                return genericType;
+            }
+
+            return ResolveSiblingSignatureTypeName(typeRef.Name);
+        }
+
+        private TypeInfo ResolveSiblingSignatureTypeName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return _typeManager.ObjectType;
+
+            // A class/struct/interface symbol already in scope — including a
+            // shell registered from another pending sibling — carries the type
+            // with its members.
+            var symbol = GlobalScope.Resolve(name);
+            if (symbol?.Type != null &&
+                (symbol.Kind == SymbolKind.Class || symbol.Kind == SymbolKind.Structure ||
+                 symbol.Kind == SymbolKind.Interface || symbol.Kind == SymbolKind.Type))
+            {
+                return symbol.Type;
+            }
+
+            return _typeManager.GetType(name) ?? new TypeInfo(name, TypeKind.Class);
         }
 
         /// <summary>
