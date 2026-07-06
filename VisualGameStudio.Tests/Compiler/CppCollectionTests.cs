@@ -9,10 +9,13 @@ using BasicLang.Compiler.CodeGen.CPlusPlus;
 namespace VisualGameStudio.Tests.Compiler;
 
 /// <summary>
-/// C++ backend collection tests (Tasks 2 &amp; 3): the backend ACCEPTS List/Dictionary/HashSet,
-/// maps them to the BasicLang::List/Dictionary/HashSet wrappers (value types, never shared_ptr),
-/// and (Task 3) lowers collection OPERATIONS — member calls, .Count/.Keys/.Values, indexer
-/// read/write, For Each — to correct, .NET-faithful C++ that actually compiles AND runs.
+/// C++ backend collection tests: the backend ACCEPTS List/Dictionary/HashSet and maps them to
+/// the BasicLang::List/Dictionary/HashSet wrappers wrapped in std::shared_ptr (REFERENCE
+/// semantics — .NET List/Dictionary/HashSet are reference types, so ByVal params/assignment/
+/// field stores/lambda capture must ALIAS, matching .NET and the C# backend). It lowers
+/// collection OPERATIONS — member calls (via -&gt;), .Count/.Keys/.Values, indexer read/write
+/// (deref/-&gt;Get/-&gt;Set), For Each (deref) — to correct, .NET-faithful C++ that compiles
+/// AND runs, and the cross-boundary sharing tests below prove the reference semantics match .NET.
 /// </summary>
 //
 // ============================================================================
@@ -88,7 +91,7 @@ public class CppCollectionTests
     }
 
     [Test]
-    public void Cpp_ListLocal_MapsToBasicLangListValue()
+    public void Cpp_ListLocal_MapsToBasicLangListSharedPtr()
     {
         var source = @"
 Sub Main()
@@ -96,9 +99,11 @@ Sub Main()
 End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain("BasicLang::List<int32_t>"));
-        Assert.That(output, Does.Not.Contain("std::make_shared<List"));
-        Assert.That(output, Does.Not.Contain("std::shared_ptr<BasicLang::List"));
+        // Reference semantics: the local is a shared_ptr and construction is make_shared.
+        Assert.That(output, Does.Contain("std::shared_ptr<BasicLang::List<int32_t>>"));
+        Assert.That(output, Does.Contain("std::make_shared<BasicLang::List<int32_t>>"));
+        // Never a nested/double wrap.
+        Assert.That(output, Does.Not.Contain("make_shared<std::shared_ptr"));
     }
 
     [Test]
@@ -112,14 +117,14 @@ Sub Main()
 End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain("BasicLang::List<int32_t>"));
+        Assert.That(output, Does.Contain("std::shared_ptr<BasicLang::List<int32_t>>"));
         Assert.That(output, Does.Contain("class List"));                     // preamble emitted
-        Assert.That(output, Does.Not.Contain("std::shared_ptr<list"));
+        Assert.That(output, Does.Not.Contain("std::shared_ptr<list"));       // never lowercase
         Assert.That(output, Does.Not.Contain("std::make_shared<list"));
     }
 
     [Test]
-    public void Cpp_DictionaryLocal_MapsToBasicLangDictionaryValue()
+    public void Cpp_DictionaryLocal_MapsToBasicLangDictionarySharedPtr()
     {
         var source = @"
 Sub Main()
@@ -127,13 +132,12 @@ Sub Main()
 End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain("BasicLang::Dictionary<std::string, int32_t>"));
-        Assert.That(output, Does.Not.Contain("std::make_shared<Dictionary"));
-        Assert.That(output, Does.Not.Contain("std::shared_ptr<BasicLang::Dictionary"));
+        Assert.That(output, Does.Contain("std::shared_ptr<BasicLang::Dictionary<std::string, int32_t>>"));
+        Assert.That(output, Does.Contain("std::make_shared<BasicLang::Dictionary<std::string, int32_t>>"));
     }
 
     [Test]
-    public void Cpp_HashSetLocal_MapsToBasicLangHashSetValue()
+    public void Cpp_HashSetLocal_MapsToBasicLangHashSetSharedPtr()
     {
         var source = @"
 Sub Main()
@@ -141,9 +145,8 @@ Sub Main()
 End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain("BasicLang::HashSet<int32_t>"));
-        Assert.That(output, Does.Not.Contain("std::make_shared<HashSet"));
-        Assert.That(output, Does.Not.Contain("std::shared_ptr<BasicLang::HashSet"));
+        Assert.That(output, Does.Contain("std::shared_ptr<BasicLang::HashSet<int32_t>>"));
+        Assert.That(output, Does.Contain("std::make_shared<BasicLang::HashSet<int32_t>>"));
     }
 
     [Test]
@@ -408,6 +411,140 @@ End Sub";
         Assert.That(csOut, Is.EqualTo(expected), "C# backend output");
     }
 
+    // ========================================================================
+    // REFERENCE SEMANTICS: collections lower to std::shared_ptr, so they ALIAS
+    // across ByVal params, `Dim b = a`, field stores, and lambda capture — exactly
+    // like .NET reference types (and the C# backend). Before the shared_ptr rewrite
+    // these all deep-COPIED (value wrappers), so the C++ output diverged from .NET.
+    // Each test's expected value is what .NET / the C# backend produces.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_CollectionByValParam_MutationVisibleToCaller()
+    {
+        // .NET: a List passed ByVal is passed by REFERENCE (the reference is copied, the
+        // object is shared) — AddItem's mutation is visible to the caller. Value wrappers
+        // printed 2 here; reference semantics print 3 (matching .NET).
+        const string source = @"
+Sub AddItem(lst As List(Of Integer))
+    lst.Add(99)
+End Sub
+
+Sub Main()
+    Dim numbers As New List(Of Integer)()
+    numbers.Add(1)
+    numbers.Add(2)
+    AddItem(numbers)
+    Console.WriteLine(numbers.Count)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // The param is a shared_ptr and the mutation uses ->.
+        Assert.That(output, Does.Contain("std::shared_ptr<BasicLang::List<int32_t>> lst"));
+        Assert.That(CompileRun(output), Is.EqualTo("3\n"));
+    }
+
+    [Test]
+    public void Cpp_CollectionAssignment_Aliases()
+    {
+        // .NET: `Dim b = a` copies the REFERENCE — b and a are the same list, so b.Add is
+        // visible through a. Value wrappers printed 1; reference semantics print 2.
+        const string source = @"
+Sub Main()
+    Dim a As New List(Of Integer)()
+    a.Add(1)
+    Dim b As List(Of Integer) = a
+    b.Add(2)
+    Console.WriteLine(a.Count)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("2\n"));
+    }
+
+    [Test]
+    public void Cpp_CollectionFieldStorage_Aliases()
+    {
+        // .NET: storing a list into a field stores the REFERENCE — mutating the original
+        // through its own variable is visible via the field. Value wrappers printed 0
+        // (the field held an independent copy taken at assignment); reference semantics print 2.
+        const string source = @"
+Class Bag
+    Public Items As List(Of Integer)
+End Class
+
+Sub Main()
+    Dim s As New List(Of Integer)()
+    Dim bg As New Bag()
+    bg.Items = s
+    s.Add(1)
+    s.Add(2)
+    Console.WriteLine(bg.Items.Count)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("2\n"));
+    }
+
+    [Test]
+    public void Cpp_CollectionLambdaCapture_CompilesAndMutates()
+    {
+        // A `[=]` lambda that captures a VALUE-type collection captures it CONST — mutating it
+        // inside is MSVC C2662 (and a void-returning Action invocation emitted `void* t = a();`,
+        // C2440). As a shared_ptr, `[=]` copies the pointer (shared object) and the mutation
+        // COMPILES and is visible after invocation. .NET prints 2.
+        const string source = @"
+Sub Main()
+    Dim numbers As New List(Of Integer)()
+    numbers.Add(1)
+    Dim adder As Action = Sub() numbers.Add(2)
+    adder()
+    Console.WriteLine(numbers.Count)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // The void Action invocation must NOT be assigned to a void* temp.
+        Assert.That(output, Does.Not.Contain("= adder();"));
+        Assert.That(output, Does.Contain("adder();"));
+        Assert.That(CompileRun(output), Is.EqualTo("2\n"));
+    }
+
+    [Test]
+    public void Portability_CollectionSharing_CppAndCSharpAgree()
+    {
+        // The KEY reference-semantics proof (spec decision 12): one aliasing scenario run on
+        // BOTH backends must produce IDENTICAL output. A ByVal-param mutation plus an alias
+        // assignment; .NET reference semantics give 4 (2 initial + 1 from AddTwice via the
+        // shared reference + 1 via the alias b). If C++ still used value wrappers it would
+        // disagree with C#.
+        const string source = @"
+Sub AddTwice(lst As List(Of Integer))
+    lst.Add(3)
+End Sub
+
+Sub Main()
+    Dim a As New List(Of Integer)()
+    a.Add(1)
+    a.Add(2)
+    AddTwice(a)
+    Dim b As List(Of Integer) = a
+    b.Add(4)
+    Console.WriteLine(a.Count)
+End Sub";
+        const string expected = "4\n";
+
+        // C++ backend (shared_ptr reference semantics).
+        var cpp = CompileToCpp(source, out var cppErrors);
+        Assert.That(cppErrors, Is.Empty, string.Join("; ", cppErrors));
+        Assert.That(CompileRun(cpp), Is.EqualTo(expected), "C++ backend output");
+
+        // C# backend — real .NET List<int> (a genuine reference type), run via Roslyn.
+        var cs = CompileToCSharp(source, out var csErrors);
+        Assert.That(csErrors, Is.Empty, string.Join("; ", csErrors));
+        var csOut = VisualGameStudio.Tests.Native.CSharpRun.CompileAndRun(cs);
+        Assert.That(csOut, Is.EqualTo(expected), "C# backend output");
+    }
+
     [Test]
     public void Cpp_DictionaryMissingKeyRead_Throws()
     {
@@ -429,7 +566,7 @@ Sub Main()
 End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain(".Get("));  // read lowers to throwing .Get(k)
+        Assert.That(output, Does.Contain("->Get("));  // read lowers to throwing ->Get(k) (shared_ptr)
         Assert.That(CompileRun(output), Is.EqualTo("CAUGHT\n"));
     }
 
@@ -459,12 +596,17 @@ End Sub";
     [Test]
     public void Cpp_ModuleGlobalCollection_CompilesAndRuns()
     {
-        // End-to-end: a module-global List is populated and read inside Main.
-        // Before the ModuleUsesCollections globals fix this produced C++ that
-        // referenced BasicLang::List with no preamble and failed to compile.
+        // End-to-end: a module-global List is INITIALIZED (New), populated, and read inside
+        // Main. Under reference semantics the global is a std::shared_ptr defaulting to null
+        // (matching .NET, where an uninitialized module field is Nothing) — so it must be
+        // assigned before use, exactly like a real .NET program; calling a method on the
+        // unassigned null would be a NullReferenceException on both backends.
+        // Before the ModuleUsesCollections globals fix this produced C++ that referenced
+        // BasicLang::List with no preamble and failed to compile.
         var source = @"
 Dim g As List(Of Integer)
 Sub Main()
+    g = New List(Of Integer)()
     g.Add(10)
     g.Add(20)
     Console.WriteLine(g.Count)

@@ -82,8 +82,11 @@ public:
         value = it->second;
         return true;
     }
-    List<K> Keys() const { List<K> ks; for (const auto& kv : _m) ks.Add(kv.first); return ks; }
-    List<V> Values() const { List<V> vs; for (const auto& kv : _m) vs.Add(kv.second); return vs; }
+    // Keys()/Values() return a std::shared_ptr<List<...>> so a BasicLang-level
+    // `List(Of K)` (which is std::shared_ptr<BasicLang::List<K>>) binds type-consistently,
+    // and `For Each k In dict.Keys` derefs the returned shared_ptr in the range-for.
+    std::shared_ptr<List<K>> Keys() const { auto ks = std::make_shared<List<K>>(); for (const auto& kv : _m) ks->Add(kv.first); return ks; }
+    std::shared_ptr<List<V>> Values() const { auto vs = std::make_shared<List<V>>(); for (const auto& kv : _m) vs->Add(kv.second); return vs; }
     bool Remove(const K& key) { return _m.erase(key) > 0; }
     int32_t Count() const { return static_cast<int32_t>(_m.size()); }
     void Clear() { _m.clear(); }

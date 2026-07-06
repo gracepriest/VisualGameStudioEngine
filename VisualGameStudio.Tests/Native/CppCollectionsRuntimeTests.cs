@@ -30,6 +30,7 @@ public class CppCollectionsRuntimeTests
             "#include <stdexcept>\n" +
             "#include <cstdint>\n" +
             "#include <string>\n" +
+            "#include <memory>\n" +
             "#include <iostream>\n" +
             "\n" +
             CppCollectionsRuntime.Source +
@@ -52,6 +53,11 @@ public class CppCollectionsRuntimeTests
             "    bool threw = false;\n" +
             "    try { dict.Get(\"missing\"); } catch (std::runtime_error&) { threw = true; }\n" +
             "    std::cout << threw << \"\\n\";\n" +
+            "    // Keys()/Values() now return std::shared_ptr<List<...>> (reference semantics).\n" +
+            "    auto keys = dict.Keys();\n" +
+            "    auto vals = dict.Values();\n" +
+            "    int32_t valSum = 0; for (int32_t vv : *vals) valSum += vv;\n" +
+            "    std::cout << keys->Count() << \" \" << valSum << \"\\n\";\n" +
             "\n" +
             "    // --- HashSet ---\n" +
             "    BasicLang::HashSet<int32_t> set;\n" +
@@ -68,6 +74,7 @@ public class CppCollectionsRuntimeTests
             "3 20 1\n" +       // List: Count() [1] Contains(20)
             "2 1 1 2 1\n" +    // Dictionary: Count() ContainsKey("a") TryGetValue ok, got, Get("a")
             "1\n" +            // Dictionary: Get("missing") threw
+            "2 3\n" +          // Dictionary: Keys()->Count()=2, sum of Values()=1+2=3
             "1 0 1 1\n";       // HashSet: Add(5) Add(5) Contains(5) Count()
         Assert.That(normalized, Is.EqualTo(expected));
     }

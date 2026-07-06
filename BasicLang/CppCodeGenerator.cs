@@ -533,14 +533,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"{type.Name}<{string.Join(", ", type.GenericArguments.Select(MapType))}>{suffix}";
                 return type.Name + suffix;
             }
-            // Everyday collections -> BasicLang wrappers (value types, never shared_ptr).
+            // Everyday collections -> BasicLang wrappers wrapped in std::shared_ptr. .NET
+            // List/Dictionary/HashSet are REFERENCE types: ByVal params alias, `Dim b = a`
+            // aliases, field stores alias, and `[=]` lambda capture copies the (shared) pointer.
+            // Value semantics (the previous behavior) diverged from .NET and the C# backend.
             // Match case-insensitively (VB-style) but always emit the canonical capitalized name.
-            if (string.Equals(type.Name, "List", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 0)
-                return $"BasicLang::List<{MapType(type.GenericArguments[0])}>";
-            if (string.Equals(type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 1)
-                return $"BasicLang::Dictionary<{MapType(type.GenericArguments[0])}, {MapType(type.GenericArguments[1])}>";
-            if (string.Equals(type.Name, "HashSet", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 0)
-                return $"BasicLang::HashSet<{MapType(type.GenericArguments[0])}>";
+            // (BareCollectionType produces the un-wrapped pointee for make_shared/decl of the class.)
+            {
+                var bareColl = BareCollectionType(type);
+                if (bareColl != null)
+                    return $"std::shared_ptr<{bareColl}>";
+            }
 
             // IEnumerable(Of T) -> the coroutine generator (iterators are its only producer)
             if (type.Name == "IEnumerable" && type.GenericArguments != null && type.GenericArguments.Count > 0)
@@ -589,6 +592,44 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (type.Kind == TypeKind.Class || type.Kind == TypeKind.Interface)
                 return $"std::shared_ptr<{bare}>";
             return bare;
+        }
+
+        /// <summary>
+        /// The bare (un-shared_ptr-wrapped) C++ wrapper type for a BasicLang collection —
+        /// <c>BasicLang::List&lt;T&gt;</c> / <c>BasicLang::Dictionary&lt;K,V&gt;</c> /
+        /// <c>BasicLang::HashSet&lt;T&gt;</c> — or <c>null</c> when <paramref name="type"/> is
+        /// not one of those collections. This is the pointee type: <see cref="MapType"/> wraps
+        /// it in <c>std::shared_ptr&lt;…&gt;</c> (reference semantics), while
+        /// <c>make_shared&lt;pointee&gt;</c> and forward-decls need it un-wrapped. Case-insensitive
+        /// (VB-style); always emits the canonical capitalized name. Nested generic arguments
+        /// recurse through <see cref="MapType"/> so e.g. a List(Of List(Of Integer)) element is a
+        /// <c>std::shared_ptr&lt;BasicLang::List&lt;int32_t&gt;&gt;</c>.
+        /// </summary>
+        private string BareCollectionType(TypeInfo type)
+        {
+            if (type?.Name == null) return null;
+            if (string.Equals(type.Name, "List", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 0)
+                return $"BasicLang::List<{MapType(type.GenericArguments[0])}>";
+            if (string.Equals(type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 1)
+                return $"BasicLang::Dictionary<{MapType(type.GenericArguments[0])}, {MapType(type.GenericArguments[1])}>";
+            if (string.Equals(type.Name, "HashSet", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 0)
+                return $"BasicLang::HashSet<{MapType(type.GenericArguments[0])}>";
+            return null;
+        }
+
+        /// <summary>
+        /// True when <paramref name="type"/> is a BasicLang collection (List/Dictionary/HashSet),
+        /// which the C++ backend lowers as <c>std::shared_ptr</c> (reference semantics). Used to
+        /// select <c>-&gt;</c> member access, pointer-deref indexing/iteration, and null defaults.
+        /// Case-insensitive (VB-style).
+        /// </summary>
+        private static bool IsCollectionType(TypeInfo type)
+        {
+            var n = type?.Name;
+            return n != null
+                && (string.Equals(n, "List", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(n, "Dictionary", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(n, "HashSet", StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -686,14 +727,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             if (obj is IRVariable v && v.Name == "this") return "->";
 
-            // Collections (BasicLang::List/Dictionary/HashSet) and any already-qualified
-            // C++ type (name contains "::") are VALUE types: member access is `.`, never `->`.
-            // Matching is case-INSENSITIVE (BasicLang is case-insensitive; Task 2 relies on this).
             var tn = obj?.Type?.Name;
-            if (tn != null && (string.Equals(tn, "List", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(tn, "Dictionary", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(tn, "HashSet", StringComparison.OrdinalIgnoreCase)
-                || tn.Contains("::")))
+
+            // Collections (BasicLang::List/Dictionary/HashSet) are .NET REFERENCE types, lowered
+            // as std::shared_ptr — member access is `->` (e.g. numbers->Add(1)). Case-INSENSITIVE
+            // (BasicLang is case-insensitive).
+            if (IsCollectionType(obj?.Type))
+                return "->";
+
+            // A foreign, already-qualified C++ type (name contains "::") is a VALUE: member
+            // access stays `.`, never `->`.
+            if (tn != null && tn.Contains("::"))
                 return ".";
 
             var kind = obj?.Type?.Kind;
@@ -1779,6 +1823,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var functionName = call.FunctionName;
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
+            // Invoking a VOID-returning delegate (an Action, or a user delegate / Func whose
+            // return type is void) yields nothing — but the semantic analyzer types the
+            // invocation result as Object, so hasReturn was wrongly true and we emitted
+            // `void* t = adder();` (MSVC C2440: can't assign void to void*, and a redeclared
+            // result temp). Treat it as no-return so it emits a bare `adder(args);`. This is a
+            // pre-existing bug (reproduces WITHOUT collections) that the lambda+collection test
+            // depends on. Foreign ::-qualified calls are handled elsewhere and excluded here.
+            if (hasReturn && IsVoidDelegateInvocation(call))
+                hasReturn = false;
+
             // Destination for the call result: a user-declared variable, else the
             // temp that later instructions reference this value by. Every emission
             // path below must honor it — the extern/stdlib paths used to drop temp
@@ -1840,6 +1894,59 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var sanitizedName = SanitizeName(ResolveFlattenedFunctionName(functionName));
             var argsStr = string.Join(", ", args);
             EmitCallStatement($"{sanitizedName}({argsStr})");
+        }
+
+        /// <summary>
+        /// True when <paramref name="call"/> invokes a VOID-returning delegate value (an
+        /// <c>Action</c>, or a user delegate whose declared return type is void) rather than a
+        /// named function or a value-returning delegate. Such an invocation yields nothing, but
+        /// the semantic analyzer types its result as Object — so without this the backend emits
+        /// `void* t = adder();` (invalid: assigning void to void*). Resolves the callee by name
+        /// among the current function's locals/parameters and the module globals.
+        ///
+        /// Only VARIABLE-targeted invocations qualify: a normal call to a named void Sub already
+        /// has Type.Name == "Void" and never reaches here. An <c>Action</c> is void by definition;
+        /// a <c>Func</c> is value-returning (its last generic arg is the result). A user delegate's
+        /// void-ness is read from its <see cref="IRDelegate.ReturnType"/>.
+        /// </summary>
+        private bool IsVoidDelegateInvocation(IRCall call)
+        {
+            // A foreign ::-qualified result is handled by the foreign-call path, not here.
+            if (call.Type?.Kind == TypeKind.Foreign) return false;
+
+            // Resolve the callee's declared type. For a delegate invocation the FunctionName is
+            // the variable's name (locals/params first, then module globals). CalleeValue, when
+            // present (e.g. f(a)(b)), carries the type directly.
+            TypeInfo calleeType = call.CalleeValue?.Type;
+            if (calleeType == null && !string.IsNullOrEmpty(call.FunctionName))
+            {
+                bool Match(IRVariable v) =>
+                    string.Equals(v?.Name, call.FunctionName, StringComparison.OrdinalIgnoreCase);
+
+                calleeType =
+                    _currentFunction?.LocalVariables?.FirstOrDefault(Match)?.Type
+                    ?? _currentFunction?.Parameters?.FirstOrDefault(Match)?.Type;
+
+                if (calleeType == null && _module != null
+                    && _module.GlobalVariables.TryGetValue(call.FunctionName, out var g))
+                    calleeType = g.Type;
+            }
+
+            if (calleeType == null) return false;
+
+            // Action(...) is void by definition.
+            if (string.Equals(calleeType.Name, "Action", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // A user delegate: read its declared return type from the module.
+            if (calleeType.Kind == TypeKind.Delegate && calleeType.Name != null
+                && _module != null && _module.Delegates.TryGetValue(calleeType.Name, out var del))
+            {
+                var rt = del.ReturnType?.Name;
+                return rt == null || string.Equals(rt, "Void", StringComparison.OrdinalIgnoreCase);
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -2412,16 +2519,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
-            // Everyday collections construct as VALUE types (BasicLang::List<int32_t> etc.),
-            // never std::make_shared — MapType routes the wrapper name and value semantics.
-            if (string.Equals(newObj.ClassName, "List", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(newObj.ClassName, "Dictionary", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(newObj.ClassName, "HashSet", StringComparison.OrdinalIgnoreCase))
+            // Everyday collections are .NET REFERENCE types: construct via std::make_shared so
+            // the resulting std::shared_ptr aliases when copied/passed/stored (matching .NET and
+            // the C# backend). make_shared needs the BARE pointee type (BasicLang::List<int32_t>),
+            // NOT MapType's shared_ptr-wrapped form — hence BareCollectionType.
             {
-                var cppType = MapType(newObj.Type);   // BasicLang::List<int32_t> etc.
-                var ctorArgs = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
-                WriteLine($"{GetValueName(newObj)} = {cppType}({ctorArgs});");
-                return;
+                var bareColl = BareCollectionType(newObj.Type);
+                if (bareColl != null)
+                {
+                    var ctorArgs = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
+                    WriteLine($"{GetValueName(newObj)} = std::make_shared<{bareColl}>({ctorArgs});");
+                    return;
+                }
             }
 
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
@@ -2611,15 +2720,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // Collection property bridge: `.Count`/`.Keys`/`.Values` on a List/Dictionary/HashSet
             // arrive as an IRFieldAccess (no call syntax in the source), but the C++ wrappers
-            // expose these as METHODS. Rewrite to a zero-arg call: `recv.Count()`.
-            if (fieldAccess.Object?.Type?.Name is not null
-                && (string.Equals(fieldAccess.Object.Type.Name, "List", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(fieldAccess.Object.Type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(fieldAccess.Object.Type.Name, "HashSet", StringComparison.OrdinalIgnoreCase))
+            // expose these as METHODS. Rewrite to a zero-arg call. The receiver is a shared_ptr
+            // (reference semantics), so use the member-access op for it: `recv->Count()`.
+            if (IsCollectionType(fieldAccess.Object?.Type)
                 && (fieldAccess.FieldName is "Count" or "Keys" or "Values"))
             {
                 var recv = GetValueName(fieldAccess.Object);
-                WriteLine($"{result} = {recv}.{SanitizeName(fieldAccess.FieldName)}();");
+                var accessOp = MemberAccessOp(fieldAccess.Object);
+                WriteLine($"{result} = {recv}{accessOp}{SanitizeName(fieldAccess.FieldName)}();");
                 return;
             }
 
@@ -2758,6 +2866,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var elemType = MapType(forEach.ElementType);
             var varName = SanitizeName(forEach.VariableName);
             var collection = GetValueName(forEach.Collection);
+
+            // A BasicLang collection (List/Dictionary/HashSet, incl. a Keys()/Values() result
+            // which is a List) is a std::shared_ptr — deref it so the range-for iterates the
+            // pointee's begin()/end(). A plain array is iterated directly (not a shared_ptr).
+            if (IsCollectionType(forEach.Collection?.Type))
+                collection = $"(*{collection})";
+
             WriteLine($"for ({elemType} {varName} : {collection})");
             WriteLine("{");
             Indent();
@@ -2775,12 +2890,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var collection = GetValueName(indexer.Collection);
             var indices = string.Join("][", indexer.Indices.Select(i => GetValueName(i)));
             var result = GetValueName(indexer);
+            var collType = indexer.Collection?.Type;
 
-            // Dictionary read -> .Get(k), which throws on a missing key (.NET-faithful:
-            // `dict[missing]` throws KeyNotFoundException). List/array reads keep operator[].
-            if (indexer.Collection?.Type?.Name is not null
-                && string.Equals(indexer.Collection.Type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase))
-                WriteLine($"{result} = {collection}.Get({indices});");
+            // Dictionary read -> ->Get(k) (shared_ptr; throws on a missing key, .NET-faithful:
+            //   `dict[missing]` throws KeyNotFoundException).
+            // List read -> (*collection)[i] (deref the shared_ptr, then operator[]).
+            // Array/other read -> collection[i] (plain array, not a shared_ptr — unchanged).
+            if (collType?.Name is not null
+                && string.Equals(collType.Name, "Dictionary", StringComparison.OrdinalIgnoreCase))
+                WriteLine($"{result} = {collection}->Get({indices});");
+            else if (collType?.Name is not null
+                && string.Equals(collType.Name, "List", StringComparison.OrdinalIgnoreCase))
+                WriteLine($"{result} = (*{collection})[{indices}];");
             else
                 WriteLine($"{result} = {collection}[{indices}];");
         }
@@ -2790,12 +2911,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var collection = GetValueName(indexerStore.Collection);
             var indices = string.Join("][", indexerStore.Indices.Select(i => GetValueName(i)));
             var value = GetValueName(indexerStore.Value);
+            var collType = indexerStore.Collection?.Type;
 
-            // Dictionary write -> .Set(k, v) (insert-or-update, matching .NET `dict[k] = v`).
-            // List/array writes use operator[] which returns a mutable reference.
-            if (indexerStore.Collection?.Type?.Name is not null
-                && string.Equals(indexerStore.Collection.Type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase))
-                WriteLine($"{collection}.Set({indices}, {value});");
+            // Dictionary write -> ->Set(k, v) (shared_ptr; insert-or-update, matching .NET
+            //   `dict[k] = v`).
+            // List write -> (*collection)[i] = v (deref the shared_ptr, operator[] returns a
+            //   mutable reference).
+            // Array/other write -> collection[i] = v (plain array — unchanged).
+            if (collType?.Name is not null
+                && string.Equals(collType.Name, "Dictionary", StringComparison.OrdinalIgnoreCase))
+                WriteLine($"{collection}->Set({indices}, {value});");
+            else if (collType?.Name is not null
+                && string.Equals(collType.Name, "List", StringComparison.OrdinalIgnoreCase))
+                WriteLine($"(*{collection})[{indices}] = {value};");
             else
                 WriteLine($"{collection}[{indices}] = {value};");
         }
@@ -2861,6 +2989,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "boolean" or "bool" => "false",
                 "char" => "'\\0'",
                 "string" => "\"\"",
+                // Collections are std::shared_ptr (reference semantics): default to nullptr,
+                // matching .NET (a `Dim l As List(Of Integer)` without New is null; a member
+                // call on it throws, mirroring NullReferenceException — no null guard added).
+                _ when IsCollectionType(type) => "nullptr",
                 _ when type.Kind == TypeKind.Array => "{}",
                 _ when type.Kind == TypeKind.Pointer => "nullptr",
                 _ => "{}"
