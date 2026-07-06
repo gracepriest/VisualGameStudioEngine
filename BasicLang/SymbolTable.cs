@@ -213,6 +213,11 @@ public class TypeInfo
         public bool IsImported { get; set; }
         public string SourceModule { get; set; }
 
+        // Signature-level symbol registered from a parsed-but-not-yet-compiled
+        // sibling's AST (order-independent cross-file resolution scaffolding).
+        // Never re-exported: the declaring unit exports the real symbol itself.
+        public bool IsSiblingSignature { get; set; }
+
         // File that declares this symbol (set for project-wide/cross-file
         // symbols so hover/definition can point at the actual defining file
         // even when several files contribute to one module)

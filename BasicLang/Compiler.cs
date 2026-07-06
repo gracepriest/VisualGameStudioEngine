@@ -235,9 +235,14 @@ namespace BasicLang.Compiler
                 if (result.HasErrors) return FinalizeResult(result, startTime);
 
                 // Phase 2: compile library-like units (.mod/.cls) before entry
-                // files (.bas/.bl) so their exported symbols exist when an entry
-                // file that uses them is analyzed. Each unit sees every already
-                // completed sibling as an implicit import.
+                // files (.bas/.bl) so their full-fidelity exported symbols
+                // exist when an entry file that uses them is analyzed. Symbol
+                // visibility itself is order-independent: every unit sees
+                // every sibling — completed siblings contribute exported
+                // symbols, and parsed-but-not-yet-compiled siblings contribute
+                // declaration signatures read from their ASTs (so a cross-file
+                // call into a later-listed .bas file, or mutual references
+                // between two files, resolve with full type information).
                 var compileOrder = projectUnits
                     .OrderBy(u => IsEntryLikeFile(u.FilePath) ? 1 : 0)
                     .ToList();
@@ -246,11 +251,11 @@ namespace BasicLang.Compiler
                 {
                     if (unit.IsComplete) continue;
 
-                    var completedSiblings = projectUnits
-                        .Where(u => u != unit && u.IsComplete)
+                    var siblings = projectUnits
+                        .Where(u => u != unit)
                         .ToList();
 
-                    CompileUnit(unit, result, completedSiblings);
+                    CompileUnit(unit, result, siblings);
                 }
                 if (result.HasErrors) return FinalizeResult(result, startTime);
 
@@ -538,6 +543,16 @@ namespace BasicLang.Compiler
         {
             foreach (var symbol in scope.Symbols.Values)
             {
+                // Signature-level scaffolding registered from a not-yet-compiled
+                // sibling's AST must never be re-exported — the declaring unit
+                // exports the real symbol itself (re-exporting the shell made a
+                // unit collide with its own declarations coming back through a
+                // sibling).
+                if (symbol.IsSiblingSignature)
+                {
+                    continue;
+                }
+
                 // For .cls/.class files: only export the class symbol (for Import resolution)
                 // The class itself carries the access modifier (Public/Private)
                 if (unit.IsClassFile)
