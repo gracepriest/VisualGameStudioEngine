@@ -136,9 +136,82 @@ public class BuildServicePipelineTests
             "Cpp backend generated C# output (.cs) — 'Backend: Cpp' is lying:\n" +
             string.Join("\n", csFiles) + "\n" + Describe(result, output));
 
-        // A C++ build produces source for an external toolchain — no .NET exe.
-        Assert.That(result.ExecutablePath, Is.Null.Or.Empty,
-            "Cpp backend claimed a .NET executable was produced.");
+        // With a C++ toolchain installed the build now produces a native exe
+        // (see Build_ConsoleAppTemplate_Cpp_ProducesRunnableExe); without one
+        // it stays source-only and must not claim an executable.
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+        {
+            Assert.That(result.ExecutablePath, Is.Null.Or.Empty,
+                "no toolchain available, yet the Cpp build claimed an executable.");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 3c. Cpp backend produces a RUNNABLE native exe (toolchain required)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Build_ConsoleAppTemplate_Cpp_ProducesRunnableExe()
+    {
+        // Regression: "Build Succeeded" for Cpp used to stop at the .cpp and
+        // Run then failed with "No executable found after build".
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC) — cannot verify native builds");
+
+        var project = await CreateTemplateProjectAsync("console-app", SolutionTypes.Native, "PipelineCppRun");
+
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.True,
+            "console-app (Cpp) failed to build to an executable.\n" + Describe(result, output));
+        Assert.That(result.ExecutablePath, Is.Not.Null.And.Not.Empty,
+            "Cpp build succeeded but reported no executable.\n" + Describe(result, output));
+        Assert.That(File.Exists(result.ExecutablePath), Is.True,
+            $"Reported executable does not exist: {result.ExecutablePath}");
+
+        // The template prints via Console.WriteLine — run the exe and verify.
+        var psi = new System.Diagnostics.ProcessStartInfo(result.ExecutablePath!)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(result.ExecutablePath)!
+        };
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var stdout = await proc.StandardOutput.ReadToEndAsync();
+        proc.WaitForExit(60000);
+
+        Assert.That(proc.ExitCode, Is.EqualTo(0),
+            $"built C++ exe crashed (exit {proc.ExitCode}).\nSTDOUT:\n{stdout}");
+        Assert.That(stdout, Does.Contain("Hello, World!"),
+            "built C++ exe did not produce the template's output.\nSTDOUT:\n" + stdout);
+    }
+
+    [Test]
+    public async Task Build_GameAppTemplate_Cpp_CompilesAndLinksAgainstEngine()
+    {
+        // The game template calls Framework_* engine exports — the C++ build
+        // must link VisualGameStudioEngine.lib and deploy the DLL next to the
+        // exe. (Not executed: it opens a game window.)
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC) — cannot verify native builds");
+
+        var project = await CreateTemplateProjectAsync("game-app", SolutionTypes.DotNet, "PipelineCppGame");
+        project.TargetBackend = TargetBackend.Cpp;
+
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.True,
+            "game-app (Cpp) failed to build/link.\n" + Describe(result, output));
+        Assert.That(result.ExecutablePath, Is.Not.Null.And.Not.Empty,
+            "Cpp game build succeeded but reported no executable.\n" + Describe(result, output));
+        Assert.That(File.Exists(result.ExecutablePath), Is.True,
+            $"Reported executable does not exist: {result.ExecutablePath}");
+
+        var outputDir = Path.GetDirectoryName(result.ExecutablePath!)!;
+        Assert.That(File.Exists(Path.Combine(outputDir, "VisualGameStudioEngine.dll")), Is.True,
+            "native engine DLL was not deployed next to the built C++ game.\n" + Describe(result, output));
     }
 
     // ------------------------------------------------------------------

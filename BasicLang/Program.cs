@@ -708,6 +708,72 @@ namespace BasicLang.Compiler.Driver
                         }
                     }
                 }
+                else if (backend == "cpp" || backend == "c++")
+                {
+                    // Compile the generated C++ to an exe with a discovered
+                    // toolchain (IDE BuildService parity — CppToolchain is the
+                    // shared implementation).
+                    var toolchain = ProjectSystem.CppToolchain.Find();
+                    if (toolchain == null)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("  Warning: no C++ toolchain found (clang++/g++/MSVC). Generated source only.");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        var cppBaseDir = AppContext.BaseDirectory;
+                        string cppEngineLib = null;
+                        var usesEngineCpp = EngineDeployment.UsesEngineCpp(generatedCode);
+                        if (usesEngineCpp)
+                        {
+                            cppEngineLib = EngineDeployment.GetImportLibPath(cppBaseDir);
+                            if (cppEngineLib == null)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.Error.WriteLine($"  Error: this program uses the game engine, but {EngineDeployment.EngineImportLibName} was not found next to the compiler ({cppBaseDir}) — the C++ build cannot link.");
+                                Console.ResetColor();
+                                success = false;
+                            }
+                        }
+
+                        if (success)
+                        {
+                            Console.WriteLine($"  Compiling C++ with {toolchain.DisplayName}...");
+                            var exePath = Path.Combine(outputDir, outputFileName + ".exe");
+                            var (cppOk, cppOutput) = toolchain.CompileToExecutable(outputPath, exePath, cppEngineLib, outputDir);
+                            if (!cppOk)
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.Error.WriteLine("  C++ compilation failed!");
+                                Console.Error.WriteLine("  " + cppOutput.Replace("\n", "\n  "));
+                                Console.ResetColor();
+                                success = false;
+                            }
+                            else
+                            {
+                                Console.WriteLine($"  Executable: {exePath}");
+                                if (usesEngineCpp)
+                                {
+                                    foreach (var nativeDll in EngineDeployment.GetNativeDllPaths(cppBaseDir))
+                                    {
+                                        try
+                                        {
+                                            File.Copy(nativeDll, Path.Combine(outputDir, Path.GetFileName(nativeDll)), overwrite: true);
+                                            Console.WriteLine($"  Deployed engine runtime: {Path.GetFileName(nativeDll)}");
+                                        }
+                                        catch (Exception copyEx)
+                                        {
+                                            Console.ForegroundColor = ConsoleColor.Yellow;
+                                            Console.WriteLine($"  Warning: could not deploy {Path.GetFileName(nativeDll)}: {copyEx.Message}");
+                                            Console.ResetColor();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if (success)
                 {

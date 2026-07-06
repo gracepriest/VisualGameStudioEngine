@@ -20,6 +20,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private readonly HashSet<IRValue> _allTemporaries;
         private readonly List<string> _headerIncludes;
         private readonly HashSet<string> _declaredIdentifiers;
+        private IRClass _emittingClass;
+        // Values produced by DateTime.Now (BasicLangRt::Now() → std::time_t).
+        // The IR types them as Object, so the generator tracks them itself to
+        // declare the temps correctly and route ToString to FormatTime.
+        private readonly HashSet<IRValue> _dateTimeValues = new HashSet<IRValue>();
         private bool _usesFramework;
         private readonly HashSet<string> _frameworkFunctionsUsed;
         private IRModule _module;
@@ -243,8 +248,51 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("using namespace std;");
             WriteLine();
 
+            EmitDotNetSurfaceHelpers();
+
             if (hasAsync || hasIterators)
                 EmitRuntimePreamble(hasAsync, hasIterators);
+        }
+
+        /// <summary>
+        /// Minimal .NET-surface runtime helpers (DateTime.Now / ToString(fmt)).
+        /// Always emitted — a handful of inline functions with zero cost when
+        /// unused, which avoids a pre-scan pass to detect usage.
+        /// </summary>
+        private void EmitDotNetSurfaceHelpers()
+        {
+            WriteLine("// Minimal .NET-surface runtime (DateTime helpers)");
+            WriteLine("namespace BasicLangRt {");
+            Indent();
+            WriteLine("inline std::time_t Now() { return std::time(nullptr); }");
+            WriteLine("inline std::string FormatTime(std::time_t t, const std::string& netFormat = \"\") {");
+            Indent();
+            WriteLine("std::string fmt = netFormat.empty() ? std::string(\"%Y-%m-%d %H:%M:%S\") : netFormat;");
+            WriteLine("if (!netFormat.empty()) {");
+            Indent();
+            WriteLine("auto replaceAll = [&fmt](const std::string& from, const std::string& to) {");
+            WriteLine("    size_t pos = 0;");
+            WriteLine("    while ((pos = fmt.find(from, pos)) != std::string::npos) { fmt.replace(pos, from.size(), to); pos += to.size(); }");
+            WriteLine("};");
+            WriteLine("// lowercase tokens first so mm/MM cannot interfere");
+            WriteLine("replaceAll(\"yyyy\", \"%Y\"); replaceAll(\"ss\", \"%S\"); replaceAll(\"mm\", \"%M\");");
+            WriteLine("replaceAll(\"dd\", \"%d\"); replaceAll(\"HH\", \"%H\"); replaceAll(\"MM\", \"%m\");");
+            Unindent();
+            WriteLine("}");
+            WriteLine("std::tm tmv{};");
+            WriteLine("#ifdef _WIN32");
+            WriteLine("localtime_s(&tmv, &t);");
+            WriteLine("#else");
+            WriteLine("localtime_r(&t, &tmv);");
+            WriteLine("#endif");
+            WriteLine("char buf[128];");
+            WriteLine("std::strftime(buf, sizeof(buf), fmt.c_str(), &tmv);");
+            WriteLine("return std::string(buf);");
+            Unindent();
+            WriteLine("}");
+            Unindent();
+            WriteLine("}");
+            WriteLine();
         }
 
         /// <summary>
@@ -549,6 +597,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "short" => "int16_t",
                 "object" => "void*",
                 "void" => "void",
+                // .NET DateTime values are produced by BasicLangRt::Now() and
+                // consumed by BasicLangRt::FormatTime (see the runtime preamble).
+                "datetime" => "std::time_t",
                 _ => SanitizeName(typeName)
             };
         }
@@ -617,6 +668,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         private void GenerateClass(IRClass irClass)
+        {
+            // Member bodies must treat the class's fields as declared
+            // identifiers: the IRBuilder names computed values after their
+            // assignment target ("Y" for `Y = Y - Speed`), and without the
+            // field names registered the destination silently decayed to a
+            // temp — field mutations vanished from the generated code.
+            var previousEmittingClass = _emittingClass;
+            _emittingClass = irClass;
+            try
+            {
+                GenerateClassCore(irClass);
+            }
+            finally
+            {
+                _emittingClass = previousEmittingClass;
+            }
+        }
+
+        private void GenerateClassCore(IRClass irClass)
         {
             var className = SanitizeName(irClass.Name);
 
@@ -1018,11 +1088,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     _declaredIdentifiers.Add(g.Name);
             }
 
+            // Class fields are valid assignment destinations inside member
+            // bodies (`Y = Y - Speed` binds the computed value to the field);
+            // without them registered the destination decays to a temp and the
+            // mutation is lost.
+            if (_emittingClass != null)
+            {
+                foreach (var field in _emittingClass.Fields)
+                    _declaredIdentifiers.Add(field.Name);
+            }
+
             // Collect temporaries (values that aren't named destinations)
+            _dateTimeValues.Clear();
             foreach (var block in function.Blocks)
             {
                 foreach (var instruction in block.Instructions)
                 {
+                    // DateTime.Now results need std::time_t declarations and
+                    // ToString → FormatTime routing (IR types them as Object).
+                    if (instruction is IRFieldAccess fa && IsDateTimeNowAccess(fa))
+                        _dateTimeValues.Add(fa);
+
                     if (instruction is IRValue value && !(value is IRConstant))
                     {
                         if (!IsNamedDestination(value))
@@ -1033,6 +1119,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
         }
+
+        private static bool IsDateTimeNowAccess(IRFieldAccess fieldAccess) =>
+            fieldAccess.Object is IRVariable staticReceiver &&
+            string.Equals(staticReceiver.Name, "DateTime", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(fieldAccess.FieldName, "Now", StringComparison.OrdinalIgnoreCase);
 
         private void DeclareLocalsAndTemporaries(IRFunction function)
         {
@@ -1053,7 +1144,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var tempsByType = _allTemporaries
                 .Where(t => t.Type?.Name != "Void" && MapType(t.Type) != "void")
                 .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name))
-                .GroupBy(t => MapType(t.Type))
+                .GroupBy(t => _dateTimeValues.Contains(t) ? "std::time_t" : MapType(t.Type))
                 .ToList();
 
             foreach (var group in tempsByType)
@@ -1382,6 +1473,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var functionName = call.FunctionName;
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
+            // Destination for the call result: a user-declared variable, else the
+            // temp that later instructions reference this value by. Every emission
+            // path below must honor it — the extern/stdlib paths used to drop temp
+            // destinations, so `If IsKeyDown(87) Then` emitted the call as a bare
+            // statement and branched on an uninitialized temp.
+            string destination = null;
+            if (hasReturn)
+            {
+                if (IsNamedDestination(call))
+                    destination = SanitizeName(call.Name);
+                else if (!string.IsNullOrEmpty(call.Name))
+                    destination = GetValueName(call);
+            }
+
+            void EmitCallStatement(string expression)
+            {
+                WriteLine(destination != null ? $"{destination} = {expression};" : $"{expression};");
+            }
+
             // Check if this is an extern function call
             if (_module != null && _module.IsExtern(functionName))
             {
@@ -1401,70 +1511,113 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         externCall = $"{impl}({string.Join(", ", args)})";
                     }
 
-                    if (hasReturn && IsNamedDestination(call))
-                    {
-                        var target = SanitizeName(call.Name);
-                        WriteLine($"{target} = {externCall};");
-                    }
-                    else
-                    {
-                        WriteLine($"{externCall};");
-                    }
+                    EmitCallStatement(externCall);
                     return;
                 }
             }
 
-            // Handle standard library calls
-            var stdlibCall = EmitStdLibCall(functionName, args);
+            // Handle standard library calls. Statement-like console calls are
+            // emitted WITHOUT a destination even when the IR types them (the
+            // analyzer gives Console.WriteLine an Object result, but assigning
+            // a cout expression to a temp is not valid C++).
+            var stdlibCall = EmitStdLibCall(functionName, args, call);
             if (stdlibCall != null)
             {
-                if (hasReturn && IsNamedDestination(call))
-                {
-                    var target = SanitizeName(call.Name);
-                    WriteLine($"{target} = {stdlibCall};");
-                }
-                else
-                {
+                if (IsVoidStdLibCall(functionName))
                     WriteLine($"{stdlibCall};");
-                }
+                else
+                    EmitCallStatement(stdlibCall);
                 return;
             }
 
             // Regular function call
-            var sanitizedName = SanitizeName(functionName);
+            var sanitizedName = SanitizeName(ResolveFlattenedFunctionName(functionName));
             var argsStr = string.Join(", ", args);
+            EmitCallStatement($"{sanitizedName}({argsStr})");
+        }
 
-            // If this call result is assigned to a declared variable, emit directly
-            if (hasReturn && IsNamedDestination(call))
-            {
-                var target = SanitizeName(call.Name);
-                WriteLine($"{target} = {sanitizedName}({argsStr});");
-            }
-            else if (hasReturn && !string.IsNullOrEmpty(call.Name))
-            {
-                // Otherwise use temp variable
-                var result = GetValueName(call);
-                WriteLine($"{result} = {sanitizedName}({argsStr});");
-            }
-            else
-            {
-                // Void call
-                WriteLine($"{sanitizedName}({argsStr});");
-            }
+        /// <summary>
+        /// The C++ backend flattens module procedures to free functions with
+        /// UNQUALIFIED names, but cross-module call sites arrive with the
+        /// qualified "Module.Function" name (which the C# backend needs for
+        /// its static-class emission). Align the call with the flattened
+        /// definition — otherwise every multi-file program fails to link
+        /// (call `HelpersPrintHeader(...)` vs definition `PrintHeader(...)`).
+        /// </summary>
+        private string ResolveFlattenedFunctionName(string functionName)
+        {
+            if (string.IsNullOrEmpty(functionName))
+                return functionName;
+
+            var lastDot = functionName.LastIndexOf('.');
+            if (lastDot < 0 || lastDot == functionName.Length - 1)
+                return functionName;
+
+            if (_module?.Functions == null)
+                return functionName;
+
+            // Only rewrite when the flattened name actually exists and the
+            // qualified one does not — never break a genuinely qualified match.
+            if (_module.Functions.Any(f => f.Name == functionName))
+                return functionName;
+
+            var plain = functionName.Substring(lastDot + 1);
+            return _module.Functions.Any(f => f.Name == plain) ? plain : functionName;
         }
 
         private string GetArg(List<string> args, int index) => index < args.Count ? args[index] : "0";
 
-        private string EmitStdLibCall(string functionName, List<string> args)
+        /// <summary>
+        /// Stdlib mappings that are statements, not value expressions — their
+        /// rendered form (cout chains, srand) must never be assigned to the
+        /// destination temp even when the IR types the call as value-returning.
+        /// </summary>
+        private static bool IsVoidStdLibCall(string functionName) =>
+            functionName.ToLowerInvariant() is "print" or "printline" or "randomize"
+                or "console.writeline" or "console.write";
+
+        /// <summary>
+        /// Re-render call arguments for a Framework_* extern "C" export:
+        /// std::string values become const char* via .c_str(). String literals
+        /// (IRConstant) already render as C string literals and pass through.
+        /// </summary>
+        private List<string> MarshalFrameworkArgs(List<string> rendered, IRCall call)
         {
-            // Check game framework functions first (case-insensitive match)
-            var frameworkCall = EmitFrameworkCall(functionName, args);
+            if (call == null) return rendered;
+
+            var marshaled = new List<string>(rendered.Count);
+            for (int i = 0; i < rendered.Count; i++)
+            {
+                var arg = rendered[i];
+                if (i < call.Arguments.Count)
+                {
+                    var irArg = call.Arguments[i];
+                    var isStringValue = irArg != null && !(irArg is IRConstant) &&
+                        string.Equals(irArg.Type?.Name, "String", StringComparison.OrdinalIgnoreCase);
+                    if (isStringValue)
+                        arg = $"{arg}.c_str()";
+                }
+                marshaled.Add(arg);
+            }
+            return marshaled;
+        }
+
+        private string EmitStdLibCall(string functionName, List<string> args, IRCall call = null)
+        {
+            // Check game framework functions first (case-insensitive match).
+            // Framework exports are extern "C" — none take std::string — so
+            // string-typed args are marshaled to const char* via .c_str()
+            // (string literals already render as const char* and stay as-is).
+            var frameworkCall = EmitFrameworkCall(functionName, MarshalFrameworkArgs(args, call));
             if (frameworkCall != null) return frameworkCall;
 
             return functionName.ToLower() switch
             {
                 "print" => $"cout << {args[0]}",
                 "printline" => $"cout << {args[0]} << endl",
+                // .NET Console surface (console-app template parity)
+                "console.writeline" => args.Count == 0 ? "cout << endl" : $"cout << {args[0]} << endl",
+                "console.write" => args.Count == 0 ? "cout << \"\"" : $"cout << {args[0]}",
                 "readline" => "([](){ string s; getline(cin, s); return s; })()",
                 "len" => $"static_cast<int32_t>({args[0]}.length())",
                 "left" => $"{args[0]}.substr(0, {args[1]})",
@@ -1936,6 +2089,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // there is no C++ class to construct here.
             if (CppExceptionTypes.IsNetException(newObj.ClassName)) return;
 
+            // .NET-surface shim: `New String("="c, n)` is (char, count) but
+            // std::string's fill constructor is (count, char) — swap. Emitting
+            // `String(...)` verbatim references a nonexistent C++ type.
+            if (string.Equals(newObj.ClassName, "String", StringComparison.OrdinalIgnoreCase))
+            {
+                var target = GetValueName(newObj);
+                var ctorArgs = newObj.Arguments.Select(a => GetValueName(a)).ToList();
+                var expr = ctorArgs.Count switch
+                {
+                    2 => $"std::string({ctorArgs[1]}, {ctorArgs[0]})",
+                    1 => $"std::string({ctorArgs[0]})",
+                    _ => "std::string()"
+                };
+                WriteLine($"{target} = {expr};");
+                return;
+            }
+
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             // Generic instantiations need template arguments on the constructor: Pair<int32_t>(...)
             string bareName;
@@ -1964,6 +2134,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public override void Visit(IRInstanceMethodCall methodCall)
         {
             var obj = GetValueName(methodCall.Object);
+
+            // .NET-surface shim: ToString has no C++ counterpart — lower it by
+            // receiver type (DateTime → runtime formatter, numbers → to_string).
+            if (string.Equals(methodCall.MethodName, "ToString", StringComparison.OrdinalIgnoreCase))
+            {
+                var shim = EmitToStringShim(methodCall, obj);
+                if (shim != null)
+                {
+                    WriteLine($"{GetValueName(methodCall)} = {shim};");
+                    return;
+                }
+            }
+
             var op = MemberAccessOp(methodCall.Object);
             var methodName = SanitizeName(methodCall.MethodName);
             var args = string.Join(", ", methodCall.Arguments.Select(a => GetValueName(a)));
@@ -1971,6 +2154,42 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"{obj}{op}{methodName}({args});");
             else
                 WriteLine($"{GetValueName(methodCall)} = {obj}{op}{methodName}({args});");
+        }
+
+        /// <summary>
+        /// Lower `x.ToString(...)` by the receiver's static type. Returns null
+        /// when the receiver isn't a known .NET-surface type (user classes may
+        /// legitimately define their own ToString).
+        /// </summary>
+        private string EmitToStringShim(IRInstanceMethodCall methodCall, string obj)
+        {
+            var receiverTypeName = methodCall.Object?.Type?.Name?.ToLowerInvariant();
+
+            // DateTime.Now results are typed Object in the IR — the generator
+            // tracks them explicitly (see _dateTimeValues).
+            if (methodCall.Object != null && _dateTimeValues.Contains(methodCall.Object))
+                receiverTypeName = "datetime";
+
+            switch (receiverTypeName)
+            {
+                case "datetime":
+                    return methodCall.Arguments.Count > 0
+                        ? $"BasicLangRt::FormatTime({obj}, {GetValueName(methodCall.Arguments[0])})"
+                        : $"BasicLangRt::FormatTime({obj})";
+                case "integer":
+                case "long":
+                case "short":
+                case "byte":
+                case "single":
+                case "double":
+                    return $"std::to_string({obj})";
+                case "boolean":
+                    return $"std::string({obj} ? \"True\" : \"False\")";
+                case "string":
+                    return obj;
+                default:
+                    return null;
+            }
         }
 
         public override void Visit(IRBaseMethodCall baseCall)
@@ -2010,10 +2229,38 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public override void Visit(IRFieldAccess fieldAccess)
         {
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
+            var result = GetValueName(fieldAccess);
+
+            // .NET-surface shims — the raw emission below would produce
+            // uncompilable member accesses for these (`DateTime->Now`,
+            // `.Length` on std::string).
+            if (IsDateTimeNowAccess(fieldAccess))
+            {
+                _dateTimeValues.Add(fieldAccess);
+                WriteLine($"{result} = BasicLangRt::Now();");
+                return;
+            }
+
+            if (string.Equals(fieldAccess.FieldName, "Length", StringComparison.OrdinalIgnoreCase) &&
+                fieldAccess.Object != null)
+            {
+                var receiverType = fieldAccess.Object.Type;
+                if (string.Equals(receiverType?.Name, "String", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteLine($"{result} = static_cast<int32_t>({GetValueName(fieldAccess.Object)}.length());");
+                    return;
+                }
+                if (receiverType?.Kind == TypeKind.Array)
+                {
+                    WriteLine($"{result} = static_cast<int32_t>({GetValueName(fieldAccess.Object)}.size());");
+                    return;
+                }
+            }
+
             var obj = GetValueName(fieldAccess.Object);
             var op = MemberAccessOp(fieldAccess.Object);
             var fieldName = SanitizeName(fieldAccess.FieldName);
-            WriteLine($"{GetValueName(fieldAccess)} = {obj}{op}{fieldName};");
+            WriteLine($"{result} = {obj}{op}{fieldName};");
         }
 
         public override void Visit(IRFieldStore fieldStore)

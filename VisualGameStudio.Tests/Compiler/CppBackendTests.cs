@@ -344,6 +344,213 @@ End Sub";
     }
 
     // ========================================================================
+    // App-readiness regressions: bugs found by compiling the reaww/rewrwwq
+    // user projects (game-app + console-app templates on the Cpp backend).
+    // ========================================================================
+
+    [Test]
+    public void Cpp_FrameworkCallResult_IsAssignedToItsTemp()
+    {
+        // Regression: `If IsKeyDown(87) Then` emitted the call as a bare
+        // statement (`Framework_IsKeyDown(87);`) and then branched on an
+        // UNINITIALIZED temp (`if (t0)`). The stdlib/framework/extern call
+        // paths dropped temp destinations that the regular-call path kept.
+        var source = @"
+Sub Poll()
+    If IsKeyDown(87) Then
+        PrintLine(""w"")
+    End If
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Match(@"t\d+ = Framework_IsKeyDown\(87\);"),
+            "framework call result must be assigned to the temp the branch tests:\n" + output);
+    }
+
+    [Test]
+    public void Cpp_FieldCompoundAssignment_StoresBack()
+    {
+        // Regression: `Y = Y - Speed` in a class method emitted only the
+        // subtraction into a temp (`t0 = Y - Speed;`) and never stored the
+        // result back to the field — movement code silently did nothing.
+        var source = @"
+Class Player
+    Public Y As Single
+    Public Speed As Single
+
+    Public Sub Update()
+        Y = Y - Speed
+    End Sub
+End Class";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Match(@"(this->)?Y = (Y - Speed|t\d+);"),
+            "the computed value must be stored back to the field:\n" + output);
+    }
+
+    [Test]
+    public void Cpp_StringArgToFrameworkCall_UsesCStr()
+    {
+        // Regression: `DrawText(name, ...)` passed a std::string where the
+        // extern ""C"" export takes const char* — the generated file cannot
+        // compile. Non-literal string args must be marshaled with .c_str().
+        var source = @"
+Sub Draw(name As String)
+    DrawText(name, 10, 10, 20, 255, 255, 255, 255)
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("Framework_DrawText(name.c_str()"),
+            "std::string args to extern C exports must be marshaled via .c_str():\n" + output);
+    }
+
+    [Test]
+    public void Cpp_CrossModuleCall_MatchesEmittedDefinitionName()
+    {
+        // Regression: the console template linked Main.bas against Helpers.mod;
+        // call sites emitted `HelpersPrintHeader(...)` while the definition was
+        // emitted as `PrintHeader(...)` — every multi-module program failed to
+        // link with undefined symbols.
+        var source = @"
+Module Main
+    Sub Main()
+        PrintHeader(""x"")
+    End Sub
+End Module
+
+Module Helpers
+    Public Sub PrintHeader(title As String)
+        PrintLine(title)
+    End Sub
+End Module";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+
+        // Whatever name the call site uses must have a matching definition.
+        var callsQualified = output.Contains("HelpersPrintHeader(");
+        var definesQualified = output.Contains("void HelpersPrintHeader(");
+        var definesPlain = output.Contains("void PrintHeader(");
+
+        if (callsQualified)
+            Assert.That(definesQualified, Is.True,
+                "call site uses the module-qualified name but no such definition exists:\n" + output);
+        else
+            Assert.That(definesPlain, Is.True,
+                "plain call name must have a plain definition:\n" + output);
+    }
+
+    [Test]
+    public void Cpp_MultiFileProject_CrossFileCall_MatchesEmittedDefinitionName()
+    {
+        // Regression (console-app template, Main.bas + Helpers.mod): the
+        // multi-file pipeline emitted call sites as `HelpersPrintHeader(...)`
+        // while the definition stayed `PrintHeader(...)` — undefined symbols
+        // at link time for every multi-file C++ project.
+        var dir = Path.Combine(Path.GetTempPath(), "blcpp-multi-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Main.bas"),
+@"Module Main
+    Sub Main()
+        PrintHeader(""x"")
+    End Sub
+End Module
+");
+            File.WriteAllText(Path.Combine(dir, "Helpers.mod"),
+@"Public Sub PrintHeader(title As String)
+    PrintLine(title)
+End Sub
+");
+
+            var compiler = new BasicCompiler();
+            var result = compiler.CompileProjectFiles(new[]
+            {
+                Path.Combine(dir, "Main.bas"),
+                Path.Combine(dir, "Helpers.mod")
+            });
+
+            Assert.That(result.AllErrors, Is.Empty,
+                "multi-file compile failed: " + string.Join("; ", result.AllErrors));
+            Assert.That(result.CombinedIR, Is.Not.Null);
+
+            var output = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+                .Generate(result.CombinedIR);
+
+            // Whatever name the call site uses must have a matching definition.
+            var callsQualified = output.Contains("HelpersPrintHeader(");
+            var definesQualified = output.Contains("void HelpersPrintHeader(");
+            var definesPlain = output.Contains("void PrintHeader(");
+
+            if (callsQualified)
+                Assert.That(definesQualified, Is.True,
+                    "cross-file call uses the module-qualified name but no such definition exists:\n" + output);
+            else
+                Assert.That(definesPlain, Is.True,
+                    "plain call name must have a plain definition:\n" + output);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Test]
+    public void Cpp_ConsoleTemplateSurface_LowersToValidCpp()
+    {
+        // Regression (console-app template): Console.WriteLine, DateTime.Now,
+        // .ToString(fmt), String.Length and New String(c, n) emitted garbage —
+        // `DateTime->Now` on nothing, calls to a nonexistent ConsoleWriteLine,
+        // .NET properties on std::string. The template surface must lower to
+        // real C++ (cout, BasicLangRt time helpers, .length(), std::string(n,c)).
+        var source = @"
+Using System
+
+Module Main
+    Sub Main()
+        PrintHeader(""Demo"")
+        Console.WriteLine(FormatMessage(""Hello""))
+        Console.WriteLine()
+        Console.WriteLine(""Time: "" & DateTime.Now.ToString())
+    End Sub
+
+    Public Function FormatMessage(message As String) As String
+        Return ""["" & DateTime.Now.ToString(""HH:mm:ss"") & ""] "" & message
+    End Function
+
+    Public Sub PrintHeader(title As String)
+        Dim separator As String = New String(""=""c, title.Length + 4)
+        Console.WriteLine(separator)
+    End Sub
+End Module";
+
+        var output = CompileToCpp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+
+        // The known-garbage forms must be gone...
+        Assert.That(output, Does.Not.Contain("DateTime->"), "DateTime.Now emitted as member access on nothing:\n" + output);
+        Assert.That(output, Does.Not.Contain("ConsoleWriteLine"), "Console.WriteLine emitted as a phantom function:\n" + output);
+        Assert.That(output, Does.Not.Contain(".Length"), ".NET Length property leaked into C++:\n" + output);
+        Assert.That(output, Does.Not.Contain(".ToString"), ".NET ToString leaked into C++:\n" + output);
+
+        // ...replaced by real C++.
+        Assert.That(output, Does.Contain("cout"), "Console.WriteLine must lower to cout:\n" + output);
+        Assert.That(output, Does.Contain("BasicLangRt::Now()"), "DateTime.Now must lower to the runtime helper:\n" + output);
+        Assert.That(output, Does.Contain("BasicLangRt::FormatTime"), "DateTime ToString must lower to the runtime helper:\n" + output);
+        Assert.That(output, Does.Match(@"std::string\(\s*t\d+,\s*'='\)"), "New String(c, n) must lower to std::string(n, c):\n" + output);
+        Assert.That(output, Does.Contain(".length()"), "String.Length must lower to .length():\n" + output);
+    }
+
+    // ========================================================================
     // Task 7: end-to-end - generated C++ must be accepted by a real C++ compiler
     // ========================================================================
 

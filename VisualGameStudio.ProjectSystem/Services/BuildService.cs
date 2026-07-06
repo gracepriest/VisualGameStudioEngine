@@ -613,12 +613,21 @@ public class BuildService : IBuildService
             await File.WriteAllTextAsync(generatedFilePath, generatedCode, cancellationToken);
             _outputService.WriteLine($"Generated: {generatedFilePath}", OutputCategory.Build);
 
-            // ---------- Non-.NET backends stop here (no dotnet build) ----------
+            // ---------- Cpp backend: compile the generated source to an exe ----------
+            if (backend == "cpp")
+            {
+                BuildProgress?.Invoke(this, new BuildProgressEventArgs("Compiling C++...", 85));
+                var cppOk = CompileGeneratedCpp(generatedFilePath, generatedCode, project, outputDir, result);
+                _outputService.WriteLine($"Output directory: {outputDir}", OutputCategory.Build);
+                result.Success = cppOk;
+                return result;
+            }
+
+            // ---------- Other non-.NET backends stop at source ----------
             if (backend != "csharp")
             {
                 var toolchainHint = backend switch
                 {
-                    "cpp" => $"Generated C++ source: {generatedFilePath} — compile it with a C++ toolchain (clang++/g++/MSVC, -std=c++20).",
                     "llvm" => $"Generated LLVM IR: {generatedFilePath} — compile it with the LLVM toolchain (llc/clang).",
                     "msil" => $"Generated MSIL: {generatedFilePath} — assemble it with ilasm.",
                     _ => $"Generated output: {generatedFilePath}."
@@ -1002,6 +1011,86 @@ public class BuildService : IBuildService
     /// IDE folder — same model as the CLI resolving next to BasicLang.exe), with
     /// dev-tree fallbacks for running from build output.
     /// </summary>
+    /// <summary>
+    /// Compile generated C++ to a runnable executable with a discovered
+    /// toolchain (clang++/g++/MSVC). Game programs link against the engine
+    /// import library and get the native DLL deployed next to the exe. When no
+    /// toolchain is installed, the build stays source-only with an honest
+    /// warning instead of "Succeeded" followed by Run's "No executable found".
+    /// </summary>
+    private bool CompileGeneratedCpp(
+        string generatedFilePath, string generatedCode, BasicLangProject project, string outputDir, BuildResult result)
+    {
+        var toolchain = BasicLang.Compiler.ProjectSystem.CppToolchain.Find();
+        if (toolchain == null)
+        {
+            var warning = "No C++ toolchain found (looked for clang++, g++, and MSVC via vswhere). " +
+                          $"Generated source only: {generatedFilePath} — install a C++ compiler to build an executable.";
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = "BL6002",
+                Message = warning,
+                FilePath = project.FilePath,
+                Severity = DiagnosticSeverity.Warning
+            });
+            _outputService.WriteError($"Warning: {warning}", OutputCategory.Build);
+            return true; // source generation itself succeeded
+        }
+
+        // Game programs: link the engine import library so Framework_* resolves.
+        string? engineLibPath = null;
+        var usesEngine = BasicLang.Compiler.ProjectSystem.EngineDeployment.UsesEngineCpp(generatedCode);
+        if (usesEngine)
+        {
+            engineLibPath = CandidateNativeEngineDirs()
+                .Select(BasicLang.Compiler.ProjectSystem.EngineDeployment.GetImportLibPath)
+                .FirstOrDefault(p => p != null);
+            if (engineLibPath == null)
+            {
+                var error = $"This program uses the game engine, but {BasicLang.Compiler.ProjectSystem.EngineDeployment.EngineImportLibName} " +
+                            "was not found next to the IDE binaries — the C++ build cannot link. Install the engine SDK beside the IDE.";
+                result.Diagnostics.Add(new DiagnosticItem
+                {
+                    Id = "BL6003",
+                    Message = error,
+                    FilePath = project.FilePath,
+                    Severity = DiagnosticSeverity.Error
+                });
+                _outputService.WriteError(error, OutputCategory.Build);
+                return false;
+            }
+            _outputService.WriteLine($"Linking engine: {engineLibPath}", OutputCategory.Build);
+        }
+
+        var exePath = Path.Combine(outputDir, $"{project.Name}.exe");
+        _outputService.WriteLine($"Compiling C++ with {toolchain.DisplayName}...", OutputCategory.Build);
+        var (success, compilerOutput) = toolchain.CompileToExecutable(generatedFilePath, exePath, engineLibPath, outputDir);
+
+        if (!success)
+        {
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = "BL6004",
+                Message = $"C++ compilation failed: {compilerOutput}",
+                FilePath = project.FilePath,
+                Severity = DiagnosticSeverity.Error
+            });
+            _outputService.WriteError($"C++ build error: {compilerOutput}", OutputCategory.Build);
+            return false;
+        }
+
+        result.ExecutablePath = exePath;
+        _outputService.WriteLine($"Executable: {exePath}", OutputCategory.Build);
+
+        // The engine DLL is loaded at runtime — put it next to the game.
+        if (usesEngine)
+        {
+            DeployNativeEngine(outputDir);
+        }
+
+        return true;
+    }
+
     private static string? FindEngineBaseDir()
     {
         foreach (var dir in CandidateEngineDirs())
