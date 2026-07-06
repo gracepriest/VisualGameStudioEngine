@@ -440,4 +440,67 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Does.Contain("std::vector<int32_t>::iterator it"));
     }
+
+    // ==================================================================
+    // Bug 3 regression (C2362) — a foreign local whose FIRST write is inside a
+    // branch/loop must NOT have its declaration deferred to that write: a `goto`
+    // over the label would skip the initialization (MSVC C2362). Deferral is
+    // only safe when the first write is in the entry block (which dominates all
+    // uses). Otherwise the plain top-level `type name;` declaration is emitted.
+    // ==================================================================
+
+    [Test]
+    public void Cpp_ForeignLocal_FirstWriteInsideIf_CompilesWithoutC2362()
+    {
+        var source = @"
+#CppInclude <vector>
+Sub Main()
+    Dim v As std::vector(Of Integer)
+    v.push_back(10)
+    Dim n As std::size_t
+    Dim flag As Boolean = True
+    If flag Then
+        n = v.size()
+    End If
+    Console.WriteLine(""ok"")
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // The declaration must be hoisted to the top (default-construct), NOT deferred
+        // into the If body where a goto would jump over its initialization.
+        Assert.That(output, Does.Contain("std::size_t n;"),
+            "first-write-in-branch must fall back to a top-level plain declaration");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        // Before the fix this failed to compile with C2362 (init skipped by goto).
+        Assert.That(VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(output, compiler.Value).Replace("\r\n", "\n"),
+            Is.EqualTo("ok\n"));
+    }
+
+    [Test]
+    public void Cpp_ForeignLocal_FirstWriteInsideFor_CompilesWithoutC2362()
+    {
+        var source = @"
+#CppInclude <vector>
+Sub Main()
+    Dim v As std::vector(Of Integer)
+    v.push_back(10)
+    Dim n As std::size_t
+    Dim i As Integer
+    For i = 1 To 3
+        n = v.size()
+    Next
+    Console.WriteLine(""ok"")
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::size_t n;"),
+            "first-write-in-loop must fall back to a top-level plain declaration");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        Assert.That(VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(output, compiler.Value).Replace("\r\n", "\n"),
+            Is.EqualTo("ok\n"));
+    }
 }

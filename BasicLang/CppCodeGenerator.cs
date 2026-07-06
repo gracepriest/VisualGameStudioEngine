@@ -1224,6 +1224,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // body carry an initializer: suppress their standalone declaration and emit the
             // type at the first write (some::type it = expr;). Foreign types may be
             // non-default-constructible / non-assignable, so declare-then-assign can fail.
+            //
+            // BUT only defer when the FIRST write is in the ENTRY block. The entry block
+            // dominates all uses and precedes every label, so a deferred `type n = expr;`
+            // there is always executed before any read. If the first write is inside a
+            // branch/loop body, its label can be jumped over by a `goto` — deferring the
+            // declaration to it would make the C++ init "skipped by goto" (MSVC C2362).
+            // Those locals fall back to the plain top-level `type name;` declaration.
             _foreignLocalsInitInline.Clear();
             _foreignLocalTypeByName.Clear();
             var foreignLocalNames = new HashSet<string>(
@@ -1232,6 +1239,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 StringComparer.OrdinalIgnoreCase);
             foreach (var local in function.LocalVariables.Where(l => l.Type?.Kind == TypeKind.Foreign))
                 _foreignLocalTypeByName[local.Name] = MapType(local.Type);
+            // Foreign locals whose first write we've already seen (so a later write in a
+            // different block can't retroactively flip the deferral decision).
+            var foreignLocalFirstWriteSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var entryBlock = function.EntryBlock;
 
             // Collect temporaries (values that aren't named destinations)
             _dateTimeValues.Clear();
@@ -1245,9 +1256,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     if (instruction is IRFieldAccess fa && IsDateTimeNowAccess(fa))
                         _dateTimeValues.Add(fa);
 
-                    // A write to a foreign local is its initializer — declare-at-first-write.
+                    // A write to a foreign local is its initializer — declare-at-first-write,
+                    // but ONLY when that first write is in the entry block (see above).
                     var writtenLocal = AssignmentTargetName(instruction);
-                    if (writtenLocal != null && foreignLocalNames.Contains(writtenLocal))
+                    if (writtenLocal != null && foreignLocalNames.Contains(writtenLocal)
+                        && foreignLocalFirstWriteSeen.Add(writtenLocal)
+                        && block == entryBlock)
                         _foreignLocalsInitInline.Add(writtenLocal);
 
                     // Any operand that is a foreign ::-qualified instance method call is
@@ -1292,6 +1306,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// foreign calls are rendered inline (and so must not also emit a standalone
         /// statement). Supersedes the old receiver-only ForeignCallReceiverOf scan by covering
         /// argument, store, return, condition, cast, and arithmetic positions too.
+        ///
+        /// The switch is intentionally scoped to the IR node kinds THIS C++ backend emits;
+        /// LLVM-oriented / not-produced-here nodes (IRGetElementPtr, IRPhi, IRArrayAlloc,
+        /// IRTupleElement, ...) are omitted. A foreign call never appears as their operand.
         /// </summary>
         private static IEnumerable<IRValue> EnumerateOperands(IRInstruction instruction)
         {
