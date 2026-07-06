@@ -222,6 +222,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var hasAsync = module.Functions.Any(f => f.IsAsync);
             var hasIterators = module.Functions.Any(f => f.IsIterator);
+            var usesCollections = ModuleUsesCollections(module);
 
             WriteLine("#pragma once");
             if (hasIterators)
@@ -233,6 +234,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 includes.Add("coroutine");
                 includes.Add("exception");
+            }
+            if (usesCollections)
+            {
+                includes.Add("unordered_map");
+                includes.Add("unordered_set");
+                includes.Add("stdexcept");
             }
             foreach (var inc in _headerIncludes)
             {
@@ -250,8 +257,46 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             EmitDotNetSurfaceHelpers();
 
-            if (hasAsync || hasIterators)
-                EmitRuntimePreamble(hasAsync, hasIterators);
+            if (hasAsync || hasIterators || usesCollections)
+                EmitRuntimePreamble(hasAsync, hasIterators, usesCollections);
+        }
+
+        /// <summary>
+        /// True when the module references List/Dictionary/HashSet anywhere in a function's
+        /// return type, parameters, locals, or a class field type (including nested generic
+        /// arguments and array element types). Also scans IRNewObject class names inside
+        /// function bodies as a fallback, since a `Dim l As New List(...)` temporary/local may
+        /// not always carry the collection type on its declared local. Drives emission of the
+        /// wrapper runtime preamble and the extra std headers it needs.
+        /// </summary>
+        private static bool ModuleUsesCollections(IRModule module)
+        {
+            bool IsColl(TypeInfo t)
+            {
+                if (t == null) return false;
+                if (t.Name == "List" || t.Name == "Dictionary" || t.Name == "HashSet") return true;
+                if (t.GenericArguments != null && t.GenericArguments.Any(IsColl)) return true;
+                return IsColl(t.ElementType);
+            }
+
+            foreach (var f in module.Functions)
+            {
+                if (IsColl(f.ReturnType)) return true;
+                if (f.Parameters.Any(p => IsColl(p.Type))) return true;
+                if (f.LocalVariables.Any(lv => IsColl(lv.Type))) return true;
+
+                // Fallback: `New List(...)` construction in the body.
+                foreach (var block in f.Blocks)
+                    foreach (var instr in block.Instructions)
+                        if (instr is IRNewObject no
+                            && (no.ClassName == "List" || no.ClassName == "Dictionary" || no.ClassName == "HashSet"))
+                            return true;
+            }
+
+            foreach (var c in module.Classes.Values)
+                if (c.Fields.Any(fld => IsColl(fld.Type))) return true;
+
+            return false;
         }
 
         /// <summary>
@@ -299,7 +344,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// Runtime support types for async (synchronous Task&lt;T&gt; emulation - type-correct,
         /// no scheduler) and iterators (C++20 coroutine Generator&lt;T&gt;).
         /// </summary>
-        private void EmitRuntimePreamble(bool hasAsync, bool hasIterators)
+        private void EmitRuntimePreamble(bool hasAsync, bool hasIterators, bool usesCollections)
         {
             WriteLine("namespace BasicLang {");
             Indent();
@@ -356,6 +401,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             Unindent();
             WriteLine("}");
             WriteLine();
+
+            // The collections runtime opens its OWN `namespace BasicLang { … }`, so it is
+            // emitted OUTSIDE the block just closed above (a sibling namespace re-open) to
+            // avoid double-nesting into BasicLang::BasicLang::List.
+            if (usesCollections)
+            {
+                foreach (var line in CppCollectionsRuntime.Source.Split('\n'))
+                    WriteLine(line.TrimEnd('\r'));
+            }
         }
 
         /// <summary>
@@ -437,6 +491,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
+
+            // Foreign C++ passthrough type (::-qualified) — emit verbatim, value semantics.
+            if (type.Name != null && type.Name.Contains("::"))
+            {
+                if (type.GenericArguments != null && type.GenericArguments.Count > 0)
+                    return $"{type.Name}<{string.Join(", ", type.GenericArguments.Select(MapType))}>";
+                return type.Name;
+            }
+            // Everyday collections -> BasicLang wrappers (value types, never shared_ptr).
+            if (type.Name == "List" && type.GenericArguments?.Count > 0)
+                return $"BasicLang::List<{MapType(type.GenericArguments[0])}>";
+            if (type.Name == "Dictionary" && type.GenericArguments?.Count > 1)
+                return $"BasicLang::Dictionary<{MapType(type.GenericArguments[0])}, {MapType(type.GenericArguments[1])}>";
+            if (type.Name == "HashSet" && type.GenericArguments?.Count > 0)
+                return $"BasicLang::HashSet<{MapType(type.GenericArguments[0])}>";
 
             // IEnumerable(Of T) -> the coroutine generator (iterators are its only producer)
             if (type.Name == "IEnumerable" && type.GenericArguments != null && type.GenericArguments.Count > 0)
@@ -2103,6 +2172,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     _ => "std::string()"
                 };
                 WriteLine($"{target} = {expr};");
+                return;
+            }
+
+            // Everyday collections construct as VALUE types (BasicLang::List<int32_t> etc.),
+            // never std::make_shared — MapType routes the wrapper name and value semantics.
+            if (newObj.ClassName == "List" || newObj.ClassName == "Dictionary" || newObj.ClassName == "HashSet")
+            {
+                var cppType = MapType(newObj.Type);   // BasicLang::List<int32_t> etc.
+                var ctorArgs = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
+                WriteLine($"{GetValueName(newObj)} = {cppType}({ctorArgs});");
                 return;
             }
 

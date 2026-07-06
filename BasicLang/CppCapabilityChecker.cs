@@ -135,6 +135,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            if (name.Equals("List", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Dictionary", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("HashSet", StringComparison.OrdinalIgnoreCase))
+                return; // BasicLang::List/Dictionary/HashSet wrappers; generic args already recursed above
+            if (name.Contains("::"))
+                return; // ::-qualified C++ foreign type (opaque passthrough)
+
             if (type.Kind == TypeKind.Class || type.Kind == TypeKind.Interface || type.Kind == TypeKind.Structure)
             {
                 if (!_userDefinedNames.Contains(name))

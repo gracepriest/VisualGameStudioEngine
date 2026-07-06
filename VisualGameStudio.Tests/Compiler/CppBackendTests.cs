@@ -199,9 +199,10 @@ End Sub";
     [Test]
     public void Cpp_UnmappedNetType_ThrowsCapabilityError()
     {
+        // Queue has no C++ mapping and (unlike List/Dictionary/HashSet) no wrapper — still rejected.
         var source = @"
 Sub Main()
-    Dim items As List(Of Integer)
+    Dim items As Queue(Of Integer)
 End Sub";
 
         var ex = Assert.Throws<CppCapabilityException>(() =>
@@ -209,7 +210,7 @@ End Sub";
             var output = CompileToCpp(source, out var errors);
             Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
         });
-        Assert.That(ex.Message, Does.Contain("List"));
+        Assert.That(ex.Message, Does.Contain("Queue"));
     }
 
     // ========================================================================

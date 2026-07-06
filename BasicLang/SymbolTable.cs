@@ -173,7 +173,8 @@ public class TypeInfo
         Pointer,
         Nullable,       // Nullable value type
         Tuple,          // Tuple type
-        Void
+        Void,
+        Foreign      // ::-qualified opaque C++ passthrough type
     }
     
     /// <summary>
