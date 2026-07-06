@@ -110,6 +110,12 @@ namespace BasicLang.Compiler.CodeGen.LLVM
         public override string Generate(IRModule module)
         {
             _module = module;
+
+            // Backend honesty (spec decision 12): LLVM rejects C++-only passthrough
+            // (#CppInclude / :: foreign types) AND collections (List/Dictionary/HashSet
+            // are not yet lowered to LLVM IR) with a clean error before any emission.
+            ForeignFeatureChecker.Check(module, "LLVM", rejectCollections: true);
+
             _output.Clear();
             _stringConstants.Clear();
             _classFieldNames.Clear();

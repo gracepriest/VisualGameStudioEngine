@@ -154,6 +154,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             _currentModule = module;
 
+            // Backend honesty (spec decision 12): the C# backend rejects the
+            // C++-only passthrough features (#CppInclude / :: foreign types) but
+            // supports collections natively (rejectCollections: false).
+            ForeignFeatureChecker.Check(module, "C#", rejectCollections: false);
+
             _output.Clear();
             _indentLevel = 0;
             _usings.Clear();

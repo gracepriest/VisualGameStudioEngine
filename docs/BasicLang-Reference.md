@@ -20,10 +20,11 @@ BasicLang is a modern BASIC-inspired programming language designed for game deve
 14. [Error Handling](#error-handling)
 15. [Preprocessor Directives](#preprocessor-directives)
 16. [.NET Interop](#net-interop)
-17. [Multi-File Projects](#multi-file-projects)
-18. [Project Files (.blproj)](#project-files-blproj)
-19. [Compiler Commands](#compiler-commands)
-20. [Built-in Functions](#built-in-functions)
+17. [C++ Backend Standard Library](#c-backend-standard-library)
+18. [Multi-File Projects](#multi-file-projects)
+19. [Project Files (.blproj)](#project-files-blproj)
+20. [Compiler Commands](#compiler-commands)
+21. [Built-in Functions](#built-in-functions)
 
 ---
 
@@ -835,6 +836,87 @@ Inline Cpp
     printf("Raw C++ code\n");
 }
 ```
+
+---
+
+## C++ Backend Standard Library
+
+When compiling with `--target=cpp`, BasicLang provides two layers of standard-library
+support: portable collections that work like their .NET counterparts, and a raw
+passthrough layer for reaching directly into the C++ standard library and any C++
+headers you supply.
+
+### Portable Collections
+
+`List(Of T)`, `Dictionary(Of K, V)`, and `HashSet(Of T)` lower to BasicLang C++
+wrapper types (`BasicLang::List<T>`, `BasicLang::Dictionary<K,V>`,
+`BasicLang::HashSet<T>`) with .NET-faithful semantics:
+
+```vb
+Dim scores As New Dictionary(Of String, Integer)()
+scores.Add("alice", 10)
+scores("bob") = 20               ' indexer set
+Dim a = scores("alice")          ' indexer get — missing key THROWS (like .NET)
+scores.Add("alice", 99)          ' duplicate key THROWS (like .NET)
+
+Dim names As New List(Of String)()
+names.Add("x")
+Dim n = names.Count              ' .Count, not .size()
+
+Dim seen As New HashSet(Of Integer)()
+seen.Add(1)                       ' returns True if newly added
+```
+
+These are value types (never `shared_ptr`), and the member surface (`.Add`,
+`.Count`, `.ContainsKey`, `.Remove`, `.Item`/indexer, iteration) mirrors .NET —
+including the throwing behavior on a missing-key read and a duplicate `Add`.
+
+### C++ Passthrough (`#CppInclude` + `::` foreign types)
+
+The passthrough layer lets you use any C++ header and type verbatim. It is
+**C++-backend-only** and completely unchecked — you get C++'s own compiler errors
+past the include, not BasicLang diagnostics.
+
+```vb
+#CppInclude <mutex>                ' -> #include <mutex>  (angle or "quoted" header)
+#CppInclude "grid.h"
+
+Sub Main()
+    Dim m As std::mutex            ' ::-qualified foreign type — opaque value
+    m.lock()                       ' member access passes through unchecked
+    m.unlock()
+
+    Dim q As std::deque(Of Integer)        ' (Of ...) -> <...> template args
+    Dim it As std::vector(Of Integer)::iterator  ' :: after the template scope
+End Sub
+```
+
+- **`#CppInclude <header>` / `"header.h"`** — emits a real C++ `#include`. This is
+  distinct from `#Include`, which textually splices a BasicLang source file.
+- **`::`-qualified types** — resolve to opaque *foreign* types passed through
+  verbatim (value semantics, `.` member access, no BasicLang member checking).
+- **`(Of ...)` template arguments** map to C++ `<...>`; a `::` segment after the
+  generic scope (e.g. `::iterator`) is preserved.
+
+A third passthrough path is the `Inline Cpp { ... }` block (see
+[.NET Interop](#net-interop)), which emits raw C++ verbatim.
+
+### Backend Honesty Matrix
+
+The passthrough and collection features are **not** portable across every backend.
+Rather than silently emit broken code, the non-C++ backends reject unsupported
+constructs with a clean compile error before any code is generated:
+
+| Feature                          | C++ | C#         | LLVM       | MSIL       |
+|----------------------------------|-----|------------|------------|------------|
+| `#CppInclude` headers            | yes | **error**  | **error**  | **error**  |
+| `::` foreign types               | yes | **error**  | **error**  | **error**  |
+| Collections (`List`/`Dictionary`/`HashSet`) | yes | yes (native .NET) | **error**  | **error**  |
+
+- **C#** supports collections natively; it only rejects the C++-only passthrough
+  features.
+- **LLVM** and **MSIL** reject both the passthrough features and collections
+  (collection lowering is not yet implemented on those backends).
 
 ---
 

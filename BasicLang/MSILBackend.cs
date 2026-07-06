@@ -70,6 +70,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         public override string Generate(IRModule module)
         {
             _module = module;
+
+            // Backend honesty (spec decision 12): MSIL rejects C++-only passthrough
+            // (#CppInclude / :: foreign types) AND collections (List/Dictionary/HashSet
+            // are not yet lowered to IL) with a clean error before any emission.
+            ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: true);
+
             _output.Clear();
             _stringConstants.Clear();
             _labelCounter = 0;
