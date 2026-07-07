@@ -2094,8 +2094,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     case "trygetvalue":
                         return _typeManager.BooleanType;
                     case "remove":
-                        // Dictionary/HashSet Remove return Boolean; List.Remove returns Void.
-                        return lowerTypeName == "list" ? _typeManager.VoidType : _typeManager.BooleanType;
+                        // List/Dictionary/HashSet Remove all return Boolean in .NET
+                        // (List<T>.Remove and HashSet<T>.Remove return whether an element
+                        // was removed; Dictionary<K,V>.Remove returns whether the key existed).
+                        return _typeManager.BooleanType;
                 }
             }
 
@@ -5308,8 +5310,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 calleeSymbol = GetNodeSymbol(memberExpr);
             }
 
+            // `f(args)` is a CALL, not an index, whenever f is itself callable (a Function or
+            // Subroutine/method). Its calleeType is the RETURN type — if that return type is an
+            // array or an indexable collection (e.g. `Function MakeList() As List(Of Integer)`),
+            // the array/collection-indexer branches below would wrongly lower `MakeList(3)` to
+            // `MakeList[3]`. Only VALUE receivers (variables/parameters/fields) index.
+            bool calleeIsCallable = calleeSymbol != null &&
+                (calleeSymbol.Kind == SymbolKind.Function || calleeSymbol.Kind == SymbolKind.Subroutine);
+
+            // Explicit VB indexer `l.Item(i)` / `d.Item(k)` on a collection: type it as the
+            // element/value type (like `l(i)`), so `Dim x As Integer = l.Item(0)` type-checks and
+            // the backends see the right result type instead of Object.
+            if (node.Callee is MemberAccessExpressionNode itemAccess
+                && string.Equals(itemAccess.MemberName, "Item", StringComparison.OrdinalIgnoreCase)
+                && node.Arguments.Count > 0)
+            {
+                var itemReceiver = GetNodeType(itemAccess.Object);
+                if (itemReceiver != null && IsIndexableGenericType(itemReceiver))
+                {
+                    foreach (var index in node.Arguments)
+                        index.Accept(this);
+                    SetNodeType(node, GetGenericCollectionElementType(itemReceiver));
+                    return;
+                }
+            }
+
             // Check if this is actually an array access (VB-style arr(i) syntax)
-            if (calleeType != null && calleeType.Kind == TypeKind.Array && node.Arguments.Count > 0)
+            if (!calleeIsCallable && calleeType != null && calleeType.Kind == TypeKind.Array && node.Arguments.Count > 0)
             {
                 // This is array access - validate indices and set element type
                 foreach (var index in node.Arguments)
@@ -5326,7 +5353,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             // Check if this is a generic collection indexer (List(i), Dictionary(key))
-            if (calleeType != null && node.Arguments.Count > 0 && IsIndexableGenericType(calleeType))
+            if (!calleeIsCallable && calleeType != null && node.Arguments.Count > 0 && IsIndexableGenericType(calleeType))
             {
                 foreach (var index in node.Arguments)
                 {

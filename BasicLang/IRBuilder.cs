@@ -826,19 +826,30 @@ namespace BasicLang.Compiler.IR
 
             foreach (var method in node.Methods)
             {
+                // Use the FULLY-resolved return type from semantic analysis (carries generic
+                // arguments), falling back to a bare-name TypeInfo. Without the generic args the
+                // C#/C++ backends emitted `List GetItems()` (dropping `<string>`), so the
+                // signature no longer matched the implementing class (CS0535/CS0305), and the
+                // LLVM/MSIL honesty guard (which keys on Type) never saw the collection.
+                var resolvedReturn = _semanticAnalyzer.GetNodeType(method);
                 var irMethod = new IRInterfaceMethod
                 {
                     Name = method.Name,
-                    ReturnType = new TypeInfo(method.ReturnType?.Name ?? "Void", TypeKind.Primitive),
+                    ReturnType = resolvedReturn ?? new TypeInfo(method.ReturnType?.Name ?? "Void", TypeKind.Primitive),
                     HasDefaultImplementation = !method.IsAbstract && method.Body != null
                 };
 
                 foreach (var param in method.Parameters)
                 {
+                    // Populate the full resolved Type (with generic args) — not just TypeName —
+                    // so both backends emit `Dictionary<string, int>` and the LLVM/MSIL guard
+                    // (ModuleTypeWalker yields p.Type) sees interface collection params.
+                    var resolvedParamType = _semanticAnalyzer.GetNodeType(param);
                     irMethod.Parameters.Add(new IRParameter
                     {
                         Name = param.Name,
                         TypeName = param.Type?.Name ?? "Object",
+                        Type = resolvedParamType,
                         IsOptional = param.IsOptional,
                         IsParamArray = param.IsParamArray,
                         IsByRef = param.IsByRef,
@@ -2913,6 +2924,25 @@ namespace BasicLang.Compiler.IR
                     EmitInstruction(new IRStore(value, gep));
                 }
             }
+            else if (node.Target is CallExpressionNode itemCallTarget
+                     && itemCallTarget.Callee is MemberAccessExpressionNode itemTarget
+                     && itemCallTarget.Arguments.Count > 0
+                     && string.Equals(itemTarget.MemberName, "Item", StringComparison.OrdinalIgnoreCase)
+                     && IsIndexableGenericType(_semanticAnalyzer.GetNodeType(itemTarget.Object)))
+            {
+                // Explicit VB indexer WRITE `l.Item(i) = v` on a collection: lower to the same
+                // IRIndexerStore as `l(i) = v` (List -> (*l)[i] = v; Dictionary -> l->Set(k, v)).
+                // Otherwise it degraded to a field access + array store on a nonexistent member.
+                itemTarget.Object.Accept(this);
+                var collection = _expressionResult;
+                var indexerStore = new IRIndexerStore(collection, value);
+                foreach (var index in itemCallTarget.Arguments)
+                {
+                    index.Accept(this);
+                    indexerStore.Indices.Add(_expressionResult);
+                }
+                EmitInstruction(indexerStore);
+            }
             else if (node.Target is CallExpressionNode callTarget && callTarget.Arguments.Count > 0)
             {
                 // VB-style paren-indexed write: `coll(i) = v` / `dict(k) = v`. Because VB uses
@@ -3166,6 +3196,35 @@ namespace BasicLang.Compiler.IR
                 ? _currentFunction.GetNextTempName()
                 : null;
 
+            // Nested/chained indexer read: `m(0)(1)` (or `d("a")("b")`). The OUTER callee is an
+            // arbitrary expression (here the inner `m(0)` indexer), not an identifier/member — so
+            // it never reached the identifier-branch indexer check, and fell through to the
+            // delegate-invocation `else` branch, emitting a call on an UNDECLARED temp
+            // (`t5(1)`). Detect it here: when the callee's own type is an indexable collection,
+            // lower to IRIndexerAccess over the (already-evaluated) inner collection value.
+            if (node.Arguments.Count > 0
+                && !(node.Callee is IdentifierExpressionNode)
+                && !(node.Callee is MemberAccessExpressionNode))
+            {
+                var chainType = _semanticAnalyzer.GetNodeType(node.Callee);
+                if (chainType != null && IsIndexableGenericType(chainType))
+                {
+                    node.Callee.Accept(this);
+                    var innerCollection = _expressionResult;
+                    var elementType = returnType ?? new TypeInfo("Object", TypeKind.Class);
+                    var chainTemp = _currentFunction.GetNextTempName();
+                    var chainAccess = new IRIndexerAccess(chainTemp, innerCollection, elementType);
+                    foreach (var index in node.Arguments)
+                    {
+                        index.Accept(this);
+                        chainAccess.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(chainAccess);
+                    _expressionResult = chainAccess;
+                    return;
+                }
+            }
+
             // Check for different call types
             if (node.Callee is MemberAccessExpressionNode memberExpr)
             {
@@ -3191,6 +3250,27 @@ namespace BasicLang.Compiler.IR
                 // Static: ClassName.Method() where ClassName is a type
                 memberExpr.Object.Accept(this);
                 var obj = _expressionResult;
+
+                // `.Item(i)` READ on a collection is the explicit VB indexer — lower it to the
+                // same IRIndexerAccess as `l(i)` (List -> (*l)[i]; Dictionary -> l->Get(k)).
+                // Otherwise it degraded to a bogus `l->Item(i)` member call (no such member).
+                var itemReceiverType = _semanticAnalyzer.GetNodeType(memberExpr.Object);
+                if (string.Equals(memberExpr.MemberName, "Item", StringComparison.OrdinalIgnoreCase)
+                    && node.Arguments.Count > 0
+                    && itemReceiverType != null && IsIndexableGenericType(itemReceiverType))
+                {
+                    var elementType = returnType ?? new TypeInfo("Object", TypeKind.Class);
+                    var itemTemp = _currentFunction.GetNextTempName();
+                    var itemAccess = new IRIndexerAccess(itemTemp, obj, elementType);
+                    foreach (var index in node.Arguments)
+                    {
+                        index.Accept(this);
+                        itemAccess.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(itemAccess);
+                    _expressionResult = itemAccess;
+                    return;
+                }
 
                 // Determine if this is a static call (type reference) or instance call (variable)
                 // Check if the object is a reference to a class type (static call) by:
@@ -3249,10 +3329,18 @@ namespace BasicLang.Compiler.IR
                 // Get symbol to check if this is an array access (VB-style arr(i) syntax)
                 var symbol = _semanticAnalyzer.GetNodeSymbol(node.Callee);
                 var calleeType = _semanticAnalyzer.GetNodeType(node.Callee);
-                
+
+                // `f(args)` is a CALL, not an index, whenever f is itself callable (a Function
+                // or Subroutine). Its calleeType is the RETURN type, so a collection/array-
+                // returning function (e.g. `Function MakeList() As List(Of Integer)`) must NOT
+                // take the array/indexer branches below — that lowered `MakeList(3)` to the
+                // invalid `MakeList[3]`. Only value receivers (variables/parameters) index.
+                bool calleeIsCallable = symbol != null &&
+                    (symbol.Kind == SymbolKind.Function || symbol.Kind == SymbolKind.Subroutine);
+
                 // Check if this is actually an array access, not a function call
                 // In VB, arr(i) can be either function call or array indexing
-                if (calleeType != null && calleeType.Kind == TypeKind.Array && node.Arguments.Count > 0)
+                if (!calleeIsCallable && calleeType != null && calleeType.Kind == TypeKind.Array && node.Arguments.Count > 0)
                 {
                     // This is array access, generate array element access
                     node.Callee.Accept(this);
@@ -3280,7 +3368,7 @@ namespace BasicLang.Compiler.IR
                 }
 
                 // Check if this is a generic collection indexer access (List<T>, Dictionary<K,V>, etc.)
-                if (calleeType != null && node.Arguments.Count > 0 && IsIndexableGenericType(calleeType))
+                if (!calleeIsCallable && calleeType != null && node.Arguments.Count > 0 && IsIndexableGenericType(calleeType))
                 {
                     // This is collection indexer access, generate IRIndexerAccess
                     node.Callee.Accept(this);

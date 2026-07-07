@@ -841,4 +841,310 @@ Sub Main()
 End Sub";
         Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
     }
+
+    // ========================================================================
+    // COLLECTION LOWERING BUG BATCH (call-vs-indexer, interface generics, indexer
+    // typing, .Item, Remove bool, nested indexer, struct ==). Each reproduces a
+    // distinct mis-lowering; where a value is produced, compile-and-run (real MSVC)
+    // and compare to known .NET behavior.
+    // ========================================================================
+
+    // ---- BUG 1: a function whose RETURN type is a collection must lower its CALLS
+    //             as calls `f(args)`, never as indexer access `f[args]`. ----
+
+    [Test]
+    public void Cpp_CollectionReturningFunctionCall_IsCallNotIndexer_CompileAndRun()
+    {
+        // MakeList(3).Count used to lower to MakeList[3].Count (indexing the FUNCTION).
+        // Fixed: a callable target is always a call regardless of its return type.
+        var source = @"
+Function MakeList(n As Integer) As List(Of Integer)
+    Dim l As New List(Of Integer)()
+    l.Add(n)
+    l.Add(n)
+    Return l
+End Function
+Sub Main()
+    Console.WriteLine(MakeList(3).Count)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("MakeList(3)"));
+        Assert.That(output, Does.Not.Contain("MakeList[3]"));
+        Assert.That(CompileRun(output), Is.EqualTo("2\n"));
+    }
+
+    [Test]
+    public void CSharp_CollectionReturningFunctionCall_IsCallNotIndexer_CompileAndRun()
+    {
+        // Same program on the C# backend (Roslyn): MakeList(3).Count must be a call.
+        // Before the fix the generated C# said MakeList[3].Count (CS0021).
+        var source = @"
+Function MakeList(n As Integer) As List(Of Integer)
+    Dim l As New List(Of Integer)()
+    l.Add(n)
+    l.Add(n)
+    Return l
+End Function
+Sub Main()
+    Console.WriteLine(MakeList(3).Count)
+End Sub";
+        var cs = CompileToCSharp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(cs, Does.Contain("MakeList(3)"));
+        Assert.That(cs, Does.Not.Contain("MakeList[3]"));
+        Assert.That(VisualGameStudio.Tests.Native.CSharpRun.CompileAndRun(cs), Is.EqualTo("2\n"));
+    }
+
+    [Test]
+    public void CSharp_DictionaryReturningFunctionCall_IsCallNotIndexer_CompileAndRun()
+    {
+        // Dictionary-returning function: MakeMap().Count must be a call, not MakeMap[].Count.
+        var source = @"
+Function MakeMap() As Dictionary(Of String, Integer)
+    Dim d As New Dictionary(Of String, Integer)()
+    d(""a"") = 1
+    Return d
+End Function
+Sub Main()
+    Console.WriteLine(MakeMap().Count)
+End Sub";
+        var cs = CompileToCSharp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(VisualGameStudio.Tests.Native.CSharpRun.CompileAndRun(cs), Is.EqualTo("1\n"));
+    }
+
+    [Test]
+    public void Cpp_NormalFunctionCallAndArrayIndex_StillWork_Regression()
+    {
+        // Guard against over-reach: an ordinary Integer-returning function call and a plain
+        // VB array index `arr(i)` must be UNAFFECTED by the call-vs-indexer guard.
+        var source = @"
+Function Doubler(n As Integer) As Integer
+    Return n * 2
+End Function
+Sub Main()
+    Dim a As New List(Of Integer)()
+    a.Add(7)
+    a.Add(8)
+    Console.WriteLine(Doubler(5))
+    Console.WriteLine(a(1))
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("10\n8\n"));
+    }
+
+    // ---- BUG 2: interface method signatures must keep collection generic type args. ----
+
+    [Test]
+    public void CSharp_InterfaceCollectionSignatures_KeepGenericArgs_CompilesWithRoslyn()
+    {
+        // The interface used to emit `List GetItems();` / `void SetMap(Dictionary m);` (generic
+        // args dropped), which no longer matched the implementing class -> CS0535/CS0305.
+        var source = @"
+Interface IStore
+    Function GetItems() As List(Of String)
+    Sub SetMap(m As Dictionary(Of String, Integer))
+End Interface
+
+Class Store
+    Implements IStore
+    Public Function GetItems() As List(Of String) Implements IStore.GetItems
+        Return New List(Of String)()
+    End Function
+    Public Sub SetMap(m As Dictionary(Of String, Integer)) Implements IStore.SetMap
+    End Sub
+End Class
+
+Sub Main()
+End Sub";
+        var cs = CompileToCSharp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(cs, Does.Contain("List<string> GetItems();"));
+        Assert.That(cs, Does.Contain("void SetMap(Dictionary<string, int> m);"));
+        // Must compile with Roslyn (signature now matches the implementing class).
+        Assert.DoesNotThrow(() => VisualGameStudio.Tests.Native.CSharpRun.CompileAndRun(cs));
+    }
+
+    [Test]
+    public void Cpp_InterfaceCollectionSignatures_KeepGenericArgs()
+    {
+        // C++ backend: interface pure-virtual signatures must carry the full wrapper generic
+        // types (never the bare `List` / `Dictionary`).
+        var source = @"
+Interface IStore
+    Function GetItems() As List(Of String)
+    Sub SetMap(m As Dictionary(Of String, Integer))
+End Interface
+Sub Main()
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::shared_ptr<BasicLang::List<std::string>> GetItems()"));
+        Assert.That(output, Does.Contain("std::shared_ptr<BasicLang::Dictionary<std::string, int32_t>>"));
+    }
+
+    // ---- BUG 3: an indexer READ of a collection element types as the element type. ----
+
+    [Test]
+    public void Cpp_IndexerRead_TypesAsElementType_CompileAndRun()
+    {
+        // `Dim x As Integer = l(0)` / `Dim v As String = d("k")` must type as the element/value
+        // type (not Object). Before the fix the result was Object -> void* in C++ / CS0266 in C#.
+        var source = @"
+Sub Main()
+    Dim l As New List(Of Integer)()
+    l.Add(5)
+    Dim x As Integer = l(0)
+    Console.WriteLine(x)
+    Dim d As New Dictionary(Of String, String)()
+    d(""k"") = ""hi""
+    Dim v As String = d(""k"")
+    Console.WriteLine(v)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("5\nhi\n"));
+    }
+
+    // ---- BUG 4: `.Item(i)` READ/WRITE lowers to the indexer, not `->item(...)`. ----
+
+    [Test]
+    public void Cpp_ItemAccessorReadAndWrite_LowersToIndexer_CompileAndRun()
+    {
+        // `l.Item(0)` READ and `l.Item(1) = v` WRITE are the explicit VB indexer; they used to
+        // emit a nonexistent `l->Item(...)` member. Now they mirror `l(i)` / `l(i) = v`.
+        var source = @"
+Sub Main()
+    Dim l As New List(Of Integer)()
+    l.Add(1)
+    l.Add(2)
+    Console.WriteLine(l.Item(0))
+    l.Item(1) = 99
+    Console.WriteLine(l.Item(1))
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Not.Contain("->Item("));
+        Assert.That(output, Does.Contain("(*l)[0]"));
+        Assert.That(output, Does.Contain("(*l)[1] = 99"));
+        Assert.That(CompileRun(output), Is.EqualTo("1\n99\n"));
+    }
+
+    // ---- BUG 5: List.Remove / HashSet.Remove return Boolean (not Void). ----
+
+    [Test]
+    public void Cpp_ListRemove_ReturnsBoolean_CompileAndRun()
+    {
+        // .NET List<T>.Remove returns whether an element was removed. `Dim ok As Boolean = ...`
+        // used to error (Remove typed Void). The wrapper's List::Remove now returns bool too.
+        var source = @"
+Sub Main()
+    Dim l As New List(Of Integer)()
+    l.Add(5)
+    l.Add(6)
+    Dim ok As Boolean = l.Remove(5)
+    Dim gone As Boolean = l.Remove(42)
+    Console.WriteLine(ok)
+    Console.WriteLine(gone)
+    Console.WriteLine(l.Count)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // Remove(5)=true(1), Remove(42)=false(0), Count=1.
+        Assert.That(CompileRun(output), Is.EqualTo("1\n0\n1\n"));
+    }
+
+    [Test]
+    public void Cpp_HashSetRemove_ReturnsBoolean_CompileAndRun()
+    {
+        var source = @"
+Sub Main()
+    Dim s As New HashSet(Of Integer)()
+    s.Add(5)
+    Dim ok As Boolean = s.Remove(5)
+    Dim gone As Boolean = s.Remove(5)
+    Console.WriteLine(ok)
+    Console.WriteLine(gone)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("1\n0\n"));
+    }
+
+    // ---- BUG 6: chained/nested indexer `a(i)(j)` on nested collections. ----
+
+    [Test]
+    public void Cpp_NestedIndexerRead_ListOfList_CompileAndRun()
+    {
+        // `m(0)(1)` used to reference an undeclared temp (t5(1)); the outer indexer over the
+        // inner collection value was never wired. Now it reads (*(*m)[0])[1].
+        var source = @"
+Sub Main()
+    Dim m As New List(Of List(Of Integer))()
+    Dim inner As New List(Of Integer)()
+    inner.Add(10)
+    inner.Add(20)
+    m.Add(inner)
+    Console.WriteLine(m(0)(1))
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("20\n"));
+    }
+
+    [Test]
+    public void Cpp_NestedIndexerRead_DictOfDict_CompileAndRun()
+    {
+        // Nested-dictionary chained read `d("a")("b")`.
+        var source = @"
+Sub Main()
+    Dim d As New Dictionary(Of String, Dictionary(Of String, Integer))()
+    Dim inner As New Dictionary(Of String, Integer)()
+    inner(""b"") = 7
+    d(""a"") = inner
+    Console.WriteLine(d(""a"")(""b""))
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("7\n"));
+    }
+
+    // ---- BUG 7: List(Of SomeStructure) needs value-equality operator== on the struct. ----
+
+    [Test]
+    public void Cpp_ListOfStruct_Contains_UsesValueEquality_CompileAndRun()
+    {
+        // List(Of Point).Contains/IndexOf call std::find, needing `item == *it`. Generated
+        // structs had no operator== (C2676). A C++20 defaulted operator== gives memberwise
+        // equality matching .NET ValueType.Equals.
+        var source = @"
+Structure Point
+    Public X As Integer
+    Public Y As Integer
+End Structure
+
+Sub Main()
+    Dim pts As New List(Of Point)()
+    Dim p As Point
+    p.X = 1
+    p.Y = 2
+    pts.Add(p)
+    Dim q As Point
+    q.X = 1
+    q.Y = 2
+    Dim other As Point
+    other.X = 9
+    other.Y = 9
+    Console.WriteLine(pts.Contains(q))
+    Console.WriteLine(pts.Contains(other))
+    Console.WriteLine(pts.IndexOf(q))
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("bool operator==(const Point& other) const = default;"));
+        // Contains(q)=true(1), Contains(other)=false(0), IndexOf(q)=0.
+        Assert.That(CompileRun(output), Is.EqualTo("1\n0\n0\n"));
+    }
 }

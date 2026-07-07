@@ -847,8 +847,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (param.IsByRef)
                 parts.Add("ref");
 
-            // Type and name
-            parts.Add(MapTypeName(param.TypeName));
+            // Type and name. Prefer the fully-resolved Type (carries generic arguments, e.g.
+            // Dictionary<string, int>) when present; fall back to the bare TypeName string.
+            parts.Add(param.Type != null ? MapType(param.Type) : MapTypeName(param.TypeName));
             parts.Add(SanitizeName(param.Name));
 
             var result = string.Join(" ", parts);

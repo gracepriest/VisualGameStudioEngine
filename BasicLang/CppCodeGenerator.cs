@@ -794,8 +794,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 var returnType = MapType(method.ReturnType);
                 var methodName = SanitizeName(method.Name);
+                // Prefer the fully-resolved Type (carries generic arguments, e.g.
+                // std::shared_ptr<BasicLang::Dictionary<std::string, int32_t>>) when present;
+                // fall back to the bare TypeName string.
                 var paramList = string.Join(", ", method.Parameters.Select(p =>
-                    $"{MapTypeName(p.TypeName)} {SanitizeName(p.Name)}"));
+                    $"{(p.Type != null ? MapType(p.Type) : MapTypeName(p.TypeName))} {SanitizeName(p.Name)}"));
 
                 WriteLine($"virtual {returnType} {methodName}({paramList}) = 0;");
             }
@@ -947,6 +950,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             else
             {
                 WriteLine($"~{className}() = default;");
+                WriteLine();
+            }
+
+            // Value-type structs get C++20 defaulted equality so field-wise value equality
+            // matches .NET ValueType.Equals. Without it, List(Of SomeStruct).Contains/IndexOf/
+            // Remove (which call std::find, needing `item == *it`) fail to compile (C2676).
+            // Reference-type classes are lowered to std::shared_ptr, whose == is pointer
+            // identity — matching .NET reference equality — so they are intentionally excluded.
+            if (irClass.IsStruct)
+            {
+                WriteLine($"bool operator==(const {className}& other) const = default;");
                 WriteLine();
             }
 

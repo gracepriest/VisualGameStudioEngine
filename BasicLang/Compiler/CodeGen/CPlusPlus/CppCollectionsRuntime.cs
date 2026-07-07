@@ -47,9 +47,11 @@ public:
         auto it = std::find(_v.begin(), _v.end(), item);
         return it == _v.end() ? -1 : static_cast<int32_t>(it - _v.begin());
     }
-    void Remove(const T& item) {
+    bool Remove(const T& item) {
         auto it = std::find(_v.begin(), _v.end(), item);
-        if (it != _v.end()) _v.erase(it);
+        if (it == _v.end()) return false;
+        _v.erase(it);
+        return true;
     }
     void RemoveAt(int32_t i) { _v.erase(_v.begin() + i); }
     void Insert(int32_t i, const T& item) { _v.insert(_v.begin() + i, item); }

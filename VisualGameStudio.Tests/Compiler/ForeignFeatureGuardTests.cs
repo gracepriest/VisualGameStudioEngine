@@ -260,6 +260,40 @@ public class ForeignFeatureGuardTests
     }
 
     // ------------------------------------------------------------------
+    // BUG 2 HONESTY GAP: an interface method's collection PARAMETER used to carry only a
+    // bare TypeName (its full Type was null), so ModuleTypeWalker yielded null for it and the
+    // LLVM/MSIL guard silently skipped it — a `Sub AddItems(items As List(Of Integer))` on an
+    // interface compiled to LLVM/MSIL as broken code. Now that IRBuilder populates the full
+    // Type, the guard sees the collection and rejects cleanly on both backends.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void LLVM_InterfaceCollectionParam_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Interface IStore\nSub AddItems(items As List(Of Integer))\nEnd Interface\nSub Main()\nEnd Sub",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("List"));
+    }
+
+    [Test]
+    public void MSIL_InterfaceCollectionParam_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Interface IStore\nSub AddItems(items As List(Of Integer))\nEnd Interface\nSub Main()\nEnd Sub",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("List"));
+    }
+
+    // ------------------------------------------------------------------
     // REGRESSION: the plain #Include source splicer is UNTOUCHED by the guard.
     // The guard only rejects #CppInclude / :: foreign / collections; a #Include
     // of a BasicLang source file must still textually splice its content in.
