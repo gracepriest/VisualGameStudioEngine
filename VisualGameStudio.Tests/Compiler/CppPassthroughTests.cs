@@ -503,4 +503,171 @@ End Sub";
         Assert.That(VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(output, compiler.Value).Replace("\r\n", "\n"),
             Is.EqualTo("ok\n"));
     }
+
+    // ==================================================================
+    // Bug (foreign New) — `New <::-foreign-type>(...)` must keep '::' and emit a
+    // VALUE construction with a single, correctly-declared temp.
+    //
+    // Before the fix Visit(IRNewObject) built the constructed type with
+    // SanitizeName(ClassName), which STRIPS '::' (std::string -> stdstring,
+    // std::vector -> stdvector, my::ns::Foo -> mynsFoo), and named the holding temp
+    // inconsistently (declared `t0`, assigned `t1` / never declared). The generated
+    // C++ failed to compile (C3861 undeclared type + C2065 undeclared temp). Foreign
+    // types are VALUES (not std::shared_ptr / make_shared like collections/classes),
+    // so the fix emits `auto <temp> = <foreign-type-verbatim>(<args>);`.
+    // ==================================================================
+
+    [Test]
+    public void Cpp_ForeignNew_StdString_KeepsScopeResolution_CompilesAndRuns()
+    {
+        var source = @"
+#CppInclude <string>
+Sub Main()
+    Dim s As std::string = New std::string(""hello"")
+    Console.WriteLine(s.size())
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // '::' preserved (NOT stripped to `stdstring`); value construction of the verbatim type.
+        Assert.That(output, Does.Contain("std::string(\"hello\")"),
+            "New std::string(...) must construct the verbatim '::'-qualified type, not 'stdstring'");
+        Assert.That(output, Does.Not.Contain("stdstring"),
+            "SanitizeName must not strip '::' from a constructed foreign type name");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        // "hello".size() == 5.
+        Assert.That(VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(output, compiler.Value).Replace("\r\n", "\n"),
+            Is.EqualTo("5\n"));
+    }
+
+    [Test]
+    public void Cpp_ForeignNew_StdVectorOfInteger_MapsGenericArgs_Compiles()
+    {
+        var source = @"
+#CppInclude <vector>
+Sub Main()
+    Dim v As std::vector(Of Integer) = New std::vector(Of Integer)()
+    v.push_back(7)
+    Console.WriteLine(v.size())
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // Generic args mapped ((Of Integer) -> <int32_t>) with '::' intact.
+        Assert.That(output, Does.Contain("std::vector<int32_t>()"),
+            "New std::vector(Of Integer)() must construct std::vector<int32_t>, not 'stdvector'");
+        Assert.That(output, Does.Not.Contain("stdvector"));
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        Assert.That(VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(output, compiler.Value).Replace("\r\n", "\n"),
+            Is.EqualTo("1\n"));
+    }
+
+    [Test]
+    public void Cpp_ForeignNew_MultiSegmentNamespace_WithArgs_CompilesAndRuns()
+    {
+        // my::ns::Foo(1, 2) — a multi-segment '::' name with constructor arguments.
+        var source = @"
+#CppInclude ""myns.h""
+Sub Main()
+    Dim f As my::ns::Foo = New my::ns::Foo(1, 2)
+    Console.WriteLine(f.sum())
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("my::ns::Foo(1, 2)"),
+            "multi-segment '::' names must be emitted verbatim with their constructor args");
+        Assert.That(output, Does.Not.Contain("mynsFoo"));
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        var header = new KeyValuePair<string, string>(
+            "myns.h",
+            "#pragma once\n#include <cstdint>\n" +
+            "namespace my { namespace ns { struct Foo { int a; int b; " +
+            "Foo(int x, int y):a(x),b(y){} int sum(){return a+b;} }; } }\n");
+        var run = VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(
+            output, compiler.Value, new[] { header });
+        Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("3\n"));  // 1 + 2
+    }
+
+    // ==================================================================
+    // Bug (type-inferred foreign local) — `Dim x = <foreignCall>()` inferred the
+    // synthetic member-path pseudo-type ("probe::Widget::compute") as the DECLARED
+    // C++ type (`probe::Widget::compute x = ...;`), which is not a real type (C2146/
+    // C3867/C2065). The inferred type must be emitted as `auto`.
+    // ==================================================================
+
+    [Test]
+    public void Cpp_TypeInferredForeignLocal_UsesAuto_CompilesAndRuns()
+    {
+        var source = @"
+#CppInclude ""counter.h""
+Sub Main()
+    Dim w As probe::Widget
+    Dim x = w.compute()
+    Console.WriteLine(x)
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // Declared `auto`, not the synthetic member-path pseudo-type.
+        Assert.That(output, Does.Contain("auto x = w.compute();"),
+            "a type-inferred opaque foreign local must be declared 'auto', not its pseudo-type");
+        Assert.That(output, Does.Not.Contain("probe::Widget::compute x"),
+            "the synthetic member-path pseudo-type must never be used as a declaration type");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        var header = new KeyValuePair<string, string>(
+            "counter.h",
+            "#pragma once\nnamespace probe { struct Widget { int compute(){ return 42; } }; }\n");
+        var run = VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(
+            output, compiler.Value, new[] { header });
+        Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("42\n"));
+    }
+
+    [Test]
+    public void Cpp_TypeInferredForeignLocal_ExplicitTypeStillWorks()
+    {
+        // Regression guard: an EXPLICITLY named foreign type must NOT be forced to `auto`
+        // or rejected — `Dim n As std::size_t = v.size()` keeps its verbatim declared type.
+        var source = @"
+#CppInclude <vector>
+Sub Main()
+    Dim v As std::vector(Of Integer)
+    v.push_back(1)
+    Dim n As std::size_t = v.size()
+    Console.WriteLine(""ok"")
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Match(@"std::size_t n = v\.size\(\);"),
+            "an explicit foreign local type must stay verbatim, not become 'auto'");
+    }
+
+    [Test]
+    public void Cpp_TypeInferredForeignLocal_InsideControlFlowBlock_CleanRejection()
+    {
+        // The HARDER form: a type-inferred foreign capture whose declaration sits inside a
+        // control-flow body would need a deferred `auto x = expr;` that a goto could jump over
+        // (MSVC C2362). Rather than emit non-compiling C++, the compiler rejects it with a clean,
+        // actionable diagnostic (explicit-type declarations are the escape hatch).
+        var source = @"
+#CppInclude ""counter.h""
+Sub Main()
+    Dim w As probe::Widget
+    Dim flag As Boolean = True
+    If flag Then
+        Dim x = w.compute()
+        Console.WriteLine(x)
+    End If
+    Console.WriteLine(""end"")
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(output, Is.Null, "a type-inferred opaque foreign capture in a control-flow block must be rejected");
+        Assert.That(string.Join("; ", errors),
+            Does.Contain("Cannot infer the type of an opaque C++ expression"),
+            "the rejection must be a clean, actionable BasicLang diagnostic (never non-compiling C++)");
+    }
 }

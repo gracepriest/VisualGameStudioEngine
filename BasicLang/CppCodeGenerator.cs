@@ -1280,8 +1280,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 function.LocalVariables.Where(l => l.Type?.Kind == TypeKind.Foreign)
                                        .Select(l => l.Name),
                 StringComparer.OrdinalIgnoreCase);
+            // A TYPE-INFERRED foreign local (`Dim x = w.compute()`) has a synthetic member-path
+            // pseudo-type (e.g. "probe::Widget::compute") that is NOT a real C++ type — it must be
+            // declared `auto` at its (entry-block) first write. An EXPLICIT foreign type
+            // (`Dim it As std::...::iterator`) is a real type and keeps its verbatim spelling.
+            // (Inferred foreign locals inside control-flow blocks are rejected at semantic
+            // analysis, so only the entry-block `auto x = expr;` form reaches codegen.)
             foreach (var local in function.LocalVariables.Where(l => l.Type?.Kind == TypeKind.Foreign))
-                _foreignLocalTypeByName[local.Name] = MapType(local.Type);
+                _foreignLocalTypeByName[local.Name] =
+                    local.IsInferredType ? "auto" : MapType(local.Type);
             // Foreign locals whose first write we've already seen (so a later write in a
             // different block can't retroactively flip the deferral decision).
             var foreignLocalFirstWriteSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1300,7 +1307,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         _dateTimeValues.Add(fa);
 
                     // A write to a foreign local is its initializer — declare-at-first-write,
-                    // but ONLY when that first write is in the entry block (see above).
+                    // but ONLY when that first write is in the entry block. A deferred
+                    // `type n = expr;` inside a branch/loop body could be jumped over by a goto
+                    // (MSVC C2362 "initialization skipped by goto"), so a branch-first-write
+                    // foreign local falls back to a plain top-level declaration. This holds for
+                    // BOTH explicit foreign types (`type name;` at top) and inferred ones — a
+                    // type-inferred foreign local (`auto`) has no legal standalone declaration,
+                    // so the semantic analyzer rejects one declared inside a control-flow block
+                    // (see SemanticAnalyzer.Visit(VariableDeclarationNode)); only the entry-block
+                    // form ever reaches here.
                     var writtenLocal = AssignmentTargetName(instruction);
                     if (writtenLocal != null && foreignLocalNames.Contains(writtenLocal)
                         && foreignLocalFirstWriteSeen.Add(writtenLocal)
@@ -1460,6 +1475,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         // A foreign local with an initializer is declared at its first write
                         // (some::type it = expr;) — skip the standalone declaration here.
                         if (_foreignLocalsInitInline.Contains(local.Name))
+                            continue;
+                        // A type-INFERRED foreign local's type is a synthetic member-path
+                        // pseudo-type (not a real C++ type) — a standalone `pseudo-type x;`
+                        // would not compile, and `auto x;` is illegal. It is always declared
+                        // at its first write (auto x = expr;); never emit a bare declaration.
+                        if (local.IsInferredType)
                             continue;
                         WriteLine($"{localType} {localName};");
                     }
@@ -2520,6 +2541,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     _ => "std::string()"
                 };
                 WriteLine($"{target} = {expr};");
+                return;
+            }
+
+            // ::-qualified foreign C++ passthrough type (e.g. New std::string("hi"),
+            // New std::vector(Of Integer)(), New my::ns::Foo(1, 2)). Foreign types are VALUES
+            // (NOT std::shared_ptr / make_shared like collections and user classes). The type
+            // name is emitted VERBATIM (keeping '::' — SanitizeName would strip it to
+            // "stdstring") with generic args mapped ((Of Integer) -> <int32_t>) via MapType.
+            //
+            // The result temp cannot be pre-declared: a foreign type may be non-default-
+            // constructible / non-assignable, and DeclareLocalsAndTemporaries deliberately
+            // skips Foreign temps. So fold declaration + construction into one `auto` binding
+            // (the temp is single-assignment and always initialized before any use).
+            if (newObj.Type?.Kind == TypeKind.Foreign
+                || (newObj.ClassName != null && newObj.ClassName.Contains("::")))
+            {
+                var foreignType = newObj.Type?.Kind == TypeKind.Foreign
+                    ? MapType(newObj.Type)
+                    : newObj.ClassName;
+                var ctorArgs = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
+                WriteLine($"auto {GetValueName(newObj)} = {foreignType}({ctorArgs});");
                 return;
             }
 

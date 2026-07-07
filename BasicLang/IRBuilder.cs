@@ -411,6 +411,11 @@ namespace BasicLang.Compiler.IR
             {
                 // Local variable - register it for declaration
                 var localVar = CreateVariable(node.Name, varType, _nextVersion++);
+                // Record when the type was INFERRED (`Dim x = expr` / `Auto x = expr`, no
+                // `As` clause) rather than explicitly declared. The C++ backend uses this to
+                // emit `auto` for opaque foreign initializers whose inferred type is a
+                // synthetic member-path pseudo-type (not a real C++ type).
+                localVar.IsInferredType = node.IsAuto;
                 PushVariableVersion(node.Name, localVar);
                 _currentFunction.LocalVariables.Add(localVar);
 

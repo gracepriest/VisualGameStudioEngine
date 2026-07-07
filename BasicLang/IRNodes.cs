@@ -127,6 +127,16 @@ namespace BasicLang.Compiler.IR
         public bool IsOptional { get; set; }
         public bool IsParamArray { get; set; }
         public bool IsByRef { get; set; }
+        /// <summary>
+        /// True when this local's type was INFERRED from its initializer (`Dim x = expr`
+        /// / `Auto x = expr`) rather than explicitly declared with an `As` clause. The C++
+        /// backend needs this for opaque foreign (::-qualified) initializers: an inferred
+        /// foreign type is a synthetic member-path pseudo-type (e.g. "probe::Widget::compute"
+        /// from a member access) that is NOT a real C++ type, so the declaration must be
+        /// emitted as `auto` instead of the pseudo-type. An EXPLICIT foreign type
+        /// (`Dim it As std::vector(Of Integer)::iterator`) is a real type and stays verbatim.
+        /// </summary>
+        public bool IsInferredType { get; set; }
         public IRValue DefaultValue { get; set; }
         public IRValue InitialValue { get; set; }
 

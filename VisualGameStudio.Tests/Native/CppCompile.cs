@@ -99,7 +99,19 @@ public static class CppCompile
     /// A compile or run that exceeds its timeout is killed and reported as a clear timeout
     /// failure. Temp files are cleaned up in a <c>finally</c>.
     /// </summary>
-    public static string CompileAndRun(string cppSource, (string exe, string argsTemplate) compiler)
+    public static string CompileAndRun(string cppSource, (string exe, string argsTemplate) compiler) =>
+        CompileAndRun(cppSource, compiler, extraFiles: null);
+
+    /// <summary>
+    /// Same as <see cref="CompileAndRun(string,ValueTuple{string,string})"/>, but first writes
+    /// each (fileName -> content) in <paramref name="extraFiles"/> into the temp compile dir so
+    /// the generated C++ can <c>#include "header.h"</c> a sibling header (the compiler runs with
+    /// that dir as its working directory, so quote-includes resolve against it).
+    /// </summary>
+    public static string CompileAndRun(
+        string cppSource,
+        (string exe, string argsTemplate) compiler,
+        IEnumerable<KeyValuePair<string, string>>? extraFiles)
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), "blcpp_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
@@ -108,6 +120,10 @@ public static class CppCompile
 
         try
         {
+            if (extraFiles != null)
+                foreach (var kv in extraFiles)
+                    File.WriteAllText(Path.Combine(tmpDir, kv.Key), kv.Value);
+
             File.WriteAllText(srcPath, cppSource);
 
             // Compile.

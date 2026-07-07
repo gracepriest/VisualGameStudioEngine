@@ -1651,6 +1651,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        /// <summary>
+        /// True when the current declaration sits inside a control-flow body (If/For/While/Try
+        /// block or loop), as opposed to directly in the function body. A function/subroutine
+        /// body is itself exactly ONE <see cref="ScopeKind.Block"/> scope directly under the
+        /// enclosing Function/Subroutine scope; any additional Block/Loop scope in between means
+        /// the declaration is control-flow-nested. Used to reject type-inferred opaque foreign
+        /// captures whose `auto` declaration would be jumped over by a goto (MSVC C2362).
+        /// </summary>
+        private bool IsInsideControlFlowBlock()
+        {
+            int blockDepth = 0;
+            for (var scope = _currentScope; scope != null; scope = scope.Parent)
+            {
+                if (scope.Kind == ScopeKind.Function || scope.Kind == ScopeKind.Subroutine)
+                    break;
+                if (scope.Kind == ScopeKind.Block || scope.Kind == ScopeKind.Loop)
+                    blockDepth++;
+            }
+            return blockDepth > 1;
+        }
+
         private TypeInfo ResolveTypeReference(TypeReference typeRef)
         {
             if (typeRef == null)
@@ -2815,6 +2836,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     {
                         Error($"Cannot infer type for variable '{node.Name}'", node.Line, node.Column);
                         varType = _typeManager.ObjectType;
+                    }
+                    // A type-inferred capture of an OPAQUE foreign (::-qualified) C++ expression
+                    // has no real inferred type — the member-access result is a synthetic
+                    // member-path pseudo-type (e.g. "probe::Widget::compute"), not a C++ type.
+                    // The C++ backend emits `auto x = expr;` for these, which is only legal when
+                    // the declaration folds into its initializer at a point no `goto` can jump
+                    // over (MSVC C2362). A declaration directly in the function body (entry block)
+                    // is fine; one nested inside an If/For/While/Try body is not, so reject it
+                    // with an actionable diagnostic rather than emit non-compiling C++.
+                    if (varType != null && varType.Kind == TypeKind.Foreign
+                        && IsInsideControlFlowBlock())
+                    {
+                        Error($"Cannot infer the type of an opaque C++ expression for variable '{node.Name}' " +
+                              $"inside a control-flow block. Declare an explicit type, e.g. " +
+                              $"'Dim {node.Name} As <cpp::type> = ...'",
+                              node.Line, node.Column);
                     }
                 }
             }
