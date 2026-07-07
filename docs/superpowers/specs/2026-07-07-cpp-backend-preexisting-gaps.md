@@ -75,6 +75,25 @@ backend tests should exercise the optimizer (or drive the CLI) so they test what
    work (confirmed against `3020b93^`). Makes `GenerateExternDeclaration` + the canonical demo
    dead code. (The inline `cpp{}` block form is separate and works on the C++ backend.)
 
+10. **Interface method return type resolves to `Object` when consumed through an interface-typed
+    receiver (IMPORTANT).** `Dim p As IProvider = New Provider() : Dim items As List(Of String) =
+    p.GetItems()` fails: *"Cannot assign value of type 'Object' to variable of type 'List'"*.
+    General, not collection-specific (`Function Greet() As String` via an interface variable fails
+    identically). Root: `SemanticAnalyzer.Visit(InterfaceNode)` never registers the interface's
+    methods into `interfaceType.Members` (unlike `StructureNode`/`TypeNode`), so member-call
+    resolution on an interface receiver misses and defaults to `Object`. (The std-lib branch fixed
+    interface *signature emission* — `List<string>` not `List` — and consuming through the concrete
+    class works; only the interface-typed-receiver consumer path is broken.)
+
+11. **`Mod` (modulo) operator is mis-lowered on the C++ backend (IMPORTANT).** `x Mod 2` emits a
+    malformed incomplete ternary (`a ? b`) and references an undeclared temp → non-compiling C++
+    (C2065). Reproduces at top level, in a plain `For`, and in `For Each`. `--target=csharp` lowers
+    `x Mod 2` correctly to `(x % 2)`. General C++ expression-lowering bug.
+
+12. **Single-line lambda body with an assignment is mis-lowered (IMPORTANT).** A single-line
+    `Sub()`/`Function()` lambda whose body is an assignment lowers wrong on BOTH backends (C# emits
+    an empty body; C++ emits `==` instead of `=`). Parser/lowering level, not collection-specific.
+
 ## Not deferred (fixed on the std-lib branch)
 
 For reference, the feature-owned bugs (foreign `New`, type-inferred foreign locals, call-vs-indexer,
