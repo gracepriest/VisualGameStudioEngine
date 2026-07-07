@@ -72,9 +72,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _module = module;
 
             // Backend honesty (spec decision 12): MSIL rejects C++-only passthrough
-            // (#CppInclude / :: foreign types) AND collections (List/Dictionary/HashSet
-            // are not yet lowered to IL) with a clean error before any emission.
-            ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: true);
+            // (#CppInclude / :: foreign types / cpp{} inline blocks) AND collections
+            // (List/Dictionary/HashSet are not yet lowered to IL) with a clean error
+            // before any emission. Its own inline language is "msil".
+            ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: true, ownInlineLanguage: "msil");
 
             _output.Clear();
             _stringConstants.Clear();

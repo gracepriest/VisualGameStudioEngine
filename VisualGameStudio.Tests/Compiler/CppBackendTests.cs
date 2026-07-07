@@ -214,6 +214,132 @@ End Sub";
     }
 
     // ========================================================================
+    // HONESTY GAP 1 (regression): an unmapped GENERIC .NET type used as an
+    // INTERFACE METHOD RETURN must be rejected with a clean CppCapabilityException
+    // — NOT emitted as an undefined C++ type (e.g. `virtual Nullable GetVal() = 0;`,
+    // which fails to compile). These resolve with a non-class TypeKind in
+    // interface-return position, so the fix must reject them Kind-independently.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_InterfaceReturn_NullableGeneric_ThrowsCapabilityError()
+    {
+        var source = @"
+Interface IFoo
+    Function GetVal() As Nullable(Of Integer)
+End Interface
+Module Test
+    Sub Main()
+    End Sub
+End Module";
+
+        var ex = Assert.Throws<CppCapabilityException>(() =>
+        {
+            var output = CompileToCpp(source, out var errors);
+            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
+        });
+        Assert.That(ex.Message, Does.Contain("Nullable"));
+    }
+
+    [Test]
+    public void Cpp_InterfaceReturn_TupleGeneric_ThrowsCapabilityError()
+    {
+        var source = @"
+Interface IFoo
+    Function GetVal() As Tuple(Of Integer, String)
+End Interface
+Module Test
+    Sub Main()
+    End Sub
+End Module";
+
+        var ex = Assert.Throws<CppCapabilityException>(() =>
+        {
+            var output = CompileToCpp(source, out var errors);
+            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
+        });
+        Assert.That(ex.Message, Does.Contain("Tuple"));
+    }
+
+    [Test]
+    public void Cpp_InterfaceReturn_KeyValuePairGeneric_ThrowsCapabilityError()
+    {
+        var source = @"
+Interface IFoo
+    Function GetVal() As KeyValuePair(Of String, Integer)
+End Interface
+Module Test
+    Sub Main()
+    End Sub
+End Module";
+
+        var ex = Assert.Throws<CppCapabilityException>(() =>
+        {
+            var output = CompileToCpp(source, out var errors);
+            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
+        });
+        Assert.That(ex.Message, Does.Contain("KeyValuePair"));
+    }
+
+    [Test]
+    public void Cpp_InterfaceReturn_FuncOfUnmappedArg_ThrowsCapabilityError()
+    {
+        // Func itself maps to std::function, but its DateTime generic argument is
+        // unmapped and must be recursed into and rejected.
+        var source = @"
+Interface IFoo
+    Function GetVal() As Func(Of DateTime)
+End Interface
+Module Test
+    Sub Main()
+    End Sub
+End Module";
+
+        var ex = Assert.Throws<CppCapabilityException>(() =>
+        {
+            var output = CompileToCpp(source, out var errors);
+            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
+        });
+        Assert.That(ex.Message, Does.Contain("DateTime"));
+    }
+
+    [Test]
+    public void Cpp_InterfaceReturn_MappedPrimitive_Compiles()
+    {
+        // A MAPPED interface return (Integer) must still generate clean C++.
+        var source = @"
+Interface IFoo
+    Function GetN() As Integer
+End Interface
+Module Test
+    Sub Main()
+    End Sub
+End Module";
+
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("GetN"));
+    }
+
+    [Test]
+    public void Cpp_InterfaceReturn_MappedCollection_Compiles()
+    {
+        // A MAPPED collection interface return (List(Of Integer)) is supported on C++.
+        var source = @"
+Interface IFoo
+    Function GetN() As List(Of Integer)
+End Interface
+Module Test
+    Sub Main()
+    End Sub
+End Module";
+
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("GetN"));
+    }
+
+    // ========================================================================
     // Task 3: reference semantics - classes are std::shared_ptr, structures stay values
     // ========================================================================
 

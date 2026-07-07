@@ -112,9 +112,10 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _module = module;
 
             // Backend honesty (spec decision 12): LLVM rejects C++-only passthrough
-            // (#CppInclude / :: foreign types) AND collections (List/Dictionary/HashSet
-            // are not yet lowered to LLVM IR) with a clean error before any emission.
-            ForeignFeatureChecker.Check(module, "LLVM", rejectCollections: true);
+            // (#CppInclude / :: foreign types / cpp{} inline blocks) AND collections
+            // (List/Dictionary/HashSet are not yet lowered to LLVM IR) with a clean
+            // error before any emission. Its own inline language is "llvm".
+            ForeignFeatureChecker.Check(module, "LLVM", rejectCollections: true, ownInlineLanguage: "llvm");
 
             _output.Clear();
             _stringConstants.Clear();

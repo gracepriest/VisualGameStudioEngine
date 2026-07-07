@@ -10,6 +10,7 @@ using BasicLang.Compiler.CodeGen;
 using BasicLang.Compiler.CodeGen.CSharp;
 using BasicLang.Compiler.CodeGen.LLVM;
 using BasicLang.Compiler.CodeGen.MSIL;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 
 namespace VisualGameStudio.Tests.Compiler;
 
@@ -326,5 +327,166 @@ public class ForeignFeatureGuardTests
         // (no ForeignFeatureException — #Include is not a passthrough feature).
         var module = BuildModuleFromProcessed(processed, new List<string>());
         Assert.DoesNotThrow(() => new ImprovedCSharpCodeGenerator().Generate(module));
+    }
+
+    // ------------------------------------------------------------------
+    // HONESTY GAP 2: a collection built ONLY as an EXPRESSION TEMPORARY (never
+    // bound to a declared local/field/param/return) bypassed the declared-type
+    // walk, so `Return New List(Of Integer)().Count` and `Take(New List(...))`
+    // compiled "successfully" on LLVM/MSIL, emitting invalid IL (bare unqualified
+    // `newobj ... List`). The guard now also scans function-body IRNewObject
+    // instructions and rejects the collection cleanly on LLVM/MSIL. The SAME
+    // program still compiles on C# (native collections) and C++.
+    // ------------------------------------------------------------------
+
+    private const string ExprTempListSource =
+        "Module Program\nFunction GetCount() As Integer\nReturn New List(Of Integer)().Count\nEnd Function\nSub Main()\nEnd Sub\nEnd Module";
+
+    [Test]
+    public void LLVM_ExpressionTempCollection_ThrowsCleanError()
+    {
+        var module = BuildModule(ExprTempListSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("List"));
+    }
+
+    [Test]
+    public void MSIL_ExpressionTempCollection_ThrowsCleanError()
+    {
+        var module = BuildModule(ExprTempListSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("List"));
+    }
+
+    [Test]
+    public void CSharp_ExpressionTempCollection_DoesNotThrow()
+    {
+        // C# supports collections natively — the expression-temp scan must NOT
+        // reject them (only LLVM/MSIL pass rejectCollections: true).
+        var module = BuildModule(ExprTempListSource, runPreprocessor: false);
+        Assert.DoesNotThrow(() => new ImprovedCSharpCodeGenerator().Generate(module));
+    }
+
+    [Test]
+    public void Cpp_ExpressionTempCollection_DoesNotThrowForeignFeature()
+    {
+        // C++ supports collections; the ForeignFeatureChecker is not even wired
+        // into the C++ backend, so this program generates without a
+        // ForeignFeatureException.
+        var module = BuildModule(ExprTempListSource, runPreprocessor: false);
+        Assert.DoesNotThrow(
+            () => new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false }).Generate(module));
+    }
+
+    [Test]
+    public void LLVM_ExpressionTempDictionary_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Module Program\nFunction GetCount() As Integer\nReturn New Dictionary(Of String, Integer)().Count\nEnd Function\nSub Main()\nEnd Sub\nEnd Module",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("Dictionary"));
+    }
+
+    [Test]
+    public void MSIL_ExpressionTempHashSet_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Module Program\nFunction GetCount() As Integer\nReturn New HashSet(Of Integer)().Count\nEnd Function\nSub Main()\nEnd Sub\nEnd Module",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("HashSet"));
+    }
+
+    [Test]
+    public void LLVM_CollectionPassedInlineAsArg_ThrowsCleanError()
+    {
+        // A collection built inline and passed straight as a call argument — again
+        // a pure expression temporary with no declared collection-typed position.
+        var module = BuildModule(
+            "Module Program\nSub Take(items As List(Of Integer))\nEnd Sub\nSub Main()\nTake(New List(Of Integer)())\nEnd Sub\nEnd Module",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("List"));
+    }
+
+    // ------------------------------------------------------------------
+    // HONESTY GAP 3: an inline `cpp{}` block (C++ passthrough) used to be silently
+    // DROPPED on C#/LLVM/MSIL (a warning comment + do-nothing program). It must now
+    // be REJECTED with a clean ForeignFeatureException. A backend's OWN-language
+    // inline block (csharp{} on C#, etc.) must still be allowed.
+    // ------------------------------------------------------------------
+
+    private const string CppInlineSource =
+        "Module Program\nSub Main()\ncpp{\nstd::cout << \"hi\" << std::endl;\n}\nEnd Sub\nEnd Module";
+
+    [Test]
+    public void CSharp_InlineCppBlock_ThrowsCleanError()
+    {
+        var module = BuildModule(CppInlineSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new ImprovedCSharpCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("C#"));
+        Assert.That(ex.Message, Does.Contain("cpp"));
+    }
+
+    [Test]
+    public void LLVM_InlineCppBlock_ThrowsCleanError()
+    {
+        var module = BuildModule(CppInlineSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("cpp"));
+    }
+
+    [Test]
+    public void MSIL_InlineCppBlock_ThrowsCleanError()
+    {
+        var module = BuildModule(CppInlineSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("cpp"));
+    }
+
+    [Test]
+    public void CSharp_OwnLanguageInlineBlock_DoesNotThrow()
+    {
+        // A csharp{} block is this backend's OWN language — it must be allowed
+        // through (and emitted verbatim), not rejected.
+        var module = BuildModule(
+            "Module Program\nSub Main()\ncsharp{\nSystem.Console.WriteLine(\"hi\");\n}\nEnd Sub\nEnd Module",
+            runPreprocessor: false);
+
+        Assert.DoesNotThrow(() => new ImprovedCSharpCodeGenerator().Generate(module));
+    }
+
+    [Test]
+    public void Cpp_InlineCppBlock_DoesNotThrowForeignFeature()
+    {
+        // cpp{} passthrough is exactly what the C++ backend is FOR — it generates
+        // without a ForeignFeatureException.
+        var module = BuildModule(CppInlineSource, runPreprocessor: false);
+        Assert.DoesNotThrow(
+            () => new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false }).Generate(module));
     }
 }
