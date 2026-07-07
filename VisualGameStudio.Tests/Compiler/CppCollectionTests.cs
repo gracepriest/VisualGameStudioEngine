@@ -399,6 +399,43 @@ End Sub";
     }
 
     // ========================================================================
+    // VB-STYLE ARRAY LITERALS (cherry-picked from the array-literal fix, 2269540):
+    // `Dim arr() As Integer = {10, 20, 30}` — the element type must route through the
+    // type mapper (the BasicLang name `Integer` must NOT leak into C++), and the array
+    // must be assignable so the literal actually reaches `arr`. Fix lives in the C++ backend.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ArrayLiteralLocal_ElementTypeMapped_NotLeaked()
+    {
+        var source = @"
+Sub Main()
+    Dim arr() As Integer = {10, 20, 30}
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("int32_t"));
+        Assert.That(output, Does.Not.Contain("Integer"));
+    }
+
+    [Test]
+    public void Cpp_ArrayLiteralForEach_CompileAndRun()
+    {
+        var source = @"
+Sub Main()
+    Dim arr() As Integer = {10, 20, 30}
+    Dim total As Integer = 0
+    For Each v In arr
+        total = total + v
+    Next
+    Console.WriteLine(total)
+End Sub";
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("60\n"));
+    }
+
+    // ========================================================================
     // REGRESSION: control flow INSIDE a For Each / Try body (through the OPTIMIZER).
     //
     // Root cause (CppCodeGenerator): Visit(IRForEach)/Visit(IRTryCatch) emitted a native

@@ -520,6 +520,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             if (type == null) return base.MapType(type);
             if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
+            // VB arrays lower to std::vector<T>: an assignable/copyable value type (unlike a
+            // C array, which cannot be assigned or returned). Route the element type through
+            // the mapper so `Integer` becomes int32_t instead of leaking verbatim into C++.
+            if (type.Kind == TypeKind.Array && type.ElementType != null)
+                return $"std::vector<{MapType(type.ElementType)}>";
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
 
@@ -1926,6 +1931,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            // An alloca address (<name>_addr) is the backing memory for a local — write
+            // straight to that local (mirrors the C# backend). Emitted for array locals; without
+            // this the store targets a fresh unnamed temp and the value never reaches the local.
+            if (store.Address is IRAlloca alloca)
+            {
+                var allocaVar = alloca.Name != null
+                    && alloca.Name.EndsWith("_addr", StringComparison.OrdinalIgnoreCase)
+                        ? alloca.Name.Substring(0, alloca.Name.Length - "_addr".Length)
+                        : alloca.Name;
+                WriteLine($"{ForeignInitDeclPrefix(allocaVar)}{SanitizeName(allocaVar)} = {value};");
+                return;
+            }
+
             // Array element store
             if (store.Address is IRGetElementPtr gep)
             {
@@ -2588,13 +2606,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRArrayAlloc arrayAlloc)
         {
+            // The temp is already declared as std::vector<T> by DeclareLocalsAndTemporaries,
+            // so SIZE it here rather than redeclaring it (a C array `T name[N]` both double-
+            // declares and is not assignable). Name it via GetValueName — not .Name — so this
+            // allocation, the element stores, and the assignment into the target local all
+            // reference the same identifier (.Name and GetValueName can diverge for temps).
             var elementType = MapType(arrayAlloc.ElementType);
-            WriteLine($"{elementType} {arrayAlloc.Name}[{arrayAlloc.Size}];");
+            var arrayName = GetValueName(arrayAlloc);
+            WriteLine($"{arrayName} = std::vector<{elementType}>({arrayAlloc.Size});");
         }
 
         public override void Visit(IRArrayStore arrayStore)
         {
-            var arrayName = arrayStore.Array.Name;
+            var arrayName = GetValueName(arrayStore.Array);
             var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : GetValueName(arrayStore.Index);
             var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(arrayStore.Value);
             WriteLine($"{arrayName}[{indexVal}] = {valueVal};");
