@@ -90,6 +90,46 @@ public class CppCollectionTests
         return gen.Generate(irModule);
     }
 
+    /// <summary>
+    /// Compile BasicLang source to C++ AFTER running the SAME standard IR optimizer passes the
+    /// CLI (`BasicLang.exe compile`) runs. This is load-bearing for the For Each / Try
+    /// codegen tests: the plain <see cref="CompileToCpp"/> path skips optimization, but the
+    /// DeadCodeEliminationPass is what exposed the block-drop / temp-hoist bugs — it used to
+    /// delete the (CFG-unreachable) For Each / Try body and continuation blocks, so the
+    /// post-loop/post-try statements and the temporaries produced inside those bodies
+    /// vanished from the emitted code. Tests that must reproduce those bugs have to optimize.
+    /// </summary>
+    private string? CompileToCppOptimized(string source, out List<string> errors)
+    {
+        errors = new List<string>();
+
+        var lexer = new Lexer(source);
+        var tokens = lexer.Tokenize();
+
+        var parser = new Parser(tokens);
+        ProgramNode ast;
+        try { ast = parser.Parse(); }
+        catch (Exception ex) { errors.Add($"Parse error: {ex.Message}"); return null; }
+
+        var analyzer = new SemanticAnalyzer();
+        if (!analyzer.Analyze(ast))
+        {
+            foreach (var err in analyzer.Errors) errors.Add($"Semantic error: {err.Message}");
+            return null;
+        }
+
+        var irBuilder = new IRBuilder(analyzer);
+        var irModule = irBuilder.Build(ast, "TestModule");
+
+        // Run the standard optimizer passes exactly as the CLI compile path does.
+        var pipeline = new BasicLang.Compiler.IR.Optimization.OptimizationPipeline();
+        pipeline.AddStandardPasses();
+        pipeline.Run(irModule);
+
+        var gen = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false });
+        return gen.Generate(irModule);
+    }
+
     [Test]
     public void Cpp_ListLocal_MapsToBasicLangListSharedPtr()
     {
@@ -227,6 +267,135 @@ End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(CompileRun(output), Is.EqualTo("60\n3\n20\n"));
+    }
+
+    // ========================================================================
+    // REGRESSION: For Each / Try body codegen through the OPTIMIZER (CLI path).
+    //
+    // Root cause (ControlFlowGraph.Build): the CFG wired edges only from branch
+    // terminators, never from the structured IRForEach (-> BodyBlock/EndBlock) and
+    // IRTryCatch (-> Try/Catch/Finally/EndBlock) instructions. So those blocks were
+    // UNREACHABLE from entry and DeadCodeEliminationPass.RemoveUnreachableBlocks()
+    // deleted them from Function.Blocks. Two symptoms, both only under the optimizer:
+    //   BUG 1 — statements AFTER a For Each/Try were silently dropped (the deleted
+    //           EndBlock held them), e.g. For-Each-then-Clear-then-Count printed 1,2
+    //           instead of 1,2,0.
+    //   BUG 2 — a temporary produced INSIDE a For Each/Try body was never declared at
+    //           function scope (the deleted body block was skipped by the temp-collection
+    //           pass), so the C++ failed to compile (C2065 undeclared identifier).
+    // These MUST run through CompileToCppOptimized to reproduce; the non-optimized
+    // CompileToCpp path never triggered them (that is why Cpp_ListOperations passed).
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ForEach_TrailingStatementsAfterLoop_NotDropped_CompileAndRun()
+    {
+        // BUG 1: the For Each body contains a call (Console.WriteLine) — the emitted-block
+        // structure that triggered the drop — and there is code AFTER the loop (Clear, Count).
+        // Correct .NET output is 1, 2, 0; the bug dropped Clear()+Count and printed only 1, 2.
+        var source = @"
+Sub Main()
+    Dim l As New List(Of Integer)()
+    l.Add(1)
+    l.Add(2)
+    For Each x In l
+        Console.WriteLine(x)
+    Next
+    l.Clear()
+    Console.WriteLine(l.Count)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("1\n2\n0\n"));
+    }
+
+    [Test]
+    public void Cpp_ForEach_BodyTemporary_DeclaredAndCompiles_CompileAndRun()
+    {
+        // BUG 2: `x + 1` produces a temporary used inside the loop body. It must be hoisted
+        // to a function-scope declaration or the C++ won't compile (C2065). A numeric temp is
+        // used deliberately (NOT a String & Integer concat, which hits an unrelated bug).
+        var source = @"
+Sub Main()
+    Dim l As New List(Of Integer)()
+    l.Add(5)
+    l.Add(6)
+    For Each x In l
+        Console.WriteLine(x + 1)
+    Next
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // Compiles-and-runs (would be C2065 before the fix): 5+1, 6+1.
+        Assert.That(CompileRun(output), Is.EqualTo("6\n7\n"));
+    }
+
+    [Test]
+    public void Cpp_Try_TrailingStatementsAfterEndTry_NotDropped_CompileAndRun()
+    {
+        // BUG 1 (Try variant): code AFTER End Try (and the last statement inside the Try body)
+        // must survive. The Try body prints 1 then 2; after End Try prints 3. .NET output: 1,2,3.
+        var source = @"
+Sub Main()
+    Try
+        Console.WriteLine(1)
+        Console.WriteLine(2)
+    Catch ex As Exception
+        Console.WriteLine(99)
+    End Try
+    Console.WriteLine(3)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("1\n2\n3\n"));
+    }
+
+    [Test]
+    public void Cpp_Try_BodyTemporary_DeclaredAndCompiles_CompileAndRun()
+    {
+        // BUG 2 (Try variant): a temporary produced inside the Try body (`n + 1`) must be
+        // hoisted to function scope, or the generated C++ fails to compile (C2065).
+        var source = @"
+Sub Main()
+    Dim n As Integer = 41
+    Try
+        Console.WriteLine(n + 1)
+    Catch ex As Exception
+        Console.WriteLine(0)
+    End Try
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("42\n"));
+    }
+
+    [Test]
+    public void Cpp_Array_ForEach_TrailingStatements_NotDropped()
+    {
+        // Bonus: the same fix covers a For Each over a plain ARRAY (not a collection) — the
+        // block-drop was collection-agnostic (it lived in the CFG, not the collection lowering).
+        // This asserts on the generated C++ rather than compile-and-run because the VB array
+        // literal declaration `Dim arr() As Integer = {...}` trips a SEPARATE, pre-existing C++
+        // array-declaration type-mapping bug (emits `Integer arr[]` instead of `int32_t arr[]`,
+        // MSVC C2065) that is out of scope here. The point being pinned is that the statements
+        // AFTER the For Each over the array survive optimization (they used to be dropped).
+        var source = @"
+Sub Main()
+    Dim arr() As Integer = {10, 20, 30}
+    Dim total As Integer = 0
+    For Each v In arr
+        total = total + v
+    Next
+    Console.WriteLine(total)
+    Console.WriteLine(999)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // The range-for over the array and BOTH trailing prints must be present.
+        Assert.That(output, Does.Contain("for (int32_t v : arr)"));
+        Assert.That(output, Does.Contain("cout << total << endl;"));
+        Assert.That(output, Does.Contain("cout << 999 << endl;"),
+            "the statement after the For Each over an array must survive optimization");
     }
 
     [Test]

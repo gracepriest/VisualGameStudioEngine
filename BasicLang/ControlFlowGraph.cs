@@ -44,7 +44,7 @@ namespace BasicLang.Compiler.IR
             foreach (var block in Blocks)
             {
                 var terminator = block.GetTerminator();
-                
+
                 if (terminator is IRBranch branch)
                 {
                     AddEdge(block, branch.Target);
@@ -63,6 +63,33 @@ namespace BasicLang.Compiler.IR
                     }
                 }
                 // IRReturn has no successors
+
+                // Structured control-flow instructions (For Each, Try/Catch) carry their
+                // body/continuation blocks by reference rather than by branch terminator, so
+                // they must be wired into the CFG explicitly. Without these edges the loop
+                // body, the post-loop continuation, the try/catch/finally bodies and the
+                // post-try continuation are all UNREACHABLE from entry — so
+                // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them from
+                // Function.Blocks. That silently dropped every statement after a For Each/Try
+                // (and every temporary produced inside a For Each/Try body) from the emitted
+                // code. They can appear anywhere in the block (not only as the terminator),
+                // so scan all instructions.
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst is IRForEach forEach)
+                    {
+                        if (forEach.BodyBlock != null) AddEdge(block, forEach.BodyBlock);
+                        if (forEach.EndBlock != null) AddEdge(block, forEach.EndBlock);
+                    }
+                    else if (inst is IRTryCatch tryCatch)
+                    {
+                        if (tryCatch.TryBlock != null) AddEdge(block, tryCatch.TryBlock);
+                        foreach (var catchClause in tryCatch.CatchClauses)
+                            if (catchClause.Block != null) AddEdge(block, catchClause.Block);
+                        if (tryCatch.FinallyBlock != null) AddEdge(block, tryCatch.FinallyBlock);
+                        if (tryCatch.EndBlock != null) AddEdge(block, tryCatch.EndBlock);
+                    }
+                }
             }
         }
         

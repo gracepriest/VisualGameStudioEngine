@@ -1595,11 +1595,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var visited = new HashSet<BasicBlock>();
             var consumed = CollectInlineEmittedBlocks(function);
             if (function.EntryBlock != null)
-                GenerateBlock(function.EntryBlock, visited);
+                GenerateBlock(function.EntryBlock, visited, consumed);
             foreach (var block in function.Blocks)
             {
                 if (block == null || visited.Contains(block) || consumed.Contains(block)) continue;
-                GenerateBlock(block, visited);
+                GenerateBlock(block, visited, consumed);
             }
         }
 
@@ -1627,7 +1627,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return consumed;
         }
 
-        private void GenerateBlock(BasicBlock block, HashSet<BasicBlock> visited)
+        private void GenerateBlock(BasicBlock block, HashSet<BasicBlock> visited, HashSet<BasicBlock> consumed)
         {
             if (visited.Contains(block)) return;
             visited.Add(block);
@@ -1646,10 +1646,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 instruction.Accept(this);
             }
 
-            // Process successors (populated only when a CFG pass has run; see GenerateFunctionBody)
-            foreach (var successor in block.Successors.Where(s => !visited.Contains(s)))
+            // Process successors (populated only when a CFG pass has run — e.g. the optimizer's
+            // DeadCodeEliminationPass — otherwise empty). Skip blocks CONSUMED by a structured
+            // statement (a For Each body, or a try/catch/finally body): those are emitted inline
+            // by Visit(IRForEach)/Visit(IRTryCatch), so following a CFG edge into them here would
+            // emit them a SECOND time as a stray labeled block.
+            foreach (var successor in block.Successors.Where(s => !visited.Contains(s) && !consumed.Contains(s)))
             {
-                GenerateBlock(successor, visited);
+                GenerateBlock(successor, visited, consumed);
             }
         }
         
