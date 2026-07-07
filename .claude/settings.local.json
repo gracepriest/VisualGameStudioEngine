@@ -433,7 +433,61 @@
       "Bash(cp BasicLang/bin/Release/net8.0/BasicLang.exe IDE/)",
       "Bash(for f:*)",
       "Bash(do cp:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "PowerShell($exe = \"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\VisualGameStudioEngine\\\\BasicLang\\\\bin\\\\Release\\\\net8.0\\\\BasicLang.exe\"; $sp = \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\"; foreach \\($f in @\\(\"WinFormsApp_Program.bas\",\"WinFormsApp_MainForm.bas\",\"WpfApp_App.bas\",\"WpfApp_MainWindow.bas\"\\)\\) { \"===== $f =====\"; & $exe \"$sp\\\\tplbas\\\\$f\" --target=csharp 2>&1 | Select-String -Pattern \"Error at\" | Select-Object -First 4 })",
+      "PowerShell($exe = \"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\VisualGameStudioEngine\\\\BasicLang\\\\bin\\\\Release\\\\net8.0\\\\BasicLang.exe\"; $sp = \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\"; & $exe \"$sp\\\\inherit_test.bas\" --target=csharp 2>&1 | Select-String -Pattern \"Error at|successful\" | Select-Object -First 6; \"exit: $LASTEXITCODE\")",
+      "PowerShell(dotnet build *)",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(Set-Content *)",
+      "PowerShell(dotnet test *)",
+      "Bash(mkdir -p \"/c/Users/melvi/AppData/Local/Temp/claude/C--Users-melvi-source-repos-VisualGameStudioEngine/7011411c-282d-46a3-a6d6-b95bc80275f9/scratchpad/b4\")",
+      "Bash(printf 'Sub Main\\(\\)\\\\n    Dim x As Integer = \"not a number\" +\\\\n    Dim y As = 5\\\\nEnd Sub\\\\n')",
+      "Bash(mkdir -p /c/Users/melvi/AppData/Local/Temp/claude/C--Users-melvi-source-repos-VisualGameStudioEngine/7011411c-282d-46a3-a6d6-b95bc80275f9/scratchpad/snippets)",
+      "Read(//c/Users/melvi/AppData/Local/Temp/claude/C--Users-melvi-source-repos-VisualGameStudioEngine/7011411c-282d-46a3-a6d6-b95bc80275f9/scratchpad/**)",
+      "PowerShell(New-Item *)",
+      "PowerShell(& \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\snippets\\\\gen.ps1\")",
+      "PowerShell(Get-Content *)",
+      "PowerShell(node \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\b4\\\\test_matcher.js\")",
+      "PowerShell(node \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\b4\\\\test_compile_matcher.js\")",
+      "PowerShell(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('C:/Users/melvi/source/repos/VisualGameStudioEngine/vscode-basiclang/package.json','utf8'\\)\\); console.log\\('package.json is valid JSON'\\)\")",
+      "PowerShell(node \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\b4\\\\test_final.js\")",
+      "PowerShell(git diff *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\VisualGameStudioEngine\\\\BasicLang.VisualStudio\\\\src\\\\BasicLang.VisualStudio\\\\BasicLang.VisualStudio.csproj\" -p:Configuration=Release -v:m -nologo)",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\VisualGameStudioEngine\\\\vscode-basiclang\"; npx --yes @vscode/vsce package --no-dependencies 2>&1 | Select-Object -Last 5; \"VSCE EXIT: $LASTEXITCODE\")",
+      "PowerShell(Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead\\(\"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\VisualGameStudioEngine\\\\BasicLang.VisualStudio\\\\src\\\\BasicLang.VisualStudio\\\\bin\\\\Release\\\\net48\\\\BasicLang.VisualStudio.vsix\"\\); $entries = $z.Entries | Where-Object { $_.FullName -match \"Templates|Content_Types\" } | Select-Object -ExpandProperty FullName; $entries; \"total entries: $\\($z.Entries.Count\\)\"; $tplZip = $z.Entries | Where-Object { $_.FullName -eq \"ProjectTemplates/BasicLang/WpfApp.zip\" }; if \\($tplZip\\) { $ms = New-Object System.IO.MemoryStream; $s = $tplZip.Open\\(\\); $s.CopyTo\\($ms\\); $s.Close\\(\\); $ms.Position = 0; $inner = New-Object System.IO.Compression.ZipArchive\\($ms\\); \"WpfApp.zip contains: $\\($inner.Entries.FullName -join ', '\\)\"; $inner.Dispose\\(\\) }; $z.Dispose\\(\\))",
+      "PowerShell(& \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\lsp_smoke.ps1\")",
+      "PowerShell($exe = \"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\VisualGameStudioEngine\\\\BasicLang\\\\bin\\\\Release\\\\net8.0\\\\BasicLang.exe\"; $out = echo '' | & $exe --lsp 2>&1; \"exit: $LASTEXITCODE, output lines: $\\($out.Count\\)\"; $out | Select-Object -First 10)",
+      "PowerShell(git *)",
+      "PowerShell($exe = Get-ChildItem \"BasicLang\\\\bin\\\\Release\" -Recurse -Filter BasicLang.exe | Select-Object -First 1 -ExpandProperty FullName; $exe; & $exe \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\lambda1.bas\" --target=csharp; \"EXIT=$LASTEXITCODE\")",
+      "PowerShell(& \"BasicLang\\\\bin\\\\Release\\\\net8.0\\\\BasicLang.exe\" \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\lambda2.bas\" --target=csharp; \"EXIT=$LASTEXITCODE\")",
+      "PowerShell(& \"BasicLang\\\\bin\\\\Release\\\\net8.0\\\\BasicLang.exe\" \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\lambda1.bas\" --target=csharp)",
+      "PowerShell(& \"BasicLang\\\\bin\\\\Release\\\\net8.0\\\\BasicLang.exe\" \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\lambda4.bas\" --target=csharp)",
+      "PowerShell(node \"C:\\\\Users\\\\melvi\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-melvi-source-repos-VisualGameStudioEngine\\\\7011411c-282d-46a3-a6d6-b95bc80275f9\\\\scratchpad\\\\lsp_client.js\" 2>&1 | Select-Object -First 25)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(try { \\(Get-Command uvx -ErrorAction Stop\\).Source; uvx --version } catch { \"uvx NOT FOUND\" }; try { \\(Get-Command npx -ErrorAction Stop\\).Source; npx --version } catch { \"npx NOT FOUND\" }; try { \\(Get-Command node -ErrorAction Stop\\).Source; node --version } catch { \"node NOT FOUND\" })",
+      "PowerShell(npx -y firebase-tools@latest --version)",
+      "PowerShell($psi = New-Object System.Diagnostics.ProcessStartInfo; $psi.FileName = \"cmd.exe\"; $psi.Arguments = \"/c npx -y firebase-tools@latest mcp\"; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.UseShellExecute = $false; $p = [System.Diagnostics.Process]::Start\\($psi\\); $init = '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"doctor-test\",\"version\":\"1.0\"}}}'; $p.StandardInput.WriteLine\\($init\\); Start-Sleep -Seconds 15; if \\($p.HasExited\\) { \"PROCESS EXITED code=$\\($p.ExitCode\\)\" } else { \"PROCESS STILL RUNNING \\(good\\)\" ; $p.Kill\\(\\) }; $out = $p.StandardOutput.ReadToEnd\\(\\); $err = $p.StandardError.ReadToEnd\\(\\); \"STDOUT: $\\($out.Substring\\(0, [Math]::Min\\(600, $out.Length\\)\\)\\)\"; \"STDERR: $\\($err.Substring\\(0, [Math]::Min\\(600, $err.Length\\)\\)\\)\")",
+      "PowerShell($psi = New-Object System.Diagnostics.ProcessStartInfo; $psi.FileName = \"cmd.exe\"; $psi.Arguments = \"/c npx -y firebase-tools@latest mcp\"; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.UseShellExecute = $false; $p = [System.Diagnostics.Process]::Start\\($psi\\); $init = '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"doctor-test\",\"version\":\"1.0\"}}}'; $p.StandardInput.WriteLine\\($init\\); $task = $p.StandardOutput.ReadLineAsync\\(\\); $done = $task.Wait\\(60000\\); if \\($done -and $task.Result\\) { \"SERVER RESPONDED: $\\($task.Result.Substring\\(0, [Math]::Min\\(300, $task.Result.Length\\)\\)\\)\" } elseif \\($p.HasExited\\) { \"PROCESS EXITED code=$\\($p.ExitCode\\)\"; \"STDERR: $\\($p.StandardError.ReadToEnd\\(\\).Substring\\(0,500\\)\\)\" } else { \"NO RESPONSE IN 60s \\(still running\\)\" }; if \\(-not $p.HasExited\\) { $p.Kill\\(\\) })",
+      "PowerShell($psi = New-Object System.Diagnostics.ProcessStartInfo; $psi.FileName = \"cmd.exe\"; $psi.Arguments = \"/c npx -y firebase-tools@latest mcp\"; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.UseShellExecute = $false; $p = [System.Diagnostics.Process]::Start\\($psi\\); $p.StandardInput.AutoFlush = $true; $init = '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"doctor-test\",\"version\":\"1.0\"}}}'; $p.StandardInput.Write\\(\"$init`n\"\\); $task = $p.StandardOutput.ReadLineAsync\\(\\); $done = $task.Wait\\(60000\\); if \\($done -and $task.Result\\) { \"SERVER RESPONDED: $\\($task.Result.Substring\\(0, [Math]::Min\\(300, $task.Result.Length\\)\\)\\)\" } elseif \\($p.HasExited\\) { \"PROCESS EXITED code=$\\($p.ExitCode\\)\"; \"STDERR: $\\($p.StandardError.ReadToEnd\\(\\).Substring\\(0,500\\)\\)\" } else { \"NO RESPONSE IN 60s \\(still running\\)\" }; if \\(-not $p.HasExited\\) { $p.Kill\\(\\) })",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\melvi\\\\.claude\\\\jobs\\\\01982d4d\\\\tmp\\\\make-input.ps1\" -OutFile \"C:\\\\Users\\\\melvi\\\\.claude\\\\jobs\\\\01982d4d\\\\tmp\\\\init.bin\")",
+      "PowerShell($exe = \"BasicLang\\\\bin\\\\Release\\\\net8.0\\\\BasicLang.exe\"; if \\(-not \\(Test-Path $exe\\)\\) { ls BasicLang\\\\bin\\\\Release }; & $exe compile _asyncrepro\\\\t1_plain.bas --target=csharp; echo \"---EXIT $LASTEXITCODE---\")",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\melvi\\\\.claude\\\\jobs\\\\01982d4d\\\\tmp\\\\listzip.ps1\" \"C:\\\\Users\\\\melvi\\\\.claude\\\\jobs\\\\01982d4d\\\\tmp\\\\old.vsix\" \"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\VisualGameStudioEngine\\\\vscode-basiclang\\\\basiclang-1.0.0.vsix\")"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["C:\\Users\\melvi\\source\\repos\\VisualGameStudioEngine\\.claude\\hooks\\prefer-native-tools.js"],
+            "timeout": 10,
+            "statusMessage": "Checking Bash vs. native tools"
+          }
+        ]
+      }
     ]
   }
 }
