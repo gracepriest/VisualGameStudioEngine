@@ -398,6 +398,223 @@ End Sub";
             "the statement after the For Each over an array must survive optimization");
     }
 
+    // ========================================================================
+    // REGRESSION: control flow INSIDE a For Each / Try body (through the OPTIMIZER).
+    //
+    // Root cause (CppCodeGenerator): Visit(IRForEach)/Visit(IRTryCatch) emitted a native
+    // C++ range-for / try{}-catch{} but inlined ONLY the single body BLOCK. When the body
+    // held control flow (an If, a nested loop, a Try), the CFG split it into SEPARATE blocks
+    // (if0.then/if0.end/...) that were NOT part of BodyBlock/TryBlock — the top-level block
+    // walker then emitted them at FUNCTION scope, landing after the function `return` as
+    // unreachable dead code. The program compiled clean but produced WRONG output:
+    //   - If inside a For Each: the then-branch never ran (`for(x:...){ t=x>3; }` computed
+    //     the condition temp but never branched); the counter stayed 0.
+    //   - conditional Throw inside a Try: the throw was orphaned after `return`, so it never
+    //     executed and the catch never fired.
+    // Fix: emit the WHOLE body sub-region (BodyBlock/TryBlock + every block it reaches, up to
+    // the construct's EndBlock) INSIDE the braces using the flat goto/label model, marking the
+    // region consumed. A For Each end-of-iteration branch to EndBlock becomes `continue;`; a Try
+    // body's becomes a forward `goto try_end;`. These MUST run through CompileToCppOptimized (the
+    // CLI path) — the block-drop only manifests once the optimizer's CFG pass has run.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_If_Inside_ForEach_Branches_CompileAndRun()
+    {
+        // Manifestation A: an If inside a For Each body. Correct .NET output is 2 (two of
+        // {1,5,10} exceed 3). The bug orphaned the then-block after `return` and printed 0.
+        var source = @"
+Sub Main()
+    Dim l As New List(Of Integer)()
+    l.Add(1)
+    l.Add(5)
+    l.Add(10)
+    Dim big As Integer = 0
+    For Each x In l
+        If x > 3 Then
+            big = big + 1
+        End If
+    Next
+    Console.WriteLine(big)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("2\n"),
+            "an If inside a For Each body must branch (not be stranded after the return)");
+    }
+
+    [Test]
+    public void Cpp_If_Throw_Inside_Try_Catches_CompileAndRun()
+    {
+        // Manifestation B: a conditional Throw (an If) inside a Try body. Correct .NET output
+        // is 'caught'. The bug orphaned the throw after `return`, so it never ran and the catch
+        // never fired (nothing printed).
+        var source = @"
+Sub Main()
+    Try
+        Dim d As Integer = 10
+        If d > 5 Then
+            Throw New Exception(""boom"")
+        End If
+        Console.WriteLine(""no throw"")
+    Catch ex As Exception
+        Console.WriteLine(""caught"")
+    End Try
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("caught\n"),
+            "a conditional Throw inside a Try body must reach the catch");
+    }
+
+    [Test]
+    public void Cpp_NestedForEach_WithIf_CompileAndRun()
+    {
+        // Nested For Each, innermost body an If. outer{1,2} x inner{10,20}; pairs summing >15
+        // are (1,20) and (2,20) -> 2. Proves inner loop + If compose inside the outer range-for.
+        var source = @"
+Sub Main()
+    Dim outer As New List(Of Integer)()
+    outer.Add(1)
+    outer.Add(2)
+    Dim inner As New List(Of Integer)()
+    inner.Add(10)
+    inner.Add(20)
+    Dim total As Integer = 0
+    For Each a In outer
+        For Each b In inner
+            If a + b > 15 Then
+                total = total + 1
+            End If
+        Next
+    Next
+    Console.WriteLine(total)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("2\n"));
+    }
+
+    [Test]
+    public void Cpp_While_Inside_ForEach_CompileAndRun()
+    {
+        // A While loop inside a For Each body. For each n in {2,3}, count up to n: 2+3 = 5.
+        var source = @"
+Sub Main()
+    Dim l As New List(Of Integer)()
+    l.Add(2)
+    l.Add(3)
+    Dim total As Integer = 0
+    For Each n In l
+        Dim k As Integer = 0
+        While k < n
+            total = total + 1
+            k = k + 1
+        End While
+    Next
+    Console.WriteLine(total)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("5\n"));
+    }
+
+    [Test]
+    public void Cpp_IfThrow_InTry_InsideForEach_CompileAndRun()
+    {
+        // An If (conditional Throw) inside a Try inside a For Each. Only n=9 throws -> caught==1.
+        var source = @"
+Sub Main()
+    Dim l As New List(Of Integer)()
+    l.Add(1)
+    l.Add(9)
+    Dim caught As Integer = 0
+    For Each n In l
+        Try
+            If n > 5 Then
+                Throw New Exception(""big"")
+            End If
+        Catch ex As Exception
+            caught = caught + 1
+        End Try
+    Next
+    Console.WriteLine(caught)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("1\n"));
+    }
+
+    [Test]
+    public void Cpp_NestedForEach_InsideIf_InsideForEach_CompileAndRun()
+    {
+        // A nested For Each guarded by an If inside a For Each. Inner loop runs only when a=2,
+        // summing inner {100,200} -> 300.
+        var source = @"
+Sub Main()
+    Dim outer As New List(Of Integer)()
+    outer.Add(1)
+    outer.Add(2)
+    Dim inner As New List(Of Integer)()
+    inner.Add(100)
+    inner.Add(200)
+    Dim total As Integer = 0
+    For Each a In outer
+        If a = 2 Then
+            For Each b In inner
+                total = total + b
+            Next
+        End If
+    Next
+    Console.WriteLine(total)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("300\n"));
+    }
+
+    [Test]
+    public void Cpp_If_Inside_ForEach_Over_DictValues_CompileAndRun()
+    {
+        // The same If-in-body fix over a Dictionary's .Values (a List). Values {1,5}; one > 3.
+        var source = @"
+Sub Main()
+    Dim d As New Dictionary(Of String, Integer)()
+    d.Add(""a"", 1)
+    d.Add(""b"", 5)
+    Dim big As Integer = 0
+    For Each v In d.Values
+        If v > 3 Then
+            big = big + 1
+        End If
+    Next
+    Console.WriteLine(big)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("1\n"));
+    }
+
+    [Test]
+    public void Cpp_ForEach_OverDictionary_IsCleanError()
+    {
+        // Spec decision 7: direct `For Each ... In someDictionary` is a v1 non-goal (iterate
+        // .Keys/.Values). BasicLang::Dictionary has no begin()/end(), so the old code emitted an
+        // uncompilable `for(... : (*dict))` (cl C3312). It must be a CLEAN capability diagnostic.
+        var source = @"
+Sub Main()
+    Dim d As New Dictionary(Of String, Integer)()
+    d.Add(""a"", 1)
+    For Each kv In d
+        Console.WriteLine(kv)
+    Next
+End Sub";
+        var ex = Assert.Throws<CppCapabilityException>(() => CompileToCppOptimized(source, out _));
+        Assert.That(string.Join("\n", ex!.Diagnostics),
+            Does.Contain("For Each over a Dictionary").And.Contains(".Keys or .Values"),
+            "direct For Each over a Dictionary must be an actionable diagnostic, not broken C++");
+    }
+
     [Test]
     public void Cpp_MultipleElseIf_NoDuplicateLabels_CompileAndRun()
     {

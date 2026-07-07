@@ -176,6 +176,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     if (tc.FinallyBlock != null)
                         foreach (var i in tc.FinallyBlock.Instructions) CheckInstruction(i, funcName, diags);
                     break;
+
+                case IRForEach fe:
+                    // Direct `For Each ... In someDictionary` is a v1 non-goal: BasicLang::Dictionary
+                    // has no begin()/end(), so the generated range-for (`for (... : (*dict))`) does
+                    // not compile (cl C3312). Reject it cleanly here with an actionable message
+                    // instead of emitting broken C++. Iterating `.Keys`/`.Values` (which lower to a
+                    // BasicLang::List) or a List/HashSet still works — those carry a non-Dictionary
+                    // collection type and pass this gate.
+                    if (fe.Collection?.Type?.Name is string collName
+                        && collName.Equals("Dictionary", StringComparison.OrdinalIgnoreCase))
+                    {
+                        diags.Add($"For Each over a Dictionary (in '{funcName}') is not supported; " +
+                                  "iterate .Keys or .Values instead");
+                    }
+                    break;
             }
         }
 

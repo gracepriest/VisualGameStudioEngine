@@ -1615,7 +1615,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
         
         /// <summary>C++ labels cannot contain dots (block names like "if0.then" do).</summary>
-        private string LabelName(string blockName) => blockName.Replace('.', '_');
+        private string LabelName(string blockName) => blockName.Replace('.', '_') + _regionLabelSuffix;
+
+        /// <summary>
+        /// Appended to every emitted label and goto target while set. Used ONLY to keep the two
+        /// copies of a Finally body (the catch(...) rethrow path and the normal path) from
+        /// defining the same C++ label twice when the Finally contains control flow — each copy
+        /// gets a distinct suffix so labels/gotos stay internally consistent yet globally unique.
+        /// Empty everywhere else.
+        /// </summary>
+        private string _regionLabelSuffix = "";
 
         /// <summary>
         /// Emit a function body: the entry block, then every remaining block in creation
@@ -1640,6 +1649,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         private HashSet<BasicBlock> CollectInlineEmittedBlocks(IRFunction function)
         {
+            // Structured constructs (For Each, Try/Catch) emit their body regions INLINE inside
+            // the native C++ construct (range-for / try{}/catch{}). Everything in those regions —
+            // not just the single entry block, but every block the body reaches (the `if0.then`/
+            // `if0.end` split blocks of a nested If, a nested loop's blocks, ...) up to the
+            // construct's EndBlock — is emitted there. The top-level block walker must therefore
+            // treat the WHOLE region as consumed; otherwise those inner blocks land at function
+            // scope AFTER the `return` as unreachable dead code (the original bug: control flow
+            // inside a For Each/Try body was silently orphaned and never ran).
             var consumed = new HashSet<BasicBlock>();
             foreach (var block in function.Blocks)
             {
@@ -1648,18 +1665,94 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     switch (inst)
                     {
                         case IRTryCatch tc:
-                            if (tc.TryBlock != null) consumed.Add(tc.TryBlock);
+                            AddRegion(consumed, ComputeInlineRegion(tc.TryBlock, tc.EndBlock));
                             foreach (var cc in tc.CatchClauses)
-                                if (cc.Block != null) consumed.Add(cc.Block);
-                            if (tc.FinallyBlock != null) consumed.Add(tc.FinallyBlock);
+                                AddRegion(consumed, ComputeInlineRegion(cc.Block, tc.EndBlock));
+                            AddRegion(consumed, ComputeInlineRegion(tc.FinallyBlock, tc.EndBlock));
                             break;
                         case IRForEach fe:
-                            if (fe.BodyBlock != null) consumed.Add(fe.BodyBlock);
+                            AddRegion(consumed, ComputeInlineRegion(fe.BodyBlock, fe.EndBlock));
                             break;
                     }
                 }
             }
             return consumed;
+        }
+
+        private static void AddRegion(HashSet<BasicBlock> target, IReadOnlyList<BasicBlock> region)
+        {
+            foreach (var b in region) target.Add(b);
+        }
+
+        /// <summary>
+        /// All blocks belonging to a structured construct's inline body region: every block
+        /// reachable from <paramref name="entry"/> by control flow (branch targets AND nested
+        /// structured-construct body/continuation edges), stopping at — and never including —
+        /// the construct's <paramref name="boundary"/> (its EndBlock). The boundary block is the
+        /// loop/try continuation; it holds code that runs AFTER the construct and is emitted at
+        /// the enclosing scope, so it must not be pulled into the region. Blocks are returned in
+        /// the function's creation order for stable, readable output. Reachability is computed
+        /// from the IR's own branch/structured edges (not <c>BasicBlock.Successors</c>, which is
+        /// only populated when a CFG pass has run), so it works on the un-optimized path too.
+        /// </summary>
+        private IReadOnlyList<BasicBlock> ComputeInlineRegion(BasicBlock entry, BasicBlock boundary)
+        {
+            var region = new HashSet<BasicBlock>();
+            if (entry == null || entry == boundary) return new List<BasicBlock>();
+
+            var stack = new Stack<BasicBlock>();
+            stack.Push(entry);
+            while (stack.Count > 0)
+            {
+                var block = stack.Pop();
+                if (block == null || block == boundary || !region.Add(block)) continue;
+                foreach (var succ in ControlFlowTargets(block))
+                    if (succ != null && succ != boundary && !region.Contains(succ))
+                        stack.Push(succ);
+            }
+
+            // Emit in creation order (stable); the goto/label model makes order non-semantic.
+            return _currentFunction.Blocks.Where(region.Contains).ToList();
+        }
+
+        /// <summary>
+        /// The control-flow successor blocks of <paramref name="block"/> as the IR defines them:
+        /// branch/conditional-branch targets, plus the body/continuation blocks carried by
+        /// nested structured constructs (For Each -&gt; Body/End, Try -&gt; Try/Catch/Finally/End).
+        /// Mirrors the edge set <see cref="ControlFlowGraph"/> builds, but read straight off the
+        /// instructions so it does not depend on a CFG pass having run.
+        /// </summary>
+        private static IEnumerable<BasicBlock> ControlFlowTargets(BasicBlock block)
+        {
+            foreach (var inst in block.Instructions)
+            {
+                switch (inst)
+                {
+                    case IRBranch br:
+                        if (br.Target != null) yield return br.Target;
+                        break;
+                    case IRConditionalBranch cb:
+                        if (cb.TrueTarget != null) yield return cb.TrueTarget;
+                        if (cb.FalseTarget != null) yield return cb.FalseTarget;
+                        break;
+                    case IRSwitch sw:
+                        if (sw.DefaultTarget != null) yield return sw.DefaultTarget;
+                        foreach (var (_, target) in sw.Cases)
+                            if (target != null) yield return target;
+                        break;
+                    case IRForEach fe:
+                        if (fe.BodyBlock != null) yield return fe.BodyBlock;
+                        if (fe.EndBlock != null) yield return fe.EndBlock;
+                        break;
+                    case IRTryCatch tc:
+                        if (tc.TryBlock != null) yield return tc.TryBlock;
+                        foreach (var cc in tc.CatchClauses)
+                            if (cc.Block != null) yield return cc.Block;
+                        if (tc.FinallyBlock != null) yield return tc.FinallyBlock;
+                        if (tc.EndBlock != null) yield return tc.EndBlock;
+                        break;
+                }
+            }
         }
 
         private void GenerateBlock(BasicBlock block, HashSet<BasicBlock> visited, HashSet<BasicBlock> consumed)
@@ -2816,11 +2909,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRTryCatch tryCatch)
         {
-            // C++ exception handling with try-catch
+            // C++ exception handling with try-catch. The try/catch/finally BODIES are emitted as
+            // full inline regions (not just their single entry block) so control flow inside a
+            // body — a conditional Throw, a nested If/loop — actually branches inside the braces.
+            // A body's normal exit branches to EndBlock; here that is a legal forward `goto
+            // try_end;` (a jump out of the try to the function-scope continuation label), so no
+            // loopEnd remap is needed (loopEnd: null).
             WriteLine("try");
             WriteLine("{");
             Indent();
-            EmitBlockInstructions(tryCatch.TryBlock);
+            EmitInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock, RegionEnd.GotoEnd);
             Unindent();
             WriteLine("}");
 
@@ -2833,21 +2931,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"catch (const {exType}& {varName})");
                 WriteLine("{");
                 Indent();
-                EmitBlockInstructions(catchClause.Block);
+                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd);
                 Unindent();
                 WriteLine("}");
             }
 
             if (tryCatch.FinallyBlock != null)
             {
-                // Exceptional path: run the finally body, then rethrow.
+                // The finally body is emitted TWICE (exceptional + normal path). When it contains
+                // control flow its region has interior labels; a distinct label suffix per copy
+                // keeps the two emissions from redefining the same C++ label (C2045).
                 // Known limitation: Return inside Try bypasses the finally body.
                 WriteLine("catch (...)");
                 WriteLine("{");
                 Indent();
                 WriteLine("{");
                 Indent();
-                EmitBlockInstructions(tryCatch.FinallyBlock);
+                _regionLabelSuffix = "_fex";
+                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.FallThrough);
+                _regionLabelSuffix = "";
                 Unindent();
                 WriteLine("}");
                 WriteLine("throw;");
@@ -2857,7 +2959,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // Normal path; braces scope the duplicated body against redeclarations.
                 WriteLine("{");
                 Indent();
-                EmitBlockInstructions(tryCatch.FinallyBlock);
+                _regionLabelSuffix = "_fnorm";
+                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.FallThrough);
+                _regionLabelSuffix = "";
                 Unindent();
                 WriteLine("}");
             }
@@ -2870,6 +2974,156 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 if (inst is IRBranch or IRConditionalBranch) continue;
                 inst.Accept(this);
+            }
+        }
+
+        /// <summary>How a branch to the region's boundary (EndBlock) is emitted inside the
+        /// enclosing native construct.</summary>
+        private enum RegionEnd
+        {
+            /// A For Each range-for: end-of-iteration -&gt; <c>continue;</c> (the range-for owns
+            /// iteration; a literal <c>goto end;</c> would break out of the whole loop).
+            LoopContinue,
+            /// A Try/Catch body: a normal forward <c>goto try_end;</c> out of the try to the
+            /// function-scope continuation label (legal C++, and where control should land).
+            GotoEnd,
+            /// A Finally body: emit nothing — control falls out of the <c>{ }</c> scope, so the
+            /// exceptional-path copy proceeds to its <c>throw;</c> and the normal-path copy falls
+            /// through to the continuation. (A <c>goto</c> here would skip the rethrow.)
+            FallThrough,
+        }
+
+        /// <summary>
+        /// Emit a structured construct's inline body region (see <see cref="ComputeInlineRegion"/>)
+        /// inside the native C++ construct's braces. Unlike <see cref="EmitBlockInstructions"/>
+        /// (single block, terminators dropped), this emits EVERY block of the region — including
+        /// the If/loop split blocks a nested control-flow statement produces — each with its label
+        /// and its branch terminator, so inner control flow actually branches inside the braces
+        /// instead of being stranded at function scope after the return.
+        ///
+        /// <paramref name="endMode"/> selects how a branch to <paramref name="endBlock"/> (the
+        /// construct's EndBlock) is lowered for the enclosing native construct.
+        /// </summary>
+        private void EmitInlineRegion(BasicBlock entry, BasicBlock endBlock, RegionEnd endMode)
+        {
+            var region = ComputeInlineRegion(entry, endBlock);
+            // Blocks a NESTED structured construct owns are emitted by that construct's own Visit
+            // (inline, inside ITS braces); skip them here so they are not emitted twice.
+            var nestedConsumed = new HashSet<BasicBlock>();
+            foreach (var b in region)
+                foreach (var inst in b.Instructions)
+                {
+                    if (inst is IRForEach fe)
+                        AddRegion(nestedConsumed, ComputeInlineRegion(fe.BodyBlock, fe.EndBlock));
+                    else if (inst is IRTryCatch tc)
+                    {
+                        AddRegion(nestedConsumed, ComputeInlineRegion(tc.TryBlock, tc.EndBlock));
+                        foreach (var cc in tc.CatchClauses)
+                            AddRegion(nestedConsumed, ComputeInlineRegion(cc.Block, tc.EndBlock));
+                        AddRegion(nestedConsumed, ComputeInlineRegion(tc.FinallyBlock, tc.EndBlock));
+                    }
+                }
+
+            foreach (var block in region)
+            {
+                if (block != entry && nestedConsumed.Contains(block)) continue;
+
+                // Label every block except the region entry (nothing branches to the entry — it is
+                // the first statement of the body). Interior blocks are goto targets and need one.
+                if (block != entry)
+                {
+                    Unindent();
+                    WriteLine($"{LabelName(block.Name)}: ;");
+                    Indent();
+                }
+
+                EmitRegionInstructions(block, endBlock, endMode);
+            }
+        }
+
+        /// <summary>
+        /// Emit one region block's instructions, lowering a branch to <paramref name="endBlock"/>
+        /// per <paramref name="endMode"/>. Interior branches (to other region blocks) fall through
+        /// to the normal goto/if-goto emitted by <see cref="Visit(IRBranch)"/>/
+        /// <see cref="Visit(IRConditionalBranch)"/>.
+        /// </summary>
+        private void EmitRegionInstructions(BasicBlock block, BasicBlock endBlock, RegionEnd endMode)
+        {
+            foreach (var inst in block.Instructions)
+            {
+                switch (inst)
+                {
+                    case IRBranch br when br.Target == endBlock:
+                        EmitRegionEnd(endBlock, endMode);
+                        break;
+                    case IRConditionalBranch cb when cb.TrueTarget == endBlock || cb.FalseTarget == endBlock:
+                        EmitConditionalBranchToEnd(cb, endBlock, endMode);
+                        break;
+                    default:
+                        inst.Accept(this);
+                        break;
+                }
+            }
+        }
+
+        /// <summary>Lower a whole-block branch to the region's EndBlock per the enclosing construct.</summary>
+        private void EmitRegionEnd(BasicBlock endBlock, RegionEnd endMode)
+        {
+            switch (endMode)
+            {
+                case RegionEnd.LoopContinue: WriteLine("continue;"); break;
+                case RegionEnd.GotoEnd: WriteLine($"goto {EndLabelName(endBlock)};"); break;
+                case RegionEnd.FallThrough: /* emit nothing — fall out of the { } scope */ break;
+            }
+        }
+
+        /// <summary>
+        /// The label of the construct's EndBlock as emitted at FUNCTION scope — always WITHOUT the
+        /// finally-copy suffix, since the end block is written once, unsuffixed, by the top-level
+        /// block walker. A goto out of a suffixed region must still target that single label.
+        /// </summary>
+        private static string EndLabelName(BasicBlock endBlock) => endBlock.Name.Replace('.', '_');
+
+        /// <summary>
+        /// A conditional branch where one arm is the region's EndBlock and the other an interior
+        /// label. The end arm is lowered per <paramref name="endMode"/>; the interior arm is a goto.
+        /// </summary>
+        private void EmitConditionalBranchToEnd(IRConditionalBranch cb, BasicBlock endBlock, RegionEnd endMode)
+        {
+            var condition = GetValueName(cb.Condition);
+            WriteLine($"if ({condition}) {{");
+            Indent();
+            EmitBranchArm(cb.TrueTarget, endBlock, endMode);
+            Unindent();
+            WriteLine("}");
+            WriteLine("else {");
+            Indent();
+            EmitBranchArm(cb.FalseTarget, endBlock, endMode);
+            Unindent();
+            WriteLine("}");
+        }
+
+        private void EmitBranchArm(BasicBlock target, BasicBlock endBlock, RegionEnd endMode)
+        {
+            if (target == endBlock)
+            {
+                switch (endMode)
+                {
+                    case RegionEnd.LoopContinue: WriteLine("continue;"); break;
+                    // Both GotoEnd and FallThrough branch an if/else arm to the function-scope end
+                    // label. FallThrough has no single-statement fall-out form for one arm, so a
+                    // goto to the (unsuffixed) end label is the correct exit. This one-arm end only
+                    // arises for a Finally whose body itself has a conditional exit — a shape the
+                    // finally-duplication design does not fully support; the goto keeps it valid.
+                    case RegionEnd.GotoEnd:
+                    case RegionEnd.FallThrough:
+                        WriteLine($"goto {EndLabelName(endBlock)};");
+                        break;
+                }
+            }
+            else
+            {
+                WriteLine($"goto {LabelName(target.Name)};");
             }
         }
 
@@ -2937,9 +3191,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("{");
             Indent();
 
-            // Emit body block instructions (skipping block-terminator branches:
-            // the range-for supplies the loop structure)
-            EmitBlockInstructions(forEach.BodyBlock);
+            // Emit the ENTIRE body region inside the loop braces, not just BodyBlock. Any control
+            // flow the body contains (an If, a nested loop, a Try) is split by the CFG into extra
+            // blocks (if0.then/if0.end/...); those must be emitted here so their labels and gotos
+            // live inside the loop. An end-of-iteration branch to EndBlock becomes `continue;`
+            // (the range-for owns iteration), never a `goto` that would break the whole loop.
+            EmitInlineRegion(forEach.BodyBlock, forEach.EndBlock, RegionEnd.LoopContinue);
 
             Unindent();
             WriteLine("}");
