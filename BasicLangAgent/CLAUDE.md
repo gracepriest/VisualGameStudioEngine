@@ -35,7 +35,7 @@ The agent operates on the parent directory (VisualGameStudioEngine), which conta
 - **BasicLang/** — Full compiler (lexer, parser, semantic analyzer, IR builder, 4 backends)
 - **VisualGameStudio.Editor/** — Avalonia-based code editor
 - **VisualGameStudio.Shell/** — IDE application shell
-- **VisualGameStudio.Tests/** — 1636 xUnit tests
+- **VisualGameStudio.Tests/** — ~2,400 xUnit tests (run `dotnet test` for the current count)
 - **BasicLang/Debugger/** — DAP-based debugger
 - **BasicLang/LSP/** — Language Server Protocol server
 

@@ -28,7 +28,7 @@ The agent operates on the parent directory (VisualGameStudioEngine), which conta
 - **VisualGameStudio.ProjectSystem/** — 29 service implementations (LSP, DAP, build)
 - **VisualGameStudio.Editor/** — Avalonia code editor, 7 renderers, margins, multi-cursor
 - **VisualGameStudio.Shell/** — IDE shell, 17 panel VMs, 40+ dialog VMs, MainWindow
-- **VisualGameStudio.Tests/** — 1636 xUnit tests
+- **VisualGameStudio.Tests/** — ~2,400 xUnit tests (run `dotnet test` for the current count)
 
 ## Key Conventions
 
