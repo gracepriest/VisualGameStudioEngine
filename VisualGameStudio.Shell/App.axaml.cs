@@ -67,6 +67,13 @@ public partial class App : Application
             };
             desktop.MainWindow = MainWindow;
 
+            // Force a final per-project layout/session save on exit (VS Code's shutdown flush).
+            desktop.ShutdownRequested += (s, e) =>
+            {
+                try { mainViewModel.FlushWorkspaceStateForShutdown(); }
+                catch (Exception ex) { LogCrash("SHUTDOWN_SAVE", ex); }
+            };
+
             // Auto-load TestProject for debugging
             desktop.MainWindow.Opened += async (s, e) =>
             {

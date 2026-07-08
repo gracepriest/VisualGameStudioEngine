@@ -70,6 +70,11 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IWorkspaceService _workspaceService;
     private readonly ITaskRunnerService _taskRunnerService;
     private readonly DockFactory _dockFactory;
+    private readonly IWorkspaceStateStore _workspaceStateStore;
+
+    // Per-project layout/session persistence (VS Code's workspaceStorage model).
+    private CancellationTokenSource? _layoutSaveCts;
+    private bool _restoringLayout;
 
     /// <summary>
     /// Tracks extension-contributed tree view panels by viewId.
@@ -357,6 +362,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IWorkspaceService workspaceService,
         ITaskRunnerService taskRunnerService,
         DockFactory dockFactory,
+        IWorkspaceStateStore workspaceStateStore,
         SolutionExplorerViewModel solutionExplorer,
         OutputPanelViewModel outputPanel,
         ErrorListViewModel errorList,
@@ -402,6 +408,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _workspaceService = workspaceService;
         _taskRunnerService = taskRunnerService;
         _dockFactory = dockFactory;
+        _workspaceStateStore = workspaceStateStore;
 
         SolutionExplorer = solutionExplorer;
         OutputPanel = outputPanel;
@@ -452,6 +459,15 @@ public partial class MainWindowViewModel : ViewModelBase
         // Auto-save (onFocusChange): switching document tabs counts as an editor
         // focus change in VS Code semantics.
         _dockFactory.ActiveDockableChanged += OnActiveDockableChangedForAutoSave;
+
+        // Persist per-project layout when the user rearranges/adds/removes/closes panels
+        // or switches the active tab (debounced). Splitter-drag resizes raise no event, so
+        // the definitive capture happens on project-close and app-shutdown flushes.
+        _dockFactory.ActiveDockableChanged += (_, _) => ScheduleLayoutSave();
+        _dockFactory.DockableAdded += (_, _) => ScheduleLayoutSave();
+        _dockFactory.DockableRemoved += (_, _) => ScheduleLayoutSave();
+        _dockFactory.DockableMoved += (_, _) => ScheduleLayoutSave();
+        _dockFactory.DockableClosed += (_, _) => ScheduleLayoutSave();
 
         // Auto-save (files.autoSaveSkipOnErrors): let the service query per-file
         // error state tracked from LSP diagnostics (same source as the Problems badge).
@@ -924,9 +940,22 @@ public partial class MainWindowViewModel : ViewModelBase
         // Load persisted breakpoints
         Breakpoints.SetProjectDirectory(e.Project.ProjectDirectory);
         await Breakpoints.LoadBreakpointsAsync();
+
+        // Restore this project's saved window layout + open documents (VS Code style).
+        await RestoreWorkspaceStateAsync(e.Project.ProjectDirectory);
     }
 
     private void OnDocumentClosed(object? sender, string filePath)
+    {
+        CleanupDocumentState(filePath);
+    }
+
+    /// <summary>
+    /// Tears down all tracking for a document (event handlers, auto-save, caches, LSP/extension
+    /// notifications). Used both when a tab is closed and when the layout is rebuilt during a
+    /// per-project restore/reset, which detaches the old document dockables.
+    /// </summary>
+    private void CleanupDocumentState(string filePath)
     {
         // Run cleanup actions (unsubscribe events) for this document
         if (_documentCleanupActions.TryGetValue(filePath, out var cleanup))
@@ -1035,6 +1064,9 @@ public partial class MainWindowViewModel : ViewModelBase
             : "Visual Game Studio";
         StatusText = "Ready";
 
+        // Persist this project's layout + open documents before we let go of it.
+        SaveWorkspaceStateNow(e.Project.ProjectDirectory);
+
         // Clear workspace settings when project is closed
         if (_settingsService is VisualGameStudio.ProjectSystem.Services.SettingsService settingsSvc)
         {
@@ -1045,6 +1077,195 @@ public partial class MainWindowViewModel : ViewModelBase
         _diagnosticsAggregator.Clear();
         ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
     }
+
+    #region Per-project layout & session persistence
+
+    /// <summary>
+    /// Debounced save of the current project's layout + open documents, triggered by dock
+    /// rearrangements and tab switches. Capture runs on the UI thread; the file write does not.
+    /// </summary>
+    private void ScheduleLayoutSave()
+    {
+        if (_restoringLayout) return;
+
+        var project = _projectService.CurrentProject;
+        if (project == null) return;
+        var projectDir = project.ProjectDirectory;
+
+        _layoutSaveCts?.Cancel();
+        _layoutSaveCts = new CancellationTokenSource();
+        var token = _layoutSaveCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(750, token);
+                if (token.IsCancellationRequested) return;
+
+                WorkspaceStateModel? state = null;
+                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    // Don't snapshot a half-rebuilt tree while a restore/reset is in progress.
+                    if (!token.IsCancellationRequested && !_restoringLayout)
+                        state = CaptureWorkspaceState();
+                });
+
+                if (state != null && !token.IsCancellationRequested)
+                    _workspaceStateStore.Save(projectDir, state);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LayoutSave] {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>Synchronously captures and saves a project's state (project-close/app-shutdown flush).</summary>
+    private void SaveWorkspaceStateNow(string projectDirectory)
+    {
+        if (string.IsNullOrEmpty(projectDirectory)) return;
+
+        try
+        {
+            _layoutSaveCts?.Cancel();
+            var state = CaptureWorkspaceState();
+            if (state != null)
+                _workspaceStateStore.Save(projectDirectory, state);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[LayoutSave] {ex.Message}");
+        }
+    }
+
+    /// <summary>Flushes the current project's state on application shutdown (called from App).</summary>
+    public void FlushWorkspaceStateForShutdown()
+    {
+        var project = _projectService.CurrentProject;
+        if (project != null)
+            SaveWorkspaceStateNow(project.ProjectDirectory);
+    }
+
+    /// <summary>Snapshots the live layout tree and the open documents in tab order.</summary>
+    private WorkspaceStateModel CaptureWorkspaceState()
+    {
+        var openDocuments = _dockFactory.GetAllDocuments()
+            .OfType<CodeEditorDocumentViewModel>()
+            .Where(d => !string.IsNullOrEmpty(d.FilePath))
+            .Select(d => new OpenDocumentState
+            {
+                Path = d.FilePath!,
+                CaretLine = d.CaretLine,
+                CaretColumn = d.CaretColumn
+            })
+            .ToList();
+
+        var activePath = (_dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel)?.FilePath
+            ?? _lastActiveEditorFilePath;
+
+        return new WorkspaceStateModel
+        {
+            DockLayout = _dockFactory.SerializeCurrentLayout(),
+            OpenDocuments = openDocuments,
+            ActiveDocumentPath = activePath
+        };
+    }
+
+    /// <summary>
+    /// Restores a project's saved layout and reopens the documents it had open. No-op when the
+    /// project has no saved state, so first-time / never-arranged projects behave exactly as before.
+    /// </summary>
+    private async Task RestoreWorkspaceStateAsync(string projectDirectory)
+    {
+        WorkspaceStateModel? state;
+        try { state = _workspaceStateStore.Load(projectDirectory); }
+        catch { state = null; }
+
+        if (state?.DockLayout == null) return;
+
+        await ApplyLayoutAndDocumentsAsync(state.DockLayout, state.OpenDocuments, state.ActiveDocumentPath);
+    }
+
+    /// <summary>
+    /// Swaps in a rebuilt layout and reopens the given documents. Currently-tracked documents are
+    /// torn down first because rebuilding the tree detaches their dockables. The restoring flag
+    /// suppresses save-on-change feedback while the layout is mutated.
+    /// </summary>
+    private async Task ApplyLayoutAndDocumentsAsync(
+        DockNode? layout, List<OpenDocumentState> documents, string? activePath)
+    {
+        _restoringLayout = true;
+        try
+        {
+            // Cancel any debounced save that could otherwise fire against the outgoing tree.
+            _layoutSaveCts?.Cancel();
+
+            foreach (var path in _openDocuments.Keys.ToList())
+            {
+                CleanupDocumentState(path);
+            }
+
+            var restored = layout != null ? _dockFactory.TryApplyLayout(layout) : null;
+            if (restored != null)
+            {
+                Layout = restored;
+            }
+            else
+            {
+                Layout = _dockFactory.CreateLayout();
+                _dockFactory.InitLayout(Layout);
+            }
+
+            foreach (var doc in documents)
+            {
+                if (!string.IsNullOrEmpty(doc.Path) && File.Exists(doc.Path))
+                {
+                    await OpenFileAsync(doc.Path);
+                    if (_openDocuments.TryGetValue(doc.Path, out var vm))
+                    {
+                        vm.NavigateTo(doc.CaretLine, doc.CaretColumn);
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(activePath) && _openDocuments.TryGetValue(activePath, out var activeVm))
+            {
+                _dockFactory.ActivateDocument(activeVm);
+            }
+        }
+        finally
+        {
+            _restoringLayout = false;
+        }
+    }
+
+    /// <summary>
+    /// Resets the current project's layout to the default (VS Code's "Reset View Locations"),
+    /// keeping open documents. Clears any saved layout so the reset persists.
+    /// </summary>
+    [RelayCommand]
+    private async Task ResetLayout()
+    {
+        var project = _projectService.CurrentProject;
+        if (project != null)
+        {
+            _workspaceStateStore.Clear(project.ProjectDirectory);
+        }
+
+        var docs = _dockFactory.GetAllDocuments()
+            .OfType<CodeEditorDocumentViewModel>()
+            .Where(d => !string.IsNullOrEmpty(d.FilePath))
+            .Select(d => new OpenDocumentState { Path = d.FilePath!, CaretLine = d.CaretLine, CaretColumn = d.CaretColumn })
+            .ToList();
+        var activePath = (_dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel)?.FilePath;
+
+        await ApplyLayoutAndDocumentsAsync(null, docs, activePath);
+        StatusText = "Layout reset to default";
+    }
+
+    #endregion
 
     private void OnBuildCompleted(object? sender, BuildCompletedEventArgs e)
     {

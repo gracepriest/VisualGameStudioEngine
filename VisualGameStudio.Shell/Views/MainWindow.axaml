@@ -263,6 +263,9 @@
         </MenuItem>
         <MenuItem Header="_Zen Mode" Command="{Binding ToggleZenModeCommand}" InputGesture="Ctrl+Shift+Z"/>
         <MenuItem Header="_Full Screen" InputGesture="Shift+Alt+Enter"/>
+        <Separator/>
+        <MenuItem Header="_Reset Layout" Command="{Binding ResetLayoutCommand}"
+                  ToolTip.Tip="Restore the default panel layout for this project (keeps open files)"/>
       </MenuItem>
 
       <MenuItem Header="_Tools">

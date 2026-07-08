@@ -37,6 +37,7 @@ public static class ServiceConfiguration
         services.AddSingleton<IHotExitService, HotExitService>();
         services.AddSingleton<IFileWatcherService, FileWatcherService>();
         services.AddSingleton<IRecentProjectsService, RecentProjectsService>();
+        services.AddSingleton<IWorkspaceStateStore, WorkspaceStateStore>();
         services.AddSingleton<IWorkspaceService, WorkspaceService>();
         services.AddSingleton<ITaskRunnerService, TaskRunnerService>();
         services.AddSingleton<ITextMateService, TextMateService>();

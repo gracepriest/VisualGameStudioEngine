@@ -185,6 +185,7 @@ public class DockFactory : Factory
         // Left tool dock (Solution Explorer, Git panels, Outline, Bookmarks, Timeline)
         _leftDock = new ProportionalDock
         {
+            Id = "LeftDock",
             Proportion = 0.2,
             Orientation = Orientation.Vertical,
             VisibleDockables = CreateList<IDockable>(
@@ -316,6 +317,7 @@ public class DockFactory : Factory
 
         _bottomDock = new ProportionalDock
         {
+            Id = "BottomDock",
             Proportion = 0.35,
             Orientation = Orientation.Horizontal,
             VisibleDockables = CreateList<IDockable>(
@@ -329,6 +331,7 @@ public class DockFactory : Factory
         // Main content area (documents + bottom tools)
         _mainArea = new ProportionalDock
         {
+            Id = "MainArea",
             Orientation = Orientation.Vertical,
             VisibleDockables = CreateList<IDockable>(
                 _documentDock,
@@ -595,6 +598,75 @@ public class DockFactory : Factory
         }
 
         return null;
+    }
+
+    /// <summary>The current root layout (for capturing/persisting state).</summary>
+    public IRootDock? RootDock => _rootDock;
+
+    /// <summary>
+    /// Single source of truth mapping each tool's stable Id to a constructor that wires its
+    /// view-model. Used both to rebuild a persisted layout (restoring each panel as its correct
+    /// concrete subclass) and, indirectly, to keep restore in sync with CreateLayout's tool set.
+    /// Keep this list aligned with the tools created in <see cref="CreateLayout"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, Func<IDockable>> GetToolFactoryMap()
+    {
+        return new Dictionary<string, Func<IDockable>>
+        {
+            ["SolutionExplorer"] = () => new SolutionExplorerTool { Id = "SolutionExplorer", Title = "Solution Explorer", ViewModel = _solutionExplorer },
+            ["Output"] = () => new OutputTool { Id = "Output", Title = "Output", ViewModel = _outputPanel },
+            ["ErrorList"] = () => new ErrorListTool { Id = "ErrorList", Title = "Error List", ViewModel = _errorList },
+            ["GitChanges"] = () => new GitChangesTool { Id = "GitChanges", Title = "Git Changes", ViewModel = _gitChanges },
+            ["GitBranches"] = () => new GitBranchesTool { Id = "GitBranches", Title = "Branches", ViewModel = _gitBranches },
+            ["GitStash"] = () => new GitStashTool { Id = "GitStash", Title = "Stash", ViewModel = _gitStash },
+            ["GitBlame"] = () => new GitBlameTool { Id = "GitBlame", Title = "Blame", ViewModel = _gitBlame },
+            ["DocumentOutline"] = () => new DocumentOutlineTool { Id = "DocumentOutline", Title = "Outline", ViewModel = _documentOutline },
+            ["Bookmarks"] = () => new BookmarksTool { Id = "Bookmarks", Title = "Bookmarks", ViewModel = _bookmarks },
+            ["Extensions"] = () => new ExtensionsTool { Id = "Extensions", Title = "Extensions", ViewModel = _extensions },
+            ["Timeline"] = () => new TimelineTool { Id = "Timeline", Title = "Timeline", ViewModel = _timeline },
+            ["CallStack"] = () => new CallStackTool { Id = "CallStack", Title = "Call Stack", ViewModel = _callStack },
+            ["Variables"] = () => new VariablesTool { Id = "Variables", Title = "Variables", ViewModel = _variables },
+            ["Breakpoints"] = () => new BreakpointsTool { Id = "Breakpoints", Title = "Breakpoints", ViewModel = _breakpoints },
+            ["FindInFiles"] = () => new FindInFilesTool { Id = "FindInFiles", Title = "Find in Files", ViewModel = _findInFiles },
+            ["Terminal"] = () => new TerminalTool { Id = "Terminal", Title = "Terminal", ViewModel = _terminal },
+            ["Watch"] = () => new WatchTool { Id = "Watch", Title = "Watch", ViewModel = _watch },
+            ["ImmediateWindow"] = () => new ImmediateWindowTool { Id = "ImmediateWindow", Title = "Immediate", ViewModel = _immediateWindow },
+            ["Problems"] = () => new ProblemsTool { Id = "Problems", Title = "Problems", ViewModel = _problems },
+            ["DebugConsole"] = () => new DebugConsoleTool { Id = "DebugConsole", Title = "Debug Console", ViewModel = _debugConsole },
+            ["Threads"] = () => new ThreadsTool { Id = "Threads", Title = "Threads", ViewModel = _threads },
+            ["CallHierarchy"] = () => new CallHierarchyTool { Id = "CallHierarchy", Title = "Call Hierarchy", ViewModel = _callHierarchy }
+        };
+    }
+
+    /// <summary>Captures the current layout tree as a serializable DTO (documents excluded).</summary>
+    public Core.Models.DockNode? SerializeCurrentLayout()
+    {
+        return new DockLayoutSerializer().Capture(_rootDock);
+    }
+
+    /// <summary>
+    /// Rebuilds the layout from a persisted DTO and swaps it in, re-wiring the internal dock
+    /// references the rest of the factory depends on. Returns the new root, or null if the DTO
+    /// couldn't be reconstructed (caller keeps the default layout).
+    /// </summary>
+    public IRootDock? TryApplyLayout(Core.Models.DockNode node)
+    {
+        var root = new DockLayoutSerializer().Rebuild(node, GetToolFactoryMap());
+        if (root == null) return null;
+
+        // A restored tree must contain the document area, or documents can't be opened.
+        var documentDock = FindDockableById(root, "DocumentDock") as DocumentDock;
+        if (documentDock == null) return null;
+
+        _rootDock = root;
+        _documentDock = documentDock;
+        _leftDock = FindDockableById(root, "LeftDock") as ProportionalDock;
+        _mainArea = FindDockableById(root, "MainArea") as ProportionalDock;
+        _bottomDock = FindDockableById(root, "BottomDock") as ProportionalDock;
+        _isBottomPanelMaximized = false;
+
+        InitLayout(root);
+        return root;
     }
 }
 
