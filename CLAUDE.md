@@ -26,7 +26,7 @@ BasicLang (a VB-like language + compiler), a cross-platform IDE (Avalonia), and 
 | VisualGameStudio.Editor | C# | Avalonia code editor (highlighting, IntelliSense, folding) |
 | VisualGameStudio.ProjectSystem | C# | Projects, build service, LSP client, debugging |
 | VisualGameStudio.Shell | C# | IDE app shell — **the build/run target for the IDE** |
-| VisualGameStudio.Tests | C# | xUnit suite (~2,400 tests) |
+| VisualGameStudio.Tests | C# | NUnit suite (~2,400 tests) |
 | BasicLang.VisualStudio | C# (VSIX) | VS 2022 CPS extension — details in `docs/vs-extension-notes.md` |
 
 **GameEngine**
