@@ -378,10 +378,16 @@ function createWindowApi(rpc, extensionId) {
                 _viewColumn = state.viewColumn || _viewColumn;
                 _onDidChangeViewState.fire({ webviewPanel: panel });
             },
+            // Internal: _onDidReceiveMessage emitter for main.js webview/postMessage handler
+            _onDidReceiveMessage,
         };
 
+        _webviewPanels.set(webviewId, panel);
         return panel;
     }
+
+    /** @type {Map<string, object>} panelId -> webview panel */
+    const _webviewPanels = new Map();
 
     /** @type {Map<string, object>} viewId -> provider registration */
     const _webviewViewProviders = new Map();
@@ -552,6 +558,9 @@ function createWindowApi(rpc, extensionId) {
         // -----------------------------------------------------------------
         // Internal state methods (called by main.js)
         // -----------------------------------------------------------------
+
+        _treeViews,
+        _webviewPanels,
 
         _setActiveEditor(editorData) {
             _activeTextEditor = _makeTextEditor(editorData);

@@ -421,12 +421,60 @@ class ProviderRegistry {
 
     /**
      * Invoke a provider's method for the given type.
-     * Maps PROVIDER_TYPES to the standard VS Code provider method names.
+     * Maps PROVIDER_TYPES to the standard VS Code provider method names,
+     * dispatching with the correct argument shape for each provider type.
      */
     _invokeProvider(provider, type, document, params, token) {
         const methodName = PROVIDER_METHOD_MAP[type];
         if (methodName && typeof provider[methodName] === 'function') {
-            return provider[methodName](document, params, token);
+            switch (type) {
+                case PROVIDER_TYPES.COMPLETION:
+                    return provider[methodName](params.document, params.position, token, params.context);
+                case PROVIDER_TYPES.HOVER:
+                case PROVIDER_TYPES.DEFINITION:
+                case PROVIDER_TYPES.TYPE_DEFINITION:
+                case PROVIDER_TYPES.IMPLEMENTATION:
+                case PROVIDER_TYPES.DECLARATION:
+                    return provider[methodName](params.document, params.position, token);
+                case PROVIDER_TYPES.REFERENCES:
+                    return provider[methodName](params.document, params.position, params.context, token);
+                case PROVIDER_TYPES.DOCUMENT_HIGHLIGHT:
+                    return provider[methodName](params.document, params.position, token);
+                case PROVIDER_TYPES.DOCUMENT_SYMBOL:
+                    return provider[methodName](params.document, token);
+                case PROVIDER_TYPES.WORKSPACE_SYMBOL:
+                    return provider[methodName](params.query, token);
+                case PROVIDER_TYPES.CODE_ACTION:
+                    return provider[methodName](params.document, params.range, params.context, token);
+                case PROVIDER_TYPES.CODE_LENS:
+                    return provider[methodName](params.document, token);
+                case PROVIDER_TYPES.DOCUMENT_FORMATTING:
+                    return provider[methodName](params.document, params.options, token);
+                case PROVIDER_TYPES.DOCUMENT_RANGE_FORMATTING:
+                    return provider[methodName](params.document, params.range, params.options, token);
+                case PROVIDER_TYPES.ON_TYPE_FORMATTING:
+                    return provider[methodName](params.document, params.position, params.ch, params.options, token);
+                case PROVIDER_TYPES.RENAME:
+                    return provider[methodName](params.document, params.position, params.newName, token);
+                case PROVIDER_TYPES.SIGNATURE_HELP:
+                    return provider[methodName](params.document, params.position, token, params.context);
+                case PROVIDER_TYPES.DOCUMENT_LINK:
+                    return provider[methodName](params.document, token);
+                case PROVIDER_TYPES.COLOR:
+                    return provider[methodName](params.document, token);
+                case PROVIDER_TYPES.FOLDING_RANGE:
+                    return provider[methodName](params.document, params.context, token);
+                case PROVIDER_TYPES.SELECTION_RANGE:
+                    return provider[methodName](params.document, params.positions, token);
+                case PROVIDER_TYPES.INLAY_HINT:
+                    return provider[methodName](params.document, params.range, token);
+                case PROVIDER_TYPES.LINKED_EDITING_RANGE:
+                    return provider[methodName](params.document, params.position, token);
+                case PROVIDER_TYPES.SEMANTIC_TOKENS:
+                    return provider[methodName](params.document, token);
+                default:
+                    return provider[methodName](document, params, token);
+            }
         }
         // Try generic 'provide' method
         if (typeof provider.provide === 'function') {

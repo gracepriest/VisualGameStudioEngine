@@ -362,6 +362,26 @@
           }
         }
       },
+      "MessagePack/2.5.108": {
+        "dependencies": {
+          "MessagePack.Annotations": "2.5.108",
+          "Microsoft.NET.StringTools": "17.4.0"
+        },
+        "runtime": {
+          "lib/net6.0/MessagePack.dll": {
+            "assemblyVersion": "2.5.0.0",
+            "fileVersion": "2.5.108.51978"
+          }
+        }
+      },
+      "MessagePack.Annotations/2.5.108": {
+        "runtime": {
+          "lib/netstandard2.0/MessagePack.Annotations.dll": {
+            "assemblyVersion": "2.5.0.0",
+            "fileVersion": "2.5.108.51978"
+          }
+        }
+      },
       "MicroCom.Runtime/0.11.0": {
         "runtime": {
           "lib/net5.0/MicroCom.Runtime.dll": {
@@ -370,11 +390,11 @@
           }
         }
       },
-      "Microsoft.Bcl.AsyncInterfaces/7.0.0": {
+      "Microsoft.Bcl.AsyncInterfaces/8.0.0": {
         "runtime": {
           "lib/netstandard2.1/Microsoft.Bcl.AsyncInterfaces.dll": {
-            "assemblyVersion": "7.0.0.0",
-            "fileVersion": "7.0.22.51805"
+            "assemblyVersion": "8.0.0.0",
+            "fileVersion": "8.0.23.53103"
           }
         }
       },
@@ -523,15 +543,23 @@
           }
         }
       },
-      "Microsoft.VisualStudio.Threading/17.6.40": {
+      "Microsoft.NET.StringTools/17.4.0": {
+        "runtime": {
+          "lib/net7.0/Microsoft.NET.StringTools.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "17.4.0.51802"
+          }
+        }
+      },
+      "Microsoft.VisualStudio.Threading/17.9.28": {
         "dependencies": {
-          "Microsoft.Bcl.AsyncInterfaces": "7.0.0",
-          "Microsoft.VisualStudio.Validation": "17.6.11"
+          "Microsoft.Bcl.AsyncInterfaces": "8.0.0",
+          "Microsoft.VisualStudio.Validation": "17.8.8"
         },
         "runtime": {
           "lib/net6.0/Microsoft.VisualStudio.Threading.dll": {
-            "assemblyVersion": "17.6.0.0",
-            "fileVersion": "17.6.40.52285"
+            "assemblyVersion": "17.9.0.0",
+            "fileVersion": "17.9.28.19228"
           }
         },
         "resources": {
@@ -576,11 +604,11 @@
           }
         }
       },
-      "Microsoft.VisualStudio.Validation/17.6.11": {
+      "Microsoft.VisualStudio.Validation/17.8.8": {
         "runtime": {
           "lib/net6.0/Microsoft.VisualStudio.Validation.dll": {
-            "assemblyVersion": "17.6.0.0",
-            "fileVersion": "17.6.11.23530"
+            "assemblyVersion": "17.8.0.0",
+            "fileVersion": "17.8.8.15457"
           }
         },
         "resources": {
@@ -627,9 +655,9 @@
       },
       "Nerdbank.Streams/2.10.69": {
         "dependencies": {
-          "Microsoft.Bcl.AsyncInterfaces": "7.0.0",
-          "Microsoft.VisualStudio.Threading": "17.6.40",
-          "Microsoft.VisualStudio.Validation": "17.6.11",
+          "Microsoft.Bcl.AsyncInterfaces": "8.0.0",
+          "Microsoft.VisualStudio.Threading": "17.9.28",
+          "Microsoft.VisualStudio.Validation": "17.8.8",
           "System.IO.Pipelines": "7.0.0"
         },
         "runtime": {
@@ -769,6 +797,64 @@
           }
         }
       },
+      "StreamJsonRpc/2.18.48": {
+        "dependencies": {
+          "MessagePack": "2.5.108",
+          "Microsoft.Bcl.AsyncInterfaces": "8.0.0",
+          "Microsoft.VisualStudio.Threading": "17.9.28",
+          "Microsoft.VisualStudio.Validation": "17.8.8",
+          "Nerdbank.Streams": "2.10.69",
+          "Newtonsoft.Json": "13.0.3",
+          "System.IO.Pipelines": "7.0.0"
+        },
+        "runtime": {
+          "lib/netstandard2.1/StreamJsonRpc.dll": {
+            "assemblyVersion": "2.18.0.0",
+            "fileVersion": "2.18.48.3416"
+          }
+        },
+        "resources": {
+          "lib/netstandard2.1/cs/StreamJsonRpc.resources.dll": {
+            "locale": "cs"
+          },
+          "lib/netstandard2.1/de/StreamJsonRpc.resources.dll": {
+            "locale": "de"
+          },
+          "lib/netstandard2.1/es/StreamJsonRpc.resources.dll": {
+            "locale": "es"
+          },
+          "lib/netstandard2.1/fr/StreamJsonRpc.resources.dll": {
+            "locale": "fr"
+          },
+          "lib/netstandard2.1/it/StreamJsonRpc.resources.dll": {
+            "locale": "it"
+          },
+          "lib/netstandard2.1/ja/StreamJsonRpc.resources.dll": {
+            "locale": "ja"
+          },
+          "lib/netstandard2.1/ko/StreamJsonRpc.resources.dll": {
+            "locale": "ko"
+          },
+          "lib/netstandard2.1/pl/StreamJsonRpc.resources.dll": {
+            "locale": "pl"
+          },
+          "lib/netstandard2.1/pt-BR/StreamJsonRpc.resources.dll": {
+            "locale": "pt-BR"
+          },
+          "lib/netstandard2.1/ru/StreamJsonRpc.resources.dll": {
+            "locale": "ru"
+          },
+          "lib/netstandard2.1/tr/StreamJsonRpc.resources.dll": {
+            "locale": "tr"
+          },
+          "lib/netstandard2.1/zh-Hans/StreamJsonRpc.resources.dll": {
+            "locale": "zh-Hans"
+          },
+          "lib/netstandard2.1/zh-Hant/StreamJsonRpc.resources.dll": {
+            "locale": "zh-Hant"
+          }
+        }
+      },
       "System.IO.Pipelines/7.0.0": {
         "runtime": {
           "lib/net7.0/System.IO.Pipelines.dll": {
@@ -836,6 +922,7 @@
       "VisualGameStudio.ProjectSystem/1.0.0": {
         "dependencies": {
           "BasicLang": "1.0.0",
+          "StreamJsonRpc": "2.18.48",
           "VisualGameStudio.Core": "1.0.0"
         },
         "runtime": {
@@ -1014,6 +1101,20 @@
       "path": "mediatr/8.1.0",
       "hashPath": "mediatr.8.1.0.nupkg.sha512"
     },
+    "MessagePack/2.5.108": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-kcVRbdWP3xNWLZmmpm4DFO+kuXf6mUR2mHZ27WoZIEFIv9hazuUd80injXhNrZnlq/FklAdCsLOil5M76I4Ndg==",
+      "path": "messagepack/2.5.108",
+      "hashPath": "messagepack.2.5.108.nupkg.sha512"
+    },
+    "MessagePack.Annotations/2.5.108": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-28aNCvfJClgwaKr26gf2S6LT+C1PNyPxiG+ihYpy8uCJsRLJEDoCt2I0Uk5hqOPQ8P8hI0ESy520oMkZkPmsOQ==",
+      "path": "messagepack.annotations/2.5.108",
+      "hashPath": "messagepack.annotations.2.5.108.nupkg.sha512"
+    },
     "MicroCom.Runtime/0.11.0": {
       "type": "package",
       "serviceable": true,
@@ -1021,12 +1122,12 @@
       "path": "microcom.runtime/0.11.0",
       "hashPath": "microcom.runtime.0.11.0.nupkg.sha512"
     },
-    "Microsoft.Bcl.AsyncInterfaces/7.0.0": {
+    "Microsoft.Bcl.AsyncInterfaces/8.0.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-3aeMZ1N0lJoSyzqiP03hqemtb1BijhsJADdobn/4nsMJ8V1H+CrpuduUe4hlRdx+ikBQju1VGjMD1GJ3Sk05Eg==",
-      "path": "microsoft.bcl.asyncinterfaces/7.0.0",
-      "hashPath": "microsoft.bcl.asyncinterfaces.7.0.0.nupkg.sha512"
+      "sha512": "sha512-3WA9q9yVqJp222P3x1wYIGDAkpjAku0TMUaaQV22g6L67AI0LdOIrVS7Ht2vJfLHGSPVuqN94vIr15qn+HEkHw==",
+      "path": "microsoft.bcl.asyncinterfaces/8.0.0",
+      "hashPath": "microsoft.bcl.asyncinterfaces.8.0.0.nupkg.sha512"
     },
     "Microsoft.Extensions.Configuration/8.0.0": {
       "type": "package",
@@ -1112,19 +1213,26 @@
       "path": "microsoft.extensions.primitives/8.0.0",
       "hashPath": "microsoft.extensions.primitives.8.0.0.nupkg.sha512"
     },
-    "Microsoft.VisualStudio.Threading/17.6.40": {
+    "Microsoft.NET.StringTools/17.4.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-hLa/0xargG7p3bF7aeq2/lRYn/bVnfZXurUWVHx+MNqxxAUjIDMKi4OIOWbYQ/DTkbn9gv8TLvgso+6EtHVQQg==",
-      "path": "microsoft.visualstudio.threading/17.6.40",
-      "hashPath": "microsoft.visualstudio.threading.17.6.40.nupkg.sha512"
+      "sha512": "sha512-06T6Hqfs3JDIaBvJaBRFFMIdU7oE0OMab5Xl8LKQjWPxBQr3BgVFKMQPTC+GsSEuYREWmK6g5eOd7Xqd9p1YCA==",
+      "path": "microsoft.net.stringtools/17.4.0",
+      "hashPath": "microsoft.net.stringtools.17.4.0.nupkg.sha512"
     },
-    "Microsoft.VisualStudio.Validation/17.6.11": {
+    "Microsoft.VisualStudio.Threading/17.9.28": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-J+9L/iac6c8cwcgVSCMuoIYOlD1Jw4mbZ8XMe1IZVj8p8+3dJ46LnnkIkTRMjK7xs9UtU9MoUp1JGhWoN6fAEw==",
-      "path": "microsoft.visualstudio.validation/17.6.11",
-      "hashPath": "microsoft.visualstudio.validation.17.6.11.nupkg.sha512"
+      "sha512": "sha512-n1bG965yT/7QHChX4x8zJ28LDaNdlJ6AgzthU3XzCsV9fVAMXYJEFi6BbWt8EM+7t0Wz9Oy021VMH2Z/iyz/Qw==",
+      "path": "microsoft.visualstudio.threading/17.9.28",
+      "hashPath": "microsoft.visualstudio.threading.17.9.28.nupkg.sha512"
+    },
+    "Microsoft.VisualStudio.Validation/17.8.8": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-rWXThIpyQd4YIXghNkiv2+VLvzS+MCMKVRDR0GAMlflsdo+YcAN2g2r5U1Ah98OFjQMRexTFtXQQ2LkajxZi3g==",
+      "path": "microsoft.visualstudio.validation/17.8.8",
+      "hashPath": "microsoft.visualstudio.validation.17.8.8.nupkg.sha512"
     },
     "Nerdbank.Streams/2.10.69": {
       "type": "package",
@@ -1195,6 +1303,13 @@
       "sha512": "sha512-O9QXoWEXA+6cweR4h3BOnwMz+pO9vL9mXdjLrpDd0w1QzCgWmLQBxa1VgySDITiH7nQndrDG1h6937zm9pLj1Q==",
       "path": "skiasharp.nativeassets.win32/2.88.8",
       "hashPath": "skiasharp.nativeassets.win32.2.88.8.nupkg.sha512"
+    },
+    "StreamJsonRpc/2.18.48": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-IW6zhdIM2R8SkFmjraj02HlOuLMOyZWGvbAo3rgzbuQPlhMpB9BMqaJVtZHJGwPnAnk3ZWvE3q45aEhtPmLEuw==",
+      "path": "streamjsonrpc/2.18.48",
+      "hashPath": "streamjsonrpc.2.18.48.nupkg.sha512"
     },
     "System.IO.Pipelines/7.0.0": {
       "type": "package",

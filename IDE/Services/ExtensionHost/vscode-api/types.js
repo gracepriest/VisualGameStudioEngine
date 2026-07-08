@@ -248,12 +248,16 @@ class Uri {
 
     get fsPath() {
         if (this.scheme === 'file') {
-            // Handle Windows paths: /C:/foo -> C:\foo
             let p = this.path;
-            if (p.length >= 3 && p[0] === '/' && p[2] === ':') {
-                p = p.substring(1);
+            const isWindows = process.platform === 'win32';
+            if (isWindows) {
+                // Handle Windows paths: /C:/foo -> C:\foo
+                if (p.length >= 3 && p[0] === '/' && p[2] === ':') {
+                    p = p.substring(1);
+                }
+                return p.replace(/\//g, '\\');
             }
-            return p.replace(/\//g, '\\');
+            return p;
         }
         return this.path;
     }
