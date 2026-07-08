@@ -49,6 +49,25 @@ End Sub";
         Assert.That(parser.Errors.Count, Is.GreaterThan(0), "Expected parser errors for missing 'Then'");
     }
 
+    [Test]
+    public void Parse_MissingCommaBetweenCallArguments_SuggestsComma()
+    {
+        // A ')' expected where the next token starts another argument means a comma
+        // was omitted (Foo(1, 2 3)), NOT a missing closing parenthesis. The suggestion
+        // must point at the comma, not the paren.
+        var source = @"Sub Test()
+    Foo(1, 2 3)
+End Sub";
+        var tokens = Tokenize(source);
+        var parser = new Parser(tokens);
+        parser.Parse();
+
+        Assert.That(parser.Errors.Count, Is.GreaterThan(0), "expected a parse error for the missing comma");
+        Assert.That(parser.Errors.Any(e => (e.Suggestion ?? "").Contains("comma")), Is.True,
+            "expected a 'missing comma' suggestion, got: " +
+            string.Join(" | ", parser.Errors.Select(e => $"{e.Message} => {e.Suggestion}")));
+    }
+
     #endregion
 
     #region Valid Parsing Tests

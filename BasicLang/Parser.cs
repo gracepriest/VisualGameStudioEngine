@@ -4618,9 +4618,50 @@ namespace BasicLang.Compiler
 
             // Generate suggestion based on expected token type
             string suggestion = GetSuggestionForExpectedToken(type);
+
+            // A ')' or ']' expected where the next token instead STARTS a new
+            // expression almost always means a separator (comma) was omitted between
+            // list items — e.g. Foo(1, 2 3). That is a far more useful hint than the
+            // generic "did you forget a closing parenthesis".
+            if ((type == TokenType.RightParen || type == TokenType.RightBracket)
+                && CanStartExpression(Peek()))
+            {
+                suggestion = "Did you forget a comma ',' between items?";
+            }
+
             string errorMsg = message + $" but found {Peek().Type}";
 
             throw new ParseException(errorMsg, Peek(), suggestion);
+        }
+
+        /// <summary>
+        /// True when the token can BEGIN an expression. Used to tell a missing
+        /// separator (comma) apart from a genuinely missing ')'/']' in list contexts.
+        /// Deliberately excludes prefix operators (-, Not) and '(' whose presence after
+        /// a complete expression is ambiguous, to avoid a misleading comma suggestion.
+        /// </summary>
+        private bool CanStartExpression(Token token)
+        {
+            switch (token.Type)
+            {
+                case TokenType.IntegerLiteral:
+                case TokenType.LongLiteral:
+                case TokenType.SingleLiteral:
+                case TokenType.DoubleLiteral:
+                case TokenType.StringLiteral:
+                case TokenType.InterpolatedStringLiteral:
+                case TokenType.CharLiteral:
+                case TokenType.BooleanLiteral:
+                case TokenType.Nothing:
+                case TokenType.Identifier:
+                case TokenType.New:
+                case TokenType.Me:
+                case TokenType.MyBase:
+                case TokenType.AddressOf:
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         /// <summary>
