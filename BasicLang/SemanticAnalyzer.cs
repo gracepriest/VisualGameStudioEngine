@@ -1834,11 +1834,51 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return type;
             }
 
+            // Cross-file project type (LSP path): a class/struct/interface defined in
+            // a sibling file lives in the ProjectSymbolTable, not in scope or the type
+            // manager. Consult it BEFORE the permissive .NET fallback so the type keeps
+            // its members (e.g. Player.Name : String) and member access does not degrade
+            // to Object. The CLI injects sibling classes into scope instead (see the
+            // scope branch above), so _projectSymbols is null there and this is a no-op.
+            var projectType = ResolveProjectSymbolType(name);
+            if (projectType != null)
+            {
+                return projectType;
+            }
+
             // Check if this could be a .NET type
             if (IsNetType(name))
             {
                 // Create a synthetic type for .NET types
                 return new TypeInfo(name, TypeKind.Class);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Look up a user-defined class/structure/interface by unqualified name across
+        /// every module in the project symbol table (the LSP cross-file channel).
+        /// Returns the member-bearing <see cref="TypeInfo"/>, or null when there is no
+        /// such project type. Mirrors the in-scope class branch of
+        /// <see cref="ResolveTypeName"/> for the channel the LSP populates, so cross-file
+        /// member access does not silently resolve to Object in the editor.
+        /// </summary>
+        private TypeInfo ResolveProjectSymbolType(string name)
+        {
+            if (_projectSymbols == null || string.IsNullOrEmpty(name))
+                return null;
+
+            foreach (var (_, symbol) in _projectSymbols.GetAllPublicSymbols())
+            {
+                if (symbol?.Type != null &&
+                    string.Equals(symbol.Name, name, StringComparison.OrdinalIgnoreCase) &&
+                    (symbol.Kind == SymbolKind.Class ||
+                     symbol.Kind == SymbolKind.Structure ||
+                     symbol.Kind == SymbolKind.Interface))
+                {
+                    return symbol.Type;
+                }
             }
 
             return null;

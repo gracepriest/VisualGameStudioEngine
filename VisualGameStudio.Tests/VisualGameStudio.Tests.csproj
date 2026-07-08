@@ -37,6 +37,8 @@
     <ProjectReference Include="..\VisualGameStudio.Core\VisualGameStudio.Core.csproj" />
     <ProjectReference Include="..\VisualGameStudio.Editor\VisualGameStudio.Editor.csproj" />
     <ProjectReference Include="..\VisualGameStudio.ProjectSystem\VisualGameStudio.ProjectSystem.csproj" />
+    <!-- Shell VMs (e.g. ErrorListViewModel) are unit-tested for their count/filter contract. -->
+    <ProjectReference Include="..\VisualGameStudio.Shell\VisualGameStudio.Shell.csproj" />
     <!-- Ships RaylibWrapper.dll next to the test host so in-process game builds
          resolve the engine wrapper exactly like the IDE/BasicLang.exe deployments
          (EngineDeployment probes the process base directory). -->

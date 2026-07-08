@@ -10,6 +10,10 @@
 
     <Application.Styles>
         <FluentTheme />
+        <!-- DataGrid ships in a separate package; its control theme MUST be included
+             explicitly or every DataGrid renders template-less (no headers/rows).
+             Without this the Error List and Problems panels show nothing. -->
+        <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
         <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
         <StyleInclude Source="avares://Dock.Avalonia/Themes/DockFluentTheme.axaml" />
         <StyleInclude Source="avares://VisualGameStudio/Resources/Styles/AppStyles.axaml" />

@@ -159,6 +159,41 @@ End Sub
     }
 
     // ------------------------------------------------------------------
+    // Cross-file member types must reach the DIAGNOSTICS path, not just
+    // completion: passing a sibling class's typed member to a typed
+    // parameter must not report a spurious conversion error.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Diagnostics_PassCrossFileClassMemberToTypedParameter_NoConversionError()
+    {
+        // Regression: `player.Name` (a String field on a sibling class) passed to a
+        // String parameter reported a false "cannot convert 'Object' to 'String'".
+        // Completion already resolves player.Name as String (CrossFileMemberCompletionTests);
+        // the SemanticAnalyzer diagnostics path must agree. It previously skipped the
+        // project symbol table in ResolveTypeName, degrading the cross-file class to a
+        // member-less shell whose .Name access fell back to Object.
+        WriteFile("Player.bas",
+            "Public Class Player\n" +
+            "    Public Name As String\n" +
+            "End Class\n");
+        var mainPath = WriteFile("Main.bas",
+            "Sub Main()\n" +
+            "    Dim player As Player\n" +
+            "    Greet(player.Name)\n" +
+            "End Sub\n" +
+            "\n" +
+            "Sub Greet(who As String)\n" +
+            "End Sub\n");
+
+        var state = OpenDocument(mainPath);
+
+        Assert.That(state.ProjectContext, Is.Not.Null, "expected an implicit sibling project");
+        Assert.That(Errors(state).Any(d => d.Message.Contains("convert")), Is.False,
+            "spurious conversion diagnostic on a cross-file class member: " + DumpDiagnostics(state));
+    }
+
+    // ------------------------------------------------------------------
     // Unresolvable imports must still be reported
     // ------------------------------------------------------------------
 
