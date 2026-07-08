@@ -3585,6 +3585,14 @@ public partial class CodeEditorControl : UserControl
             panel.Children.Add(popup);
     }
 
+    /// <summary>Removes a popup previously rooted by <see cref="RootPopup"/> (for
+    /// per-use popups that are recreated each time, so they do not accumulate).</summary>
+    private void UnrootPopup(Avalonia.Controls.Primitives.Popup popup)
+    {
+        if (this.Content is Avalonia.Controls.Panel panel)
+            panel.Children.Remove(popup);
+    }
+
     /// <summary>
     /// Ensures the shared tooltip popup exists and returns its Border child,
     /// whose content is swapped between error text and hover content.
@@ -4561,17 +4569,25 @@ public partial class CodeEditorControl : UserControl
         _colorPickerControl.ColorPicked += OnColorPicked;
         _colorPickerControl.Cancelled += OnColorPickerCancelled;
 
-        // Create the popup
+        // Create the popup. Anchor to the swatch within the TextView and root it in
+        // the visual tree (RootPopup) — an unrooted Popup can't resolve its
+        // PlacementTarget and falls to the bottom of the window.
         _colorPickerPopup = new Avalonia.Controls.Primitives.Popup
         {
             PlacementTarget = _textEditor.TextArea.TextView,
+            Placement = Avalonia.Controls.PlacementMode.AnchorAndGravity,
+            PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.TopLeft,
+            PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.BottomRight,
             Child = _colorPickerControl,
             IsLightDismissEnabled = true
         };
 
-        // Position below the swatch
+        // Position below the swatch (SwatchBounds is in TextView viewport coords).
         _colorPickerPopup.HorizontalOffset = e.SwatchBounds.X;
         _colorPickerPopup.VerticalOffset = e.SwatchBounds.Bottom + 4;
+
+        RootPopup(_colorPickerPopup);
+        var pickerPopup = _colorPickerPopup;
 
         // Close any previously open popup
         _colorPickerPopup.Closed += (_, _) =>
@@ -4582,6 +4598,7 @@ public partial class CodeEditorControl : UserControl
                 _colorPickerControl.Cancelled -= OnColorPickerCancelled;
             }
             _colorPickerControl = null;
+            UnrootPopup(pickerPopup);   // this popup is recreated per click
         };
 
         _colorPickerPopup.IsOpen = true;
