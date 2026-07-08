@@ -55,14 +55,16 @@ automatic; ship `BasicLang.ProjectTemplates.vstman` / `BasicLang.ItemTemplates.v
 register `[$RootKey$\TemplateEngine\Templates\...]` in the pkgdef. In a `.vstman`,
 `TemplateFileName` references the `.vstemplate` **inside** the zip, not the `.zip` name.
 
-**4. Template `<ProjectType>` — VERIFY before trusting either source.** VS only shows
-custom project types in New Project once the pkgdef project-factory + template-dir
-registration is present. Two records in this repo disagree on the value:
-- The old root changelog said the working templates used `<ProjectType>BasicLang</ProjectType>`.
-- `VSExtensionAgent/CLAUDE.md` says it must be `VisualBasic` (VS ignores unknown types).
-
-Check the actual `.vstemplate` files before relying on either. If templates don't appear:
-`devenv.exe /updateConfiguration`.
+**4. Template `<ProjectType>` is `VisualBasic`, NOT `BasicLang`.** VS ignores unknown
+project-type values in the New Project dialog, so the templates categorize under Visual
+Basic. This is settled: all 4 project + 3 item `.vstemplate` files and both `.vstman`
+manifests use `<ProjectType>VisualBasic</ProjectType>` + `<LanguageTag>visualbasic</LanguageTag>`.
+The `<ProjectType>BasicLang</ProjectType>` recorded in the old root changelog was a
+superseded v2.2.0 intermediate state that VS never surfaced. BasicLang identity is carried
+instead by the project-type **GUID** — `<ProjectTypeGuids>{95a8f3e1-1234-4567-8903-abcdef123456}</ProjectTypeGuids>`
+in each `Project.blproj` — plus the pkgdef project-factory / template-dir registration; the
+`<ProjectType>` tag only controls which category the template appears under. If templates
+still don't appear: `devenv.exe /updateConfiguration`.
 
 **5. Templates use `Microsoft.NET.Sdk`** with a `ProjectTypeGuids` + `<IsBasicLangProject>true</IsBasicLangProject>`
 marker and `<BasicLangCompile Include="**\*.bas" />` — not a custom `BasicLang.SDK` reference.
