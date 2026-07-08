@@ -4198,15 +4198,18 @@ public partial class CodeEditorControl : UserControl
     {
         if (_signatureHelpPopup == null || _textEditor == null) return;
 
-        // Position above the caret using the caret rectangle
+        // Position the popup just above the caret. caretRect is in TextView
+        // coordinates, so translate from the TextView (whose origin is right of the
+        // line-number gutter) into this control's space; the popup is anchored to
+        // this control's top-left with upward gravity (see EnsureSignatureHelpPopup).
         var caretRect = _textEditor.TextArea.Caret.CalculateCaretRectangle();
-        var screenPos = _textEditor.TextArea.TranslatePoint(
+        var caretPos = _textEditor.TextArea.TextView.TranslatePoint(
             new Point(caretRect.X, caretRect.Y), this);
 
-        if (screenPos.HasValue)
+        if (caretPos.HasValue)
         {
-            _signatureHelpPopup.HorizontalOffset = screenPos.Value.X;
-            _signatureHelpPopup.VerticalOffset = screenPos.Value.Y - 60;
+            _signatureHelpPopup.HorizontalOffset = caretPos.Value.X;
+            _signatureHelpPopup.VerticalOffset = caretPos.Value.Y - 4;
         }
 
         _signatureHelpPopup.IsOpen = true;
@@ -4297,7 +4300,15 @@ public partial class CodeEditorControl : UserControl
 
         _signatureHelpPopup = new Avalonia.Controls.Primitives.Popup
         {
-            PlacementTarget = _textEditor.TextArea,
+            // Anchor the popup's bottom-left to a point relative to THIS control's
+            // top-left (the caret, set in OpenSignatureHelpPopup) with upward gravity,
+            // so it sits just above the current line. The default PlacementMode.Bottom
+            // instead anchored at the BOTTOM of the full-height TextArea and then added
+            // the caret offset, dropping the popup to the bottom of the window.
+            PlacementTarget = this,
+            Placement = Avalonia.Controls.PlacementMode.AnchorAndGravity,
+            PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.TopLeft,
+            PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.TopRight,
             Child = border,
             IsLightDismissEnabled = true
         };
