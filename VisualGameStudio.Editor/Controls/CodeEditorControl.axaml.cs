@@ -3570,6 +3570,22 @@ public partial class CodeEditorControl : UserControl
     }
 
     /// <summary>
+    /// Roots a code-created popup in the editor's visual root (the top-level window),
+    /// mirroring AvaloniaEdit's CompletionWindowBase. Without a logical parent a Popup
+    /// cannot resolve its PlacementTarget-relative position and falls to the bottom of
+    /// the window regardless of Placement/offsets.
+    /// </summary>
+    private void RootPopup(Avalonia.Controls.Primitives.Popup popup)
+    {
+        // A code-created Popup must live in the visual tree to resolve its
+        // PlacementTarget; otherwise it falls to the bottom of the window regardless of
+        // Placement/offsets. Adding it to this control's root panel roots it — a Popup
+        // renders in its own host, not inline, so it does not affect layout.
+        if (this.Content is Avalonia.Controls.Panel panel && !panel.Children.Contains(popup))
+            panel.Children.Add(popup);
+    }
+
+    /// <summary>
     /// Ensures the shared tooltip popup exists and returns its Border child,
     /// whose content is swapped between error text and hover content.
     /// </summary>
@@ -3588,8 +3604,18 @@ public partial class CodeEditorControl : UserControl
             _errorTooltip = new Avalonia.Controls.Primitives.Popup
             {
                 Child = border,
-                PlacementTarget = _textEditor.TextArea
+                // Anchor to the hover point within the TextView (viewport coords from
+                // e.GetPosition(TextView)); AnchorAndGravity/TopLeft measures the offsets
+                // (set in ShowErrorTooltip/ShowHoverTooltip) from the TextView's top-left.
+                // The default PlacementMode.Bottom anchored at the TextArea's bottom edge,
+                // dropping the tooltip to the bottom of the window.
+                PlacementTarget = _textEditor.TextArea.TextView,
+                Placement = Avalonia.Controls.PlacementMode.AnchorAndGravity,
+                PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.TopLeft,
+                PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.BottomRight
             };
+
+            RootPopup(_errorTooltip);
         }
 
         return (Border)_errorTooltip.Child!;
@@ -4198,19 +4224,17 @@ public partial class CodeEditorControl : UserControl
     {
         if (_signatureHelpPopup == null || _textEditor == null) return;
 
-        // Position the popup just above the caret. caretRect is in TextView
-        // coordinates, so translate from the TextView (whose origin is right of the
-        // line-number gutter) into this control's space; the popup is anchored to
-        // this control's top-left with upward gravity (see EnsureSignatureHelpPopup).
+        // Anchor to the caret's visual position, matching AvaloniaEdit's
+        // CompletionWindow. CalculateCaretRectangle returns document coordinates, so
+        // subtract the TextView scroll offset to get the viewport point the popup
+        // (anchored to the TextView's top-left) is offset from. Bottom = line bottom,
+        // so the popup sits just under the current line.
+        var textView = _textEditor.TextArea.TextView;
         var caretRect = _textEditor.TextArea.Caret.CalculateCaretRectangle();
-        var caretPos = _textEditor.TextArea.TextView.TranslatePoint(
-            new Point(caretRect.X, caretRect.Y), this);
+        var caretPos = new Point(caretRect.X, caretRect.Bottom) - textView.ScrollOffset;
 
-        if (caretPos.HasValue)
-        {
-            _signatureHelpPopup.HorizontalOffset = caretPos.Value.X;
-            _signatureHelpPopup.VerticalOffset = caretPos.Value.Y - 4;
-        }
+        _signatureHelpPopup.HorizontalOffset = caretPos.X;
+        _signatureHelpPopup.VerticalOffset = caretPos.Y;
 
         _signatureHelpPopup.IsOpen = true;
     }
@@ -4300,18 +4324,20 @@ public partial class CodeEditorControl : UserControl
 
         _signatureHelpPopup = new Avalonia.Controls.Primitives.Popup
         {
-            // Anchor the popup's bottom-left to a point relative to THIS control's
-            // top-left (the caret, set in OpenSignatureHelpPopup) with upward gravity,
-            // so it sits just above the current line. The default PlacementMode.Bottom
-            // instead anchored at the BOTTOM of the full-height TextArea and then added
-            // the caret offset, dropping the popup to the bottom of the window.
-            PlacementTarget = this,
+            // Anchor to the caret's visual position within the TextView, matching how
+            // AvaloniaEdit's own CompletionWindow positions itself (offsets set in
+            // OpenSignatureHelpPopup). The default PlacementMode.Bottom instead anchored
+            // at the BOTTOM of the full-height TextArea and then added the caret offset,
+            // dropping the popup to the bottom of the window.
+            PlacementTarget = _textEditor.TextArea.TextView,
             Placement = Avalonia.Controls.PlacementMode.AnchorAndGravity,
             PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.TopLeft,
-            PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.TopRight,
+            PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.BottomRight,
             Child = border,
             IsLightDismissEnabled = true
         };
+
+        RootPopup(_signatureHelpPopup);
     }
 
     #endregion
