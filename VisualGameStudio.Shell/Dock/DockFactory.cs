@@ -402,6 +402,28 @@ public class DockFactory : Factory
         };
 
         base.InitLayout(layout);
+
+        // base.InitLayout wires Owner on every nested dockable but leaves their Factory null.
+        // Dock's drag/drop executes each move through sourceDockableOwner.Factory / targetDock.Factory,
+        // so a null Factory makes every drop a silent no-op — panels can't be moved or repositioned.
+        // Assign the factory across the whole tree so docking works.
+        WireFactory(layout);
+    }
+
+    /// <summary>
+    /// Sets <see cref="IDockable.Factory"/> to this factory on every dockable in the tree. Required
+    /// for drag/drop reposition to work (see <see cref="InitLayout"/>).
+    /// </summary>
+    private void WireFactory(IDockable dockable)
+    {
+        dockable.Factory = this;
+        if (dockable is IDock dock && dock.VisibleDockables != null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                WireFactory(child);
+            }
+        }
     }
 
     /// <summary>
