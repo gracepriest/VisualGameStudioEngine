@@ -92,33 +92,36 @@ public partial class CodeEditorDocumentView : UserControl
         }
     }
 
-    // Named handlers to allow unsubscribe (replaces lambdas)
-    private void OnToggleCommentRequestedHandler(object? s, EventArgs args) => MainEditor?.ToggleLineComment();
+    // Named handlers to allow unsubscribe (replaces lambdas).
+    //
+    // They route through LiveEditor, which is null unless THIS view is attached to the visual
+    // tree (i.e. it is the shown document tab). Dock can leave a leaked/hidden duplicate view of
+    // the same document subscribed to the view-model's edit events; without this guard a single
+    // command double-applies — once per view, each at its own stale caret. That was the root
+    // cause of Toggle Comment (and Duplicate/Move/Delete/Cut/Paste/Undo/Redo) hitting two lines.
+    private CodeEditorControl? LiveEditor =>
+        Avalonia.VisualTree.VisualExtensions.GetVisualRoot(this) != null ? MainEditor : null;
+
+    private void OnToggleCommentRequestedHandler(object? s, EventArgs args) => LiveEditor?.ToggleLineComment();
     private void OnToggleWhitespaceRequestedHandler(object? s, bool show)
     {
-        if (MainEditor != null)
-        {
-            // Set the whitespace state directly rather than toggling,
-            // so all open editors stay in sync with the ViewModel's state
-            MainEditor.SetWhitespaceVisible(show);
-        }
+        // Set the whitespace state directly (not toggling) so it tracks the view-model state.
+        LiveEditor?.SetWhitespaceVisible(show);
     }
     private void OnToggleColumnSelectionRequestedHandler(object? s, bool enabled)
     {
-        if (MainEditor != null)
-        {
-            MainEditor.IsColumnSelectionMode = enabled;
-        }
+        var editor = LiveEditor;
+        if (editor != null) editor.IsColumnSelectionMode = enabled;
     }
-    private void OnDuplicateLineRequestedHandler(object? s, EventArgs args) => MainEditor?.DuplicateLine();
-    private void OnMoveLineUpRequestedHandler(object? s, EventArgs args) => MainEditor?.MoveLineUp();
-    private void OnMoveLineDownRequestedHandler(object? s, EventArgs args) => MainEditor?.MoveLineDown();
-    private void OnDeleteLineRequestedHandler(object? s, EventArgs args) => MainEditor?.DeleteLine();
-    private void OnUndoRequestedHandler(object? s, EventArgs args) => MainEditor?.Undo();
-    private void OnRedoRequestedHandler(object? s, EventArgs args) => MainEditor?.Redo();
-    private void OnCutRequestedHandler(object? s, EventArgs args) => MainEditor?.Cut();
-    private void OnCopyRequestedHandler(object? s, EventArgs args) => MainEditor?.Copy();
-    private void OnPasteRequestedHandler(object? s, EventArgs args) => MainEditor?.Paste();
+    private void OnDuplicateLineRequestedHandler(object? s, EventArgs args) => LiveEditor?.DuplicateLine();
+    private void OnMoveLineUpRequestedHandler(object? s, EventArgs args) => LiveEditor?.MoveLineUp();
+    private void OnMoveLineDownRequestedHandler(object? s, EventArgs args) => LiveEditor?.MoveLineDown();
+    private void OnDeleteLineRequestedHandler(object? s, EventArgs args) => LiveEditor?.DeleteLine();
+    private void OnUndoRequestedHandler(object? s, EventArgs args) => LiveEditor?.Undo();
+    private void OnRedoRequestedHandler(object? s, EventArgs args) => LiveEditor?.Redo();
+    private void OnCutRequestedHandler(object? s, EventArgs args) => LiveEditor?.Cut();
+    private void OnCopyRequestedHandler(object? s, EventArgs args) => LiveEditor?.Copy();
+    private void OnPasteRequestedHandler(object? s, EventArgs args) => LiveEditor?.Paste();
 
     private void OnEditorGoToDefinition(object? s, EventArgs e) => _subscribedVm?.RequestGoToDefinition();
     private void OnEditorPeekDefinition(object? s, EventArgs e) => _subscribedVm?.RequestPeekDefinition();
