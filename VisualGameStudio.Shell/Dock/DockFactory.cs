@@ -633,8 +633,8 @@ public class DockFactory : Factory
 
     /// <summary>
     /// Recreates a previously-closed tool from the factory map and docks it into its home
-    /// <see cref="ToolDock"/> (falling back to the first tool dock in the tree). Returns the new
-    /// tool and its parent dock, or (null, null) if the tool is unknown or there's nowhere to put it.
+    /// <see cref="ToolDock"/> (rebuilding the home region if the user had closed it away). Returns
+    /// the new tool and its parent dock, or (null, null) if the tool id is unknown.
     /// </summary>
     private (IDockable?, IDock?) ReopenClosedTool(string toolId)
     {
@@ -642,44 +642,109 @@ public class DockFactory : Factory
         if (!GetToolFactoryMap().TryGetValue(toolId, out var make)) return (null, null);
 
         var host = FindHomeToolDock(toolId);
-        if (host == null) return (null, null);
-
         var tool = make();
         AddDockable(host, tool);
         return (tool, host);
     }
 
     /// <summary>
-    /// Finds the <see cref="ToolDock"/> a reopened tool should go into: its mapped home dock by Id,
-    /// or — if that dock no longer exists — the first tool dock anywhere in the tree.
+    /// Returns the <see cref="ToolDock"/> a reopened tool should go into: its mapped home dock if it
+    /// still exists, otherwise the home dock and its parent region are recreated. Repeatedly closing
+    /// panels empties and removes their ToolDocks — then their parent ProportionalDocks — so a reopen
+    /// has to rebuild the missing region, or panels "disappear and won't come back".
     /// </summary>
-    private IToolDock? FindHomeToolDock(string toolId)
+    private IToolDock FindHomeToolDock(string toolId)
     {
-        if (_rootDock == null) return null;
+        var homeId = _toolHomeDockId.TryGetValue(toolId, out var mapped) ? mapped : "BottomLeftTools";
 
-        if (_toolHomeDockId.TryGetValue(toolId, out var homeId) &&
-            FindDockableById(_rootDock, homeId) is IToolDock home)
-        {
-            return home;
-        }
+        if (FindDockableById(_rootDock!, homeId) is IToolDock existing)
+            return existing;
 
-        return FindFirstToolDock(_rootDock);
+        return homeId == "LeftTools"
+            ? CreateToolDockIn(EnsureLeftRegion(), homeId, Alignment.Left, insertFirst: false)
+            : CreateToolDockIn(EnsureBottomRegion(), homeId, Alignment.Bottom, insertFirst: homeId == "BottomLeftTools");
     }
 
-    private static IToolDock? FindFirstToolDock(IDockable dockable)
+    /// <summary>The single ProportionalDock directly under the root (the horizontal Left|Main split).</summary>
+    private ProportionalDock RootLayout()
     {
-        if (dockable is IToolDock toolDock) return toolDock;
-
-        if (dockable is IDock dock && dock.VisibleDockables != null)
+        if (_rootDock?.VisibleDockables != null)
         {
-            foreach (var child in dock.VisibleDockables)
-            {
-                var found = FindFirstToolDock(child);
-                if (found != null) return found;
-            }
+            foreach (var d in _rootDock.VisibleDockables)
+                if (d is ProportionalDock p)
+                    return p;
         }
+        throw new InvalidOperationException("Root layout ProportionalDock is missing.");
+    }
 
-        return null;
+    /// <summary>Returns the left sidebar container, recreating and re-attaching it to the root if it was removed.</summary>
+    private ProportionalDock EnsureLeftRegion()
+    {
+        if (FindDockableById(_rootDock!, "LeftDock") is ProportionalDock live)
+            return _leftDock = live;
+
+        var leftDock = new ProportionalDock
+        {
+            Id = "LeftDock",
+            Proportion = 0.2,
+            Orientation = Orientation.Vertical,
+            VisibleDockables = CreateList<IDockable>()
+        };
+        _leftDock = leftDock;
+
+        var rootLayout = RootLayout();
+        InsertDockable(rootLayout, leftDock, 0);
+        InsertDockable(rootLayout, new ProportionalDockSplitter(), 1);
+        return leftDock;
+    }
+
+    /// <summary>Returns the bottom panel container, recreating and re-attaching it to the main area if it was removed.</summary>
+    private ProportionalDock EnsureBottomRegion()
+    {
+        if (FindDockableById(_rootDock!, "BottomDock") is ProportionalDock live)
+            return _bottomDock = live;
+
+        var bottomDock = new ProportionalDock
+        {
+            Id = "BottomDock",
+            Proportion = 0.35,
+            Orientation = Orientation.Horizontal,
+            VisibleDockables = CreateList<IDockable>()
+        };
+        _bottomDock = bottomDock;
+
+        // MainArea always survives (its DocumentDock is non-collapsable). Append the bottom region.
+        var mainArea = FindDockableById(_rootDock!, "MainArea") as ProportionalDock ?? _mainArea!;
+        AddDockable(mainArea, new ProportionalDockSplitter());
+        AddDockable(mainArea, bottomDock);
+        return bottomDock;
+    }
+
+    /// <summary>Creates a fresh empty ToolDock with the given id and adds it into <paramref name="parent"/>.</summary>
+    private IToolDock CreateToolDockIn(ProportionalDock parent, string id, Alignment alignment, bool insertFirst)
+    {
+        var toolDock = new ToolDock
+        {
+            Id = id,
+            Alignment = alignment,
+            Proportion = alignment == Alignment.Bottom ? 0.5 : double.NaN,
+            GripMode = GripMode.Visible,
+            VisibleDockables = CreateList<IDockable>()
+        };
+
+        var hasSiblings = parent.VisibleDockables is { Count: > 0 };
+        if (insertFirst && hasSiblings)
+        {
+            InsertDockable(parent, toolDock, 0);
+            InsertDockable(parent, new ProportionalDockSplitter(), 1);
+        }
+        else
+        {
+            if (hasSiblings)
+                AddDockable(parent, new ProportionalDockSplitter());
+            AddDockable(parent, toolDock);
+        }
+        return toolDock;
     }
 
     private (IDockable?, IDock?) FindDockableWithParent(IDockable dockable, string id, IDock? parent)
