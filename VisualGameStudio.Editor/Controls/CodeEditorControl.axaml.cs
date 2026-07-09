@@ -2419,74 +2419,36 @@ public partial class CodeEditorControl : UserControl
     /// <summary>
     /// Toggles line comment on the current selection or line
     /// </summary>
-    public void ToggleLineComment()
+    /// <summary>
+    /// The inclusive line range covered by the current selection, or the caret line when there
+    /// is no selection. A selection that ends exactly at the start of a line does not pull in
+    /// that trailing line (matching CopyLineUp/MoveLine behavior).
+    /// </summary>
+    private (int startLine, int endLine) GetSelectedLineRange()
     {
-        if (_textEditor == null) return;
-
+        var document = _textEditor!.Document;
         var selection = _textEditor.TextArea.Selection;
-        var document = _textEditor.Document;
 
-        int startLine, endLine;
         if (selection.IsEmpty)
         {
-            startLine = endLine = _textEditor.TextArea.Caret.Line;
-        }
-        else
-        {
-            startLine = document.GetLineByOffset(selection.SurroundingSegment.Offset).LineNumber;
-            endLine = document.GetLineByOffset(selection.SurroundingSegment.EndOffset).LineNumber;
+            var caretLine = _textEditor.TextArea.Caret.Line;
+            return (caretLine, caretLine);
         }
 
-        // Check if all lines are commented
-        var allCommented = true;
-        for (var line = startLine; line <= endLine; line++)
-        {
-            var docLine = document.GetLineByNumber(line);
-            var lineText = document.GetText(docLine.Offset, docLine.Length).TrimStart();
-            if (!lineText.StartsWith("'") && !lineText.StartsWith("REM ", StringComparison.OrdinalIgnoreCase))
-            {
-                allCommented = false;
-                break;
-            }
-        }
+        var startLine = document.GetLineByOffset(selection.SurroundingSegment.Offset).LineNumber;
+        var endLine = document.GetLineByOffset(selection.SurroundingSegment.EndOffset).LineNumber;
+        var endLineStart = document.GetLineByNumber(endLine).Offset;
+        if (selection.SurroundingSegment.EndOffset == endLineStart && endLine > startLine)
+            endLine--;
 
-        // Toggle comments
-        document.BeginUpdate();
-        try
-        {
-            for (var line = startLine; line <= endLine; line++)
-            {
-                var docLine = document.GetLineByNumber(line);
-                var lineText = document.GetText(docLine.Offset, docLine.Length);
-                var trimmedText = lineText.TrimStart();
-                var leadingWhitespace = lineText.Substring(0, lineText.Length - trimmedText.Length);
+        return (startLine, endLine);
+    }
 
-                if (allCommented)
-                {
-                    // Uncomment
-                    if (trimmedText.StartsWith("' "))
-                    {
-                        document.Replace(docLine.Offset, docLine.Length, leadingWhitespace + trimmedText.Substring(2));
-                    }
-                    else if (trimmedText.StartsWith("'"))
-                    {
-                        document.Replace(docLine.Offset, docLine.Length, leadingWhitespace + trimmedText.Substring(1));
-                    }
-                }
-                else
-                {
-                    // Comment
-                    if (!string.IsNullOrWhiteSpace(lineText))
-                    {
-                        document.Replace(docLine.Offset, docLine.Length, leadingWhitespace + "' " + trimmedText);
-                    }
-                }
-            }
-        }
-        finally
-        {
-            document.EndUpdate();
-        }
+    public void ToggleLineComment()
+    {
+        if (_textEditor?.Document == null) return;
+        var (startLine, endLine) = GetSelectedLineRange();
+        LineEditOperations.ToggleLineComment(_textEditor.Document, startLine, endLine);
     }
 
     /// <summary>
@@ -2697,32 +2659,10 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void DeleteLine()
     {
-        if (_textEditor == null) return;
-
-        var document = _textEditor.Document;
-        var line = document.GetLineByNumber(_textEditor.TextArea.Caret.Line);
-
-        document.BeginUpdate();
-        try
-        {
-            if (line.LineNumber == document.LineCount)
-            {
-                // Last line - also remove the preceding newline if there is one
-                var startOffset = line.LineNumber > 1
-                    ? document.GetLineByNumber(line.LineNumber - 1).EndOffset
-                    : line.Offset;
-                document.Remove(startOffset, line.EndOffset - startOffset);
-            }
-            else
-            {
-                // Remove line including its newline
-                document.Remove(line.Offset, line.TotalLength);
-            }
-        }
-        finally
-        {
-            document.EndUpdate();
-        }
+        if (_textEditor?.Document == null) return;
+        // Delete every line the selection spans (or just the caret line when there is none).
+        var (startLine, endLine) = GetSelectedLineRange();
+        LineEditOperations.DeleteLineRange(_textEditor.Document, startLine, endLine);
     }
 
     /// <summary>

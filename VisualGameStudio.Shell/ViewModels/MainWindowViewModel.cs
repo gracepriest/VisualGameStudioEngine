@@ -941,6 +941,10 @@ public partial class MainWindowViewModel : ViewModelBase
         Breakpoints.SetProjectDirectory(e.Project.ProjectDirectory);
         await Breakpoints.LoadBreakpointsAsync();
 
+        // Load persisted bookmarks
+        _bookmarkService.SetProjectDirectory(e.Project.ProjectDirectory);
+        await _bookmarkService.LoadAsync();
+
         // Restore this project's saved window layout + open documents (VS Code style).
         await RestoreWorkspaceStateAsync(e.Project.ProjectDirectory);
     }

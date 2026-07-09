@@ -12,6 +12,15 @@ public interface IBookmarkService
     Bookmark? GetNextBookmark(string filePath, int currentLine);
     Bookmark? GetPreviousBookmark(string filePath, int currentLine);
     void UpdateBookmarkLine(string filePath, int oldLine, int newLine);
+
+    /// <summary>Sets the project whose bookmarks are persisted to disk; null disables persistence.</summary>
+    void SetProjectDirectory(string? path);
+
+    /// <summary>Loads persisted bookmarks for the current project, replacing the in-memory set.</summary>
+    Task LoadAsync();
+
+    /// <summary>Persists the current bookmarks for the project.</summary>
+    Task SaveAsync();
 }
 
 public class Bookmark

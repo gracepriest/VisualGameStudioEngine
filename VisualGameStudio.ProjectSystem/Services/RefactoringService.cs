@@ -214,8 +214,18 @@ public class RefactoringService : IRefactoringService
                 }
             }
 
+            // Determine which in-scope variables the selection uses that are declared OUTSIDE it
+            // (the enclosing method's parameters + locals declared before the selection). Pass
+            // them ByRef so both reads and writes flow correctly and the extracted method
+            // compiles — the previous behavior always emitted a parameterless Sub, which failed
+            // to compile whenever the selected code touched a local.
+            var (methodStart, _) = FindCurrentMethodBounds(lines, endLine);
+            var parameters = DetermineExtractedParameters(lines, methodStart, startLine, selectedCode);
+            var paramList = string.Join(", ", parameters.Select(p => $"ByRef {p.Name} As {p.Type}"));
+            var argList = string.Join(", ", parameters.Select(p => p.Name));
+
             // Create new method
-            var newMethod = $"\n{indent}Private Sub {methodName}()\n";
+            var newMethod = $"\n{indent}Private Sub {methodName}({paramList})\n";
             foreach (var line in selectedLines)
             {
                 newMethod += $"{indent}    {line.TrimStart()}\n";
@@ -232,7 +242,7 @@ public class RefactoringService : IRefactoringService
                     StartColumn = 1,
                     EndLine = endLine,
                     EndColumn = lines[endLine - 1].Length + 1,
-                    NewText = $"{indent}{methodName}()"
+                    NewText = $"{indent}{methodName}({argList})"
                 }
             };
 
@@ -264,6 +274,74 @@ public class RefactoringService : IRefactoringService
         {
             return new ExtractMethodResult { Success = false, ErrorMessage = ex.Message };
         }
+    }
+
+    /// <summary>
+    /// Determines the parameters an extracted method needs: the enclosing method's parameters
+    /// plus locals declared (Dim) before the selection, restricted to those the selected code
+    /// references. Returned in declaration order (parameters first). Types come from the
+    /// declarations, falling back to Object. Erring toward inclusion is safe — an unused ByRef
+    /// parameter still compiles, whereas a missing one does not.
+    /// </summary>
+    private List<(string Name, string Type)> DetermineExtractedParameters(
+        List<string> lines, int methodStart, int selectionStartLine, string selectedCode)
+    {
+        var candidates = new List<(string Name, string Type)>();
+
+        // Enclosing method's own parameters.
+        if (methodStart >= 0 && methodStart < lines.Count)
+        {
+            var sig = lines[methodStart];
+            var open = sig.IndexOf('(');
+            var close = sig.LastIndexOf(')');
+            if (open >= 0 && close > open)
+            {
+                foreach (var raw in ParseParameters(sig.Substring(open + 1, close - open - 1)))
+                {
+                    var (name, type) = ParseParamNameType(raw);
+                    if (name != null) candidates.Add((name, type));
+                }
+            }
+        }
+
+        // Locals declared before the selection start.
+        for (var i = methodStart + 1; i < selectionStartLine - 1 && i < lines.Count; i++)
+        {
+            var m = Regex.Match(lines[i], @"^\s*Dim\s+(\w+)(?:\s+As\s+([\w.]+))?", RegexOptions.IgnoreCase);
+            if (m.Success)
+            {
+                candidates.Add((m.Groups[1].Value, m.Groups[2].Success ? m.Groups[2].Value : "Object"));
+            }
+        }
+
+        var result = new List<(string Name, string Type)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in candidates)
+        {
+            if (seen.Contains(c.Name)) continue;
+            if (Regex.IsMatch(selectedCode, $@"\b{Regex.Escape(c.Name)}\b", RegexOptions.IgnoreCase))
+            {
+                result.Add(c);
+                seen.Add(c.Name);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Parses a "[ByVal|ByRef|Optional|ParamArray] name [As Type]" parameter into (name, type).</summary>
+    private (string? Name, string Type) ParseParamNameType(string param)
+    {
+        var cleaned = param.Trim();
+        while (true)
+        {
+            var stripped = Regex.Replace(cleaned, @"^(ByVal|ByRef|Optional|ParamArray)\s+", "", RegexOptions.IgnoreCase);
+            if (stripped == cleaned) break;
+            cleaned = stripped;
+        }
+
+        var m = Regex.Match(cleaned, @"^(\w+)(?:\s+As\s+([\w.]+))?", RegexOptions.IgnoreCase);
+        if (!m.Success) return (null, "Object");
+        return (m.Groups[1].Value, m.Groups[2].Success ? m.Groups[2].Value : "Object");
     }
 
     private int FindEndOfCurrentMethod(List<string> lines, int currentLine)

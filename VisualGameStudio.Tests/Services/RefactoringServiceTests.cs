@@ -229,6 +229,41 @@ End Sub";
         Assert.That(result, Is.Not.Null);
     }
 
+    [Test]
+    public async Task ExtractMethodAsync_UsesOuterLocal_PassesItByRef()
+    {
+        // x is declared before the selection and used inside it, so the extracted method must
+        // take it ByRef (previously it emitted a parameterless Sub that wouldn't compile).
+        var content = "Sub Main()\n    Dim x As Integer\n    x = 10\n    x = x + 5\n    PrintLine(x)\nEnd Sub";
+        _fileServiceMock.Setup(f => f.ReadFileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(content);
+
+        var result = await _service.ExtractMethodAsync("test.bas", 3, 1, 4, 15, "Compute");
+
+        Assert.That(result.Success, Is.True);
+        var newTexts = result.FileEdit!.Edits.Select(e => e.NewText).ToList();
+        Assert.That(newTexts.Any(t => t.Contains("Private Sub Compute(ByRef x As Integer)")), Is.True,
+            "extracted method should take the outer local x ByRef; got: " + string.Join(" | ", newTexts));
+        Assert.That(newTexts.Any(t => t.Contains("Compute(x)")), Is.True,
+            "call site should pass x as the argument; got: " + string.Join(" | ", newTexts));
+    }
+
+    [Test]
+    public async Task ExtractMethodAsync_SelectionDeclaresItsOwnLocals_IsParameterless()
+    {
+        // y is declared inside the selection, so it stays local and must NOT become a parameter.
+        var content = "Sub Main()\n    Dim y As Integer\n    y = 5\n    PrintLine(y)\nEnd Sub";
+        _fileServiceMock.Setup(f => f.ReadFileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(content);
+
+        var result = await _service.ExtractMethodAsync("test.bas", 2, 1, 4, 15, "Compute");
+
+        Assert.That(result.Success, Is.True);
+        var newTexts = result.FileEdit!.Edits.Select(e => e.NewText).ToList();
+        Assert.That(newTexts.Any(t => t.Contains("Private Sub Compute()")), Is.True,
+            "no outer variables are used, so the method should be parameterless; got: " + string.Join(" | ", newTexts));
+    }
+
     #endregion
 
     #region GetSurroundWithOptionsAsync Tests
