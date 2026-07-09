@@ -67,11 +67,19 @@ public partial class App : Application
             };
             desktop.MainWindow = MainWindow;
 
-            // Force a final per-project layout/session save on exit (VS Code's shutdown flush).
+            // Force a final per-project layout/session save on exit (VS Code's shutdown flush),
+            // then dispose the DI container so singleton services run their teardown.
             desktop.ShutdownRequested += (s, e) =>
             {
                 try { mainViewModel.FlushWorkspaceStateForShutdown(); }
                 catch (Exception ex) { LogCrash("SHUTDOWN_SAVE", ex); }
+
+                // Disposing the container invokes LanguageService.Dispose()/DebugService.Dispose(),
+                // which Kill the spawned `BasicLang --lsp` and debug-adapter processes. Without this
+                // the language server is orphaned on every exit and copies pile up, locking
+                // IDE/BasicLang.dll. Nothing else stops those processes.
+                try { (Services as IDisposable)?.Dispose(); }
+                catch (Exception ex) { LogCrash("SHUTDOWN_DISPOSE", ex); }
             };
 
             // Auto-load TestProject for debugging
