@@ -176,9 +176,16 @@ public class InlineColorRenderer : IBackgroundRenderer
             var pos = visualLine.GetVisualPosition(charIndex, VisualYPosition.TextTop);
             var lineHeight = visualLine.Height;
 
+            // GetVisualPosition returns document coordinates, but the Selection layer paints in
+            // viewport space with no scroll transform — so subtract ScrollOffset (as the sibling
+            // ExecutionLineRenderer does). Without this the swatch drifts away from its color as
+            // the view scrolls, and click hit-testing (which compares against viewport pointer
+            // coordinates) misses the swatch. The stored Bounds are therefore viewport-space too.
+            var scrollOffset = textView.ScrollOffset;
+
             // Center the swatch vertically within the line
-            double swatchX = pos.X + SwatchMarginLeft;
-            double swatchY = pos.Y + (lineHeight - SwatchSize) / 2;
+            double swatchX = pos.X + SwatchMarginLeft - scrollOffset.X;
+            double swatchY = pos.Y + (lineHeight - SwatchSize) / 2 - scrollOffset.Y;
 
             var swatchRect = new Rect(swatchX, swatchY, SwatchSize, SwatchSize);
 

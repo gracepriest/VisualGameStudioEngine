@@ -68,7 +68,10 @@ public class InlayHintRenderer : IBackgroundRenderer
                     var charIndex = offset - visualLine.FirstDocumentLine.Offset;
                     if (charIndex < 0) charIndex = 0;
 
-                    var pos = visualLine.GetVisualPosition(charIndex, VisualYPosition.TextTop);
+                    // Convert document coords to viewport space (the Selection layer has no scroll
+                    // transform); without this the hint drifts from its anchor as the view scrolls
+                    // — same root cause as the InlineColorRenderer swatch drift.
+                    var pos = visualLine.GetVisualPosition(charIndex, VisualYPosition.TextTop) - textView.ScrollOffset;
 
                     // Draw background
                     var formattedText = new FormattedText(
