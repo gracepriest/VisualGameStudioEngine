@@ -178,12 +178,12 @@
       </MenuItem>
 
       <MenuItem Header="_Edit">
-        <MenuItem Header="_Undo" InputGesture="Ctrl+Z"/>
-        <MenuItem Header="_Redo" InputGesture="Ctrl+Y"/>
+        <MenuItem Header="_Undo" Command="{Binding UndoCommand}" InputGesture="Ctrl+Z"/>
+        <MenuItem Header="_Redo" Command="{Binding RedoCommand}" InputGesture="Ctrl+Y"/>
         <Separator/>
-        <MenuItem Header="Cu_t" InputGesture="Ctrl+X"/>
-        <MenuItem Header="_Copy" InputGesture="Ctrl+C"/>
-        <MenuItem Header="_Paste" InputGesture="Ctrl+V"/>
+        <MenuItem Header="Cu_t" Command="{Binding CutCommand}" InputGesture="Ctrl+X"/>
+        <MenuItem Header="_Copy" Command="{Binding CopyCommand}" InputGesture="Ctrl+C"/>
+        <MenuItem Header="_Paste" Command="{Binding PasteCommand}" InputGesture="Ctrl+V"/>
         <Separator/>
         <MenuItem Header="_Find..." Command="{Binding FindCommand}" InputGesture="Ctrl+F"/>
         <MenuItem Header="_Replace..." Command="{Binding ReplaceCommand}" InputGesture="Ctrl+H"/>
@@ -192,16 +192,22 @@
         <MenuItem Header="_Go to Definition" Command="{Binding GoToDefinitionCommand}" InputGesture="F12"/>
         <MenuItem Header="Go to _Implementation" Command="{Binding GoToImplementationCommand}" InputGesture="Ctrl+F12"/>
         <MenuItem Header="Find All _References" Command="{Binding FindReferencesCommand}" InputGesture="Shift+F12"/>
-        <MenuItem Header="_Rename Symbol..." Command="{Binding RenameSymbolCommand}" InputGesture="Ctrl+R"/>
-        <MenuItem Header="_Extract Method..." Command="{Binding ExtractMethodCommand}" InputGesture="Ctrl+Shift+M"/>
-        <MenuItem Header="_Inline Method..." Command="{Binding InlineMethodCommand}" InputGesture="Ctrl+Shift+I"/>
-        <MenuItem Header="Introduce _Variable..." Command="{Binding IntroduceVariableCommand}" InputGesture="Ctrl+Shift+V"/>
-        <MenuItem Header="Change _Signature..." Command="{Binding ChangeSignatureCommand}" InputGesture="Ctrl+Shift+-"/>
-        <MenuItem Header="_Encapsulate Field..." Command="{Binding EncapsulateFieldCommand}" InputGesture="Ctrl+Shift+E"/>
-        <MenuItem Header="_Move Type to File..." Command="{Binding MoveTypeToFileCommand}" InputGesture="Ctrl+Shift+T"/>
-        <MenuItem Header="E_xtract Interface..." Command="{Binding ExtractInterfaceCommand}" InputGesture="Ctrl+Shift+X"/>
-        <MenuItem Header="_Generate Constructor..." Command="{Binding GenerateConstructorCommand}" InputGesture="Ctrl+Shift+G"/>
-        <MenuItem Header="_Implement Interface..." Command="{Binding ImplementInterfaceCommand}" InputGesture="Ctrl+."/>
+        <Separator/>
+        <MenuItem Header="Ref_actor">
+          <MenuItem Header="_Rename Symbol..." Command="{Binding RenameSymbolCommand}" InputGesture="Ctrl+R"/>
+          <MenuItem Header="_Extract Method..." Command="{Binding ExtractMethodCommand}" InputGesture="Ctrl+Shift+M"/>
+          <MenuItem Header="_Inline Method..." Command="{Binding InlineMethodCommand}" InputGesture="Ctrl+Shift+I"/>
+          <MenuItem Header="Introduce _Variable..." Command="{Binding IntroduceVariableCommand}" InputGesture="Ctrl+Shift+V"/>
+          <MenuItem Header="Change _Signature..." Command="{Binding ChangeSignatureCommand}" InputGesture="Ctrl+Shift+-"/>
+          <Separator/>
+          <MenuItem Header="_Type &amp; Class Refactors">
+            <MenuItem Header="_Encapsulate Field..." Command="{Binding EncapsulateFieldCommand}" InputGesture="Ctrl+Shift+E"/>
+            <MenuItem Header="_Move Type to File..." Command="{Binding MoveTypeToFileCommand}" InputGesture="Ctrl+Shift+T"/>
+            <MenuItem Header="E_xtract Interface..." Command="{Binding ExtractInterfaceCommand}" InputGesture="Ctrl+Shift+X"/>
+            <MenuItem Header="_Generate Constructor..." Command="{Binding GenerateConstructorCommand}" InputGesture="Ctrl+Shift+G"/>
+            <MenuItem Header="_Implement Interface..." Command="{Binding ImplementInterfaceCommand}" InputGesture="Ctrl+."/>
+          </MenuItem>
+        </MenuItem>
         <Separator/>
         <MenuItem Header="Go to _Line..." Command="{Binding GoToLineCommand}" InputGesture="Ctrl+G"/>
         <MenuItem Header="Go to _Symbol..." Command="{Binding GoToSymbolCommand}" InputGesture="Ctrl+T"/>

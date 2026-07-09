@@ -4556,6 +4556,49 @@ public partial class MainWindowViewModel : ViewModelBase
 
     #endregion
 
+    #region Clipboard and History
+
+    // These forward to the active code editor. AvaloniaEdit already handles the raw
+    // keystrokes when the editor is focused; these commands make the Edit-menu items
+    // (and any other command consumers) actually do something on click.
+
+    [RelayCommand]
+    private void Undo()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        activeDoc?.RequestUndo();
+    }
+
+    [RelayCommand]
+    private void Redo()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        activeDoc?.RequestRedo();
+    }
+
+    [RelayCommand]
+    private void Cut()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        activeDoc?.RequestCut();
+    }
+
+    [RelayCommand]
+    private void Copy()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        activeDoc?.RequestCopy();
+    }
+
+    [RelayCommand]
+    private void Paste()
+    {
+        var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
+        activeDoc?.RequestPaste();
+    }
+
+    #endregion
+
     #region Line Operations
 
     [RelayCommand]

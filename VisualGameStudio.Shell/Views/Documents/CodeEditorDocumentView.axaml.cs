@@ -39,6 +39,11 @@ public partial class CodeEditorDocumentView : UserControl
         vm.MoveLineUpRequested -= OnMoveLineUpRequestedHandler;
         vm.MoveLineDownRequested -= OnMoveLineDownRequestedHandler;
         vm.DeleteLineRequested -= OnDeleteLineRequestedHandler;
+        vm.UndoRequested -= OnUndoRequestedHandler;
+        vm.RedoRequested -= OnRedoRequestedHandler;
+        vm.CutRequested -= OnCutRequestedHandler;
+        vm.CopyRequested -= OnCopyRequestedHandler;
+        vm.PasteRequested -= OnPasteRequestedHandler;
         vm.GetSelectionInfo = null;
         vm.DiagnosticsUpdated -= OnDiagnosticsUpdated;
         vm.CodeLensUpdated -= OnCodeLensUpdated;
@@ -109,6 +114,11 @@ public partial class CodeEditorDocumentView : UserControl
     private void OnMoveLineUpRequestedHandler(object? s, EventArgs args) => MainEditor?.MoveLineUp();
     private void OnMoveLineDownRequestedHandler(object? s, EventArgs args) => MainEditor?.MoveLineDown();
     private void OnDeleteLineRequestedHandler(object? s, EventArgs args) => MainEditor?.DeleteLine();
+    private void OnUndoRequestedHandler(object? s, EventArgs args) => MainEditor?.Undo();
+    private void OnRedoRequestedHandler(object? s, EventArgs args) => MainEditor?.Redo();
+    private void OnCutRequestedHandler(object? s, EventArgs args) => MainEditor?.Cut();
+    private void OnCopyRequestedHandler(object? s, EventArgs args) => MainEditor?.Copy();
+    private void OnPasteRequestedHandler(object? s, EventArgs args) => MainEditor?.Paste();
 
     private void OnEditorGoToDefinition(object? s, EventArgs e) => _subscribedVm?.RequestGoToDefinition();
     private void OnEditorPeekDefinition(object? s, EventArgs e) => _subscribedVm?.RequestPeekDefinition();
@@ -254,6 +264,11 @@ public partial class CodeEditorDocumentView : UserControl
             vm.MoveLineUpRequested += OnMoveLineUpRequestedHandler;
             vm.MoveLineDownRequested += OnMoveLineDownRequestedHandler;
             vm.DeleteLineRequested += OnDeleteLineRequestedHandler;
+            vm.UndoRequested += OnUndoRequestedHandler;
+            vm.RedoRequested += OnRedoRequestedHandler;
+            vm.CutRequested += OnCutRequestedHandler;
+            vm.CopyRequested += OnCopyRequestedHandler;
+            vm.PasteRequested += OnPasteRequestedHandler;
 
             // Wire up selection info callback for extract method
             vm.GetSelectionInfo = () =>

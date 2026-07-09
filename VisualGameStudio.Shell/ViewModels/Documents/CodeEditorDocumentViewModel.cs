@@ -83,6 +83,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public event EventHandler? MoveLineUpRequested;
     public event EventHandler? MoveLineDownRequested;
     public event EventHandler? DeleteLineRequested;
+    public event EventHandler? UndoRequested;
+    public event EventHandler? RedoRequested;
+    public event EventHandler? CutRequested;
+    public event EventHandler? CopyRequested;
+    public event EventHandler? PasteRequested;
     public event EventHandler? RenameSymbolRequested;
     public event EventHandler? ExtractMethodRequested;
     public event EventHandler? InlineMethodRequested;
@@ -276,6 +281,31 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void RequestDeleteLine()
     {
         DeleteLineRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestUndo()
+    {
+        UndoRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestRedo()
+    {
+        RedoRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestCut()
+    {
+        CutRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestCopy()
+    {
+        CopyRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestPaste()
+    {
+        PasteRequested?.Invoke(this, EventArgs.Empty);
     }
 
     public void RequestRenameSymbol()
