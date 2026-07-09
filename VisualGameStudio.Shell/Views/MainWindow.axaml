@@ -74,6 +74,8 @@
     <KeyBinding Gesture="Ctrl+P" Command="{Binding OpenQuickOpenCommand}"/>
     <!-- Zen Mode -->
     <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding ToggleZenModeCommand}"/>
+    <!-- Full Screen -->
+    <KeyBinding Gesture="Shift+Alt+Enter" Command="{Binding ToggleFullScreenCommand}"/>
     <!-- Show Whitespace -->
     <KeyBinding Gesture="Ctrl+Shift+W" Command="{Binding ToggleWhitespaceCommand}"/>
     <!-- Column Selection Mode -->
@@ -233,44 +235,59 @@
       </MenuItem>
 
       <MenuItem Header="_View">
+        <!-- Navigate -->
         <MenuItem Header="_Command Palette..." Command="{Binding OpenCommandPaletteCommand}" InputGesture="Ctrl+Shift+P"/>
         <MenuItem Header="_Quick Open..." Command="{Binding OpenQuickOpenCommand}" InputGesture="Ctrl+P"/>
         <Separator/>
+        <!-- Tool windows -->
         <MenuItem Header="_Solution Explorer" Command="{Binding ShowSolutionExplorerCommand}"/>
-        <MenuItem Header="_Output" Command="{Binding ShowOutputCommand}"/>
-        <MenuItem Header="_Error List" Command="{Binding ShowErrorListCommand}"/>
-        <MenuItem Header="_Next Error" Command="{Binding GoToNextErrorCommand}" InputGesture="F8"/>
-        <MenuItem Header="Pre_vious Error" Command="{Binding GoToPreviousErrorCommand}" InputGesture="Shift+F8"/>
+        <MenuItem Header="_Output" Command="{Binding ShowOutputCommand}" InputGesture="Ctrl+Alt+O"/>
+        <MenuItem Header="_Error List" Command="{Binding ShowErrorListCommand}" InputGesture="Ctrl+Alt+E"/>
         <MenuItem Header="_Terminal" Command="{Binding ShowTerminalCommand}" InputGesture="Ctrl+OemTilde"/>
         <MenuItem Header="New Ter_minal" Command="{Binding CreateNewTerminalCommand}" InputGesture="Ctrl+Shift+OemTilde"/>
         <MenuItem Header="Find _Results" Command="{Binding ShowFindResultsCommand}"/>
         <Separator/>
-        <MenuItem Header="Focus Solution E_xplorer" Command="{Binding FocusSolutionExplorerCommand}" InputGesture="Ctrl+1"/>
-        <MenuItem Header="Focus _Editor" Command="{Binding FocusEditorCommand}" InputGesture="Ctrl+2"/>
-        <MenuItem Header="Focus _Output" Command="{Binding FocusOutputCommand}" InputGesture="Ctrl+3"/>
-        <MenuItem Header="Focus Ter_minal" Command="{Binding FocusTerminalCommand}" InputGesture="Ctrl+4"/>
-        <MenuItem Header="Focus Error _List" Command="{Binding FocusErrorListCommand}" InputGesture="Ctrl+5"/>
-        <MenuItem Header="Focus _Variables" Command="{Binding FocusVariablesCommand}" InputGesture="Ctrl+0"/>
+        <!-- Error navigation -->
+        <MenuItem Header="_Next Error" Command="{Binding GoToNextErrorCommand}" InputGesture="F8"/>
+        <MenuItem Header="Pre_vious Error" Command="{Binding GoToPreviousErrorCommand}" InputGesture="Shift+F8"/>
         <Separator/>
-        <MenuItem Header="Show _Whitespace" Command="{Binding ToggleWhitespaceCommand}" InputGesture="Ctrl+Shift+W">
-          <MenuItem.Icon>
-            <CheckBox IsChecked="{Binding ShowWhitespace}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
-          </MenuItem.Icon>
+        <!-- Focus (keyboard panel navigation) -->
+        <MenuItem Header="_Focus">
+          <MenuItem Header="_Solution Explorer" Command="{Binding FocusSolutionExplorerCommand}" InputGesture="Ctrl+1"/>
+          <MenuItem Header="_Editor" Command="{Binding FocusEditorCommand}" InputGesture="Ctrl+2"/>
+          <MenuItem Header="_Output" Command="{Binding FocusOutputCommand}" InputGesture="Ctrl+3"/>
+          <MenuItem Header="_Terminal" Command="{Binding FocusTerminalCommand}" InputGesture="Ctrl+4"/>
+          <MenuItem Header="Error _List" Command="{Binding FocusErrorListCommand}" InputGesture="Ctrl+5"/>
+          <MenuItem Header="_Variables" Command="{Binding FocusVariablesCommand}" InputGesture="Ctrl+0"/>
         </MenuItem>
-        <MenuItem Header="Column Se_lection Mode" Command="{Binding ToggleColumnSelectionModeCommand}" InputGesture="Alt+Shift+Insert">
-          <MenuItem.Icon>
-            <CheckBox IsChecked="{Binding IsColumnSelectionMode}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
-          </MenuItem.Icon>
+        <!-- Appearance -->
+        <MenuItem Header="_Appearance">
+          <MenuItem Header="Show _Whitespace" Command="{Binding ToggleWhitespaceCommand}" InputGesture="Ctrl+Shift+W">
+            <MenuItem.Icon>
+              <CheckBox IsChecked="{Binding ShowWhitespace}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
+            </MenuItem.Icon>
+          </MenuItem>
+          <MenuItem Header="Column Se_lection Mode" Command="{Binding ToggleColumnSelectionModeCommand}" InputGesture="Alt+Shift+Insert">
+            <MenuItem.Icon>
+              <CheckBox IsChecked="{Binding IsColumnSelectionMode}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
+            </MenuItem.Icon>
+          </MenuItem>
+          <Separator/>
+          <MenuItem Header="_Maximize Panel" Command="{Binding ToggleBottomPanelMaximizeCommand}">
+            <MenuItem.Icon>
+              <CheckBox IsChecked="{Binding IsBottomPanelMaximized}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
+            </MenuItem.Icon>
+          </MenuItem>
+          <MenuItem Header="_Zen Mode" Command="{Binding ToggleZenModeCommand}" InputGesture="Ctrl+Shift+Z"/>
+          <MenuItem Header="_Full Screen" Command="{Binding ToggleFullScreenCommand}" InputGesture="Shift+Alt+Enter">
+            <MenuItem.Icon>
+              <CheckBox IsChecked="{Binding IsFullScreen}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
+            </MenuItem.Icon>
+          </MenuItem>
         </MenuItem>
-        <MenuItem Header="_Maximize Panel" Command="{Binding ToggleBottomPanelMaximizeCommand}">
-          <MenuItem.Icon>
-            <CheckBox IsChecked="{Binding IsBottomPanelMaximized}" IsHitTestVisible="False" BorderThickness="0" Padding="0" MinWidth="0"/>
-          </MenuItem.Icon>
-        </MenuItem>
-        <MenuItem Header="_Zen Mode" Command="{Binding ToggleZenModeCommand}" InputGesture="Ctrl+Shift+Z"/>
-        <MenuItem Header="_Full Screen" InputGesture="Shift+Alt+Enter"/>
         <Separator/>
-        <MenuItem Header="_Reset Layout" Command="{Binding ResetLayoutCommand}"
+        <!-- Layout -->
+        <MenuItem Header="Reset _Layout" Command="{Binding ResetLayoutCommand}"
                   ToolTip.Tip="Restore the default panel layout for this project (keeps open files)"/>
       </MenuItem>
 

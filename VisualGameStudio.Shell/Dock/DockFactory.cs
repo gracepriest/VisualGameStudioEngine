@@ -191,6 +191,7 @@ public class DockFactory : Factory
             VisibleDockables = CreateList<IDockable>(
                 new ToolDock
                 {
+                    Id = "LeftTools",
                     VisibleDockables = CreateList<IDockable>(solutionExplorerTool, gitChangesTool, gitBranchesTool, gitStashTool, gitBlameTool, timelineTool, documentOutlineTool, bookmarksTool, extensionsTool),
                     ActiveDockable = solutionExplorerTool,
                     Alignment = Alignment.Left,
@@ -551,21 +552,112 @@ public class DockFactory : Factory
             .Where(vm => vm != null)!;
     }
 
+    /// <summary>
+    /// Maps each tool's stable Id to the Id of the <see cref="ToolDock"/> it lives in by default.
+    /// Used to re-dock a tool that the user closed, so a View/Debug menu command can bring it back
+    /// to a sensible place (mirrors the grouping in <see cref="CreateLayout"/>).
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> _toolHomeDockId = new Dictionary<string, string>
+    {
+        // Left sidebar
+        ["SolutionExplorer"] = "LeftTools",
+        ["GitChanges"] = "LeftTools",
+        ["GitBranches"] = "LeftTools",
+        ["GitStash"] = "LeftTools",
+        ["GitBlame"] = "LeftTools",
+        ["Timeline"] = "LeftTools",
+        ["DocumentOutline"] = "LeftTools",
+        ["Bookmarks"] = "LeftTools",
+        ["Extensions"] = "LeftTools",
+        // Bottom-left group (general tools)
+        ["Output"] = "BottomLeftTools",
+        ["ErrorList"] = "BottomLeftTools",
+        ["Problems"] = "BottomLeftTools",
+        ["Terminal"] = "BottomLeftTools",
+        ["FindInFiles"] = "BottomLeftTools",
+        ["CallHierarchy"] = "BottomLeftTools",
+        // Bottom-right group (debug tools)
+        ["CallStack"] = "BottomRightTools",
+        ["Variables"] = "BottomRightTools",
+        ["Breakpoints"] = "BottomRightTools",
+        ["Watch"] = "BottomRightTools",
+        ["ImmediateWindow"] = "BottomRightTools",
+        ["DebugConsole"] = "BottomRightTools",
+        ["Threads"] = "BottomRightTools",
+    };
+
     public void ActivateTool(string toolId)
     {
         if (_rootDock == null) return;
 
         var (tool, parent) = FindDockableWithParent(_rootDock, toolId, null);
-        if (tool != null)
+
+        // If the tool isn't in the layout, the user closed it — recreate and re-dock it so the
+        // menu command actually reopens the panel instead of silently doing nothing.
+        if (tool == null)
         {
-            // Set as active in parent dock first (this switches the tab)
-            if (parent is IDock parentDock)
-            {
-                parentDock.ActiveDockable = tool;
-            }
-            SetActiveDockable(tool);
-            SetFocusedDockable(_rootDock, tool);
+            (tool, parent) = ReopenClosedTool(toolId);
+            if (tool == null) return;
         }
+
+        // Set as active in parent dock first (this switches the tab)
+        if (parent is IDock parentDock)
+        {
+            parentDock.ActiveDockable = tool;
+        }
+        SetActiveDockable(tool);
+        SetFocusedDockable(_rootDock, tool);
+    }
+
+    /// <summary>
+    /// Recreates a previously-closed tool from the factory map and docks it into its home
+    /// <see cref="ToolDock"/> (falling back to the first tool dock in the tree). Returns the new
+    /// tool and its parent dock, or (null, null) if the tool is unknown or there's nowhere to put it.
+    /// </summary>
+    private (IDockable?, IDock?) ReopenClosedTool(string toolId)
+    {
+        if (_rootDock == null) return (null, null);
+        if (!GetToolFactoryMap().TryGetValue(toolId, out var make)) return (null, null);
+
+        var host = FindHomeToolDock(toolId);
+        if (host == null) return (null, null);
+
+        var tool = make();
+        AddDockable(host, tool);
+        return (tool, host);
+    }
+
+    /// <summary>
+    /// Finds the <see cref="ToolDock"/> a reopened tool should go into: its mapped home dock by Id,
+    /// or — if that dock no longer exists — the first tool dock anywhere in the tree.
+    /// </summary>
+    private IToolDock? FindHomeToolDock(string toolId)
+    {
+        if (_rootDock == null) return null;
+
+        if (_toolHomeDockId.TryGetValue(toolId, out var homeId) &&
+            FindDockableById(_rootDock, homeId) is IToolDock home)
+        {
+            return home;
+        }
+
+        return FindFirstToolDock(_rootDock);
+    }
+
+    private static IToolDock? FindFirstToolDock(IDockable dockable)
+    {
+        if (dockable is IToolDock toolDock) return toolDock;
+
+        if (dockable is IDock dock && dock.VisibleDockables != null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                var found = FindFirstToolDock(child);
+                if (found != null) return found;
+            }
+        }
+
+        return null;
     }
 
     private (IDockable?, IDock?) FindDockableWithParent(IDockable dockable, string id, IDock? parent)

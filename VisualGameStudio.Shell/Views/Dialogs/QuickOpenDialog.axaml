@@ -18,13 +18,33 @@
     <DockPanel>
       <!-- Search Box -->
       <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12" CornerRadius="8,8,0,0">
-        <TextBox x:Name="SearchBox"
-                 Text="{Binding SearchText, Mode=TwoWay}"
-                 Watermark="{Binding Placeholder}"
-                 FontSize="16"
-                 BorderThickness="0"
-                 Background="Transparent"
-                 Foreground="#CCCCCC"/>
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBox Grid.Column="0"
+                   x:Name="SearchBox"
+                   Text="{Binding SearchText, Mode=TwoWay}"
+                   Watermark="{Binding Placeholder}"
+                   FontSize="16"
+                   BorderThickness="0"
+                   Background="Transparent"
+                   Foreground="#CCCCCC"/>
+          <Button Grid.Column="1"
+                  Command="{Binding CancelCommand}"
+                  Background="Transparent"
+                  BorderThickness="0"
+                  Padding="6,2"
+                  Margin="8,0,0,0"
+                  VerticalAlignment="Center"
+                  Foreground="#808080"
+                  ToolTip.Tip="Close (Esc)"
+                  AutomationProperties.Name="Close Quick Open">
+            <Button.Styles>
+              <Style Selector="Button:pointerover /template/ ContentPresenter">
+                <Setter Property="Background" Value="#3C3C3C"/>
+              </Style>
+            </Button.Styles>
+            <TextBlock Text="✕" FontSize="14"/>
+          </Button>
+        </Grid>
       </Border>
 
       <!-- Mode indicator -->

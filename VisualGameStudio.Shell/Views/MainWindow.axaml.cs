@@ -41,6 +41,11 @@ public partial class MainWindow : Window
     /// </summary>
     private WindowState _preZenWindowState;
 
+    /// <summary>
+    /// Stores the window state before entering full screen so it can be restored on exit.
+    /// </summary>
+    private WindowState _preFullScreenWindowState;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -143,6 +148,24 @@ public partial class MainWindow : Window
                     EnterZenMode();
                 else
                     RestoreFromZenMode();
+            });
+        }
+        else if (e.PropertyName == nameof(MainWindowViewModel.IsFullScreen) && sender is MainWindowViewModel fsVm)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (fsVm.IsFullScreen)
+                {
+                    _preFullScreenWindowState = WindowState;
+                    WindowState = WindowState.FullScreen;
+                }
+                else
+                {
+                    // Avoid getting stuck if the pre-fullscreen state was itself FullScreen.
+                    WindowState = _preFullScreenWindowState == WindowState.FullScreen
+                        ? WindowState.Normal
+                        : _preFullScreenWindowState;
+                }
             });
         }
     }
