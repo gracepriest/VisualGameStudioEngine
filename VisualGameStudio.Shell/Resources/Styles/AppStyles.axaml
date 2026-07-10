@@ -1,6 +1,7 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:idc="using:Dock.Avalonia.Controls">
+        xmlns:idc="using:Dock.Avalonia.Controls"
+        xmlns:ds="using:Dock.Settings">
 
   <!-- ========== DARK THEME ========== -->
   <Styles.Resources>
@@ -452,6 +453,13 @@
   <!-- Style the tool tab strip for better visibility -->
   <Style Selector="idc|ToolTabStrip">
     <Setter Property="Background" Value="{DynamicResource IdeMenuBg}"/>
+    <!-- Make the tab bar a dock target so dropping a dragged tab onto it docks the panel there
+         (the natural gesture), not just the panel body. Bigger, more forgiving drop surface. -->
+    <Setter Property="(ds:DockProperties.IsDockTarget)" Value="True"/>
+  </Style>
+
+  <Style Selector="idc|DocumentTabStrip">
+    <Setter Property="(ds:DockProperties.IsDockTarget)" Value="True"/>
   </Style>
 
   <Style Selector="idc|ToolTabStripItem">
@@ -473,6 +481,12 @@
   <!-- Tool chrome styling -->
   <Style Selector="idc|ToolChromeControl">
     <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
+  </Style>
+
+  <!-- Let panels be dragged much smaller: Dock's splitter defaults to a 75px minimum,
+       which stops panels from shrinking. Lower it so they can be made narrow/short. -->
+  <Style Selector="idc|ProportionalStackPanelSplitter">
+    <Setter Property="(idc:ProportionalStackPanelSplitter.MinimumProportionSize)" Value="24"/>
   </Style>
 
   <!-- Primary button styling -->

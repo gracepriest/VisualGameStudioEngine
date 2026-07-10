@@ -398,7 +398,11 @@ public class DockFactory : Factory
 
         HostWindowLocator = new Dictionary<string, Func<IHostWindow?>>
         {
-            [nameof(IDockWindow)] = () => new HostWindow()
+            // Real Avalonia floating-window host so a panel can be popped out into its own window and
+            // dragged back / re-docked. (The old no-op stub extracted the panel into a non-presenting
+            // window, making it vanish — that's the bug we hit before.) Docking works via the dock
+            // adorner arrows; floating is the drop-onto-empty-space path.
+            [nameof(IDockWindow)] = () => new global::Dock.Avalonia.Controls.HostWindow()
         };
 
         base.InitLayout(layout);
@@ -974,20 +978,3 @@ public class CallHierarchyTool : Tool
     public CallHierarchyViewModel? ViewModel { get; set; }
 }
 
-public class HostWindow : IHostWindow
-{
-    public IDockWindow? Window { get; set; }
-    public IDockManager? DockManager { get; set; }
-    public IHostWindowState? HostWindowState { get; set; }
-    public bool IsTracked { get; set; }
-
-    public void Present(bool isDialog) { }
-    public void Exit() { }
-    public void SetPosition(double x, double y) { }
-    public void GetPosition(out double x, out double y) { x = 0; y = 0; }
-    public void SetSize(double width, double height) { }
-    public void GetSize(out double width, out double height) { width = 800; height = 600; }
-    public void SetTitle(string title) { }
-    public void SetLayout(IDock layout) { }
-    public void SetTopmost(bool topmost) { }
-}
