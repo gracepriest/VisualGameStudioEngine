@@ -68,14 +68,20 @@ One engine, both entry points — the IDE's BuildService keeps delegating to the
 CLI engine (`CompileProjectFiles`), which routes internally. This preserves the
 repo's no-drift invariant between `BasicLang.exe build` and the IDE.
 
-Routing key is **native-ness**, not `Language`: a BasicLang project with
-`Backend=Cpp` and a C++ project share the same pipeline; the former simply starts
-with a transpile step.
+Routing key is **native-ness**, not `Language`: a project is native when
+`Backend=Cpp` (the CLI already accepts this backend) — `Language=Cpp` templates
+simply default `Backend` to `Cpp`. A BasicLang project with `Backend=Cpp` and a
+C++ project share the same pipeline; the former simply starts with a transpile
+step.
 
 Native path:
 
-1. **Transpile** each `.bas`/`.mod`/`.cls` → generated `.cpp`/`.h` in `obj/gen/`
-   (existing `CppCodeGenerator`).
+1. **Transpile** the `.bas`/`.mod`/`.cls` sources → generated C++ in `obj/gen/`
+   (existing `CppCodeGenerator`). In Phase 1 this stays what the backend does
+   today: one combined translation unit. Phase 2 adds **per-module split
+   emission** (a `.h`/`.cpp` pair per module, with include guards and
+   cross-module includes) — this is new backend work, not a repackaging of
+   existing output, and it is the enabler for Direction B interop in §3.
 2. **Gather** translation units: generated C++ + user `.cpp` files.
 3. **Emit `compile_commands.json`** (compilation database for clangd) into the
    obj directory — trivial because this pipeline constructs the exact compiler
@@ -102,9 +108,12 @@ Interop is `#include`, not FFI.
 `::` passthrough, already shipped. New work is only include-path wiring so the
 project's own headers resolve with zero configuration.
 
-**Direction B — C++ calls BasicLang (new).** The C++ backend already generates a
-header/source pair per module internally; the change is making those headers a
-stable, consumable artifact in `obj/gen/`:
+**Direction B — C++ calls BasicLang (new).** Requires the per-module split
+emission added in Phase 2 (§2 step 1): today `CppCodeGenerator` emits one
+combined translation unit, so producing a stable, consumable `.h` per module in
+`obj/gen/` is new backend work — declaration/definition separation, include
+guards, and cross-module includes. Once emitted, C++ consumes it as an ordinary
+include:
 
 ```cpp
 #include "Logic.h"                                  // generated from logic.bas
@@ -120,8 +129,9 @@ same runtime headers the backend already emits against.
 
 Rules:
 
-- **Entry point:** exactly one `Main`/`main` across both languages; the compiler
-  counts and errors on 0 or 2+.
+- **Entry point:** for `OutputType=Exe`, exactly one `Main`/`main` across both
+  languages; the compiler counts and errors on 0 or 2+. `OutputType=Library`
+  requires zero entry points.
 - **Freshness at build time:** guaranteed by build order (transpile → compile).
   Editor-time freshness is handled in §4.
 - **Symmetry:** "C++ project + `.bas` files" and "BasicLang native project +
@@ -149,10 +159,12 @@ built in).
 Apache 2.0, redistributable) into `~/.vgs/tools/`. IntelliSense works without a
 compiler installed.
 
-**Feeding clangd:** `compile_commands.json` is emitted on project **open** and
-on project-file **change**, not only on build, so IntelliSense precedes the
-first compile. Generated `obj/gen/*.h` headers are refreshed (debounced) on
-`.bas` save so C++-side completion of BasicLang symbols stays current — this
+**Feeding clangd:** `compile_commands.json` **and** the generated `obj/gen`
+headers are emitted on project **open** and on project-file **change**, not only
+on build — so IntelliSense precedes the first compile and a fresh checkout of a
+mixed project resolves its generated includes immediately. Generated headers are
+additionally refreshed (debounced) on `.bas` save so C++-side completion of
+BasicLang symbols stays current — this
 also gives C++ files completion/hover/go-to-def on BasicLang modules for free,
 because clangd just reads the generated headers.
 
@@ -171,6 +183,9 @@ Same registry pattern on the DAP side:
 | BasicLang on C#/MSIL backend | `BasicLang.exe --debug-adapter` (existing) |
 | Native (C++ or mixed) | `lldb-dap` (ships in LLVM) or `gdb -i dap` (gdb ≥ 14) |
 
+BasicLang on the LLVM backend keeps its existing behavior unchanged; the
+registry does not affect it.
+
 - **Pairing rule:** toolchain picks the debugger — clang++ → lldb-dap,
   MinGW g++ → gdb DAP. MSVC-built binaries are compile-only (Microsoft's debug
   adapter is not freely licensed); clang is the blessed toolchain on Windows.
@@ -183,10 +198,13 @@ Same registry pattern on the DAP side:
 
 ## 6. Phasing
 
+Each phase gets its own implementation plan; do not plan the whole spec as one
+monolith.
+
 | Phase | Ships | Contents |
 |---|---|---|
 | 1 | C++ projects build & run | `Language` in `ProjectFile`; native routing in `CompileProjectFiles`; TU gathering; diagnostics parsers → Error List; `compile_commands.json`; templates (Console, Library, Game); New Project language picker; C++ highlighting; run-without-debug |
-| 2 | Mixed projects | Stable `obj/gen` headers + include-path wiring; single-entry-point rule; both-direction interop e2e tests |
+| 2 | Mixed projects | **Per-module split emission in `CppCodeGenerator`** (new backend work: `.h`/`.cpp` per module, include guards, cross-module includes) landing in `obj/gen`; include-path wiring; entry-point rule (Exe only); both-direction interop e2e tests |
 | 3 | IntelliSense | LSP registry + routing; clangd discovery + download; `compile_commands.json` on open/change; debounced gen-header refresh |
 | 4 | Debugging | DAP registry; lldb-dap / gdb DAP; native launch configs; stretch: `#line` → `.bas`-source debugging |
 | 5 | Backlog | Incremental `.o` caching; gen→`.bas` go-to-def mapping; CMake import; clang-tidy |
