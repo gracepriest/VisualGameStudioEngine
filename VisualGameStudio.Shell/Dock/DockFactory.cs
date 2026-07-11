@@ -717,11 +717,47 @@ public class DockFactory : Factory
         };
         _bottomDock = bottomDock;
 
-        // MainArea always survives (its DocumentDock is non-collapsable). Append the bottom region.
-        var mainArea = FindDockableById(_rootDock!, "MainArea") as ProportionalDock ?? _mainArea!;
+        var mainArea = EnsureMainArea();
         AddDockable(mainArea, new ProportionalDockSplitter());
         AddDockable(mainArea, bottomDock);
         return bottomDock;
+    }
+
+    /// <summary>
+    /// Returns the live MainArea, rebuilding it if the dock collapse removed it. Dock 11.3 collapses
+    /// empty docks more aggressively than 11.1: after every panel is closed even MainArea is flattened
+    /// away and the (non-collapsable) DocumentDock is hoisted into the root layout. The old fallback
+    /// to the stale <c>_mainArea</c> field then added the rebuilt region to a DETACHED dock — invisible.
+    /// Instead, rebuild MainArea around the DocumentDock: wrap the live DocumentDock back in a fresh
+    /// vertical MainArea in the same slot of its current parent.
+    /// </summary>
+    private ProportionalDock EnsureMainArea()
+    {
+        if (FindDockableById(_rootDock!, "MainArea") is ProportionalDock live)
+            return _mainArea = live;
+
+        // DocumentDock is IsCollapsable=false, so it always survives somewhere in the live tree.
+        var (docDockable, parent) = FindDockableWithParent(_rootDock!, "DocumentDock", null);
+        if (docDockable is not DocumentDock documentDock || parent is not IDock parentDock || parentDock.VisibleDockables == null)
+            throw new InvalidOperationException("DocumentDock is missing from the layout tree.");
+
+        var mainArea = new ProportionalDock
+        {
+            Id = "MainArea",
+            Orientation = Orientation.Vertical,
+            Proportion = documentDock.Proportion,
+            VisibleDockables = CreateList<IDockable>()
+        };
+        mainArea.Factory = this;
+        _mainArea = mainArea;
+
+        // Swap MainArea into the DocumentDock's slot, then re-nest the DocumentDock inside it.
+        var index = parentDock.VisibleDockables.IndexOf(documentDock);
+        RemoveDockable(documentDock, false);
+        InsertDockable(parentDock, mainArea, Math.Max(index, 0));
+        AddDockable(mainArea, documentDock);
+        documentDock.Proportion = 0.6; // its share within MainArea, as in CreateLayout
+        return mainArea;
     }
 
     /// <summary>Creates a fresh empty ToolDock with the given id and adds it into <paramref name="parent"/>.</summary>

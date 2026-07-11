@@ -15,7 +15,8 @@
              Without this the Error List and Problems panels show nothing. -->
         <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
         <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
-        <StyleInclude Source="avares://Dock.Avalonia/Themes/DockFluentTheme.axaml" />
+        <!-- Dock 11.3 moved its Fluent theme into the separate Dock.Avalonia.Themes.Fluent package. -->
+        <StyleInclude Source="avares://Dock.Avalonia.Themes.Fluent/DockFluentTheme.axaml" />
         <StyleInclude Source="avares://VisualGameStudio/Resources/Styles/AppStyles.axaml" />
     </Application.Styles>
 

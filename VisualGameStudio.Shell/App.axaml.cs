@@ -53,6 +53,14 @@ public partial class App : Application
         // Avalonia UI thread exceptions
         RxApp_DefaultExceptionHandler();
 
+        // Dock 11.3 docking behavior (set before any DockControl exists):
+        // - UseFloatingDockAdorner: dock adorners render in a floating transparent window, so the
+        //   compass shows reliably over any surface (including floated panels) — the smoother
+        //   drag-docking this upgrade was for.
+        // - CloseFloatingWindowsOnMainWindowClose: floated panels can't outlive the IDE window.
+        global::Dock.Settings.DockSettings.UseFloatingDockAdorner = true;
+        global::Dock.Settings.DockSettings.CloseFloatingWindowsOnMainWindowClose = true;
+
         // Setup dependency injection
         var services = new ServiceCollection();
         services.ConfigureServices();

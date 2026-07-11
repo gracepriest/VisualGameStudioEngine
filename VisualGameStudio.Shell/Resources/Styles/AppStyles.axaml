@@ -1,7 +1,8 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:idc="using:Dock.Avalonia.Controls"
-        xmlns:ds="using:Dock.Settings">
+        xmlns:ds="using:Dock.Settings"
+        xmlns:psp="using:Dock.Controls.ProportionalStackPanel">
 
   <!-- ========== DARK THEME ========== -->
   <Styles.Resources>
@@ -484,9 +485,10 @@
   </Style>
 
   <!-- Let panels be dragged much smaller: Dock's splitter defaults to a 75px minimum,
-       which stops panels from shrinking. Lower it so they can be made narrow/short. -->
-  <Style Selector="idc|ProportionalStackPanelSplitter">
-    <Setter Property="(idc:ProportionalStackPanelSplitter.MinimumProportionSize)" Value="24"/>
+       which stops panels from shrinking. Lower it so they can be made narrow/short.
+       (Dock 11.3 moved the splitter into the Dock.Controls.ProportionalStackPanel package.) -->
+  <Style Selector="psp|ProportionalStackPanelSplitter">
+    <Setter Property="(psp:ProportionalStackPanelSplitter.MinimumProportionSize)" Value="24"/>
   </Style>
 
   <!-- Primary button styling -->
