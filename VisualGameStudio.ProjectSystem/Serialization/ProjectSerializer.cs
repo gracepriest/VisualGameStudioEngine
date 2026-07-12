@@ -55,10 +55,13 @@ public class ProjectSerializer
                 }
                 if (project.Language == ProjectLanguage.Cpp)
                 {
-                    project.CppSettings = new CppProjectSettings
+                    project.CppSettings ??= new CppProjectSettings();
+
+                    var cppStandard = propertyGroup.Element("CppStandard")?.Value;
+                    if (!string.IsNullOrEmpty(cppStandard))
                     {
-                        CppStandard = propertyGroup.Element("CppStandard")?.Value ?? "c++20"
-                    };
+                        project.CppSettings.CppStandard = cppStandard;
+                    }
                 }
             }
             else

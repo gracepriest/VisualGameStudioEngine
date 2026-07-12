@@ -76,7 +76,40 @@ public class ProjectSerializerCppTests
 
         Assert.That(reloaded.Language, Is.EqualTo(ProjectLanguage.Cpp),
             "an IDE save must not strip <Language> from a C++ project");
+        Assert.That(reloaded.CppSettings, Is.Not.Null);
         Assert.That(reloaded.CppSettings!.IncludeDirs, Is.EqualTo(new[] { "inc" }));
+    }
+
+    [Test]
+    public async Task SaveThenLoad_RoundTripsNonDefaultCppStandardAndAllItemKinds()
+    {
+        var path = Path.Combine(_dir, "App.blproj");
+        File.WriteAllText(path, """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>App</ProjectName>
+                <Language>Cpp</Language>
+                <CppStandard>c++17</CppStandard>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="main.cpp" />
+                <NativeLib Include="x.lib" />
+                <Define Include="D1" />
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+
+        await serializer.SaveAsync(project);
+        var reloaded = await serializer.LoadAsync(path);
+
+        Assert.That(reloaded.CppSettings, Is.Not.Null);
+        Assert.That(reloaded.CppSettings!.CppStandard, Is.EqualTo("c++17"),
+            "a non-default CppStandard must survive an IDE save round-trip");
+        Assert.That(reloaded.CppSettings.NativeLibs, Is.EqualTo(new[] { "x.lib" }));
+        Assert.That(reloaded.CppSettings.Defines, Is.EqualTo(new[] { "D1" }));
     }
 
     [Test]
