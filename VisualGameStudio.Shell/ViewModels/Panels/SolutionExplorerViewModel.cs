@@ -337,7 +337,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             // Add source files
             var sourceExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                ".bas", ".bl", ".mod", ".cls", ".class", ".json", ".xml", ".blproj"
+                ".bas", ".bl", ".mod", ".cls", ".class", ".json", ".xml", ".blproj",
+                ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx"
             };
 
             var files = Directory.GetFiles(projectDir)
@@ -1064,7 +1065,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
-            ".bas" or ".bl" or ".mod" or ".cls" or ".class" => ProjectItemType.Compile,
+            ".bas" or ".bl" or ".mod" or ".cls" or ".class"
+                or ".cpp" or ".cc" or ".cxx" or ".c" or ".h" or ".hpp" => ProjectItemType.Compile,
             ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".ico" => ProjectItemType.Resource,
             _ => ProjectItemType.Content
         };
@@ -1197,7 +1199,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         var files = await _dialogService.ShowOpenFileDialogAsync(
             "Add Existing File",
-            new[] { ("BasicLang Files", new[] { "*.bas", "*.bl", "*.mod", "*.cls", "*.class" }), ("All Files", new[] { "*.*" }) },
+            new[] { ("BasicLang Files", new[] { "*.bas", "*.bl", "*.mod", "*.cls", "*.class" }), ("C++ Files", new[] { "*.cpp", "*.h", "*.hpp", "*.c", "*.cc", "*.cxx" }), ("All Files", new[] { "*.*" }) },
             allowMultiple: true);
 
         if (files == null || files.Length == 0) return;
