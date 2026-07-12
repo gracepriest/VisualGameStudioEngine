@@ -344,7 +344,7 @@ and after the existing Compile/Reference ItemGroup emission add a C++ ItemGroup 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~CppProjectFileTests"`
-Expected: all 7 PASS.
+Expected: all 6 PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -2199,7 +2199,7 @@ public class CppHighlightingTests
 ```
 
 - [ ] **Step 5:** `HighlightingLoader.cs`:
-- In `RegisterHighlighting()` after the BasicLang registration, load + register C++ the same way (`LoadDefinitionFromResource("Cpp.xshd")` — reuse the existing private loader; resource name `VisualGameStudio.Editor.Highlighting.Cpp.xshd`):
+- In `RegisterHighlighting()` after the BasicLang registration, load + register C++ the same way (reuse the existing private loader with the FULL manifest resource name `VisualGameStudio.Editor.Highlighting.Cpp.xshd`):
 
 ```csharp
         // CAUTION: LoadDefinitionFromResource takes the FULL manifest resource
