@@ -72,6 +72,12 @@ public partial class App : Application
         // settings, otherwise every Get() silently falls back to schema defaults.
         LoadUserSettingsAtStartup(Services);
 
+        // Install the global per-window High-Contrast class hook BEFORE any window loads, so every
+        // window (main, dialogs, Dock floating HostWindows) is class-stamped the moment it loads —
+        // not just those open at theme-Apply time. Must precede window construction below.
+        try { ThemeManager.EnsureGlobalWindowClassHook(); }
+        catch (Exception ex) { LogCrash("THEME_HOOK", ex); }
+
         // Apply the saved theme now that the single store is loaded and before any window is
         // constructed. (Moved out of Initialize(), which runs before the DI container exists —
         // reading the retired legacy %APPDATA% file there is exactly what split the two stores.)
@@ -89,6 +95,12 @@ public partial class App : Application
                 DataContext = mainViewModel
             };
             desktop.MainWindow = MainWindow;
+
+            // Stamp the HC class on the main window now (before first render) rather than waiting for
+            // the Loaded hook, and so a restart already in High Contrast comes up class-styled — the
+            // startup ThemeManager.ApplyFromSettings above ran before this window existed, and its
+            // desktop.Windows sweep can't have seen an unshown window.
+            ThemeManager.Register(MainWindow);
 
             // Force a final per-project layout/session save on exit (VS Code's shutdown flush),
             // then dispose the DI container so singleton services run their teardown.

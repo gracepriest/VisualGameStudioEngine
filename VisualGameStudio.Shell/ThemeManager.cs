@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Styling;
 using VisualGameStudio.Core.Abstractions.Services;
@@ -253,6 +254,71 @@ public static class ThemeManager
         return count;
     }
 
+    #region Window class registration
+
+    /// <summary>
+    /// Backing flag so <see cref="EnsureGlobalWindowClassHook"/> installs its class handler once.
+    /// </summary>
+    private static bool _globalWindowHookInstalled;
+
+    /// <summary>
+    /// Installs a process-wide class handler on <see cref="Control.LoadedEvent"/> so EVERY
+    /// <see cref="Window"/> — the main window, every dialog, and Dock's floating <c>HostWindow</c>s,
+    /// present and future — has the <c>highContrast</c> style class stamped (or removed) to match the
+    /// active theme the instant it loads. Idempotent; safe to call more than once.
+    ///
+    /// Why this is the reliable route (verified against the Avalonia 11.3.13 source): <c>LoadedEvent</c>
+    /// is a <see cref="Avalonia.Interactivity.RoutingStrategies.Direct"/> routed event raised on each
+    /// control — including the Window itself — as it loads, and
+    /// <c>RoutedEvent.AddClassHandler&lt;TTarget&gt;</c> matches the sender by <c>IsInstanceOfType</c>,
+    /// so a handler registered for <see cref="Window"/> also fires for every Window subclass (e.g.
+    /// Dock's <c>HostWindow</c>). This is the one global per-window hook Avalonia exposes —
+    /// <c>Window.Opened</c> is a plain CLR event with no global equivalent — so it covers all windows
+    /// from a single site instead of stamping each <c>ShowDialog</c> caller by hand.
+    /// </summary>
+    public static void EnsureGlobalWindowClassHook()
+    {
+        if (_globalWindowHookInstalled) return;
+        _globalWindowHookInstalled = true;
+
+        Control.LoadedEvent.AddClassHandler<Window>((window, _) => Register(window));
+    }
+
+    /// <summary>
+    /// Stamps (or removes) the <c>highContrast</c> style class on a single <paramref name="window"/>
+    /// to match the current <see cref="IsHighContrast"/> state. Invoked by the global Loaded hook
+    /// (see <see cref="EnsureGlobalWindowClassHook"/>) for every window, and directly at the main
+    /// window and Dock <c>HostWindow</c> creation sites so the class is already present before the
+    /// window's first render.
+    /// </summary>
+    public static void Register(Window window)
+    {
+        if (window == null) return;
+        ApplyHighContrastClass(window.Classes, IsHighContrast);
+    }
+
+    /// <summary>
+    /// Pure add/remove decision for the <c>highContrast</c> class, factored onto an
+    /// <see cref="IList{T}"/> so it is unit-testable without constructing a <see cref="Window"/> (the
+    /// test suite has no Avalonia platform). Adds the class when <paramref name="highContrast"/> is
+    /// true and it is absent; removes it otherwise. Idempotent in both directions.
+    /// </summary>
+    public static void ApplyHighContrastClass(IList<string> classes, bool highContrast)
+    {
+        const string highContrastClass = "highContrast";
+        if (highContrast)
+        {
+            if (!classes.Contains(highContrastClass))
+                classes.Add(highContrastClass);
+        }
+        else
+        {
+            classes.Remove(highContrastClass);
+        }
+    }
+
+    #endregion
+
     #region Private Implementation
 
     private static void ApplyVsCodeTheme(LoadedTheme theme, bool raiseEvent)
@@ -328,21 +394,20 @@ public static class ThemeManager
         }
     }
 
+    /// <summary>
+    /// Re-stamps the <c>highContrast</c> class across all currently open windows to match the active
+    /// theme. Runs at theme-switch time (from <see cref="Apply"/>/<see cref="ApplyVsCodeTheme"/>) to
+    /// update windows that are already open; windows opened later are handled by the global Loaded
+    /// hook (see <see cref="EnsureGlobalWindowClassHook"/>). Removes the class when leaving High
+    /// Contrast, so switching out is covered too.
+    /// </summary>
     private static void ApplyHighContrastClass()
     {
         if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
         {
             foreach (var window in desktop.Windows)
             {
-                if (IsHighContrast)
-                {
-                    if (!window.Classes.Contains("highContrast"))
-                        window.Classes.Add("highContrast");
-                }
-                else
-                {
-                    window.Classes.Remove("highContrast");
-                }
+                ApplyHighContrastClass(window.Classes, IsHighContrast);
             }
         }
     }

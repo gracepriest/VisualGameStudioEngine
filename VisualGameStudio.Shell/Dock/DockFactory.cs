@@ -402,7 +402,14 @@ public class DockFactory : Factory
             // dragged back / re-docked. (The old no-op stub extracted the panel into a non-presenting
             // window, making it vanish — that's the bug we hit before.) Docking works via the dock
             // adorner arrows; floating is the drop-onto-empty-space path.
-            [nameof(IDockWindow)] = () => new global::Dock.Avalonia.Controls.HostWindow()
+            // Register with ThemeManager so a floated panel inherits the High-Contrast class before it
+            // renders (the global Loaded hook also covers it, but this stamps it at creation time).
+            [nameof(IDockWindow)] = () =>
+            {
+                var hostWindow = new global::Dock.Avalonia.Controls.HostWindow();
+                VisualGameStudio.Shell.ThemeManager.Register(hostWindow);
+                return hostWindow;
+            }
         };
 
         base.InitLayout(layout);
