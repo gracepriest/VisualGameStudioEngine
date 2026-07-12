@@ -2,6 +2,7 @@ using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Models;
 using VisualGameStudio.Editor.Completion;
 using VisualGameStudio.Editor.Controls;
@@ -1872,14 +1873,27 @@ public partial class CodeEditorDocumentView : UserControl
     }
 
     /// <summary>
-    /// Reads the current persisted settings and applies font family, font size,
-    /// and font ligatures to all editor instances in this view.
+    /// Reads editor settings from the single store (<see cref="ISettingsService"/> effective
+    /// values) and applies font family, font size, ligatures, line numbers, and word wrap to all
+    /// editor instances in this view. Runs on construction and again whenever
+    /// <see cref="SettingsViewModel.SettingsChanged"/> fires, so these settings are live (not
+    /// OK-only) — the dialog's live edits write through the same service. Reading the retired
+    /// legacy %APPDATA% file here is what made these settings apply on OK only and revert on
+    /// restart.
     /// </summary>
     private void ApplyEditorSettings()
     {
         try
         {
-            var settings = SettingsViewModel.LoadCurrentSettings();
+            // Null-tolerant: this view can be constructed in unit tests / design mode before
+            // App.Services is initialized. Defaults below mirror the SettingsService schema.
+            var settings = App.Services?.GetService(typeof(ISettingsService)) as ISettingsService;
+
+            var fontFamily = settings?.Get<string>("editor.fontFamily", "Cascadia Code") ?? "Cascadia Code";
+            var fontSize = settings?.Get<int>("editor.fontSize", 14) ?? 14;
+            var fontLigatures = settings?.Get<bool>("editor.fontLigatures", false) ?? false;
+            var showLineNumbers = (settings?.Get<string>("editor.lineNumbers", "on") ?? "on") != "off";
+            var wordWrap = (settings?.Get<string>("editor.wordWrap", "off") ?? "off") != "off";
 
             var editors = new[]
             {
@@ -1894,16 +1908,16 @@ public partial class CodeEditorDocumentView : UserControl
             {
                 if (editor == null) continue;
 
-                if (!string.IsNullOrWhiteSpace(settings.FontFamily))
-                    editor.EditorFontFamily = settings.FontFamily;
+                if (!string.IsNullOrWhiteSpace(fontFamily))
+                    editor.EditorFontFamily = fontFamily;
 
-                if (settings.FontSize > 0)
-                    editor.EditorFontSize = settings.FontSize;
+                if (fontSize > 0)
+                    editor.EditorFontSize = fontSize;
 
-                editor.EnableFontLigatures = settings.FontLigatures;
+                editor.EnableFontLigatures = fontLigatures;
 
-                editor.ShowLineNumbers = settings.ShowLineNumbers;
-                editor.WordWrap = settings.WordWrap;
+                editor.ShowLineNumbers = showLineNumbers;
+                editor.WordWrap = wordWrap;
             }
         }
         catch

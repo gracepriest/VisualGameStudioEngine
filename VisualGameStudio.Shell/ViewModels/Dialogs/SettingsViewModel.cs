@@ -1203,13 +1203,13 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void Save()
     {
-        SaveSettings();
         DialogResult = true;
 
         // Apply theme change immediately
         ThemeManager.Apply(SelectedTheme);
 
-        // Push to ISettingsService
+        // Push to ISettingsService (the single store). The legacy %APPDATA% write was retired
+        // here — theme + editor settings now live/persist through ISettingsService only.
         SaveToService();
 
         SettingsChanged?.Invoke(this, EventArgs.Empty);
@@ -1458,59 +1458,47 @@ public partial class SettingsViewModel : ViewModelBase
         }
     }
 
-    private void SaveSettings()
+    /// <summary>
+    /// Absolute path to the retired legacy <c>%APPDATA%\VisualGameStudio\settings.json</c> store.
+    /// Exposed only so the one-time theme-migration shim can locate it; nothing writes here anymore.
+    /// </summary>
+    public static string LegacyThemeStorePath => LegacySettingsPath;
+
+    /// <summary>
+    /// One-time migration off the retired legacy store: if the single store (~/.vgs via
+    /// <see cref="ISettingsService"/>) has no <c>workbench.colorTheme</c> at User scope but the
+    /// legacy file at <paramref name="legacyPath"/> still holds a <c>SelectedTheme</c>, copy it
+    /// across so a returning user keeps their theme. The legacy file is NOT deleted here
+    /// (Reset All owns that). Returns true iff a value was migrated. Path-parameterized so it can
+    /// be exercised hermetically in tests without touching the real %APPDATA%.
+    /// </summary>
+    public static bool MigrateLegacyThemeIfNeeded(ISettingsService service, string legacyPath)
     {
-        try
-        {
-            // Save to legacy location for backward compatibility
-            var dir = Path.GetDirectoryName(LegacySettingsPath);
-            if (!string.IsNullOrEmpty(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
+        if (service == null) return false;
 
-            var settings = new SettingsData
-            {
-                FontFamily = FontFamily,
-                FontLigatures = FontLigatures,
-                FontSize = FontSize,
-                TabSize = TabSize,
-                ConvertTabsToSpaces = ConvertTabsToSpaces,
-                ShowLineNumbers = ShowLineNumbers,
-                HighlightCurrentLine = HighlightCurrentLine,
-                ShowWhitespace = ShowWhitespace,
-                WordWrap = WordWrap,
-                AutoIndent = AutoIndent,
-                BracketMatching = BracketMatching,
-                AutoCloseBrackets = AutoCloseBrackets,
-                SmoothScrolling = SmoothScrolling,
-                SelectedTheme = SelectedTheme,
-                EnableAutoComplete = EnableAutoComplete,
-                ShowQuickInfo = ShowQuickInfo,
-                ShowSignatureHelp = ShowSignatureHelp,
-                AutoCompleteDelay = AutoCompleteDelay,
-                SaveBeforeBuild = SaveBeforeBuild,
-                ShowBuildOutput = ShowBuildOutput,
-                DefaultConfiguration = DefaultConfiguration,
-                Shortcuts = Shortcuts.ToDictionary(s => s.Action, s => s.CurrentBinding)
-            };
+        // Only migrate when the single store has no theme of its own -- never let the stale
+        // legacy value clobber a theme the new store already holds (that was the split-brain bug).
+        if (service.Has("workbench.colorTheme", SettingsScope.User)) return false;
 
-            var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(LegacySettingsPath, json);
-        }
-        catch
-        {
-            // Ignore save errors
-        }
+        var legacy = LoadLegacySettingsFrom(legacyPath);
+        if (string.IsNullOrWhiteSpace(legacy.SelectedTheme)) return false;
+
+        service.Set("workbench.colorTheme", legacy.SelectedTheme!, SettingsScope.User);
+        return true;
     }
 
-    public static SettingsData LoadCurrentSettings()
+    [Obsolete("The legacy %APPDATA%\\VisualGameStudio\\settings.json store is retired; the single " +
+              "store is ~/.vgs via ISettingsService. Retained only for the one-time theme-migration " +
+              "shim (MigrateLegacyThemeIfNeeded) — do not add new callers.")]
+    public static SettingsData LoadCurrentSettings() => LoadLegacySettingsFrom(LegacySettingsPath);
+
+    private static SettingsData LoadLegacySettingsFrom(string path)
     {
         try
         {
-            if (File.Exists(LegacySettingsPath))
+            if (File.Exists(path))
             {
-                var json = File.ReadAllText(LegacySettingsPath);
+                var json = File.ReadAllText(path);
                 return JsonSerializer.Deserialize<SettingsData>(json) ?? new SettingsData();
             }
         }

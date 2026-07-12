@@ -34,8 +34,10 @@ public partial class App : Application
     {
         AvaloniaXamlLoader.Load(this);
 
-        // Apply saved theme (Dark/Light) before UI renders
-        ThemeManager.ApplyFromSettings();
+        // NOTE: the saved theme is applied later in OnFrameworkInitializationCompleted, right
+        // after the DI container is built and ~/.vgs is loaded — the single store lives behind
+        // ISettingsService, which does not exist yet at Initialize() time. No window has rendered
+        // by then, so the theme is still set before anything is shown.
     }
 
     public override void OnFrameworkInitializationCompleted()
@@ -69,6 +71,11 @@ public partial class App : Application
         // Load ~/.vgs/settings.json before anything (e.g. MainWindowViewModel below) reads
         // settings, otherwise every Get() silently falls back to schema defaults.
         LoadUserSettingsAtStartup(Services);
+
+        // Apply the saved theme now that the single store is loaded and before any window is
+        // constructed. (Moved out of Initialize(), which runs before the DI container exists —
+        // reading the retired legacy %APPDATA% file there is exactly what split the two stores.)
+        ThemeManager.ApplyFromSettings();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

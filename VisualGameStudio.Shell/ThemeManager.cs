@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Styling;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Models.Extensions;
 using VisualGameStudio.Editor;
 using VisualGameStudio.ProjectSystem.Services;
@@ -71,13 +72,41 @@ public static class ThemeManager
     }
 
     /// <summary>
-    /// Applies the theme from the saved settings on startup.
+    /// Applies the theme from the saved settings on startup. Reads the single store
+    /// (~/.vgs via <see cref="ISettingsService"/>) — no longer the retired legacy %APPDATA% file.
+    /// Must be called after the DI container is built and <c>LoadUserSettingsAtStartup</c> has run
+    /// (see <c>App.OnFrameworkInitializationCompleted</c>) so the store is populated from disk.
     /// </summary>
     public static void ApplyFromSettings()
     {
-        var settings = SettingsViewModel.LoadCurrentSettings();
-        var theme = settings.SelectedTheme ?? "Dark";
+        var service = App.Services?.GetService(typeof(ISettingsService)) as ISettingsService;
+        var theme = ResolveStartupThemeName(service);
         Apply(theme, raiseEvent: false);
+    }
+
+    /// <summary>
+    /// Resolves the theme name to apply at startup from the single settings store, running the
+    /// one-time legacy-theme migration first. Pure (no Avalonia dependency) so it is unit-testable;
+    /// <see cref="ApplyFromSettings"/> wraps it and hands the result to <see cref="Apply"/>.
+    /// </summary>
+    public static string ResolveStartupThemeName(ISettingsService? service)
+        => ResolveStartupThemeName(service, SettingsViewModel.LegacyThemeStorePath);
+
+    /// <summary>
+    /// Test/seam overload of <see cref="ResolveStartupThemeName(ISettingsService?)"/> that takes an
+    /// explicit legacy-store path so tests never touch the real %APPDATA% file.
+    /// </summary>
+    public static string ResolveStartupThemeName(ISettingsService? service, string? legacyPath)
+    {
+        if (service == null) return "Dark";
+
+        if (!string.IsNullOrEmpty(legacyPath))
+        {
+            SettingsViewModel.MigrateLegacyThemeIfNeeded(service, legacyPath);
+        }
+
+        // "Dark" mirrors the SettingsService schema default for workbench.colorTheme.
+        return service.Get<string>("workbench.colorTheme", "Dark");
     }
 
     /// <summary>
