@@ -270,8 +270,11 @@ public class SettingsService : ISettingsService, IDisposable
 
     public async Task SaveAsync()
     {
-        await SaveToFileAsync(_userSettingsPath, _userSettings);
-        await SaveWorkspaceSettingsAsync();
+        // ConfigureAwait(false) throughout this chain: a shutdown flush can call SaveAsync
+        // from a context without a pumping dispatcher loop (same startup-deadlock hazard
+        // LoadAsync guards against), so never capture a synchronization context here.
+        await SaveToFileAsync(_userSettingsPath, _userSettings).ConfigureAwait(false);
+        await SaveWorkspaceSettingsAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -282,10 +285,10 @@ public class SettingsService : ISettingsService, IDisposable
         switch (scope)
         {
             case SettingsScope.User:
-                await SaveToFileAsync(_userSettingsPath, _userSettings);
+                await SaveToFileAsync(_userSettingsPath, _userSettings).ConfigureAwait(false);
                 break;
             case SettingsScope.Workspace:
-                await SaveWorkspaceSettingsAsync();
+                await SaveWorkspaceSettingsAsync().ConfigureAwait(false);
                 break;
         }
     }
@@ -423,13 +426,15 @@ public class SettingsService : ISettingsService, IDisposable
                 dict[kvp.Key] = kvp.Value;
             }
 
-            // Save the raw JSON (preserving comments)
+            // Save the raw JSON (preserving comments) through the same lock + atomic
+            // temp-file-then-replace choke point as SaveToFileAsync. This used to be a bare
+            // File.WriteAllTextAsync that bypassed _saveLock entirely -- the most likely real
+            // source of the interleaved-write corruption (duplicate keys) seen in the audit,
+            // since the raw settings editor and a debounced Set()-triggered save could race.
             var filePath = scope == SettingsScope.Workspace ? WorkspaceSettingsPath : _userSettingsPath;
             if (filePath != null)
             {
-                var dir = Path.GetDirectoryName(filePath);
-                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                await File.WriteAllTextAsync(filePath, json);
+                await SaveJsonToFileAsync(filePath, json).ConfigureAwait(false);
             }
 
             if (affectedKeys.Count > 0)
@@ -648,8 +653,15 @@ public class SettingsService : ISettingsService, IDisposable
 
         try
         {
-            var json = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
+            // A save (temp-file write + atomic replace/move) can be transiently in-flight
+            // when this fires from the file watcher, so the read tolerates being briefly
+            // shared with a writer and retries once if the OS still reports it busy.
+            var json = await ReadFileWithRetryAsync(filePath).ConfigureAwait(false);
             json = StripJsonComments(json);
+
+            // System.Text.Json's Dictionary<TKey,TValue> deserialization already tolerates a
+            // JSON object with a duplicated key (last occurrence wins, no throw) -- pinned by
+            // SettingsServicePersistenceTests so this stays true if the runtime ever changes it.
             var settings = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
             if (settings != null)
             {
@@ -668,6 +680,32 @@ public class SettingsService : ISettingsService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Reads a file's full text, sharing read/write access with any concurrent writer, and
+    /// retries once after a short delay if the OS reports the file busy (e.g. caught mid atomic
+    /// replace). Used by the file-watcher reload path, where a save can legitimately still be
+    /// in flight when the watcher fires.
+    /// </summary>
+    private static async Task<string> ReadFileWithRetryAsync(string filePath)
+    {
+        try
+        {
+            return await ReadFileShareReadWriteAsync(filePath).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await Task.Delay(50).ConfigureAwait(false);
+            return await ReadFileShareReadWriteAsync(filePath).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<string> ReadFileShareReadWriteAsync(string filePath)
+    {
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync().ConfigureAwait(false);
+    }
+
     private static object? ConvertJsonElement(JsonElement element)
     {
         return element.ValueKind switch
@@ -683,14 +721,22 @@ public class SettingsService : ISettingsService, IDisposable
 
     private async Task SaveToFileAsync(string filePath, Dictionary<string, object?> dict)
     {
-        await _saveLock.WaitAsync();
+        var json = JsonSerializer.Serialize(dict, JsonOptions);
+        await SaveJsonToFileAsync(filePath, json).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Single choke point for every settings-file write (debounced saves, explicit
+    /// SaveScopeAsync, and the raw-JSON editor via SetRawJsonAsync). Serializes access with
+    /// <see cref="_saveLock"/> and writes atomically so a reader (including the file watcher's
+    /// reload, or a second IDE instance) can never observe a torn/partial file.
+    /// </summary>
+    private async Task SaveJsonToFileAsync(string filePath, string json)
+    {
+        await _saveLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            var dir = Path.GetDirectoryName(filePath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-            var json = JsonSerializer.Serialize(dict, JsonOptions);
-            await File.WriteAllTextAsync(filePath, json);
+            await WriteFileAtomicallyAsync(filePath, json).ConfigureAwait(false);
         }
         catch
         {
@@ -699,6 +745,30 @@ public class SettingsService : ISettingsService, IDisposable
         finally
         {
             _saveLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Writes <paramref name="content"/> to <paramref name="filePath"/> by first writing the
+    /// full content to a sibling ".tmp" file, then atomically swapping it into place --
+    /// File.Replace when the destination already exists (same-volume, preserves the atomic
+    /// guarantee), File.Move(overwrite:true) for the very first save when it doesn't yet.
+    /// </summary>
+    private static async Task WriteFileAtomicallyAsync(string filePath, string content)
+    {
+        var dir = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        var tempPath = filePath + ".tmp";
+        await File.WriteAllTextAsync(tempPath, content).ConfigureAwait(false);
+
+        if (File.Exists(filePath))
+        {
+            File.Replace(tempPath, filePath, null);
+        }
+        else
+        {
+            File.Move(tempPath, filePath, overwrite: true);
         }
     }
 
@@ -730,7 +800,7 @@ public class SettingsService : ISettingsService, IDisposable
 
         // Create .vgs directory on first write
         bool dirCreated = !Directory.Exists(settingsDir);
-        await SaveToFileAsync(settingsPath, _workspaceSettings);
+        await SaveToFileAsync(settingsPath, _workspaceSettings).ConfigureAwait(false);
 
         // Start watching if we just created the directory
         if (dirCreated && _workspaceWatcher == null)
@@ -750,9 +820,9 @@ public class SettingsService : ISettingsService, IDisposable
             {
                 try
                 {
-                    await Task.Delay(SaveDebounceMs, token);
+                    await Task.Delay(SaveDebounceMs, token).ConfigureAwait(false);
                     if (!token.IsCancellationRequested)
-                        await SaveToFileAsync(_userSettingsPath, _userSettings);
+                        await SaveToFileAsync(_userSettingsPath, _userSettings).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { }
             });
@@ -766,9 +836,9 @@ public class SettingsService : ISettingsService, IDisposable
             {
                 try
                 {
-                    await Task.Delay(SaveDebounceMs, token);
+                    await Task.Delay(SaveDebounceMs, token).ConfigureAwait(false);
                     if (!token.IsCancellationRequested)
-                        await SaveWorkspaceSettingsAsync();
+                        await SaveWorkspaceSettingsAsync().ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { }
             });
@@ -839,8 +909,8 @@ public class SettingsService : ISettingsService, IDisposable
         {
             try
             {
-                await Task.Delay(100); // small delay for file to be released
-                await LoadFromFileAsync(_userSettingsPath, _userSettings);
+                await Task.Delay(100).ConfigureAwait(false); // small delay for file to be released
+                await LoadFromFileAsync(_userSettingsPath, _userSettings).ConfigureAwait(false);
                 SettingsChanged?.Invoke(this, new SettingsChangedEventArgs(
                     _userSettings.Keys.ToList(), SettingsScope.User));
             }
@@ -854,8 +924,8 @@ public class SettingsService : ISettingsService, IDisposable
         {
             try
             {
-                await Task.Delay(100);
-                await LoadWorkspaceSettingsAsync();
+                await Task.Delay(100).ConfigureAwait(false);
+                await LoadWorkspaceSettingsAsync().ConfigureAwait(false);
                 SettingsChanged?.Invoke(this, new SettingsChangedEventArgs(
                     _workspaceSettings.Keys.ToList(), SettingsScope.Workspace));
             }
