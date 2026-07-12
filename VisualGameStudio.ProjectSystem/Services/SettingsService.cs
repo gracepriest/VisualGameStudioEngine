@@ -261,8 +261,11 @@ public class SettingsService : ISettingsService, IDisposable
 
     public async Task LoadAsync()
     {
-        await LoadFromFileAsync(_userSettingsPath, _userSettings);
-        await LoadWorkspaceSettingsAsync();
+        // ConfigureAwait(false) throughout this chain: LoadAsync is blocked on during app
+        // startup while the UI thread's dispatcher loop is not yet pumping — capturing that
+        // synchronization context would deadlock.
+        await LoadFromFileAsync(_userSettingsPath, _userSettings).ConfigureAwait(false);
+        await LoadWorkspaceSettingsAsync().ConfigureAwait(false);
     }
 
     public async Task SaveAsync()
@@ -645,7 +648,7 @@ public class SettingsService : ISettingsService, IDisposable
 
         try
         {
-            var json = await File.ReadAllTextAsync(filePath);
+            var json = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
             json = StripJsonComments(json);
             var settings = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
             if (settings != null)
@@ -657,9 +660,11 @@ public class SettingsService : ISettingsService, IDisposable
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore load errors
+            // Don't rethrow (a broken settings file must not break the caller), but don't
+            // swallow silently either — malformed-JSON/locked-file errors were undiagnosable.
+            System.Diagnostics.Debug.WriteLine($"[SettingsService] Failed to load {filePath}: {ex.Message}");
         }
     }
 
@@ -701,7 +706,7 @@ public class SettingsService : ISettingsService, IDisposable
     {
         if (string.IsNullOrEmpty(_workspacePath)) return;
         var settingsPath = Path.Combine(_workspacePath, ".vgs", "settings.json");
-        await LoadFromFileAsync(settingsPath, _workspaceSettings);
+        await LoadFromFileAsync(settingsPath, _workspaceSettings).ConfigureAwait(false);
     }
 
     private async Task SaveWorkspaceSettingsAsync()

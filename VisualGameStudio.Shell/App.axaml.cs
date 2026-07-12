@@ -137,12 +137,25 @@ public partial class App : Application
     /// <summary>
     /// Resolves the settings service from the DI container and loads ~/.vgs/settings.json from
     /// disk. Extracted as its own method so the startup contract can be exercised directly by
-    /// tests without spinning up Avalonia's application lifecycle. LoadAsync is a fast local
-    /// file read, so blocking here (pre-UI) is acceptable.
+    /// tests without spinning up Avalonia's application lifecycle.
+    ///
+    /// This runs on the UI thread with the AvaloniaSynchronizationContext installed but the
+    /// dispatcher loop not yet pumping, so awaiting the load inline would queue continuations
+    /// that can never run and deadlock the launch. Task.Run detaches the whole await chain from
+    /// the captured context (the thread-pool has no sync context), making the block-and-wait
+    /// safe regardless of the service's internals. Settings errors are logged, never rethrown:
+    /// a broken settings store must not prevent the IDE from launching.
     /// </summary>
     public static void LoadUserSettingsAtStartup(IServiceProvider services)
     {
-        var settingsService = services.GetRequiredService<ISettingsService>();
-        settingsService.LoadAsync().GetAwaiter().GetResult();
+        try
+        {
+            var settingsService = services.GetRequiredService<ISettingsService>();
+            Task.Run(() => settingsService.LoadAsync()).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            LogCrash("SETTINGS_LOAD", ex);
+        }
     }
 }
