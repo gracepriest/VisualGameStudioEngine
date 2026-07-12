@@ -438,6 +438,22 @@ public partial class SettingsViewModel : ViewModelBase
     public Action? CloseDialog { get; set; }
     public bool DialogResult { get; private set; }
 
+    /// <summary>
+    /// Confirmation gate for Reset All (Task 0.5): (title, message) =&gt; confirmed. The dialog
+    /// code-behind wires this to a real Yes/No dialog; tests set a stub. When null (unwired),
+    /// Reset All fails safe and does nothing, so a reset can never fire without an explicit
+    /// user confirmation.
+    /// </summary>
+    public Func<string, string, Task<bool>>? ConfirmResetInteraction { get; set; }
+
+    /// <summary>
+    /// The retired legacy <c>%APPDATA%\VisualGameStudio\settings.json</c> file that a USER-scope
+    /// Reset All deletes, so the one-time migration shim cannot resurrect pre-reset values on the
+    /// next launch. Overridable so reset tests point it at a temp file instead of the real store;
+    /// production leaves it at <see cref="LegacySettingsPath"/>.
+    /// </summary>
+    public string LegacyResetPath { get; set; } = LegacySettingsPath;
+
     public static event EventHandler? SettingsChanged;
 
     public SettingsViewModel()
@@ -1225,12 +1241,12 @@ public partial class SettingsViewModel : ViewModelBase
         // later RevertToSnapshot (e.g. the window Closing handler) can never roll an OK back.
         _reverted = true;
 
-        // Apply theme change immediately
+        // Nothing to persist here: every edit was already live-written to the active scope by
+        // AutoSaveSettingToService, so OK simply keeps those live changes. The old SaveToService()
+        // re-dumped all ~45 keys into the active scope on every OK — with the Workspace tab active
+        // that flooded a project's .vgs/settings.json with the entire schema. Re-apply the theme
+        // defensively (it was already applied live on change; Apply no-ops when unchanged).
         ThemeManager.Apply(SelectedTheme);
-
-        // Push to ISettingsService (the single store). The legacy %APPDATA% write was retired
-        // here — theme + editor settings now live/persist through ISettingsService only.
-        SaveToService();
 
         SettingsChanged?.Invoke(this, EventArgs.Empty);
         CloseDialog?.Invoke();
@@ -1352,67 +1368,87 @@ public partial class SettingsViewModel : ViewModelBase
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Reset All: clears every dialog-managed setting in the CURRENTLY-ACTIVE scope back to its
+    /// schema default, after an explicit user confirmation (Task 0.5).
+    ///
+    /// Design notes:
+    ///  - <b>Confirmation required.</b> <see cref="ConfirmResetInteraction"/> is wired by the dialog
+    ///    code-behind to a real Yes/No dialog and stubbed in tests; when null (unwired) the reset
+    ///    fails safe and does nothing, so a reset can never fire without an explicit confirmation.
+    ///  - <b>Scope-restricted.</b> Only the active scope's store is cleared (User tab → user store,
+    ///    Workspace tab → workspace store), never both. The old <c>ResetAllToDefaults()</c> wiped
+    ///    user + workspace + folder at once.
+    ///  - <b>Snapshot interplay (deliberate).</b> Reset does NOT close the dialog and does NOT touch
+    ///    the revert snapshot or <c>_reverted</c>. Consequence of the D1a model: a Cancel after a
+    ///    Reset restores the values the dialog opened with (the snapshot revert undoes the reset).
+    ///    That is the intended, consistent "Cancel = leave everything as it was at open" behavior
+    ///    (pinned by <c>SettingsResetTests.Reset_ThenCancel_RestoresPreResetValues</c>).
+    /// </summary>
     [RelayCommand]
-    private void ResetToDefaults()
+    private async Task ResetToDefaults()
     {
-        FontFamily = "Cascadia Code";
-        FontLigatures = false;
-        FontSize = 14;
-        TabSize = 4;
-        ConvertTabsToSpaces = true;
-        ShowLineNumbers = true;
-        HighlightCurrentLine = true;
-        ShowWhitespace = false;
-        WordWrap = false;
-        AutoIndent = true;
-        BracketMatching = true;
-        AutoCloseBrackets = true;
-        SmoothScrolling = true;
-        SelectedTheme = "Dark";
-        EnableAutoComplete = true;
-        ShowQuickInfo = true;
-        ShowSignatureHelp = true;
-        AutoCompleteDelay = 200;
-        SaveBeforeBuild = true;
-        ShowBuildOutput = true;
-        DefaultConfiguration = "Debug";
-        FormatOnSave = false;
-        TrimTrailingWhitespaceOnSave = false;
-        RenderWhitespace = "none";
-        WordWrapMode = "off";
-        CursorBlinking = "blink";
-        AutoSaveMode = "off";
-        AutoSaveDelay = 1000;
-        CompilerBackend = "CSharp";
-        TerminalFontFamily = "";
-        TerminalFontSize = 14;
-        TerminalCursorStyle = "block";
-        TerminalDefaultProfile = "";
-        DebugConsoleFontSize = 14;
-        DebugAllowBreakpointsEverywhere = false;
-        GitAutoFetch = true;
-        GitAutoFetchInterval = 180;
-        GitConfirmSync = true;
-        IconTheme = "default";
-        StartupEditor = "welcomePage";
-        SideBarLocation = "left";
-        LspServerPath = "";
-        LspAutoStart = true;
-        MinimapEnabled = true;
-        MinimapSide = "right";
-        StickyScrollEnabled = true;
+        // Confirm first. Unwired (null) ⇒ fail safe, change nothing. Plain await (no
+        // ConfigureAwait(false)): the continuation writes UI-bound observable properties, so it
+        // must resume on the captured UI context in the running app (tests have none — fine).
+        var confirm = ConfirmResetInteraction;
+        if (confirm == null) return;
 
+        var scopeName = ActiveScope == SettingsScope.Workspace ? "workspace" : "user";
+        bool confirmed = await confirm(
+            "Reset Settings",
+            $"Reset all {scopeName} settings to their defaults? Open documents update immediately.");
+        if (!confirmed) return;
+
+        if (_settingsService != null)
+        {
+            // Clear ONLY the active scope. ISettingsService has no "clear a scope" API, so remove
+            // each dialog-managed key from the active scope; every Remove rides the same atomic,
+            // debounced save path a normal edit uses.
+            foreach (var item in _allSettings)
+            {
+                _settingsService.Remove(item.Key, ActiveScope);
+            }
+
+            // A user-scope reset must also delete the retired legacy %APPDATA% file, or the
+            // one-time migration shim would resurrect the pre-reset theme on next launch. Guarded
+            // (the file may be absent or locked); path is overridable so tests stay off the real store.
+            if (ActiveScope == SettingsScope.User)
+            {
+                try
+                {
+                    if (File.Exists(LegacyResetPath))
+                        File.Delete(LegacyResetPath);
+                }
+                catch { /* legacy file absent or locked — nothing to migrate back anyway */ }
+            }
+        }
+
+        // Reflect the reset in the dialog UI (reads the post-reset values back into the VM).
+        LoadFromService();
         foreach (var shortcut in Shortcuts)
         {
             shortcut.CurrentBinding = shortcut.DefaultBinding;
         }
+        RefreshAllScopeBadges();
+        RefreshCategoryModifiedCounts();
 
+        // Apply the resulting EFFECTIVE theme immediately (guarded like startup/Cancel). Removing
+        // the active-scope override can change the effective theme — and when resetting Workspace
+        // the effective theme may still come from User, so read Effective rather than the VM's
+        // scope-local SelectedTheme. Apply early-returns when there is no Application (tests).
         if (_settingsService != null)
         {
-            _settingsService.ResetAllToDefaults();
+            try
+            {
+                var effectiveTheme = _settingsService.Get<string>("workbench.colorTheme", "Dark", SettingsScope.Effective);
+                ThemeManager.Apply(effectiveTheme);
+            }
+            catch { }
         }
 
-        RefreshCategoryModifiedCounts();
+        // Open editors listen ONLY to this static event; broadcast so they re-read the reset values.
+        SettingsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -1470,61 +1506,6 @@ public partial class SettingsViewModel : ViewModelBase
         CompilerBackend = _settingsService.Get("basiclang.compiler.backend", "CSharp", scope);
         LspServerPath = _settingsService.Get("basiclang.lsp.path", "", scope);
         LspAutoStart = _settingsService.Get("basiclang.lsp.autoStart", true, scope);
-    }
-
-    /// <summary>
-    /// Pushes ViewModel properties to ISettingsService.
-    /// </summary>
-    private void SaveToService()
-    {
-        if (_settingsService == null) return;
-
-        var scope = ActiveScope;
-
-        _settingsService.Set("editor.fontFamily", FontFamily, scope);
-        _settingsService.Set("editor.fontLigatures", FontLigatures, scope);
-        _settingsService.Set("editor.fontSize", FontSize, scope);
-        _settingsService.Set("editor.tabSize", TabSize, scope);
-        _settingsService.Set("editor.insertSpaces", ConvertTabsToSpaces, scope);
-        _settingsService.Set("editor.lineNumbers", ShowLineNumbers ? "on" : "off", scope);
-        _settingsService.Set("editor.highlightCurrentLine", HighlightCurrentLine, scope);
-        _settingsService.Set("editor.renderWhitespace", RenderWhitespace, scope);
-        _settingsService.Set("editor.wordWrap", WordWrapMode, scope);
-        _settingsService.Set("editor.autoIndent", AutoIndent, scope);
-        _settingsService.Set("editor.bracketPairColorization", BracketMatching, scope);
-        _settingsService.Set("editor.autoClosingBrackets", AutoCloseBrackets ? "always" : "never", scope);
-        _settingsService.Set("editor.smoothScrolling", SmoothScrolling, scope);
-        _settingsService.Set("editor.formatOnSave", FormatOnSave, scope);
-        _settingsService.Set("editor.trimTrailingWhitespaceOnSave", TrimTrailingWhitespaceOnSave, scope);
-        _settingsService.Set("editor.cursorBlinking", CursorBlinking, scope);
-        _settingsService.Set("editor.minimap.enabled", MinimapEnabled, scope);
-        _settingsService.Set("editor.minimap.side", MinimapSide, scope);
-        _settingsService.Set("editor.stickyScroll.enabled", StickyScrollEnabled, scope);
-        _settingsService.Set("workbench.colorTheme", SelectedTheme, scope);
-        _settingsService.Set("workbench.iconTheme", IconTheme, scope);
-        _settingsService.Set("workbench.startupEditor", StartupEditor, scope);
-        _settingsService.Set("workbench.sideBar.location", SideBarLocation, scope);
-        _settingsService.Set("terminal.integrated.fontFamily", TerminalFontFamily, scope);
-        _settingsService.Set("terminal.integrated.fontSize", TerminalFontSize, scope);
-        _settingsService.Set("terminal.integrated.cursorStyle", TerminalCursorStyle, scope);
-        _settingsService.Set("terminal.integrated.defaultProfile", TerminalDefaultProfile, scope);
-        _settingsService.Set("debug.console.fontSize", DebugConsoleFontSize, scope);
-        _settingsService.Set("debug.allowBreakpointsEverywhere", DebugAllowBreakpointsEverywhere, scope);
-        _settingsService.Set("git.autoFetch", GitAutoFetch, scope);
-        _settingsService.Set("git.autoFetchInterval", GitAutoFetchInterval, scope);
-        _settingsService.Set("git.confirmSync", GitConfirmSync, scope);
-        _settingsService.Set("intellisense.autoComplete", EnableAutoComplete, scope);
-        _settingsService.Set("intellisense.quickInfo", ShowQuickInfo, scope);
-        _settingsService.Set("intellisense.signatureHelp", ShowSignatureHelp, scope);
-        _settingsService.Set("intellisense.delay", AutoCompleteDelay, scope);
-        _settingsService.Set("build.saveBeforeBuild", SaveBeforeBuild, scope);
-        _settingsService.Set("build.showOutput", ShowBuildOutput, scope);
-        _settingsService.Set("build.defaultConfiguration", DefaultConfiguration, scope);
-        _settingsService.Set("files.autoSave", AutoSaveMode, scope);
-        _settingsService.Set("files.autoSaveDelay", AutoSaveDelay, scope);
-        _settingsService.Set("basiclang.compiler.backend", CompilerBackend, scope);
-        _settingsService.Set("basiclang.lsp.path", LspServerPath, scope);
-        _settingsService.Set("basiclang.lsp.autoStart", LspAutoStart, scope);
     }
 
     private void LoadSettings()

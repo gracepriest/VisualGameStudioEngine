@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Shell.ViewModels.Dialogs;
 
 namespace VisualGameStudio.Shell.Views.Dialogs;
@@ -44,7 +46,23 @@ public partial class SettingsDialog : AccessibleDialog
         if (DataContext is SettingsViewModel vm)
         {
             vm.CloseDialog = () => Close(vm.DialogResult);
+            // Reset All must confirm before wiping the active scope (Task 0.5). Wire the VM's
+            // confirmation gate to the app's shared Yes/No dialog convention (IDialogService).
+            vm.ConfirmResetInteraction = ConfirmResetAsync;
         }
+    }
+
+    /// <summary>
+    /// Shows the app's standard Yes/No confirmation for Reset All. Returns false (do not reset)
+    /// when no dialog service is available, matching the ViewModel's fail-safe contract.
+    /// </summary>
+    private static Task<bool> ConfirmResetAsync(string title, string message)
+    {
+        if (App.Services?.GetService(typeof(IDialogService)) is IDialogService dialogService)
+        {
+            return dialogService.ConfirmAsync(title, message);
+        }
+        return Task.FromResult(false);
     }
 }
 
