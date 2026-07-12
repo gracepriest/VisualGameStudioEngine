@@ -106,6 +106,27 @@ public class SettingsServicePersistenceTests
     }
 
     [Test]
+    public async Task Dispose_FlushesPendingDebouncedSave_NoExitDataLossWindow()
+    {
+        // Saves are debounced by 500ms. Dispose() used to just CANCEL the pending save without
+        // flushing, and app shutdown never flushed settings either -- so any edit made within
+        // ~500ms of quitting was silently lost. Dispose must complete one final save when a
+        // debounced save is still pending.
+        var service = new SettingsService(_homeDir);
+        service.Set("editor.fontSize", 61, SettingsScope.User);
+
+        // Dispose immediately -- well inside the 500ms debounce window, so the scheduled
+        // background save has not fired yet.
+        service.Dispose();
+
+        using var reloaded = new SettingsService(_homeDir);
+        await reloaded.LoadAsync();
+        Assert.That(reloaded.Get<int>("editor.fontSize", 14, SettingsScope.User), Is.EqualTo(61),
+            "a value set just before Dispose must survive: Dispose has to flush the pending " +
+            "debounced save instead of cancelling it (the 500ms exit data-loss window)");
+    }
+
+    [Test]
     public async Task LoadAsync_ToleratesDuplicateKeysInUserSettingsFile_LastValueWins()
     {
         // Reproduces the exact corruption pattern observed live: workbench.colorTheme

@@ -40,6 +40,12 @@ public class SettingsService : ISettingsService, IDisposable
     private readonly SemaphoreSlim _saveLock = new(1, 1);
     private bool _disposed;
 
+    // Set by ScheduleSave, cleared when the debounced save actually runs. Consulted by Dispose:
+    // a still-set flag there means an edit landed inside the debounce window and would be
+    // silently lost if Dispose just cancelled the timer (the ~500ms exit data-loss window).
+    private volatile bool _userSavePending;
+    private volatile bool _workspaceSavePending;
+
     // Debounce delay for saves
     private const int SaveDebounceMs = 500;
 
@@ -491,9 +497,42 @@ public class SettingsService : ISettingsService, IDisposable
 
         _userWatcher?.Dispose();
         _workspaceWatcher?.Dispose();
+
+        // Cancel the debounce timers FIRST so no new debounced save can start, then flush any
+        // save that was still pending. Without the flush, an edit made within ~500ms of app
+        // shutdown was silently lost: Dispose cancelled the pending save and nothing else ever
+        // wrote it (App.ShutdownRequested does not flush settings). The flush goes through the
+        // same _saveLock + atomic temp-file path as every other save (the whole chain carries
+        // ConfigureAwait(false)); Task.Run keeps it off any ambient synchronization context so
+        // blocking here cannot deadlock. Never throw from Dispose.
         _userSaveCts?.Cancel();
-        _userSaveCts?.Dispose();
         _workspaceSaveCts?.Cancel();
+        try
+        {
+            if (_userSavePending || _workspaceSavePending)
+            {
+                Task.Run(async () =>
+                {
+                    if (_userSavePending)
+                    {
+                        _userSavePending = false;
+                        await SaveToFileAsync(_userSettingsPath, _userSettings).ConfigureAwait(false);
+                    }
+                    if (_workspaceSavePending)
+                    {
+                        _workspaceSavePending = false;
+                        await SaveWorkspaceSettingsAsync().ConfigureAwait(false);
+                    }
+                }).GetAwaiter().GetResult();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[SettingsService] Failed to flush pending settings save on dispose: {ex.Message}");
+        }
+
+        _userSaveCts?.Dispose();
         _workspaceSaveCts?.Dispose();
         _saveLock.Dispose();
     }
@@ -826,6 +865,7 @@ public class SettingsService : ISettingsService, IDisposable
     {
         if (scope == SettingsScope.User)
         {
+            _userSavePending = true;
             _userSaveCts?.Cancel();
             _userSaveCts = new CancellationTokenSource();
             var token = _userSaveCts.Token;
@@ -835,13 +875,20 @@ public class SettingsService : ISettingsService, IDisposable
                 {
                     await Task.Delay(SaveDebounceMs, token).ConfigureAwait(false);
                     if (!token.IsCancellationRequested)
+                    {
+                        // Clear BEFORE saving: the dict is serialized live under _saveLock, so
+                        // this save already includes any concurrent edit; an edit arriving after
+                        // the clear re-sets the flag and schedules its own save.
+                        _userSavePending = false;
                         await SaveToFileAsync(_userSettingsPath, _userSettings).ConfigureAwait(false);
+                    }
                 }
                 catch (OperationCanceledException) { }
             });
         }
         else if (scope == SettingsScope.Workspace)
         {
+            _workspaceSavePending = true;
             _workspaceSaveCts?.Cancel();
             _workspaceSaveCts = new CancellationTokenSource();
             var token = _workspaceSaveCts.Token;
@@ -851,7 +898,10 @@ public class SettingsService : ISettingsService, IDisposable
                 {
                     await Task.Delay(SaveDebounceMs, token).ConfigureAwait(false);
                     if (!token.IsCancellationRequested)
+                    {
+                        _workspaceSavePending = false;
                         await SaveWorkspaceSettingsAsync().ConfigureAwait(false);
+                    }
                 }
                 catch (OperationCanceledException) { }
             });

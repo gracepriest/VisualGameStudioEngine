@@ -1394,7 +1394,12 @@ public partial class SettingsViewModel : ViewModelBase
         var confirm = ConfirmResetInteraction;
         if (confirm == null) return;
 
-        var scopeName = ActiveScope == SettingsScope.Workspace ? "workspace" : "user";
+        // Capture the scope ONCE, before the await: the confirm dialog is parented to the main
+        // window, so the user can flip the User/Workspace scope toggle while it is open. The
+        // reset must hit exactly the scope named in the confirmation message, not whatever
+        // happens to be active after the dialog closes.
+        var scope = ActiveScope;
+        var scopeName = scope == SettingsScope.Workspace ? "workspace" : "user";
         bool confirmed = await confirm(
             "Reset Settings",
             $"Reset all {scopeName} settings to their defaults? Open documents update immediately.");
@@ -1402,18 +1407,18 @@ public partial class SettingsViewModel : ViewModelBase
 
         if (_settingsService != null)
         {
-            // Clear ONLY the active scope. ISettingsService has no "clear a scope" API, so remove
-            // each dialog-managed key from the active scope; every Remove rides the same atomic,
+            // Clear ONLY the captured scope. ISettingsService has no "clear a scope" API, so
+            // remove each dialog-managed key from that scope; every Remove rides the same atomic,
             // debounced save path a normal edit uses.
             foreach (var item in _allSettings)
             {
-                _settingsService.Remove(item.Key, ActiveScope);
+                _settingsService.Remove(item.Key, scope);
             }
 
             // A user-scope reset must also delete the retired legacy %APPDATA% file, or the
             // one-time migration shim would resurrect the pre-reset theme on next launch. Guarded
             // (the file may be absent or locked); path is overridable so tests stay off the real store.
-            if (ActiveScope == SettingsScope.User)
+            if (scope == SettingsScope.User)
             {
                 try
                 {
