@@ -37,16 +37,20 @@ public class SettingsService : ISettingsService, IDisposable
 
     private CancellationTokenSource? _userSaveCts;
     private CancellationTokenSource? _workspaceSaveCts;
+    // True while a scheduled debounced save has not yet run; Dispose flushes dirty scopes
+    // so a change made within the debounce window of app exit isn't lost.
+    private volatile bool _userSaveDirty;
+    private volatile bool _workspaceSaveDirty;
     private readonly SemaphoreSlim _saveLock = new(1, 1);
     private bool _disposed;
 
     // Debounce delay for saves
     private const int SaveDebounceMs = 500;
 
-    public SettingsService()
+    public SettingsService(string? userSettingsDirectory = null)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        _userSettingsDir = Path.Combine(home, ".vgs");
+        _userSettingsDir = userSettingsDirectory ?? Path.Combine(home, ".vgs");
         Directory.CreateDirectory(_userSettingsDir);
         _userSettingsPath = Path.Combine(_userSettingsDir, "settings.json");
 
@@ -477,6 +481,30 @@ public class SettingsService : ISettingsService, IDisposable
         _userSaveCts?.Dispose();
         _workspaceSaveCts?.Cancel();
         _workspaceSaveCts?.Dispose();
+
+        // Cancelling above killed any pending debounced save; flush dirty scopes now so a
+        // settings change made within the debounce window of shutdown isn't lost. The DI
+        // container disposes this singleton on app exit, which makes this the shutdown flush.
+        try
+        {
+            if (_userSaveDirty || _workspaceSaveDirty)
+            {
+                // Flush via the thread pool: blocking directly on the async saves from a
+                // UI-thread Dispose would deadlock on the captured SynchronizationContext.
+                Task.Run(async () =>
+                {
+                    if (_userSaveDirty)
+                        await SaveToFileAsync(_userSettingsPath, _userSettings);
+                    if (_workspaceSaveDirty)
+                        await SaveWorkspaceSettingsAsync();
+                }).GetAwaiter().GetResult();
+            }
+        }
+        catch
+        {
+            // Best-effort flush; never throw from Dispose
+        }
+
         _saveLock.Dispose();
     }
 
@@ -728,6 +756,7 @@ public class SettingsService : ISettingsService, IDisposable
     {
         if (scope == SettingsScope.User)
         {
+            _userSaveDirty = true;
             _userSaveCts?.Cancel();
             _userSaveCts = new CancellationTokenSource();
             var token = _userSaveCts.Token;
@@ -737,13 +766,19 @@ public class SettingsService : ISettingsService, IDisposable
                 {
                     await Task.Delay(SaveDebounceMs, token);
                     if (!token.IsCancellationRequested)
+                    {
+                        // Clear the flag before writing: a Set() racing with the write
+                        // re-marks dirty, so Dispose at worst re-flushes (never loses data).
+                        _userSaveDirty = false;
                         await SaveToFileAsync(_userSettingsPath, _userSettings);
+                    }
                 }
                 catch (OperationCanceledException) { }
             });
         }
         else if (scope == SettingsScope.Workspace)
         {
+            _workspaceSaveDirty = true;
             _workspaceSaveCts?.Cancel();
             _workspaceSaveCts = new CancellationTokenSource();
             var token = _workspaceSaveCts.Token;
@@ -753,7 +788,10 @@ public class SettingsService : ISettingsService, IDisposable
                 {
                     await Task.Delay(SaveDebounceMs, token);
                     if (!token.IsCancellationRequested)
+                    {
+                        _workspaceSaveDirty = false;
                         await SaveWorkspaceSettingsAsync();
+                    }
                 }
                 catch (OperationCanceledException) { }
             });
