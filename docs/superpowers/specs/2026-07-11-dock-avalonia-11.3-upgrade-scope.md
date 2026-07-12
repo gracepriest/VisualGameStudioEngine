@@ -1,6 +1,11 @@
 # Scoping: Avalonia 11.1 → 11.3 + Dock.Avalonia 11.3 upgrade
 
-**Status:** Scoping only — not started. Investigation done 2026-07-11.
+**Status:** EXECUTED 2026-07-12 — merged to master (branch `avalonia-dock-11.3-upgrade`). The spike's
+predictions held exactly (2 AXAML breaks, 0 C# errors). One additional runtime regression found and
+fixed: Dock 11.3 collapses empty docks more aggressively, flattening MainArea away when every panel
+closes — `DockFactory.EnsureMainArea()` now rebuilds it around the live DocumentDock. Suite
+2459/2459; manual UI pass verified (editor, docking/float/re-dock, resize, reopen, debug).
+Deprecated drag-drop API migration (§3.4) deferred — still warnings only.
 **Motivation:** Get the newer Dock's smoother drag-dock / floating-adorner behavior so panels
 dock reliably on any drop (not only when dropped on the compass arrows), removing the 11.1.0.2
 workarounds. See [[dock-drag-float-behavior]] in auto-memory for the 11.1.0.2 constraints.
