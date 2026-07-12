@@ -431,6 +431,11 @@ End Namespace
             // C++ console application (Language=Cpp: user-authored C++ built by
             // CppProjectBuilder through a discovered native toolchain — the
             // BasicLang pipeline is not involved).
+            // NOTE: The cpp-console / cpp-library / cpp-game file contents must
+            // stay in sync with the IDE's cpp-console-app / cpp-library /
+            // cpp-game-app templates in
+            // VisualGameStudio.ProjectSystem/Services/ProjectTemplateService.cs
+            // (the two template systems are known to drift — change one, change both).
             _templates["cpp-console"] = new ProjectTemplate
             {
                 Name = "cpp-console",

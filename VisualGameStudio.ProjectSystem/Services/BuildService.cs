@@ -1017,12 +1017,6 @@ public class BuildService : IBuildService
     }
 
     /// <summary>
-    /// Finds the directory where the game-engine wrapper (RaylibWrapper.dll)
-    /// ships. The primary location is the running process's base directory (the
-    /// IDE folder — same model as the CLI resolving next to BasicLang.exe), with
-    /// dev-tree fallbacks for running from build output.
-    /// </summary>
-    /// <summary>
     /// Native C++ project build (Language=Cpp). Delegates to the SAME
     /// CppProjectBuilder the CLI uses (BasicLang.Compiler.ProjectSystem) — no
     /// IDE-side reimplementation. Never throws: any I/O or project-load failure
@@ -1165,6 +1159,12 @@ public class BuildService : IBuildService
         return true;
     }
 
+    /// <summary>
+    /// Finds the directory where the game-engine wrapper (RaylibWrapper.dll)
+    /// ships. The primary location is the running process's base directory (the
+    /// IDE folder — same model as the CLI resolving next to BasicLang.exe), with
+    /// dev-tree fallbacks for running from build output.
+    /// </summary>
     private static string? FindEngineBaseDir()
     {
         foreach (var dir in CandidateEngineDirs())

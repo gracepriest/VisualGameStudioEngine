@@ -94,6 +94,66 @@ public class TemplateBuildSweepTests
             $"'{templateId}' project failed to build.\n--- compiler output ---\n{output}");
     }
 
+    [TestCase("cpp-console-app")]
+    [TestCase("cpp-library")]
+    [TestCase("cpp-game-app")]
+    public async Task CppTemplate_CreatesProject_ThatCompilerBuilds(string templateId)
+    {
+        var compiler = FindCompiler();
+        if (compiler == null)
+            Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+        if (templateId == "cpp-game-app" &&
+            BasicLang.Compiler.ProjectSystem.EngineDeployment.LocateImportLib() == null)
+            Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built)");
+
+        var template = ProjectTemplates.All.Single(t => t.Id == templateId);
+        var name = "Sweep" + string.Concat(templateId.Split('-').Select(
+            p => char.ToUpperInvariant(p[0]) + p.Substring(1)));
+
+        var options = new CreateProjectOptions
+        {
+            Name = name,
+            Location = _rootDir,
+            Template = template,
+            SolutionType = SolutionTypes.Cpp,
+            CreateSolutionFolder = true,
+            CreateGitRepository = false
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, $"project creation failed: {result.Error}");
+        Assert.That(File.ReadAllText(result.ProjectPath!), Does.Contain("<Language>Cpp</Language>"));
+
+        var (exitCode, output) = RunCompilerBuild(compiler, result.ProjectPath!);
+        Assert.That(exitCode, Is.EqualTo(0),
+            $"'{templateId}' project failed to build.\n--- compiler output ---\n{output}");
+    }
+
+    [Test]
+    public async Task CppLibraryTemplate_DoesNotLeaveBogusMainCpp()
+    {
+        // Pins the GenerateSourceFilesAsync gating: the generic BasicLang-content
+        // Main.<ext> write must not run for cpp solution types.
+        var template = ProjectTemplates.All.Single(t => t.Id == "cpp-library");
+        var options = new CreateProjectOptions
+        {
+            Name = "SweepCppLibNoMain",
+            Location = _rootDir,
+            Template = template,
+            SolutionType = SolutionTypes.Cpp,
+            CreateSolutionFolder = false,
+            CreateGitRepository = false
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, $"project creation failed: {result.Error}");
+        var projDir = Path.GetDirectoryName(result.ProjectPath!)!;
+        Assert.That(File.Exists(Path.Combine(projDir, "Main.cpp")), Is.False,
+            "generic Main-file write must be gated off for cpp solution types");
+        Assert.That(File.Exists(Path.Combine(projDir, "mathutils.cpp")), Is.True);
+        Assert.That(File.Exists(Path.Combine(projDir, "mathutils.h")), Is.True);
+    }
+
     private static (int ExitCode, string Output) RunCompilerBuild(string compiler, string projectFile)
     {
         var psi = new ProcessStartInfo
