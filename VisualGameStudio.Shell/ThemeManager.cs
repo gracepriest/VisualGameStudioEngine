@@ -135,7 +135,10 @@ public static class ThemeManager
                 IsHighContrast = false;
                 break;
             case "High Contrast":
-                variant = ThemeVariant.Dark; // Avalonia has no HC variant; use Dark base
+                // Custom variant whose inheritance parent is Dark: keys defined in the
+                // HighContrast ThemeDictionary (AppStyles.axaml) win; everything else falls
+                // back to the Dark palette. (Proven in ThemeVariantFallbackSpikeTests.)
+                variant = AppThemes.HighContrast;
                 IsDark = true;
                 IsHighContrast = true;
                 break;

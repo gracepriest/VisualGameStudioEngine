@@ -1,5 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:VisualGameStudio.Shell"
         xmlns:idc="using:Dock.Avalonia.Controls"
         xmlns:ds="using:Dock.Settings"
         xmlns:psp="using:Dock.Controls.ProportionalStackPanel">
@@ -56,41 +57,45 @@
           <SolidColorBrush x:Key="IdeFooterBg" Color="#E8E8E8"/>
           <SolidColorBrush x:Key="IdeFooterBorder" Color="#CCCEDB"/>
         </ResourceDictionary>
+        <!-- High Contrast: a real ThemeVariant (AppThemes.HighContrast inherits Dark), so any
+             Ide* key NOT overridden here falls back to the Dark dictionary above. These 22 keys
+             were formerly in a dead <Style Selector="Window.highContrast"><Style.Resources> block
+             (Style.Resources are not selector-scoped, so theme-dictionary lookup won first and HC
+             silently rendered with the Dark palette). -->
+        <ResourceDictionary x:Key="{x:Static local:AppThemes.HighContrast}">
+          <SolidColorBrush x:Key="IdeBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeFg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdePanelBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeMenuBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeBorder" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeHoverBg" Color="#1A1A2E"/>
+          <SolidColorBrush x:Key="IdeInputBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeInputBorder" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeSelectionBg" Color="#264F78"/>
+          <SolidColorBrush x:Key="IdeHeaderBg" Color="#1A1A1A"/>
+          <SolidColorBrush x:Key="IdeThumbBg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeThumbHover" Color="#FFFF00"/>
+          <SolidColorBrush x:Key="IdeContextBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeContextBorder" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeSecondaryBg" Color="#1A1A1A"/>
+          <SolidColorBrush x:Key="IdeSecondaryFg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeSecondaryBorder" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeSecondaryHover" Color="#1A1A2E"/>
+          <SolidColorBrush x:Key="IdeListHover" Color="#1A1A2E"/>
+          <SolidColorBrush x:Key="IdeListSelected" Color="#264F78"/>
+          <SolidColorBrush x:Key="IdeFooterBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeFooterBorder" Color="#FFFFFF"/>
+        </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>
   </Styles.Resources>
 
   <!-- ========== HIGH CONTRAST THEME OVERRIDES ========== -->
-  <!-- These styles activate when ThemeManager adds the "highContrast" class to the window. -->
-
-  <Style Selector="Window.highContrast">
-    <Setter Property="Background" Value="#000000"/>
-    <Setter Property="Foreground" Value="#FFFFFF"/>
-    <Style.Resources>
-      <SolidColorBrush x:Key="IdeBg" Color="#000000"/>
-      <SolidColorBrush x:Key="IdeFg" Color="#FFFFFF"/>
-      <SolidColorBrush x:Key="IdePanelBg" Color="#000000"/>
-      <SolidColorBrush x:Key="IdeMenuBg" Color="#000000"/>
-      <SolidColorBrush x:Key="IdeBorder" Color="#FFFFFF"/>
-      <SolidColorBrush x:Key="IdeHoverBg" Color="#1A1A2E"/>
-      <SolidColorBrush x:Key="IdeInputBg" Color="#000000"/>
-      <SolidColorBrush x:Key="IdeInputBorder" Color="#FFFFFF"/>
-      <SolidColorBrush x:Key="IdeSelectionBg" Color="#264F78"/>
-      <SolidColorBrush x:Key="IdeHeaderBg" Color="#1A1A1A"/>
-      <SolidColorBrush x:Key="IdeThumbBg" Color="#FFFFFF"/>
-      <SolidColorBrush x:Key="IdeThumbHover" Color="#FFFF00"/>
-      <SolidColorBrush x:Key="IdeContextBg" Color="#000000"/>
-      <SolidColorBrush x:Key="IdeContextBorder" Color="#FFFFFF"/>
-      <SolidColorBrush x:Key="IdeSecondaryBg" Color="#1A1A1A"/>
-      <SolidColorBrush x:Key="IdeSecondaryFg" Color="#FFFFFF"/>
-      <SolidColorBrush x:Key="IdeSecondaryBorder" Color="#FFFFFF"/>
-      <SolidColorBrush x:Key="IdeSecondaryHover" Color="#1A1A2E"/>
-      <SolidColorBrush x:Key="IdeListHover" Color="#1A1A2E"/>
-      <SolidColorBrush x:Key="IdeListSelected" Color="#264F78"/>
-      <SolidColorBrush x:Key="IdeFooterBg" Color="#000000"/>
-      <SolidColorBrush x:Key="IdeFooterBorder" Color="#FFFFFF"/>
-    </Style.Resources>
-  </Style>
+  <!-- These styles activate when ThemeManager adds the "highContrast" class to the window.
+       The HC brush palette itself lives in the AppThemes.HighContrast ThemeDictionary above
+       (the old Style.Resources block here was dead code — not selector-scoped — and was removed).
+       The window's black background / white foreground now come from the base Window style
+       resolving IdeBg/IdeFg against the HighContrast variant. -->
 
   <!-- High Contrast: Menu -->
   <Style Selector="Window.highContrast Menu">
