@@ -53,6 +53,7 @@ public class CompileCommandsWriterTests
             Assert.That(args, Does.Contain("-std=c++20"));
             Assert.That(args, Does.Contain("-I" + Path.Combine(_dir, "inc")));
             Assert.That(args, Does.Contain("-DFLAG"));
+            Assert.That(args.Last(), Is.EqualTo(e.GetProperty("file").GetString()), "per-entry arguments must end with that entry's own file");
         }
         Assert.That(entries.Select(e => e.GetProperty("file").GetString()),
             Is.EquivalentTo(request.SourceFiles));
