@@ -20,6 +20,21 @@ public partial class SettingsDialog : AccessibleDialog
     {
         InitializeComponent();
         EnterActivatesDefaultButton = false; // Settings has many interactive controls
+        Closing += OnDialogClosing;
+    }
+
+    /// <summary>
+    /// Closing the window via the X button or Escape must behave like Cancel: undo every
+    /// live-applied change (theme included). Save() sets DialogResult=true first, so an
+    /// OK-initiated close is skipped. RevertToSnapshot is guarded, so when Cancel already
+    /// reverted before closing this is a harmless no-op.
+    /// </summary>
+    private void OnDialogClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (DataContext is SettingsViewModel vm && vm.DialogResult != true)
+        {
+            vm.RevertToSnapshot();
+        }
     }
 
     protected override void OnDataContextChanged(EventArgs e)

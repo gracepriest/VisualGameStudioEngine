@@ -172,6 +172,18 @@ public partial class SettingsViewModel : ViewModelBase
 
     private SettingsService? _settingsService;
 
+    // -- Cancel/X snapshot-revert (Task 0.4, decision D1a: live-apply + revert-on-cancel) --
+    // Raw per-(key, scope) values captured when the dialog opened. A null value records "absent"
+    // (the key had no override in that scope at open) as a distinct state, so Cancel/X can remove
+    // an override that live-apply added rather than leaving a stale value behind. Changes are
+    // reverted in the SAME scope they were made (User or Workspace).
+    private readonly Dictionary<(string Key, SettingsScope Scope), object?> _openSnapshot = new();
+    // Effective theme name at open; Cancel restores the service value then re-applies this visually.
+    private string _openThemeName = "Dark";
+    // Guards RevertToSnapshot so the Cancel-button path and the window-close (X / Esc) path — both
+    // of which route through RevertToSnapshot — undo the changes exactly once.
+    private bool _reverted;
+
     // Current active scope for editing
     [ObservableProperty]
     private SettingsScope _activeScope = SettingsScope.User;
@@ -449,6 +461,9 @@ public partial class SettingsViewModel : ViewModelBase
         {
             _settingsService.SettingsChanged += OnExternalSettingsChanged;
         }
+
+        // Capture the opening state so Cancel/X can revert every live-applied change (Task 0.4).
+        SnapshotForRevert();
     }
 
     /// <summary>
@@ -459,6 +474,8 @@ public partial class SettingsViewModel : ViewModelBase
         _settingsService = settingsService;
         LoadFromService();
         UpdateScopePaths();
+        // Re-snapshot against the injected service (this() snapshotted against the DI/absent one).
+        SnapshotForRevert();
     }
 
     private void OnExternalSettingsChanged(object? sender, SettingsChangedEventArgs e)
@@ -1204,6 +1221,9 @@ public partial class SettingsViewModel : ViewModelBase
     private void Save()
     {
         DialogResult = true;
+        // Accepting the dialog keeps the live-applied changes; make the close path a no-op so a
+        // later RevertToSnapshot (e.g. the window Closing handler) can never roll an OK back.
+        _reverted = true;
 
         // Apply theme change immediately
         ThemeManager.Apply(SelectedTheme);
@@ -1220,7 +1240,92 @@ public partial class SettingsViewModel : ViewModelBase
     private void Cancel()
     {
         DialogResult = false;
+        // Undo every live-applied change before the window closes. The Closing handler routes
+        // through the same guarded RevertToSnapshot, so this is safe to call from both paths.
+        RevertToSnapshot();
         CloseDialog?.Invoke();
+    }
+
+    /// <summary>
+    /// Captures the raw per-scope value of every setting the dialog manages (plus the effective
+    /// theme) at the moment the dialog opens. Cancel/X replays this to restore exactly the state
+    /// the user opened with, undoing all live-applied changes. "Absent" (no override in that
+    /// scope) is recorded as a null value so Cancel removes an override live-apply added.
+    /// </summary>
+    private void SnapshotForRevert()
+    {
+        _reverted = false;
+        _openSnapshot.Clear();
+        if (_settingsService == null) return;
+
+        // The managed key set is derived from the dialog's own settings inventory (built by
+        // BuildSearchableSettings) so it can never drift from a hardcoded duplicate list.
+        foreach (var item in _allSettings)
+        {
+            var key = item.Key;
+            _openSnapshot[(key, SettingsScope.User)] = _settingsService.Get(key, SettingsScope.User);
+            if (_settingsService.HasWorkspace)
+                _openSnapshot[(key, SettingsScope.Workspace)] = _settingsService.Get(key, SettingsScope.Workspace);
+        }
+
+        _openThemeName = _settingsService.Get("workbench.colorTheme", "Dark", SettingsScope.Effective);
+    }
+
+    /// <summary>
+    /// Restores every managed setting to the raw per-scope value captured when the dialog opened,
+    /// undoing all live-applied changes (theme included), then re-applies the snapshot theme.
+    /// Runs at most once (guarded) so the Cancel-button path and the window-close (X / Esc) path
+    /// can both call it without double-reverting; Save() marks the dialog so close does not revert.
+    /// </summary>
+    public void RevertToSnapshot()
+    {
+        if (_reverted) return;
+        _reverted = true;
+
+        if (_settingsService != null)
+        {
+            foreach (var entry in _openSnapshot)
+            {
+                var (key, scope) = entry.Key;
+                var snapshotValue = entry.Value;
+                var currentValue = _settingsService.Get(key, scope);
+
+                if (RawValueEquals(currentValue, snapshotValue))
+                    continue; // unchanged since open — nothing to undo (and no needless write/event)
+
+                if (snapshotValue == null)
+                    _settingsService.Remove(key, scope); // had no override at open — remove the added one
+                else
+                    _settingsService.Set(key, snapshotValue, scope); // restore the opening value
+            }
+        }
+
+        // Restore the theme that was showing at open. Apply early-returns when Application.Current
+        // is null (unit tests); the try/catch only guards a real theme-apply fault from blocking
+        // dialog close (same defensive pattern used at startup).
+        try
+        {
+            ThemeManager.Apply(_openThemeName);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Compares two raw settings values (as returned by <c>ISettingsService.Get(key, scope)</c>),
+    /// tolerating the int/long/double boxing differences a JSON round-trip can introduce. A null
+    /// operand means "absent in that scope".
+    /// </summary>
+    private static bool RawValueEquals(object? a, object? b)
+    {
+        if (a is null) return b is null;
+        if (b is null) return false;
+        if (Equals(a, b)) return true;
+        // Numbers can come back boxed as int, long, or double; compare by invariant string form
+        // so 14 == 14L == 14.0, while strings ("on") and bools compare exactly.
+        return string.Equals(
+            System.Convert.ToString(a, CultureInfo.InvariantCulture),
+            System.Convert.ToString(b, CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
     }
 
     [RelayCommand]
