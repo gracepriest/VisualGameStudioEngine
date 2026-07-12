@@ -44,9 +44,19 @@ public class SettingsService : ISettingsService, IDisposable
     private const int SaveDebounceMs = 500;
 
     public SettingsService()
+        : this(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        _userSettingsDir = Path.Combine(home, ".vgs");
+    }
+
+    /// <summary>
+    /// Testable constructor that lets callers override the "home" directory under which
+    /// ~/.vgs/settings.json is located. Production code should use the parameterless
+    /// constructor; tests use this overload (pointed at a temp directory) so they never
+    /// touch the real user profile's settings.
+    /// </summary>
+    public SettingsService(string userHomeDirectory)
+    {
+        _userSettingsDir = Path.Combine(userHomeDirectory, ".vgs");
         Directory.CreateDirectory(_userSettingsDir);
         _userSettingsPath = Path.Combine(_userSettingsDir, "settings.json");
 

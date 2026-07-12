@@ -66,6 +66,10 @@ public partial class App : Application
         services.ConfigureServices();
         Services = services.BuildServiceProvider();
 
+        // Load ~/.vgs/settings.json before anything (e.g. MainWindowViewModel below) reads
+        // settings, otherwise every Get() silently falls back to schema defaults.
+        LoadUserSettingsAtStartup(Services);
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var mainViewModel = Services.GetRequiredService<MainWindowViewModel>();
@@ -128,5 +132,17 @@ public partial class App : Application
     private static void RxApp_DefaultExceptionHandler()
     {
         // No-op: Avalonia scheduler doesn't expose a public catch handler
+    }
+
+    /// <summary>
+    /// Resolves the settings service from the DI container and loads ~/.vgs/settings.json from
+    /// disk. Extracted as its own method so the startup contract can be exercised directly by
+    /// tests without spinning up Avalonia's application lifecycle. LoadAsync is a fast local
+    /// file read, so blocking here (pre-UI) is acceptable.
+    /// </summary>
+    public static void LoadUserSettingsAtStartup(IServiceProvider services)
+    {
+        var settingsService = services.GetRequiredService<ISettingsService>();
+        settingsService.LoadAsync().GetAwaiter().GetResult();
     }
 }
