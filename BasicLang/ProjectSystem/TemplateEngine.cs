@@ -427,6 +427,134 @@ End Namespace
 "
                 }
             };
+
+            // C++ console application (Language=Cpp: user-authored C++ built by
+            // CppProjectBuilder through a discovered native toolchain — the
+            // BasicLang pipeline is not involved).
+            _templates["cpp-console"] = new ProjectTemplate
+            {
+                Name = "cpp-console",
+                DisplayName = "C++ Console Application",
+                Description = "A native C++ command-line application",
+                ShortName = "cpp-console",
+                DefaultProjectName = "MyCppApp",
+                Tags = new List<string> { "cpp", "console" },
+                Files = new Dictionary<string, string>
+                {
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
+  <PropertyGroup>
+    <ProjectName>{{ProjectName}}</ProjectName>
+    <OutputType>Exe</OutputType>
+    <Language>Cpp</Language>
+    <CppStandard>c++20</CppStandard>
+    <TargetBackend>Cpp</TargetBackend>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""main.cpp"" />
+  </ItemGroup>
+</BasicLangProject>",
+                    ["main.cpp"] = @"#include <iostream>
+
+int main()
+{
+    std::cout << ""Hello from {{ProjectName}}!"" << std::endl;
+    return 0;
+}
+",
+                    [".gitignore"] = "bin/\nobj/\n"
+                }
+            };
+
+            // C++ static library (Language=Cpp, OutputType=Library — archives
+            // via lib.exe/ar into a .lib/.a).
+            _templates["cpp-library"] = new ProjectTemplate
+            {
+                Name = "cpp-library",
+                DisplayName = "C++ Static Library",
+                Description = "A native C++ static library",
+                ShortName = "cpp-library",
+                DefaultProjectName = "MyCppLib",
+                Tags = new List<string> { "cpp", "library" },
+                Files = new Dictionary<string, string>
+                {
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
+  <PropertyGroup>
+    <ProjectName>{{ProjectName}}</ProjectName>
+    <OutputType>Library</OutputType>
+    <Language>Cpp</Language>
+    <CppStandard>c++20</CppStandard>
+    <TargetBackend>Cpp</TargetBackend>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""mathutils.cpp"" />
+  </ItemGroup>
+</BasicLangProject>",
+                    ["mathutils.h"] = "#pragma once\nint Add(int a, int b);\n",
+                    ["mathutils.cpp"] = "#include \"mathutils.h\"\nint Add(int a, int b) { return a + b; }\n",
+                    [".gitignore"] = "bin/\nobj/\n"
+                }
+            };
+
+            // C++ game on the VGS engine (Language=Cpp + NativeLib link against
+            // the engine import library; CppProjectBuilder resolves the .lib via
+            // EngineDeployment and deploys the native DLLs next to the exe).
+            _templates["cpp-game"] = new ProjectTemplate
+            {
+                Name = "cpp-game",
+                DisplayName = "C++ Game (VGS Engine)",
+                Description = "A native C++ game using the VisualGameStudio engine",
+                ShortName = "cpp-game",
+                DefaultProjectName = "MyCppGame",
+                Tags = new List<string> { "cpp", "game", "engine" },
+                Files = new Dictionary<string, string>
+                {
+                    ["{{ProjectName}}.blproj"] = @"<BasicLangProject Version=""1.0"">
+  <PropertyGroup>
+    <ProjectName>{{ProjectName}}</ProjectName>
+    <OutputType>Exe</OutputType>
+    <Language>Cpp</Language>
+    <CppStandard>c++20</CppStandard>
+    <TargetBackend>Cpp</TargetBackend>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""main.cpp"" />
+    <NativeLib Include=""VisualGameStudioEngine.lib"" />
+  </ItemGroup>
+</BasicLangProject>",
+                    ["main.cpp"] = @"// Engine C-ABI declarations (see VisualGameStudioEngine/framework.h).
+extern ""C"" {
+    bool Framework_Initialize(int width, int height, const char* title);
+    void Framework_Update();
+    bool Framework_ShouldClose();
+    void Framework_Shutdown();
+    void Framework_BeginDrawing();
+    void Framework_EndDrawing();
+    void Framework_ClearBackground(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    void Framework_DrawText(const char* text, int x, int y, int fontSize,
+                            unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+}
+
+int main()
+{
+    if (!Framework_Initialize(800, 450, ""{{ProjectName}}""))
+        return 1;
+
+    while (!Framework_ShouldClose())
+    {
+        Framework_Update();
+        Framework_BeginDrawing();
+        Framework_ClearBackground(30, 30, 46, 255);
+        Framework_DrawText(""Hello from {{ProjectName}}!"", 260, 200, 24, 205, 214, 244, 255);
+        Framework_EndDrawing();
+    }
+
+    Framework_Shutdown();
+    return 0;
+}
+",
+                    [".gitignore"] = "bin/\nobj/\n"
+                }
+            };
         }
 
         private void LoadTemplatesFromDirectory(string path)
