@@ -329,22 +329,33 @@ public class BuildService : IBuildService
 
             BuildProgress?.Invoke(this, new BuildProgressEventArgs("Starting build...", 0));
 
-            // Get source files
-            var sourceFiles = project.GetSourceFiles().ToList();
-            if (!sourceFiles.Any())
+            // ---------- Language=Cpp: route to the shared native builder ----------
+            if (project.Language == ProjectLanguage.Cpp)
             {
-                result.Success = false;
-                result.Diagnostics.Add(new DiagnosticItem
-                {
-                    Id = "BL0001",
-                    Message = "No source files found in project",
-                    Severity = DiagnosticSeverity.Error
-                });
-                return result;
+                // BuildCppProject never throws (exceptions map to a failed result)
+                // so execution ALWAYS falls through to the shared finalization
+                // below — BuildCompleted is the Error List's only diagnostics feed.
+                result = await Task.Run(() => BuildCppProject(project), _buildCts.Token);
             }
+            else
+            {
+                // Get source files
+                var sourceFiles = project.GetSourceFiles().ToList();
+                if (!sourceFiles.Any())
+                {
+                    result.Success = false;
+                    result.Diagnostics.Add(new DiagnosticItem
+                    {
+                        Id = "BL0001",
+                        Message = "No source files found in project",
+                        Severity = DiagnosticSeverity.Error
+                    });
+                    return result;
+                }
 
-            // Delegate to the real BasicLang compiler engine (same as `BasicLang.exe build`)
-            result = await CompileWithBasicLangApiAsync(project, sourceFiles, _buildCts.Token);
+                // Delegate to the real BasicLang compiler engine (same as `BasicLang.exe build`)
+                result = await CompileWithBasicLangApiAsync(project, sourceFiles, _buildCts.Token);
+            }
 
             stopwatch.Stop();
             result.Duration = stopwatch.Elapsed;
@@ -1011,6 +1022,69 @@ public class BuildService : IBuildService
     /// IDE folder — same model as the CLI resolving next to BasicLang.exe), with
     /// dev-tree fallbacks for running from build output.
     /// </summary>
+    /// <summary>
+    /// Native C++ project build (Language=Cpp). Delegates to the SAME
+    /// CppProjectBuilder the CLI uses (BasicLang.Compiler.ProjectSystem) — no
+    /// IDE-side reimplementation. Never throws: any I/O or project-load failure
+    /// maps to a failed BuildResult so BuildInternalAsync's shared finalization
+    /// (logging + BuildCompleted, the Error List's only feed) always runs.
+    /// </summary>
+    private BuildResult BuildCppProject(BasicLangProject project)
+    {
+        var result = new BuildResult();
+        var configuration = CurrentConfiguration?.Name ?? "Debug";
+
+        _outputService.WriteLine($"Building C++ project {project.Name} [{configuration}]...", OutputCategory.Build);
+
+        BasicLang.Compiler.ProjectSystem.CppProjectBuildResult cpp;
+        try
+        {
+            var projectFile = BasicLang.Compiler.ProjectSystem.ProjectFile.Load(
+                Path.GetFullPath(project.FilePath));
+            cpp = BasicLang.Compiler.ProjectSystem.CppProjectBuilder.Build(projectFile, configuration);
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = "BL6010",
+                Message = $"C++ build failed: {ex.Message}",
+                FilePath = project.FilePath,
+                Severity = DiagnosticSeverity.Error,
+                Source = "cpp"
+            });
+            _outputService.WriteError($"C++ build failed: {ex.Message}", OutputCategory.Build);
+            return result;
+        }
+
+        foreach (var msg in cpp.Messages)
+            _outputService.WriteLine(msg, OutputCategory.Build);
+
+        foreach (var diag in cpp.Diagnostics)
+        {
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = diag.Code,
+                Message = diag.Message,
+                FilePath = diag.FilePath,
+                Line = diag.Line,
+                Column = diag.Column,
+                Severity = diag.IsWarning ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error,
+                Source = "cpp"
+            });
+            // Echo in the OutputPanel's clickable format.
+            _outputService.WriteLine("  " +
+                BasicLang.Compiler.ProjectSystem.CppDiagnosticsParser.FormatNormalized(diag),
+                OutputCategory.Build);
+        }
+
+        result.Success = cpp.Success;
+        result.ExecutablePath = cpp.ExecutablePath;
+        result.OutputPath = cpp.OutputPath;
+        return result;
+    }
+
     /// <summary>
     /// Compile generated C++ to a runnable executable with a discovered
     /// toolchain (clang++/g++/MSVC). Game programs link against the engine
