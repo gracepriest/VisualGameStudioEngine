@@ -1487,11 +1487,6 @@ public partial class SettingsViewModel : ViewModelBase
         return true;
     }
 
-    [Obsolete("The legacy %APPDATA%\\VisualGameStudio\\settings.json store is retired; the single " +
-              "store is ~/.vgs via ISettingsService. Retained only for the one-time theme-migration " +
-              "shim (MigrateLegacyThemeIfNeeded) — do not add new callers.")]
-    public static SettingsData LoadCurrentSettings() => LoadLegacySettingsFrom(LegacySettingsPath);
-
     private static SettingsData LoadLegacySettingsFrom(string path)
     {
         try

@@ -75,7 +75,11 @@ public partial class App : Application
         // Apply the saved theme now that the single store is loaded and before any window is
         // constructed. (Moved out of Initialize(), which runs before the DI container exists —
         // reading the retired legacy %APPDATA% file there is exactly what split the two stores.)
-        ThemeManager.ApplyFromSettings();
+        // Guarded like its startup siblings: the migration's Set() fires settings-changed
+        // handlers synchronously and Apply touches EditorTheme/extension themes — an uncaught
+        // throw here would reach Program.cs's [FATAL] and keep the IDE from launching at all.
+        try { ThemeManager.ApplyFromSettings(); }
+        catch (Exception ex) { LogCrash("THEME_APPLY", ex); }
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

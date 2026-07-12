@@ -126,4 +126,50 @@ public class SettingsServiceStartupTests
 
         Assert.That(ThemeManager.ResolveStartupThemeName(service, legacyPath), Is.EqualTo("Dark"));
     }
+
+    [Test]
+    public void ResolveStartupThemeName_InvalidLegacyJson_NoOpsAndReturnsStoreOrDefault()
+    {
+        // A corrupt legacy file must never break startup: migration no-ops, nothing throws,
+        // and the resolver falls through to the single store (empty here -> schema default).
+        var legacyPath = Path.Combine(_homeDir, "legacy", "settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+        File.WriteAllText(legacyPath, "this is {{{ not json ]]");
+
+        using var service = new SettingsService(_homeDir);
+
+        string theme = null!;
+        Assert.DoesNotThrow(() => theme = ThemeManager.ResolveStartupThemeName(service, legacyPath));
+
+        Assert.That(theme, Is.EqualTo("Dark"),
+            "garbage legacy JSON must fall through to the store/schema default");
+        Assert.That(service.Has("workbench.colorTheme", SettingsScope.User), Is.False,
+            "nothing must be migrated from an unreadable legacy file");
+    }
+
+    [TestCase("null")]
+    [TestCase("\"\"")]
+    [TestCase("\"   \"")]
+    public void ResolveStartupThemeName_LegacyThemeNullOrWhitespace_DoesNotMigrate(string selectedThemeJson)
+    {
+        // A legacy file whose SelectedTheme is null/empty/whitespace has nothing worth
+        // migrating -- the store must stay clean and the schema default must win.
+        var legacyPath = Path.Combine(_homeDir, "legacy", "settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+        File.WriteAllText(legacyPath, $"{{\"SelectedTheme\": {selectedThemeJson}}}");
+
+        using var service = new SettingsService(_homeDir);
+
+        Assert.That(ThemeManager.ResolveStartupThemeName(service, legacyPath), Is.EqualTo("Dark"));
+        Assert.That(service.Has("workbench.colorTheme", SettingsScope.User), Is.False,
+            "a blank legacy SelectedTheme must not be migrated into the single store");
+    }
+
+    [Test]
+    public void ResolveStartupThemeName_NullService_ReturnsDark()
+    {
+        // Defensive guard for the DI-unavailable path (e.g. resolution failure at startup):
+        // the resolver must degrade to the built-in default instead of throwing.
+        Assert.That(ThemeManager.ResolveStartupThemeName(null, NoLegacyFile), Is.EqualTo("Dark"));
+    }
 }

@@ -1886,7 +1886,9 @@ public partial class CodeEditorDocumentView : UserControl
         try
         {
             // Null-tolerant: this view can be constructed in unit tests / design mode before
-            // App.Services is initialized. Defaults below mirror the SettingsService schema.
+            // App.Services is initialized. The inline defaults below only govern that
+            // null-service path; in production the service resolves unset keys from its own
+            // schema defaults (which these mirror).
             var settings = App.Services?.GetService(typeof(ISettingsService)) as ISettingsService;
 
             var fontFamily = settings?.Get<string>("editor.fontFamily", "Cascadia Code") ?? "Cascadia Code";
