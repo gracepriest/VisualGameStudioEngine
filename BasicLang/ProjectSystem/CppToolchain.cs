@@ -140,11 +140,22 @@ namespace BasicLang.Compiler.ProjectSystem
             return flags;
         }
 
+        /// <summary>Characters that force whole-token quoting: whitespace splits
+        /// tokens everywhere, and the rest are cmd.exe metacharacters that would
+        /// split/redirect the MSVC command line when unquoted.</summary>
+        private static readonly char[] NeedsQuoting = { ' ', '\t', '&', '^', '(', ')', '<', '>', '|', ';', ',', '=' };
+
         /// <summary>Quote a whole flag token for a shell command line when it
-        /// contains a space — e.g. an include dir with spaces becomes the single
-        /// quoted token "/IC:\path with spaces".</summary>
-        private static string QuoteToken(string token)
-            => token.Contains(' ') ? "\"" + token + "\"" : token;
+        /// contains whitespace or a cmd metacharacter — e.g. an include dir with
+        /// spaces becomes the single quoted token "/IC:\path with spaces".
+        /// Note: cmd.exe %VAR% expansion happens even inside quotes and is
+        /// unfixable at this layer — do not attempt to quote it away.</summary>
+        internal static string QuoteToken(string token)
+        {
+            if (token.IndexOfAny(NeedsQuoting) < 0) return token;
+            var trailing = token.Length - token.TrimEnd('\\').Length;   // CRT: double trailing \ so they don't escape the closing quote
+            return "\"" + token + new string('\\', trailing) + "\"";
+        }
 
         /// <summary>Shell-string form of <see cref="FlagsFor"/> used by <see cref="Compile"/>.</summary>
         private static string JoinFlags(CppToolchainKind kind, CppCompileRequest request)

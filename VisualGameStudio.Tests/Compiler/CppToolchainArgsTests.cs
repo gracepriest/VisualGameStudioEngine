@@ -102,4 +102,28 @@ public class CppToolchainArgsTests
         });
         Assert.That(dup, Is.Null);
     }
+
+    [Test]
+    public void QuoteToken_SpaceToken_WrappedInQuotes()
+    {
+        Assert.That(CppToolchain.QuoteToken(@"/IC:\path with spaces"),
+            Is.EqualTo("\"" + @"/IC:\path with spaces" + "\""));
+    }
+
+    [Test]
+    public void QuoteToken_CmdMetacharacterWithoutSpace_WrappedInQuotes()
+    {
+        // Unquoted '&' would split the cmd.exe command line on the MSVC path.
+        Assert.That(CppToolchain.QuoteToken(@"/IC:\proj\a&b\inc"),
+            Is.EqualTo("\"" + @"/IC:\proj\a&b\inc" + "\""));
+    }
+
+    [Test]
+    public void QuoteToken_SpacePlusTrailingBackslash_DoublesTrailingBackslashes()
+    {
+        // MSVC CRT arg parsing: a trailing \ right before the closing quote
+        // would escape it and swallow subsequent tokens, so it must double.
+        Assert.That(CppToolchain.QuoteToken(@"/IC:\Program Files\"),
+            Is.EqualTo("\"/IC:\\Program Files\\\\\""));
+    }
 }
