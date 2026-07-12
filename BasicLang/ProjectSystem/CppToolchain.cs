@@ -111,35 +111,74 @@ namespace BasicLang.Compiler.ProjectSystem
         public string DriverName => _vcvarsPath != null ? "cl" : _executable;
 
         /// <summary>
-        /// Per-TU compile command (argv, driver first) — single source of truth
-        /// shared by the real compile and compile_commands.json emission.
-        /// Static + kind-keyed so it is unit-testable without an installed toolchain.
+        /// Ordered compile-flag tokens for one invocation. This is the single
+        /// source of truth for flag spelling: <see cref="BuildCompileCommandArguments"/>
+        /// (compile_commands.json argv) and <see cref="Compile"/> (real shell
+        /// command lines) both consume it verbatim, so the two cannot drift.
+        /// </summary>
+        private static List<string> FlagsFor(CppToolchainKind kind, CppCompileRequest request)
+        {
+            var flags = new List<string>();
+            if (kind == CppToolchainKind.Msvc)
+            {
+                flags.Add("/nologo");
+                flags.Add("/std:" + request.CppStandard);
+                flags.Add("/EHsc");
+                flags.Add(request.Optimize ? "/O2" : "/Od");
+                if (request.DebugSymbols) flags.Add("/Zi");
+                foreach (var inc in request.IncludeDirs) flags.Add("/I" + inc);
+                foreach (var def in request.Defines) flags.Add("/D" + def);
+            }
+            else
+            {
+                flags.Add("-std=" + request.CppStandard);
+                flags.Add(request.Optimize ? "-O2" : "-O0");
+                if (request.DebugSymbols) flags.Add("-g");
+                foreach (var inc in request.IncludeDirs) flags.Add("-I" + inc);
+                foreach (var def in request.Defines) flags.Add("-D" + def);
+            }
+            return flags;
+        }
+
+        /// <summary>Quote a whole flag token for a shell command line when it
+        /// contains a space — e.g. an include dir with spaces becomes the single
+        /// quoted token "/IC:\path with spaces".</summary>
+        private static string QuoteToken(string token)
+            => token.Contains(' ') ? "\"" + token + "\"" : token;
+
+        /// <summary>Shell-string form of <see cref="FlagsFor"/> used by <see cref="Compile"/>.</summary>
+        private static string JoinFlags(CppToolchainKind kind, CppCompileRequest request)
+            => string.Join(" ", FlagsFor(kind, request).Select(QuoteToken));
+
+        /// <summary>
+        /// Per-TU compile command (argv, driver first) for compile_commands.json
+        /// emission. Flags come from <see cref="FlagsFor"/> — the same source
+        /// <see cref="Compile"/> consumes — so emitted commands match the real
+        /// compile exactly. Static + kind-keyed so it is unit-testable without
+        /// an installed toolchain.
         /// </summary>
         public static List<string> BuildCompileCommandArguments(
             CppToolchainKind kind, string driver, CppCompileRequest request, string sourceFile)
         {
             var args = new List<string> { driver };
-            if (kind == CppToolchainKind.Msvc)
-            {
-                args.Add("/nologo");
-                args.Add("/std:" + request.CppStandard);
-                args.Add("/EHsc");
-                args.Add(request.Optimize ? "/O2" : "/Od");
-                if (request.DebugSymbols) args.Add("/Zi");
-                foreach (var inc in request.IncludeDirs) args.Add("/I" + inc);
-                foreach (var def in request.Defines) args.Add("/D" + def);
-                args.Add(sourceFile);
-            }
-            else
-            {
-                args.Add("-std=" + request.CppStandard);
-                args.Add(request.Optimize ? "-O2" : "-O0");
-                if (request.DebugSymbols) args.Add("-g");
-                foreach (var inc in request.IncludeDirs) args.Add("-I" + inc);
-                foreach (var def in request.Defines) args.Add("-D" + def);
-                args.Add(sourceFile);
-            }
+            args.AddRange(FlagsFor(kind, request));
+            args.Add(sourceFile);
             return args;
+        }
+
+        /// <summary>cl /c and g++ -c drop basename-derived .obj/.o files into a
+        /// single directory, so two TUs sharing a base name would silently
+        /// overwrite each other's objects. Returns the first colliding base name
+        /// (OrdinalIgnoreCase), or null when all are distinct.</summary>
+        internal static string FindDuplicateBasename(IEnumerable<string> sourceFiles)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in sourceFiles)
+            {
+                var name = Path.GetFileNameWithoutExtension(file);
+                if (!seen.Add(name)) return name;
+            }
+            return null;
         }
 
         /// <summary>
@@ -152,17 +191,17 @@ namespace BasicLang.Compiler.ProjectSystem
         /// </summary>
         public (bool Success, string Output) Compile(CppCompileRequest request)
         {
+            var duplicate = FindDuplicateBasename(request.SourceFiles);
+            if (duplicate != null)
+                return (false, "error: duplicate source file base names would overwrite object files: " + duplicate);
+
             var quotedSources = string.Join(" ", request.SourceFiles.Select(s => "\"" + s + "\""));
             var libs = string.Join(" ", request.Libraries.Select(l => "\"" + l + "\""));
             string arguments;
 
             if (_vcvarsPath != null)
             {
-                var flags = "/nologo /std:" + request.CppStandard + " /EHsc "
-                          + (request.Optimize ? "/O2" : "/Od")
-                          + (request.DebugSymbols ? " /Zi" : "")
-                          + string.Concat(request.IncludeDirs.Select(i => " /I\"" + i + "\""))
-                          + string.Concat(request.Defines.Select(d => " /D" + d));
+                var flags = JoinFlags(CppToolchainKind.Msvc, request);
                 if (request.LinkExecutable)
                 {
                     arguments = "/s /c \"\"" + _vcvarsPath + "\" >nul && cl " + flags + " "
@@ -180,11 +219,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 return RunProcess(_executable, arguments, request.WorkingDirectory, request.OutputPath);
             }
 
-            var gnuFlags = "-std=" + request.CppStandard + " "
-                         + (request.Optimize ? "-O2" : "-O0")
-                         + (request.DebugSymbols ? " -g" : "")
-                         + string.Concat(request.IncludeDirs.Select(i => " -I\"" + i + "\""))
-                         + string.Concat(request.Defines.Select(d => " -D" + d));
+            var gnuFlags = JoinFlags(CppToolchainKind.ClangLike, request);
 
             if (request.LinkExecutable)
             {
@@ -241,17 +276,24 @@ namespace BasicLang.Compiler.ProjectSystem
             };
             if (!string.IsNullOrEmpty(workingDirectory)) psi.WorkingDirectory = workingDirectory;
 
-            using var proc = Process.Start(psi);
-            var stdOutTask = proc.StandardOutput.ReadToEndAsync();
-            var stdErrTask = proc.StandardError.ReadToEndAsync();
-            if (!proc.WaitForExit(CompileTimeoutMs))
+            try
             {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                return (false, "error: C++ compile timed out after " + (CompileTimeoutMs / 1000) + "s");
+                using var proc = Process.Start(psi);
+                var stdOutTask = proc.StandardOutput.ReadToEndAsync();
+                var stdErrTask = proc.StandardError.ReadToEndAsync();
+                if (!proc.WaitForExit(CompileTimeoutMs))
+                {
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                    return (false, "error: C++ compile timed out after " + (CompileTimeoutMs / 1000) + "s");
+                }
+                var output = (stdOutTask.Result + "\n" + stdErrTask.Result).Trim();
+                var ok = proc.ExitCode == 0 && (expectedOutput == null || File.Exists(expectedOutput));
+                return (ok, output);
             }
-            var output = (stdOutTask.Result + "\n" + stdErrTask.Result).Trim();
-            var ok = proc.ExitCode == 0 && (expectedOutput == null || File.Exists(expectedOutput));
-            return (ok, output);
+            catch (Exception ex)
+            {
+                return (false, $"Failed to invoke {executable}: {ex.Message}");
+            }
         }
 
         /// <summary>
