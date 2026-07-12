@@ -46,6 +46,20 @@ public class ProjectSerializer
                 {
                     project.TargetBackend = tb;
                 }
+
+                var language = propertyGroup.Element("Language")?.Value;
+                if (!string.IsNullOrEmpty(language) &&
+                    Enum.TryParse<ProjectLanguage>(language, true, out var lang))
+                {
+                    project.Language = lang;
+                }
+                if (project.Language == ProjectLanguage.Cpp)
+                {
+                    project.CppSettings = new CppProjectSettings
+                    {
+                        CppStandard = propertyGroup.Element("CppStandard")?.Value ?? "c++20"
+                    };
+                }
             }
             else
             {
@@ -94,6 +108,36 @@ public class ProjectSerializer
                 if (!string.IsNullOrEmpty(include))
                 {
                     project.Items.Add(new ProjectItem(include, ProjectItemType.Resource));
+                }
+            }
+
+            foreach (var includeDir in itemGroup.Elements("IncludeDir"))
+            {
+                var include = includeDir.Attribute("Include")?.Value;
+                if (!string.IsNullOrEmpty(include))
+                {
+                    project.CppSettings ??= new CppProjectSettings();
+                    project.CppSettings.IncludeDirs.Add(include);
+                }
+            }
+
+            foreach (var nativeLib in itemGroup.Elements("NativeLib"))
+            {
+                var include = nativeLib.Attribute("Include")?.Value;
+                if (!string.IsNullOrEmpty(include))
+                {
+                    project.CppSettings ??= new CppProjectSettings();
+                    project.CppSettings.NativeLibs.Add(include);
+                }
+            }
+
+            foreach (var define in itemGroup.Elements("Define"))
+            {
+                var include = define.Attribute("Include")?.Value;
+                if (!string.IsNullOrEmpty(include))
+                {
+                    project.CppSettings ??= new CppProjectSettings();
+                    project.CppSettings.Defines.Add(include);
                 }
             }
 
@@ -149,7 +193,13 @@ public class ProjectSerializer
                     new XElement("ProjectName", project.Name),
                     new XElement("OutputType", project.OutputType.ToString()),
                     new XElement("RootNamespace", project.RootNamespace),
-                    new XElement("TargetBackend", project.TargetBackend.ToString())
+                    new XElement("TargetBackend", project.TargetBackend.ToString()),
+                    project.Language == ProjectLanguage.Cpp
+                        ? new XElement("Language", project.Language.ToString())
+                        : null,
+                    project.Language == ProjectLanguage.Cpp
+                        ? new XElement("CppStandard", project.CppSettings?.CppStandard ?? "c++20")
+                        : null
                 )
             )
         );
@@ -194,6 +244,19 @@ public class ProjectSerializer
                     new XAttribute("Include", r.Name),
                     r.Path != null ? new XElement("HintPath", r.Path) : null
                 ))
+            ));
+        }
+
+        // Add C++ items (IncludeDir / NativeLib / Define) so IDE saves round-trip them
+        if (project.CppSettings != null &&
+            (project.CppSettings.IncludeDirs.Any() ||
+             project.CppSettings.NativeLibs.Any() ||
+             project.CppSettings.Defines.Any()))
+        {
+            root.Add(new XElement("ItemGroup",
+                project.CppSettings.IncludeDirs.Select(d => new XElement("IncludeDir", new XAttribute("Include", d))),
+                project.CppSettings.NativeLibs.Select(l => new XElement("NativeLib", new XAttribute("Include", l))),
+                project.CppSettings.Defines.Select(d => new XElement("Define", new XAttribute("Include", d)))
             ));
         }
 
