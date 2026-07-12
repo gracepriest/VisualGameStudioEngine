@@ -28,4 +28,15 @@
     <PackageReference Include="System.Reflection.Metadata" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Ships RaylibWrapper.dll next to BasicLang.exe: EngineDeployment probes the
+         compiler's own directory to auto-inject the engine reference for game apps.
+         Not a compile-time reference — the compiler never uses wrapper types, it
+         only needs the DLL deployed beside itself. -->
+    <ProjectReference Include="..\RaylibWrapper\RaylibWrapper.vbproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
