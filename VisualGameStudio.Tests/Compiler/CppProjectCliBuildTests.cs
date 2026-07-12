@@ -79,6 +79,7 @@ public class CppProjectCliBuildTests
         using var proc = System.Diagnostics.Process.Start(psi)!;
         var stdout = proc.StandardOutput.ReadToEnd();
         proc.WaitForExit(30000);
+        Assert.That(proc.ExitCode, Is.EqualTo(0));
         Assert.That(stdout, Does.Contain("sum=5"));
     }
 
@@ -153,5 +154,6 @@ public class CppProjectCliBuildTests
         Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain("BL6006"));
         Assert.That(result.Diagnostics.First(d => d.Code == "BL6006").Message,
             Does.Contain("ld.lld"));
+        Assert.That(result.RawToolchainOutput, Does.Contain("ld.lld"));
     }
 }

@@ -101,7 +101,19 @@ namespace BasicLang.Compiler.ProjectSystem
             foreach (var lib in project.NativeLibs)
             {
                 var local = Path.IsPathRooted(lib) ? lib : Path.Combine(projectDir, lib);
-                if (File.Exists(local)) { request.Libraries.Add(local); continue; }
+                if (File.Exists(local))
+                {
+                    request.Libraries.Add(local);
+                    // A vendored engine import lib must still deploy its native
+                    // DLLs next to the exe (LocateNativeDlls looks in the lib's
+                    // dir first, then the compiler's base dir) — otherwise the
+                    // built game dies at startup with a missing-DLL error and
+                    // no build-time hint.
+                    if (string.Equals(Path.GetFileName(lib), EngineDeployment.EngineImportLibName,
+                            StringComparison.OrdinalIgnoreCase))
+                        engineLib = local;
+                    continue;
+                }
 
                 if (string.Equals(Path.GetFileName(lib), EngineDeployment.EngineImportLibName,
                         StringComparison.OrdinalIgnoreCase))
@@ -143,9 +155,19 @@ namespace BasicLang.Compiler.ProjectSystem
             {
                 foreach (var dll in EngineDeployment.LocateNativeDlls(engineLib))
                 {
-                    var dest = Path.Combine(outputDir, Path.GetFileName(dll));
-                    File.Copy(dll, dest, overwrite: true);
-                    result.Messages.Add($"Deployed {Path.GetFileName(dll)}");
+                    // A locked DLL (previous game run still open) must never
+                    // discard a successful build result — warn and continue,
+                    // mirroring the CLI's existing deploy precedent.
+                    try
+                    {
+                        var dest = Path.Combine(outputDir, Path.GetFileName(dll));
+                        File.Copy(dll, dest, overwrite: true);
+                        result.Messages.Add($"Deployed {Path.GetFileName(dll)}");
+                    }
+                    catch (Exception ex)
+                    {
+                        result.Messages.Add($"warning: could not deploy {Path.GetFileName(dll)}: {ex.Message}");
+                    }
                 }
             }
             return result;
