@@ -721,26 +721,39 @@ public class SettingsService : ISettingsService, IDisposable
 
     private async Task SaveToFileAsync(string filePath, Dictionary<string, object?> dict)
     {
-        var json = JsonSerializer.Serialize(dict, JsonOptions);
-        await SaveJsonToFileAsync(filePath, json).ConfigureAwait(false);
+        // Serialization is deferred into SaveCoreAsync so it runs UNDER _saveLock: dict is the
+        // live settings Dictionary, and enumerating it must be shielded from a concurrent save
+        // enumerating it at the same time (or a concurrent mutation landing mid-enumeration).
+        await SaveCoreAsync(filePath, () => JsonSerializer.Serialize(dict, JsonOptions)).ConfigureAwait(false);
+    }
+
+    private async Task SaveJsonToFileAsync(string filePath, string json)
+    {
+        await SaveCoreAsync(filePath, () => json).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Single choke point for every settings-file write (debounced saves, explicit
-    /// SaveScopeAsync, and the raw-JSON editor via SetRawJsonAsync). Serializes access with
-    /// <see cref="_saveLock"/> and writes atomically so a reader (including the file watcher's
-    /// reload, or a second IDE instance) can never observe a torn/partial file.
+    /// SaveScopeAsync, and the raw-JSON editor via SetRawJsonAsync). Acquires
+    /// <see cref="_saveLock"/> exactly once per save, produces the JSON inside the lock
+    /// (shielding live-Dictionary enumeration from concurrent saves), and writes atomically
+    /// so a reader (including the file watcher's reload, or a second IDE instance) can never
+    /// observe a torn/partial file.
     /// </summary>
-    private async Task SaveJsonToFileAsync(string filePath, string json)
+    private async Task SaveCoreAsync(string filePath, Func<string> serialize)
     {
         await _saveLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            var json = serialize();
             await WriteFileAtomicallyAsync(filePath, json).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore save errors
+            // Don't rethrow (a failed save must not break the caller), but don't swallow
+            // silently either — e.g. two processes racing the same .tmp path lose a save
+            // with an IOException that would otherwise be undiagnosable.
+            System.Diagnostics.Debug.WriteLine($"[SettingsService] Failed to save {filePath}: {ex.Message}");
         }
         finally
         {

@@ -34,7 +34,9 @@ public class SettingsServicePersistenceTests
     [Test]
     public async Task SaveScopeAsync_StagesFullContentInTempFile_DestinationUntouchedUntilAtomicSwap()
     {
-        var service = new SettingsService(_homeDir);
+        // using: the service starts a FileSystemWatcher, and Set() schedules a debounced
+        // background save -- both must be torn down before TearDown deletes the temp dir.
+        using var service = new SettingsService(_homeDir);
         var settingsPath = service.UserSettingsPath;
         var tempPath = settingsPath + ".tmp";
 
@@ -82,7 +84,7 @@ public class SettingsServicePersistenceTests
         // SetRawJsonAsync (used by the raw settings.json editor) used to bypass the
         // save lock and write directly with File.WriteAllTextAsync -- the most likely
         // real-world source of the interleaved-write corruption seen in the audit.
-        var service = new SettingsService(_homeDir);
+        using var service = new SettingsService(_homeDir);
         var settingsPath = service.UserSettingsPath;
         var tempPath = settingsPath + ".tmp";
 
@@ -113,7 +115,7 @@ public class SettingsServicePersistenceTests
         File.WriteAllText(Path.Combine(vgsDir, "settings.json"),
             "{\"workbench.colorTheme\": \"Dark\", \"editor.fontSize\": 10, \"workbench.colorTheme\": \"Light\"}");
 
-        var service = new SettingsService(_homeDir);
+        using var service = new SettingsService(_homeDir);
         await service.LoadAsync();
 
         Assert.That(service.Get<string>("workbench.colorTheme", "Dark"), Is.EqualTo("Light"),
