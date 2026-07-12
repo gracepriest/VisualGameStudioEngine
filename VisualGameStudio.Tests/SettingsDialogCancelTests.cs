@@ -159,6 +159,52 @@ public class SettingsDialogCancelTests
             "the second RevertToSnapshot must be a guarded no-op");
     }
 
+    // ---- Cancel notifies consumers (open editors listen ONLY to the static SettingsChanged) ----
+
+    [Test]
+    public void Cancel_AfterChanges_RaisesSettingsChangedExactlyOnce()
+    {
+        var vm = new SettingsViewModel(_service);
+        Proxy(vm, "editor.fontSize").IntValue = 30; // live-apply (raises its own event; not counted)
+
+        int raised = 0;
+        EventHandler handler = (_, _) => raised++;
+        SettingsViewModel.SettingsChanged += handler; // static event — subscribe only around Cancel
+        try
+        {
+            vm.CancelCommand.Execute(null);
+        }
+        finally
+        {
+            SettingsViewModel.SettingsChanged -= handler;
+        }
+
+        Assert.That(raised, Is.EqualTo(1),
+            "Cancel must broadcast SettingsChanged exactly once so open editors undo the " +
+            "live-applied change visually (the store alone reverting is not enough)");
+    }
+
+    [Test]
+    public void Cancel_WithNoChanges_DoesNotRaiseSettingsChanged()
+    {
+        var vm = new SettingsViewModel(_service); // opened and immediately canceled — nothing changed
+
+        int raised = 0;
+        EventHandler handler = (_, _) => raised++;
+        SettingsViewModel.SettingsChanged += handler;
+        try
+        {
+            vm.CancelCommand.Execute(null);
+        }
+        finally
+        {
+            SettingsViewModel.SettingsChanged -= handler;
+        }
+
+        Assert.That(raised, Is.EqualTo(0),
+            "a no-op Cancel (nothing restored, theme untouched) must not broadcast");
+    }
+
     // ---- Scope-correct revert: a Workspace-scope change is undone in Workspace, User untouched ----
 
     [Test]

@@ -1273,7 +1273,9 @@ public partial class SettingsViewModel : ViewModelBase
 
     /// <summary>
     /// Restores every managed setting to the raw per-scope value captured when the dialog opened,
-    /// undoing all live-applied changes (theme included), then re-applies the snapshot theme.
+    /// undoing all live-applied changes (theme included), re-applies the snapshot theme when the
+    /// live theme drifted from it, and broadcasts <see cref="SettingsChanged"/> when anything was
+    /// actually undone (open editors listen only to that event).
     /// Runs at most once (guarded) so the Cancel-button path and the window-close (X / Esc) path
     /// can both call it without double-reverting; Save() marks the dialog so close does not revert.
     /// </summary>
@@ -1282,6 +1284,7 @@ public partial class SettingsViewModel : ViewModelBase
         if (_reverted) return;
         _reverted = true;
 
+        bool anyRestored = false;
         if (_settingsService != null)
         {
             foreach (var entry in _openSnapshot)
@@ -1297,17 +1300,35 @@ public partial class SettingsViewModel : ViewModelBase
                     _settingsService.Remove(key, scope); // had no override at open — remove the added one
                 else
                     _settingsService.Set(key, snapshotValue, scope); // restore the opening value
+
+                anyRestored = true;
             }
         }
 
-        // Restore the theme that was showing at open. Apply early-returns when Application.Current
-        // is null (unit tests); the try/catch only guards a real theme-apply fault from blocking
-        // dialog close (same defensive pattern used at startup).
-        try
+        // Restore the theme that was showing at open — but only when the live theme actually
+        // drifted from it: a full re-theme (RequestedThemeVariant + EditorTheme + ThemeChanged)
+        // is not free, so a Cancel that never touched the theme must not re-apply it. Apply
+        // early-returns when Application.Current is null (unit tests); the try/catch only guards
+        // a real theme-apply fault from blocking dialog close (same defensive pattern as startup).
+        bool themeReverted = false;
+        if (!string.Equals(ThemeManager.CurrentTheme, _openThemeName, StringComparison.Ordinal))
         {
-            ThemeManager.Apply(_openThemeName);
+            try
+            {
+                ThemeManager.Apply(_openThemeName);
+                themeReverted = true;
+            }
+            catch { }
         }
-        catch { }
+
+        // Mirror Save()/AutoSaveSettingToService: this static event is the ONLY signal open
+        // CodeEditorDocumentViews listen to, so without it a canceled live-applied change (e.g.
+        // font size) would stay visually applied even though the store correctly reverted. A
+        // no-op Cancel (nothing restored, theme untouched) must not broadcast.
+        if (anyRestored || themeReverted)
+        {
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     /// <summary>
@@ -1320,6 +1341,9 @@ public partial class SettingsViewModel : ViewModelBase
         if (a is null) return b is null;
         if (b is null) return false;
         if (Equals(a, b)) return true;
+        // Scalars loaded from disk are pre-normalized to string/int/double/bool by
+        // SettingsService.ConvertJsonElement; JsonElement survives only for complex kinds
+        // (objects/arrays), which none of the dialog-managed keys use.
         // Numbers can come back boxed as int, long, or double; compare by invariant string form
         // so 14 == 14L == 14.0, while strings ("on") and bools compare exactly.
         return string.Equals(
