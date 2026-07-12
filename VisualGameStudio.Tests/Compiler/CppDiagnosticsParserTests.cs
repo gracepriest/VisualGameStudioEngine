@@ -67,6 +67,30 @@ public class CppDiagnosticsParserTests
     }
 
     [Test]
+    public void Parses_LinkerError_WithAbsoluteOutputPath()
+    {
+        // Real link.exe prints the absolute output path on LNK1120/LNK1104 lines.
+        var output = @"C:\proj\bin\app.exe : fatal error LNK1120: 1 unresolved externals";
+        var diags = CppDiagnosticsParser.Parse(output, @"C:\proj");
+        Assert.That(diags, Has.Count.EqualTo(1));
+        Assert.That(diags[0].Code, Is.EqualTo("LNK1120"));
+        Assert.That(diags[0].FilePath, Is.EqualTo(@"C:\proj\bin\app.exe"));
+        Assert.That(diags[0].Line, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void OverflowingLineNumber_SkipsThatLine_KeepsOthers()
+    {
+        // A pathological/echoed line whose line number exceeds Int32 must be
+        // skipped as non-diagnostic — not throw and discard all diagnostics.
+        var output = "main.cpp:12:5: error: use of undeclared identifier 'foo'\n"
+                   + "util.cc:99999999999999:1: error: fake";
+        var diags = CppDiagnosticsParser.Parse(output, @"C:\proj");
+        Assert.That(diags, Has.Count.EqualTo(1), "overflowing line skipped, valid one kept");
+        Assert.That(diags[0].Line, Is.EqualTo(12));
+    }
+
+    [Test]
     public void Ignores_Notes_CaretLines_AndChatter()
     {
         var output = "main.cpp:12:5: error: no matching function for call to 'f'\n"
@@ -96,5 +120,15 @@ public class CppDiagnosticsParserTests
         };
         Assert.That(CppDiagnosticsParser.FormatNormalized(d),
             Is.EqualTo(@"C:\proj\main.cpp(12,5): error CPP1001: boom"));
+
+        // Line without column (MSVC line-only shape).
+        d.Line = 5; d.Column = 0; d.Code = "C2065";
+        Assert.That(CppDiagnosticsParser.FormatNormalized(d),
+            Is.EqualTo(@"C:\proj\main.cpp(5): error C2065: boom"));
+
+        // No location at all (linker diagnostics).
+        d.Line = 0; d.Code = "LNK2019";
+        Assert.That(CppDiagnosticsParser.FormatNormalized(d),
+            Is.EqualTo(@"C:\proj\main.cpp: error LNK2019: boom"));
     }
 }

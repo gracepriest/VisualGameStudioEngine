@@ -38,9 +38,12 @@ namespace BasicLang.Compiler.ProjectSystem
             @"^(?<file>.+?)\((?<line>\d+)(?:,(?<col>\d+))?\)\s*:\s*(?:fatal\s+)?(?<sev>error|warning)\s+(?<code>[A-Z]+\d+)\s*:\s*(?<msg>.*)$",
             RegexOptions.Compiled);
 
-        // MSVC linker: main.obj : error LNK2019: msg
+        // MSVC linker: main.obj : error LNK2019: msg. The optional drive spec
+        // lets link.exe's absolute output paths (LNK1120/LNK1104) match; the
+        // '('-excluding class still rejects banner lines like
+        // "Microsoft (R) C/C++ Optimizing Compiler".
         private static readonly Regex Linker = new Regex(
-            @"^(?<file>[^:(]+?)\s*:\s*(?:fatal\s+)?error\s+(?<code>LNK\d+)\s*:\s*(?<msg>.*)$",
+            @"^(?<file>(?:[A-Za-z]:)?[^:(]+?)\s*:\s*(?:fatal\s+)?error\s+(?<code>LNK\d+)\s*:\s*(?<msg>.*)$",
             RegexOptions.Compiled);
 
         public static List<CppDiagnostic> Parse(string toolchainOutput, string workingDirectory)
@@ -56,11 +59,19 @@ namespace BasicLang.Compiler.ProjectSystem
                 var m = Msvc.Match(line);
                 if (m.Success)
                 {
+                    // TryParse: a pathological line/col (bigger than Int32)
+                    // means this isn't a real diagnostic — skip the line
+                    // rather than throw and discard everything.
+                    if (!int.TryParse(m.Groups["line"].Value, out var msvcLine))
+                        continue;
+                    var msvcCol = 0;
+                    if (m.Groups["col"].Success && !int.TryParse(m.Groups["col"].Value, out msvcCol))
+                        continue;
                     result.Add(new CppDiagnostic
                     {
                         FilePath = Absolutize(m.Groups["file"].Value.Trim(), workingDirectory),
-                        Line = int.Parse(m.Groups["line"].Value),
-                        Column = m.Groups["col"].Success ? int.Parse(m.Groups["col"].Value) : 0,
+                        Line = msvcLine,
+                        Column = msvcCol,
                         IsWarning = m.Groups["sev"].Value == "warning",
                         Code = m.Groups["code"].Value,
                         Message = m.Groups["msg"].Value.Trim()
@@ -71,12 +82,15 @@ namespace BasicLang.Compiler.ProjectSystem
                 m = GccClang.Match(line);
                 if (m.Success)
                 {
+                    if (!int.TryParse(m.Groups["line"].Value, out var gccLine) ||
+                        !int.TryParse(m.Groups["col"].Value, out var gccCol))
+                        continue;
                     var isWarning = m.Groups["sev"].Value == "warning";
                     result.Add(new CppDiagnostic
                     {
                         FilePath = Absolutize(m.Groups["file"].Value.Trim(), workingDirectory),
-                        Line = int.Parse(m.Groups["line"].Value),
-                        Column = int.Parse(m.Groups["col"].Value),
+                        Line = gccLine,
+                        Column = gccCol,
                         IsWarning = isWarning,
                         Code = isWarning ? GenericWarningCode : GenericErrorCode,
                         Message = m.Groups["msg"].Value.Trim()
