@@ -1,10 +1,29 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace BasicLang.Compiler.ProjectSystem
 {
+    public enum CppToolchainKind { ClangLike, Msvc }
+
+    /// <summary>Inputs for a multi-TU native compile (exe or static library).</summary>
+    public sealed class CppCompileRequest
+    {
+        public List<string> SourceFiles { get; } = new List<string>();
+        public string OutputPath { get; set; }               // .exe, or .lib/.a for libraries
+        public bool LinkExecutable { get; set; } = true;     // false = static library
+        public List<string> IncludeDirs { get; } = new List<string>();
+        public List<string> Defines { get; } = new List<string>();
+        public List<string> Libraries { get; } = new List<string>();
+        public string CppStandard { get; set; } = "c++20";
+        public string WorkingDirectory { get; set; }
+        public bool DebugSymbols { get; set; }
+        public bool Optimize { get; set; }
+    }
+
     /// <summary>
     /// Discovery and invocation of a native C++ toolchain so the Cpp backend
     /// can produce a runnable executable instead of stopping at source.
@@ -84,6 +103,155 @@ namespace BasicLang.Compiler.ProjectSystem
             }
 
             return null;
+        }
+
+        public CppToolchainKind Kind => _vcvarsPath != null ? CppToolchainKind.Msvc : CppToolchainKind.ClangLike;
+
+        /// <summary>Compiler driver name for compile_commands.json ("clang++", "g++", "cl").</summary>
+        public string DriverName => _vcvarsPath != null ? "cl" : _executable;
+
+        /// <summary>
+        /// Per-TU compile command (argv, driver first) — single source of truth
+        /// shared by the real compile and compile_commands.json emission.
+        /// Static + kind-keyed so it is unit-testable without an installed toolchain.
+        /// </summary>
+        public static List<string> BuildCompileCommandArguments(
+            CppToolchainKind kind, string driver, CppCompileRequest request, string sourceFile)
+        {
+            var args = new List<string> { driver };
+            if (kind == CppToolchainKind.Msvc)
+            {
+                args.Add("/nologo");
+                args.Add("/std:" + request.CppStandard);
+                args.Add("/EHsc");
+                args.Add(request.Optimize ? "/O2" : "/Od");
+                if (request.DebugSymbols) args.Add("/Zi");
+                foreach (var inc in request.IncludeDirs) args.Add("/I" + inc);
+                foreach (var def in request.Defines) args.Add("/D" + def);
+                args.Add(sourceFile);
+            }
+            else
+            {
+                args.Add("-std=" + request.CppStandard);
+                args.Add(request.Optimize ? "-O2" : "-O0");
+                if (request.DebugSymbols) args.Add("-g");
+                foreach (var inc in request.IncludeDirs) args.Add("-I" + inc);
+                foreach (var def in request.Defines) args.Add("-D" + def);
+                args.Add(sourceFile);
+            }
+            return args;
+        }
+
+        /// <summary>
+        /// Compile a whole project in one toolchain invocation (all TUs on one
+        /// command line; Phase 1 has no incremental builds). Executables compile
+        /// and link in one step; libraries compile to objects then archive
+        /// (llvm-ar/ar for clang/g++, lib.exe inside the vcvars environment).
+        /// Known limitation: very large projects could exceed cmd.exe's 8191-char
+        /// limit on the MSVC path — acceptable for Phase 1, response files later.
+        /// </summary>
+        public (bool Success, string Output) Compile(CppCompileRequest request)
+        {
+            var quotedSources = string.Join(" ", request.SourceFiles.Select(s => "\"" + s + "\""));
+            var libs = string.Join(" ", request.Libraries.Select(l => "\"" + l + "\""));
+            string arguments;
+
+            if (_vcvarsPath != null)
+            {
+                var flags = "/nologo /std:" + request.CppStandard + " /EHsc "
+                          + (request.Optimize ? "/O2" : "/Od")
+                          + (request.DebugSymbols ? " /Zi" : "")
+                          + string.Concat(request.IncludeDirs.Select(i => " /I\"" + i + "\""))
+                          + string.Concat(request.Defines.Select(d => " /D" + d));
+                if (request.LinkExecutable)
+                {
+                    arguments = "/s /c \"\"" + _vcvarsPath + "\" >nul && cl " + flags + " "
+                              + quotedSources + (libs.Length > 0 ? " " + libs : "")
+                              + " /Fe:\"" + request.OutputPath + "\"\"";
+                }
+                else
+                {
+                    // cl /c into the working dir, then lib.exe archives the .obj files.
+                    var objs = string.Join(" ", request.SourceFiles.Select(s =>
+                        "\"" + Path.GetFileNameWithoutExtension(s) + ".obj\""));
+                    arguments = "/s /c \"\"" + _vcvarsPath + "\" >nul && cl /c " + flags + " "
+                              + quotedSources + " && lib /nologo /OUT:\"" + request.OutputPath + "\" " + objs + "\"";
+                }
+                return RunProcess(_executable, arguments, request.WorkingDirectory, request.OutputPath);
+            }
+
+            var gnuFlags = "-std=" + request.CppStandard + " "
+                         + (request.Optimize ? "-O2" : "-O0")
+                         + (request.DebugSymbols ? " -g" : "")
+                         + string.Concat(request.IncludeDirs.Select(i => " -I\"" + i + "\""))
+                         + string.Concat(request.Defines.Select(d => " -D" + d));
+
+            if (request.LinkExecutable)
+            {
+                arguments = gnuFlags + " " + quotedSources
+                          + (libs.Length > 0 ? " " + libs : "")
+                          + " -o \"" + request.OutputPath + "\"";
+                return RunProcess(_executable, arguments, request.WorkingDirectory, request.OutputPath);
+            }
+
+            // Library: compile to objects, then archive.
+            var compile = RunProcess(_executable, gnuFlags + " -c " + quotedSources,
+                request.WorkingDirectory, expectedOutput: null);
+            if (!compile.Success) return compile;
+
+            var objNames = string.Join(" ", request.SourceFiles.Select(s =>
+                "\"" + Path.GetFileNameWithoutExtension(s) + ".o\""));
+            var archiver = FindArchiver();
+            if (archiver == null)
+                return (false, compile.Output + "\nerror: no archiver (llvm-ar/ar) found on PATH for static library output");
+            var archive = RunProcess(archiver, "rcs \"" + request.OutputPath + "\" " + objNames,
+                request.WorkingDirectory, request.OutputPath);
+            return (archive.Success, compile.Output + archive.Output);
+        }
+
+        private static string FindArchiver()
+        {
+            foreach (var exe in new[] { "llvm-ar", "ar" })
+            {
+                try
+                {
+                    using var probe = Process.Start(new ProcessStartInfo(exe, "--version")
+                    { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+                    probe.WaitForExit(10000);
+                    if (probe.ExitCode == 0) return exe;
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private (bool Success, string Output) RunProcess(
+            string executable, string arguments, string workingDirectory, string expectedOutput)
+        {
+            // NOTE: unlike the legacy CompileToExecutable body, this helper drains
+            // stdout/stderr via async reads — compilers overflow the ~4KB pipe
+            // buffer with error dumps and deadlock naive sync ReadToEnd() code.
+            // Success = exit 0 (+ output file exists when expected).
+            var psi = new ProcessStartInfo(executable, arguments)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            if (!string.IsNullOrEmpty(workingDirectory)) psi.WorkingDirectory = workingDirectory;
+
+            using var proc = Process.Start(psi);
+            var stdOutTask = proc.StandardOutput.ReadToEndAsync();
+            var stdErrTask = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(CompileTimeoutMs))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return (false, "error: C++ compile timed out after " + (CompileTimeoutMs / 1000) + "s");
+            }
+            var output = (stdOutTask.Result + "\n" + stdErrTask.Result).Trim();
+            var ok = proc.ExitCode == 0 && (expectedOutput == null || File.Exists(expectedOutput));
+            return (ok, output);
         }
 
         /// <summary>
