@@ -9,53 +9,28 @@
         Title="Attach to Process"
         Width="700" Height="500"
         WindowStartupLocation="CenterOwner"
-        Background="#252526">
+        Background="{DynamicResource IdeBg}">
 
+  <!-- Local button/textbox/textblock restyles dropped: the global Button.primary /
+       Button.secondary / TextBox styles (AppStyles.axaml) now handle chrome and follow the
+       theme. The local Button.secondary only set Background, letting Fluent's default border
+       render as a white outline (the 1.6a bug). Only the DataGrid row/cell bits not covered
+       by the global DataGrid style remain, migrated to Ide* keys. -->
   <Window.Styles>
-    <Style Selector="TextBlock">
-      <Setter Property="Foreground" Value="#CCCCCC"/>
-    </Style>
-    <Style Selector="TextBox">
-      <Setter Property="Background" Value="#3C3C3C"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
-      <Setter Property="BorderBrush" Value="#555555"/>
-      <Setter Property="CaretBrush" Value="#FFFFFF"/>
-    </Style>
-    <Style Selector="TextBox:focus">
-      <Setter Property="BorderBrush" Value="#007ACC"/>
-    </Style>
-    <Style Selector="Button">
-      <Setter Property="Background" Value="#0E639C"/>
-      <Setter Property="Foreground" Value="#FFFFFF"/>
-      <Setter Property="Padding" Value="12,6"/>
-      <Setter Property="CornerRadius" Value="2"/>
-    </Style>
-    <Style Selector="Button:pointerover">
-      <Setter Property="Background" Value="#1177BB"/>
-    </Style>
-    <Style Selector="Button.secondary">
-      <Setter Property="Background" Value="#3C3C3C"/>
-    </Style>
-    <Style Selector="Button.secondary:pointerover">
-      <Setter Property="Background" Value="#4C4C4C"/>
-    </Style>
     <Style Selector="DataGridColumnHeader">
-      <Setter Property="Background" Value="#2D2D2D"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
-      <Setter Property="Padding" Value="8,4"/>
       <Setter Property="FontSize" Value="12"/>
     </Style>
     <Style Selector="DataGridRow">
       <Setter Property="Background" Value="Transparent"/>
     </Style>
     <Style Selector="DataGridRow:pointerover /template/ Rectangle#BackgroundRectangle">
-      <Setter Property="Fill" Value="#2A2D2E"/>
+      <Setter Property="Fill" Value="{DynamicResource IdeListHover}"/>
     </Style>
     <Style Selector="DataGridRow:selected /template/ Rectangle#BackgroundRectangle">
-      <Setter Property="Fill" Value="#094771"/>
+      <Setter Property="Fill" Value="{DynamicResource IdeListSelected}"/>
     </Style>
     <Style Selector="DataGridCell">
-      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
       <Setter Property="FontSize" Value="12"/>
     </Style>
   </Window.Styles>
@@ -65,7 +40,7 @@
     <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
       <TextBlock Text="Attach to Process" FontSize="16" FontWeight="SemiBold"/>
       <TextBlock Text="Select a running process to attach the debugger."
-                 Foreground="#888888" FontSize="12"/>
+                 Foreground="{DynamicResource IdeFgMuted}" FontSize="12"/>
     </StackPanel>
 
     <!-- Filter and Refresh -->
@@ -78,7 +53,7 @@
     </Grid>
 
     <!-- Process List -->
-    <Border Grid.Row="2" Background="#1E1E1E" BorderBrush="#3C3C3C" BorderThickness="1" CornerRadius="4">
+    <Border Grid.Row="2" Background="{DynamicResource IdePanelBg}" BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1" CornerRadius="4">
       <DataGrid ItemsSource="{Binding FilteredProcesses}"
                 SelectedItem="{Binding SelectedProcess}"
                 AutoGenerateColumns="False"
@@ -102,7 +77,7 @@
 
     <!-- Buttons -->
     <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,12,0,0">
-      <Button Content="Attach" Command="{Binding AttachCommand}" IsDefault="True"
+      <Button Content="Attach" Command="{Binding AttachCommand}" IsDefault="True" Classes="primary"
               IsEnabled="{Binding SelectedProcess, Converter={x:Static ObjectConverters.IsNotNull}}"/>
       <Button Content="Cancel" Command="{Binding CancelCommand}" Classes="secondary" IsCancel="True"/>
     </StackPanel>
