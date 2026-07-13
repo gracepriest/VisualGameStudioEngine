@@ -119,7 +119,7 @@ public class BuildService : IBuildService
                 BasicLangProject? loadedProject = null;
                 try
                 {
-                    loadedProject = await _projectSerializer.LoadAsync(projectPath, _buildCts.Token);
+                    loadedProject = await _projectSerializer.LoadAsync(projectPath, cancellationToken: _buildCts.Token);
                 }
                 catch (Exception ex)
                 {

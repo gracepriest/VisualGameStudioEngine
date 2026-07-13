@@ -353,6 +353,11 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("Build", "Clean Project", null, () => vm.CleanCommand.Execute(null));
         AddCommand("Build", "Cancel Build", null, () => vm.CancelBuildCommand.Execute(null));
 
+        // --- Language server ---
+        // Lets the user start the BasicLang language server manually when basiclang.lsp.autoStart
+        // is off (or after a stop) — otherwise IntelliSense would have no way to come up.
+        AddCommand("Language", "Start Language Server", null, () => vm.StartLanguageServerCommand.Execute(null));
+
         // --- Debug commands ---
         AddCommand("Debug", "Start Debugging", "F5", () => vm.StartDebuggingCommand.Execute(null));
         AddCommand("Debug", "Start Without Debugging", "Ctrl+F5", () => vm.StartWithoutDebuggingCommand.Execute(null));

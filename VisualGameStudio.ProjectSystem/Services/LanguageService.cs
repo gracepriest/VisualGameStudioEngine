@@ -60,9 +60,26 @@ public class LanguageService : ILanguageService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    public LanguageService(IOutputService outputService)
+    public LanguageService(IOutputService outputService, ISettingsService? settingsService = null)
     {
         _outputService = outputService;
+
+        // A user-supplied override (Settings → BasicLang → "LSP Server Path") wins whenever it
+        // names a file that exists; otherwise fall back to the auto-probe below. Settings are
+        // loaded at startup (App.LoadUserSettingsAtStartup) before this singleton is constructed
+        // via MainWindowViewModel, so the value is available here in the constructor.
+        // basiclang.lsp.path is honored as a compiler-path override for the spawned `--lsp` server.
+        SettingsConsumerRegistry.RegisterConsumer(
+            "basiclang.lsp.path",
+            "LanguageService → BasicLang compiler path override for the spawned --lsp server");
+
+        var overridePath = ResolveLspPathOverride(settingsService?.Get<string>("basiclang.lsp.path", ""));
+        if (overridePath != null)
+        {
+            _compilerPath = overridePath;
+            return;
+        }
+
         // Find the BasicLang compiler
         var baseDir = AppContext.BaseDirectory;
         _compilerPath = Path.Combine(baseDir, "BasicLang.dll");
@@ -78,6 +95,20 @@ public class LanguageService : ILanguageService
             // Try Debug build in same solution
             _compilerPath = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"));
         }
+    }
+
+    /// <summary>
+    /// Resolves the <c>basiclang.lsp.path</c> override: returns the trimmed configured path when it
+    /// is non-empty AND points at an existing file, otherwise null (meaning "use the auto-probe").
+    /// Pure and static so the resolution rule can be pinned headlessly; <paramref name="fileExists"/>
+    /// is injectable for tests and defaults to <see cref="File.Exists(string)"/>.
+    /// </summary>
+    public static string? ResolveLspPathOverride(string? configuredPath, Func<string, bool>? fileExists = null)
+    {
+        if (string.IsNullOrWhiteSpace(configuredPath)) return null;
+        var trimmed = configuredPath.Trim();
+        var exists = fileExists ?? File.Exists;
+        return exists(trimmed) ? trimmed : null;
     }
 
     public Task StartAsync(CancellationToken cancellationToken = default)

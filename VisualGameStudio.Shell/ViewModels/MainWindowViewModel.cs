@@ -527,8 +527,12 @@ public partial class MainWindowViewModel : ViewModelBase
         // and auto-restarted server has lost all didOpen state.
         _languageService.ConnectionChanged += OnLanguageServiceConnectionChanged;
 
-        // Start language service
-        _ = _languageService.StartAsync();
+        // Start language service — unless the user turned off basiclang.lsp.autoStart, in which
+        // case it stays off until the "Start Language Server" command is run (command palette).
+        if (ShouldAutoStartLanguageServer(_settingsService))
+        {
+            _ = _languageService.StartAsync();
+        }
 
         // Load recent projects and subscribe to changes
         _recentProjectsService.RecentProjectsChanged += OnRecentProjectsChanged;
@@ -557,6 +561,11 @@ public partial class MainWindowViewModel : ViewModelBase
             ShowMinimap = _settingsService.Get("editor.minimap.enabled", true);
             ShowWhitespace = _settingsService.Get("editor.renderWhitespace", "none") != "none";
             _settingsService.SettingChanged += OnEditorDisplaySettingChanged;
+
+            // build.defaultConfiguration seeds the initial active configuration (the toolbar combo
+            // still wins during the session once the user changes it). Validate against the known
+            // configurations so an unexpected value can't leave the build pointed at a bad config.
+            CurrentConfiguration = ResolveDefaultBuildConfiguration(_settingsService, Configurations);
         }
 
         // Name the MainWindowViewModel-side settings consumers for the Phase 3 contract test.
@@ -567,6 +576,11 @@ public partial class MainWindowViewModel : ViewModelBase
         SettingsConsumerRegistry.RegisterConsumer("editor.insertSpaces", "MainWindowViewModel.BuildFormattingOptions → LSP FormattingOptions.InsertSpaces");
         SettingsConsumerRegistry.RegisterConsumer("editor.minimap.enabled", "MainWindowViewModel.ShowMinimap → View-menu toggle state");
         SettingsConsumerRegistry.RegisterConsumer("editor.renderWhitespace", "MainWindowViewModel.ShowWhitespace → View-menu toggle state");
+
+        // Build + BasicLang-LSP settings consumed by this view-model (Task 2.4). Extracted to a
+        // static seam so the Phase 3 contract test can assert registration without constructing the
+        // (very heavy, ~40-service) MainWindowViewModel.
+        RegisterBuildAndLspSettingsConsumers();
 
         // ── Activity bar badge subscriptions ──
         // Source Control badge: track staged + unstaged change counts
@@ -2565,6 +2579,88 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    // ── Build + BasicLang settings seams (Task 2.4) ──
+    // Pure static resolvers so the settings→behavior mapping (key names, defaults) can be pinned
+    // headlessly; all read the schema default explicitly so they never depend on the store being
+    // pre-populated. A null service means "no settings loaded" → schema-default behavior.
+
+    /// <summary><c>build.saveBeforeBuild</c> (default true): save all files before a build.</summary>
+    public static bool ShouldSaveBeforeBuild(ISettingsService? settings)
+        => settings?.Get("build.saveBeforeBuild", true) ?? true;
+
+    /// <summary><c>build.showOutput</c> (default true): reveal the Output panel when a build starts.</summary>
+    public static bool ShouldShowBuildOutput(ISettingsService? settings)
+        => settings?.Get("build.showOutput", true) ?? true;
+
+    /// <summary><c>basiclang.lsp.autoStart</c> (default true): auto-start the language server at launch.</summary>
+    public static bool ShouldAutoStartLanguageServer(ISettingsService? settings)
+        => settings?.Get("basiclang.lsp.autoStart", true) ?? true;
+
+    /// <summary>
+    /// Resolves <c>build.defaultConfiguration</c> (schema default "Debug") to a value that actually
+    /// exists in <paramref name="validConfigurations"/> (case-insensitive). Unknown/empty values fall
+    /// back to "Debug" when present, else the first known configuration, else "Debug".
+    /// </summary>
+    public static string ResolveDefaultBuildConfiguration(ISettingsService? settings, IEnumerable<string> validConfigurations)
+    {
+        var known = validConfigurations?.ToList() ?? new List<string>();
+        var configured = settings?.Get("build.defaultConfiguration", "Debug") ?? "Debug";
+
+        var match = known.FirstOrDefault(c => string.Equals(c, configured, StringComparison.OrdinalIgnoreCase));
+        if (match != null) return match;
+
+        var debug = known.FirstOrDefault(c => string.Equals(c, "Debug", StringComparison.OrdinalIgnoreCase));
+        return debug ?? known.FirstOrDefault() ?? "Debug";
+    }
+
+    /// <summary>
+    /// Registers the Build + BasicLang-LSP settings consumers owned by this view-model. A static
+    /// seam (rather than inline ctor lines) so the Phase 3 settings-consumer contract test can force
+    /// registration without building the heavy MainWindowViewModel. Idempotent — safe to call twice.
+    /// </summary>
+    public static void RegisterBuildAndLspSettingsConsumers()
+    {
+        SettingsConsumerRegistry.RegisterConsumer("build.saveBeforeBuild", "MainWindowViewModel.SaveBeforeBuildAsync → save all files before a build");
+        SettingsConsumerRegistry.RegisterConsumer("build.showOutput", "MainWindowViewModel.ShowBuildOutput → reveal Output panel on build");
+        SettingsConsumerRegistry.RegisterConsumer("build.defaultConfiguration", "MainWindowViewModel ctor → initial CurrentConfiguration");
+        SettingsConsumerRegistry.RegisterConsumer("basiclang.lsp.autoStart", "MainWindowViewModel ctor → gate language-server auto-start; manual StartLanguageServer command otherwise");
+    }
+
+    /// <summary>Saves all dirty files before a build when <c>build.saveBeforeBuild</c> is enabled.</summary>
+    private async Task SaveBeforeBuildAsync()
+    {
+        if (ShouldSaveBeforeBuild(_settingsService))
+        {
+            await SaveAllAsync();
+        }
+    }
+
+    /// <summary>
+    /// Selects the Build output channel and, when <c>build.showOutput</c> is enabled, reveals the
+    /// Output panel. The channel is always selected so the build log lands in the right place even
+    /// when auto-reveal is off.
+    /// </summary>
+    private void ShowBuildOutput()
+    {
+        OutputPanel.SelectedCategory = OutputCategory.Build;
+        if (ShouldShowBuildOutput(_settingsService))
+        {
+            _dockFactory.ActivateTool("Output");
+        }
+    }
+
+    /// <summary>
+    /// Manually starts the BasicLang language server. Surfaced in the command palette so the server
+    /// can still be brought up when <c>basiclang.lsp.autoStart</c> is off (or after a manual stop).
+    /// StartAsync is a no-op if the service is already connected or has been disposed.
+    /// </summary>
+    [RelayCommand]
+    private async Task StartLanguageServerAsync()
+    {
+        StatusText = "Starting language server...";
+        await _languageService.StartAsync();
+    }
+
     [RelayCommand]
     private async Task BuildAsync()
     {
@@ -2580,12 +2676,11 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Save all before building
-        await SaveAllAsync();
+        // Save all before building (honors build.saveBeforeBuild)
+        await SaveBeforeBuildAsync();
 
-        // Switch output panel to Build channel and show it
-        OutputPanel.SelectedCategory = OutputCategory.Build;
-        _dockFactory.ActivateTool("Output");
+        // Switch output panel to Build channel and (honoring build.showOutput) reveal it
+        ShowBuildOutput();
 
         // Update status bar with build-in-progress indicator
         StatusBar.SetBuildStarted();
@@ -2616,11 +2711,10 @@ public partial class MainWindowViewModel : ViewModelBase
         if (_projectService.CurrentProject == null) return;
         if (_buildService.IsBuilding) return;
 
-        await SaveAllAsync();
+        await SaveBeforeBuildAsync();
 
-        // Switch output panel to Build channel and show it
-        OutputPanel.SelectedCategory = OutputCategory.Build;
-        _dockFactory.ActivateTool("Output");
+        // Switch output panel to Build channel and (honoring build.showOutput) reveal it
+        ShowBuildOutput();
 
         StatusBar.SetBuildStarted();
         StatusText = "Rebuilding...";
@@ -3097,12 +3191,11 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Build first
-        await SaveAllAsync();
+        // Build first (honors build.saveBeforeBuild)
+        await SaveBeforeBuildAsync();
 
-        // Show build progress in output panel
-        OutputPanel.SelectedCategory = OutputCategory.Build;
-        _dockFactory.ActivateTool("Output");
+        // Show build progress in output panel (honors build.showOutput)
+        ShowBuildOutput();
         StatusBar.SetBuildStarted();
         StatusText = "Building before debug...";
 
@@ -3222,9 +3315,8 @@ public partial class MainWindowViewModel : ViewModelBase
         if (_projectService.CurrentProject == null) return;
         if (IsDebugging) return;
 
-        await SaveAllAsync();
-        OutputPanel.SelectedCategory = OutputCategory.Build;
-        _dockFactory.ActivateTool("Output");
+        await SaveBeforeBuildAsync();
+        ShowBuildOutput();
         StatusBar.SetBuildStarted();
         StatusText = "Building...";
         var buildResult = await _buildService.BuildProjectAsync(_projectService.CurrentProject);
@@ -3258,9 +3350,8 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         if (_projectService.CurrentProject == null) return;
 
-        await SaveAllAsync();
-        OutputPanel.SelectedCategory = OutputCategory.Build;
-        _dockFactory.ActivateTool("Output");
+        await SaveBeforeBuildAsync();
+        ShowBuildOutput();
         StatusBar.SetBuildStarted();
         StatusText = "Building...";
         var buildResult = await _buildService.BuildProjectAsync(_projectService.CurrentProject);
@@ -6241,10 +6332,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
         if (_buildService.IsBuilding) return;
 
-        await SaveAllAsync();
+        await SaveBeforeBuildAsync();
 
-        OutputPanel.SelectedCategory = OutputCategory.Build;
-        _dockFactory.ActivateTool("Output");
+        ShowBuildOutput();
 
         StatusBar.SetBuildStarted();
         StatusText = "Building solution...";

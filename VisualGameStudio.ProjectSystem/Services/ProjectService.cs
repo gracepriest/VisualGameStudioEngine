@@ -8,6 +8,7 @@ namespace VisualGameStudio.ProjectSystem.Services;
 public class ProjectService : IProjectService
 {
     private readonly IFileService _fileService;
+    private readonly ISettingsService? _settingsService;
     private readonly ProjectSerializer _projectSerializer;
     private readonly SolutionSerializer _solutionSerializer;
 
@@ -21,11 +22,47 @@ public class ProjectService : IProjectService
     public event EventHandler<SolutionEventArgs>? SolutionClosed;
     public event EventHandler? ProjectChanged;
 
-    public ProjectService(IFileService fileService)
+    public ProjectService(IFileService fileService, ISettingsService? settingsService = null)
     {
         _fileService = fileService;
+        _settingsService = settingsService;
         _projectSerializer = new ProjectSerializer();
         _solutionSerializer = new SolutionSerializer();
+
+        // basiclang.compiler.backend supplies the default TargetBackend for NEW projects and for
+        // .blproj files that omit <TargetBackend>. A per-project value always wins because it is
+        // written into (and read back from) the project file. See ResolveDefaultBackend.
+        SettingsConsumerRegistry.RegisterConsumer(
+            "basiclang.compiler.backend",
+            "ProjectService → default TargetBackend for new projects and .blproj files omitting it");
+    }
+
+    /// <summary>
+    /// The IDE-configured default compiler backend (<c>basiclang.compiler.backend</c>), used when a
+    /// project does not specify one of its own. Resolved through the pure
+    /// <see cref="ResolveDefaultBackend"/> seam so the mapping (setting string → enum, with a safe
+    /// CSharp fallback) can be pinned headlessly.
+    /// </summary>
+    private TargetBackend DefaultBackend =>
+        ResolveDefaultBackend(_settingsService?.Get<string>("basiclang.compiler.backend", "CSharp"));
+
+    /// <summary>
+    /// Maps the <c>basiclang.compiler.backend</c> setting string (CSharp / MSIL / LLVM / CPP, per the
+    /// schema enum, case-insensitive) to a <see cref="TargetBackend"/>. Unknown / empty / null values
+    /// fall back to <see cref="TargetBackend.CSharp"/> — the same default the model uses — so a typo in
+    /// the settings file can never make projects fail to build. Pure and static for headless tests.
+    /// </summary>
+    public static TargetBackend ResolveDefaultBackend(string? configured)
+    {
+        if (string.IsNullOrWhiteSpace(configured)) return TargetBackend.CSharp;
+        return configured.Trim().ToLowerInvariant() switch
+        {
+            "cpp" or "c++" => TargetBackend.Cpp,
+            "llvm" => TargetBackend.LLVM,
+            "msil" => TargetBackend.MSIL,
+            "csharp" or "c#" => TargetBackend.CSharp,
+            _ => TargetBackend.CSharp
+        };
     }
 
     public async Task<BasicLangProject> CreateProjectAsync(string name, string path, ProjectTemplateKind template, CancellationToken cancellationToken = default)
@@ -41,7 +78,7 @@ public class ProjectService : IProjectService
             FilePath = projectFile,
             RootNamespace = name,
             OutputType = template == ProjectTemplateKind.ClassLibrary ? OutputType.Library : OutputType.Exe,
-            TargetBackend = TargetBackend.CSharp,
+            TargetBackend = DefaultBackend,
             Version = "1.0"
         };
 
@@ -86,7 +123,7 @@ public class ProjectService : IProjectService
             await CloseProjectAsync();
         }
 
-        var project = await _projectSerializer.LoadAsync(path, cancellationToken);
+        var project = await _projectSerializer.LoadAsync(path, DefaultBackend, cancellationToken);
         CurrentProject = project;
         HasUnsavedChanges = false;
         ProjectOpened?.Invoke(this, new ProjectEventArgs(project));

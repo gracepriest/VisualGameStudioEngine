@@ -7,7 +7,13 @@ public class ProjectSerializer
 {
     private const string ProjectVersion = "1.0";
 
-    public async Task<BasicLangProject> LoadAsync(string filePath, CancellationToken cancellationToken = default)
+    /// <param name="defaultBackendWhenOmitted">
+    /// When the project file has no explicit <c>&lt;TargetBackend&gt;</c> element, use this backend
+    /// instead of the model default. Lets the IDE apply the <c>basiclang.compiler.backend</c> setting
+    /// to hand-written .blproj files that omit the element (a per-project value always wins because it
+    /// is read from the file below). Null keeps the <see cref="BasicLangProject"/> model default (CSharp).
+    /// </param>
+    public async Task<BasicLangProject> LoadAsync(string filePath, TargetBackend? defaultBackendWhenOmitted = null, CancellationToken cancellationToken = default)
     {
         var content = await File.ReadAllTextAsync(filePath, cancellationToken);
         var doc = XDocument.Parse(content);
@@ -21,7 +27,10 @@ public class ProjectSerializer
         var project = new BasicLangProject
         {
             FilePath = filePath,
-            Version = root.Attribute("Version")?.Value ?? ProjectVersion
+            Version = root.Attribute("Version")?.Value ?? ProjectVersion,
+            // Seed with the IDE's configured default; an explicit <TargetBackend> in the file
+            // (parsed below) overrides it, so the per-project value always wins.
+            TargetBackend = defaultBackendWhenOmitted ?? TargetBackend.CSharp
         };
 
         // Parse PropertyGroup elements
