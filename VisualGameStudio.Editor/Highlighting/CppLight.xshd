@@ -22,7 +22,8 @@
         <Span begin="\\" end="." />
       </RuleSet>
     </Span>
-    <Span color="Char" begin="'" end="'">
+    <!-- Lookbehind keeps C++ digit separators (1'000'000) from opening a char span -->
+    <Span color="Char" begin="(?&lt;![\w'])'" end="'">
       <RuleSet>
         <Span begin="\\" end="." />
       </RuleSet>

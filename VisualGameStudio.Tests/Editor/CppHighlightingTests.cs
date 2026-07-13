@@ -1,3 +1,4 @@
+using AvaloniaEdit.Document;
 using AvaloniaEdit.Highlighting;
 using NUnit.Framework;
 using VisualGameStudio.Editor.Highlighting;
@@ -59,5 +60,25 @@ public class CppHighlightingTests
             // so other fixtures see the same registrations they started with.
             HighlightingLoader.UpdateForTheme(isDark: true);
         }
+    }
+
+    [Test]
+    public void DigitSeparators_DoNotOpenCharSpan()
+    {
+        HighlightingLoader.RegisterHighlighting();
+        var def = HighlightingManager.Instance.GetDefinition("C++");
+        Assert.That(def, Is.Not.Null);
+
+        var document = new TextDocument("int x = 1'000'000;\nint y = 0xFF'FF'FF;\nchar c = 'a';");
+        var highlighter = new DocumentHighlighter(document, def!);
+
+        var decimalLine = highlighter.HighlightLine(1).Sections.Select(s => s.Color?.Name).ToList();
+        var hexLine = highlighter.HighlightLine(2).Sections.Select(s => s.Color?.Name).ToList();
+        var charLine = highlighter.HighlightLine(3).Sections.Select(s => s.Color?.Name).ToList();
+
+        Assert.That(decimalLine, Has.None.EqualTo("Char"), "decimal digit separators must not start a char literal");
+        Assert.That(decimalLine, Has.Some.EqualTo("Number"), "1'000'000 should highlight as a number");
+        Assert.That(hexLine, Has.None.EqualTo("Char"), "hex digit separators must not start a char literal");
+        Assert.That(charLine, Has.Some.EqualTo("Char"), "real char literals must still highlight");
     }
 }

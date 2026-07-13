@@ -17,6 +17,11 @@ public static class HighlightingLoader
     private static IHighlightingDefinition? _cppDarkDefinition;
     private static IHighlightingDefinition? _cppLightDefinition;
 
+    /// <summary>
+    /// Authoritative C++ extension list for HighlightingManager registration.
+    /// The <c>extensions</c> attribute inside the .xshd files is inert metadata —
+    /// only this array drives GetDefinitionByExtension lookups.
+    /// </summary>
     private static readonly string[] CppExtensions =
         { ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx", ".hh", ".hxx", ".inl" };
 
@@ -52,7 +57,9 @@ public static class HighlightingLoader
         // CAUTION: LoadDefinitionFromResource takes the FULL manifest resource
         // name — a bare "Cpp.xshd" returns null and the if-guard would silently
         // leave AvaloniaEdit's light-only built-in active.
-        var cpp = GetCppDefinitionForTheme(isDark: true);
+        // Theme-aware so UpdateForCustomTheme's re-registration keeps the C++
+        // palette matched to the active theme (EditorTheme.IsDark defaults true).
+        var cpp = GetCppDefinitionForTheme(EditorTheme.IsDark, EditorTheme.IsHighContrast);
         if (cpp != null)
         {
             HighlightingManager.Instance.RegisterHighlighting("C++", CppExtensions, cpp);
