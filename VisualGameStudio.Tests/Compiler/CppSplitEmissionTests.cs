@@ -105,12 +105,14 @@ public class CppSplitEmissionTests
     [Test]
     public void Split_ModuleNamedBasicLangRuntime_ThrowsInsteadOfSilentlyOverwriting()
     {
-        // "BasicLangRuntime.bas" produces shim "BasicLangRuntime.g.h" — the SAME file name as
-        // the reserved runtime header. Files uses OrdinalIgnoreCase + Add, so the collision
-        // throws loudly instead of silently losing one of the two files. (Task 4 maps this to
-        // a proper diagnostic; loud beats silent until then.)
-        Assert.Throws<ArgumentException>(() => Split(emitMain: true,
+        // "BasicLangRuntime.bas" would produce shim "BasicLangRuntime.g.h" — the SAME file
+        // name as the reserved runtime header. The preflight check rejects the module by name
+        // with an actionable message (Task 4 surfaces it verbatim as a diagnostic); the
+        // case-insensitive Files.Add calls remain as a backstop.
+        var ex = Assert.Throws<ArgumentException>(() => Split(emitMain: true,
             ("BasicLangRuntime.bas", "Sub Main()\nEnd Sub")));
+        Assert.That(ex!.Message, Does.Contain("BasicLangRuntime"));
+        Assert.That(ex.Message, Does.Contain("reserved"));
     }
 
     [Test]

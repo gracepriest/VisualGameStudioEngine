@@ -85,6 +85,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     moduleNames.Add(unit.Name);
             }
 
+            // Preflight: reject module names that would emit onto a reserved output file name.
+            // Actionable message naming the MODULE (Task 4 surfaces it verbatim as a diagnostic);
+            // the Files.Add calls below remain as a backstop for anything this misses.
+            foreach (var name in moduleNames)
+            {
+                string reservedFile = null;
+                if (name.Equals("BasicLangRuntime", StringComparison.OrdinalIgnoreCase))
+                    reservedFile = RuntimeHeaderFileName;
+                else if (name.Equals(projectName + ".main", StringComparison.OrdinalIgnoreCase))
+                    reservedFile = projectName + ".main.g.cpp";
+                else if (name.Equals(projectName + ".__shared", StringComparison.OrdinalIgnoreCase))
+                    reservedFile = projectName + ".__shared.g.cpp";
+                if (reservedFile != null)
+                    throw new ArgumentException(
+                        $"Module '{name}' collides with reserved generated file '{reservedFile}'.");
+            }
+
             var buckets = new Dictionary<string, List<IRFunction>>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in moduleNames)
                 buckets[name] = new List<IRFunction>();
@@ -378,6 +395,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("#else");
             WriteLine("#define FRAMEWORK_API");
             WriteLine("#endif");
+            WriteLine("#define BASICLANG_OWNS_FRAMEWORK_API");
             WriteLine("#endif");
             WriteLine();
             WriteLine("extern \"C\" {");
@@ -386,8 +404,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"    FRAMEWORK_API {pair.Value};");
             }
             WriteLine("}");
-            // Don't leak the helper macro into user translation units that include this header.
+            // Don't leak the helper macro into user translation units that include this header —
+            // but only undef what WE defined; an externally pre-defined FRAMEWORK_API (which the
+            // #ifndef above honored) belongs to the user and survives.
+            WriteLine("#ifdef BASICLANG_OWNS_FRAMEWORK_API");
             WriteLine("#undef FRAMEWORK_API");
+            WriteLine("#undef BASICLANG_OWNS_FRAMEWORK_API");
+            WriteLine("#endif");
         }
     }
 }

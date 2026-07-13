@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Native;
@@ -170,7 +171,7 @@ public static class CppCompile
             // Failure context: every non-runtime file (the runtime header is big and stable;
             // errors there would still name it by file:line in the compiler output).
             var context = string.Join("\n", files
-                .Where(kv => !kv.Key.Equals("BasicLangRuntime.g.h", StringComparison.OrdinalIgnoreCase))
+                .Where(kv => !kv.Key.Equals(CppCodeGenerator.RuntimeHeaderFileName, StringComparison.OrdinalIgnoreCase))
                 .Select(kv => $"--- {kv.Key} ---\n{kv.Value}"));
 
             return CompileAndRunCore(tmpDir, string.Join("\" \"", tuList), exePath, compiler, context);

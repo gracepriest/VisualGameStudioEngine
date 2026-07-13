@@ -59,7 +59,7 @@ public class CppSplitCompileTests
 
         var stdout = CppCompile.CompileAndRunFiles(r.Files, r.TranslationUnitFileNames, compiler);
 
-        Assert.That(stdout, Does.Contain("30"));
+        Assert.That(stdout.Trim(), Is.EqualTo("30"));
     }
 
     [Test]
@@ -87,7 +87,7 @@ public class CppSplitCompileTests
 
         var stdout = CppCompile.CompileAndRunFiles(files, tus, compiler);
 
-        Assert.That(stdout, Does.Contain("40"));
+        Assert.That(stdout.Trim(), Is.EqualTo("40"));
     }
 
     [Test]
@@ -130,8 +130,10 @@ public class CppSplitCompileTests
 
         var stdout = CppCompile.CompileAndRunFiles(r.Files, r.TranslationUnitFileNames, compiler);
 
-        // SumList() = 2 items, plus yielded 1 + 2 = 5.
-        Assert.That(stdout, Does.Contain("5"));
+        // SumList() = 2 items, plus yielded 1 + 2 = 5 — exact match, so a wrong total like 15
+        // (the double-count symptom this ODR test exists to catch) fails instead of
+        // substring-passing on Contains("5").
+        Assert.That(stdout.Trim(), Is.EqualTo("5"));
     }
 
     [Test]
@@ -174,7 +176,9 @@ public class CppSplitCompileTests
 
         var stdout = CppCompile.CompileAndRunFiles(files, tus, compiler);
 
-        Assert.That(stdout, Does.Contain("Player: Rex"));
-        Assert.That(stdout, Does.Contain("Rex"));
+        // Line-wise exact: the second line pins the p->Tag() output on its own — a bare
+        // Contains("Rex") would be implied by "Player: Rex" and verify nothing.
+        var lines = stdout.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToArray();
+        Assert.That(lines, Is.EqualTo(new[] { "Player: Rex", "Rex" }));
     }
 }
