@@ -9,7 +9,7 @@
         Title="Exception Settings"
         Width="600" Height="500"
         WindowStartupLocation="CenterOwner"
-        Background="{DynamicResource IdeBg}">
+        Background="{DynamicResource IdePanelBg}">
 
   <!-- Local button/textbox/textblock/checkbox restyles dropped: the global themed styles in
        AppStyles.axaml now handle chrome. The local Button.secondary only set Background, so
@@ -38,7 +38,7 @@
     </Grid>
 
     <!-- Exception Tree -->
-    <Border Grid.Row="2" Background="{DynamicResource IdePanelBg}" BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1" CornerRadius="4">
+    <Border Grid.Row="2" Background="{DynamicResource IdeBg}" BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1" CornerRadius="4">
       <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
         <ItemsControl ItemsSource="{Binding ExceptionCategories}" Margin="8">
           <ItemsControl.ItemTemplate>
