@@ -579,9 +579,11 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         // Name the MainWindowViewModel-side settings consumers for the Phase 3 contract test.
-        // trimTrailingWhitespaceOnSave was already verified working; the rest are wired in 2.1.
-        SettingsConsumerRegistry.RegisterConsumer("editor.trimTrailingWhitespaceOnSave", "MainWindowViewModel.SaveDocumentCoreAsync → trim trailing whitespace before save");
-        SettingsConsumerRegistry.RegisterConsumer("editor.formatOnSave", "MainWindowViewModel.SaveDocumentCoreAsync → format document before save");
+        // The two save-hook keys register from a static seam (below) so the contract test can force
+        // them without constructing the heavy (~40-service) MainWindowViewModel — see the registry
+        // doc note that these two are the only editor.* keys not also covered by the
+        // CodeEditorDocumentView static ctor.
+        RegisterEditorSaveSettingsConsumers();
         SettingsConsumerRegistry.RegisterConsumer("editor.tabSize", "MainWindowViewModel.BuildFormattingOptions → LSP FormattingOptions.TabSize");
         SettingsConsumerRegistry.RegisterConsumer("editor.insertSpaces", "MainWindowViewModel.BuildFormattingOptions → LSP FormattingOptions.InsertSpaces");
         SettingsConsumerRegistry.RegisterConsumer("editor.minimap.enabled", "MainWindowViewModel.ShowMinimap → View-menu toggle state");
@@ -2648,6 +2650,19 @@ public partial class MainWindowViewModel : ViewModelBase
         SettingsConsumerRegistry.RegisterConsumer("build.showOutput", "MainWindowViewModel.ShowBuildOutput → reveal Output panel on build");
         SettingsConsumerRegistry.RegisterConsumer("build.defaultConfiguration", "MainWindowViewModel ctor → initial CurrentConfiguration");
         SettingsConsumerRegistry.RegisterConsumer("basiclang.lsp.autoStart", "MainWindowViewModel ctor → gate language-server auto-start; manual StartLanguageServer command otherwise");
+    }
+
+    /// <summary>
+    /// Registers the two save-hook settings consumed by this view-model's SaveDocumentCoreAsync
+    /// (<c>editor.formatOnSave</c> and <c>editor.trimTrailingWhitespaceOnSave</c>). A static seam
+    /// (rather than inline ctor lines) so the Phase 3 settings-consumer contract test can force
+    /// registration without building the heavy MainWindowViewModel — these are the only editor.*
+    /// dialog keys not also registered by the CodeEditorDocumentView static ctor. Idempotent.
+    /// </summary>
+    public static void RegisterEditorSaveSettingsConsumers()
+    {
+        SettingsConsumerRegistry.RegisterConsumer("editor.trimTrailingWhitespaceOnSave", "MainWindowViewModel.SaveDocumentCoreAsync → trim trailing whitespace before save");
+        SettingsConsumerRegistry.RegisterConsumer("editor.formatOnSave", "MainWindowViewModel.SaveDocumentCoreAsync → format document before save");
     }
 
     /// <summary>Saves all dirty files before a build when <c>build.saveBeforeBuild</c> is enabled.</summary>

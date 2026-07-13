@@ -435,6 +435,16 @@ public partial class SettingsViewModel : ViewModelBase
     /// <summary>All searchable settings (built once).</summary>
     private List<SearchableSettingItem> _allSettings = new();
 
+    /// <summary>
+    /// The exact set of settings keys the dialog manages — i.e. every key that drives a control the
+    /// user can edit in Tools → Settings (the inventory built by <see cref="BuildSearchableSettings"/>).
+    /// Exposed so the Phase 3 settings-consumer contract test can enumerate the dialog inventory the
+    /// same way the dialog does and assert each key names a real consumer. This is the single source
+    /// of truth for "a setting the dialog exposes"; adding a <c>MakeBool/MakeCombo/...</c> entry above
+    /// automatically enrolls the new key in the contract test.
+    /// </summary>
+    public IReadOnlyList<string> DialogSettingKeys => _allSettings.Select(s => s.Key).ToList();
+
     public Action? CloseDialog { get; set; }
     public bool DialogResult { get; private set; }
 
@@ -890,7 +900,9 @@ public partial class SettingsViewModel : ViewModelBase
             new() { Id = "editor", Name = "Editor", Icon = "\u270E", Order = 1 },
             new() { Id = "workbench", Name = "Workbench", Icon = "\u2699", Order = 2 },
             new() { Id = "terminal", Name = "Terminal", Icon = "\u2588", Order = 3 },
-            new() { Id = "debug", Name = "Debug", Icon = "\u25B6", Order = 4 },
+            // Debug category dropped: its only two settings were removed as persists-but-dead (D3).
+            // The "debug" => "Debug" arms in the category-name maps below are harmless no-ops now and
+            // are kept so a future real Debug setting can re-enable the category with one line here.
             new() { Id = "git", Name = "Git", Icon = "\u2387", Order = 5 },
             new() { Id = "basiclang", Name = "BasicLang", Icon = "\u2663", Order = 6 },
             new() { Id = "intellisense", Name = "IntelliSense", Icon = "\u2726", Order = 7 },
@@ -953,11 +965,14 @@ public partial class SettingsViewModel : ViewModelBase
             MakeCombo("editor.renderWhitespace", "Render Whitespace", "Controls rendering of whitespace characters.", "Editor", nameof(RenderWhitespace), RenderWhitespaceOptions, "none"),
             MakeCombo("editor.wordWrap", "Word Wrap", "Controls how lines should wrap.", "Editor", nameof(WordWrapMode), WordWrapModes, "off"),
             MakeBool("editor.minimap.enabled", "Minimap", "Controls whether the minimap is shown.", "Editor", nameof(MinimapEnabled), true),
-            MakeCombo("editor.minimap.side", "Minimap Side", "Controls the side where the minimap is rendered.", "Editor", nameof(MinimapSide), MinimapSides, "right"),
+            // D3: editor.minimap.side removed from the dialog — the minimap renderer has no
+            // configurable side yet (always right). Key stays in the schema for a future feature.
             MakeBool("editor.stickyScroll.enabled", "Sticky Scroll", "Pin enclosing scope headers at the top of the editor.", "Editor", nameof(StickyScrollEnabled), true),
 
             // Behavior
-            MakeBool("editor.autoIndent", "Auto Indent", "Automatically indent new lines based on the previous line.", "Editor", nameof(AutoIndent), true),
+            // D3: editor.autoIndent removed from the dialog — the editor always installs
+            // BasicLangIndentationStrategy (CodeEditorControl); nothing reads this key to toggle it,
+            // so the checkbox was placebo. Key stays in the schema for a future feature.
             MakeBool("editor.bracketPairColorization", "Bracket Pair Colorization", "Colorize matching brackets for easier code navigation.", "Editor", nameof(BracketMatching), true),
             MakeBool("editor.autoClosingBrackets", "Auto Close Brackets", "Automatically insert closing brackets, quotes, and parentheses.", "Editor", nameof(AutoCloseBrackets), true),
             MakeBool("editor.smoothScrolling", "Smooth Scrolling", "Animate scrolling for a smoother visual experience.", "Editor", nameof(SmoothScrolling), true),
@@ -981,8 +996,10 @@ public partial class SettingsViewModel : ViewModelBase
             MakeText("terminal.integrated.defaultProfile", "Default Profile", "The default terminal shell profile.", "Terminal", nameof(TerminalDefaultProfile), ""),
 
             // ===== Debug =====
-            MakeNumeric("debug.console.fontSize", "Console Font Size", "Controls the font size of the debug console.", "Debug", nameof(DebugConsoleFontSize), 6, 72, defaultValue: 14),
-            MakeBool("debug.allowBreakpointsEverywhere", "Allow Breakpoints Everywhere", "Allow setting breakpoints in any file, not just source files.", "Debug", nameof(DebugAllowBreakpointsEverywhere), false),
+            // D3: debug.console.fontSize + debug.allowBreakpointsEverywhere removed from the dialog —
+            // no debug-console font pipeline and no breakpoint-everywhere gate consume them, so both
+            // were persists-but-dead. Keys stay in the schema for a future feature. With no live Debug
+            // settings, the Debug category is dropped from the sidebar (see BuildCategories).
 
             // ===== Git =====
             MakeBool("git.autoFetch", "Auto Fetch", "Periodically fetch from remotes to keep the local repo up to date.", "Git", nameof(GitAutoFetch), true),
