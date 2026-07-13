@@ -453,6 +453,16 @@ public partial class MainWindowViewModel : ViewModelBase
         Layout = _dockFactory.CreateLayout();
         _dockFactory.InitLayout(Layout);
 
+        // workbench.startupEditor = newUntitledFile: CreateLayout leaves the document area empty for
+        // this mode (it can't build an editor document itself), so create the untitled file here now
+        // that the editor-document machinery is available. welcomePage / none are already handled
+        // inside CreateLayout. A later project-open with a saved session replaces this entirely
+        // (RestoreWorkspaceStateAsync tears down open documents first), so restore takes precedence.
+        if (DockFactory.ResolveStartupEditorMode(_settingsService) == StartupEditorMode.NewUntitledFile)
+        {
+            _ = NewFileAsync();
+        }
+
         // Subscribe to document close event
         _dockFactory.DocumentClosed += OnDocumentClosed;
 
@@ -6628,17 +6638,9 @@ $"""
         }
     }
 
-    [RelayCommand]
-    private async Task OpenFileIconThemeAsync()
-    {
-        var themes = new List<string> { "Seti (Default)", "Material Icons", "Minimal", "None" };
-        var selected = await _dialogService.ShowListSelectionAsync("File Icon Theme", "Select a file icon theme:", themes);
-
-        if (selected >= 0 && selected < themes.Count)
-        {
-            StatusText = $"File icon theme changed to: {themes[selected]}";
-        }
-    }
+    // D3: OpenFileIconThemeAsync (the "File Icon Theme..." picker) removed — it wrote nothing (no
+    // file-icon-theme feature exists) and its value set didn't even match the schema. The command
+    // palette entry that invoked it was removed with it.
 
     #endregion
 

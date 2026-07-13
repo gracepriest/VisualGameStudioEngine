@@ -2,14 +2,77 @@ using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm;
 using Dock.Model.Mvvm.Controls;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Shell.ViewModels.Documents;
 using VisualGameStudio.Shell.ViewModels.Panels;
 
 namespace VisualGameStudio.Shell.Dock;
 
+/// <summary>
+/// Which editor <see cref="DockFactory.CreateLayout"/> seeds the initial document area with when
+/// there is no restored per-project session (fresh start / no project). Mirrors VS Code's
+/// <c>workbench.startupEditor</c>. <see cref="NewUntitledFile"/> can't be materialized inside
+/// CreateLayout (it needs the editor view-model machinery in MainWindowViewModel), so CreateLayout
+/// treats it the same as <see cref="None"/> — an empty document dock — and MainWindowViewModel
+/// creates the untitled file after InitLayout.
+/// </summary>
+public enum StartupEditorMode
+{
+    WelcomePage,
+    None,
+    NewUntitledFile
+}
+
 public class DockFactory : Factory
 {
     public event EventHandler<string>? DocumentClosed;
+
+    // Optional so headless dock tests can keep using `new DockFactory()`; the DI container injects
+    // the real service (registered in ServiceConfiguration). Reads workbench.startupEditor /
+    // workbench.sideBar.location at CreateLayout time.
+    private readonly ISettingsService? _settingsService;
+
+    public DockFactory(ISettingsService? settingsService = null)
+    {
+        _settingsService = settingsService;
+
+        // Name the workbench-layout consumers so the Phase 3 contract test knows these dialog
+        // settings are live. startupEditor is also (co-)consumed by MainWindowViewModel (the
+        // newUntitledFile branch) and the Welcome page's "Show welcome on startup" checkbox.
+        SettingsConsumerRegistry.RegisterConsumer(
+            "workbench.startupEditor",
+            "DockFactory.CreateLayout → initial document (welcomePage vs empty)");
+        SettingsConsumerRegistry.RegisterConsumer(
+            "workbench.sideBar.location",
+            "DockFactory.CreateLayout → root child order (left/right)");
+    }
+
+    /// <summary>
+    /// Resolves <c>workbench.startupEditor</c> to a <see cref="StartupEditorMode"/>. Pure (no
+    /// Avalonia / dock state) so the startup-editor decision is unit-testable. A null service or an
+    /// unrecognized value resolves to <see cref="StartupEditorMode.WelcomePage"/> (the schema default).
+    /// </summary>
+    public static StartupEditorMode ResolveStartupEditorMode(ISettingsService? settings)
+    {
+        var value = settings?.Get<string>("workbench.startupEditor", "welcomePage") ?? "welcomePage";
+        return value switch
+        {
+            "none" => StartupEditorMode.None,
+            "newUntitledFile" => StartupEditorMode.NewUntitledFile,
+            _ => StartupEditorMode.WelcomePage
+        };
+    }
+
+    /// <summary>
+    /// True when <c>workbench.sideBar.location</c> is <c>right</c>. Pure so the sidebar-placement
+    /// decision is unit-testable. Restart-scoped: only <see cref="CreateLayout"/> reads it, so a live
+    /// change takes effect on the next layout build (fresh start / reset), not immediately.
+    /// </summary>
+    public static bool IsSideBarOnRight(ISettingsService? settings)
+        => string.Equals(
+            settings?.Get<string>("workbench.sideBar.location", "left"),
+            "right",
+            StringComparison.OrdinalIgnoreCase);
 
     private SolutionExplorerViewModel? _solutionExplorer;
     private OutputPanelViewModel? _outputPanel;
@@ -96,6 +159,13 @@ public class DockFactory : Factory
 
     public override IRootDock CreateLayout()
     {
+        // workbench.startupEditor governs the initial document area only when there is no restored
+        // per-project session (fresh start / no project). Per-project layout restore
+        // (RestoreWorkspaceStateAsync → TryApplyLayout) fully replaces this layout, so restore always
+        // takes precedence. WelcomePage seeds the Start Page here; None / NewUntitledFile start with an
+        // empty document dock (MainWindowViewModel materializes the untitled file after InitLayout).
+        var startupMode = ResolveStartupEditorMode(_settingsService);
+
         // Create tool panels
         var solutionExplorerTool = new SolutionExplorerTool
         {
@@ -201,14 +271,18 @@ public class DockFactory : Factory
         };
         var leftDock = _leftDock;
 
-        // Document area
+        // Document area. Seed the Welcome document only for the welcomePage startup mode; None and
+        // NewUntitledFile start empty (see startupMode note at the top of CreateLayout).
+        var seedWelcome = startupMode == StartupEditorMode.WelcomePage;
         _documentDock = new DocumentDock
         {
             Id = "DocumentDock",
             Title = "Documents",
             Proportion = 0.6,
-            VisibleDockables = CreateList<IDockable>(welcomeDocument),
-            ActiveDockable = welcomeDocument,
+            VisibleDockables = seedWelcome
+                ? CreateList<IDockable>(welcomeDocument)
+                : CreateList<IDockable>(),
+            ActiveDockable = seedWelcome ? welcomeDocument : null,
             CanCreateDocument = false,
             IsCollapsable = false
         };
@@ -342,15 +416,22 @@ public class DockFactory : Factory
         };
         var mainArea = _mainArea;
 
-        // Root layout
+        // Root layout. workbench.sideBar.location flips the CHILD ORDER only — the sidebar keeps its
+        // Id "LeftDock" (and inner "LeftTools") so the reopen-resilience helpers (FindHomeToolDock /
+        // EnsureLeftRegion) and per-project layout restore keep working unchanged; only the geometry
+        // moves. Restart-scoped: this is read once per layout build.
         var rootLayout = new ProportionalDock
         {
             Orientation = Orientation.Horizontal,
-            VisibleDockables = CreateList<IDockable>(
-                leftDock,
-                new ProportionalDockSplitter(),
-                mainArea
-            )
+            VisibleDockables = IsSideBarOnRight(_settingsService)
+                ? CreateList<IDockable>(
+                    mainArea,
+                    new ProportionalDockSplitter(),
+                    leftDock)
+                : CreateList<IDockable>(
+                    leftDock,
+                    new ProportionalDockSplitter(),
+                    mainArea)
         };
 
         _rootDock = CreateRootDock();
@@ -704,8 +785,19 @@ public class DockFactory : Factory
         _leftDock = leftDock;
 
         var rootLayout = RootLayout();
-        InsertDockable(rootLayout, leftDock, 0);
-        InsertDockable(rootLayout, new ProportionalDockSplitter(), 1);
+        // Rebuild the sidebar on the same side workbench.sideBar.location put it (matches CreateLayout's
+        // child order). Default left mode keeps the original insert-at-0 behavior, so the reopen tests
+        // that construct the factory without a settings service are unaffected.
+        if (IsSideBarOnRight(_settingsService))
+        {
+            AddDockable(rootLayout, new ProportionalDockSplitter());
+            AddDockable(rootLayout, leftDock);
+        }
+        else
+        {
+            InsertDockable(rootLayout, leftDock, 0);
+            InsertDockable(rootLayout, new ProportionalDockSplitter(), 1);
+        }
         return leftDock;
     }
 

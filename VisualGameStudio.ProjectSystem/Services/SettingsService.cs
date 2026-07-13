@@ -1057,9 +1057,9 @@ public class SettingsService : ISettingsService, IDisposable
                     enumVals: new[] { "Dark", "Light", "High Contrast" }),
                 Prop("workbench.iconTheme", SettingsPropertyType.String, "Icon Theme", "default", "Specifies the file icon theme.",
                     enumVals: new[] { "default", "minimal", "none" }),
-                Prop("workbench.startupEditor", SettingsPropertyType.String, "Startup Editor", "welcomePage", "Controls which editor is shown at startup.",
+                Prop("workbench.startupEditor", SettingsPropertyType.String, "Startup Editor", "welcomePage", "Controls which editor is shown at startup when no project session is restored.",
                     enumVals: new[] { "welcomePage", "none", "newUntitledFile" }),
-                Prop("workbench.sideBar.location", SettingsPropertyType.String, "Side Bar Location", "left", "Controls the location of the sidebar.",
+                Prop("workbench.sideBar.location", SettingsPropertyType.String, "Side Bar Location", "left", "Controls the location of the sidebar. Takes effect after restart.",
                     enumVals: new[] { "left", "right" }),
             }
         });

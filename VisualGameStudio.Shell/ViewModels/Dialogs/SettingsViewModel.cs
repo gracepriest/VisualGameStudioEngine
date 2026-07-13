@@ -397,12 +397,8 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _gitConfirmSync = true;
 
     // -- Workbench Settings --
-    [ObservableProperty]
-    private string _iconTheme = "default";
-
-    [ObservableProperty]
-    private ObservableCollection<string> _iconThemes = new() { "default", "minimal", "none" };
-
+    // D3: workbench.iconTheme removed from the dialog — the IDE has no file-icon-theme rendering
+    // surface (the old picker wrote nothing). The key remains in the schema for a future feature.
     [ObservableProperty]
     private string _startupEditor = "welcomePage";
 
@@ -913,9 +909,9 @@ public partial class SettingsViewModel : ViewModelBase
 
             // ===== Workbench =====
             MakeCombo("workbench.colorTheme", "Color Theme", "Overall color theme for the IDE.", "Workbench", nameof(SelectedTheme), AvailableThemes, "Dark"),
-            MakeCombo("workbench.iconTheme", "Icon Theme", "Specifies the file icon theme used in the explorer and tabs.", "Workbench", nameof(IconTheme), IconThemes, "default"),
-            MakeCombo("workbench.startupEditor", "Startup Editor", "Controls which editor is shown at startup.", "Workbench", nameof(StartupEditor), StartupEditors, "welcomePage"),
-            MakeCombo("workbench.sideBar.location", "Side Bar Location", "Controls the location of the sidebar.", "Workbench", nameof(SideBarLocation), SideBarLocations, "left"),
+            // D3: workbench.iconTheme intentionally omitted — no file-icon-theme feature exists yet.
+            MakeCombo("workbench.startupEditor", "Startup Editor", "Controls which editor is shown at startup when no project session is restored.", "Workbench", nameof(StartupEditor), StartupEditors, "welcomePage"),
+            MakeCombo("workbench.sideBar.location", "Side Bar Location", "Controls the location of the sidebar. Takes effect after restart.", "Workbench", nameof(SideBarLocation), SideBarLocations, "left"),
 
             // ===== Terminal =====
             MakeText("terminal.integrated.fontFamily", "Font Family", "Controls the font family of the terminal. Leave empty to use editor font.", "Terminal", nameof(TerminalFontFamily), ""),
@@ -1097,7 +1093,6 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(TerminalFontFamily) => TerminalFontFamily,
         nameof(TerminalCursorStyle) => TerminalCursorStyle,
         nameof(TerminalDefaultProfile) => TerminalDefaultProfile,
-        nameof(IconTheme) => IconTheme,
         nameof(StartupEditor) => StartupEditor,
         nameof(SideBarLocation) => SideBarLocation,
         nameof(LspServerPath) => LspServerPath,
@@ -1120,7 +1115,6 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(TerminalFontFamily): TerminalFontFamily = value; break;
             case nameof(TerminalCursorStyle): TerminalCursorStyle = value; break;
             case nameof(TerminalDefaultProfile): TerminalDefaultProfile = value; break;
-            case nameof(IconTheme): IconTheme = value; break;
             case nameof(StartupEditor): StartupEditor = value; break;
             case nameof(SideBarLocation): SideBarLocation = value; break;
             case nameof(LspServerPath): LspServerPath = value; break;
@@ -1201,7 +1195,6 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(MinimapSide) => "editor.minimap.side",
         nameof(StickyScrollEnabled) => "editor.stickyScroll.enabled",
         nameof(SelectedTheme) => "workbench.colorTheme",
-        nameof(IconTheme) => "workbench.iconTheme",
         nameof(StartupEditor) => "workbench.startupEditor",
         nameof(SideBarLocation) => "workbench.sideBar.location",
         nameof(TerminalFontFamily) => "terminal.integrated.fontFamily",
@@ -1502,7 +1495,6 @@ public partial class SettingsViewModel : ViewModelBase
         MinimapSide = _settingsService.Get("editor.minimap.side", "right", scope);
         StickyScrollEnabled = _settingsService.Get("editor.stickyScroll.enabled", true, scope);
         SelectedTheme = _settingsService.Get("workbench.colorTheme", "Dark", scope);
-        IconTheme = _settingsService.Get("workbench.iconTheme", "default", scope);
         StartupEditor = _settingsService.Get("workbench.startupEditor", "welcomePage", scope);
         SideBarLocation = _settingsService.Get("workbench.sideBar.location", "left", scope);
         TerminalFontFamily = _settingsService.Get("terminal.integrated.fontFamily", "", scope);

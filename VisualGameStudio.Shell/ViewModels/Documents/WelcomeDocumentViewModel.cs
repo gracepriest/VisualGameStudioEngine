@@ -9,6 +9,9 @@ namespace VisualGameStudio.Shell.ViewModels.Documents;
 public partial class WelcomeDocumentViewModel : ViewModelBase
 {
     private readonly IRecentProjectsService _recentProjectsService;
+    private readonly ISettingsService? _settingsService;
+    // Guards the settings write-back while we seed the checkbox from the stored value in the ctor.
+    private bool _suppressStartupEditorWrite;
     private Action<string>? _openProject;
     private Action? _newProject;
     private Action? _openFile;
@@ -37,11 +40,12 @@ public partial class WelcomeDocumentViewModel : ViewModelBase
     private ObservableCollection<LearnLink> _learnLinks = new();
 
     /// <summary>
-    /// DI-friendly constructor that only requires the service.
-    /// Action callbacks can be set later via SetCallbacks().
+    /// DI-friendly constructor. Only the services are required; action callbacks can be set later
+    /// via SetCallbacks(). The settings service is optional so headless tests can construct the VM
+    /// without one; the DI container supplies it.
     /// </summary>
-    public WelcomeDocumentViewModel(IRecentProjectsService recentProjectsService)
-        : this(recentProjectsService, null, null, null, null, null)
+    public WelcomeDocumentViewModel(IRecentProjectsService recentProjectsService, ISettingsService? settingsService = null)
+        : this(recentProjectsService, null, null, null, null, null, settingsService)
     {
     }
 
@@ -51,9 +55,11 @@ public partial class WelcomeDocumentViewModel : ViewModelBase
         Action? newProject,
         Action? openFile,
         Action? openFolder,
-        Action? cloneRepository)
+        Action? cloneRepository,
+        ISettingsService? settingsService = null)
     {
         _recentProjectsService = recentProjectsService;
+        _settingsService = settingsService;
         _openProject = openProject;
         _newProject = newProject;
         _openFile = openFile;
@@ -61,6 +67,22 @@ public partial class WelcomeDocumentViewModel : ViewModelBase
         _cloneRepository = cloneRepository;
 
         _recentProjectsService.RecentProjectsChanged += (_, _) => LoadRecentProjects();
+
+        // Wire the "Show welcome page on startup" checkbox to workbench.startupEditor (checked iff the
+        // saved value is "welcomePage"). Previously the checkbox was dead — nothing read or persisted it.
+        if (_settingsService != null)
+        {
+            SettingsConsumerRegistry.RegisterConsumer(
+                "workbench.startupEditor",
+                "WelcomeDocumentView 'Show welcome page on startup' checkbox");
+
+            _suppressStartupEditorWrite = true;
+            ShowWelcomeOnStartup = string.Equals(
+                _settingsService.Get<string>("workbench.startupEditor", "welcomePage"),
+                "welcomePage",
+                StringComparison.Ordinal);
+            _suppressStartupEditorWrite = false;
+        }
 
         InitializeWalkthroughItems();
         InitializeLearnLinks();
@@ -80,6 +102,17 @@ public partial class WelcomeDocumentViewModel : ViewModelBase
             }
         }
         catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// Persists the "Show welcome page on startup" checkbox to workbench.startupEditor: checked keeps
+    /// the Start Page (welcomePage), unchecked switches to none. (Both round-trip through the same
+    /// single store the Settings dialog and DockFactory read.) Suppressed while the ctor seeds the box.
+    /// </summary>
+    partial void OnShowWelcomeOnStartupChanged(bool value)
+    {
+        if (_suppressStartupEditorWrite || _settingsService == null) return;
+        _settingsService.Set("workbench.startupEditor", value ? "welcomePage" : "none", SettingsScope.User);
     }
 
     /// <summary>

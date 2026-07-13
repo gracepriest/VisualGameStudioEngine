@@ -421,7 +421,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("Preferences", "Settings...", null, () => vm.SettingsCommand.Execute(null));
         AddCommand("Preferences", "Open Settings (JSON)...", null, () => vm.OpenSettingsCommand.Execute(null));
         AddCommand("Preferences", "Color Theme...", null, () => vm.OpenColorThemeCommand.Execute(null));
-        AddCommand("Preferences", "File Icon Theme...", null, () => vm.OpenFileIconThemeCommand.Execute(null));
+        // "File Icon Theme..." removed (D3) — the underlying picker was a no-op stub.
         AddCommand("Preferences", "Keyboard Shortcuts...", null, () => vm.ShowKeyboardShortcutsCommand.Execute(null));
 
         // --- Help ---
