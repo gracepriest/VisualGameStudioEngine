@@ -239,6 +239,15 @@ public class ProjectSerializer
             ));
         }
 
+        // Add Resource items
+        var resourceItems = project.Items.Where(i => i.ItemType == ProjectItemType.Resource).ToList();
+        if (resourceItems.Any())
+        {
+            root.Add(new XElement("ItemGroup",
+                resourceItems.Select(i => new XElement("Resource", new XAttribute("Include", i.Include)))
+            ));
+        }
+
         // Add References
         if (project.References.Any())
         {
