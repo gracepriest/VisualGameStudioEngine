@@ -74,6 +74,18 @@ public class NewProjectWizardViewModelTests
     }
 
     [Test]
+    public void SelectingLanguageOption_DrivesBackendAndTemplateCascade()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedLanguageOption = vm.Languages.First(o => o.Value == ProjectLanguage.Cpp);
+
+        Assert.That(vm.SelectedLanguage, Is.EqualTo(ProjectLanguage.Cpp));
+        Assert.That(vm.Backends.Select(b => b.SolutionType.Id), Is.All.EqualTo("cpp"));
+        Assert.That(vm.VisibleTemplates.Select(t => t.Id),
+            Is.EquivalentTo(new[] { "cpp-console-app", "cpp-library", "cpp-game-app" }));
+    }
+
+    [Test]
     public void PlatformFilter_CrossPlatform_ExcludesWinFormsAndWpf()
     {
         var vm = NewVm(out _);

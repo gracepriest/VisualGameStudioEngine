@@ -11,6 +11,11 @@ using VisualGameStudio.Core.Abstractions.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Dialogs;
 
+// Deliberate UI-only enum, distinct from VisualGameStudio.Core.Models.ProjectLanguage
+// (the persisted .blproj <Language> axis). The wizard's language toggle drives template
+// filtering / backend presentation only and must NOT become the project-persistence axis
+// this pass — do not "unify" these two enums, or the toggle would get wired into
+// project persistence.
 public enum ProjectLanguage { BasicLang, Cpp }
 
 /// <summary>A selectable backend. For BasicLang it maps to a real SolutionType;
