@@ -14,10 +14,10 @@
         TransparencyLevelHint="AcrylicBlur"
         Background="Transparent">
 
-  <Border Background="#E8252526" CornerRadius="8" BorderBrush="#3C3C3C" BorderThickness="1">
+  <Border Background="{DynamicResource IdeOverlayBg}" CornerRadius="8" BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
     <DockPanel>
       <!-- Search Box -->
-      <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12" CornerRadius="8,8,0,0">
+      <Border DockPanel.Dock="Top" Background="{DynamicResource IdeMenuBg}" Padding="12" CornerRadius="8,8,0,0">
         <Grid ColumnDefinitions="*,Auto">
           <TextBox Grid.Column="0"
                    x:Name="SearchBox"
@@ -26,7 +26,7 @@
                    FontSize="16"
                    BorderThickness="0"
                    Background="Transparent"
-                   Foreground="#CCCCCC"/>
+                   Foreground="{DynamicResource IdeFg}"/>
           <Button Grid.Column="1"
                   Command="{Binding CancelCommand}"
                   Background="Transparent"
@@ -34,12 +34,12 @@
                   Padding="6,2"
                   Margin="8,0,0,0"
                   VerticalAlignment="Center"
-                  Foreground="#808080"
+                  Foreground="{DynamicResource IdeFgMuted}"
                   ToolTip.Tip="Close (Esc)"
                   AutomationProperties.Name="Close Quick Open">
             <Button.Styles>
               <Style Selector="Button:pointerover /template/ ContentPresenter">
-                <Setter Property="Background" Value="#3C3C3C"/>
+                <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
               </Style>
             </Button.Styles>
             <TextBlock Text="✕" FontSize="14"/>
@@ -47,16 +47,16 @@
         </Grid>
       </Border>
 
-      <!-- Mode indicator -->
-      <Border DockPanel.Dock="Top" Background="#252526" Padding="12,4">
+      <!-- Mode indicator. #569CD6 (mode accent) kept literal (editor blue, != IdeAccent #3794FF). -->
+      <Border DockPanel.Dock="Top" Background="{DynamicResource IdeContextBg}" Padding="12,4">
         <StackPanel Orientation="Horizontal" Spacing="16">
           <StackPanel Orientation="Horizontal">
-            <TextBlock Text="Mode: " FontSize="11" Foreground="#808080"/>
+            <TextBlock Text="Mode: " FontSize="11" Foreground="{DynamicResource IdeFgMuted}"/>
             <TextBlock Text="{Binding Mode}" FontSize="11" Foreground="#569CD6"/>
           </StackPanel>
-          <TextBlock Text="↑↓ Navigate" FontSize="11" Foreground="#606060"/>
-          <TextBlock Text="Enter Select" FontSize="11" Foreground="#606060"/>
-          <TextBlock Text="Esc Cancel" FontSize="11" Foreground="#606060"/>
+          <TextBlock Text="↑↓ Navigate" FontSize="11" Foreground="{DynamicResource IdeFgSubtle}"/>
+          <TextBlock Text="Enter Select" FontSize="11" Foreground="{DynamicResource IdeFgSubtle}"/>
+          <TextBlock Text="Esc Cancel" FontSize="11" Foreground="{DynamicResource IdeFgSubtle}"/>
         </StackPanel>
       </Border>
 
@@ -78,10 +78,10 @@
                 <StackPanel Grid.Column="1">
                   <TextBlock Text="{Binding Name}"
                              FontSize="14"
-                             Foreground="#CCCCCC"/>
+                             Foreground="{DynamicResource IdeFg}"/>
                   <TextBlock Text="{Binding Description}"
                              FontSize="11"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
               </Grid>
@@ -90,10 +90,10 @@
         </ListBox.ItemTemplate>
         <ListBox.Styles>
           <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-            <Setter Property="Background" Value="#094771"/>
+            <Setter Property="Background" Value="{DynamicResource IdeListSelected}"/>
           </Style>
           <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#2A2D2E"/>
+            <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
           </Style>
         </ListBox.Styles>
       </ListBox>

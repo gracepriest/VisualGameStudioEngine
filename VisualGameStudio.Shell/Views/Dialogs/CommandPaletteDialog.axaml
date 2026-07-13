@@ -14,10 +14,10 @@
         TransparencyLevelHint="AcrylicBlur"
         Background="Transparent">
 
-  <Border Background="#E8252526" CornerRadius="8" BorderBrush="#3C3C3C" BorderThickness="1">
+  <Border Background="{DynamicResource IdeOverlayBg}" CornerRadius="8" BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
     <DockPanel>
       <!-- Search Box -->
-      <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="12" CornerRadius="8,8,0,0">
+      <Border DockPanel.Dock="Top" Background="{DynamicResource IdeMenuBg}" Padding="12" CornerRadius="8,8,0,0">
         <Grid ColumnDefinitions="Auto,*,Auto">
           <TextBlock Grid.Column="0"
                      Text="{Binding ModePrefix}"
@@ -34,7 +34,7 @@
                    FontSize="16"
                    BorderThickness="0"
                    Background="Transparent"
-                   Foreground="#CCCCCC"/>
+                   Foreground="{DynamicResource IdeFg}"/>
           <Button Grid.Column="2"
                   Command="{Binding DismissCommand}"
                   Background="Transparent"
@@ -42,12 +42,12 @@
                   Padding="6,2"
                   Margin="8,0,0,0"
                   VerticalAlignment="Center"
-                  Foreground="#808080"
+                  Foreground="{DynamicResource IdeFgMuted}"
                   ToolTip.Tip="Close (Esc)"
                   AutomationProperties.Name="Close Command Palette">
             <Button.Styles>
               <Style Selector="Button:pointerover /template/ ContentPresenter">
-                <Setter Property="Background" Value="#3C3C3C"/>
+                <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
               </Style>
             </Button.Styles>
             <TextBlock Text="✕" FontSize="14"/>
@@ -55,20 +55,21 @@
         </Grid>
       </Border>
 
-      <!-- Hint bar -->
-      <Border DockPanel.Dock="Top" Background="#252526" Padding="12,4">
+      <!-- Hint bar. #569CD6 (accent text) kept literal (editor blue, != IdeAccent Dark #3794FF);
+           #505050 kept literal (extra-subtle hint text, no theme key has this Dark value). -->
+      <Border DockPanel.Dock="Top" Background="{DynamicResource IdeContextBg}" Padding="12,4">
         <StackPanel Orientation="Horizontal" Spacing="16">
           <TextBlock FontSize="11" Foreground="#569CD6"
                      Text="{Binding ModeName}"/>
-          <TextBlock Text="Up/Down Navigate" FontSize="11" Foreground="#606060"/>
-          <TextBlock Text="Enter Execute" FontSize="11" Foreground="#606060"/>
-          <TextBlock Text="Esc Close" FontSize="11" Foreground="#606060"/>
+          <TextBlock Text="Up/Down Navigate" FontSize="11" Foreground="{DynamicResource IdeFgSubtle}"/>
+          <TextBlock Text="Enter Execute" FontSize="11" Foreground="{DynamicResource IdeFgSubtle}"/>
+          <TextBlock Text="Esc Close" FontSize="11" Foreground="{DynamicResource IdeFgSubtle}"/>
           <TextBlock Text="> Commands  : Line  @ Symbol  # Workspace  ? Help" FontSize="11" Foreground="#505050"/>
         </StackPanel>
       </Border>
 
-      <!-- Section header (recently used / recently opened) -->
-      <Border DockPanel.Dock="Top" Background="#252526" Padding="12,2"
+      <!-- Section header (recently used / recently opened). #569CD6 kept literal (accent). -->
+      <Border DockPanel.Dock="Top" Background="{DynamicResource IdeContextBg}" Padding="12,2"
               IsVisible="{Binding SectionHeader, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
         <TextBlock Text="{Binding SectionHeader}" FontSize="11" Foreground="#569CD6"
                    FontWeight="SemiBold"/>
@@ -84,7 +85,8 @@
           <DataTemplate>
             <Border Padding="8,6" Background="Transparent">
               <Grid ColumnDefinitions="Auto,*,Auto">
-                <!-- File icon label (only for file items) -->
+                <!-- File icon label (only for file items). #333333 chip bg kept literal:
+                     no theme key has this Dark value except IdeActivityBarBg (dark-by-design). -->
                 <Border Grid.Column="0"
                         IsVisible="{Binding FileIcon, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                         Background="#333333"
@@ -94,11 +96,11 @@
                         VerticalAlignment="Center">
                   <TextBlock Text="{Binding FileIcon}"
                              FontSize="10"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              FontFamily="Consolas, Courier New, monospace"/>
                 </Border>
 
-                <!-- Category + Name -->
+                <!-- Category + Name. #569CD6 (category accent) kept literal. -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                   <TextBlock Text="{Binding Category}"
                              FontSize="12"
@@ -107,11 +109,11 @@
                              MinWidth="60"/>
                   <TextBlock Text="{Binding Name}"
                              FontSize="14"
-                             Foreground="#CCCCCC"
+                             Foreground="{DynamicResource IdeFg}"
                              VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <!-- Keyboard shortcut -->
+                <!-- Keyboard shortcut. #333333 chip bg kept literal (see file-icon note). -->
                 <Border Grid.Column="2"
                         IsVisible="{Binding Shortcut, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                         Background="#333333"
@@ -120,7 +122,7 @@
                         VerticalAlignment="Center">
                   <TextBlock Text="{Binding Shortcut}"
                              FontSize="11"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              FontFamily="Consolas, Courier New, monospace"/>
                 </Border>
               </Grid>
@@ -129,10 +131,10 @@
         </ListBox.ItemTemplate>
         <ListBox.Styles>
           <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-            <Setter Property="Background" Value="#094771"/>
+            <Setter Property="Background" Value="{DynamicResource IdeListSelected}"/>
           </Style>
           <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#2A2D2E"/>
+            <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
           </Style>
         </ListBox.Styles>
       </ListBox>

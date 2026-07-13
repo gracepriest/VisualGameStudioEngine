@@ -5,9 +5,21 @@
              xmlns:local="using:VisualGameStudio.Shell.Converters"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
              x:Class="VisualGameStudio.Shell.Views.Documents.WelcomeDocumentView"
-             
-             Background="#1E1E1E">
 
+             Background="{DynamicResource IdeEditorBg}">
+
+  <!-- Theme migration (Task 1.6d): chrome hexes lowered to Ide* DynamicResources by
+       dark-identity (the key's Dark value equals the literal it replaced). Intentional
+       LEFT-LITERAL colors, none of which equal any theme key's Dark value:
+         #569CD6  editor keyword blue used as icon-glyph accent (!= IdeAccent Dark #3794FF)
+         #333333  1px section dividers + folder/learn icon chips (only IdeActivityBarBg has
+                  this Dark value, and it is dark-by-design in Light — wrong role here)
+         #0E639C  the "New Project +" primary-button-blue tile (matches Button.primary's
+                  own literal; no theme key exists for it)
+         White    the "+" glyph on that fixed-blue tile
+         #555555  walkthrough step circle outline
+         #CE9178  syntax string-orange used for keyboard-shortcut key labels
+       #3794FF link text DID map (== IdeAccent Dark). -->
   <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                 VerticalScrollBarVisibility="Auto">
     <Border HorizontalAlignment="Center" MaxWidth="900" Margin="40,30">
@@ -18,14 +30,14 @@
           <TextBlock Text="Visual Game Studio"
                      FontSize="36"
                      FontWeight="Light"
-                     Foreground="#CCCCCC"/>
+                     Foreground="{DynamicResource IdeFg}"/>
           <StackPanel Orientation="Horizontal" Spacing="12">
             <TextBlock Text="BasicLang Development Environment"
                        FontSize="16"
-                       Foreground="#808080"/>
+                       Foreground="{DynamicResource IdeFgMuted}"/>
             <TextBlock Text="{Binding VersionText}"
                        FontSize="14"
-                       Foreground="#606060"
+                       Foreground="{DynamicResource IdeFgSubtle}"
                        VerticalAlignment="Center"/>
           </StackPanel>
         </StackPanel>
@@ -43,12 +55,12 @@
                            Text="Recent"
                            FontSize="18"
                            FontWeight="SemiBold"
-                           Foreground="#CCCCCC"/>
+                           Foreground="{DynamicResource IdeFg}"/>
                 <Button Grid.Column="1"
                         Content="Clear All"
                         Command="{Binding ClearRecentProjectsCommand}"
                         FontSize="11"
-                        Foreground="#808080"
+                        Foreground="{DynamicResource IdeFgMuted}"
                         Background="Transparent"
                         BorderThickness="0"
                         Padding="4,2"
@@ -62,7 +74,7 @@
               <ItemsControl ItemsSource="{Binding RecentProjects}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate >
-                    <Border Background="#252526"
+                    <Border Background="{DynamicResource IdePanelBg}"
                             CornerRadius="4"
                             Margin="0,0,0,4"
                             Padding="0"
@@ -70,7 +82,7 @@
                             Name="RecentItemBorder">
                       <Border.Styles>
                         <Style Selector="Border#RecentItemBorder:pointerover">
-                          <Setter Property="Background" Value="#2A2D2E"/>
+                          <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
                         </Style>
                       </Border.Styles>
                       <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
@@ -98,10 +110,10 @@
                             <TextBlock Text="{Binding Name}"
                                        FontSize="14"
                                        FontWeight="SemiBold"
-                                       Foreground="#CCCCCC"/>
+                                       Foreground="{DynamicResource IdeFg}"/>
                             <TextBlock Text="{Binding DirectoryPath}"
                                        FontSize="11"
-                                       Foreground="#808080"
+                                       Foreground="{DynamicResource IdeFgMuted}"
                                        TextTrimming="CharacterEllipsis"
                                        MaxWidth="350"/>
                           </StackPanel>
@@ -111,7 +123,7 @@
                         <TextBlock Grid.Column="2"
                                    Text="{Binding LastOpenedText}"
                                    FontSize="11"
-                                   Foreground="#606060"
+                                   Foreground="{DynamicResource IdeFgSubtle}"
                                    VerticalAlignment="Center"
                                    Margin="4,0,8,0"/>
 
@@ -142,7 +154,7 @@
                             <!-- Outline pin shown when unpinned -->
                             <TextBlock Text="&#x25CB;"
                                        FontSize="14"
-                                       Foreground="#808080"
+                                       Foreground="{DynamicResource IdeFgMuted}"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
                                        IsVisible="{Binding !IsPinned}"
@@ -167,7 +179,7 @@
                               <Setter Property="Opacity" Value="1.0"/>
                             </Style>
                           </Button.Styles>
-                          <TextBlock Text="x" FontSize="13" Foreground="#808080"/>
+                          <TextBlock Text="x" FontSize="13" Foreground="{DynamicResource IdeFgMuted}"/>
                         </Button>
                       </Grid>
                     </Border>
@@ -177,7 +189,7 @@
 
               <!-- Empty state -->
               <TextBlock Text="No recent projects"
-                         Foreground="#606060"
+                         Foreground="{DynamicResource IdeFgSubtle}"
                          FontSize="13"
                          IsVisible="{Binding RecentProjects.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}"
                          Margin="0,8"/>
@@ -188,13 +200,13 @@
               <TextBlock Text="Getting Started"
                          FontSize="18"
                          FontWeight="SemiBold"
-                         Foreground="#CCCCCC"/>
+                         Foreground="{DynamicResource IdeFg}"/>
               <Border Height="1" Background="#333333"/>
 
               <ItemsControl ItemsSource="{Binding WalkthroughItems}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate >
-                    <Border Background="#252526" CornerRadius="4"
+                    <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4"
                             Margin="0,0,0,4" Padding="12,10">
                       <Grid ColumnDefinitions="Auto,*">
                         <Border Grid.Column="0"
@@ -214,10 +226,10 @@
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                           <TextBlock Text="{Binding Title}"
                                      FontSize="13"
-                                     Foreground="#CCCCCC"/>
+                                     Foreground="{DynamicResource IdeFg}"/>
                           <TextBlock Text="{Binding Description}"
                                      FontSize="11"
-                                     Foreground="#808080"
+                                     Foreground="{DynamicResource IdeFgMuted}"
                                      Margin="0,2,0,0"/>
                         </StackPanel>
                       </Grid>
@@ -236,7 +248,7 @@
               <TextBlock Text="Start"
                          FontSize="18"
                          FontWeight="SemiBold"
-                         Foreground="#CCCCCC"/>
+                         Foreground="{DynamicResource IdeFg}"/>
               <Border Height="1" Background="#333333"/>
 
               <StackPanel Spacing="8">
@@ -247,12 +259,12 @@
                         Padding="0"
                         HorizontalContentAlignment="Stretch"
                         Cursor="Hand">
-                  <Border Background="#252526" CornerRadius="6"
+                  <Border Background="{DynamicResource IdePanelBg}" CornerRadius="6"
                           Padding="14,12"
                           Name="NewProjectCard">
                     <Border.Styles>
                       <Style Selector="Border#NewProjectCard:pointerover">
-                        <Setter Property="Background" Value="#2A2D2E"/>
+                        <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
                       </Style>
                     </Border.Styles>
                     <StackPanel Orientation="Horizontal" Spacing="14">
@@ -262,8 +274,8 @@
                                    Margin="0,-2,0,0"/>
                       </Border>
                       <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="New Project..." FontSize="14" Foreground="#3794FF"/>
-                        <TextBlock Text="Create a new BasicLang project" FontSize="11" Foreground="#808080"/>
+                        <TextBlock Text="New Project..." FontSize="14" Foreground="{DynamicResource IdeAccent}"/>
+                        <TextBlock Text="Create a new BasicLang project" FontSize="11" Foreground="{DynamicResource IdeFgMuted}"/>
                       </StackPanel>
                     </StackPanel>
                   </Border>
@@ -276,23 +288,23 @@
                         Padding="0"
                         HorizontalContentAlignment="Stretch"
                         Cursor="Hand">
-                  <Border Background="#252526" CornerRadius="6"
+                  <Border Background="{DynamicResource IdePanelBg}" CornerRadius="6"
                           Padding="14,12"
                           Name="OpenProjectCard">
                     <Border.Styles>
                       <Style Selector="Border#OpenProjectCard:pointerover">
-                        <Setter Property="Background" Value="#2A2D2E"/>
+                        <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
                       </Style>
                     </Border.Styles>
                     <StackPanel Orientation="Horizontal" Spacing="14">
-                      <Border Background="#3C3C3C" CornerRadius="6" Width="40" Height="40">
+                      <Border Background="{DynamicResource IdeHeaderBg}" CornerRadius="6" Width="40" Height="40">
                         <TextBlock Text="O" FontSize="20" FontWeight="Bold"
                                    Foreground="#569CD6"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                       </Border>
                       <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="Open Project..." FontSize="14" Foreground="#3794FF"/>
-                        <TextBlock Text="Open an existing .blproj file" FontSize="11" Foreground="#808080"/>
+                        <TextBlock Text="Open Project..." FontSize="14" Foreground="{DynamicResource IdeAccent}"/>
+                        <TextBlock Text="Open an existing .blproj file" FontSize="11" Foreground="{DynamicResource IdeFgMuted}"/>
                       </StackPanel>
                     </StackPanel>
                   </Border>
@@ -305,23 +317,23 @@
                         Padding="0"
                         HorizontalContentAlignment="Stretch"
                         Cursor="Hand">
-                  <Border Background="#252526" CornerRadius="6"
+                  <Border Background="{DynamicResource IdePanelBg}" CornerRadius="6"
                           Padding="14,12"
                           Name="OpenFileCard">
                     <Border.Styles>
                       <Style Selector="Border#OpenFileCard:pointerover">
-                        <Setter Property="Background" Value="#2A2D2E"/>
+                        <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
                       </Style>
                     </Border.Styles>
                     <StackPanel Orientation="Horizontal" Spacing="14">
-                      <Border Background="#3C3C3C" CornerRadius="6" Width="40" Height="40">
+                      <Border Background="{DynamicResource IdeHeaderBg}" CornerRadius="6" Width="40" Height="40">
                         <TextBlock Text="F" FontSize="20" FontWeight="Bold"
                                    Foreground="#569CD6"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                       </Border>
                       <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="Open File..." FontSize="14" Foreground="#3794FF"/>
-                        <TextBlock Text="Open a file without a project" FontSize="11" Foreground="#808080"/>
+                        <TextBlock Text="Open File..." FontSize="14" Foreground="{DynamicResource IdeAccent}"/>
+                        <TextBlock Text="Open a file without a project" FontSize="11" Foreground="{DynamicResource IdeFgMuted}"/>
                       </StackPanel>
                     </StackPanel>
                   </Border>
@@ -334,23 +346,23 @@
                         Padding="0"
                         HorizontalContentAlignment="Stretch"
                         Cursor="Hand">
-                  <Border Background="#252526" CornerRadius="6"
+                  <Border Background="{DynamicResource IdePanelBg}" CornerRadius="6"
                           Padding="14,12"
                           Name="CloneRepoCard">
                     <Border.Styles>
                       <Style Selector="Border#CloneRepoCard:pointerover">
-                        <Setter Property="Background" Value="#2A2D2E"/>
+                        <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
                       </Style>
                     </Border.Styles>
                     <StackPanel Orientation="Horizontal" Spacing="14">
-                      <Border Background="#3C3C3C" CornerRadius="6" Width="40" Height="40">
+                      <Border Background="{DynamicResource IdeHeaderBg}" CornerRadius="6" Width="40" Height="40">
                         <TextBlock Text="G" FontSize="20" FontWeight="Bold"
                                    Foreground="#569CD6"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                       </Border>
                       <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="Clone Repository..." FontSize="14" Foreground="#3794FF"/>
-                        <TextBlock Text="Clone a Git repository" FontSize="11" Foreground="#808080"/>
+                        <TextBlock Text="Clone Repository..." FontSize="14" Foreground="{DynamicResource IdeAccent}"/>
+                        <TextBlock Text="Clone a Git repository" FontSize="11" Foreground="{DynamicResource IdeFgMuted}"/>
                       </StackPanel>
                     </StackPanel>
                   </Border>
@@ -363,7 +375,7 @@
               <TextBlock Text="Learn"
                          FontSize="18"
                          FontWeight="SemiBold"
-                         Foreground="#CCCCCC"/>
+                         Foreground="{DynamicResource IdeFg}"/>
               <Border Height="1" Background="#333333"/>
 
               <ItemsControl ItemsSource="{Binding LearnLinks}">
@@ -381,7 +393,7 @@
                               Name="LearnLinkBorder">
                         <Border.Styles>
                           <Style Selector="Border#LearnLinkBorder:pointerover">
-                            <Setter Property="Background" Value="#2A2D2E"/>
+                            <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
                           </Style>
                         </Border.Styles>
                         <StackPanel Orientation="Horizontal" Spacing="10">
@@ -395,9 +407,9 @@
                           </Border>
                           <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="{Binding Title}"
-                                       FontSize="13" Foreground="#3794FF"/>
+                                       FontSize="13" Foreground="{DynamicResource IdeAccent}"/>
                             <TextBlock Text="{Binding Description}"
-                                       FontSize="11" Foreground="#808080"/>
+                                       FontSize="11" Foreground="{DynamicResource IdeFgMuted}"/>
                           </StackPanel>
                         </StackPanel>
                       </Border>
@@ -412,27 +424,27 @@
               <TextBlock Text="Keyboard Shortcuts"
                          FontSize="18"
                          FontWeight="SemiBold"
-                         Foreground="#CCCCCC"/>
+                         Foreground="{DynamicResource IdeFg}"/>
               <Border Height="1" Background="#333333"/>
 
               <Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Ctrl+Shift+N" Foreground="#CE9178" Margin="0,0,16,6"/>
-                <TextBlock Grid.Row="0" Grid.Column="1" Text="New Project" Foreground="#808080"/>
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="New Project" Foreground="{DynamicResource IdeFgMuted}"/>
 
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Ctrl+Shift+O" Foreground="#CE9178" Margin="0,0,16,6"/>
-                <TextBlock Grid.Row="1" Grid.Column="1" Text="Open Project" Foreground="#808080"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="Open Project" Foreground="{DynamicResource IdeFgMuted}"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Ctrl+Shift+B" Foreground="#CE9178" Margin="0,0,16,6"/>
-                <TextBlock Grid.Row="2" Grid.Column="1" Text="Build Project" Foreground="#808080"/>
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="Build Project" Foreground="{DynamicResource IdeFgMuted}"/>
 
                 <TextBlock Grid.Row="3" Grid.Column="0" Text="F5" Foreground="#CE9178" Margin="0,0,16,6"/>
-                <TextBlock Grid.Row="3" Grid.Column="1" Text="Start Debugging" Foreground="#808080"/>
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="Start Debugging" Foreground="{DynamicResource IdeFgMuted}"/>
 
                 <TextBlock Grid.Row="4" Grid.Column="0" Text="Ctrl+Shift+P" Foreground="#CE9178" Margin="0,0,16,6"/>
-                <TextBlock Grid.Row="4" Grid.Column="1" Text="Command Palette" Foreground="#808080"/>
+                <TextBlock Grid.Row="4" Grid.Column="1" Text="Command Palette" Foreground="{DynamicResource IdeFgMuted}"/>
 
                 <TextBlock Grid.Row="5" Grid.Column="0" Text="Ctrl+P" Foreground="#CE9178" Margin="0,0,16,6"/>
-                <TextBlock Grid.Row="5" Grid.Column="1" Text="Quick Open" Foreground="#808080"/>
+                <TextBlock Grid.Row="5" Grid.Column="1" Text="Quick Open" Foreground="{DynamicResource IdeFgMuted}"/>
               </Grid>
             </StackPanel>
 
@@ -443,7 +455,7 @@
         <Border Height="1" Background="#333333" Margin="0,10,0,0"/>
         <CheckBox Content="Show welcome page on startup"
                   IsChecked="{Binding ShowWelcomeOnStartup}"
-                  Foreground="#808080"
+                  Foreground="{DynamicResource IdeFgMuted}"
                   FontSize="12"
                   Margin="0,0,0,20"/>
       </StackPanel>

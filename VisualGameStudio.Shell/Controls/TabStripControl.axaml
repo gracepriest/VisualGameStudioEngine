@@ -6,32 +6,33 @@
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="35"
              x:Class="VisualGameStudio.Shell.Controls.TabStripControl"
              x:DataType="vm:TabManagerViewModel"
-             Background="#252526">
+             Background="{DynamicResource IdePanelBg}">
 
   <UserControl.Styles>
     <!-- Base tab item style -->
     <Style Selector="Border.tabItem">
-      <Setter Property="Background" Value="#2D2D2D"/>
-      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="Background" Value="{DynamicResource IdeMenuBg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource IdeBorder}"/>
       <Setter Property="BorderThickness" Value="0,0,1,0"/>
       <Setter Property="Padding" Value="10,4,4,4"/>
       <Setter Property="MinHeight" Value="35"/>
       <Setter Property="Cursor" Value="Hand"/>
     </Style>
 
-    <!-- Active tab -->
+    <!-- Active tab (blends with the editor canvas below it) -->
     <Style Selector="Border.tabItem.active">
-      <Setter Property="Background" Value="#1E1E1E"/>
-      <Setter Property="BorderBrush" Value="#1E1E1E"/>
+      <Setter Property="Background" Value="{DynamicResource IdeEditorBg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource IdeEditorBg}"/>
       <Setter Property="BorderThickness" Value="0,2,1,0"/>
     </Style>
 
     <!-- Hover tab -->
     <Style Selector="Border.tabItem:pointerover">
-      <Setter Property="Background" Value="#2A2D2E"/>
+      <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
     </Style>
 
-    <!-- Active tab top border (accent) -->
+    <!-- Active tab top border (accent). #569CD6 = editor keyword blue, kept literal:
+         it is the codebase's tab accent and does not equal IdeAccent's Dark value (#3794FF). -->
     <Style Selector="Border.tabItem.active">
       <Setter Property="BorderBrush" Value="#569CD6"/>
     </Style>
@@ -55,7 +56,7 @@
 
     <Style Selector="Button.tabCloseBtn:pointerover">
       <Setter Property="Opacity" Value="1"/>
-      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
     </Style>
 
     <!-- Modified dot replaces close button when modified and not hovered -->
@@ -77,7 +78,8 @@
       <Setter Property="MaxWidth" Value="45"/>
     </Style>
 
-    <!-- Error underline -->
+    <!-- Error underline. #E51400 = error red, kept literal (semantic error indicator;
+         no theme key has this Dark value). -->
     <Style Selector="Border.errorUnderline">
       <Setter Property="BorderBrush" Value="#E51400"/>
       <Setter Property="BorderThickness" Value="0,0,0,2"/>
@@ -89,10 +91,10 @@
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="Padding" Value="8,4"/>
       <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
     </Style>
     <Style Selector="Button.overflowBtn:pointerover">
-      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
     </Style>
 
     <!-- Split button -->
@@ -101,14 +103,15 @@
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="Padding" Value="6,4"/>
       <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Foreground" Value="#808080"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFgMuted}"/>
     </Style>
     <Style Selector="Button.splitBtn:pointerover">
-      <Setter Property="Background" Value="#3C3C3C"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
     </Style>
 
-    <!-- Drop indicator line -->
+    <!-- Drop indicator line. #569CD6 = editor keyword blue, kept literal (tab-strip accent;
+         not equal to IdeAccent Dark #3794FF). -->
     <Style Selector="Border.dropIndicator">
       <Setter Property="Width" Value="2"/>
       <Setter Property="Background" Value="#569CD6"/>
@@ -162,7 +165,7 @@
                   <!-- Tab title (hidden for pinned tabs) -->
                   <TextBlock Grid.Column="1"
                              Text="{Binding FileName}"
-                             Foreground="#CCCCCC"
+                             Foreground="{DynamicResource IdeFg}"
                              VerticalAlignment="Center"
                              Margin="0,0,6,0"
                              FontSize="12"
@@ -185,7 +188,7 @@
                     <!-- Modified dot (shown when modified and tab not hovered) -->
                     <Ellipse Classes="modifiedDot"
                              Width="8" Height="8"
-                             Fill="#CCCCCC"
+                             Fill="{DynamicResource IdeFg}"
                              HorizontalAlignment="Center"
                              VerticalAlignment="Center"
                              IsVisible="{Binding IsModified}"/>
@@ -196,7 +199,7 @@
                             Tag="{Binding}"
                             ToolTip.Tip="Close (Ctrl+W)">
                       <TextBlock Text="&#x2715;" FontSize="10"
-                                 Foreground="#CCCCCC"
+                                 Foreground="{DynamicResource IdeFg}"
                                  HorizontalAlignment="Center"
                                  VerticalAlignment="Center"/>
                     </Button>
