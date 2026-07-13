@@ -920,7 +920,9 @@ public partial class SettingsViewModel : ViewModelBase
             // ===== Terminal =====
             MakeText("terminal.integrated.fontFamily", "Font Family", "Controls the font family of the terminal. Leave empty to use editor font.", "Terminal", nameof(TerminalFontFamily), ""),
             MakeNumeric("terminal.integrated.fontSize", "Font Size", "Controls the font size in the terminal (in pixels).", "Terminal", nameof(TerminalFontSize), 6, 72, defaultValue: 14),
-            MakeCombo("terminal.integrated.cursorStyle", "Cursor Style", "Controls the style of terminal cursor.", "Terminal", nameof(TerminalCursorStyle), TerminalCursorStyles, "block"),
+            // D3: terminal.integrated.cursorStyle removed from the dialog — no terminal cursor-rendering
+            // surface exists (the terminal is a SelectableTextBlock, not a real cursor grid). The key
+            // remains in the schema so a future real-terminal renderer can adopt it.
             MakeText("terminal.integrated.defaultProfile", "Default Profile", "The default terminal shell profile.", "Terminal", nameof(TerminalDefaultProfile), ""),
 
             // ===== Debug =====

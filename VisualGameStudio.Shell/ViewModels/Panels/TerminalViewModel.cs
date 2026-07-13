@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
 using VisualGameStudio.ProjectSystem.Services;
 
@@ -404,6 +405,46 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
         "settings.json");
 
     /// <summary>
+    /// The single live settings store (Task 2.2). Null in design-time / lightweight test
+    /// construction, in which case the terminal falls back to its built-in font defaults and does
+    /// no persistence.
+    /// </summary>
+    private readonly ISettingsService? _settingsService;
+
+    /// <summary>
+    /// Guards <see cref="OnSelectedProfileChanged"/> so that assigning <see cref="SelectedProfile"/>
+    /// from settings during load does not write the value straight back to settings.
+    /// </summary>
+    private bool _suppressProfilePersist;
+
+    static TerminalViewModel()
+    {
+        // Task 2.2 — name the terminal consumers so the Phase 3 settings-consumer contract test can
+        // prove these dialog settings are actually wired (registered at type initialization, like
+        // CodeEditorDocumentView). fontFamily/fontSize feed the output + input font; defaultProfile
+        // feeds the shell chosen for NEW sessions.
+        SettingsConsumerRegistry.RegisterConsumer("terminal.integrated.fontFamily", "TerminalViewModel.ApplyTerminalFontSettings → output/input font family (falls back to editor.fontFamily)");
+        SettingsConsumerRegistry.RegisterConsumer("terminal.integrated.fontSize", "TerminalViewModel.ApplyTerminalFontSettings → output/input font size");
+        SettingsConsumerRegistry.RegisterConsumer("terminal.integrated.defaultProfile", "TerminalViewModel.LoadDefaultShellPreference → default shell profile for new sessions");
+    }
+
+    /// <summary>
+    /// Effective terminal font family, bound by the view onto the output <c>SelectableTextBlock</c>
+    /// and the input <c>TextBox</c>. Fed from <c>terminal.integrated.fontFamily</c> (falling back to
+    /// the editor font, then a built-in monospace stack). Live-updates on <see cref="OnSettingChanged"/>.
+    /// </summary>
+    [ObservableProperty]
+    private string _terminalFontFamily = "Cascadia Code, Consolas, monospace";
+
+    /// <summary>
+    /// Effective terminal font size (points), bound onto the same output/input surfaces. Fed from
+    /// <c>terminal.integrated.fontSize</c> (schema default 14 — the old hardcoded 13 didn't even
+    /// match it). Live-updates on <see cref="OnSettingChanged"/>.
+    /// </summary>
+    [ObservableProperty]
+    private double _terminalFontSize = 14;
+
+    /// <summary>
     /// Raised when new output text is appended on the active session.
     /// </summary>
     public event Action<string>? OutputAppended;
@@ -501,12 +542,106 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     /// </summary>
     public event Action<string>? CurrentDirectoryChanged;
 
-    public TerminalViewModel()
+    public TerminalViewModel(ISettingsService? settingsService = null)
     {
+        _settingsService = settingsService;
+
         WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         DetectShellProfiles();
+        ApplyTerminalFontSettings();
         LoadDefaultShellPreference();
         LoadTerminalEnvironmentVariables();
+
+        // Live-update the font + default profile when the Settings dialog (or an external edit to
+        // ~/.vgs/settings.json via the file watcher) changes the relevant keys.
+        if (_settingsService != null)
+            _settingsService.SettingChanged += OnSettingChanged;
+    }
+
+    /// <summary>
+    /// Applies the effective terminal font (family + size) from settings onto the bound VM
+    /// properties. Called at construction and on every relevant <see cref="OnSettingChanged"/>.
+    /// </summary>
+    private void ApplyTerminalFontSettings()
+    {
+        var (family, size) = ResolveTerminalFont(_settingsService);
+        TerminalFontFamily = family;
+        TerminalFontSize = size;
+    }
+
+    /// <summary>
+    /// Resolves the effective terminal font (family + size) from settings. Static + pure so it can
+    /// be unit-tested without an Avalonia app (repo static-seam precedent). The family inherits the
+    /// editor font when <c>terminal.integrated.fontFamily</c> is empty (VS Code behavior), then a
+    /// built-in monospace stack; the size clamps to the schema's 6..72 range (default 14).
+    /// </summary>
+    public static (string family, double size) ResolveTerminalFont(ISettingsService? settings)
+    {
+        if (settings == null) return ("Cascadia Code, Consolas, monospace", 14);
+
+        var family = settings.Get("terminal.integrated.fontFamily", "");
+        if (string.IsNullOrWhiteSpace(family))
+            family = settings.Get("editor.fontFamily", "");
+        if (string.IsNullOrWhiteSpace(family))
+            family = "Cascadia Code, Consolas, monospace";
+
+        var size = settings.Get("terminal.integrated.fontSize", 14);
+        if (size < 6) size = 6;
+        else if (size > 72) size = 72;
+
+        return (family, size);
+    }
+
+    /// <summary>
+    /// Reads the saved default-shell name from settings, honoring the VS Code key precedence:
+    /// the platform-specific key (<c>terminal.integrated.defaultProfile.windows</c>/<c>.linux</c>)
+    /// wins, then the generic <c>terminal.integrated.defaultProfile</c>, then the legacy
+    /// <c>Terminal.DefaultShell</c> / <c>Terminal.Shell</c> keys. Static + pure for headless
+    /// testing. Returns "" when nothing is saved.
+    /// </summary>
+    public static string ResolveSavedShellName(ISettingsService? settings)
+    {
+        if (settings == null) return "";
+
+        var platformKey = Environment.OSVersion.Platform == PlatformID.Win32NT
+            ? "terminal.integrated.defaultProfile.windows"
+            : "terminal.integrated.defaultProfile.linux";
+
+        var saved = settings.Get(platformKey, "");
+        if (string.IsNullOrEmpty(saved)) saved = settings.Get("terminal.integrated.defaultProfile", "");
+        if (string.IsNullOrEmpty(saved)) saved = settings.Get("Terminal.DefaultShell", "");
+        if (string.IsNullOrEmpty(saved)) saved = settings.Get("Terminal.Shell", "");
+        return saved ?? "";
+    }
+
+    private void OnSettingChanged(object? sender, SettingChangedEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "terminal.integrated.fontFamily":
+            case "terminal.integrated.fontSize":
+            case "editor.fontFamily": // the terminal font falls back to the editor font
+                RunOnUiThread(ApplyTerminalFontSettings);
+                break;
+            case "terminal.integrated.defaultProfile":
+            case "terminal.integrated.defaultProfile.windows":
+            case "terminal.integrated.defaultProfile.linux":
+                // Re-resolve the default for NEW sessions only — never disturb running shells.
+                RunOnUiThread(LoadDefaultShellPreference);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> on the UI thread. The SettingChanged event can arrive from the
+    /// settings file watcher (a background thread), and these actions touch bound VM properties.
+    /// </summary>
+    private static void RunOnUiThread(Action action)
+    {
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+            action();
+        else
+            Avalonia.Threading.Dispatcher.UIThread.Post(action);
     }
 
     /// <summary>
@@ -523,112 +658,50 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Loads the user's default shell preference from settings.
-    /// Checks platform-specific key (terminal.integrated.defaultProfile.windows),
-    /// generic key (Terminal.DefaultShell), and legacy key (Terminal.Shell).
-    /// Falls back to the first available profile.
+    /// Loads the user's default shell preference from the single live settings store (Task 2.2 —
+    /// was raw %APPDATA% JSON before). Honors the VS Code key precedence
+    /// (platform-specific → generic → legacy) via <see cref="ResolveSavedShellName"/> and matches it
+    /// to an available profile by name, then by path. Falls back to the first available profile.
+    /// Assigning <see cref="SelectedProfile"/> here is guarded so it never writes straight back.
     /// </summary>
     private void LoadDefaultShellPreference()
     {
-        string? savedShell = null;
+        var savedShell = ResolveSavedShellName(_settingsService);
 
-        try
-        {
-            if (File.Exists(SettingsFilePath))
-            {
-                var json = File.ReadAllText(SettingsFilePath);
-                var doc = System.Text.Json.JsonDocument.Parse(json);
-
-                // Try platform-specific key first (VS Code compatible)
-                var platformKey = Environment.OSVersion.Platform == PlatformID.Win32NT
-                    ? "terminal.integrated.defaultProfile.windows"
-                    : "terminal.integrated.defaultProfile.linux";
-
-                if (doc.RootElement.TryGetProperty(platformKey, out var platformProp))
-                {
-                    savedShell = platformProp.GetString();
-                }
-
-                // Fall back to generic keys
-                if (string.IsNullOrEmpty(savedShell) &&
-                    doc.RootElement.TryGetProperty("terminal.integrated.defaultProfile", out var genericProp))
-                {
-                    savedShell = genericProp.GetString();
-                }
-
-                if (string.IsNullOrEmpty(savedShell) &&
-                    doc.RootElement.TryGetProperty("Terminal.DefaultShell", out var legacyProp))
-                {
-                    savedShell = legacyProp.GetString();
-                }
-
-                if (string.IsNullOrEmpty(savedShell) &&
-                    doc.RootElement.TryGetProperty("Terminal.Shell", out var oldProp))
-                {
-                    savedShell = oldProp.GetString();
-                }
-            }
-        }
-        catch
-        {
-            // Ignore read errors
-        }
-
+        ShellProfile? resolved = null;
         if (!string.IsNullOrEmpty(savedShell))
         {
-            // Try to match by name first, then by path
-            SelectedProfile = AvailableProfiles.FirstOrDefault(p =>
+            // Try to match by name first, then by path.
+            resolved = AvailableProfiles.FirstOrDefault(p =>
                 string.Equals(p.Name, savedShell, StringComparison.OrdinalIgnoreCase))
                 ?? AvailableProfiles.FirstOrDefault(p =>
                     string.Equals(p.Path, savedShell, StringComparison.OrdinalIgnoreCase));
         }
 
-        // Fall back to first profile
-        SelectedProfile ??= AvailableProfiles.FirstOrDefault();
+        // Fall back to first profile.
+        resolved ??= AvailableProfiles.FirstOrDefault();
+
+        // Assigning from settings must not persist back (would be a redundant write, and on the
+        // file-watcher re-entry path could stomp a just-made choice).
+        _suppressProfilePersist = true;
+        try { SelectedProfile = resolved; }
+        finally { _suppressProfilePersist = false; }
     }
 
     /// <summary>
-    /// Saves the default shell preference to settings.
+    /// Saves the default shell preference to the single live settings store (Task 2.2). Writes both
+    /// the VS Code platform-specific key (which takes precedence on read) and the generic key.
     /// </summary>
     private void SaveDefaultShellPreference()
     {
-        if (SelectedProfile == null) return;
+        if (SelectedProfile == null || _settingsService == null) return;
 
-        try
-        {
-            var settingsDir = System.IO.Path.GetDirectoryName(SettingsFilePath);
-            if (!string.IsNullOrEmpty(settingsDir))
-            {
-                Directory.CreateDirectory(settingsDir);
-            }
+        var platformKey = Environment.OSVersion.Platform == PlatformID.Win32NT
+            ? "terminal.integrated.defaultProfile.windows"
+            : "terminal.integrated.defaultProfile.linux";
 
-            Dictionary<string, object>? settings = null;
-
-            if (File.Exists(SettingsFilePath))
-            {
-                var existingJson = File.ReadAllText(SettingsFilePath);
-                settings = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(existingJson);
-            }
-
-            settings ??= new Dictionary<string, object>();
-            settings["Terminal.DefaultShell"] = SelectedProfile.Name;
-
-            // Also write VS Code-compatible platform-specific key
-            var platformKey = Environment.OSVersion.Platform == PlatformID.Win32NT
-                ? "terminal.integrated.defaultProfile.windows"
-                : "terminal.integrated.defaultProfile.linux";
-            settings[platformKey] = SelectedProfile.Name;
-
-            var json = System.Text.Json.JsonSerializer.Serialize(settings, new System.Text.Json.JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-            File.WriteAllText(SettingsFilePath, json);
-        }
-        catch
-        {
-            // Ignore save errors
-        }
+        _settingsService.Set(platformKey, SelectedProfile.Name);
+        _settingsService.Set("terminal.integrated.defaultProfile", SelectedProfile.Name);
     }
 
     /// <summary>
@@ -688,7 +761,7 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
 
     partial void OnSelectedProfileChanged(ShellProfile? value)
     {
-        if (value != null)
+        if (value != null && !_suppressProfilePersist)
         {
             SaveDefaultShellPreference();
         }
@@ -1037,6 +1110,9 @@ public partial class TerminalViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        if (_settingsService != null)
+            _settingsService.SettingChanged -= OnSettingChanged;
+
         foreach (var session in Sessions)
         {
             session.Dispose();
