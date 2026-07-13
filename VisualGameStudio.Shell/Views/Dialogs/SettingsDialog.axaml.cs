@@ -67,6 +67,27 @@ public partial class SettingsDialog : AccessibleDialog
 }
 
 /// <summary>
+/// Resolves an <c>Ide*</c> theme brush by key against the CURRENT theme variant at call time.
+/// The Settings dialog's scope-tab and category converters call this on every Convert so a theme
+/// switch is picked up without cached brushes (the plan's "re-resolve per theme" requirement).
+/// Falls back to <paramref name="fallback"/> if the key is missing (e.g. during design-time).
+/// </summary>
+internal static class SettingsThemeBrush
+{
+    public static IBrush Resolve(string key, IBrush fallback)
+    {
+        var app = Application.Current;
+        if (app != null &&
+            app.TryGetResource(key, app.ActualThemeVariant, out var res) &&
+            res is IBrush brush)
+        {
+            return brush;
+        }
+        return fallback;
+    }
+}
+
+/// <summary>
 /// Converts bool to FontWeight: true = Bold, false = Normal.
 /// </summary>
 internal class BoolToFontWeightConverter : IValueConverter
@@ -88,7 +109,7 @@ internal class ScopeTabBackgroundConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         if (value is true)
-            return new SolidColorBrush(Color.Parse("#3794FF"));
+            return SettingsThemeBrush.Resolve("IdeAccent", new SolidColorBrush(Color.Parse("#3794FF")));
         return new SolidColorBrush(Colors.Transparent);
     }
 
@@ -103,9 +124,11 @@ internal class ScopeTabForegroundConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
+        // Active tab text sits on the IdeAccent fill; inactive on the panel bar. Both resolve to
+        // IdeFg so the label follows the theme (active/inactive differ by background + bold weight).
         if (value is true)
-            return new SolidColorBrush(Colors.White);
-        return new SolidColorBrush(Color.Parse("#CCCCCC"));
+            return SettingsThemeBrush.Resolve("IdeFg", new SolidColorBrush(Colors.White));
+        return SettingsThemeBrush.Resolve("IdeFg", new SolidColorBrush(Color.Parse("#CCCCCC")));
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -120,7 +143,7 @@ internal class CategoryBackgroundConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         if (value is true)
-            return new SolidColorBrush(Color.Parse("#37373D"));
+            return SettingsThemeBrush.Resolve("IdeListSelected", new SolidColorBrush(Color.Parse("#37373D")));
         return new SolidColorBrush(Colors.Transparent);
     }
 

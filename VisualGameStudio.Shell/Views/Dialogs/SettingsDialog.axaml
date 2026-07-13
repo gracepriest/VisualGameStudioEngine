@@ -44,8 +44,8 @@
                   Command="{Binding ShowModifiedOnlyCommand}"
                   Padding="8,4" Margin="0,0,4,0"
                   FontSize="11"
-                  Background="Transparent" BorderThickness="1" BorderBrush="#3794FF"
-                  Foreground="#3794FF" CornerRadius="3"
+                  Background="Transparent" BorderThickness="1" BorderBrush="{DynamicResource IdeAccent}"
+                  Foreground="{DynamicResource IdeAccent}" CornerRadius="3"
                   ToolTip.Tip="Show only modified settings (@modified)"/>
 
           <!-- Open Settings JSON -->
@@ -117,12 +117,12 @@
 
         <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
           <Button Content="Save JSON" Command="{Binding SaveJsonEditorCommand}" Classes="accent" Padding="12,6"/>
-          <Button Content="Validate" Command="{Binding ValidateJsonEditorCommand}" Padding="12,6"/>
-          <Button Content="Back to UI" Command="{Binding ToggleJsonEditorCommand}" Padding="12,6"/>
+          <Button Content="Validate" Command="{Binding ValidateJsonEditorCommand}" Classes="secondary" Padding="12,6"/>
+          <Button Content="Back to UI" Command="{Binding ToggleJsonEditorCommand}" Classes="secondary" Padding="12,6"/>
           <ItemsControl ItemsSource="{Binding JsonValidationErrors}" Margin="8,0,0,0">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
-                <TextBlock Text="{Binding}" FontSize="11" Foreground="#E5534B" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding}" FontSize="11" Foreground="{DynamicResource IdeErrorFg}" VerticalAlignment="Center"/>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
@@ -140,7 +140,7 @@
               <DataTemplate x:DataType="vm:SearchableSettingItem">
                 <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Margin="0,0,0,6"
                         BorderThickness="{Binding IsModified, Converter={x:Static vm:ModifiedBorderConverter.Instance}}"
-                        BorderBrush="#3794FF" Padding="0">
+                        BorderBrush="{DynamicResource IdeAccent}" Padding="0">
                   <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto,Auto" Margin="14,10">
                     <!-- Setting name + category badge + scope badge -->
                     <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
@@ -148,11 +148,11 @@
                       <Border Background="{DynamicResource IdeFooterBg}" CornerRadius="3" Padding="6,2">
                         <TextBlock Text="{Binding Category}" FontSize="10" Opacity="0.7"/>
                       </Border>
-                      <Border Background="#264F78" CornerRadius="3" Padding="6,2"
+                      <Border Background="{DynamicResource IdeListSelected}" CornerRadius="3" Padding="6,2"
                               IsVisible="{Binding ScopeBadge, Converter={x:Static vm:ScopeBadgeVisibilityConverter.Instance}}">
-                        <TextBlock Text="{Binding ScopeBadge}" FontSize="10" Foreground="#CCC"/>
+                        <TextBlock Text="{Binding ScopeBadge}" FontSize="10" Foreground="{DynamicResource IdeFg}"/>
                       </Border>
-                      <Border Background="#3794FF" CornerRadius="3" Padding="6,2" IsVisible="{Binding IsModified}">
+                      <Border Background="{DynamicResource IdeAccent}" CornerRadius="3" Padding="6,2" IsVisible="{Binding IsModified}">
                         <TextBlock Text="Modified" FontSize="10" Foreground="White"/>
                       </Border>
                     </StackPanel>
@@ -180,8 +180,8 @@
                             Content="Reset" Command="{Binding ResetToDefaultCommand}"
                             IsVisible="{Binding IsModified}"
                             FontSize="11" Padding="8,3" Margin="4,0,0,0"
-                            Background="Transparent" Foreground="#3794FF"
-                            BorderThickness="1" BorderBrush="#3794FF" CornerRadius="3"
+                            Background="Transparent" Foreground="{DynamicResource IdeAccent}"
+                            BorderThickness="1" BorderBrush="{DynamicResource IdeAccent}" CornerRadius="3"
                             VerticalAlignment="Center"
                             ToolTip.Tip="Reset to default value"/>
 
@@ -225,7 +225,7 @@
                                  Margin="0,0,10,0" Opacity="0.7" Width="20" TextAlignment="Center"/>
                       <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" VerticalAlignment="Center"
                                  FontWeight="{Binding IsSelected, Converter={x:Static views:SettingsDialog.BoldIfTrue}}"/>
-                      <Border Grid.Column="2" Background="#3794FF" CornerRadius="8" Padding="6,2" MinWidth="20"
+                      <Border Grid.Column="2" Background="{DynamicResource IdeAccent}" CornerRadius="8" Padding="6,2" MinWidth="20"
                               HorizontalAlignment="Center" VerticalAlignment="Center"
                               IsVisible="{Binding ModifiedCount, Converter={x:Static vm:ModifiedCountVisibilityConverter.Instance}}">
                         <TextBlock Text="{Binding ModifiedCount}" FontSize="10" Foreground="White"
@@ -257,16 +257,16 @@
                 <DataTemplate x:DataType="vm:SearchableSettingItem">
                   <Border Background="{DynamicResource IdePanelBg}" CornerRadius="4" Margin="0,0,0,6"
                           BorderThickness="{Binding IsModified, Converter={x:Static vm:ModifiedBorderConverter.Instance}}"
-                          BorderBrush="#3794FF">
+                          BorderBrush="{DynamicResource IdeAccent}">
                     <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto,Auto" Margin="14,10">
                       <!-- Setting name + badges -->
                       <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
-                        <Border Background="#264F78" CornerRadius="3" Padding="6,2"
+                        <Border Background="{DynamicResource IdeListSelected}" CornerRadius="3" Padding="6,2"
                                 IsVisible="{Binding ScopeBadge, Converter={x:Static vm:ScopeBadgeVisibilityConverter.Instance}}">
-                          <TextBlock Text="{Binding ScopeBadge}" FontSize="10" Foreground="#CCC"/>
+                          <TextBlock Text="{Binding ScopeBadge}" FontSize="10" Foreground="{DynamicResource IdeFg}"/>
                         </Border>
-                        <Border Background="#3794FF" CornerRadius="3" Padding="4,1" IsVisible="{Binding IsModified}">
+                        <Border Background="{DynamicResource IdeAccent}" CornerRadius="3" Padding="4,1" IsVisible="{Binding IsModified}">
                           <TextBlock Text="Modified" FontSize="9" Foreground="White"/>
                         </Border>
                       </StackPanel>
@@ -294,8 +294,8 @@
                               Content="Reset" Command="{Binding ResetToDefaultCommand}"
                               IsVisible="{Binding IsModified}"
                               FontSize="11" Padding="8,3" Margin="4,0,0,0"
-                              Background="Transparent" Foreground="#3794FF"
-                              BorderThickness="1" BorderBrush="#3794FF" CornerRadius="3"
+                              Background="Transparent" Foreground="{DynamicResource IdeAccent}"
+                              BorderThickness="1" BorderBrush="{DynamicResource IdeAccent}" CornerRadius="3"
                               VerticalAlignment="Center"
                               ToolTip.Tip="Reset to default value"/>
 
@@ -351,6 +351,7 @@
                   Width="80" Classes="accent"/>
           <Button Content="Cancel"
                   Command="{Binding CancelCommand}"
+                  Classes="secondary"
                   Width="80"/>
         </StackPanel>
       </Grid>
