@@ -154,7 +154,7 @@ public static class ThemeManager
         Application.Current.RequestedThemeVariant = variant;
 
         // Apply High Contrast overrides via style classes on the top-level window
-        ApplyHighContrastClass();
+        SweepOpenWindowsHighContrastClass();
 
         // Clear any custom resource overrides from a previous extension theme
         ClearResourceOverrides();
@@ -279,9 +279,9 @@ public static class ThemeManager
     public static void EnsureGlobalWindowClassHook()
     {
         if (_globalWindowHookInstalled) return;
-        _globalWindowHookInstalled = true;
 
         Control.LoadedEvent.AddClassHandler<Window>((window, _) => Register(window));
+        _globalWindowHookInstalled = true;
     }
 
     /// <summary>
@@ -305,6 +305,7 @@ public static class ThemeManager
     /// </summary>
     public static void ApplyHighContrastClass(IList<string> classes, bool highContrast)
     {
+        if (classes == null) return;
         const string highContrastClass = "highContrast";
         if (highContrast)
         {
@@ -331,7 +332,7 @@ public static class ThemeManager
         CurrentTheme = theme.Label;
 
         Application.Current.RequestedThemeVariant = IsDark ? ThemeVariant.Dark : ThemeVariant.Light;
-        ApplyHighContrastClass();
+        SweepOpenWindowsHighContrastClass();
         ApplyResourceOverrides(theme);
 
         var tokenColorMap = _themeLoader.ExtractTokenColorMap(theme);
@@ -401,7 +402,7 @@ public static class ThemeManager
     /// hook (see <see cref="EnsureGlobalWindowClassHook"/>). Removes the class when leaving High
     /// Contrast, so switching out is covered too.
     /// </summary>
-    private static void ApplyHighContrastClass()
+    private static void SweepOpenWindowsHighContrastClass()
     {
         if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
         {

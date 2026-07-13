@@ -407,7 +407,7 @@ public class DockFactory : Factory
             [nameof(IDockWindow)] = () =>
             {
                 var hostWindow = new global::Dock.Avalonia.Controls.HostWindow();
-                VisualGameStudio.Shell.ThemeManager.Register(hostWindow);
+                ThemeManager.Register(hostWindow);
                 return hostWindow;
             }
         };
