@@ -381,7 +381,16 @@ public static class ThemeManager
             "IdeInputBg", "IdeInputBorder", "IdeSelectionBg", "IdeHeaderBg",
             "IdeThumbBg", "IdeThumbHover", "IdeContextBg", "IdeContextBorder",
             "IdeSecondaryBg", "IdeSecondaryFg", "IdeSecondaryBorder", "IdeSecondaryHover",
-            "IdeListHover", "IdeListSelected", "IdeFooterBg", "IdeFooterBorder"
+            "IdeListHover", "IdeListSelected", "IdeFooterBg", "IdeFooterBorder",
+            "IdeStatusBarBg", "IdeStatusBarDebugBg",
+            // Task 1.6 surface keys — kept in sync so imported VS Code themes can retint and
+            // cleanly release editor/accent/muted/overlay/activity-bar/semantic surfaces.
+            "IdeEditorBg", "IdeAccent", "IdeFgMuted", "IdeFgSubtle", "IdeOverlayBg",
+            "IdeActivityBarBg", "IdeActivityBarFg",
+            "IdeWarningBg", "IdeWarningBorder", "IdeWarningFg",
+            "IdeSuccessBg", "IdeSuccessBorder", "IdeSuccessFg",
+            "IdeErrorBg", "IdeErrorBorder", "IdeErrorFg",
+            "IdeDiffAddedBg", "IdeDiffRemovedBg"
         };
 
         foreach (var key in keysToRemove)

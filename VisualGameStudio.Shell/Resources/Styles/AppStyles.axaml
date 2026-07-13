@@ -34,6 +34,26 @@
           <SolidColorBrush x:Key="IdeFooterBorder" Color="#3C3C3C"/>
           <SolidColorBrush x:Key="IdeStatusBarBg" Color="#007ACC"/>
           <SolidColorBrush x:Key="IdeStatusBarDebugBg" Color="#CC6800"/>
+          <!-- Task 1.6 surface keys: editor canvas, accent, muted/subtle text, popup overlay,
+               activity bar, and semantic (warning/success/error/diff) surfaces. -->
+          <SolidColorBrush x:Key="IdeEditorBg" Color="#1E1E1E"/>
+          <SolidColorBrush x:Key="IdeAccent" Color="#3794FF"/>
+          <SolidColorBrush x:Key="IdeFgMuted" Color="#808080"/>
+          <SolidColorBrush x:Key="IdeFgSubtle" Color="#606060"/>
+          <SolidColorBrush x:Key="IdeOverlayBg" Color="#E8252526"/>
+          <SolidColorBrush x:Key="IdeActivityBarBg" Color="#333333"/>
+          <SolidColorBrush x:Key="IdeActivityBarFg" Color="#CCCCCC"/>
+          <SolidColorBrush x:Key="IdeWarningBg" Color="#3D2C1E"/>
+          <SolidColorBrush x:Key="IdeWarningBorder" Color="#A67C52"/>
+          <SolidColorBrush x:Key="IdeWarningFg" Color="#CCA700"/>
+          <SolidColorBrush x:Key="IdeSuccessBg" Color="#2D4F3E"/>
+          <SolidColorBrush x:Key="IdeSuccessBorder" Color="#3E6B51"/>
+          <SolidColorBrush x:Key="IdeSuccessFg" Color="#4EC9B0"/>
+          <SolidColorBrush x:Key="IdeErrorBg" Color="#3D1E1E"/>
+          <SolidColorBrush x:Key="IdeErrorBorder" Color="#A65252"/>
+          <SolidColorBrush x:Key="IdeErrorFg" Color="#F48771"/>
+          <SolidColorBrush x:Key="IdeDiffAddedBg" Color="#1E3A1E"/>
+          <SolidColorBrush x:Key="IdeDiffRemovedBg" Color="#3A1E1E"/>
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
           <SolidColorBrush x:Key="IdeBg" Color="#F5F5F5"/>
@@ -60,6 +80,26 @@
           <SolidColorBrush x:Key="IdeFooterBorder" Color="#CCCEDB"/>
           <SolidColorBrush x:Key="IdeStatusBarBg" Color="#007ACC"/>
           <SolidColorBrush x:Key="IdeStatusBarDebugBg" Color="#CC6800"/>
+          <!-- Task 1.6 surface keys (light equivalents: white canvas, darker accent,
+               readable muted/subtle text, pale semantic surfaces with dark text). -->
+          <SolidColorBrush x:Key="IdeEditorBg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeAccent" Color="#0066BF"/>
+          <SolidColorBrush x:Key="IdeFgMuted" Color="#616161"/>
+          <SolidColorBrush x:Key="IdeFgSubtle" Color="#8E8E8E"/>
+          <SolidColorBrush x:Key="IdeOverlayBg" Color="#E8F6F6F6"/>
+          <SolidColorBrush x:Key="IdeActivityBarBg" Color="#2C2C2C"/>
+          <SolidColorBrush x:Key="IdeActivityBarFg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeWarningBg" Color="#FFF8E1"/>
+          <SolidColorBrush x:Key="IdeWarningBorder" Color="#E6C200"/>
+          <SolidColorBrush x:Key="IdeWarningFg" Color="#7A5D00"/>
+          <SolidColorBrush x:Key="IdeSuccessBg" Color="#E6F4EA"/>
+          <SolidColorBrush x:Key="IdeSuccessBorder" Color="#4CAF50"/>
+          <SolidColorBrush x:Key="IdeSuccessFg" Color="#107C41"/>
+          <SolidColorBrush x:Key="IdeErrorBg" Color="#FDE7E9"/>
+          <SolidColorBrush x:Key="IdeErrorBorder" Color="#E06C75"/>
+          <SolidColorBrush x:Key="IdeErrorFg" Color="#A1260D"/>
+          <SolidColorBrush x:Key="IdeDiffAddedBg" Color="#E6FFED"/>
+          <SolidColorBrush x:Key="IdeDiffRemovedBg" Color="#FFEEF0"/>
         </ResourceDictionary>
         <!-- High Contrast: a real ThemeVariant (AppThemes.HighContrast inherits Dark), so any
              Ide* key NOT overridden here falls back to the Dark dictionary above. These 22 keys
@@ -91,6 +131,27 @@
           <SolidColorBrush x:Key="IdeFooterBorder" Color="#FFFFFF"/>
           <SolidColorBrush x:Key="IdeStatusBarBg" Color="#000000"/>
           <SolidColorBrush x:Key="IdeStatusBarDebugBg" Color="#000000"/>
+          <!-- Task 1.6 surface keys (High Contrast: black surfaces; yellow for warning/accent,
+               white for success/error borders + text — HC conveys state via glyphs + borders,
+               not hue). Keys absent here fall back to the Dark dictionary via the variant parent. -->
+          <SolidColorBrush x:Key="IdeEditorBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeAccent" Color="#FFFF00"/>
+          <SolidColorBrush x:Key="IdeFgMuted" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeFgSubtle" Color="#C0C0C0"/>
+          <SolidColorBrush x:Key="IdeOverlayBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeActivityBarBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeActivityBarFg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeWarningBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeWarningBorder" Color="#FFFF00"/>
+          <SolidColorBrush x:Key="IdeWarningFg" Color="#FFFF00"/>
+          <SolidColorBrush x:Key="IdeSuccessBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeSuccessBorder" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeSuccessFg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeErrorBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeErrorBorder" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeErrorFg" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeDiffAddedBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeDiffRemovedBg" Color="#000000"/>
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>
