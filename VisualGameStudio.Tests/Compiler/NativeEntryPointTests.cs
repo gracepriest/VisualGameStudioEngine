@@ -60,6 +60,58 @@ public class NativeEntryPointTests
         => Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(expected));
 
     // ========================================================================
+    // Task 3 hardening: digit separators, raw strings, missing entry-point
+    // forms (wWinMain/noexcept/try), and // line-continuation splicing. A
+    // spec reviewer found these as real-world-plausible false BL6011/BL6012s
+    // (BL6011/BL6012 are hard, build-blocking errors).
+    // ========================================================================
+
+    // --- Fix 1: C++14/17 digit separators must not be misread as char literals ---
+    [TestCase("constexpr int N = 10'000; int main() { }", 1)]
+    [TestCase("constexpr int N = 0xFF'FF; int main() { }", 1)]
+    [TestCase("constexpr int N = 1'000'000; int main() { }", 1)]
+    [TestCase("char c = 'a'; int main() { }", 1)]
+    [TestCase("char c = '{'; int main() { }", 1)]
+    [TestCase("wchar_t c = L'x'; int main() { }", 1)]
+    [TestCase("auto c = u8'x'; int main() { }", 1)]
+    [TestCase("char c = '\\''; int main() { }", 1)]
+    public void CountMains_DigitSeparatorsAndCharLiterals(string source, int expected)
+        => Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(expected));
+
+    // --- Fix 2: raw string literals must be scanned as a delimiter-matched unit ---
+    [TestCase("auto q = R\"(say \"hello)\"; int main() { }", 1)]
+    [TestCase("auto q = LR\"(x)\"; int main() { }", 1)]
+    [TestCase("const char* s = R\"(int main(){})\"; ", 0)]
+    [TestCase("auto q = R\"xyz(int main(){})xyz\"; int main() { }", 1)]
+    public void CountMains_RawStringLiterals(string source, int expected)
+        => Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(expected));
+
+    // --- Fix 3: missing entry-point forms (wWinMain, noexcept, function-try-block) ---
+    [TestCase("int wWinMain(void*, void*, char*, int) { }", 1)]
+    [TestCase("int main() noexcept { }", 1)]
+    [TestCase("int main() noexcept(true) { }", 1)]
+    [TestCase("int main() try { }", 1)]
+    [TestCase("int main() noexcept;", 0)]
+    public void CountMains_NewEntryPointForms(string source, int expected)
+        => Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(expected));
+
+    // --- Fix 4: a trailing backslash at the end of a // comment line splices ---
+    // the next physical line into the comment (translation phase 2), hiding it.
+    [Test]
+    public void CountMains_LineCommentSplice_HidesSplicedMain()
+    {
+        var source = "// see C:\\build\\\nint main() { }";
+        Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void CountMains_LineComment_NoTrailingBackslash_DoesNotHideNextLine()
+    {
+        var source = "// plain comment\nint main() { }";
+        Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(1));
+    }
+
+    // ========================================================================
     // Apply — the Exe/Library entry-point rule
     // ========================================================================
 
@@ -101,7 +153,7 @@ public class NativeEntryPointTests
     public void Rule_BL6011_SaysWhatWasSearched_AndHasErrorShape()
     {
         var d = NativeEntryPoints.Apply(true, 0, new())[0];
-        Assert.That(d.Message, Does.Contain("Sub Main").And.Contain("main").And.Contain("wmain").And.Contain("WinMain"));
+        Assert.That(d.Message, Does.Contain("Sub Main").And.Contain("main").And.Contain("wmain").And.Contain("WinMain").And.Contain("wWinMain"));
         Assert.That(d.IsWarning, Is.False);
         Assert.That(d.FilePath, Is.Empty);
         Assert.That(d.Line, Is.EqualTo(0));

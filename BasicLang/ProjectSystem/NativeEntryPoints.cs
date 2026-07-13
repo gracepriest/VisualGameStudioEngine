@@ -16,12 +16,29 @@ namespace BasicLang.Compiler.ProjectSystem
     ///
     /// Design decision D9: C++ entry points are found by a comment/string-
     /// stripped TEXTUAL heuristic, not a real parse. `int main(...)`,
-    /// `auto main(...) -> int`, `wmain` and `WinMain` count as candidates only
-    /// when they are DEFINITIONS (parameter list followed by `{`, not `;`).
-    /// KNOWN LIMITATION: the heuristic does not evaluate the preprocessor, so
-    /// mains under mutually exclusive `#if`/`#else` branches all count and can
-    /// overcount. That is accepted by design — the BL6012 message names every
-    /// candidate file so the user can restructure.
+    /// `auto main(...) -> int`, `wmain`, `WinMain` and `wWinMain` count as
+    /// candidates only when they are DEFINITIONS: the parameter list must be
+    /// followed by an optional trailing return type (`-> int`), an optional
+    /// `noexcept`/`noexcept(...)` specifier, an optional function-try-block
+    /// `try`, and then `{` — never just `;`.
+    ///
+    /// KNOWN LIMITATIONS (accepted by design, not bugs):
+    /// - The heuristic does not evaluate the preprocessor, so mains under
+    ///   mutually exclusive `#if`/`#else` branches all count and can
+    ///   overcount. The BL6012 message names every candidate file so the
+    ///   user can restructure.
+    /// - Digit separators (`10'000`, `0xFF'FF`, `1'000'000`) are told apart
+    ///   from char-literal quotes by a local rule: a `'` is a separator iff
+    ///   BOTH its immediately preceding and following characters are hex
+    ///   digits (`[0-9a-fA-F]`); otherwise it opens a char literal. This
+    ///   misreads a `u8'a'`-style UTF-8 char literal whose sole content
+    ///   character is itself a hex letter (prev `8`, next `a`, both hex
+    ///   digits) as a digit separator instead of a char literal —
+    ///   astronomically rare in practice, not worth extra state to special-case.
+    /// - Raw string literals `R"delim(...)delim"` (optionally preceded by a
+    ///   `u8`/`L`/`u`/`U` encoding prefix) are recognized as a unit and their
+    ///   entire span is stripped, so embedded quotes/braces inside them never
+    ///   desync the scan or get mistaken for real code.
     /// </summary>
     public static class NativeEntryPoints
     {
@@ -33,20 +50,26 @@ namespace BasicLang.Compiler.ProjectSystem
         public const string LibraryEntryPointCode = "BL6013";
 
         // Entry-point DEFINITIONS only: the parameter list must not cross a ';'
-        // (declaration) and must be followed by '{' (optionally via a trailing
-        // return type for `auto main(...) -> int`). WinMain is matched by name
-        // alone because real signatures interpose WINAPI/CALLBACK between the
-        // return type and the name.
+        // (declaration) and must be followed by '{', optionally via a trailing
+        // return type (`auto main(...) -> int`), a `noexcept`/`noexcept(...)`
+        // specifier, and/or a function-try-block `try`. WinMain/wWinMain are
+        // matched by name alone because real signatures interpose WINAPI/
+        // CALLBACK between the return type and the name.
+        private const string EntryPointTail =
+            @"\s*(?:->\s*int\s*)?(?:noexcept(?:\s*\([^)]*\))?\s*)?(?:try\s*)?\{";
+
         private static readonly Regex EntryPointDefinition = new Regex(
-            @"(?:\b(?:int|auto)\s+(?:main|wmain)\s*\([^;{)]*\)\s*(?:->\s*int\s*)?\{)" +
-            @"|(?:\bWinMain\s*\([^;{)]*\)\s*\{)",
+            @"(?:\b(?:int|auto)\s+(?:main|wmain)\s*\([^;{)]*\)" + EntryPointTail + ")" +
+            @"|(?:\b(?:w?WinMain)\s*\([^;{)]*\)" + EntryPointTail + ")",
             RegexOptions.Compiled);
 
         /// <summary>
-        /// Counts C++ entry-point definitions (main/wmain/WinMain) in a source
-        /// text using the D9 textual heuristic. Line comments, block comments,
-        /// string literals (honoring \" and \\ escapes) and char literals are
-        /// stripped before matching.
+        /// Counts C++ entry-point definitions (main/wmain/WinMain/wWinMain) in
+        /// a source text using the D9 textual heuristic. Line comments (with
+        /// backslash-newline splicing), block comments, string literals
+        /// (honoring \" and \\ escapes), raw string literals (`R"(...)"` and
+        /// prefixed forms), char literals and C++14 digit separators are all
+        /// resolved before matching.
         /// </summary>
         public static int CountCppMains(string source)
         {
@@ -78,7 +101,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 {
                     diagnostics.Add(MakeError(NoEntryPointCode, string.Empty,
                         "No entry point found for Exe project. Searched every source file for a " +
-                        "BasicLang 'Sub Main' and a C++ 'main'/'wmain'/'WinMain' definition; " +
+                        "BasicLang 'Sub Main' and a C++ 'main'/'wmain'/'WinMain'/'wWinMain' definition; " +
                         "define exactly one, or set OutputType to Library."));
                 }
                 else if (total > 1)
@@ -127,11 +150,16 @@ namespace BasicLang.Compiler.ProjectSystem
         }
 
         /// <summary>
-        /// Replaces // and /* */ comments, "..." string literals and '...'
-        /// char literals with a single space each so the entry-point regex
-        /// only sees real code. Escape handling: a backslash inside a string/
-        /// char literal always consumes the next character, so \" stays inside
-        /// the literal and "path\\" still terminates at its real closing quote.
+        /// Replaces // and /* */ comments, "..." string literals, raw string
+        /// literals (`R"delim(...)delim"`, with optional `u8`/`L`/`u`/`U`
+        /// encoding prefix) and '...' char literals with a single space each,
+        /// and skips over C++14 digit separators (`10'000`), so the
+        /// entry-point regex only sees real code. Escape handling: a backslash
+        /// inside a string/char literal always consumes the next character, so
+        /// \" stays inside the literal and "path\\" still terminates at its
+        /// real closing quote. A trailing backslash at the very end of a //
+        /// line splices the next physical line into the comment (C++
+        /// translation phase 2), hiding whatever follows it too.
         /// </summary>
         private static string StripCommentsAndLiterals(string source)
         {
@@ -145,10 +173,26 @@ namespace BasicLang.Compiler.ProjectSystem
 
                 if (c == '/' && i + 1 < n && source[i + 1] == '/')
                 {
-                    // Line comment: skip to end of line (newline itself is kept).
+                    // Line comment: skip to end of line. A trailing backslash
+                    // immediately before the newline (translation phase 2)
+                    // splices the next physical line into the comment too.
                     i += 2;
-                    while (i < n && source[i] != '\n')
-                        i++;
+                    while (true)
+                    {
+                        while (i < n && source[i] != '\n')
+                            i++;
+                        if (i >= n)
+                            break;
+                        var spliceCheck = i - 1;
+                        if (spliceCheck >= 0 && source[spliceCheck] == '\r')
+                            spliceCheck--;
+                        if (spliceCheck >= 0 && source[spliceCheck] == '\\')
+                        {
+                            i++; // consume the newline, keep the comment going
+                            continue;
+                        }
+                        break;
+                    }
                     sb.Append(' ');
                 }
                 else if (c == '/' && i + 1 < n && source[i + 1] == '*')
@@ -160,17 +204,46 @@ namespace BasicLang.Compiler.ProjectSystem
                     i = Math.Min(n, i + 2);
                     sb.Append(' ');
                 }
-                else if (c == '"' || c == '\'')
+                else if (c == '"')
                 {
-                    // String or char literal; backslash escapes the next char.
-                    var quote = c;
-                    i++;
-                    while (i < n)
+                    // String literal; backslash escapes the next char.
+                    i = ConsumeQuotedLiteral(source, i, n, '"');
+                    sb.Append(' ');
+                }
+                else if (c == '\'')
+                {
+                    if (IsDigitSeparator(source, i, n))
                     {
-                        if (source[i] == '\\') { i += 2; continue; }
-                        if (source[i] == quote) { i++; break; }
+                        // C++14 digit separator (e.g. 10'000), not a char-literal opener.
+                        sb.Append(c);
                         i++;
                     }
+                    else
+                    {
+                        // Char literal; backslash escapes the next char.
+                        i = ConsumeQuotedLiteral(source, i, n, '\'');
+                        sb.Append(' ');
+                    }
+                }
+                else if ((c == 'R' || c == 'L' || c == 'u' || c == 'U') &&
+                         TryMatchRawStringPrefix(source, i, n, out var rawPrefixLength))
+                {
+                    // Raw string literal: strip the whole delimiter-matched
+                    // span so embedded quotes/braces never desync the scan.
+                    i += rawPrefixLength; // now at the opening '"'
+                    i++;                  // skip it
+                    var delimStart = i;
+                    while (i < n && source[i] != '(')
+                        i++;
+                    var delimiter = source.Substring(delimStart, i - delimStart);
+                    if (i < n)
+                    {
+                        i++; // skip '('
+                        var closeSeq = ")" + delimiter + "\"";
+                        var closeIdx = source.IndexOf(closeSeq, i, StringComparison.Ordinal);
+                        i = closeIdx >= 0 ? closeIdx + closeSeq.Length : n;
+                    }
+                    // else: no '(' at all before EOF — already consumed to n.
                     sb.Append(' ');
                 }
                 else
@@ -181,6 +254,57 @@ namespace BasicLang.Compiler.ProjectSystem
             }
 
             return sb.ToString();
+        }
+
+        // Consumes a "..." or '...' literal starting at the opening quote and
+        // returns the index just past its closing quote (or n at EOF). A
+        // backslash always consumes the next character, so \" / \\ don't
+        // terminate the literal early.
+        private static int ConsumeQuotedLiteral(string source, int i, int n, char quote)
+        {
+            i++; // skip opening quote
+            while (i < n)
+            {
+                if (source[i] == '\\') { i += 2; continue; }
+                if (source[i] == quote) { i++; break; }
+                i++;
+            }
+            return i;
+        }
+
+        private static bool IsHexDigit(char c) =>
+            (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+        // A `'` is a C++14 digit separator (not a char-literal opener) iff BOTH
+        // neighbors are hex digits — e.g. 10'000, 0xFF'FF, 1'000'000. Known
+        // miss (accepted, see class remarks): u8'a' reads as a separator too.
+        private static bool IsDigitSeparator(string source, int i, int n) =>
+            i > 0 && i + 1 < n && IsHexDigit(source[i - 1]) && IsHexDigit(source[i + 1]);
+
+        // Matches an (optional encoding prefix +) raw-string opener `R"` in
+        // code context — R", LR", uR", UR", u8R". Returns the length of the
+        // prefix up to and including 'R' (the caller still skips the quote
+        // itself). Requires a non-identifier character (or start of input)
+        // immediately before the prefix so this never fires inside a longer
+        // identifier that merely ends in R/L/u/U (e.g. "URL").
+        private static bool TryMatchRawStringPrefix(string source, int i, int n, out int prefixLength)
+        {
+            prefixLength = 0;
+            if (i > 0 && (char.IsLetterOrDigit(source[i - 1]) || source[i - 1] == '_'))
+                return false;
+
+            var p = i;
+            if (p + 1 < n && source[p] == 'u' && source[p + 1] == '8')
+                p += 2;
+            else if (p < n && (source[p] == 'L' || source[p] == 'u' || source[p] == 'U'))
+                p += 1;
+
+            if (p < n && source[p] == 'R' && p + 1 < n && source[p + 1] == '"')
+            {
+                prefixLength = p - i + 1;
+                return true;
+            }
+            return false;
         }
     }
 }
