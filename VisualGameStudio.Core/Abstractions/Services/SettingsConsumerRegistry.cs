@@ -17,6 +17,29 @@ namespace VisualGameStudio.Core.Abstractions.Services;
 /// Thread-safe: registrations can arrive from UI-thread control/view-model initializers and from
 /// background service constructors concurrently. Multiple consumers per key are allowed — their
 /// descriptions are combined (de-duplicated, insertion order preserved).
+///
+/// <para><b>Lazy-initialization failure mode (read before writing the Phase 3 contract test):</b>
+/// registration only happens when a consumer's type/instance initializer actually RUNS. In a
+/// headless test process, a consumer type that was never loaded looks unregistered even though its
+/// wiring is fine — the contract test must force initialization first:
+/// <list type="bullet">
+/// <item><description><b>Static-ctor registrants</b> — force with
+/// <c>RuntimeHelpers.RunClassConstructor(typeof(T).TypeHandle)</c>: <c>CodeEditorDocumentView</c>
+/// (editor.fontFamily / fontSize / fontLigatures / lineNumbers / wordWrap / tabSize / insertSpaces
+/// / highlightCurrentLine / stickyScroll.enabled / bracketPairColorization / autoClosingBrackets /
+/// smoothScrolling / minimap.enabled / renderWhitespace) and <c>ThemeManager</c>
+/// (workbench.colorTheme).</description></item>
+/// <item><description><b>Instance-ctor registrants</b> — an instance must be constructed:
+/// <c>MainWindowViewModel</c> (editor.trimTrailingWhitespaceOnSave / formatOnSave / tabSize /
+/// insertSpaces / minimap.enabled / renderWhitespace), <c>AutoSaveService</c> (files.autoSave /
+/// autoSaveDelay / autoSaveSkipOnErrors), <c>HotExitService</c> (files.hotExit). Where
+/// construction is too heavy for a headless test (MainWindowViewModel needs ~40 services), note
+/// that all of its keys except formatOnSave and trimTrailingWhitespaceOnSave are also registered
+/// by the <c>CodeEditorDocumentView</c> static ctor — the contract test must cover those two keys
+/// by another route (e.g. a dedicated one-line registration assertion or a lightweight seam).
+/// </description></item>
+/// </list>
+/// Keep this list in sync when adding consumers in Tasks 2.2+.</para>
 /// </summary>
 public static class SettingsConsumerRegistry
 {

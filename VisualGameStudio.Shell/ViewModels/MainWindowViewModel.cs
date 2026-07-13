@@ -3835,12 +3835,35 @@ public partial class MainWindowViewModel : ViewModelBase
     private void ToggleWhitespace()
     {
         ShowWhitespace = !ShowWhitespace;
+        // Persist so the toggle survives the next settings event and restarts (VS Code parity).
+        // Without this, any later SettingsChanged re-apply would revert the editors to the stored
+        // value and leave the menu checkmark stale.
+        PersistWhitespaceToggle(_settingsService, ShowWhitespace);
         foreach (var doc in _dockFactory.GetAllDocuments().OfType<CodeEditorDocumentViewModel>())
         {
             doc.RequestToggleWhitespace(ShowWhitespace);
         }
         StatusText = ShowWhitespace ? "Whitespace characters visible" : "Whitespace characters hidden";
     }
+
+    /// <summary>
+    /// Writes the View-menu whitespace toggle through the settings pipeline
+    /// (editor.renderWhitespace: "all"/"none", User scope) so the setting stays the single source
+    /// of truth. Static test seam: <c>SettingsEditorWiringTests</c> exercises the exact mapping the
+    /// <see cref="ToggleWhitespace"/> command uses. No feedback loop: the resulting SettingChanged
+    /// re-seed (<see cref="OnEditorDisplaySettingChanged"/>) reads back the value just written and
+    /// the ObservableProperty setter no-ops on equality.
+    /// </summary>
+    public static void PersistWhitespaceToggle(ISettingsService? service, bool showWhitespace)
+        => service?.Set("editor.renderWhitespace", showWhitespace ? "all" : "none", SettingsScope.User);
+
+    /// <summary>
+    /// Writes the View-menu minimap toggle through the settings pipeline
+    /// (editor.minimap.enabled: bool, User scope). See <see cref="PersistWhitespaceToggle"/> for
+    /// the rationale and the convergence argument.
+    /// </summary>
+    public static void PersistMinimapToggle(ISettingsService? service, bool showMinimap)
+        => service?.Set("editor.minimap.enabled", showMinimap, SettingsScope.User);
 
     [RelayCommand]
     private void ToggleColumnSelectionMode()
@@ -6670,6 +6693,8 @@ $"""
     private void ToggleMinimap()
     {
         ShowMinimap = !ShowMinimap;
+        // Persist so the toggle survives the next settings event and restarts (VS Code parity).
+        PersistMinimapToggle(_settingsService, ShowMinimap);
         foreach (var doc in _dockFactory.GetAllDocuments().OfType<CodeEditorDocumentViewModel>())
         {
             doc.RequestToggleMinimap(ShowMinimap);

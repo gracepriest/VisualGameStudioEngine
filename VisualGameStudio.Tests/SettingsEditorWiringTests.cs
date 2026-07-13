@@ -5,6 +5,7 @@ using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.ProjectSystem.Services;
 using VisualGameStudio.Shell;
+using VisualGameStudio.Shell.ViewModels;
 using VisualGameStudio.Shell.ViewModels.Dialogs;
 using VisualGameStudio.Shell.Views.Documents;
 
@@ -172,6 +173,40 @@ public class SettingsEditorWiringTests
         _service.Set("editor.renderWhitespace", "all", SettingsScope.User);
         var visible = _service.Get("editor.renderWhitespace", "none") != "none";
         Assert.That(visible, Is.True);
+    }
+
+    // ---- View-menu toggles persist their settings (2.1 review I-2) ----
+    // ToggleMinimap/ToggleWhitespace call these exact static seams (MainWindowViewModel itself
+    // needs ~40 services, so the command bodies are covered by code-trace; the value mapping and
+    // scope — the part that can silently drift — is pinned here).
+
+    [Test]
+    public void ViewMenuMinimapToggle_PersistsBoolToUserScope()
+    {
+        MainWindowViewModel.PersistMinimapToggle(_service, false);
+        Assert.That(_service.Get("editor.minimap.enabled", true, SettingsScope.User), Is.False,
+            "hiding the minimap via the View menu must persist editor.minimap.enabled=false");
+
+        MainWindowViewModel.PersistMinimapToggle(_service, true);
+        Assert.That(_service.Get("editor.minimap.enabled", false, SettingsScope.User), Is.True);
+    }
+
+    [Test]
+    public void ViewMenuWhitespaceToggle_PersistsAllNoneStringToUserScope()
+    {
+        MainWindowViewModel.PersistWhitespaceToggle(_service, true);
+        Assert.That(_service.Get("editor.renderWhitespace", "none", SettingsScope.User), Is.EqualTo("all"),
+            "showing whitespace via the View menu must persist editor.renderWhitespace=all");
+
+        MainWindowViewModel.PersistWhitespaceToggle(_service, false);
+        Assert.That(_service.Get("editor.renderWhitespace", "all", SettingsScope.User), Is.EqualTo("none"));
+    }
+
+    [Test]
+    public void ViewMenuToggles_NullService_DoNotThrow()
+    {
+        Assert.DoesNotThrow(() => MainWindowViewModel.PersistMinimapToggle(null, true));
+        Assert.DoesNotThrow(() => MainWindowViewModel.PersistWhitespaceToggle(null, true));
     }
 
     // ---- Consumer registry: every wired editor.* key names its consumer ----

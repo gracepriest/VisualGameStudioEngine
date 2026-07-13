@@ -249,6 +249,15 @@ public partial class CodeEditorDocumentView : UserControl
     {
         if (_subscribedVm != null)
             InitializeBreakpointSupport(_subscribedVm);
+
+        // ApplyEditorSettings already ran from OnDataContextChanged, but possibly BEFORE the inner
+        // TextEditor existed: the imperative appliers (SetIndentation / SetHighlightCurrentLine /
+        // SetWhitespaceVisible) silently no-op while _textEditor is null, and ConfigureEditor then
+        // writes hardcoded defaults (IndentationSize=4, ConvertTabsToSpaces=true,
+        // HighlightCurrentLine=true) — so a user with e.g. tabSize=2 would get 4 until an unrelated
+        // settings event. Re-apply now that the editor is real so the user's values win. Safe to
+        // run twice: the method only reads effective values and sets them (idempotent).
+        ApplyEditorSettings();
     }
 
     /// <summary>
@@ -391,7 +400,8 @@ public partial class CodeEditorDocumentView : UserControl
 
                 _editorEventsWired = true;
 
-                // Initialize breakpoints when editor is ready
+                // Initialize breakpoints (and re-apply editor settings — see OnEditorReady) once
+                // the editor is ready; the inner TextEditor may not exist yet at this point.
                 if (MainEditor.IsReady)
                 {
                     InitializeBreakpointSupport(vm);

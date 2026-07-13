@@ -2453,9 +2453,8 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     public void SetMinimapVisible(bool visible)
     {
-        var minimap = this.FindControl<Control>("Minimap");
-        if (minimap != null)
-            minimap.IsVisible = visible;
+        if (_minimap != null)
+            _minimap.IsVisible = visible;
     }
 
     /// <summary>
