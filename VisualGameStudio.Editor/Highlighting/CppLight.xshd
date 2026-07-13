@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<SyntaxDefinition name="C++" extensions=".cpp;.h;.hpp;.c;.cc;.cxx;.hh;.hxx;.inl"
+                  xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+
+  <Color name="Comment" foreground="#008000" fontStyle="italic" />
+  <Color name="String" foreground="#A31515" />
+  <Color name="Char" foreground="#A31515" />
+  <Color name="Number" foreground="#098658" />
+  <Color name="Preprocessor" foreground="#AF00DB" />
+  <Color name="Keyword" foreground="#0000FF" fontWeight="bold" />
+  <Color name="ControlKeyword" foreground="#AF00DB" fontWeight="bold" />
+  <Color name="TypeKeyword" foreground="#267F99" />
+  <Color name="Constant" foreground="#0070C1" />
+  <Color name="Operator" foreground="#000000" />
+
+  <RuleSet>
+    <Span color="Comment" begin="//" />
+    <Span color="Comment" multiline="true" begin="/\*" end="\*/" />
+
+    <Span color="String" begin="&quot;" end="&quot;">
+      <RuleSet>
+        <Span begin="\\" end="." />
+      </RuleSet>
+    </Span>
+    <!-- Lookbehind keeps C++ digit separators (1'000'000) from opening a char span -->
+    <Span color="Char" begin="(?&lt;![\w'])'" end="'">
+      <RuleSet>
+        <Span begin="\\" end="." />
+      </RuleSet>
+    </Span>
+
+    <Span color="Preprocessor" begin="^\s*\#" />
+
+    <Keywords color="ControlKeyword">
+      <Word>if</Word><Word>else</Word><Word>switch</Word><Word>case</Word><Word>default</Word>
+      <Word>for</Word><Word>while</Word><Word>do</Word><Word>break</Word><Word>continue</Word>
+      <Word>return</Word><Word>goto</Word><Word>try</Word><Word>catch</Word><Word>throw</Word>
+      <Word>co_await</Word><Word>co_yield</Word><Word>co_return</Word>
+    </Keywords>
+
+    <Keywords color="Keyword">
+      <Word>class</Word><Word>struct</Word><Word>union</Word><Word>enum</Word><Word>namespace</Word>
+      <Word>template</Word><Word>typename</Word><Word>using</Word><Word>typedef</Word>
+      <Word>public</Word><Word>private</Word><Word>protected</Word><Word>friend</Word>
+      <Word>virtual</Word><Word>override</Word><Word>final</Word><Word>explicit</Word><Word>inline</Word>
+      <Word>static</Word><Word>extern</Word><Word>const</Word><Word>constexpr</Word><Word>consteval</Word>
+      <Word>constinit</Word><Word>mutable</Word><Word>volatile</Word><Word>register</Word>
+      <Word>new</Word><Word>delete</Word><Word>operator</Word><Word>sizeof</Word><Word>alignof</Word>
+      <Word>decltype</Word><Word>noexcept</Word><Word>static_assert</Word><Word>static_cast</Word>
+      <Word>dynamic_cast</Word><Word>const_cast</Word><Word>reinterpret_cast</Word>
+      <Word>concept</Word><Word>requires</Word><Word>export</Word><Word>import</Word><Word>module</Word>
+    </Keywords>
+
+    <Keywords color="TypeKeyword">
+      <Word>void</Word><Word>bool</Word><Word>char</Word><Word>wchar_t</Word><Word>char8_t</Word>
+      <Word>char16_t</Word><Word>char32_t</Word><Word>short</Word><Word>int</Word><Word>long</Word>
+      <Word>float</Word><Word>double</Word><Word>signed</Word><Word>unsigned</Word><Word>auto</Word>
+      <Word>size_t</Word><Word>this</Word>
+    </Keywords>
+
+    <Keywords color="Constant">
+      <Word>true</Word><Word>false</Word><Word>nullptr</Word><Word>NULL</Word>
+    </Keywords>
+
+    <Rule color="Number">
+      \b0[xX][0-9a-fA-F']+\b|\b\d[\d']*(\.[\d']+)?([eE][+-]?\d+)?[fFlLuU]*\b
+    </Rule>
+  </RuleSet>
+</SyntaxDefinition>

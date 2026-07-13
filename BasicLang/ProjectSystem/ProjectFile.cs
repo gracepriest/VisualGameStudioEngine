@@ -38,6 +38,22 @@ namespace BasicLang.Compiler.ProjectSystem
         public bool DebugSymbols { get; set; } = true;
         public string Backend { get; set; } = "CSharp"; // CSharp, MSIL, LLVM
 
+        // Project language: "BasicLang" (default) or "Cpp" (user-authored C++
+        // sources compiled directly by the native toolchain — no transpile).
+        public string Language { get; set; } = "BasicLang";
+
+        public bool IsCppProject =>
+            string.Equals(Language, "Cpp", StringComparison.OrdinalIgnoreCase);
+
+        // C++-only settings (ignored for BasicLang projects)
+        public string CppStandard { get; set; } = "c++20";
+        public List<string> IncludeDirs { get; set; } = new List<string>();
+        public List<string> NativeLibs { get; set; } = new List<string>();
+        public List<string> Defines { get; set; } = new List<string>();
+
+        /// <summary>File extensions treated as C++ translation units (headers are not compiled).</summary>
+        public static readonly string[] CppTranslationUnitExtensions = { ".cpp", ".cc", ".cxx", ".c" };
+
         // Windows desktop UI frameworks (require the net*-windows TFM)
         public bool UseWindowsForms { get; set; } = false;
         public bool UseWpf { get; set; } = false;
@@ -94,6 +110,8 @@ namespace BasicLang.Compiler.ProjectSystem
                 project.Backend = propertyGroup.Element("Backend")?.Value
                     ?? propertyGroup.Element("TargetBackend")?.Value
                     ?? "CSharp";
+                project.Language = propertyGroup.Element("Language")?.Value ?? "BasicLang";
+                project.CppStandard = propertyGroup.Element("CppStandard")?.Value ?? "c++20";
 
                 var optimize = propertyGroup.Element("Optimize")?.Value;
                 if (optimize != null) project.OptimizationsEnabled = bool.Parse(optimize);
@@ -117,6 +135,30 @@ namespace BasicLang.Compiler.ProjectSystem
                     var include = compile.Attribute("Include")?.Value;
                     if (!string.IsNullOrEmpty(include))
                         project.SourceFiles.Add(include);
+                }
+
+                // C++ include directories
+                foreach (var includeDir in itemGroup.Elements("IncludeDir"))
+                {
+                    var include = includeDir.Attribute("Include")?.Value;
+                    if (!string.IsNullOrEmpty(include))
+                        project.IncludeDirs.Add(include);
+                }
+
+                // C++ native libraries to link
+                foreach (var nativeLib in itemGroup.Elements("NativeLib"))
+                {
+                    var include = nativeLib.Attribute("Include")?.Value;
+                    if (!string.IsNullOrEmpty(include))
+                        project.NativeLibs.Add(include);
+                }
+
+                // C++ preprocessor defines
+                foreach (var define in itemGroup.Elements("Define"))
+                {
+                    var include = define.Attribute("Include")?.Value;
+                    if (!string.IsNullOrEmpty(include))
+                        project.Defines.Add(include);
                 }
 
                 // Package references
@@ -225,6 +267,8 @@ namespace BasicLang.Compiler.ProjectSystem
                         new XElement("OutputType", OutputType),
                         string.IsNullOrEmpty(RootNamespace) ? null : new XElement("RootNamespace", RootNamespace),
                         new XElement("TargetBackend", Backend),
+                        IsCppProject ? new XElement("Language", Language) : null,
+                        IsCppProject ? new XElement("CppStandard", CppStandard) : null,
                         string.IsNullOrEmpty(Description) ? null : new XElement("Description", Description),
                         string.IsNullOrEmpty(Authors) ? null : new XElement("Authors", Authors),
                         new XElement("Version", Version)
@@ -287,6 +331,16 @@ namespace BasicLang.Compiler.ProjectSystem
                 ));
             }
 
+            // Add ItemGroup for C++ items (include dirs, native libs, defines)
+            if (IncludeDirs.Count > 0 || NativeLibs.Count > 0 || Defines.Count > 0)
+            {
+                root.Add(new XElement("ItemGroup",
+                    IncludeDirs.Select(d => new XElement("IncludeDir", new XAttribute("Include", d))),
+                    NativeLibs.Select(l => new XElement("NativeLib", new XAttribute("Include", l))),
+                    Defines.Select(d => new XElement("Define", new XAttribute("Include", d)))
+                ));
+            }
+
             // Remove null elements
             doc.Descendants().Where(e => e.IsEmpty && !e.HasAttributes).Remove();
 
@@ -332,6 +386,45 @@ namespace BasicLang.Compiler.ProjectSystem
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// C++ translation units for a Language=Cpp project. Default (no explicit
+        /// Compile items): recursive glob of TU extensions excluding bin/ and obj/
+        /// (build outputs live under the project dir). Explicit Compile items are
+        /// resolved by GetSourceFiles' existing rules, then filtered to TU
+        /// extensions so headers can be listed without being compiled.
+        /// </summary>
+        public IEnumerable<string> GetCppTranslationUnits()
+        {
+            var projectDir = Path.GetDirectoryName(FilePath) ?? ".";
+
+            if (SourceFiles.Count == 0)
+            {
+                foreach (var ext in CppTranslationUnitExtensions)
+                    foreach (var file in Directory.GetFiles(projectDir, "*" + ext, SearchOption.AllDirectories))
+                        // Exact-extension check: Win32 globbing lets "*.c" match
+                        // longer extensions that merely start with "c".
+                        if (string.Equals(Path.GetExtension(file), ext, StringComparison.OrdinalIgnoreCase)
+                            && !IsInBuildOutputDir(projectDir, file))
+                            yield return file;
+            }
+            else
+            {
+                foreach (var file in GetSourceFiles())
+                {
+                    var ext = Path.GetExtension(file).ToLowerInvariant();
+                    if (Array.IndexOf(CppTranslationUnitExtensions, ext) >= 0)
+                        yield return file;
+                }
+            }
+        }
+
+        internal static bool IsInBuildOutputDir(string projectDir, string file)
+        {
+            var rel = Path.GetRelativePath(projectDir, file);
+            return rel.StartsWith("bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || rel.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

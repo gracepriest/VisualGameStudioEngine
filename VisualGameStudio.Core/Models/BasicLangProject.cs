@@ -8,6 +8,10 @@ public class BasicLangProject
     public OutputType OutputType { get; set; } = OutputType.Exe;
     public string RootNamespace { get; set; } = "";
     public TargetBackend TargetBackend { get; set; } = TargetBackend.CSharp;
+    public ProjectLanguage Language { get; set; } = ProjectLanguage.BasicLang;
+
+    /// <summary>C++-only settings; null for BasicLang projects. Modeled so IDE saves round-trip them.</summary>
+    public CppProjectSettings? CppSettings { get; set; }
     public string Version { get; set; } = "1.0";
 
     public List<ProjectItem> Items { get; set; } = new();
@@ -50,4 +54,18 @@ public enum TargetBackend
     Cpp,
     LLVM,
     MSIL
+}
+
+public enum ProjectLanguage
+{
+    BasicLang,
+    Cpp
+}
+
+public class CppProjectSettings
+{
+    public string CppStandard { get; set; } = "c++20";
+    public List<string> IncludeDirs { get; set; } = new();
+    public List<string> NativeLibs { get; set; } = new();
+    public List<string> Defines { get; set; } = new();
 }

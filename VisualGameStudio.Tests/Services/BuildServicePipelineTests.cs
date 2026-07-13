@@ -370,8 +370,117 @@ End Sub
     }
 
     // ------------------------------------------------------------------
+    // 6. Language=Cpp projects: BuildService must route through the SAME
+    //    CppProjectBuilder the CLI uses (no IDE-side reimplementation) and
+    //    the diagnostics must reach the Error List via BuildCompleted.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Build_CppLanguageProject_ProducesRunnableExe()
+    {
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+
+        var project = await CreateCppProjectOnDisk("IdeCppRun",
+            "#include <iostream>\nint main(){ std::cout << \"ide-cpp-ok\"; return 0; }\n");
+
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.True, Describe(result, output));
+        Assert.That(result.ExecutablePath, Is.Not.Null.And.Not.Empty, Describe(result, output));
+        Assert.That(File.Exists(result.ExecutablePath), Is.True);
+
+        var psi = new System.Diagnostics.ProcessStartInfo(result.ExecutablePath!)
+        { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var stdout = await proc.StandardOutput.ReadToEndAsync();
+        proc.WaitForExit(30000);
+        Assert.That(proc.ExitCode, Is.EqualTo(0));
+        Assert.That(stdout, Does.Contain("ide-cpp-ok"));
+    }
+
+    [Test]
+    public async Task Build_CppLanguageProject_CompileError_DiagnosticHasFileLineColumn()
+    {
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+
+        var project = await CreateCppProjectOnDisk("IdeCppErr",
+            "int main() { undeclared_symbol; return 0; }\n");
+
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.False);
+        var d = result.Diagnostics.FirstOrDefault(x =>
+            x.Severity == DiagnosticSeverity.Error && x.FilePath?.EndsWith("main.cpp") == true);
+        Assert.That(d, Is.Not.Null, "expected a per-file diagnostic, got:\n" + Describe(result, output));
+        Assert.That(d!.Line, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Build_CppLanguageProject_FiresBuildCompleted_WithDiagnostics()
+    {
+        // THE load-bearing test for the Error List route: BuildCompleted must fire
+        // for C++ builds (MainWindowViewModel publishes diagnostics ONLY via it).
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+
+        var project = await CreateCppProjectOnDisk("IdeCppEvt",
+            "int main() { undeclared_symbol; return 0; }\n");
+
+        var output = new RecordingOutput();
+        var buildService = new BuildService(output);
+        BuildCompletedEventArgs? completed = null;
+        buildService.BuildCompleted += (_, e) => completed = e;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var result = await buildService.BuildProjectAsync(project, cts.Token);
+
+        Assert.That(completed, Is.Not.Null, "BuildCompleted did not fire for a C++ build");
+        Assert.That(completed!.Result, Is.SameAs(result));
+        Assert.That(completed.Result.Diagnostics.Any(d => d.FilePath?.EndsWith("main.cpp") == true),
+            Is.True, "diagnostics missing from the BuildCompleted payload");
+    }
+
+    [Test]
+    public async Task Build_CppLanguageProject_NoToolchain_IsHardErrorNotSourceOnlySuccess()
+    {
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() != null)
+            Assert.Ignore("Toolchain installed — the no-toolchain contract is only assertable without one");
+
+        var project = await CreateCppProjectOnDisk("IdeCppNoTc", "int main(){ return 0; }\n");
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.False,
+            "Language=Cpp must hard-fail without a toolchain (unlike the transpile backend's BL6002 soft warning)");
+        Assert.That(result.Diagnostics.Select(x => x.Id), Does.Contain("BL6005"));
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    private async Task<BasicLangProject> CreateCppProjectOnDisk(string name, string mainCpp)
+    {
+        var dir = Path.Combine(_rootDir, name);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "main.cpp"), mainCpp);
+        var blproj = Path.Combine(dir, name + ".blproj");
+        File.WriteAllText(blproj, $"""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>{name}</ProjectName>
+                <OutputType>Exe</OutputType>
+                <Language>Cpp</Language>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="main.cpp" />
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+        return await new ProjectSerializer().LoadAsync(blproj);
+    }
 
     private async Task<BasicLangProject> CreateTemplateProjectAsync(
         string templateId, SolutionType solutionType, string name)

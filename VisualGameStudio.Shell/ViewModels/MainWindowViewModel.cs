@@ -1711,6 +1711,7 @@ public partial class MainWindowViewModel : ViewModelBase
             Filters = new List<FileDialogFilter>
             {
                 new("BasicLang Files", "bas", "bl", "basic"),
+                new("C++ Files", "cpp", "h", "hpp", "c", "cc", "cxx"),
                 new("All Files", "*")
             }
         });
@@ -3057,6 +3058,18 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        // Phase 1: the BasicLang debug adapter cannot debug native C++ exes —
+        // guard F5 for Language=Cpp projects instead of handing it a native binary.
+        if (_projectService.CurrentProject.Language == ProjectLanguage.Cpp)
+        {
+            const string message =
+                "Native C++ debugging arrives in a later phase — use Start Without Debugging (Ctrl+F5) to run.";
+            _dockFactory.ActivateTool("Output");
+            OutputPanel.AppendOutput(message + "\n");
+            StatusText = message;
+            return;
+        }
+
         // If already debugging, F5 should continue execution when paused
         if (IsDebugging)
         {
@@ -4219,8 +4232,11 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
 
-        // Try language service first
-        if (_languageService.IsConnected)
+        // Try language service first — only for BasicLang sources: the BasicLang
+        // server answers unknown URIs as if they were BasicLang files, so an
+        // ungated F12 in a .cpp would get actively wrong locations. Non-BasicLang
+        // files skip straight to the text-search fallback below.
+        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
         {
             var location = await _languageService.GetDefinitionAsync(
                 activeDoc.FilePath,
@@ -4244,7 +4260,9 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
 
-        if (_languageService.IsConnected)
+        // Same gate as GoToDefinition: the BasicLang server answers unknown URIs
+        // as if they were BasicLang files, so never query it for non-BasicLang docs.
+        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
         {
             var location = await _languageService.GetImplementationAsync(
                 activeDoc.FilePath,

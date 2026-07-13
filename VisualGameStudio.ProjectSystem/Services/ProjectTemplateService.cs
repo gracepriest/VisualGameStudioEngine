@@ -263,6 +263,7 @@ public class ProjectTemplateService : IProjectTemplateService
             "msil" => "MSIL",
             "native" => "Cpp",
             "llvm" => "LLVM",
+            "cpp" => "Cpp",
             _ => "CSharp"
         };
 
@@ -274,6 +275,14 @@ public class ProjectTemplateService : IProjectTemplateService
         sb.AppendLine($"    <OutputType>{outputType switch { "exe" => "Exe", "library" => "Library", _ => "WinExe" }}</OutputType>");
         sb.AppendLine($"    <RootNamespace>{options.Namespace ?? options.Name}</RootNamespace>");
         sb.AppendLine($"    <TargetBackend>{targetBackend}</TargetBackend>");
+        // Pure C++ projects (Language=Cpp): user-authored C++ built by
+        // CppProjectBuilder through a discovered native toolchain — the
+        // BasicLang pipeline is not involved.
+        if (options.SolutionType.Id == "cpp")
+        {
+            sb.AppendLine("    <Language>Cpp</Language>");
+            sb.AppendLine("    <CppStandard>c++20</CppStandard>");
+        }
         // Windows desktop UI frameworks need the net*-windows TFM at build time.
         if (options.Template.Id == "winforms-app")
         {
@@ -301,6 +310,13 @@ public class ProjectTemplateService : IProjectTemplateService
         foreach (var item in compileItems)
         {
             sb.AppendLine($"    <Compile Include=\"{item}\" />");
+        }
+
+        // The C++ game template links the engine import library; CppProjectBuilder
+        // resolves the .lib via EngineDeployment and deploys the native DLLs.
+        if (options.Template.Id == "cpp-game-app")
+        {
+            sb.AppendLine("    <NativeLib Include=\"VisualGameStudioEngine.lib\" />");
         }
 
         sb.AppendLine("  </ItemGroup>");
@@ -348,6 +364,9 @@ public class ProjectTemplateService : IProjectTemplateService
             "class-library" => "library",
             "web-api" => "exe",
             "unit-test" => "exe",
+            "cpp-console-app" => "exe",
+            "cpp-game-app" => "exe",
+            "cpp-library" => "library",
             _ => "exe"
         };
     }
@@ -364,6 +383,9 @@ public class ProjectTemplateService : IProjectTemplateService
             "winforms-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
             "wpf-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
             "avalonia-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
+            "cpp-console-app" => new List<string> { "main.cpp" },
+            "cpp-game-app" => new List<string> { "main.cpp" },
+            "cpp-library" => new List<string> { "mathutils.cpp" },
             _ => new List<string> { "Main.bas" }
         };
     }
@@ -372,8 +394,11 @@ public class ProjectTemplateService : IProjectTemplateService
     {
         var filesToOpen = new List<string>();
 
-        // Templates that use Main.bas as entry point
-        if (options.Template.Id != "class-library")
+        // Templates that use Main.bas as entry point. Pure C++ solution types
+        // write their own entry files below — the generic BasicLang-content
+        // Main.<ext> write must never run for them (it would leave a bogus
+        // BasicLang-content main.cpp on disk).
+        if (options.SolutionType.Id != "cpp" && options.Template.Id != "class-library")
         {
             var mainFile = Path.Combine(projectDir, $"Main{options.SolutionType.SourceExtension}");
             var content = GenerateMainFileContent(options);
@@ -402,6 +427,15 @@ public class ProjectTemplateService : IProjectTemplateService
                 break;
             case "avalonia-app":
                 await GenerateAvaloniaFilesAsync(projectDir, options, cancellationToken);
+                break;
+            case "cpp-console-app":
+                filesToOpen.Add(await GenerateCppConsoleFilesAsync(projectDir, options, cancellationToken));
+                break;
+            case "cpp-library":
+                filesToOpen.AddRange(await GenerateCppLibraryFilesAsync(projectDir, cancellationToken));
+                break;
+            case "cpp-game-app":
+                filesToOpen.Add(await GenerateCppGameFilesAsync(projectDir, options, cancellationToken));
                 break;
         }
 
@@ -1008,6 +1042,79 @@ End Sub
         await File.WriteAllTextAsync(windowFile, windowContent, cancellationToken);
     }
 
+    #region Pure C++ template files
+
+    // NOTE: These file contents must stay in sync with the CLI's cpp-console /
+    // cpp-library / cpp-game templates in BasicLang/ProjectSystem/TemplateEngine.cs
+    // (the two template systems are known to drift — change one, change both).
+    // The CLI substitutes {{ProjectName}}; here Replace does the same.
+
+    private async Task<string> GenerateCppConsoleFilesAsync(string projectDir, CreateProjectOptions options, CancellationToken cancellationToken)
+    {
+        const string template = @"#include <iostream>
+
+int main()
+{
+    std::cout << ""Hello from {{ProjectName}}!"" << std::endl;
+    return 0;
+}
+";
+        var mainFile = Path.Combine(projectDir, "main.cpp");
+        await File.WriteAllTextAsync(mainFile, template.Replace("{{ProjectName}}", options.Name), cancellationToken);
+        return mainFile;
+    }
+
+    private async Task<List<string>> GenerateCppLibraryFilesAsync(string projectDir, CancellationToken cancellationToken)
+    {
+        var headerFile = Path.Combine(projectDir, "mathutils.h");
+        await File.WriteAllTextAsync(headerFile, "#pragma once\nint Add(int a, int b);\n", cancellationToken);
+
+        var sourceFile = Path.Combine(projectDir, "mathutils.cpp");
+        await File.WriteAllTextAsync(sourceFile, "#include \"mathutils.h\"\nint Add(int a, int b) { return a + b; }\n", cancellationToken);
+
+        return new List<string> { sourceFile };
+    }
+
+    private async Task<string> GenerateCppGameFilesAsync(string projectDir, CreateProjectOptions options, CancellationToken cancellationToken)
+    {
+        const string template = @"// Engine C-ABI declarations (see VisualGameStudioEngine/framework.h).
+extern ""C"" {
+    bool Framework_Initialize(int width, int height, const char* title);
+    void Framework_Update();
+    bool Framework_ShouldClose();
+    void Framework_Shutdown();
+    void Framework_BeginDrawing();
+    void Framework_EndDrawing();
+    void Framework_ClearBackground(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    void Framework_DrawText(const char* text, int x, int y, int fontSize,
+                            unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+}
+
+int main()
+{
+    if (!Framework_Initialize(800, 450, ""{{ProjectName}}""))
+        return 1;
+
+    while (!Framework_ShouldClose())
+    {
+        Framework_Update();
+        Framework_BeginDrawing();
+        Framework_ClearBackground(30, 30, 46, 255);
+        Framework_DrawText(""Hello from {{ProjectName}}!"", 260, 200, 24, 205, 214, 244, 255);
+        Framework_EndDrawing();
+    }
+
+    Framework_Shutdown();
+    return 0;
+}
+";
+        var mainFile = Path.Combine(projectDir, "main.cpp");
+        await File.WriteAllTextAsync(mainFile, template.Replace("{{ProjectName}}", options.Name), cancellationToken);
+        return mainFile;
+    }
+
+    #endregion
+
     private async Task<string> CreateSolutionFileAsync(string solutionDir, CreateProjectOptions options, string projectFile, CancellationToken cancellationToken)
     {
         var solutionFile = Path.Combine(solutionDir, $"{options.Name}{options.SolutionType.SolutionExtension}");
@@ -1103,7 +1210,7 @@ End Sub
             sb.AppendLine();
         }
 
-        if (solutionType.Id == "native")
+        if (solutionType.Id == "native" || solutionType.Id == "cpp")
         {
             sb.AppendLine("# C++");
             sb.AppendLine("*.o");

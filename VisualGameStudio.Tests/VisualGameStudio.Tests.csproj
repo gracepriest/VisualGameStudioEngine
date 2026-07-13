@@ -45,4 +45,14 @@
     <ProjectReference Include="..\RaylibWrapper\RaylibWrapper.vbproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Ships the engine import lib + native DLL (prebuilt IDE/ layout) next to
+         the test host — which is also where BasicLang.exe deploys — so
+         Language=Cpp game builds (CppProjectBuilder / CLI e2e) link and deploy
+         the engine exactly like a shipped install (EngineDeployment.LocateImportLib
+         probes the process base directory). -->
+    <None Include="..\IDE\VisualGameStudioEngine.lib" Link="VisualGameStudioEngine.lib" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\IDE\VisualGameStudioEngine.dll" Link="VisualGameStudioEngine.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
