@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -182,5 +183,117 @@ public partial class NewProjectWizardViewModel : ObservableObject
 
         if (SelectedTemplate == null || !VisibleTemplates.Contains(SelectedTemplate))
             SelectedTemplate = VisibleTemplates.FirstOrDefault();
+    }
+
+    partial void OnSelectedTemplateChanged(ProjectTemplate? value)
+    {
+        OnPropertyChanged(nameof(CanGoNext));
+        OnPropertyChanged(nameof(CanCreate));
+    }
+
+    partial void OnProjectNameChanged(string value)
+    {
+        OnPropertyChanged(nameof(CanCreate));
+        ClearError();
+        // Same classifier the build layer escapes with, so the hint can't drift.
+        var specials = BasicLang.Compiler.ProjectSystem.MSBuildText.FindSpecialCharacters(value);
+        NameWarning = specials.Length == 0
+            ? null
+            : $"The name contains special characters ({string.Join(" ", specials.ToCharArray())}) — " +
+              "it will build fine, but a simpler name is easier to work with.";
+    }
+
+    partial void OnLocationChanged(string value)
+    {
+        OnPropertyChanged(nameof(CanCreate));
+        ClearError();
+    }
+
+    partial void OnIsCreatingChanged(bool value) => OnPropertyChanged(nameof(CanCreate));
+
+    private void ClearError()
+    {
+        ErrorMessage = null;
+        HasError = false;
+    }
+
+    [RelayCommand]
+    private void GoNext()
+    {
+        if (CanGoNext) NextRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    private void GoBack() => BackRequested?.Invoke(this, EventArgs.Empty);
+
+    [RelayCommand]
+    private void Cancel() => Cancelled?.Invoke(this, EventArgs.Empty);
+
+    [RelayCommand]
+    private async Task CreateProjectAsync()
+    {
+        if (!CanCreate) return;
+        ClearError();
+        IsCreating = true;
+        try
+        {
+            var options = new CreateProjectOptions
+            {
+                Name = ProjectName,
+                Location = Location,
+                SolutionType = SelectedBackend!.SolutionType,
+                Template = SelectedTemplate!,
+                CreateSolutionFolder = CreateSolutionFolder,
+                CreateGitRepository = CreateGitRepository,
+                TargetFramework = TargetFramework,
+                Namespace = CustomNamespace
+                // NOTE (spec): CppStandard + toolchain are display-only this pass —
+                // there is no field on CreateProjectOptions to carry them.
+            };
+
+            var result = await _templateService.CreateProjectAsync(options);
+            if (result.Success)
+            {
+                ProjectCreated?.Invoke(this, result);
+            }
+            else
+            {
+                ErrorMessage = result.Error ?? "Failed to create project.";
+                HasError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = ex.Message;
+            HasError = true;
+        }
+        finally
+        {
+            IsCreating = false;
+        }
+    }
+}
+
+/// <summary>Design-time VM so the two wizard views preview in the AXAML designer.</summary>
+public class NewProjectWizardDesignViewModel : NewProjectWizardViewModel
+{
+    public NewProjectWizardDesignViewModel() : base(new DesignTemplateService())
+    {
+        ProjectName = "MyProject";
+    }
+
+    private sealed class DesignTemplateService : IProjectTemplateService
+    {
+        public IReadOnlyList<SolutionType> GetSolutionTypes() => SolutionTypes.All;
+        public IReadOnlyList<ProjectTemplate> GetProjectTemplates(SolutionType s) =>
+            ProjectTemplates.All.Where(t => t.SupportedSolutionTypes.Contains(s.Id)).ToList();
+        public IReadOnlyList<ProjectTemplate> GetAllProjectTemplates() => ProjectTemplates.All;
+        public Task<ProjectCreationResult> CreateProjectAsync(CreateProjectOptions o, CancellationToken c = default)
+            => Task.FromResult(new ProjectCreationResult { Success = true });
+        public Task<SolutionCreationResult> CreateSolutionAsync(CreateSolutionOptions o, CancellationToken c = default)
+            => Task.FromResult(new SolutionCreationResult { Success = true });
+        public ProjectValidationResult ValidateProjectOptions(CreateProjectOptions o) => new() { IsValid = true };
+        public void RegisterTemplate(ProjectTemplate t) { }
+        public IReadOnlyList<ProjectTemplate> GetRecentTemplates() => new List<ProjectTemplate>();
     }
 }

@@ -133,4 +133,107 @@ public class NewProjectWizardViewModelTests
         Assert.That(vm.SelectedCategory, Is.EqualTo("All"));
         Assert.That(vm.Categories, Does.Not.Contain("Web")); // cpp has no Web template
     }
+
+    [Test]
+    public void CanGoNext_RequiresSelectedTemplate()
+    {
+        var vm = NewVm(out _);
+        Assert.That(vm.CanGoNext, Is.True); // a template auto-selected on load
+        vm.SelectedTemplate = null;
+        Assert.That(vm.CanGoNext, Is.False);
+    }
+
+    [Test]
+    public void CanCreate_RequiresNameAndLocation()
+    {
+        var vm = NewVm(out _);
+        vm.ProjectName = "";
+        Assert.That(vm.CanCreate, Is.False);
+        vm.ProjectName = "Demo";
+        Assert.That(vm.CanCreate, Is.True); // Location defaulted in ctor
+        vm.Location = "";
+        Assert.That(vm.CanCreate, Is.False);
+    }
+
+    [Test]
+    public void GoNext_RaisesNextRequested_OnlyWhenAllowed()
+    {
+        var vm = NewVm(out _);
+        int fired = 0;
+        vm.NextRequested += (_, _) => fired++;
+
+        vm.SelectedTemplate = null;
+        vm.GoNextCommand.Execute(null);
+        Assert.That(fired, Is.EqualTo(0));
+
+        // Re-select a template directly. (Do NOT re-assign the already-selected
+        // backend: CommunityToolkit's [ObservableProperty] setter guards on
+        // equality, and Backends[0] is reference-equal to the current SelectedBackend,
+        // so that assignment is a no-op and would not repopulate SelectedTemplate.)
+        vm.SelectedTemplate = vm.VisibleTemplates.First();
+        vm.GoNextCommand.Execute(null);
+        Assert.That(fired, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task CreateProject_MapsState_ToOptions_AndFiresProjectCreated()
+    {
+        var vm = NewVm(out var svc);
+        vm.SelectedLanguage = ProjectLanguage.BasicLang;
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "dotnet");
+        vm.ProjectName = "Demo";
+        vm.Location = "X:/here";
+        vm.TargetFramework = "net7.0";
+        vm.CustomNamespace = "Acme.Demo";
+
+        ProjectCreationResult? got = null;
+        vm.ProjectCreated += (_, r) => got = r;
+
+        await vm.CreateProjectCommand.ExecuteAsync(null);
+
+        Assert.That(svc.LastOptions, Is.Not.Null);
+        Assert.That(svc.LastOptions!.Name, Is.EqualTo("Demo"));
+        Assert.That(svc.LastOptions.SolutionType.Id, Is.EqualTo("dotnet"));
+        Assert.That(svc.LastOptions.TargetFramework, Is.EqualTo("net7.0"));
+        Assert.That(svc.LastOptions.Namespace, Is.EqualTo("Acme.Demo"));
+        Assert.That(got, Is.Not.Null.And.Property("Success").True);
+    }
+
+    [Test]
+    public async Task CreateProject_Cpp_UsesCppSolutionType_AndIgnoresToolchain()
+    {
+        var vm = NewVm(out var svc);
+        vm.SelectedLanguage = ProjectLanguage.Cpp;
+        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "gcc"); // display-only
+        vm.ProjectName = "NativeDemo";
+        vm.Location = "X:/here";
+
+        await vm.CreateProjectCommand.ExecuteAsync(null);
+
+        Assert.That(svc.LastOptions!.SolutionType.Id, Is.EqualTo("cpp"));
+        // CreateProjectOptions has no toolchain field — the gcc choice cannot leak.
+    }
+
+    [Test]
+    public void NameWarning_SetForSpecialCharacters_NullWhenClean()
+    {
+        var vm = NewVm(out _);
+        vm.ProjectName = "Clean";
+        Assert.That(vm.NameWarning, Is.Null);
+        vm.ProjectName = "Bad;Name";
+        Assert.That(vm.NameWarning, Is.Not.Null);
+    }
+
+    [Test]
+    public void ShowSelectors_TrackLanguageAndBackend()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "dotnet");
+        Assert.That(vm.ShowFrameworkSelector, Is.True);
+        Assert.That(vm.ShowCppStandardSelector, Is.False);
+
+        vm.SelectedLanguage = ProjectLanguage.Cpp;
+        Assert.That(vm.ShowFrameworkSelector, Is.False);
+        Assert.That(vm.ShowCppStandardSelector, Is.True);
+    }
 }
