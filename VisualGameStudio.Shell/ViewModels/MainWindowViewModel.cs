@@ -1706,25 +1706,22 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         if (App.MainWindow == null) return;
 
-        var dialog = new Views.Dialogs.CreateProjectView(_projectTemplateService);
+        var wizardVm = new ViewModels.Dialogs.NewProjectWizardViewModel(_projectTemplateService);
+        var selectWindow = new Views.Dialogs.NewProjectSelectView(wizardVm);
 
-        var result = await dialog.ShowDialog<bool?>(App.MainWindow);
+        var result = await selectWindow.ShowDialog<ProjectCreationResult?>(App.MainWindow);
 
-        if (result == true && dialog.Result != null)
+        if (result != null && result.Success && !string.IsNullOrEmpty(result.ProjectPath))
         {
-            var projectResult = dialog.Result;
-            if (projectResult.Success && !string.IsNullOrEmpty(projectResult.ProjectPath))
+            try
             {
-                try
-                {
-                    await _projectService.OpenProjectAsync(projectResult.ProjectPath);
-                    StatusText = $"Project created: {Path.GetFileNameWithoutExtension(projectResult.ProjectPath)}";
-                }
-                catch (Exception ex)
-                {
-                    await _dialogService.ShowMessageAsync("Error", $"Failed to open created project: {ex.Message}",
-                        DialogButtons.Ok, DialogIcon.Error);
-                }
+                await _projectService.OpenProjectAsync(result.ProjectPath);
+                StatusText = $"Project created: {Path.GetFileNameWithoutExtension(result.ProjectPath)}";
+            }
+            catch (Exception ex)
+            {
+                await _dialogService.ShowMessageAsync("Error", $"Failed to open created project: {ex.Message}",
+                    DialogButtons.Ok, DialogIcon.Error);
             }
         }
     }
