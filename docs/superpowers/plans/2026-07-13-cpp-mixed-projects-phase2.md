@@ -438,7 +438,7 @@ New `Build` flow (replaces the BL6008 guard):
 ```
 
 - [ ] **Step 1: Write the failing tests** in `MixedProjectBuildTests` (`[NonParallelizable]`; toolchain-skip pattern; temp-dir + retry teardown; follow `CppProjectCliBuildTests` helper shapes — write `.blproj` + sources, call `CppProjectBuilder.Build(ProjectFile.Load(...), "Debug")`):
-  1. `Mixed_LanguageCppProject_WithBasFile_BuildsAndRuns` — `Language=Cpp` project: `main.cpp` (has `int main`, includes `"Logic.g.h"`, calls `CalculateScore`), `logic.bas` (no Main). Succeeds; run exe → expected stdout. **Direction B through the real builder.**
+  1. `Mixed_LanguageCppProject_WithBasFile_BuildsAndRuns` — `Language=Cpp` project: `main.cpp` (has `int main`, includes `"Logic.g.h"`, calls `CalculateScore`), `Logic.bas` (PascalCase per D11 — test 7 asserts `Logic.g.cpp` case-sensitively in JSON; no Main). Succeeds; run exe → expected stdout. **Direction B through the real builder.**
   2. `Mixed_BasicLangNativeProject_WithUserCpp_DirectionA` — `Language` absent, `<Backend>Cpp</Backend>`: `App.bas` with `Sub Main` + `#CppInclude "helper.h"` + `::`-call into user `helper.h` (header-only) sitting NEXT TO the .blproj. Succeeds (proves projectDir include wiring; impossible on the old path). Run → stdout.
   3. `Mixed_PureBasicLang_NativeBackend_StillBuilds` — no user .cpp at all; BL6007 must NOT fire; exe at `bin/Debug/<name>.exe` (converged layout).
   4. `Mixed_BothMains_FailsBL6012` / `Mixed_ExeNoMain_FailsBL6011` / `Mixed_LibraryWithMain_FailsBL6013`.
@@ -559,8 +559,9 @@ There is NO native-BasicLang template id (CLI ids: console, classlib, game, empt
 ```powershell
 $d = "$env:TEMP\MixedSmoke"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory $d | Out-Null
 # Write (with the Write tool, not Set-Content) MixedSmoke.blproj:
-#   <Project><PropertyGroup><OutputType>Exe</OutputType><Backend>Cpp</Backend></PropertyGroup>
+#   <Project><PropertyGroup><ProjectName>MixedSmoke</ProjectName><OutputType>Exe</OutputType><Backend>Cpp</Backend></PropertyGroup>
 #   <ItemGroup><Compile Include="Logic.bas"/><Compile Include="main.cpp"/></ItemGroup></Project>
+# (ProjectName is REQUIRED: ProjectFile.Load has no filename fallback — without it the exe is Program.exe)
 # plus Logic.bas (CalculateScore, NO Main) and main.cpp (#include "Logic.g.h", int main prints CalculateScore(3))
 BasicLang/bin/Release/net8.0/BasicLang.exe build $d\MixedSmoke.blproj              # succeeds
 & "$d\bin\Debug\MixedSmoke.exe"                                                     # prints 30
