@@ -1897,10 +1897,15 @@ public partial class CodeEditorControl : UserControl
 
     private void UpdateFoldings()
     {
-        // If LSP is available, request folding ranges asynchronously
+        // If LSP is available, request folding ranges asynchronously — but only
+        // for BasicLang sources: the BasicLang server answers unknown URIs as if
+        // they were BasicLang files, so the gate prevents wrong results, not just
+        // waste. Non-BasicLang files (e.g. .cpp) fall through to the regex
+        // strategy, which yields nothing for C++ — correct-and-quiet for Phase 1.
         if (!_isUpdatingFoldings && _isFoldingEnabled
             && _foldingManager != null && _textEditor?.Document != null && _textEditor?.TextArea != null
-            && _languageService != null && _languageService.IsConnected && !string.IsNullOrEmpty(_documentFilePath))
+            && _languageService != null && _languageService.IsConnected && !string.IsNullOrEmpty(_documentFilePath)
+            && VisualGameStudio.Core.Utilities.BasicLangFileTypes.IsBasicLangSourceFile(_documentFilePath))
         {
             _ = UpdateFoldingsFromLspAsync();
             return;

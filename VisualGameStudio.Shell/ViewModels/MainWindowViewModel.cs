@@ -4220,8 +4220,11 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
 
-        // Try language service first
-        if (_languageService.IsConnected)
+        // Try language service first — only for BasicLang sources: the BasicLang
+        // server answers unknown URIs as if they were BasicLang files, so an
+        // ungated F12 in a .cpp would get actively wrong locations. Non-BasicLang
+        // files skip straight to the text-search fallback below.
+        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
         {
             var location = await _languageService.GetDefinitionAsync(
                 activeDoc.FilePath,
