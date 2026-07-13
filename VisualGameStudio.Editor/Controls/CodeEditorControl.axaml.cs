@@ -66,6 +66,13 @@ public partial class CodeEditorControl : UserControl
     private bool _autoCloseBrackets = true;
     private BasicLangIndentationStrategy? _indentationStrategy;
     private ILanguageService? _languageService;
+    /// <summary>
+    /// The single live settings store, pushed in from the host (CodeEditorDocumentView). Null in
+    /// design-time / bare construction, in which case IntelliSense behaves as if all gates are on
+    /// and the completion debounce uses the built-in <see cref="CompletionDebounceMilliseconds"/>.
+    /// Read at point-of-use so intellisense.* changes are live without any subscription.
+    /// </summary>
+    private ISettingsService? _settingsService;
     private string? _documentFilePath;
     private bool _isColumnSelectionMode;
     private CurrentLineNumberMargin? _currentLineNumberMargin;
@@ -458,9 +465,62 @@ public partial class CodeEditorControl : UserControl
         return Highlighting.HighlightingLoader.GetLanguageConfigurationForExtension(ext);
     }
 
+    static CodeEditorControl()
+    {
+        // Task 2.3 — name the IntelliSense consumers so the Phase 3 settings-consumer contract test
+        // can prove these dialog settings are actually wired (registered at type initialization, like
+        // CodeEditorDocumentView). All four are read at point-of-use (live for free): autoComplete /
+        // signatureHelp / delay here in the control; quickInfo in the MainWindowViewModel hover
+        // handler (the control's hover timer also drives error tooltips, which must stay).
+        SettingsConsumerRegistry.RegisterConsumer("intellisense.autoComplete", "CodeEditorControl.TriggerCompletion → gates auto (word/member) completion triggers; Ctrl+Space still works");
+        SettingsConsumerRegistry.RegisterConsumer("intellisense.signatureHelp", "CodeEditorControl.TriggerSignatureHelp → gates the ( / , signature-help trigger");
+        SettingsConsumerRegistry.RegisterConsumer("intellisense.delay", "CodeEditorControl.RestartCompletionDebounce → completion debounce interval");
+        SettingsConsumerRegistry.RegisterConsumer("intellisense.quickInfo", "MainWindowViewModel hover handler → gates the LSP quick-info request");
+    }
+
     public CodeEditorControl()
     {
         InitializeComponent();
+    }
+
+    /// <summary>
+    /// Provides the live settings store so IntelliSense gates (intellisense.autoComplete /
+    /// signatureHelp / delay) can be read at point-of-use. Pushed in by the host alongside
+    /// <see cref="SetLanguageService"/>.
+    /// </summary>
+    public void SetSettingsService(ISettingsService? settingsService)
+    {
+        _settingsService = settingsService;
+    }
+
+    /// <summary>
+    /// True when auto (non-invoked) completion triggers are allowed. intellisense.autoComplete off
+    /// suppresses the auto-popup while leaving explicit Ctrl+Space (Invoked) working. Static + pure
+    /// for headless testing; a null service means "enabled" (the schema default).
+    /// </summary>
+    public static bool IsAutoCompleteEnabled(ISettingsService? settings)
+        => settings == null || settings.Get("intellisense.autoComplete", true);
+
+    /// <summary>
+    /// True when signature help may be triggered. Static + pure for headless testing; a null service
+    /// means "enabled" (the schema default).
+    /// </summary>
+    public static bool IsSignatureHelpEnabled(ISettingsService? settings)
+        => settings == null || settings.Get("intellisense.signatureHelp", true);
+
+    /// <summary>
+    /// Resolves the completion debounce interval (ms) from intellisense.delay, clamped to 0..2000.
+    /// Static + pure for headless testing. Falls back to the built-in
+    /// <see cref="CompletionDebounceMilliseconds"/> when no service is set.
+    /// </summary>
+    public static int ResolveCompletionDelayMs(ISettingsService? settings)
+    {
+        if (settings == null) return (int)CompletionDebounceMilliseconds;
+
+        var delay = settings.Get("intellisense.delay", 200);
+        if (delay < 0) delay = 0;
+        else if (delay > 2000) delay = 2000;
+        return delay;
     }
 
     protected override void OnInitialized()
@@ -1560,12 +1620,14 @@ public partial class CodeEditorControl : UserControl
     {
         if (_completionDebounceTimer == null)
         {
-            _completionDebounceTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(CompletionDebounceMilliseconds)
-            };
+            _completionDebounceTimer = new DispatcherTimer();
             _completionDebounceTimer.Tick += OnCompletionDebounceTick;
         }
+
+        // intellisense.delay — read at use so a change to the debounce takes effect on the next
+        // keystroke with no subscription (clamped 0..2000; falls back to the built-in 120 ms).
+        _completionDebounceTimer.Interval =
+            TimeSpan.FromMilliseconds(ResolveCompletionDelayMs(_settingsService));
 
         _completionDebounceTimer.Stop();
         _completionDebounceTimer.Start();
@@ -3958,6 +4020,14 @@ public partial class CodeEditorControl : UserControl
         System.Diagnostics.Debug.WriteLine($"[Editor] TriggerCompletion called at line {CaretLine}, col {CaretColumn}");
         if (_textEditor == null) return;
 
+        // intellisense.autoComplete gates AUTO triggers (word / member-access). Explicit Invoked
+        // (Ctrl+Space) is never gated. Read at use so the toggle takes effect live.
+        if (triggerKind != CompletionSession.CompletionTriggerKind.Invoked
+            && !IsAutoCompleteEnabled(_settingsService))
+        {
+            return;
+        }
+
         CancelCompletionDebounce();
         _completionSession.Begin(_textEditor.CaretOffset, CaretLine, triggerKind);
 
@@ -4087,6 +4157,10 @@ public partial class CodeEditorControl : UserControl
     public void TriggerSignatureHelp()
     {
         if (_textEditor == null) return;
+
+        // intellisense.signatureHelp gates the ( / , trigger (and the caret-move re-trigger). Read
+        // at use so the toggle is live.
+        if (!IsSignatureHelpEnabled(_settingsService)) return;
 
         SignatureHelpRequested?.Invoke(this, new SignatureHelpRequestEventArgs(CaretLine, CaretColumn));
     }

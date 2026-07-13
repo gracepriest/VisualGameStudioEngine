@@ -1968,6 +1968,10 @@ public partial class CodeEditorDocumentView : UserControl
             {
                 if (editor == null) continue;
 
+                // Task 2.3 — hand each editor the live settings store so its IntelliSense gates
+                // (intellisense.autoComplete / signatureHelp / delay) can read at point-of-use.
+                editor.SetSettingsService(settings);
+
                 if (!string.IsNullOrWhiteSpace(fontFamily))
                     editor.EditorFontFamily = fontFamily;
 

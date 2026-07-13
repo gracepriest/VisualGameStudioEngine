@@ -1625,6 +1625,8 @@ public partial class MainWindowViewModel : ViewModelBase
     private async void FallbackToLspHover(CodeEditorDocumentViewModel? document, DataTipEvaluationRequestEventArgs e)
     {
         if (document == null || e.Line <= 0 || e.Column <= 0) return;
+        // intellisense.quickInfo also gates the debug-datatip → LSP hover fallback (read at use).
+        if (_settingsService != null && !_settingsService.Get("intellisense.quickInfo", true)) return;
         try
         {
             var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
@@ -2004,6 +2006,10 @@ public partial class MainWindowViewModel : ViewModelBase
                 try
                 {
                     if (e == null || document.FilePath == null) return;
+                    // intellisense.quickInfo gates the LSP hover (quick info) request. Read at use so
+                    // the toggle is live. Error/diagnostic tooltips are separate (editor marker
+                    // service) and stay regardless.
+                    if (_settingsService != null && !_settingsService.Get("intellisense.quickInfo", true)) return;
                     // BasicLang LSP hover only for BasicLang source files —
                     // the server answers unknown URIs as if they were
                     // BasicLang. Other file types go to extension providers.
