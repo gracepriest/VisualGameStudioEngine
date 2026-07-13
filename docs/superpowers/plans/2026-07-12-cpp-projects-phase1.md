@@ -31,6 +31,7 @@
 | BL6007 | Error | `Language=Cpp` project contains no C++ translation units |
 | BL6008 | Error | `Language=Cpp` project contains BasicLang sources (mixed projects arrive in Phase 2) |
 | BL6009 | Error | A `<NativeLib>` could not be resolved |
+| BL6010 | Error | IDE-side C++ build exception wrapper (BuildService.BuildCppProject) |
 | CPP1001 / CPP1002 | Error / Warning | Parsed clang/gcc diagnostic with no compiler code (MSVC codes like `C2065`/`LNK2019` are kept verbatim) |
 
 **File structure (new files):**
@@ -59,7 +60,7 @@ Skills to apply throughout: @superpowers:test-driven-development (every task bel
 - Modify: `BasicLang/ProjectSystem/ProjectFile.cs` (property block ~:39, `Load` ~:94–96 and ItemGroup loop ~:112, `Save` ~:227, new method after `GetSourceFiles` ~:335)
 - Test: `VisualGameStudio.Tests/Compiler/CppProjectFileTests.cs` (create)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using BasicLang.Compiler.ProjectSystem;
@@ -222,12 +223,12 @@ public class CppProjectFileTests
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~CppProjectFileTests"`
 Expected: FAIL — `ProjectFile` has no `Language`/`CppStandard`/`IncludeDirs`/`NativeLibs`/`Defines`/`GetCppTranslationUnits` members (compile errors).
 
-- [ ] **Step 3: Implement in `ProjectFile.cs`**
+- [x] **Step 3: Implement in `ProjectFile.cs`**
 
 3a. Property block (after `public string Backend ... = "CSharp";` at :39):
 
@@ -341,12 +342,12 @@ and after the existing Compile/Reference ItemGroup emission add a C++ ItemGroup 
         }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~CppProjectFileTests"`
 Expected: all 6 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add BasicLang/ProjectSystem/ProjectFile.cs VisualGameStudio.Tests/Compiler/CppProjectFileTests.cs
@@ -361,7 +362,7 @@ git commit -m "feat(cpp): Language axis + C++ items and TU gathering in ProjectF
 - Create: `BasicLang/ProjectSystem/CppDiagnosticsParser.cs`
 - Test: `VisualGameStudio.Tests/Compiler/CppDiagnosticsParserTests.cs` (create)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using BasicLang.Compiler.ProjectSystem;
@@ -466,12 +467,12 @@ public class CppDiagnosticsParserTests
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~CppDiagnosticsParserTests"`
 Expected: FAIL (types don't exist).
 
-- [ ] **Step 3: Implement `CppDiagnosticsParser.cs` (complete file)**
+- [x] **Step 3: Implement `CppDiagnosticsParser.cs` (complete file)**
 
 ```csharp
 using System;
@@ -605,12 +606,12 @@ namespace BasicLang.Compiler.ProjectSystem
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~CppDiagnosticsParserTests"`
 Expected: all 8 PASS. (If `Ignores_Notes...` fails because the linker regex matches the banner line `Microsoft (R) ...`: the `[^:(]+?` file group excludes `(`, which the banner contains — verify the regex is transcribed exactly.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add BasicLang/ProjectSystem/CppDiagnosticsParser.cs VisualGameStudio.Tests/Compiler/CppDiagnosticsParserTests.cs
@@ -627,7 +628,7 @@ git commit -m "feat(cpp): clang/gcc/MSVC diagnostics parser with MSBuild-style n
 
 The existing `CompileToExecutable` stays untouched (the transpile-backend path keeps using it). New surface:
 
-- [ ] **Step 1: Write the failing tests (command-line construction is pure — no compiler needed)**
+- [x] **Step 1: Write the failing tests (command-line construction is pure — no compiler needed)**
 
 ```csharp
 using BasicLang.Compiler.ProjectSystem;
@@ -683,9 +684,9 @@ public class CppToolchainArgsTests
 }
 ```
 
-- [ ] **Step 2: Run to verify failure** (`--filter "FullyQualifiedName~CppToolchainArgsTests"` → compile error)
+- [x] **Step 2: Run to verify failure** (`--filter "FullyQualifiedName~CppToolchainArgsTests"` → compile error)
 
-- [ ] **Step 3: Implement.** Add to `CppToolchain.cs` (same namespace/file, above the class):
+- [x] **Step 3: Implement.** Add to `CppToolchain.cs` (same namespace/file, above the class):
 
 ```csharp
     public enum CppToolchainKind { ClangLike, Msvc }
@@ -862,9 +863,9 @@ Inside `CppToolchain` add:
 
 (If the existing file's `CompileToExecutable` body already has a private run helper, reuse/extend it instead of duplicating — read the remaining lines 114–147 first. Keep the async-drain pattern: compilers overflow the ~4 KB pipe buffer and deadlock naive code.)
 
-- [ ] **Step 4: Run tests** — `CppToolchainArgsTests` PASS; also run `--filter "FullyQualifiedName~CppBackendTests"` to confirm nothing existing broke.
+- [x] **Step 4: Run tests** — `CppToolchainArgsTests` PASS; also run `--filter "FullyQualifiedName~CppBackendTests"` to confirm nothing existing broke.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add BasicLang/ProjectSystem/CppToolchain.cs VisualGameStudio.Tests/Compiler/CppToolchainArgsTests.cs
@@ -879,7 +880,7 @@ git commit -m "feat(cpp): multi-TU flag-aware CppToolchain.Compile + shared per-
 - Create: `BasicLang/ProjectSystem/CompileCommandsWriter.cs`
 - Test: `VisualGameStudio.Tests/Compiler/CompileCommandsWriterTests.cs` (create)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using System.Text.Json;
@@ -944,9 +945,9 @@ public class CompileCommandsWriterTests
 }
 ```
 
-- [ ] **Step 2: Run to verify failure.**
+- [x] **Step 2: Run to verify failure.**
 
-- [ ] **Step 3: Implement `CompileCommandsWriter.cs` (complete file)**
+- [x] **Step 3: Implement `CompileCommandsWriter.cs` (complete file)**
 
 ```csharp
 using System.Collections.Generic;
@@ -988,8 +989,8 @@ namespace BasicLang.Compiler.ProjectSystem
 }
 ```
 
-- [ ] **Step 4: Run tests** — PASS.
-- [ ] **Step 5: Commit** — `git commit -m "feat(cpp): compile_commands.json writer fed by toolchain command construction"`
+- [x] **Step 4: Run tests** — PASS.
+- [x] **Step 5: Commit** — `git commit -m "feat(cpp): compile_commands.json writer fed by toolchain command construction"`
 
 ---
 
@@ -1000,7 +1001,7 @@ namespace BasicLang.Compiler.ProjectSystem
 
 Dev trees don't have `VisualGameStudioEngine.lib` next to `BasicLang/bin/.../BasicLang.exe`; the IDE privately probes `x64/{Release,Debug}` (BuildService.cs:1127–1138). Give the shared layer the same reach.
 
-- [ ] **Step 1: Add to `EngineDeployment` (test comes via Task 6's builder tests + Task 7's game template e2e):**
+- [x] **Step 1: Add to `EngineDeployment` (test comes via Task 6's builder tests + Task 7's game template e2e):**
 
 ```csharp
         /// <summary>
@@ -1041,8 +1042,8 @@ Dev trees don't have `VisualGameStudioEngine.lib` next to `BasicLang/bin/.../Bas
 
 (Match the file's existing style; `GetImportLibPath`/`GetNativeDllPaths`/`EngineImportLibName` already exist at :76/:130/:38.)
 
-- [ ] **Step 2: Build** — `dotnet build BasicLang/BasicLang.csproj -c Release` → 0 errors.
-- [ ] **Step 3: Commit** — `git commit -m "feat(cpp): dev-tree-aware engine import-lib lookup in EngineDeployment"`
+- [x] **Step 2: Build** — `dotnet build BasicLang/BasicLang.csproj -c Release` → 0 errors.
+- [x] **Step 3: Commit** — `git commit -m "feat(cpp): dev-tree-aware engine import-lib lookup in EngineDeployment"`
 
 ---
 
@@ -1052,7 +1053,7 @@ Dev trees don't have `VisualGameStudioEngine.lib` next to `BasicLang/bin/.../Bas
 - Create: `BasicLang/ProjectSystem/CppProjectBuilder.cs`
 - Test: `VisualGameStudio.Tests/Compiler/CppProjectCliBuildTests.cs` (created here with builder-level tests; CLI-spawning tests added in Task 7)
 
-- [ ] **Step 1: Write failing builder-level tests (in-process, toolchain-guarded)**
+- [x] **Step 1: Write failing builder-level tests (in-process, toolchain-guarded)**
 
 ```csharp
 using BasicLang.Compiler.ProjectSystem;
@@ -1198,9 +1199,9 @@ public class CppProjectCliBuildTests
 }
 ```
 
-- [ ] **Step 2: Run to verify failure** (`--filter "FullyQualifiedName~CppProjectCliBuildTests"`).
+- [x] **Step 2: Run to verify failure** (`--filter "FullyQualifiedName~CppProjectCliBuildTests"`).
 
-- [ ] **Step 3: Implement `CppProjectBuilder.cs` (complete file)**
+- [x] **Step 3: Implement `CppProjectBuilder.cs` (complete file)**
 
 ```csharp
 using System;
@@ -1365,8 +1366,8 @@ namespace BasicLang.Compiler.ProjectSystem
 }
 ```
 
-- [ ] **Step 4: Run tests** — all 5 PASS (2 skip on toolchain-less machines).
-- [ ] **Step 5: Commit** — `git commit -m "feat(cpp): shared CppProjectBuilder (TU gather, toolchain, diagnostics, compile_commands, engine deploy)"`
+- [x] **Step 4: Run tests** — all 5 PASS (2 skip on toolchain-less machines).
+- [x] **Step 5: Commit** — `git commit -m "feat(cpp): shared CppProjectBuilder (TU gather, toolchain, diagnostics, compile_commands, engine deploy)"`
 
 ---
 
@@ -1377,7 +1378,7 @@ namespace BasicLang.Compiler.ProjectSystem
 - Modify: `BasicLang/ProjectSystem/TemplateEngine.cs` (`RegisterBuiltInTemplates` :40–430)
 - Test: extend `VisualGameStudio.Tests/Compiler/CppProjectCliBuildTests.cs`
 
-- [ ] **Step 1: Write the failing CLI e2e tests (append to `CppProjectCliBuildTests`)**
+- [x] **Step 1: Write the failing CLI e2e tests (append to `CppProjectCliBuildTests`)**
 
 ```csharp
     private static string CliPath()
@@ -1407,7 +1408,17 @@ namespace BasicLang.Compiler.ProjectSystem
         process.Start();
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
+        try
+        {
+            await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Kill the whole tree (BasicLang.exe spawns the C++ toolchain) —
+            // otherwise a timed-out compile leaks cl.exe/clang++ processes.
+            try { process.Kill(entireProcessTree: true); } catch { }
+            Assert.Fail($"CLI timed out after 5 minutes: BasicLang.exe {string.Join(" ", args)}");
+        }
         return (process.ExitCode, await stdout, await stderr);
     }
 
@@ -1496,9 +1507,9 @@ namespace BasicLang.Compiler.ProjectSystem
     }
 ```
 
-- [ ] **Step 2: Run to verify failure** (build routes into the BasicLang pipeline and fails, `new cpp-console` says unknown template).
+- [x] **Step 2: Run to verify failure** (build routes into the BasicLang pipeline and fails, `new cpp-console` says unknown template).
 
-- [ ] **Step 3a: Route `HandleBuildCommand`.** In `BasicLang/Program.cs`, the NuGet restore (:419–427) currently runs **before** configuration resolution (:430–437). First **move the restore block below the configuration resolution**, then insert this branch between configuration resolution and the (now-later) restore — C++ projects skip restore entirely:
+- [x] **Step 3a: Route `HandleBuildCommand`.** In `BasicLang/Program.cs`, the NuGet restore (:419–427) currently runs **before** configuration resolution (:430–437). First **move the restore block below the configuration resolution**, then insert this branch between configuration resolution and the (now-later) restore — C++ projects skip restore entirely:
 
 ```csharp
             // ---------- Language=Cpp: user-authored C++, no BasicLang pipeline ----------
@@ -1525,7 +1536,7 @@ namespace BasicLang.Compiler.ProjectSystem
 
 (Move the restore call after this branch if it currently precedes the insertion point; keep the existing behavior for non-C++ projects byte-identical.)
 
-- [ ] **Step 3b: Fix `HandleRunCommand`** (:837–847). Extend `possiblePaths` so native exes are found and run directly (not via `dotnet`):
+- [x] **Step 3b: Fix `HandleRunCommand`** (:837–847). Extend `possiblePaths` so native exes are found and run directly (not via `dotnet`):
 
 ```csharp
             // NOTE: outputDir here is ALREADY projectDir/bin/<config>/<TFM>
@@ -1542,7 +1553,7 @@ namespace BasicLang.Compiler.ProjectSystem
 
 and where the found path is launched, branch: `.exe` → `Process.Start(exePath)` directly with redirected output; `.dll` → existing `dotnet` launch. (Read the surrounding launch code at :850–884 first and mirror its output handling.)
 
-- [ ] **Step 3c: Register CLI templates.** In `TemplateEngine.RegisterBuiltInTemplates`, add three entries following the existing embedded-string pattern (`[\"{{ProjectName}}.blproj\"] = @"..."`). Exact template files:
+- [x] **Step 3c: Register CLI templates.** In `TemplateEngine.RegisterBuiltInTemplates`, add three entries following the existing embedded-string pattern (`[\"{{ProjectName}}.blproj\"] = @"..."`). Exact template files:
 
 **`cpp-console`** (`Name`: "C++ Console Application", `ShortName`: "cpp-console", `DefaultProjectName`: "MyCppApp", Tags: cpp, console):
 - `{{ProjectName}}.blproj`:
@@ -1613,9 +1624,9 @@ int main()
 }
 ```
 
-- [ ] **Step 4: Run tests** — `--filter "FullyQualifiedName~CppProjectCliBuildTests"` → all PASS (skips where guarded). Then the neighboring fixtures: `--filter "FullyQualifiedName~CliBuildTests|FullyQualifiedName~TemplateBuildSweepTests"` → still green (no regressions in the BasicLang path).
+- [x] **Step 4: Run tests** — `--filter "FullyQualifiedName~CppProjectCliBuildTests"` → all PASS (skips where guarded). Then the neighboring fixtures: `--filter "FullyQualifiedName~CliBuildTests|FullyQualifiedName~TemplateBuildSweepTests"` → still green (no regressions in the BasicLang path).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add BasicLang/Program.cs BasicLang/ProjectSystem/TemplateEngine.cs VisualGameStudio.Tests/Compiler/CppProjectCliBuildTests.cs
@@ -1631,7 +1642,7 @@ git commit -m "feat(cpp): CLI build/run/new support for Language=Cpp projects (c
 - Modify: `VisualGameStudio.ProjectSystem/Serialization/ProjectSerializer.cs` (parse :35–48 area + item loop; write :140–160 area)
 - Test: `VisualGameStudio.Tests/Serialization/ProjectSerializerCppTests.cs` (create)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using NUnit.Framework;
@@ -1733,9 +1744,9 @@ public class ProjectSerializerCppTests
 
 (Adjust `SaveAsync` call to its actual signature — read ProjectSerializer.cs:140 first; it may take `(project, path)`.)
 
-- [ ] **Step 2: Run to verify failure.**
+- [x] **Step 2: Run to verify failure.**
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
 3a. `BasicLangProject.cs` — add next to `TargetBackend`:
 
@@ -1786,8 +1797,8 @@ In the ItemGroup parse loop (near Compile items :73–80): collect `IncludeDir`/
 
 In `SaveAsync` (:140+): after writing `TargetBackend` (:152), when `project.Language == ProjectLanguage.Cpp` write `<Language>Cpp</Language>` + `<CppStandard>`; after the Compile/Content item emission, emit an ItemGroup with the `CppSettings` items when non-empty (same shapes as Task 1's Save).
 
-- [ ] **Step 4: Run tests** — 3 PASS.
-- [ ] **Step 5: Commit** — `git commit -m "feat(cpp): IDE project model + serializer round-trip Language and C++ settings"`
+- [x] **Step 4: Run tests** — 3 PASS.
+- [x] **Step 5: Commit** — `git commit -m "feat(cpp): IDE project model + serializer round-trip Language and C++ settings"`
 
 ---
 
@@ -1797,7 +1808,7 @@ In `SaveAsync` (:140+): after writing `TargetBackend` (:152), when `project.Lang
 - Modify: `VisualGameStudio.ProjectSystem/Services/BuildService.cs` (branch in `BuildInternalAsync` before the empty-source check at :332–347; new private method)
 - Test: extend `VisualGameStudio.Tests/Services/BuildServicePipelineTests.cs`
 
-- [ ] **Step 1: Write the failing tests (append to `BuildServicePipelineTests`)**
+- [x] **Step 1: Write the failing tests (append to `BuildServicePipelineTests`)**
 
 ```csharp
     private async Task<BasicLangProject> CreateCppProjectOnDisk(string name, string mainCpp)
@@ -1878,9 +1889,9 @@ In `SaveAsync` (:140+): after writing `TargetBackend` (:152), when `project.Lang
     }
 ```
 
-- [ ] **Step 2: Run to verify failure** — the first test fails with BL0001 or the BasicLang pipeline choking on `.cpp`.
+- [x] **Step 2: Run to verify failure** — the first test fails with BL0001 or the BasicLang pipeline choking on `.cpp`.
 
-- [ ] **Step 3: Implement.** In `BuildInternalAsync`: the `BuildCompleted` event fires only when execution **falls through** to the shared finalization code after the compile call (:369) — and `MainWindowViewModel` publishes to the Error List *solely* via `BuildCompleted` (subscribed :482, handler :1274). **Do NOT `return` early** or C++ diagnostics silently never reach the Error List. Structure the branch as if/else around the existing sourceFiles + `CompileWithBasicLangApiAsync` block (:332–347) so both paths fall through to the same logging + `BuildCompleted` finalization:
+- [x] **Step 3: Implement.** In `BuildInternalAsync`: the `BuildCompleted` event fires only when execution **falls through** to the shared finalization code after the compile call (:369) — and `MainWindowViewModel` publishes to the Error List *solely* via `BuildCompleted` (subscribed :482, handler :1274). **Do NOT `return` early** or C++ diagnostics silently never reach the Error List. Structure the branch as if/else around the existing sourceFiles + `CompileWithBasicLangApiAsync` block (:332–347) so both paths fall through to the same logging + `BuildCompleted` finalization:
 
 ```csharp
             // ---------- Language=Cpp: route to the shared native builder ----------
@@ -1944,8 +1955,8 @@ New private method (place near `CompileGeneratedCpp` :1021):
 
 (Check how `BuildInternalAsync` finalizes results — BuildCompleted firing, IsBuilding flags — and return through the same path so the Error List publication at MainWindowViewModel.OnBuildCompleted still runs. Loading via the compiler-side `ProjectFile.Load` is deliberate: the CLI parser owns C++ item semantics; the IDE model's `Language` is only the routing key.)
 
-- [ ] **Step 4: Run** — `--filter "FullyQualifiedName~BuildServicePipelineTests"` → new tests pass, existing 6+ tests still green.
-- [ ] **Step 5: Commit** — `git commit -m "feat(cpp): IDE BuildService routes Language=Cpp through shared CppProjectBuilder with per-line diagnostics"`
+- [x] **Step 4: Run** — `--filter "FullyQualifiedName~BuildServicePipelineTests"` → new tests pass, existing 6+ tests still green.
+- [x] **Step 5: Commit** — `git commit -m "feat(cpp): IDE BuildService routes Language=Cpp through shared CppProjectBuilder with per-line diagnostics"`
 
 ---
 
@@ -1956,7 +1967,7 @@ New private method (place near `CompileGeneratedCpp` :1021):
 - Modify: `VisualGameStudio.ProjectSystem/Services/ProjectTemplateService.cs` (`GenerateProjectFileContent` :257, `GetOutputType` :339, `GetCompileItems` :355, `GenerateSourceFilesAsync` :371)
 - Test: extend `VisualGameStudio.Tests/Services/TemplateBuildSweepTests.cs`
 
-- [ ] **Step 1: Write the failing sweep tests.** In `TemplateBuildSweepTests`, add three `[TestCase]`s and make the solution type per-case:
+- [x] **Step 1: Write the failing sweep tests.** In `TemplateBuildSweepTests`, add three `[TestCase]`s and make the solution type per-case:
 
 ```csharp
     [TestCase("cpp-console-app")]
@@ -1996,9 +2007,9 @@ New private method (place near `CompileGeneratedCpp` :1021):
     }
 ```
 
-- [ ] **Step 2: Run to verify failure** (`SolutionTypes.Cpp` doesn't exist).
+- [x] **Step 2: Run to verify failure** (`SolutionTypes.Cpp` doesn't exist).
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
 3a. `IProjectTemplateService.cs` — add to `SolutionTypes` (and to `All`):
 
@@ -2032,8 +2043,8 @@ Add to `ProjectTemplates.All` three entries following the existing shape (`Id`, 
 - `GetCompileItems` (:355): `cpp-console-app`/`cpp-game-app` → `["main.cpp"]`; `cpp-library` → `["mathutils.cpp"]` (header listed as Content or omitted — match Task 7's CLI templates).
 - `GenerateSourceFilesAsync` (:371): write the same file contents as Task 7's CLI templates (keep the two template systems content-identical; add a comment in each pointing at the other — they are known to drift). **CAUTION:** this method today writes `Main{SolutionType.SourceExtension}` with BasicLang content **unconditionally** for every template except `class-library` (:371–382) — with `SourceExtension=".cpp"` that produces a bogus BasicLang-content `Main.cpp` (persisting on disk for `cpp-library`, masked for the others only by case-insensitive overwrite). Gate the generic Main-file write to non-`"cpp"` solution types before adding the cpp branches.
 
-- [ ] **Step 4: Run** — `--filter "FullyQualifiedName~TemplateBuildSweepTests"` → 8 old + 3 new pass/skip. `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` → clean.
-- [ ] **Step 5: Commit** — `git commit -m "feat(cpp): C++ solution type + IDE templates; New Project dialog gains C++ via SolutionTypes"`
+- [x] **Step 4: Run** — `--filter "FullyQualifiedName~TemplateBuildSweepTests"` → 8 old + 3 new pass/skip. `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` → clean.
+- [x] **Step 5: Commit** — `git commit -m "feat(cpp): C++ solution type + IDE templates; New Project dialog gains C++ via SolutionTypes"`
 
 ---
 
@@ -2045,8 +2056,8 @@ Add to `ProjectTemplates.All` three entries following the existing shape (`Id`, 
 
 No good headless test seam exists for these view-models (they are UI-bound); this task is small mechanical edits verified by build + the final IDE smoke (Task 14). Keep each edit minimal:
 
-- [ ] **Step 1:** Solution-view allowlist (:338–348): add `".cpp", ".h", ".hpp", ".c", ".cc", ".cxx"` to the `sourceExtensions` set.
-- [ ] **Step 2:** `GetItemTypeForExtension` (:1062): extend the Compile arm:
+- [x] **Step 1:** Solution-view allowlist (:338–348): add `".cpp", ".h", ".hpp", ".c", ".cc", ".cxx"` to the `sourceExtensions` set.
+- [x] **Step 2:** `GetItemTypeForExtension` (:1062): extend the Compile arm:
 
 ```csharp
             ".bas" or ".bl" or ".mod" or ".cls" or ".class"
@@ -2054,10 +2065,10 @@ No good headless test seam exists for these view-models (they are UI-bound); thi
 ```
 
 (Headers as Compile items are harmless: `CppProjectBuilder` filters to TU extensions; listing headers keeps them visible in the project tree.)
-- [ ] **Step 3:** `AddExistingFileAsync` dialog (:1200): add a filter entry `new("C++ Files", new[] { "*.cpp", "*.h", "*.hpp", "*.c", "*.cc", "*.cxx" })` (match the existing FilePickerFileType construction style).
-- [ ] **Step 4:** Open File dialog (MainWindowViewModel.cs:1713): this dialog uses a DIFFERENT filter type than Step 3 — `FileDialogFilter(string name, params string[] extensions)` with **bare** extensions (no `*.` prefix). Add: `new("C++ Files", "cpp", "h", "hpp", "c", "cc", "cxx")`.
-- [ ] **Step 5:** Build: `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` → 0 errors. Run the full existing suite filter for the Shell-adjacent fixtures if any exist; otherwise rely on Task 14.
-- [ ] **Step 6: Commit** — `git commit -m "feat(cpp): Solution Explorer and file dialogs recognize C++ files"`
+- [x] **Step 3:** `AddExistingFileAsync` dialog (:1200): add a filter entry `new("C++ Files", new[] { "*.cpp", "*.h", "*.hpp", "*.c", "*.cc", "*.cxx" })` (match the existing FilePickerFileType construction style).
+- [x] **Step 4:** Open File dialog (MainWindowViewModel.cs:1713): this dialog uses a DIFFERENT filter type than Step 3 — `FileDialogFilter(string name, params string[] extensions)` with **bare** extensions (no `*.` prefix). Add: `new("C++ Files", "cpp", "h", "hpp", "c", "cc", "cxx")`.
+- [x] **Step 5:** Build: `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` → 0 errors. Run the full existing suite filter for the Shell-adjacent fixtures if any exist; otherwise rely on Task 14.
+- [x] **Step 6: Commit** — `git commit -m "feat(cpp): Solution Explorer and file dialogs recognize C++ files"`
 
 ---
 
@@ -2072,7 +2083,7 @@ No good headless test seam exists for these view-models (they are UI-bound); thi
 
 **IMPORTANT: author the .xshd files with the Write tool only** (PS round-trips corrupt BOM-less UTF-8 in this repo).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using AvaloniaEdit.Highlighting;
@@ -2114,9 +2125,9 @@ public class CppHighlightingTests
 }
 ```
 
-- [ ] **Step 2: Run to verify failure** (`--filter "FullyQualifiedName~CppHighlightingTests"`): the built-in resolves but its Comment color is Green → first test fails.
+- [x] **Step 2: Run to verify failure** (`--filter "FullyQualifiedName~CppHighlightingTests"`): the built-in resolves but its Comment color is Green → first test fails.
 
-- [ ] **Step 3: Author `Cpp.xshd`** (complete file — VS Code dark palette, same hexes as BasicLang.xshd):
+- [x] **Step 3: Author `Cpp.xshd`** (complete file — VS Code dark palette, same hexes as BasicLang.xshd):
 
 ```xml
 <?xml version="1.0"?>
@@ -2191,14 +2202,14 @@ public class CppHighlightingTests
 
 `CppLight.xshd`: identical structure; mirror the color hexes from `BasicLangLight.xshd` (open it and copy its palette for the same color names; Preprocessor/ControlKeyword use its ControlKeyword hex, TypeKeyword uses its Type hex).
 
-- [ ] **Step 4:** `VisualGameStudio.Editor.csproj` — add to the EmbeddedResource ItemGroup:
+- [x] **Step 4:** `VisualGameStudio.Editor.csproj` — add to the EmbeddedResource ItemGroup:
 
 ```xml
   <EmbeddedResource Include="Highlighting\Cpp.xshd" />
   <EmbeddedResource Include="Highlighting\CppLight.xshd" />
 ```
 
-- [ ] **Step 5:** `HighlightingLoader.cs`:
+- [x] **Step 5:** `HighlightingLoader.cs`:
 - In `RegisterHighlighting()` after the BasicLang registration, load + register C++ the same way (reuse the existing private loader with the FULL manifest resource name `VisualGameStudio.Editor.Highlighting.Cpp.xshd`):
 
 ```csharp
@@ -2219,7 +2230,7 @@ public class CppHighlightingTests
 (Adapt the loader-call signature to the actual private helper at :291–313.)
 - In `UpdateForTheme(bool isDark, bool isHighContrast)` re-register "C++" with `VisualGameStudio.Editor.Highlighting.Cpp.xshd` (dark/HC) or `VisualGameStudio.Editor.Highlighting.CppLight.xshd` (light), mirroring the BasicLang re-registration.
 
-- [ ] **Step 6:** `CodeEditorControl.axaml.cs`:
+- [x] **Step 6:** `CodeEditorControl.axaml.cs`:
 - `OnInitialized` (:495–503): replace the unconditional BasicLang application with:
 
 ```csharp
@@ -2237,8 +2248,8 @@ public class CppHighlightingTests
 
 - `SetLanguageService` (:394): after `_documentFilePath` is stored, add `SetHighlightingForFile(filePath);` (the method already no-ops when `_textEditor` is null — whichever of the two hooks fires last wins, both orders end correct).
 
-- [ ] **Step 7: Run** — `--filter "FullyQualifiedName~CppHighlightingTests"` → PASS; also run the existing Editor fixture(s) (`--filter "FullyQualifiedName~VisualGameStudio.Tests.Editor"`) → no regressions.
-- [ ] **Step 8: Commit** — `git commit -m "feat(cpp): themed C++ syntax highlighting applied at document open"`
+- [x] **Step 7: Run** — `--filter "FullyQualifiedName~CppHighlightingTests"` → PASS; also run the existing Editor fixture(s) (`--filter "FullyQualifiedName~VisualGameStudio.Tests.Editor"`) → no regressions.
+- [x] **Step 8: Commit** — `git commit -m "feat(cpp): themed C++ syntax highlighting applied at document open"`
 
 ---
 
@@ -2250,16 +2261,16 @@ public class CppHighlightingTests
 
 The BasicLang LSP answers unknown URIs as if they were BasicLang (documented at MainWindowViewModel.cs:2082–2086), so ungated paths produce actively wrong results for `.cpp`.
 
-- [ ] **Step 1:** In `UpdateFoldings` add the gate to the LSP branch condition:
+- [x] **Step 1:** In `UpdateFoldings` add the gate to the LSP branch condition:
 
 ```csharp
                 && VisualGameStudio.Core.Utilities.BasicLangFileTypes.IsBasicLangSourceFile(_documentFilePath)
 ```
 
 (non-BasicLang files fall through to `ApplyFoldings(null)` — the regex strategy produces nothing for C++, which is correct-and-quiet for Phase 1).
-- [ ] **Step 2:** In `GoToDefinitionAsync`, add at the top of the LSP attempt: `if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;` — the in-scope variable is `activeDoc` (a `CodeEditorDocumentViewModel`), not `document`; mirror the completion gate idiom at :2087.
-- [ ] **Step 3:** Build Shell + Editor; run `--filter "FullyQualifiedName~BasicLangFileTypesTests"` (existing) → green.
-- [ ] **Step 4: Commit** — `git commit -m "fix(cpp): gate folding and go-to-definition so C++ files never query the BasicLang LSP"`
+- [x] **Step 2:** In `GoToDefinitionAsync`, add at the top of the LSP attempt: `if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;` — the in-scope variable is `activeDoc` (a `CodeEditorDocumentViewModel`), not `document`; mirror the completion gate idiom at :2087.
+- [x] **Step 3:** Build Shell + Editor; run `--filter "FullyQualifiedName~BasicLangFileTypesTests"` (existing) → green.
+- [x] **Step 4: Commit** — `git commit -m "fix(cpp): gate folding and go-to-definition so C++ files never query the BasicLang LSP"`
 
 ---
 
@@ -2267,12 +2278,12 @@ The BasicLang LSP answers unknown URIs as if they were BasicLang (documented at 
 
 Apply @superpowers:verification-before-completion — run everything, then drive the real product surfaces.
 
-- [ ] **Step 1: Full suite**
+- [x] **Step 1: Full suite**
 
 Run: `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release`
 Expected: everything green (≈2,400 existing + ~30 new; toolchain-dependent tests skip only on machines without a compiler — this machine has one, so they must RUN).
 
-- [ ] **Step 2: CLI smoke (real binary, real toolchain)**
+- [x] **Step 2: CLI smoke (real binary, real toolchain)**
 
 ```powershell
 dotnet build BasicLang/BasicLang.csproj -c Release
@@ -2283,7 +2294,7 @@ Get-Content $env:TEMP\SmokeCpp\obj\compile_commands.json   # valid JSON, 1 entry
 BasicLang/bin/Release/net8.0/BasicLang.exe run $env:TEMP\SmokeCpp\SmokeCpp.blproj   # runs the exe
 ```
 
-- [ ] **Step 3: IDE smoke (manual, through the real Shell)**
+- [x] **Step 3: IDE smoke (manual, through the real Shell)**
 
 ```powershell
 dotnet clean VisualGameStudio.Shell/VisualGameStudio.Shell.csproj   # AXAML touched in Tasks 10-12
@@ -2293,7 +2304,7 @@ VisualGameStudio.Shell/bin/Release/net8.0/VisualGameStudio.exe
 
 Verify by hand: (1) File → New Project shows "C++" in Solution Type with the three templates (and "BasicLang (Native)" renamed); (2) create a C++ Console project — `main.cpp` opens with C++ colors on the dark theme; (3) Build → succeeds, Output shows toolchain name; (4) introduce an error → Error List shows `main.cpp(line,col)` entry, double-click navigates; (5) fix, Ctrl+F5 → program output appears; (6) add a `.h` via Solution Explorer → visible in tree; (7) open a `.bas` project → everything BasicLang still works (highlighting, completion, folding).
 
-- [ ] **Step 4: Update memory/docs + final commit.** Update the auto-memory active-work entry for Phase 1 status. Do NOT add changelog entries to CLAUDE.md.
+- [x] **Step 4: Update memory/docs + final commit.** Update the auto-memory active-work entry for Phase 1 status. Do NOT add changelog entries to CLAUDE.md.
 
 ```bash
 git add -A
@@ -2309,3 +2320,5 @@ git commit -m "feat(cpp): Phase 1 complete - C++ projects build & run from CLI a
 - clangd IntelliSense, LSP registry, downloads, `compile_commands.json` on project open (Phase 3 — Phase 1 only emits it on build)
 - Native debugging via lldb-dap/gdb (Phase 4)
 - Incremental `.o` caching, response files for long MSVC command lines, C++ Toggle-Comment/`//` support, C-family indentation strategy, Find-in-Files/Command-Palette filter extensions, CMake import (Phase 5 backlog)
+- Known Phase 1 edge: adding .cpp/.h files to a BASICLANG project via Solution Explorer creates Compile items that the BasicLang pipeline will lex and fail on loudly — mixing guards are Phase 2 (BL6008 covers only the reverse direction)
+- Phase 2 precondition (from final review): converge the two parallel native pipelines — BasicLang-on-Cpp-backend still uses single-TU CompileToExecutable while Language=Cpp uses multi-TU Compile; spec §3's no-second-implementation rule requires merging them when mixing lands.

@@ -412,19 +412,14 @@ namespace BasicLang.Compiler.Driver
                 return 1;
             }
 
+            // FindProjectFile can hand back a relative path (bare positional
+            // argument) — normalize before Load: CppProjectBuilder derives its
+            // absolute output dir from project.FilePath.
+            projectPath = Path.GetFullPath(projectPath);
+
             Console.WriteLine($"Building {Path.GetFileName(projectPath)}...");
 
             var project = ProjectFile.Load(projectPath);
-
-            // Restore packages first
-            var packageManager = new PackageManager();
-            var restoreResult = await packageManager.RestoreAsync(project);
-
-            if (!restoreResult.Success)
-            {
-                Console.Error.WriteLine("Package restore failed. Fix errors and try again.");
-                return 1;
-            }
 
             // Get configuration
             var configuration = "Debug";
@@ -434,6 +429,48 @@ namespace BasicLang.Compiler.Driver
                 {
                     configuration = args[++i];
                 }
+            }
+
+            // ---------- Language=Cpp: user-authored C++, no BasicLang pipeline ----------
+            if (project.IsCppProject)
+            {
+                try
+                {
+                    var cppResult = ProjectSystem.CppProjectBuilder.Build(project, configuration);
+                    foreach (var msg in cppResult.Messages)
+                        Console.WriteLine("  " + msg);
+                    foreach (var diag in cppResult.Diagnostics)
+                    {
+                        var line = "  " + ProjectSystem.CppDiagnosticsParser.FormatNormalized(diag);
+                        if (diag.IsWarning) Console.WriteLine(line);
+                        else Console.Error.WriteLine(line);
+                    }
+                    if (!cppResult.Success)
+                    {
+                        Console.Error.WriteLine("  Build failed.");
+                        return 1;
+                    }
+                    Console.WriteLine("  Build succeeded.");
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    // Builder I/O failures (read-only project dir, locked output,
+                    // ...) must exit 1 with a clean message, never a stack trace.
+                    Console.Error.WriteLine($"  Build failed: {ex.Message}");
+                    return 1;
+                }
+            }
+
+            // Restore packages first (BasicLang projects only — C++ projects
+            // have no NuGet dependencies and skip restore entirely).
+            var packageManager = new PackageManager();
+            var restoreResult = await packageManager.RestoreAsync(project);
+
+            if (!restoreResult.Success)
+            {
+                Console.Error.WriteLine("Package restore failed. Fix errors and try again.");
+                return 1;
             }
 
             // Compile each source file
@@ -831,18 +868,45 @@ namespace BasicLang.Compiler.Driver
 
             var project = ProjectFile.Load(projectPath);
             var projectDir = Path.GetDirectoryName(projectPath) ?? ".";
+
+            // Honor -c/--configuration exactly like HandleBuildCommand does —
+            // the build above already parsed it from the same args; if the
+            // probe paths ignored it, `run -c Release` would build Release
+            // and then launch a stale Debug exe.
             var configuration = "Debug";
+            for (int i = 0; i < args.Length; i++)
+            {
+                if ((args[i] == "-c" || args[i] == "--configuration") && i + 1 < args.Length)
+                {
+                    configuration = args[++i];
+                }
+            }
+
             var outputDir = Path.Combine(projectDir, "bin", configuration, project.TargetFramework);
 
             // Find the output executable
             var exeName = project.AssemblyName ?? project.ProjectName;
 
-            // Check multiple possible locations for the dll
-            var possiblePaths = new[]
-            {
-                Path.Combine(outputDir, $"{exeName}.dll"),
-                Path.Combine(outputDir, "bin", configuration, project.TargetFramework, $"{exeName}.dll"),
-            };
+            // Check multiple possible locations for the output.
+            // NOTE: outputDir here is ALREADY projectDir/bin/<config>/<TFM> —
+            // base the native entries on projectDir, or the paths double up.
+            // Language=Cpp projects probe the native exe paths FIRST so a stale
+            // managed .dll from before a language switch is never relaunched.
+            var possiblePaths = project.IsCppProject
+                ? new[]
+                {
+                    Path.Combine(projectDir, "bin", configuration, $"{exeName}.exe"),   // native layout (CppProjectBuilder)
+                    Path.Combine(outputDir, $"{exeName}.exe"),
+                    Path.Combine(outputDir, $"{exeName}.dll"),
+                    Path.Combine(outputDir, "bin", configuration, project.TargetFramework, $"{exeName}.dll"),
+                }
+                : new[]
+                {
+                    Path.Combine(outputDir, $"{exeName}.dll"),
+                    Path.Combine(outputDir, "bin", configuration, project.TargetFramework, $"{exeName}.dll"),
+                    Path.Combine(projectDir, "bin", configuration, $"{exeName}.exe"),   // native layout (CppProjectBuilder)
+                    Path.Combine(outputDir, $"{exeName}.exe"),
+                };
 
             var exePath = possiblePaths.FirstOrDefault(File.Exists);
 
@@ -852,12 +916,15 @@ namespace BasicLang.Compiler.Driver
                 Console.WriteLine($"Running {exeName}...");
                 Console.WriteLine(new string('-', 40));
 
+                // Native exes (Language=Cpp / C++-backend builds) launch
+                // directly; managed .dll outputs go through the dotnet host.
+                var isNativeExe = exePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
                 var process = new System.Diagnostics.Process
                 {
                     StartInfo = new System.Diagnostics.ProcessStartInfo
                     {
-                        FileName = "dotnet",
-                        Arguments = $"\"{exePath}\"",
+                        FileName = isNativeExe ? exePath : "dotnet",
+                        Arguments = isNativeExe ? "" : $"\"{exePath}\"",
                         UseShellExecute = false,
                         RedirectStandardOutput = true,
                         RedirectStandardError = true

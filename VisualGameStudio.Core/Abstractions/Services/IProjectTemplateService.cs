@@ -133,12 +133,13 @@ public static class SolutionTypes
     };
 
     /// <summary>
-    /// Native (C++) solution type.
+    /// Native solution type — BasicLang transpiled to C++ (distinct from the
+    /// pure-C++ <see cref="Cpp"/> solution type below).
     /// </summary>
     public static readonly SolutionType Native = new()
     {
         Id = "native",
-        Name = "Native (C++)",
+        Name = "BasicLang (Native)",
         Description = "Compile BasicLang to native code via C++ transpilation. High performance, no runtime required.",
         Icon = "cpp",
         ProjectExtension = ".blproj",
@@ -161,9 +162,23 @@ public static class SolutionTypes
     };
 
     /// <summary>
+    /// Pure C++ solution type — user-authored C++, no BasicLang involved.
+    /// </summary>
+    public static readonly SolutionType Cpp = new()
+    {
+        Id = "cpp",
+        Name = "C++",
+        Description = "Native C++ project compiled directly with clang++, g++, or MSVC. No transpilation, no runtime.",
+        Icon = "cpp",
+        ProjectExtension = ".blproj",
+        SolutionExtension = ".blsln",
+        SourceExtension = ".cpp"
+    };
+
+    /// <summary>
     /// All solution types.
     /// </summary>
-    public static IReadOnlyList<SolutionType> All => new[] { DotNet, Msil, Native, Llvm };
+    public static IReadOnlyList<SolutionType> All => new[] { DotNet, Msil, Native, Llvm, Cpp };
 }
 
 #endregion
@@ -433,6 +448,53 @@ public static class ProjectTemplates
 
     #endregion
 
+    #region Pure C++ Templates (solution type "cpp" only)
+
+    public static readonly ProjectTemplate CppConsoleApp = new()
+    {
+        Id = "cpp-console-app",
+        Name = "C++ Console App",
+        ShortDescription = "A native C++ command-line application",
+        Description = "A native C++ command-line application compiled directly with clang++, g++, or MSVC. No BasicLang transpilation involved.",
+        Icon = "console",
+        Category = "Console",
+        Tags = new List<string> { "cpp", "console", "terminal", "cli", "native" },
+        SupportedSolutionTypes = new List<string> { "cpp" },
+        Order = 9,
+        IsBuiltIn = true
+    };
+
+    public static readonly ProjectTemplate CppLibrary = new()
+    {
+        Id = "cpp-library",
+        Name = "C++ Static Library",
+        ShortDescription = "A native C++ static library",
+        Description = "A native C++ static library archived into a .lib/.a. Can be linked by other native projects.",
+        Icon = "library",
+        Category = "Library",
+        Tags = new List<string> { "cpp", "library", "static", "native" },
+        SupportedSolutionTypes = new List<string> { "cpp" },
+        Order = 10,
+        IsBuiltIn = true,
+        CreateSolution = false
+    };
+
+    public static readonly ProjectTemplate CppGameApp = new()
+    {
+        Id = "cpp-game-app",
+        Name = "C++ Game (VGS Engine)",
+        ShortDescription = "A native C++ game using the VisualGameStudio engine",
+        Description = "A native C++ game linking the VisualGameStudio engine import library directly via its C ABI (Framework_* exports).",
+        Icon = "game",
+        Category = "Games",
+        Tags = new List<string> { "cpp", "game", "gamedev", "engine", "native" },
+        SupportedSolutionTypes = new List<string> { "cpp" },
+        Order = 11,
+        IsBuiltIn = true
+    };
+
+    #endregion
+
     /// <summary>
     /// All built-in templates.
     /// </summary>
@@ -445,7 +507,10 @@ public static class ProjectTemplates
         AvaloniaApp,
         ClassLibrary,
         WebApi,
-        UnitTest
+        UnitTest,
+        CppConsoleApp,
+        CppLibrary,
+        CppGameApp
     };
 }
 

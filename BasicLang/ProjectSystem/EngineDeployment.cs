@@ -81,6 +81,29 @@ namespace BasicLang.Compiler.ProjectSystem
             return File.Exists(path) ? path : null;
         }
 
+        /// <summary>
+        /// Locate the engine import library: next to the running binaries first
+        /// (installed layout — IDE/ ships the .lib), then walking up from the
+        /// base directory looking for a dev-tree x64/{Release,Debug} build.
+        /// Null when not found anywhere.
+        /// </summary>
+        public static string LocateImportLib()
+        {
+            var direct = GetImportLibPath(AppContext.BaseDirectory);
+            if (direct != null) return direct;
+
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            for (var depth = 0; dir != null && depth < 8; depth++, dir = dir.Parent)
+            {
+                foreach (var config in new[] { "Release", "Debug" })
+                {
+                    var candidate = Path.Combine(dir.FullName, "x64", config, EngineImportLibName);
+                    if (File.Exists(candidate)) return candidate;
+                }
+            }
+            return null;
+        }
+
         /// <summary>True when an existing assembly reference already covers the wrapper, in any legal Include form.</summary>
         public static bool IsWrapperReference(AssemblyReference reference)
         {
@@ -141,6 +164,18 @@ namespace BasicLang.Compiler.ProjectSystem
             }
 
             return result;
+        }
+
+        /// <summary>Native DLLs matching wherever the import lib was found (same dir), falling back to the base-directory set.</summary>
+        public static List<string> LocateNativeDlls(string importLibPath)
+        {
+            if (importLibPath != null)
+            {
+                var dir = Path.GetDirectoryName(importLibPath);
+                var fromLibDir = GetNativeDllPaths(dir);
+                if (fromLibDir.Count > 0) return fromLibDir;
+            }
+            return GetNativeDllPaths(AppContext.BaseDirectory);
         }
     }
 }

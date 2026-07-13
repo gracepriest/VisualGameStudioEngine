@@ -402,6 +402,11 @@ public partial class CodeEditorControl : UserControl
     {
         _languageService = languageService;
         _documentFilePath = filePath;
+
+        // Apply file-appropriate highlighting now that the path is known.
+        // No-ops before OnInitialized (_textEditor is null); whichever hook
+        // fires last wins — both orders end with the correct highlighting.
+        SetHighlightingForFile(filePath);
     }
 
     /// <summary>
@@ -555,11 +560,20 @@ public partial class CodeEditorControl : UserControl
         // Register syntax highlighting
         HighlightingLoader.RegisterHighlighting();
 
-        // Apply BasicLang highlighting
-        var highlighting = HighlightingManager.Instance.GetDefinition("BasicLang");
-        if (highlighting != null)
+        // Apply file-appropriate highlighting when the document path is already
+        // known (SetLanguageService may run before OnInitialized); otherwise
+        // default to BasicLang (untitled documents).
+        if (!string.IsNullOrEmpty(_documentFilePath))
         {
-            _textEditor.SyntaxHighlighting = highlighting;
+            SetHighlightingForFile(_documentFilePath);
+        }
+        else
+        {
+            var highlighting = HighlightingManager.Instance.GetDefinition("BasicLang");
+            if (highlighting != null)
+            {
+                _textEditor.SyntaxHighlighting = highlighting;
+            }
         }
 
         // Setup folding
@@ -1945,6 +1959,21 @@ public partial class CodeEditorControl : UserControl
 
     private void UpdateFoldings()
     {
+        // Non-BasicLang files (e.g. .cpp) get NO folding at all in Phase 1.
+        // Two reasons: the BasicLang server answers unknown URIs as if they were
+        // BasicLang files (actively wrong results, not just waste), and the regex
+        // fallback produces GARBAGE folds for C++ — BasicLangFoldingStrategy's
+        // StartPattern matches `if`/`for`/`while`/`class`/`namespace`/... at line
+        // start case-insensitively, no End pattern ever matches C++, so every
+        // keyword line becomes an "(unclosed)" fold spanning to end-of-file.
+        // Clear any stale folds and bail. (clangd brings real folding in Phase 3.)
+        if (!string.IsNullOrEmpty(_documentFilePath)
+            && !VisualGameStudio.Core.Utilities.BasicLangFileTypes.IsBasicLangSourceFile(_documentFilePath))
+        {
+            _foldingManager?.UpdateFoldings(Array.Empty<NewFolding>(), -1);
+            return;
+        }
+
         // If LSP is available, request folding ranges asynchronously
         if (!_isUpdatingFoldings && _isFoldingEnabled
             && _foldingManager != null && _textEditor?.Document != null && _textEditor?.TextArea != null
