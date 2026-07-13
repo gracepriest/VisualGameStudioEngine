@@ -143,10 +143,6 @@
     <Setter Property="Background" Value="#1A1A2E"/>
     <Setter Property="BorderBrush" Value="#FFFF00"/>
   </Style>
-  <Style Selector="Window.highContrast Button:focus-visible">
-    <Setter Property="BorderBrush" Value="#FFFF00"/>
-    <Setter Property="BorderThickness" Value="2"/>
-  </Style>
   <Style Selector="Window.highContrast Button.primary">
     <Setter Property="Background" Value="#000080"/>
     <Setter Property="Foreground" Value="#FFFFFF"/>
@@ -189,10 +185,6 @@
     <Setter Property="BorderBrush" Value="#FFFFFF"/>
   </Style>
   <Style Selector="Window.highContrast ListBoxItem">
-    <Setter Property="Foreground" Value="#FFFFFF"/>
-  </Style>
-  <Style Selector="Window.highContrast ListBoxItem:selected">
-    <Setter Property="Background" Value="#264F78"/>
     <Setter Property="Foreground" Value="#FFFFFF"/>
   </Style>
   <Style Selector="Window.highContrast ListBoxItem:pointerover">
