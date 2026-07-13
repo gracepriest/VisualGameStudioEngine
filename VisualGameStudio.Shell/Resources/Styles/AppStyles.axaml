@@ -32,6 +32,8 @@
           <SolidColorBrush x:Key="IdeListSelected" Color="#094771"/>
           <SolidColorBrush x:Key="IdeFooterBg" Color="#2D2D2D"/>
           <SolidColorBrush x:Key="IdeFooterBorder" Color="#3C3C3C"/>
+          <SolidColorBrush x:Key="IdeStatusBarBg" Color="#007ACC"/>
+          <SolidColorBrush x:Key="IdeStatusBarDebugBg" Color="#CC6800"/>
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
           <SolidColorBrush x:Key="IdeBg" Color="#F5F5F5"/>
@@ -56,6 +58,8 @@
           <SolidColorBrush x:Key="IdeListSelected" Color="#CCE8FF"/>
           <SolidColorBrush x:Key="IdeFooterBg" Color="#E8E8E8"/>
           <SolidColorBrush x:Key="IdeFooterBorder" Color="#CCCEDB"/>
+          <SolidColorBrush x:Key="IdeStatusBarBg" Color="#007ACC"/>
+          <SolidColorBrush x:Key="IdeStatusBarDebugBg" Color="#CC6800"/>
         </ResourceDictionary>
         <!-- High Contrast: a real ThemeVariant (AppThemes.HighContrast inherits Dark), so any
              Ide* key NOT overridden here falls back to the Dark dictionary above. These 22 keys
@@ -85,6 +89,8 @@
           <SolidColorBrush x:Key="IdeListSelected" Color="#264F78"/>
           <SolidColorBrush x:Key="IdeFooterBg" Color="#000000"/>
           <SolidColorBrush x:Key="IdeFooterBorder" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="IdeStatusBarBg" Color="#000000"/>
+          <SolidColorBrush x:Key="IdeStatusBarDebugBg" Color="#000000"/>
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>
@@ -128,10 +134,43 @@
     <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
   </Style>
 
-  <!-- Status bar -->
+  <!-- Status bar. Background is theme-aware via DynamicResource (was a hardcoded
+       #007ACC + a local converter binding in MainWindow.axaml that beat every style,
+       including the HC black override). The debug-session orange is now a style-class
+       swap: code-behind toggles the "statusBarDebug" class on IsDebugging, and the
+       DynamicResource re-resolves for free on a theme-variant switch. -->
   <Style Selector="Border.statusBar">
-    <Setter Property="Background" Value="#007ACC"/>
+    <Setter Property="Background" Value="{DynamicResource IdeStatusBarBg}"/>
     <Setter Property="Height" Value="22"/>
+  </Style>
+  <Style Selector="Border.statusBar.statusBarDebug">
+    <Setter Property="Background" Value="{DynamicResource IdeStatusBarDebugBg}"/>
+  </Style>
+
+  <!-- Status bar buttons: transparent chrome on the accent bar so they don't render as
+       raw Fluent boxes ("white lines"). Mirrors StatusBarControl's Button.statusItem.
+       The HC section at file end gives these a white 1px border on top of this. -->
+  <Style Selector="Button.statusBarButton">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="CornerRadius" Value="0"/>
+    <Setter Property="Padding" Value="6,2"/>
+  </Style>
+  <Style Selector="Button.statusBarButton:pointerover">
+    <Setter Property="Background" Value="#FFFFFF20"/>
+  </Style>
+  <Style Selector="Button.statusBarButton:pressed">
+    <Setter Property="Background" Value="#FFFFFF30"/>
+  </Style>
+
+  <!-- Skip-navigation links: a real accent affordance for keyboard focus (was HC-only,
+       so it rendered as raw Fluent chrome in Dark/Light). HC override at file end wins. -->
+  <Style Selector="Button.skipNavLink">
+    <Setter Property="Background" Value="#007ACC"/>
+    <Setter Property="Foreground" Value="White"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="CornerRadius" Value="3"/>
+    <Setter Property="Padding" Value="8,4"/>
   </Style>
 
   <!-- Tool panels -->

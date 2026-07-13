@@ -130,6 +130,10 @@ public partial class MainWindow : Window
             vm.CompareWithClipboardRequested += OnCompareWithClipboardRequested;
             _subscribedVm = vm;
 
+            // Reflect the current debug state on the status bar class (in case the VM is
+            // already debugging when the DataContext attaches).
+            UpdateStatusBarDebugClass(vm.IsDebugging);
+
             // Apply initial zoom level from settings
             if (vm.ZoomLevel != 100)
             {
@@ -167,6 +171,33 @@ public partial class MainWindow : Window
                         : _preFullScreenWindowState;
                 }
             });
+        }
+        else if (e.PropertyName == nameof(MainWindowViewModel.IsDebugging) && sender is MainWindowViewModel dbgVm)
+        {
+            Dispatcher.UIThread.Post(() => UpdateStatusBarDebugClass(dbgVm.IsDebugging));
+        }
+    }
+
+    /// <summary>
+    /// Toggles the "statusBarDebug" style class on the status bar so it turns orange while
+    /// debugging and reverts to the theme accent otherwise. Replaces the old converter
+    /// binding, whose local value beat the HC black override. Classes are reactive, so the
+    /// add/remove re-runs style evaluation immediately.
+    /// </summary>
+    private void UpdateStatusBarDebugClass(bool isDebugging)
+    {
+        var statusBar = this.FindControl<Border>("MainStatusBar");
+        if (statusBar == null)
+            return;
+
+        if (isDebugging)
+        {
+            if (!statusBar.Classes.Contains("statusBarDebug"))
+                statusBar.Classes.Add("statusBarDebug");
+        }
+        else
+        {
+            statusBar.Classes.Remove("statusBarDebug");
         }
     }
 

@@ -442,9 +442,10 @@
       </StackPanel>
     </Border>
 
-    <!-- Status Bar (orange during debug, blue normally) -->
-    <Border DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}"
-            Background="{Binding IsDebugging, Converter={x:Static local:BoolToBrushConverter.DebugStatusBarInstance}}"
+    <!-- Status Bar (orange during debug, blue normally). Background comes from the
+         "statusBar"/"statusBarDebug" style classes (theme-aware DynamicResource keys);
+         the "statusBarDebug" class is toggled from code-behind on IsDebugging. -->
+    <Border x:Name="MainStatusBar" DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}"
             AutomationProperties.Name="Status Bar">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
         <!-- Status message -->
