@@ -154,6 +154,38 @@ public class TemplateBuildSweepTests
         Assert.That(File.Exists(Path.Combine(projDir, "mathutils.h")), Is.True);
     }
 
+    // The IDE (ProjectTemplateService) and CLI (TemplateEngine) template systems
+    // are separate implementations that must generate IDENTICAL source files —
+    // the sync comments in both files ask for it, but only this test enforces it.
+    [TestCase("cpp-console-app", "cpp-console", "main.cpp")]
+    [TestCase("cpp-library", "cpp-library", "mathutils.cpp")]
+    [TestCase("cpp-library", "cpp-library", "mathutils.h")]
+    [TestCase("cpp-game-app", "cpp-game", "main.cpp")]
+    public async Task CppTemplates_IdeAndCliSystems_GenerateIdenticalSourceFiles(
+        string ideTemplateId, string cliShortName, string fileName)
+    {
+        // Unique project dir per TestCase (cpp-library appears twice).
+        var name = "Equiv" + string.Concat((ideTemplateId + fileName).Where(char.IsLetterOrDigit));
+        var template = ProjectTemplates.All.Single(t => t.Id == ideTemplateId);
+        var options = new CreateProjectOptions
+        {
+            Name = name, Location = _rootDir, Template = template,
+            SolutionType = SolutionTypes.Cpp, CreateSolutionFolder = false, CreateGitRepository = false
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, result.Error);
+        var ideContent = File.ReadAllText(Path.Combine(Path.GetDirectoryName(result.ProjectPath!)!, fileName));
+
+        var cliTemplate = new BasicLang.Compiler.ProjectSystem.TemplateEngine().GetTemplate(cliShortName);
+        Assert.That(cliTemplate, Is.Not.Null);
+        var cliContent = cliTemplate!.Files[fileName].Replace("{{ProjectName}}", name);
+
+        // Line-ending differences alone are a pass by design (verbatim strings
+        // inherit each source file's endings).
+        Assert.That(ideContent.ReplaceLineEndings(), Is.EqualTo(cliContent.ReplaceLineEndings()),
+            $"IDE and CLI template systems drifted on {fileName} — keep them in sync (see comments in both)");
+    }
+
     private static (int ExitCode, string Output) RunCompilerBuild(string compiler, string projectFile)
     {
         var psi = new ProcessStartInfo

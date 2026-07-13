@@ -868,7 +868,20 @@ namespace BasicLang.Compiler.Driver
 
             var project = ProjectFile.Load(projectPath);
             var projectDir = Path.GetDirectoryName(projectPath) ?? ".";
+
+            // Honor -c/--configuration exactly like HandleBuildCommand does —
+            // the build above already parsed it from the same args; if the
+            // probe paths ignored it, `run -c Release` would build Release
+            // and then launch a stale Debug exe.
             var configuration = "Debug";
+            for (int i = 0; i < args.Length; i++)
+            {
+                if ((args[i] == "-c" || args[i] == "--configuration") && i + 1 < args.Length)
+                {
+                    configuration = args[++i];
+                }
+            }
+
             var outputDir = Path.Combine(projectDir, "bin", configuration, project.TargetFramework);
 
             // Find the output executable

@@ -1407,7 +1407,17 @@ namespace BasicLang.Compiler.ProjectSystem
         process.Start();
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
+        try
+        {
+            await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Kill the whole tree (BasicLang.exe spawns the C++ toolchain) —
+            // otherwise a timed-out compile leaks cl.exe/clang++ processes.
+            try { process.Kill(entireProcessTree: true); } catch { }
+            Assert.Fail($"CLI timed out after 5 minutes: BasicLang.exe {string.Join(" ", args)}");
+        }
         return (process.ExitCode, await stdout, await stderr);
     }
 

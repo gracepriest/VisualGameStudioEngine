@@ -189,7 +189,17 @@ public class CppProjectCliBuildTests
         process.Start();
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
+        try
+        {
+            await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Kill the whole tree (BasicLang.exe spawns the C++ toolchain) —
+            // otherwise a timed-out compile leaks cl.exe/clang++ processes.
+            try { process.Kill(entireProcessTree: true); } catch { }
+            Assert.Fail($"CLI timed out after 5 minutes: BasicLang.exe {string.Join(" ", args)}");
+        }
         return (process.ExitCode, await stdout, await stderr);
     }
 
@@ -289,5 +299,20 @@ public class CppProjectCliBuildTests
         var (exitRun, runOut, runErr) = await RunCli(_dir, "run", project.FilePath);
         Assert.That(exitRun, Is.EqualTo(0), $"run failed:\nSTDOUT:\n{runOut}\nSTDERR:\n{runErr}");
         Assert.That(runOut, Does.Contain("run-ok"));
+    }
+
+    [Test]
+    public async Task Cli_Run_CppProject_HonorsReleaseConfiguration()
+    {
+        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        var project = MakeCppProject(("main.cpp", "#include <iostream>\nint main(){ std::cout << \"rel-ok\"; return 0; }\n"));
+
+        var (exitBuild, so, se) = await RunCli(_dir, "build", project.FilePath, "-c", "Release");
+        Assert.That(exitBuild, Is.EqualTo(0), $"build failed:\n{so}\n{se}");
+        Assert.That(File.Exists(Path.Combine(_dir, "bin", "Release", "App.exe")), Is.True);
+
+        var (exitRun, runOut, runErr) = await RunCli(_dir, "run", project.FilePath, "-c", "Release");
+        Assert.That(exitRun, Is.EqualTo(0), $"run failed:\nSTDOUT:\n{runOut}\nSTDERR:\n{runErr}");
+        Assert.That(runOut, Does.Contain("rel-ok"));
     }
 }
