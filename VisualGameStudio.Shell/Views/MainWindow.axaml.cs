@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private DispatcherTimer? _hideTimer;
     private MainWindowViewModel? _subscribedVm;
     private StackPanel? _notificationArea;
+    private Border? _mainStatusBar;
 
     /// <summary>
     /// Tracks active progress notifications by ID so they can be updated in-place.
@@ -65,6 +66,7 @@ public partial class MainWindow : Window
         };
 
         _notificationArea = this.FindControl<StackPanel>("NotificationArea");
+        _mainStatusBar = this.FindControl<Border>("MainStatusBar");
 
         // Initialize screen reader live regions
         var politeRegion = this.FindControl<TextBlock>("LiveRegionPolite");
@@ -186,7 +188,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateStatusBarDebugClass(bool isDebugging)
     {
-        var statusBar = this.FindControl<Border>("MainStatusBar");
+        var statusBar = _mainStatusBar;
         if (statusBar == null)
             return;
 

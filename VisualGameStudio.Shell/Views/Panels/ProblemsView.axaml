@@ -21,7 +21,8 @@
                       DockPanel.Dock="Right">
 
             <!-- File scope toggle -->
-            <ToggleButton IsChecked="{Binding IsFilterByCurrentFile}"
+            <ToggleButton Classes="toolbarButton"
+                          IsChecked="{Binding IsFilterByCurrentFile}"
                           ToolTip.Tip="Filter by current file"
                           Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
                           Background="Transparent" BorderThickness="0"
@@ -37,7 +38,8 @@
             <Border Width="1" Background="#3C3C3C" Margin="2,4"/>
 
             <!-- Error toggle -->
-            <ToggleButton IsChecked="{Binding ShowErrors}"
+            <ToggleButton Classes="toolbarButton"
+                          IsChecked="{Binding ShowErrors}"
                           ToolTip.Tip="Toggle errors"
                           Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
                           Background="Transparent" BorderThickness="0"
@@ -56,7 +58,8 @@
             </ToggleButton>
 
             <!-- Warning toggle -->
-            <ToggleButton IsChecked="{Binding ShowWarnings}"
+            <ToggleButton Classes="toolbarButton"
+                          IsChecked="{Binding ShowWarnings}"
                           ToolTip.Tip="Toggle warnings"
                           Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
                           Background="Transparent" BorderThickness="0"
@@ -71,7 +74,8 @@
             </ToggleButton>
 
             <!-- Info toggle -->
-            <ToggleButton IsChecked="{Binding ShowInfo}"
+            <ToggleButton Classes="toolbarButton"
+                          IsChecked="{Binding ShowInfo}"
                           ToolTip.Tip="Toggle info"
                           Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
                           Background="Transparent" BorderThickness="0"
@@ -88,7 +92,8 @@
             <Border Width="1" Background="#3C3C3C" Margin="2,4"/>
 
             <!-- Group by file toggle -->
-            <ToggleButton IsChecked="{Binding IsGroupedByFile}"
+            <ToggleButton Classes="toolbarButton"
+                          IsChecked="{Binding IsGroupedByFile}"
                           ToolTip.Tip="Group by file"
                           Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
                           Background="Transparent" BorderThickness="0"
@@ -97,7 +102,8 @@
             </ToggleButton>
 
             <!-- Collapse All -->
-            <Button Command="{Binding CollapseAllCommand}"
+            <Button Classes="toolbarButton"
+                    Command="{Binding CollapseAllCommand}"
                     ToolTip.Tip="Collapse All"
                     Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
                     Background="Transparent" BorderThickness="0"
@@ -106,7 +112,8 @@
             </Button>
 
             <!-- Expand All -->
-            <Button Command="{Binding ExpandAllCommand}"
+            <Button Classes="toolbarButton"
+                    Command="{Binding ExpandAllCommand}"
                     ToolTip.Tip="Expand All"
                     Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
                     Background="Transparent" BorderThickness="0"

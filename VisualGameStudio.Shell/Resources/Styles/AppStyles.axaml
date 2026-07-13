@@ -219,6 +219,14 @@
     <Setter Property="Background" Value="{DynamicResource IdeHoverBg}"/>
   </Style>
 
+  <!-- Pressed state was previously unstyled, so clicking a toolbarButton fell through to
+       raw Fluent chrome (a light/white box even on a dark bar, or vice-versa in Light) —
+       the same "white lines" bug class as the unstyled hover state. One step stronger than
+       :pointerover's IdeHoverBg so press gives visible feedback over hover. -->
+  <Style Selector="Button.toolbarButton:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource IdeSecondaryHover}"/>
+  </Style>
+
   <!-- Dock.Avalonia Tool Tab Styling -->
   <Style Selector="idc|ToolControl">
     <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>

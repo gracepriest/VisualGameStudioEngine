@@ -355,7 +355,7 @@
     </Menu>
 
     <!-- Toolbar -->
-    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="4" BorderThickness="0,0,0,1" BorderBrush="#3C3C3C" IsVisible="{Binding !IsZenMode}"
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdeMenuBg}" Padding="4" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource IdeBorder}" IsVisible="{Binding !IsZenMode}"
             AutomationProperties.Name="Main Toolbar">
       <StackPanel Orientation="Horizontal" Spacing="4">
         <Button Classes="toolbarButton" Command="{Binding NewProjectCommand}" ToolTip.Tip="New Project"
@@ -375,7 +375,7 @@
           <TextBlock Text="Save All" FontSize="12"/>
         </Button>
 
-        <Border Width="1" Background="#3C3C3C" Margin="4,2"/>
+        <Border Width="1" Background="{DynamicResource IdeBorder}" Margin="4,2"/>
 
         <ComboBox ItemsSource="{Binding Configurations}"
                   SelectedItem="{Binding CurrentConfiguration}"
@@ -389,7 +389,7 @@
           <TextBlock Text="Build" FontSize="12"/>
         </Button>
 
-        <Border Width="1" Background="#3C3C3C" Margin="4,2"/>
+        <Border Width="1" Background="{DynamicResource IdeBorder}" Margin="4,2"/>
 
         <!-- Debug Toolbar -->
         <Button Classes="toolbarButton" Command="{Binding StartDebuggingCommand}" ToolTip.Tip="Start Debugging (F5)" IsVisible="{Binding !IsDebugging}"
@@ -418,7 +418,7 @@
           <TextBlock Text="⟳" FontSize="14" Foreground="#89D185"/>
         </Button>
 
-        <Border Width="1" Background="#3C3C3C" Margin="4,2" IsVisible="{Binding IsDebugging}"/>
+        <Border Width="1" Background="{DynamicResource IdeBorder}" Margin="4,2" IsVisible="{Binding IsDebugging}"/>
 
         <Button Classes="toolbarButton" Command="{Binding StepOverCommand}" ToolTip.Tip="Step Over (F10)" IsVisible="{Binding IsPaused}"
                 AutomationProperties.Name="Step Over"
@@ -444,7 +444,11 @@
 
     <!-- Status Bar (orange during debug, blue normally). Background comes from the
          "statusBar"/"statusBarDebug" style classes (theme-aware DynamicResource keys);
-         the "statusBarDebug" class is toggled from code-behind on IsDebugging. -->
+         the "statusBarDebug" class is toggled from code-behind on IsDebugging.
+         Do NOT set a local Background or Background binding on this Border — a local
+         value beats every style setter (including the HC override), which is exactly
+         the bug this class-based approach replaced. The statusBar/statusBarDebug
+         classes own the background. -->
     <Border x:Name="MainStatusBar" DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}"
             AutomationProperties.Name="Status Bar">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
