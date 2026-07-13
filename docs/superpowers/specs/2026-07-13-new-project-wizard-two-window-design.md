@@ -63,6 +63,17 @@ supports.
 - **Project type** filter: the existing `ProjectTemplate.Category` values
   (`Console`, `Games`, `Desktop`, `Library`, `Web`, `Testing`) plus `All`.
   Narrows the template list.
+- **Platform classification** (UI-side, for the Platform filter). `Windows`
+  shows everything (all templates run on Windows); `Cross-platform` excludes the
+  Windows-only UI frameworks; `All` applies no filter. Full map over the 11
+  built-in templates:
+  | Template id | Bucket |
+  |---|---|
+  | `winforms-app`, `wpf-app` | Windows-only |
+  | `console-app`, `game-app`, `avalonia-app`, `class-library`, `web-api`, `unit-test`, `cpp-console-app`, `cpp-library`, `cpp-game-app` | Cross-platform |
+  This map lives in the wizard VM; it is not persisted and does not affect the
+  created project. (If a template set changes later, the map is the one place to
+  update.)
 - **Template search box** + **template list**: reuse the existing
   name/description/tags filter, scoped to the selected backend's templates and
   further narrowed by the platform + category filters.
@@ -113,8 +124,12 @@ Window 2's Create sets the result and closes; Back closes Window 2 and returns t
 Window 1. A Cancel from either window ends the flow with no result. The result
 flows back to `NewProjectAsync()`, which opens the created project exactly as it
 does today. The exact `ShowDialog` plumbing is an implementation detail for the
-plan; the contract is: `NewProjectAsync()` still receives a
+plan; the contract is: `NewProjectAsync()` still ends up with a
 `ProjectCreationResult?` and its downstream open-project logic is unchanged.
+Note the new flow replaces today's `ShowDialog<bool?>` + `dialog.Result` pair
+(the old `CreateProjectView` returns `bool?` and exposes a separate `Result`
+property); the plan must define how the two-window flow surfaces the final
+`ProjectCreationResult?` back to `NewProjectAsync()`.
 
 ### Surfaced but not wired (honest UI-only boundary)
 
@@ -124,8 +139,16 @@ model to store them and creation ignores them:
 
 1. **C++ toolchain** (LLVM/GCC/MSVC) — no `.blproj` field exists; the build layer
    auto-discovers the toolchain. Remembered in wizard state only.
-2. **Non-default C++ standard** — creation always writes `c++20` today. The
-   dropdown default matches, so a non-default selection is display-only.
+2. **Non-default C++ standard** — `CppStandard` *is* a real, persisted `.blproj`
+   field that the build already honors (`ProjectSerializer`/`ProjectFile`
+   round-trip it; `CppToolchain` emits `-std`/`/std` from it; a test pins a
+   non-default `c++17` surviving a save). It is display-only here only because
+   `ProjectTemplateService.GenerateProjectFileContent` hardcodes `c++20`
+   (`ProjectTemplateService.cs:284`) and `CreateProjectOptions` has no
+   `CppStandard` field. The dropdown default matches (`c++20`), so a non-default
+   selection has no effect this pass. Future wiring is therefore *small* — add a
+   `CppStandard` to `CreateProjectOptions` and thread it into the generator — not
+   a schema change.
 3. **Platform filter** — filters the template list only; not persisted.
 
 Each becomes a clean follow-up when the build/creation layer is extended to
@@ -175,8 +198,12 @@ NUnit convention:
 
 ## Non-goals / future work
 
-- Persisting the C++ toolchain, non-default C++ standard, or platform into the
-  project (each requires service + `.blproj` + build-layer changes).
+- Persisting the C++ toolchain or platform into the project (each needs a new
+  `.blproj` field + build-layer support that does not exist today).
+- Wiring the C++ standard dropdown to the created project. Unlike the two above,
+  the `.blproj` field and build support already exist — this is a small future
+  follow-up (`CreateProjectOptions.CppStandard` + generator), intentionally out
+  of scope for this UI-only pass.
 - An editable, saved project description (no such field in the model today).
 - Changing the set of templates, solution types, or creation behavior.
 
