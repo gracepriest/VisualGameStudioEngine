@@ -350,7 +350,7 @@
       </MenuItem>
 
       <MenuItem Header="_Help">
-        <MenuItem Header="_About Visual Game Studio"/>
+        <MenuItem Header="_About Visual Game Studio" Command="{Binding ShowAboutCommand}"/>
       </MenuItem>
     </Menu>
 

@@ -130,7 +130,9 @@
       </Grid>
 
       <!-- ===== Search Results View ===== -->
-      <ScrollViewer IsVisible="{Binding IsSearchActive}" Margin="16"
+      <!-- Gated on IsSearchResultsVisible (IsSearchActive AND NOT IsJsonEditorActive) so it does
+           not render on top of the JSON editor when a search is also active. -->
+      <ScrollViewer IsVisible="{Binding IsSearchResultsVisible}" Margin="16"
                     x:Name="SearchResultsScroller">
         <StackPanel>
           <TextBlock FontSize="12" Opacity="0.6" Margin="0,0,0,12"

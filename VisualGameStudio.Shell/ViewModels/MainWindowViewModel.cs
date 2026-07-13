@@ -4111,9 +4111,20 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task SettingsAsync()
     {
+        await ShowSettingsDialogAsync(openJsonEditor: false);
+    }
+
+    private async Task ShowSettingsDialogAsync(bool openJsonEditor)
+    {
         if (App.MainWindow == null) return;
 
         var vm = new ViewModels.Dialogs.SettingsViewModel();
+        if (openJsonEditor)
+        {
+            // The command-palette "Open Settings (JSON)..." entry lands directly in the raw-JSON
+            // view (setting the flag loads the JSON content via the VM's change handler).
+            vm.IsJsonEditorActive = true;
+        }
 
         var dialog = new Views.Dialogs.SettingsDialog
         {
@@ -6562,7 +6573,9 @@ $"""
     [RelayCommand]
     private async Task OpenSettingsAsync()
     {
-        await SettingsAsync();
+        // "Open Settings (JSON)..." — open the dialog directly in its raw-JSON view. This was a
+        // mislabeled duplicate of "Settings..." (it opened the normal UI view).
+        await ShowSettingsDialogAsync(openJsonEditor: true);
     }
 
     [RelayCommand]

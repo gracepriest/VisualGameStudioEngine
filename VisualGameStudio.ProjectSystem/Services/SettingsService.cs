@@ -7,6 +7,21 @@ using VisualGameStudio.Core.Abstractions.Services;
 namespace VisualGameStudio.ProjectSystem.Services;
 
 /// <summary>
+/// Outcome of <see cref="SettingsService.SetRawJsonAsync"/>. Previously the raw-JSON save
+/// swallowed parse errors silently, so the Settings dialog implied success while discarding
+/// malformed input. Callers now inspect <see cref="Success"/> and surface <see cref="Errors"/>.
+/// </summary>
+public sealed class SetRawJsonResult
+{
+    public bool Success { get; init; }
+    public IReadOnlyList<string> Errors { get; init; } = Array.Empty<string>();
+
+    public static SetRawJsonResult Ok() => new() { Success = true };
+    public static SetRawJsonResult Fail(params string[] errors) =>
+        new() { Success = false, Errors = errors };
+}
+
+/// <summary>
 /// Service for managing IDE settings at different scopes with file watching and debounced save.
 /// User settings: ~/.vgs/settings.json
 /// Workspace settings: {projectRoot}/.vgs/settings.json
@@ -413,16 +428,33 @@ public class SettingsService : ISettingsService, IDisposable
     }
 
     /// <summary>
-    /// Sets the raw JSON text for a scope's settings file.
+    /// Sets the raw JSON text for a scope's settings file. Returns a <see cref="SetRawJsonResult"/>
+    /// so the caller can tell success from a parse failure — malformed JSON used to be swallowed
+    /// silently while the dialog implied the save had stuck. On a parse error the in-memory store
+    /// and the file are left untouched (no data loss) and the error message is returned.
     /// </summary>
-    public async Task SetRawJsonAsync(string json, SettingsScope scope)
+    public async Task<SetRawJsonResult> SetRawJsonAsync(string json, SettingsScope scope)
     {
+        // Parse FIRST, before mutating anything: a parse failure must leave the existing settings
+        // intact rather than half-clearing the dictionary.
+        Dictionary<string, JsonElement>? settings;
         try
         {
             var stripped = StripJsonComments(json);
-            var settings = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(stripped, JsonOptions);
-            if (settings == null) return;
+            settings = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(stripped, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            return SetRawJsonResult.Fail($"JSON parse error: {ex.Message}");
+        }
 
+        if (settings == null)
+        {
+            return SetRawJsonResult.Fail("Settings JSON must be a JSON object (e.g. \"{ }\").");
+        }
+
+        try
+        {
             var dict = GetDictForScope(scope) ?? _userSettings;
             var affectedKeys = dict.Keys.Union(settings.Keys).Distinct().ToList();
 
@@ -447,10 +479,12 @@ public class SettingsService : ISettingsService, IDisposable
             {
                 SettingsChanged?.Invoke(this, new SettingsChangedEventArgs(affectedKeys, scope));
             }
+
+            return SetRawJsonResult.Ok();
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore parse errors
+            return SetRawJsonResult.Fail($"Failed to apply settings: {ex.Message}");
         }
     }
 
@@ -488,6 +522,49 @@ public class SettingsService : ISettingsService, IDisposable
     public IReadOnlyList<string> GetAllKnownKeys()
     {
         return _propertySchemas.Keys.OrderBy(k => k).ToList();
+    }
+
+    /// <summary>
+    /// Synchronously writes any debounced-but-not-yet-flushed save to disk immediately. Callers
+    /// that need the on-disk file to reflect the latest in-memory edits — notably the Settings
+    /// dialog's raw-JSON editor, which reads the file text via <see cref="GetRawJson"/> — must
+    /// call this first; otherwise a live-applied change made inside the ~500ms debounce window is
+    /// still only in memory and the reader sees stale text. Cancels the pending debounce timers
+    /// (a subsequent <see cref="Set{T}"/> re-arms them), then writes through the same
+    /// <see cref="_saveLock"/> + atomic temp-file path as every other save. No-op when nothing is
+    /// pending; never throws (mirrors <see cref="Dispose"/>'s flush).
+    /// </summary>
+    public void FlushPendingSaves()
+    {
+        if (_disposed) return;
+        try
+        {
+            _userSaveCts?.Cancel();
+            _workspaceSaveCts?.Cancel();
+            if (!_userSavePending && !_workspaceSavePending) return;
+
+            // Task.Run keeps the file writes off any ambient synchronization context so blocking
+            // on the result here (a UI thread) cannot deadlock — the whole save chain is
+            // ConfigureAwait(false).
+            Task.Run(async () =>
+            {
+                if (_userSavePending)
+                {
+                    _userSavePending = false;
+                    await SaveToFileAsync(_userSettingsPath, _userSettings).ConfigureAwait(false);
+                }
+                if (_workspaceSavePending)
+                {
+                    _workspaceSavePending = false;
+                    await SaveWorkspaceSettingsAsync().ConfigureAwait(false);
+                }
+            }).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[SettingsService] Failed to flush pending settings save: {ex.Message}");
+        }
     }
 
     public void Dispose()
@@ -1059,7 +1136,7 @@ public class SettingsService : ISettingsService, IDisposable
                     enumVals: new[] { "default", "minimal", "none" }),
                 Prop("workbench.startupEditor", SettingsPropertyType.String, "Startup Editor", "welcomePage", "Controls which editor is shown at startup when no project session is restored.",
                     enumVals: new[] { "welcomePage", "none", "newUntitledFile" }),
-                Prop("workbench.sideBar.location", SettingsPropertyType.String, "Side Bar Location", "left", "Controls the location of the sidebar. Takes effect after restart.",
+                Prop("workbench.sideBar.location", SettingsPropertyType.String, "Side Bar Location", "left", "Controls the location of the sidebar. Takes effect after restart. A project that already has a saved layout keeps the side it was captured with until you run View → Reset Layout (the restored layout wins over this setting).",
                     enumVals: new[] { "left", "right" }),
                 // Not shown in the dialog: file paths of imported VS Code theme JSON files, reloaded at
                 // startup so an imported theme survives a restart.

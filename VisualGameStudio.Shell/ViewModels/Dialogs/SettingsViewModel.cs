@@ -593,6 +593,31 @@ public partial class SettingsViewModel : ViewModelBase
         ApplySearchFilter(value);
     }
 
+    /// <summary>
+    /// The search-results list must hide when the JSON editor is open, otherwise both render into
+    /// the same content panel and overlap. Avalonia bindings can't AND two flags inline, so the
+    /// dialog binds this composite instead of raw <see cref="IsSearchActive"/>.
+    /// </summary>
+    public bool IsSearchResultsVisible => IsSearchActive && !IsJsonEditorActive;
+
+    partial void OnIsSearchActiveChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsSearchResultsVisible));
+    }
+
+    partial void OnIsJsonEditorActiveChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsSearchResultsVisible));
+
+        // Any path that opens the JSON view (the toolbar button, the command-palette entry that
+        // sets this directly, or the toggle command) loads the current raw JSON here, so callers
+        // don't each have to remember to.
+        if (value)
+        {
+            LoadJsonEditorContent();
+        }
+    }
+
     partial void OnSelectedCategoryChanged(SettingsCategoryItem? value)
     {
         if (value != null)
@@ -613,6 +638,17 @@ public partial class SettingsViewModel : ViewModelBase
         LoadFromService();
         RefreshAllScopeBadges();
         RefreshCategoryModifiedCounts();
+
+        // LoadFromService updates the VM's backing properties, but the SearchableSettingItem value
+        // proxies don't raise PropertyChanged when those change under them — so the already-realized
+        // controls keep showing the PREVIOUS scope's values while writes now target the new scope.
+        // Rebuild the category list AND the search results so their item containers re-read the
+        // now-current values (same refresh the external-change handler does).
+        if (SelectedCategory != null)
+        {
+            UpdateCategorySettings(SelectedCategory.Id);
+        }
+        ApplySearchFilter(SearchText);
 
         // Update JSON editor if active
         if (IsJsonEditorActive)
@@ -637,19 +673,16 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     private void ToggleJsonEditor()
     {
+        // OnIsJsonEditorActiveChanged loads the JSON content when this flips true.
         IsJsonEditorActive = !IsJsonEditorActive;
-        if (IsJsonEditorActive)
-        {
-            LoadJsonEditorContent();
-        }
     }
 
     [RelayCommand]
     private void OpenSettingsJson()
     {
         // Opens settings.json in the editor by activating JSON view
+        // (OnIsJsonEditorActiveChanged loads the content).
         IsJsonEditorActive = true;
-        LoadJsonEditorContent();
     }
 
     [RelayCommand]
@@ -665,25 +698,36 @@ public partial class SettingsViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void SaveJsonEditor()
+    private async Task SaveJsonEditorAsync()
     {
-        if (_settingsService != null)
-        {
-            // SetRawJsonAsync updates the in-memory store synchronously (before its first await), so
-            // the effective value is current on the next line even though the disk write is async.
-            _ = _settingsService.SetRawJsonAsync(JsonEditorContent, ActiveScope);
-            LoadFromService();
-            RefreshAllScopeBadges();
-            RefreshCategoryModifiedCounts();
+        if (_settingsService == null) return;
 
-            // A raw-JSON edit can change workbench.colorTheme. Only the combo's SetStringSetting path
-            // applied the theme live before; route JSON edits through ThemeManager too so the theme
-            // switches the moment the user saves the JSON (not on next launch).
-            var newTheme = _settingsService.Get<string>("workbench.colorTheme", "Dark", SettingsScope.Effective);
-            if (!string.Equals(newTheme, ThemeManager.CurrentTheme, StringComparison.Ordinal))
+        JsonValidationErrors.Clear();
+
+        // Await the save and honour its result: malformed JSON used to be swallowed while the UI
+        // implied success. On a parse failure, surface the error(s) and leave the store/theme alone.
+        var result = await _settingsService.SetRawJsonAsync(JsonEditorContent, ActiveScope);
+        if (!result.Success)
+        {
+            foreach (var error in result.Errors)
             {
-                ThemeManager.Apply(newTheme);
+                JsonValidationErrors.Add(error);
             }
+            return;
+        }
+
+        LoadFromService();
+        RefreshAllScopeBadges();
+        RefreshCategoryModifiedCounts();
+
+        // A raw-JSON edit can change workbench.colorTheme. Only the combo's SetStringSetting path
+        // applied the theme live before; route JSON edits through ThemeManager too so the theme
+        // switches the moment the user saves the JSON (not on next launch). Apply only after a
+        // successful save (added in 2.7, preserved here).
+        var newTheme = _settingsService.Get<string>("workbench.colorTheme", "Dark", SettingsScope.Effective);
+        if (!string.Equals(newTheme, ThemeManager.CurrentTheme, StringComparison.Ordinal))
+        {
+            ThemeManager.Apply(newTheme);
         }
     }
 
@@ -729,6 +773,10 @@ public partial class SettingsViewModel : ViewModelBase
     {
         if (_settingsService != null)
         {
+            // Live-applied edits ride a 500ms debounce before they hit disk, and GetRawJson reads
+            // the file — so flush first or the JSON editor shows text that lags the UI controls by
+            // up to half a second (e.g. a font size you just changed still reads the old value).
+            _settingsService.FlushPendingSaves();
             JsonEditorContent = _settingsService.GetRawJson(ActiveScope);
         }
     }
@@ -922,7 +970,7 @@ public partial class SettingsViewModel : ViewModelBase
             MakeCombo("workbench.colorTheme", "Color Theme", "Overall color theme for the IDE.", "Workbench", nameof(SelectedTheme), AvailableThemes, "Dark"),
             // D3: workbench.iconTheme intentionally omitted — no file-icon-theme feature exists yet.
             MakeCombo("workbench.startupEditor", "Startup Editor", "Controls which editor is shown at startup when no project session is restored.", "Workbench", nameof(StartupEditor), StartupEditors, "welcomePage"),
-            MakeCombo("workbench.sideBar.location", "Side Bar Location", "Controls the location of the sidebar. Takes effect after restart.", "Workbench", nameof(SideBarLocation), SideBarLocations, "left"),
+            MakeCombo("workbench.sideBar.location", "Side Bar Location", "Controls the location of the sidebar. Takes effect after restart. A project with a saved layout keeps its captured side until you run View → Reset Layout (the restored layout wins over this setting).", "Workbench", nameof(SideBarLocation), SideBarLocations, "left"),
 
             // ===== Terminal =====
             MakeText("terminal.integrated.fontFamily", "Font Family", "Controls the font family of the terminal. Leave empty to use editor font.", "Terminal", nameof(TerminalFontFamily), ""),
