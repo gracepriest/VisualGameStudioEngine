@@ -72,4 +72,65 @@ public class NewProjectWizardViewModelTests
         Assert.That(vm.VisibleTemplates.Select(t => t.Id),
             Is.EquivalentTo(new[] { "cpp-console-app", "cpp-library", "cpp-game-app" }));
     }
+
+    [Test]
+    public void PlatformFilter_CrossPlatform_ExcludesWinFormsAndWpf()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedLanguage = ProjectLanguage.BasicLang;
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "dotnet");
+
+        var withAll = vm.VisibleTemplates.Select(t => t.Id).ToList();
+        Assert.That(withAll, Does.Contain("winforms-app"));
+
+        vm.SelectedPlatform = "Cross-platform";
+        var ids = vm.VisibleTemplates.Select(t => t.Id).ToList();
+        Assert.That(ids, Does.Not.Contain("winforms-app"));
+        Assert.That(ids, Does.Not.Contain("wpf-app"));
+        Assert.That(ids, Does.Contain("avalonia-app"));
+    }
+
+    [Test]
+    public void CategoryFilter_NarrowsToOneCategory()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "dotnet");
+
+        vm.SelectedCategory = "Library";
+        Assert.That(vm.VisibleTemplates.All(t => t.Category == "Library"), Is.True);
+        Assert.That(vm.VisibleTemplates.Select(t => t.Id), Does.Contain("class-library"));
+    }
+
+    [Test]
+    public void Search_MatchesNameDescriptionOrTags()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "dotnet");
+
+        vm.SearchText = "winforms"; // matches a tag
+        Assert.That(vm.VisibleTemplates.Select(t => t.Id), Is.EqualTo(new[] { "winforms-app" }));
+    }
+
+    [Test]
+    public void Filters_Compose_CategoryPlusSearch()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "dotnet");
+
+        vm.SelectedCategory = "Desktop";
+        vm.SearchText = "avalonia";
+        Assert.That(vm.VisibleTemplates.Select(t => t.Id), Is.EqualTo(new[] { "avalonia-app" }));
+    }
+
+    [Test]
+    public void SwitchingBackend_ResetsCategoryToAll_AndRebuildsCategoryList()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "dotnet");
+        vm.SelectedCategory = "Web";
+
+        vm.SelectedLanguage = ProjectLanguage.Cpp; // reselects cpp backend
+        Assert.That(vm.SelectedCategory, Is.EqualTo("All"));
+        Assert.That(vm.Categories, Does.Not.Contain("Web")); // cpp has no Web template
+    }
 }

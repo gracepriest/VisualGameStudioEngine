@@ -142,6 +142,10 @@ public partial class NewProjectWizardViewModel : ObservableObject
         OnPropertyChanged(nameof(CanCreate));
     }
 
+    partial void OnSelectedPlatformChanged(string value) => RefreshTemplates();
+    partial void OnSelectedCategoryChanged(string value) => RefreshTemplates();
+    partial void OnSearchTextChanged(string value) => RefreshTemplates();
+
     private void RebuildCategories()
     {
         Categories.Clear();
