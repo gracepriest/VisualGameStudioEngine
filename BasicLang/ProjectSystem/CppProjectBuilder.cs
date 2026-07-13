@@ -55,9 +55,13 @@ namespace BasicLang.Compiler.ProjectSystem
             var tus = project.GetCppTranslationUnits().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (tus.Count == 0)
             {
-                Fail(result, "BL6007",
-                    "No C++ source files found (looked for " + string.Join("/", ProjectFile.CppTranslationUnitExtensions)
-                    + " under " + projectDir + ", excluding bin/ and obj/).", project.FilePath);
+                // Explicit <Compile> items get a message about THOSE items; only
+                // the no-items case actually ran the directory glob.
+                var message = project.SourceFiles.Count > 0
+                    ? "No C++ translation units among the project's <Compile> items (listed items may be missing on disk or headers-only)."
+                    : "No C++ source files found (looked for " + string.Join("/", ProjectFile.CppTranslationUnitExtensions)
+                      + " under " + projectDir + ", excluding bin/ and obj/).";
+                Fail(result, "BL6007", message, project.FilePath);
                 return result;
             }
 

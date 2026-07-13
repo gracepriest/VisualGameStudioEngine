@@ -110,6 +110,35 @@ public class CppProjectCliBuildTests
     }
 
     [Test]
+    public void Build_ExplicitCompileItemsAllMissing_FailsWithBL6007MentioningCompileItems()
+    {
+        // Explicit <Compile> items that don't exist on disk: BL6007's message
+        // must talk about the listed items, not the directory glob it never ran.
+        var blproj = Path.Combine(_dir, "App.blproj");
+        File.WriteAllText(blproj, """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>App</ProjectName>
+                <OutputType>Exe</OutputType>
+                <Language>Cpp</Language>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="ghost.cpp" />
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+        var project = ProjectFile.Load(blproj);
+
+        var result = CppProjectBuilder.Build(project, "Debug");
+
+        Assert.That(result.Success, Is.False);
+        var diag = result.Diagnostics.FirstOrDefault(d => d.Code == "BL6007");
+        Assert.That(diag, Is.Not.Null);
+        Assert.That(diag!.Message, Does.Contain("<Compile> items"));
+    }
+
+    [Test]
     public void Build_BasicLangSourcesPresent_FailsWithBL6008()
     {
         var project = MakeCppProject(("main.cpp", "int main() { return 0; }\n"),

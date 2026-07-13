@@ -890,13 +890,23 @@ namespace BasicLang.Compiler.Driver
             // Check multiple possible locations for the output.
             // NOTE: outputDir here is ALREADY projectDir/bin/<config>/<TFM> —
             // base the native entries on projectDir, or the paths double up.
-            var possiblePaths = new[]
-            {
-                Path.Combine(outputDir, $"{exeName}.dll"),
-                Path.Combine(outputDir, "bin", configuration, project.TargetFramework, $"{exeName}.dll"),
-                Path.Combine(projectDir, "bin", configuration, $"{exeName}.exe"),   // native layout (CppProjectBuilder)
-                Path.Combine(outputDir, $"{exeName}.exe"),
-            };
+            // Language=Cpp projects probe the native exe paths FIRST so a stale
+            // managed .dll from before a language switch is never relaunched.
+            var possiblePaths = project.IsCppProject
+                ? new[]
+                {
+                    Path.Combine(projectDir, "bin", configuration, $"{exeName}.exe"),   // native layout (CppProjectBuilder)
+                    Path.Combine(outputDir, $"{exeName}.exe"),
+                    Path.Combine(outputDir, $"{exeName}.dll"),
+                    Path.Combine(outputDir, "bin", configuration, project.TargetFramework, $"{exeName}.dll"),
+                }
+                : new[]
+                {
+                    Path.Combine(outputDir, $"{exeName}.dll"),
+                    Path.Combine(outputDir, "bin", configuration, project.TargetFramework, $"{exeName}.dll"),
+                    Path.Combine(projectDir, "bin", configuration, $"{exeName}.exe"),   // native layout (CppProjectBuilder)
+                    Path.Combine(outputDir, $"{exeName}.exe"),
+                };
 
             var exePath = possiblePaths.FirstOrDefault(File.Exists);
 

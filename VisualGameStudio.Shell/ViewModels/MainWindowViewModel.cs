@@ -3058,6 +3058,18 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        // Phase 1: the BasicLang debug adapter cannot debug native C++ exes —
+        // guard F5 for Language=Cpp projects instead of handing it a native binary.
+        if (_projectService.CurrentProject.Language == ProjectLanguage.Cpp)
+        {
+            const string message =
+                "Native C++ debugging arrives in a later phase — use Start Without Debugging (Ctrl+F5) to run.";
+            _dockFactory.ActivateTool("Output");
+            OutputPanel.AppendOutput(message + "\n");
+            StatusText = message;
+            return;
+        }
+
         // If already debugging, F5 should continue execution when paused
         if (IsDebugging)
         {
