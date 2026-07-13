@@ -87,15 +87,9 @@ public static class SettingsConsumerRegistry
         }
     }
 
-    /// <summary>
-    /// Removes all registrations. Intended for test isolation only — the running app never clears
-    /// the registry.
-    /// </summary>
-    public static void Clear()
-    {
-        lock (_lock)
-        {
-            _consumers.Clear();
-        }
-    }
+    // Deliberately append-only: there is no Clear(). Consumers register once (from type
+    // initializers / constructors that run at most once per process) and their entries must stay
+    // for the lifetime of the process. A Clear() would let one test wipe registrations that a
+    // once-run static constructor would never rebuild, silently breaking the Phase 3 contract test
+    // depending on test order. Tests achieve isolation by using unique keys, not by clearing.
 }

@@ -15,7 +15,6 @@ namespace VisualGameStudio.Tests;
 /// workbench / terminal consumers other fixtures register in the same process.
 /// </summary>
 [TestFixture]
-[NonParallelizable] // touches the process-wide static registry (Clear()); keep isolated
 public class SettingsConsumerRegistryTests
 {
     [Test]
@@ -110,15 +109,5 @@ public class SettingsConsumerRegistryTests
         var consumers = SettingsConsumerRegistry.Consumers;
         Assert.That(keys.All(consumers.ContainsKey), Is.True,
             "every concurrently-registered key must be present (no lost updates under contention)");
-    }
-
-    [Test]
-    public void Clear_RemovesAllRegistrations()
-    {
-        // Clear() is global; register a couple of keys, clear, and confirm they are gone. Other
-        // fixtures may re-register afterward, but immediately after Clear the registry is empty.
-        SettingsConsumerRegistry.RegisterConsumer($"test.clear.{System.Guid.NewGuid():N}", "x");
-        SettingsConsumerRegistry.Clear();
-        Assert.That(SettingsConsumerRegistry.Consumers, Is.Empty);
     }
 }

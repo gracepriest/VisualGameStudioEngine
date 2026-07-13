@@ -33,6 +33,17 @@ public partial class CodeEditorDocumentView : UserControl
         SettingsConsumerRegistry.RegisterConsumer("editor.fontLigatures", "CodeEditorDocumentView.ApplyEditorSettings → EnableFontLigatures");
         SettingsConsumerRegistry.RegisterConsumer("editor.lineNumbers", "CodeEditorDocumentView.ApplyEditorSettings → ShowLineNumbers");
         SettingsConsumerRegistry.RegisterConsumer("editor.wordWrap", "CodeEditorDocumentView.ApplyEditorSettings → WordWrap");
+
+        // Task 2.1 additions — each wired in ApplyEditorSettings above.
+        SettingsConsumerRegistry.RegisterConsumer("editor.tabSize", "CodeEditorDocumentView.ApplyEditorSettings → Options.IndentationSize");
+        SettingsConsumerRegistry.RegisterConsumer("editor.insertSpaces", "CodeEditorDocumentView.ApplyEditorSettings → Options.ConvertTabsToSpaces");
+        SettingsConsumerRegistry.RegisterConsumer("editor.highlightCurrentLine", "CodeEditorDocumentView.ApplyEditorSettings → Options.HighlightCurrentLine");
+        SettingsConsumerRegistry.RegisterConsumer("editor.stickyScroll.enabled", "CodeEditorDocumentView.ApplyEditorSettings → StickyScrollEnabled");
+        SettingsConsumerRegistry.RegisterConsumer("editor.bracketPairColorization", "CodeEditorDocumentView.ApplyEditorSettings → BracketPairColorization");
+        SettingsConsumerRegistry.RegisterConsumer("editor.autoClosingBrackets", "CodeEditorDocumentView.ApplyEditorSettings → AutoCloseBrackets");
+        SettingsConsumerRegistry.RegisterConsumer("editor.smoothScrolling", "CodeEditorDocumentView.ApplyEditorSettings → SmoothScrolling");
+        SettingsConsumerRegistry.RegisterConsumer("editor.minimap.enabled", "CodeEditorDocumentView.ApplyEditorSettings → SetMinimapVisible");
+        SettingsConsumerRegistry.RegisterConsumer("editor.renderWhitespace", "CodeEditorDocumentView.ApplyEditorSettings → SetWhitespaceVisible");
     }
 
     public CodeEditorDocumentView()
@@ -49,6 +60,7 @@ public partial class CodeEditorDocumentView : UserControl
         vm.ReplaceRequested -= OnReplaceRequested;
         vm.ToggleCommentRequested -= OnToggleCommentRequestedHandler;
         vm.ToggleWhitespaceRequested -= OnToggleWhitespaceRequestedHandler;
+        vm.ToggleMinimapRequested -= OnToggleMinimapRequestedHandler;
         vm.ToggleColumnSelectionRequested -= OnToggleColumnSelectionRequestedHandler;
         vm.DuplicateLineRequested -= OnDuplicateLineRequestedHandler;
         vm.MoveLineUpRequested -= OnMoveLineUpRequestedHandler;
@@ -122,6 +134,13 @@ public partial class CodeEditorDocumentView : UserControl
     {
         // Set the whitespace state directly (not toggling) so it tracks the view-model state.
         LiveEditor?.SetWhitespaceVisible(show);
+    }
+    private void OnToggleMinimapRequestedHandler(object? s, bool show)
+    {
+        // Push minimap visibility straight onto the editor. This event had no subscriber before —
+        // the View-menu Toggle Minimap did nothing — and the old {Binding ShowMinimap} was dead, so
+        // this handler + CodeEditorControl.SetMinimapVisible are what make the toggle real.
+        LiveEditor?.SetMinimapVisible(show);
     }
     private void OnToggleColumnSelectionRequestedHandler(object? s, bool enabled)
     {
@@ -277,6 +296,7 @@ public partial class CodeEditorDocumentView : UserControl
             vm.ReplaceRequested += OnReplaceRequested;
             vm.ToggleCommentRequested += OnToggleCommentRequestedHandler;
             vm.ToggleWhitespaceRequested += OnToggleWhitespaceRequestedHandler;
+            vm.ToggleMinimapRequested += OnToggleMinimapRequestedHandler;
             vm.ToggleColumnSelectionRequested += OnToggleColumnSelectionRequestedHandler;
             vm.DuplicateLineRequested += OnDuplicateLineRequestedHandler;
             vm.MoveLineUpRequested += OnMoveLineUpRequestedHandler;
@@ -1911,6 +1931,20 @@ public partial class CodeEditorDocumentView : UserControl
             var showLineNumbers = (settings?.Get<string>("editor.lineNumbers", "on") ?? "on") != "off";
             var wordWrap = (settings?.Get<string>("editor.wordWrap", "off") ?? "off") != "off";
 
+            // Task 2.1 — indentation / display / behavior settings, now live via this same re-apply.
+            var tabSize = settings?.Get<int>("editor.tabSize", 4) ?? 4;
+            var insertSpaces = settings?.Get<bool>("editor.insertSpaces", true) ?? true;
+            var highlightCurrentLine = settings?.Get<bool>("editor.highlightCurrentLine", true) ?? true;
+            var stickyScroll = settings?.Get<bool>("editor.stickyScroll.enabled", true) ?? true;
+            var bracketColorization = settings?.Get<bool>("editor.bracketPairColorization", true) ?? true;
+            // autoClosingBrackets persists as the VS Code enum string ("always"/"never").
+            var autoCloseBrackets = (settings?.Get<string>("editor.autoClosingBrackets", "always") ?? "always") != "never";
+            var smoothScrolling = settings?.Get<bool>("editor.smoothScrolling", true) ?? true;
+            var minimapEnabled = settings?.Get<bool>("editor.minimap.enabled", true) ?? true;
+            // renderWhitespace: any value other than "none" makes whitespace visible (boundary /
+            // selection are treated as "all" — see D3: those choices were removed from the dialog).
+            var renderWhitespace = (settings?.Get<string>("editor.renderWhitespace", "none") ?? "none") != "none";
+
             var editors = new[]
             {
                 MainEditor,
@@ -1934,6 +1968,15 @@ public partial class CodeEditorDocumentView : UserControl
 
                 editor.ShowLineNumbers = showLineNumbers;
                 editor.WordWrap = wordWrap;
+
+                editor.SetIndentation(tabSize, insertSpaces);
+                editor.SetHighlightCurrentLine(highlightCurrentLine);
+                editor.StickyScrollEnabled = stickyScroll;
+                editor.BracketPairColorization = bracketColorization;
+                editor.AutoCloseBrackets = autoCloseBrackets;
+                editor.SmoothScrolling = smoothScrolling;
+                editor.SetMinimapVisible(minimapEnabled);
+                editor.SetWhitespaceVisible(renderWhitespace);
             }
         }
         catch

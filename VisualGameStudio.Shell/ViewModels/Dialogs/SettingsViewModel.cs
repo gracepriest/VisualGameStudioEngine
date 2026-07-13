@@ -307,15 +307,19 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private string _renderWhitespace = "none";
 
+    // D3: only "none"/"all" are supported by the editor (SetWhitespaceVisible is all-or-nothing).
+    // "boundary"/"selection" stay in the schema but are dropped from the dialog to keep the UI
+    // honest; ApplyEditorSettings still treats any non-"none" value as "all".
     [ObservableProperty]
-    private ObservableCollection<string> _renderWhitespaceOptions = new() { "none", "all", "boundary", "selection" };
+    private ObservableCollection<string> _renderWhitespaceOptions = new() { "none", "all" };
 
     // Word Wrap mode
     [ObservableProperty]
     private string _wordWrapMode = "off";
 
+    // D3: "wordWrapColumn" is unsupported (no column-based wrap surface); dropped from the dialog.
     [ObservableProperty]
-    private ObservableCollection<string> _wordWrapModes = new() { "off", "on", "wordWrapColumn" };
+    private ObservableCollection<string> _wordWrapModes = new() { "off", "on" };
 
     // Cursor Blinking
     [ObservableProperty]
@@ -904,7 +908,8 @@ public partial class SettingsViewModel : ViewModelBase
             MakeBool("editor.smoothScrolling", "Smooth Scrolling", "Animate scrolling for a smoother visual experience.", "Editor", nameof(SmoothScrolling), true),
             MakeBool("editor.formatOnSave", "Format On Save", "Format a file on save.", "Editor", nameof(FormatOnSave), false),
             MakeBool("editor.trimTrailingWhitespaceOnSave", "Trim Trailing Whitespace", "Remove trailing whitespace when saving a file.", "Editor", nameof(TrimTrailingWhitespaceOnSave), false),
-            MakeCombo("editor.cursorBlinking", "Cursor Blinking", "Controls cursor blinking animation style.", "Editor", nameof(CursorBlinking), CursorBlinkingOptions, "blink"),
+            // D3: editor.cursorBlinking removed from the dialog — no cursor-blink rendering surface
+            // exists yet. The key remains in the schema so a future feature can adopt it.
 
             // ===== Workbench =====
             MakeCombo("workbench.colorTheme", "Color Theme", "Overall color theme for the IDE.", "Workbench", nameof(SelectedTheme), AvailableThemes, "Dark"),
@@ -1143,24 +1148,32 @@ public partial class SettingsViewModel : ViewModelBase
 
         var scope = ActiveScope;
 
-        // Special transformations
+        // Special transformations: a couple of bool toggles persist as VS Code enum strings.
+        // These used to `return` right here, BEFORE the SettingsChanged broadcast below — so a
+        // ShowLineNumbers / AutoCloseBrackets dialog edit wrote the value but never told open
+        // editors to re-read it (the live re-apply was silently skipped). Fall through to the
+        // single broadcast instead.
         switch (prop)
         {
             case nameof(ShowLineNumbers):
                 _settingsService.Set(key, (bool)value! ? "on" : "off", scope);
-                return;
+                break;
             case nameof(AutoCloseBrackets):
                 _settingsService.Set(key, (bool)value! ? "always" : "never", scope);
-                return;
+                break;
+            default:
+                if (value is bool b)
+                    _settingsService.Set(key, b, scope);
+                else if (value is int i)
+                    _settingsService.Set(key, i, scope);
+                else if (value is string s)
+                    _settingsService.Set(key, s, scope);
+                break;
         }
 
-        if (value is bool b)
-            _settingsService.Set(key, b, scope);
-        else if (value is int i)
-            _settingsService.Set(key, i, scope);
-        else if (value is string s)
-            _settingsService.Set(key, s, scope);
-
+        // Fire exactly once per call, for every key (normal and special-cased alike). The switch
+        // above no longer returns early, so there is no double-fire for normal keys and no
+        // missed-fire for the two special cases.
         SettingsChanged?.Invoke(this, EventArgs.Empty);
     }
 

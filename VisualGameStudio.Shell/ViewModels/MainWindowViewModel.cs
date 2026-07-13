@@ -550,13 +550,23 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             ReduceMotion = _settingsService.Get(SettingsKeys.AccessibilityReduceMotion, false);
             ZoomLevel = _settingsService.Get(SettingsKeys.ZoomLevel, 100);
+
+            // Seed the View-menu toggle state (minimap / whitespace) from the editor settings so the
+            // menu checkmarks reflect reality at startup, and re-seed on live changes. The editors
+            // themselves re-read these via ApplyEditorSettings; this only mirrors the state.
+            ShowMinimap = _settingsService.Get("editor.minimap.enabled", true);
+            ShowWhitespace = _settingsService.Get("editor.renderWhitespace", "none") != "none";
+            _settingsService.SettingChanged += OnEditorDisplaySettingChanged;
         }
 
-        // Trim-trailing-whitespace-on-save is consumed by SaveDocumentCoreAsync (verified working).
-        // Name it so the Phase 3 settings-consumer contract test knows it is live.
-        SettingsConsumerRegistry.RegisterConsumer(
-            "editor.trimTrailingWhitespaceOnSave",
-            "MainWindowViewModel.SaveDocumentCoreAsync → trim trailing whitespace before save");
+        // Name the MainWindowViewModel-side settings consumers for the Phase 3 contract test.
+        // trimTrailingWhitespaceOnSave was already verified working; the rest are wired in 2.1.
+        SettingsConsumerRegistry.RegisterConsumer("editor.trimTrailingWhitespaceOnSave", "MainWindowViewModel.SaveDocumentCoreAsync → trim trailing whitespace before save");
+        SettingsConsumerRegistry.RegisterConsumer("editor.formatOnSave", "MainWindowViewModel.SaveDocumentCoreAsync → format document before save");
+        SettingsConsumerRegistry.RegisterConsumer("editor.tabSize", "MainWindowViewModel.BuildFormattingOptions → LSP FormattingOptions.TabSize");
+        SettingsConsumerRegistry.RegisterConsumer("editor.insertSpaces", "MainWindowViewModel.BuildFormattingOptions → LSP FormattingOptions.InsertSpaces");
+        SettingsConsumerRegistry.RegisterConsumer("editor.minimap.enabled", "MainWindowViewModel.ShowMinimap → View-menu toggle state");
+        SettingsConsumerRegistry.RegisterConsumer("editor.renderWhitespace", "MainWindowViewModel.ShowWhitespace → View-menu toggle state");
 
         // ── Activity bar badge subscriptions ──
         // Source Control badge: track staged + unstaged change counts
@@ -2453,6 +2463,14 @@ public partial class MainWindowViewModel : ViewModelBase
         if (!_documentsBeingSaved.Add(filePath)) return false;
         try
         {
+            // Format on save (editor.formatOnSave), before trim + save so the formatter's output is
+            // itself trimmed and persisted. Best-effort: a formatter error must never block a save.
+            if (_settingsService?.Get("editor.formatOnSave", false) ?? false)
+            {
+                try { await FormatDocumentContentAsync(doc); }
+                catch { /* formatting is best-effort */ }
+            }
+
             // Apply trim trailing whitespace setting before saving
             doc.TrimTrailingWhitespaceOnSave =
                 _settingsService?.Get("editor.trimTrailingWhitespaceOnSave", false) ?? false;
@@ -6659,6 +6677,25 @@ $"""
         StatusText = ShowMinimap ? "Minimap visible" : "Minimap hidden";
     }
 
+    /// <summary>
+    /// Mirrors editor.minimap.enabled / editor.renderWhitespace changes onto the View-menu toggle
+    /// state so the menu checkmarks stay truthful when the settings change (e.g. via the Settings
+    /// dialog). The editors re-read these through ApplyEditorSettings independently.
+    /// </summary>
+    private void OnEditorDisplaySettingChanged(object? sender, SettingChangedEventArgs e)
+    {
+        if (_settingsService == null) return;
+        if (e.Key != "editor.minimap.enabled" && e.Key != "editor.renderWhitespace") return;
+
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (e.Key == "editor.minimap.enabled")
+                ShowMinimap = _settingsService.Get("editor.minimap.enabled", true);
+            else
+                ShowWhitespace = _settingsService.Get("editor.renderWhitespace", "none") != "none";
+        });
+    }
+
     [RelayCommand]
     private void ToggleBreadcrumbs()
     {
@@ -7331,6 +7368,17 @@ $"""
         }
     }
 
+    /// <summary>
+    /// Builds LSP formatting options from the editor.tabSize / editor.insertSpaces settings so
+    /// Format Document (and format-on-save) honor the user's indentation preferences instead of
+    /// always sending the 4-spaces defaults.
+    /// </summary>
+    private FormattingOptionsInfo BuildFormattingOptions() => new()
+    {
+        TabSize = _settingsService?.Get("editor.tabSize", 4) ?? 4,
+        InsertSpaces = _settingsService?.Get("editor.insertSpaces", true) ?? true,
+    };
+
     private async Task FormatDocumentAsync()
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
@@ -7342,40 +7390,50 @@ $"""
             return;
         }
 
-        var edits = await _languageService.FormatDocumentAsync(activeDoc.FilePath);
-        if (edits.Count > 0)
+        var applied = await FormatDocumentContentAsync(activeDoc);
+        StatusText = applied > 0
+            ? $"Applied {applied} formatting changes"
+            : "Document is already formatted";
+    }
+
+    /// <summary>
+    /// Requests LSP formatting for <paramref name="doc"/> and applies the returned edits to its
+    /// content, returning the number of edits applied (0 if none or the server is not connected).
+    /// Shared by Format Document and format-on-save so both honor editor.tabSize / insertSpaces.
+    /// Operates on the passed document (not necessarily the active one) so SaveAll can format each.
+    /// </summary>
+    private async Task<int> FormatDocumentContentAsync(CodeEditorDocumentViewModel doc)
+    {
+        if (doc.FilePath == null || !_languageService.IsConnected) return 0;
+
+        var edits = await _languageService.FormatDocumentAsync(doc.FilePath, BuildFormattingOptions());
+        if (edits.Count == 0) return 0;
+
+        // Apply the edits in reverse order to preserve offsets.
+        var sortedEdits = edits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
+        var lines = doc.Text.Split('\n');
+
+        foreach (var edit in sortedEdits)
         {
-            // Apply the edits in reverse order to preserve offsets
-            var sortedEdits = edits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
-            var text = activeDoc.Text;
-            var lines = text.Split('\n');
+            // Convert to 0-based indices.
+            var startLine = edit.StartLine - 1;
+            var endLine = edit.EndLine - 1;
+            var startCol = edit.StartColumn - 1;
+            var endCol = edit.EndColumn - 1;
 
-            foreach (var edit in sortedEdits)
+            // Simple line-based replacement for now.
+            if (startLine >= 0 && startLine < lines.Length)
             {
-                // Convert to 0-based indices
-                var startLine = edit.StartLine - 1;
-                var endLine = edit.EndLine - 1;
-                var startCol = edit.StartColumn - 1;
-                var endCol = edit.EndColumn - 1;
-
-                // Simple line-based replacement for now
-                if (startLine >= 0 && startLine < lines.Length)
+                if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
                 {
-                    if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
-                    {
-                        var line = lines[startLine];
-                        lines[startLine] = line.Substring(0, startCol) + edit.NewText + line.Substring(endCol);
-                    }
+                    var line = lines[startLine];
+                    lines[startLine] = line.Substring(0, startCol) + edit.NewText + line.Substring(endCol);
                 }
             }
+        }
 
-            activeDoc.ReplaceContent(string.Join("\n", lines));
-            StatusText = $"Applied {edits.Count} formatting changes";
-        }
-        else
-        {
-            StatusText = "Document is already formatted";
-        }
+        doc.ReplaceContent(string.Join("\n", lines));
+        return edits.Count;
     }
 
     private async Task OnTypeFormattingAsync(CodeEditorDocumentViewModel document, int line, int column, string triggerCharacter)

@@ -2417,6 +2417,48 @@ public partial class CodeEditorControl : UserControl
     }
 
     /// <summary>
+    /// Applies the editor.tabSize / editor.insertSpaces settings to the AvaloniaEdit options and
+    /// keeps the BasicLang indentation strategy in sync. Replaces the hardcoded 4-spaces defaults
+    /// set at editor init so these become live, settings-driven values.
+    /// </summary>
+    public void SetIndentation(int indentationSize, bool convertTabsToSpaces)
+    {
+        if (_textEditor == null) return;
+
+        if (indentationSize > 0)
+            _textEditor.Options.IndentationSize = indentationSize;
+        _textEditor.Options.ConvertTabsToSpaces = convertTabsToSpaces;
+
+        if (_indentationStrategy != null)
+        {
+            _indentationStrategy.IndentSize = _textEditor.Options.IndentationSize;
+            _indentationStrategy.UseTabs = !convertTabsToSpaces;
+        }
+    }
+
+    /// <summary>
+    /// Applies the editor.highlightCurrentLine setting (hardcoded true at init otherwise).
+    /// </summary>
+    public void SetHighlightCurrentLine(bool highlight)
+    {
+        if (_textEditor == null) return;
+        _textEditor.Options.HighlightCurrentLine = highlight;
+    }
+
+    /// <summary>
+    /// Shows or hides this editor's minimap. Pushed from ApplyEditorSettings (editor.minimap.enabled)
+    /// and from the View-menu Toggle Minimap command. Replaces the dead
+    /// <c>{Binding ShowMinimap, FallbackValue=True}</c> binding that resolved against the document
+    /// view-model (which has no such property, so the True fallback always won).
+    /// </summary>
+    public void SetMinimapVisible(bool visible)
+    {
+        var minimap = this.FindControl<Control>("Minimap");
+        if (minimap != null)
+            minimap.IsVisible = visible;
+    }
+
+    /// <summary>
     /// Toggles line comment on the current selection or line
     /// </summary>
     /// <summary>

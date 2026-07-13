@@ -48,10 +48,14 @@
                                           IsVisible="False"/>
     </Grid>
 
+    <!-- Visibility is pushed imperatively via CodeEditorControl.SetMinimapVisible (from
+         ApplyEditorSettings/editor.minimap.enabled and the View-menu toggle). The old
+         {Binding ShowMinimap} resolved against the document view-model, which has no such
+         property, so the True fallback always won and the setting/toggle were dead. -->
     <controls:MinimapControl x:Name="Minimap"
                              Grid.Column="1"
                              Width="100"
-                             IsVisible="{Binding ShowMinimap, FallbackValue=True}"/>
+                             IsVisible="True"/>
   </Grid>
 
 </UserControl>
