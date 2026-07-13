@@ -22,7 +22,7 @@
       </Border>
 
       <!-- Add Function Breakpoint Input -->
-      <Border Padding="2" Background="#1E1E1E">
+      <Border Padding="2" Background="{DynamicResource IdeEditorBg}">
         <Grid ColumnDefinitions="*,Auto">
           <TextBox Grid.Column="0"
                    Text="{Binding NewFunctionName}"
@@ -82,7 +82,7 @@
                         CommandParameter="{Binding}"/>
               <TextBlock Grid.Column="1"
                          Text="{Binding DisplayText}"
-                         Foreground="#CCCCCC"
+                         Foreground="{DynamicResource IdeFg}"
                          FontFamily="Cascadia Code, Consolas, monospace"
                          FontSize="12"
                          VerticalAlignment="Center"
@@ -165,7 +165,7 @@
               <CheckBox Grid.Column="0" IsChecked="{Binding IsEnabled}" Margin="0,0,8,0"/>
               <TextBlock Grid.Column="1"
                          Text="{Binding DisplayText}"
-                         Foreground="#CCCCCC"
+                         Foreground="{DynamicResource IdeFg}"
                          FontFamily="Cascadia Code, Consolas, monospace"
                          FontSize="12"
                          VerticalAlignment="Center"
@@ -270,7 +270,7 @@
               </Panel>
               <TextBlock Grid.Column="2"
                          Text="{Binding DisplayText}"
-                         Foreground="#CCCCCC"
+                         Foreground="{DynamicResource IdeFg}"
                          FontFamily="Cascadia Code, Consolas, monospace"
                          FontSize="12"
                          VerticalAlignment="Center"

@@ -10,8 +10,19 @@
         Title="{Binding FilePath, StringFormat='Diff: {0}'}"
         Width="1100" Height="700"
         WindowStartupLocation="CenterOwner"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeEditorBg}">
 
+  <!-- Theme migration (Task 1.6e): CHROME lowered to Ide* DynamicResources by dark-identity.
+       The per-line diff ADD/REMOVE/MODIFY backgrounds are NOT here — they are string
+       properties on the DiffLine model (DiffViewerViewModel.cs: BackgroundColor/
+       LeftBackground/RightBackground, e.g. Added #1E3A1E == IdeDiffAddedBg, Removed
+       #3A1E1E == IdeDiffRemovedBg) bound straight to Background; theming them needs a C#
+       IBrush+FindResource refactor, so they stay literal for now (Light diff rows render
+       dark — known limitation). Intentional LEFT-LITERAL chrome (no key has these Dark
+       values): #333333 (toolbar-button + summary/nav chips), #555555 (button border +
+       separators), #444444 (button hover), #404040 (change-count badge), #2D2D3D (fold
+       placeholder), #1A1A1A (minimap), #4EC9B0/#F48771/#DCDCAA (diff summary glyphs),
+       #D4D4D4/#569CD6 (syntax). -->
   <Window.Styles>
     <Style Selector="TextBlock.diffLine">
       <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace"/>
@@ -35,7 +46,7 @@
       <Setter Property="Background" Value="#444444"/>
     </Style>
     <Style Selector="Border.gapFiller">
-      <Setter Property="Background" Value="#252526"/>
+      <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
     </Style>
     <Style Selector="Border.foldPlaceholder">
       <Setter Property="Background" Value="#2D2D3D"/>
@@ -51,11 +62,11 @@
 
   <DockPanel>
     <!-- Toolbar -->
-    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="8,6">
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdeMenuBg}" Padding="8,6">
       <Grid ColumnDefinitions="*,Auto">
         <!-- Left: file info and change summary -->
         <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-          <TextBlock Text="{Binding FilePath}" Foreground="#CCCCCC" FontSize="12"
+          <TextBlock Text="{Binding FilePath}" Foreground="{DynamicResource IdeFg}" FontSize="12"
                      MaxWidth="400" TextTrimming="CharacterEllipsis"
                      VerticalAlignment="Center"/>
           <Border Background="#333333" CornerRadius="8" Padding="8,2">
@@ -72,7 +83,7 @@
           <!-- Change count badge -->
           <Border Background="#404040" CornerRadius="8" Padding="8,2"
                   IsVisible="{Binding ChangeCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
-            <TextBlock Foreground="#CCCCCC" FontSize="11" VerticalAlignment="Center"
+            <TextBlock Foreground="{DynamicResource IdeFg}" FontSize="11" VerticalAlignment="Center"
                        Text="{Binding ChangeCount, StringFormat='{}{0} changes'}"/>
           </Border>
         </StackPanel>
@@ -82,21 +93,21 @@
           <!-- Change navigation -->
           <Button Classes="toolbarBtn" Command="{Binding GoToPreviousChangeCommand}"
                   ToolTip.Tip="Previous Change (Shift+F7)" IsEnabled="{Binding ChangeCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
-            <TextBlock Text="^" FontWeight="Bold" Foreground="#CCCCCC" FontSize="11"/>
+            <TextBlock Text="^" FontWeight="Bold" Foreground="{DynamicResource IdeFg}" FontSize="11"/>
           </Button>
           <Border Background="#333333" CornerRadius="3" Padding="4,2" VerticalAlignment="Center">
             <StackPanel Orientation="Horizontal">
-              <TextBlock Foreground="#808080" FontSize="10" VerticalAlignment="Center"
+              <TextBlock Foreground="{DynamicResource IdeFgMuted}" FontSize="10" VerticalAlignment="Center"
                          Text="{Binding CurrentChangeIndex}"/>
-              <TextBlock Foreground="#808080" FontSize="10" VerticalAlignment="Center"
+              <TextBlock Foreground="{DynamicResource IdeFgMuted}" FontSize="10" VerticalAlignment="Center"
                          Text="/"/>
-              <TextBlock Foreground="#808080" FontSize="10" VerticalAlignment="Center"
+              <TextBlock Foreground="{DynamicResource IdeFgMuted}" FontSize="10" VerticalAlignment="Center"
                          Text="{Binding ChangeCount}"/>
             </StackPanel>
           </Border>
           <Button Classes="toolbarBtn" Command="{Binding GoToNextChangeCommand}"
                   ToolTip.Tip="Next Change (F7)" IsEnabled="{Binding ChangeCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
-            <TextBlock Text="v" FontWeight="Bold" Foreground="#CCCCCC" FontSize="11"/>
+            <TextBlock Text="v" FontWeight="Bold" Foreground="{DynamicResource IdeFg}" FontSize="11"/>
           </Button>
 
           <Border Width="1" Background="#555555" Margin="4,2"/>
@@ -106,14 +117,14 @@
                         ToolTip.Tip="Fold Unchanged Regions"
                         Width="28" Height="24" Classes="toolbarBtn"
                         Command="{Binding ToggleFoldingCommand}">
-            <TextBlock Text="{}{}" FontSize="10" FontWeight="Bold" Foreground="#CCCCCC"/>
+            <TextBlock Text="{}{}" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
           </ToggleButton>
 
           <!-- View toggle -->
           <ToggleButton IsChecked="{Binding SideBySide}"
                         ToolTip.Tip="Toggle Side-by-Side / Unified View (Ctrl+Shift+M)"
                         Width="28" Height="24" Classes="toolbarBtn">
-            <TextBlock Text="|||" FontSize="10" FontWeight="Bold" Foreground="#CCCCCC"/>
+            <TextBlock Text="|||" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
           </ToggleButton>
 
           <Border Width="1" Background="#555555" Margin="4,2"/>
@@ -125,23 +136,23 @@
     </Border>
 
     <!-- Column Headers (Side by Side only) -->
-    <Border DockPanel.Dock="Top" Background="#252526" Padding="0,4"
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdePanelBg}" Padding="0,4"
             IsVisible="{Binding SideBySide}">
       <Grid ColumnDefinitions="*,2,*">
         <TextBlock Grid.Column="0" Text="{Binding LeftTitle}"
-                   Foreground="#808080" FontSize="11" Margin="50,0,0,0"/>
-        <Border Grid.Column="1" Background="#3C3C3C"/>
+                   Foreground="{DynamicResource IdeFgMuted}" FontSize="11" Margin="50,0,0,0"/>
+        <Border Grid.Column="1" Background="{DynamicResource IdeBorder}"/>
         <TextBlock Grid.Column="2" Text="{Binding RightTitle}"
-                   Foreground="#808080" FontSize="11" Margin="50,0,0,0"/>
+                   Foreground="{DynamicResource IdeFgMuted}" FontSize="11" Margin="50,0,0,0"/>
       </Grid>
     </Border>
 
     <!-- Hunk-level staging toolbar -->
-    <Border DockPanel.Dock="Top" Background="#252526" Padding="8,4"
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdePanelBg}" Padding="8,4"
             IsVisible="{Binding Hunks.Count, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
       <Grid ColumnDefinitions="*,Auto,Auto,Auto">
         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-          <TextBlock Foreground="#808080" FontSize="11" VerticalAlignment="Center"
+          <TextBlock Foreground="{DynamicResource IdeFgMuted}" FontSize="11" VerticalAlignment="Center"
                      Text="{Binding Hunks.Count, StringFormat='{}{0} hunk(s)'}"/>
           <TextBlock Text="{Binding HunkOperationStatus}"
                      Foreground="#4EC9B0" FontSize="11"
@@ -178,9 +189,9 @@
                     <Border Grid.Column="0" Background="{Binding GutterColor}"
                             IsVisible="{Binding HasGutterMark}"/>
                     <!-- Line number -->
-                    <Border Grid.Column="1" Background="#252526" Padding="4,0">
+                    <Border Grid.Column="1" Background="{DynamicResource IdePanelBg}" Padding="4,0">
                       <TextBlock Text="{Binding LeftLineNumberText}"
-                                 Foreground="#606060"
+                                 Foreground="{DynamicResource IdeFgSubtle}"
                                  HorizontalAlignment="Right"
                                  Classes="diffLine"/>
                     </Border>
@@ -199,7 +210,7 @@
         </ScrollViewer>
 
         <!-- Splitter -->
-        <Border Grid.Column="1" Background="#3C3C3C"/>
+        <Border Grid.Column="1" Background="{DynamicResource IdeBorder}"/>
 
         <!-- Right Pane -->
         <ScrollViewer Grid.Column="2" Name="RightScrollViewer"
@@ -214,9 +225,9 @@
                     <Border Grid.Column="0" Background="{Binding GutterColor}"
                             IsVisible="{Binding HasGutterMark}"/>
                     <!-- Line number -->
-                    <Border Grid.Column="1" Background="#252526" Padding="4,0">
+                    <Border Grid.Column="1" Background="{DynamicResource IdePanelBg}" Padding="4,0">
                       <TextBlock Text="{Binding RightLineNumberText}"
-                                 Foreground="#606060"
+                                 Foreground="{DynamicResource IdeFgSubtle}"
                                  HorizontalAlignment="Right"
                                  Classes="diffLine"/>
                     </Border>
@@ -252,7 +263,7 @@
                           Command="{Binding $parent[ItemsControl].DataContext.ExpandFoldedRegionCommand}"
                           CommandParameter="{Binding}">
                     <TextBlock Text="{Binding FoldText}"
-                               Foreground="#808080" FontSize="11"
+                               Foreground="{DynamicResource IdeFgMuted}" FontSize="11"
                                FontStyle="Italic"
                                HorizontalAlignment="Center"
                                Classes="diffLine"/>
@@ -268,17 +279,17 @@
                     <Border Grid.Column="0"
                             Background="{Binding Line.GutterColor}"/>
                     <!-- Left line number -->
-                    <Border Grid.Column="1" Background="#252526" Padding="4,0">
+                    <Border Grid.Column="1" Background="{DynamicResource IdePanelBg}" Padding="4,0">
                       <TextBlock Text="{Binding Line.LeftLineNumberText}"
-                                 Foreground="#606060"
+                                 Foreground="{DynamicResource IdeFgSubtle}"
                                  HorizontalAlignment="Right"
                                  Classes="diffLine"/>
                     </Border>
                     <!-- Right line number -->
-                    <Border Grid.Column="2" Background="#252526" Padding="4,0"
-                            BorderBrush="#3C3C3C" BorderThickness="0,0,1,0">
+                    <Border Grid.Column="2" Background="{DynamicResource IdePanelBg}" Padding="4,0"
+                            BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,1,0">
                       <TextBlock Text="{Binding Line.RightLineNumberText}"
-                                 Foreground="#606060"
+                                 Foreground="{DynamicResource IdeFgSubtle}"
                                  HorizontalAlignment="Right"
                                  Classes="diffLine"/>
                     </Border>

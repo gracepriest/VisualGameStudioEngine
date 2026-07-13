@@ -16,7 +16,7 @@
   <UserControl.Styles>
     <Style Selector="Button.filterButton">
       <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="#808080"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFgMuted}"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="Padding" Value="8,4"/>
       <Setter Property="FontSize" Value="12"/>
@@ -25,11 +25,11 @@
       <Setter Property="MinHeight" Value="0"/>
     </Style>
     <Style Selector="Button.filterButton:pointerover">
-      <Setter Property="Background" Value="#2A2D2E"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
     </Style>
     <Style Selector="Button.filterButton.active">
-      <Setter Property="Background" Value="#094771"/>
+      <Setter Property="Background" Value="{DynamicResource IdeListSelected}"/>
       <Setter Property="Foreground" Value="#FFFFFF"/>
     </Style>
   </UserControl.Styles>
@@ -61,19 +61,19 @@
       </Border>
 
       <!-- Search Box -->
-      <Border DockPanel.Dock="Top" Padding="8,6" Background="#252526">
+      <Border DockPanel.Dock="Top" Padding="8,6" Background="{DynamicResource IdePanelBg}">
         <Grid ColumnDefinitions="Auto,*">
           <TextBlock Grid.Column="0"
                      Text="&#x1F50D;"
                      FontSize="14"
                      VerticalAlignment="Center"
                      Margin="0,0,6,0"
-                     Foreground="#808080"/>
+                     Foreground="{DynamicResource IdeFgMuted}"/>
           <TextBox Grid.Column="1"
                    Text="{Binding SearchQuery, Mode=TwoWay}"
                    Watermark="Search Extensions in Marketplace..."
-                   Background="#3C3C3C"
-                   Foreground="#CCCCCC"
+                   Background="{DynamicResource IdeInputBg}"
+                   Foreground="{DynamicResource IdeFg}"
                    BorderBrush="#555555"
                    BorderThickness="1"
                    CornerRadius="3"
@@ -84,8 +84,8 @@
       </Border>
 
       <!-- Filter Buttons -->
-      <Border DockPanel.Dock="Top" Padding="8,4" Background="#252526"
-              BorderThickness="0,0,0,1" BorderBrush="#3C3C3C">
+      <Border DockPanel.Dock="Top" Padding="8,4" Background="{DynamicResource IdePanelBg}"
+              BorderThickness="0,0,0,1" BorderBrush="{DynamicResource IdeBorder}">
         <StackPanel Orientation="Horizontal" Spacing="4">
           <Button Content="Installed"
                   Command="{Binding SetFilterCommand}"
@@ -109,11 +109,11 @@
       </Border>
 
       <!-- Status / Loading -->
-      <Border DockPanel.Dock="Bottom" Padding="8,4" Background="#252526"
-              BorderThickness="0,1,0,0" BorderBrush="#3C3C3C"
+      <Border DockPanel.Dock="Bottom" Padding="8,4" Background="{DynamicResource IdePanelBg}"
+              BorderThickness="0,1,0,0" BorderBrush="{DynamicResource IdeBorder}"
               IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
         <TextBlock Text="{Binding StatusMessage}"
-                   Foreground="#808080"
+                   Foreground="{DynamicResource IdeFgMuted}"
                    FontSize="11"
                    TextTrimming="CharacterEllipsis"/>
       </Border>
@@ -126,7 +126,7 @@
                 ZIndex="10">
           <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
             <ProgressBar IsIndeterminate="True" Width="120"/>
-            <TextBlock Text="Searching..." Foreground="#CCCCCC" FontSize="12"
+            <TextBlock Text="Searching..." Foreground="{DynamicResource IdeFg}" FontSize="12"
                        HorizontalAlignment="Center"/>
           </StackPanel>
         </Border>
@@ -137,18 +137,18 @@
                 ZIndex="10">
           <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
             <ProgressBar IsIndeterminate="True" Width="120"/>
-            <TextBlock Text="Installing..." Foreground="#CCCCCC" FontSize="12"
+            <TextBlock Text="Installing..." Foreground="{DynamicResource IdeFg}" FontSize="12"
                        HorizontalAlignment="Center"/>
           </StackPanel>
         </Border>
 
         <!-- Detail View (when an extension is selected) -->
         <Border IsVisible="{Binding ShowDetail}"
-                Background="#1E1E1E">
+                Background="{DynamicResource IdeEditorBg}">
           <DockPanel>
             <!-- Back button -->
-            <Border DockPanel.Dock="Top" Padding="8,6" Background="#252526"
-                    BorderThickness="0,0,0,1" BorderBrush="#3C3C3C">
+            <Border DockPanel.Dock="Top" Padding="8,6" Background="{DynamicResource IdePanelBg}"
+                    BorderThickness="0,0,0,1" BorderBrush="{DynamicResource IdeBorder}">
               <Button Content="&#x2190; Back"
                       Command="{Binding BackToListCommand}"
                       Background="Transparent"
@@ -160,13 +160,13 @@
             </Border>
 
             <!-- Extension Detail Header -->
-            <Border DockPanel.Dock="Top" Padding="12,10" Background="#252526">
+            <Border DockPanel.Dock="Top" Padding="12,10" Background="{DynamicResource IdePanelBg}">
               <DockPanel>
                 <!-- Icon -->
                 <Border DockPanel.Dock="Left"
                         Width="48" Height="48"
                         CornerRadius="4"
-                        Background="#3C3C3C"
+                        Background="{DynamicResource IdeHeaderBg}"
                         Margin="0,0,12,0">
                   <TextBlock Text="&#x1F9E9;"
                              FontSize="24"
@@ -182,13 +182,13 @@
                              FontWeight="SemiBold"/>
                   <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="{Binding SelectedExtension.Publisher}"
-                               Foreground="#808080" FontSize="12"/>
+                               Foreground="{DynamicResource IdeFgMuted}" FontSize="12"/>
                     <TextBlock Text="|" Foreground="#404040" FontSize="12"/>
                     <TextBlock Text="{Binding SelectedExtension.Version}"
-                               Foreground="#808080" FontSize="12"/>
+                               Foreground="{DynamicResource IdeFgMuted}" FontSize="12"/>
                     <TextBlock Text="|" Foreground="#404040" FontSize="12"
                                IsVisible="{Binding SelectedExtension.InstallCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"/>
-                    <TextBlock Foreground="#808080" FontSize="12"
+                    <TextBlock Foreground="{DynamicResource IdeFgMuted}" FontSize="12"
                                IsVisible="{Binding SelectedExtension.InstallCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"
                                Text="{Binding SelectedExtension.FormattedInstallCount, StringFormat='{}{0} installs'}"/>
                   </StackPanel>
@@ -227,7 +227,7 @@
                             CommandParameter="{Binding SelectedExtension}"
                             IsVisible="{Binding SelectedExtension.IsEnabled}"
                             Background="Transparent"
-                            Foreground="#808080"
+                            Foreground="{DynamicResource IdeFgMuted}"
                             BorderBrush="#555555"
                             BorderThickness="1"
                             Padding="12,6"
@@ -252,7 +252,7 @@
             <!-- Detail content -->
             <ScrollViewer Padding="12,8">
               <TextBlock Text="{Binding SelectedExtension.DetailMarkdown}"
-                         Foreground="#CCCCCC"
+                         Foreground="{DynamicResource IdeFg}"
                          FontSize="13"
                          TextWrapping="Wrap"
                          LineHeight="20"/>
@@ -268,7 +268,7 @@
                   DockPanel.Dock="Top"
                   Padding="16">
             <TextBlock Text="No extensions found."
-                       Foreground="#808080"
+                       Foreground="{DynamicResource IdeFgMuted}"
                        FontSize="13"
                        HorizontalAlignment="Center"/>
           </Border>
@@ -290,7 +290,7 @@
                     <Border Grid.Column="0" Grid.RowSpan="2"
                             Width="32" Height="32"
                             CornerRadius="4"
-                            Background="#3C3C3C"
+                            Background="{DynamicResource IdeHeaderBg}"
                             Margin="0,0,10,0"
                             VerticalAlignment="Top">
                       <TextBlock Text="&#x1F9E9;"
@@ -307,7 +307,7 @@
                                  FontWeight="SemiBold"
                                  TextTrimming="CharacterEllipsis"/>
                       <TextBlock Text="{Binding Version}"
-                                 Foreground="#606060"
+                                 Foreground="{DynamicResource IdeFgSubtle}"
                                  FontSize="11"
                                  VerticalAlignment="Center"/>
                     </StackPanel>
@@ -334,7 +334,7 @@
                     <!-- Description -->
                     <TextBlock Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
                                Text="{Binding Description}"
-                               Foreground="#808080"
+                               Foreground="{DynamicResource IdeFgMuted}"
                                FontSize="11"
                                TextTrimming="CharacterEllipsis"
                                MaxLines="1"
@@ -353,10 +353,10 @@
                 <Setter Property="MinHeight" Value="0"/>
               </Style>
               <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                <Setter Property="Background" Value="#2A2D2E"/>
+                <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
               </Style>
               <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                <Setter Property="Background" Value="#094771"/>
+                <Setter Property="Background" Value="{DynamicResource IdeListSelected}"/>
               </Style>
             </ListBox.Styles>
           </ListBox>
@@ -378,7 +378,7 @@
                     <Border Grid.Column="0" Grid.RowSpan="2"
                             Width="32" Height="32"
                             CornerRadius="4"
-                            Background="#3C3C3C"
+                            Background="{DynamicResource IdeHeaderBg}"
                             Margin="0,0,10,0"
                             VerticalAlignment="Top">
                       <TextBlock Text="&#x1F9E9;"
@@ -395,7 +395,7 @@
                                  FontWeight="SemiBold"
                                  TextTrimming="CharacterEllipsis"/>
                       <TextBlock Text="{Binding Version}"
-                                 Foreground="#606060"
+                                 Foreground="{DynamicResource IdeFgSubtle}"
                                  FontSize="11"
                                  VerticalAlignment="Center"/>
                     </StackPanel>
@@ -408,7 +408,7 @@
                               CommandParameter="{Binding}"
                               IsVisible="{Binding IsEnabled}"
                               Background="Transparent"
-                              Foreground="#808080"
+                              Foreground="{DynamicResource IdeFgMuted}"
                               BorderThickness="0"
                               Padding="4,2"
                               MinHeight="0"
@@ -443,7 +443,7 @@
                     <StackPanel Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
                                 Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
                       <TextBlock Text="{Binding Description}"
-                                 Foreground="#808080"
+                                 Foreground="{DynamicResource IdeFgMuted}"
                                  FontSize="11"
                                  TextTrimming="CharacterEllipsis"
                                  MaxLines="1"/>
@@ -464,10 +464,10 @@
                 <Setter Property="MinHeight" Value="0"/>
               </Style>
               <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                <Setter Property="Background" Value="#2A2D2E"/>
+                <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
               </Style>
               <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                <Setter Property="Background" Value="#094771"/>
+                <Setter Property="Background" Value="{DynamicResource IdeListSelected}"/>
               </Style>
             </ListBox.Styles>
           </ListBox>

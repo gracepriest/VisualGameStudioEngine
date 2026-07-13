@@ -7,6 +7,16 @@
              x:Class="VisualGameStudio.Shell.Views.Panels.ProblemsView"
              x:DataType="vm:ProblemsViewModel">
 
+  <!-- Theme migration (Task 1.6e): chrome lowered to Ide* DynamicResources by dark-identity.
+       NOTE re the plan's "delete DataGrid Background/RowBackground locals": the local values
+       here are #1E1E1E (editor canvas) but the GLOBAL DataGrid style is IdePanelBg (#252526),
+       so deleting would shift the grid from #1E1E1E to #252526 in Dark — a Dark rendering
+       change the cardinal rule forbids. Instead the locals (and the grouped TreeView) map to
+       IdeEditorBg (Dark == #1E1E1E, exact), which is dark-identical AND themes to white in
+       Light. Severity glyphs #CCA700 -> IdeWarningFg and #3794FF -> IdeAccent (exact matches).
+       LEFT LITERAL (no key has these Dark values): #F14C4C (error red), #3C9D3C (success
+       check), #37373D (group count badge), #505050 (filter-input border), White (glyph on
+       the red error dot). -->
   <Border Classes="toolPanel">
     <DockPanel>
       <!-- Toolbar -->
@@ -29,11 +39,11 @@
                 <TextBlock Text="&#x1F4C4;" FontSize="12" VerticalAlignment="Center"/>
                 <TextBlock Text="{Binding IsFilterByCurrentFile, Converter={x:Static vm:ProblemsView_Converters.FileScopeTextConverter}}"
                            VerticalAlignment="Center" FontSize="11"
-                           Foreground="#CCCCCC"/>
+                           Foreground="{DynamicResource IdeFg}"/>
               </StackPanel>
             </ToggleButton>
 
-            <Border Width="1" Background="#3C3C3C" Margin="2,4"/>
+            <Border Width="1" Background="{DynamicResource IdeBorder}" Margin="2,4"/>
 
             <!-- Error toggle -->
             <ToggleButton Classes="toolbarButton"
@@ -59,10 +69,10 @@
                           ToolTip.Tip="Toggle warnings"
                           Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                          AutomationProperties.Name="Toggle Warnings">
               <StackPanel Orientation="Horizontal" Spacing="3">
-                <TextBlock Text="&#x26A0;" Foreground="#CCA700" FontSize="13"
+                <TextBlock Text="&#x26A0;" Foreground="{DynamicResource IdeWarningFg}" FontSize="13"
                            VerticalAlignment="Center" Margin="0,-1,0,0"/>
                 <TextBlock Text="{Binding WarningCount}"
-                           Foreground="#CCA700" VerticalAlignment="Center" FontSize="12"
+                           Foreground="{DynamicResource IdeWarningFg}" VerticalAlignment="Center" FontSize="12"
                            MinWidth="14" TextAlignment="Center"/>
               </StackPanel>
             </ToggleButton>
@@ -73,15 +83,15 @@
                           ToolTip.Tip="Toggle info"
                           Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                          AutomationProperties.Name="Toggle Info">
               <StackPanel Orientation="Horizontal" Spacing="3">
-                <TextBlock Text="&#x2139;" Foreground="#3794FF" FontSize="13"
+                <TextBlock Text="&#x2139;" Foreground="{DynamicResource IdeAccent}" FontSize="13"
                            VerticalAlignment="Center" Margin="0,-1,0,0"/>
                 <TextBlock Text="{Binding InfoCount}"
-                           Foreground="#3794FF" VerticalAlignment="Center" FontSize="12"
+                           Foreground="{DynamicResource IdeAccent}" VerticalAlignment="Center" FontSize="12"
                            MinWidth="14" TextAlignment="Center"/>
               </StackPanel>
             </ToggleButton>
 
-            <Border Width="1" Background="#3C3C3C" Margin="2,4"/>
+            <Border Width="1" Background="{DynamicResource IdeBorder}" Margin="2,4"/>
 
             <!-- Group by file toggle -->
             <ToggleButton Classes="toolbarButton"
@@ -115,7 +125,7 @@
                    Height="24"
                    Margin="4,0"
                    Padding="6,2"
-                   Background="#3C3C3C"
+                   Background="{DynamicResource IdeInputBg}"
                    BorderThickness="1"
                    BorderBrush="#505050"
                    CornerRadius="3"
@@ -124,8 +134,8 @@
       </Border>
 
       <!-- Status bar at bottom -->
-      <Border DockPanel.Dock="Bottom" Background="#252526" Padding="8,2" MinHeight="20">
-        <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="#808080"
+      <Border DockPanel.Dock="Bottom" Background="{DynamicResource IdePanelBg}" Padding="8,2" MinHeight="20">
+        <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{DynamicResource IdeFgMuted}"
                    VerticalAlignment="Center"
                    AutomationProperties.Name="Problems Status"/>
       </Border>
@@ -137,7 +147,7 @@
                     IsVisible="{Binding !HasProblems}" Spacing="8">
           <TextBlock Text="&#x2705;" FontSize="32" HorizontalAlignment="Center"
                      Foreground="#3C9D3C"/>
-          <TextBlock Text="No problems detected" FontSize="14" Foreground="#808080"
+          <TextBlock Text="No problems detected" FontSize="14" Foreground="{DynamicResource IdeFgMuted}"
                      HorizontalAlignment="Center"/>
         </StackPanel>
 
@@ -145,7 +155,7 @@
         <TreeView x:Name="ProblemsTreeView"
                   ItemsSource="{Binding GroupedProblems}"
                   IsVisible="{Binding IsGroupedByFile}"
-                  Background="#1E1E1E"
+                  Background="{DynamicResource IdeEditorBg}"
                   BorderThickness="0"
                   AutomationProperties.Name="Problems list grouped by file">
           <TreeView.DataTemplates>
@@ -154,22 +164,22 @@
               <Border Padding="2,3" Cursor="Hand">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <TextBlock Text="&#x25B6;" FontSize="9" VerticalAlignment="Center"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              IsVisible="{Binding !IsExpanded}"/>
                   <TextBlock Text="&#x25BC;" FontSize="9" VerticalAlignment="Center"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              IsVisible="{Binding IsExpanded}"/>
                   <TextBlock Text="&#x1F4C4;" FontSize="12" VerticalAlignment="Center"/>
                   <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" FontSize="12"
-                             Foreground="#CCCCCC" VerticalAlignment="Center"/>
+                             Foreground="{DynamicResource IdeFg}" VerticalAlignment="Center"/>
                   <TextBlock Text="{Binding FilePath}" FontSize="11"
-                             Foreground="#606060" VerticalAlignment="Center"
+                             Foreground="{DynamicResource IdeFgSubtle}" VerticalAlignment="Center"
                              Margin="4,0,0,0" TextTrimming="CharacterEllipsis"
                              MaxWidth="400"/>
                   <Border Background="#37373D" CornerRadius="8" Padding="6,1" Margin="4,0,0,0"
                           VerticalAlignment="Center">
                     <TextBlock Text="{Binding ProblemCount}" FontSize="10"
-                               Foreground="#CCCCCC" TextAlignment="Center"
+                               Foreground="{DynamicResource IdeFg}" TextAlignment="Center"
                                MinWidth="14"/>
                   </Border>
                 </StackPanel>
@@ -188,25 +198,25 @@
                   <!-- Message -->
                   <TextBlock Grid.Column="1"
                              Text="{Binding Message}" FontSize="12"
-                             Foreground="#CCCCCC"
+                             Foreground="{DynamicResource IdeFg}"
                              VerticalAlignment="Center"
                              TextTrimming="CharacterEllipsis"
                              Margin="4,0"/>
                   <!-- Code -->
                   <TextBlock Grid.Column="2"
                              Text="{Binding Code}" FontSize="11"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              VerticalAlignment="Center"
                              TextAlignment="Left"/>
                   <!-- Source -->
                   <TextBlock Grid.Column="3"
                              Text="{Binding Source}" FontSize="11"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              VerticalAlignment="Center"
                              TextAlignment="Left"/>
                   <!-- Line:Column -->
                   <TextBlock Grid.Column="4" FontSize="11"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              VerticalAlignment="Center"
                              TextAlignment="Right"
                              Margin="0,0,8,0">
@@ -235,8 +245,8 @@
                   CanUserSortColumns="True"
                   GridLinesVisibility="None"
                   BorderThickness="0"
-                  Background="#1E1E1E"
-                  RowBackground="#1E1E1E"
+                  Background="{DynamicResource IdeEditorBg}"
+                  RowBackground="{DynamicResource IdeEditorBg}"
                   MinHeight="100"
                   AutomationProperties.Name="Problems List">
 

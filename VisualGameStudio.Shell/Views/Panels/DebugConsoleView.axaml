@@ -7,7 +7,7 @@
              mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
              x:Class="VisualGameStudio.Shell.Views.Panels.DebugConsoleView"
              x:DataType="vm:DebugConsoleViewModel"
-             Background="#1E1E1E">
+             Background="{DynamicResource IdeEditorBg}">
 
   <UserControl.Styles>
     <!-- Monospace font for all text in the console -->
@@ -16,9 +16,9 @@
       <Setter Property="FontSize" Value="12"/>
     </Style>
     <Style Selector="TextBox">
-      <Setter Property="Background" Value="#252526"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
-      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource IdeBorder}"/>
       <Setter Property="CaretBrush" Value="#FFFFFF"/>
       <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace"/>
       <Setter Property="FontSize" Value="12"/>
@@ -28,7 +28,7 @@
     </Style>
     <Style Selector="Button.toolbar-btn">
       <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
       <Setter Property="Padding" Value="6,2"/>
       <Setter Property="MinWidth" Value="24"/>
       <Setter Property="MinHeight" Value="20"/>
@@ -36,12 +36,12 @@
       <Setter Property="FontSize" Value="11"/>
     </Style>
     <Style Selector="Button.toolbar-btn:pointerover">
-      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
     </Style>
     <Style Selector="ComboBox.filter-combo">
-      <Setter Property="Background" Value="#3C3C3C"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
-      <Setter Property="BorderBrush" Value="#3C3C3C"/>
+      <Setter Property="Background" Value="{DynamicResource IdeInputBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource IdeBorder}"/>
       <Setter Property="FontSize" Value="11"/>
       <Setter Property="MinHeight" Value="22"/>
       <Setter Property="Padding" Value="6,2"/>
@@ -58,7 +58,7 @@
   <Grid RowDefinitions="Auto,*,Auto">
 
     <!-- Toolbar -->
-    <Border Grid.Row="0" Background="#252526" BorderBrush="#3C3C3C" BorderThickness="0,0,0,1"
+    <Border Grid.Row="0" Background="{DynamicResource IdePanelBg}" BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1"
             Padding="4,2">
       <StackPanel Orientation="Horizontal" Spacing="4">
         <Button Classes="toolbar-btn"
@@ -66,16 +66,16 @@
                 Command="{Binding ClearCommand}"
                 ToolTip.Tip="Clear console (Ctrl+L)"
                 AutomationProperties.Name="Clear Debug Console"/>
-        <Separator Background="#3C3C3C" Width="1" Margin="4,2"/>
+        <Separator Background="{DynamicResource IdeBorder}" Width="1" Margin="4,2"/>
         <ComboBox Classes="filter-combo"
                   ItemsSource="{Binding FilterModes}"
                   SelectedItem="{Binding FilterMode}"
                   ToolTip.Tip="Filter entries"
                   AutomationProperties.Name="Filter Mode"/>
-        <Separator Background="#3C3C3C" Width="1" Margin="4,2"/>
+        <Separator Background="{DynamicResource IdeBorder}" Width="1" Margin="4,2"/>
         <CheckBox Content="Timestamps"
                   IsChecked="{Binding ShowTimestamps}"
-                  Foreground="#CCCCCC"
+                  Foreground="{DynamicResource IdeFg}"
                   FontSize="11"
                   VerticalAlignment="Center"
                   ToolTip.Tip="Show timestamps on entries"/>
@@ -83,7 +83,7 @@
     </Border>
 
     <!-- Output Area -->
-    <Border Grid.Row="1" Background="#1E1E1E">
+    <Border Grid.Row="1" Background="{DynamicResource IdeEditorBg}">
       <ScrollViewer x:Name="OutputScroller"
                     HorizontalScrollBarVisibility="Auto"
                     VerticalScrollBarVisibility="Auto"
@@ -171,7 +171,7 @@
     </Border>
 
     <!-- Input Area -->
-    <Border Grid.Row="2" BorderBrush="#3C3C3C" BorderThickness="0,1,0,0" Background="#252526">
+    <Border Grid.Row="2" BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,1,0,0" Background="{DynamicResource IdePanelBg}">
     <Grid ColumnDefinitions="Auto,*">
       <!-- Prompt -->
       <TextBlock Grid.Column="0"
@@ -204,13 +204,13 @@
                PlacementTarget="{Binding #InputTextBox}"
                Placement="Top"
                IsLightDismissEnabled="True">
-          <Border Background="#252526" BorderBrush="#3C3C3C" BorderThickness="1"
+          <Border Background="{DynamicResource IdePanelBg}" BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1"
                   CornerRadius="2" MaxHeight="200" MinWidth="200">
             <ListBox x:Name="SuggestionsList"
                      ItemsSource="{Binding Suggestions}"
                      SelectedIndex="{Binding SelectedSuggestionIndex}"
                      Background="Transparent"
-                     Foreground="#CCCCCC"
+                     Foreground="{DynamicResource IdeFg}"
                      FontFamily="Cascadia Code, Consolas, monospace"
                      FontSize="12"
                      DoubleTapped="OnSuggestionDoubleTapped"

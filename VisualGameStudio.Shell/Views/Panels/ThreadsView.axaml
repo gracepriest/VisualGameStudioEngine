@@ -41,7 +41,7 @@
               <!-- Thread name and preview -->
               <StackPanel Grid.Column="1" Orientation="Vertical">
                 <TextBlock Text="{Binding Name}"
-                           Foreground="#CCCCCC"
+                           Foreground="{DynamicResource IdeFg}"
                            FontFamily="Cascadia Code, Consolas, monospace"
                            FontSize="12"
                            TextTrimming="CharacterEllipsis"/>

@@ -39,7 +39,7 @@
                   Spacing="12"
                   Margin="20">
         <TextBlock Text="No Git repository"
-                   Foreground="#808080"
+                   Foreground="{DynamicResource IdeFgMuted}"
                    HorizontalAlignment="Center"/>
         <Button Content="Initialize Repository"
                 Command="{Binding InitRepositoryCommand}"
@@ -49,7 +49,7 @@
       <!-- Git Repository Content -->
       <DockPanel IsVisible="{Binding IsGitRepository}">
         <!-- Toolbar -->
-        <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="8,4">
+        <Border DockPanel.Dock="Top" Background="{DynamicResource IdeMenuBg}" Padding="8,4">
           <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
             <!-- Branch selector -->
             <ComboBox Grid.Column="0"
@@ -97,20 +97,20 @@
 
         <!-- Ahead/Behind indicator -->
         <Border DockPanel.Dock="Top"
-                Background="#252526"
+                Background="{DynamicResource IdePanelBg}"
                 Padding="8,4"
                 IsVisible="{Binding AheadCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
           <StackPanel Orientation="Horizontal" Spacing="12">
-            <TextBlock FontSize="11" Foreground="#808080"
+            <TextBlock FontSize="11" Foreground="{DynamicResource IdeFgMuted}"
                        Text="{Binding AheadCount, StringFormat='↑ {0} ahead'}"/>
-            <TextBlock FontSize="11" Foreground="#808080"
+            <TextBlock FontSize="11" Foreground="{DynamicResource IdeFgMuted}"
                        Text="{Binding BehindCount, StringFormat='↓ {0} behind'}"
                        IsVisible="{Binding BehindCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}"/>
           </StackPanel>
         </Border>
 
         <!-- Commit message -->
-        <Border DockPanel.Dock="Top" Background="#252526" Padding="8">
+        <Border DockPanel.Dock="Top" Background="{DynamicResource IdePanelBg}" Padding="8">
           <StackPanel Spacing="8">
             <TextBox Text="{Binding CommitMessage}"
                      Watermark="Commit message"
@@ -136,11 +136,11 @@
                 <StackPanel Orientation="Horizontal" Spacing="8">
                   <TextBlock Text="Staged Changes" FontWeight="SemiBold"/>
                   <TextBlock Text="{Binding StagedChanges.Count, StringFormat='({0})'}"
-                             Foreground="#808080"/>
+                             Foreground="{DynamicResource IdeFgMuted}"/>
                 </StackPanel>
               </Expander.Header>
               <StackPanel>
-                <Border Background="#1E1E1E" Padding="4">
+                <Border Background="{DynamicResource IdeEditorBg}" Padding="4">
                   <Button Content="Unstage All"
                           Command="{Binding UnstageAllCommand}"
                           Classes="toolbarButton"
@@ -152,7 +152,7 @@
                               AutomationProperties.Name="Staged Changes List">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <Border Background="#1E1E1E"
+                      <Border Background="{DynamicResource IdeEditorBg}"
                               Padding="8,4"
                               Margin="0,1,0,0"
                               DoubleTapped="OnChangeItemDoubleTapped"
@@ -170,7 +170,7 @@
                           </Border>
                           <TextBlock Grid.Column="1"
                                      Text="{Binding FileName}"
-                                     Foreground="#CCCCCC"
+                                     Foreground="{DynamicResource IdeFg}"
                                      VerticalAlignment="Center"
                                      TextTrimming="CharacterEllipsis"
                                      ToolTip.Tip="{Binding FilePath}"/>
@@ -196,7 +196,7 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <TextBlock Text="No staged changes"
-                           Foreground="#606060"
+                           Foreground="{DynamicResource IdeFgSubtle}"
                            Margin="8"
                            FontSize="11"
                            IsVisible="{Binding StagedChanges.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}"/>
@@ -209,11 +209,11 @@
                 <StackPanel Orientation="Horizontal" Spacing="8">
                   <TextBlock Text="Changes" FontWeight="SemiBold"/>
                   <TextBlock Text="{Binding UnstagedChanges.Count, StringFormat='({0})'}"
-                             Foreground="#808080"/>
+                             Foreground="{DynamicResource IdeFgMuted}"/>
                 </StackPanel>
               </Expander.Header>
               <StackPanel>
-                <Border Background="#1E1E1E" Padding="4">
+                <Border Background="{DynamicResource IdeEditorBg}" Padding="4">
                   <Button Content="Stage All"
                           Command="{Binding StageAllCommand}"
                           Classes="toolbarButton"
@@ -225,7 +225,7 @@
                               AutomationProperties.Name="Unstaged Changes List">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <Border Background="#1E1E1E"
+                      <Border Background="{DynamicResource IdeEditorBg}"
                               Padding="8,4"
                               Margin="0,1,0,0"
                               DoubleTapped="OnChangeItemDoubleTapped"
@@ -243,7 +243,7 @@
                           </Border>
                           <TextBlock Grid.Column="1"
                                      Text="{Binding FileName}"
-                                     Foreground="#CCCCCC"
+                                     Foreground="{DynamicResource IdeFg}"
                                      VerticalAlignment="Center"
                                      TextTrimming="CharacterEllipsis"
                                      ToolTip.Tip="{Binding FilePath}"/>
@@ -277,7 +277,7 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <TextBlock Text="No changes"
-                           Foreground="#606060"
+                           Foreground="{DynamicResource IdeFgSubtle}"
                            Margin="8"
                            FontSize="11"
                            IsVisible="{Binding UnstagedChanges.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}"/>

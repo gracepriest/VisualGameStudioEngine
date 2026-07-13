@@ -6,11 +6,11 @@
              mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
              x:Class="VisualGameStudio.Shell.Views.Panels.GitBranchesView"
              x:DataType="vm:GitBranchesViewModel"
-             Background="#1E1E1E">
+             Background="{DynamicResource IdeEditorBg}">
 
   <DockPanel>
     <!-- Toolbar -->
-    <Border DockPanel.Dock="Top" Background="#252526" Padding="4">
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdePanelBg}" Padding="4">
       <Grid ColumnDefinitions="*,Auto">
         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
           <Button Command="{Binding RefreshCommand}"
@@ -29,14 +29,14 @@
         <CheckBox Grid.Column="1"
                   IsChecked="{Binding ShowRemoteBranches}"
                   Content="Remote"
-                  Foreground="#CCCCCC"
+                  Foreground="{DynamicResource IdeFg}"
                   FontSize="11"
                   VerticalAlignment="Center"/>
       </Grid>
     </Border>
 
     <!-- Create Branch -->
-    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="8,4">
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdeMenuBg}" Padding="8,4">
       <Grid ColumnDefinitions="*,Auto">
         <TextBox Grid.Column="0"
                  Text="{Binding NewBranchName}"
@@ -53,11 +53,11 @@
 
     <!-- Loading -->
     <Border DockPanel.Dock="Top"
-            Background="#1E1E1E"
+            Background="{DynamicResource IdeEditorBg}"
             Padding="8"
             IsVisible="{Binding IsLoading}">
       <TextBlock Text="Loading branches..."
-                 Foreground="#808080"
+                 Foreground="{DynamicResource IdeFgMuted}"
                  FontSize="11"/>
     </Border>
 
@@ -93,7 +93,7 @@
                            FontWeight="{Binding IsCurrentBranch, Converter={StaticResource BoolToCurrentBranchWeight}}"
                            FontSize="12"/>
                 <TextBlock Text="{Binding TrackingBranch}"
-                           Foreground="#606060"
+                           Foreground="{DynamicResource IdeFgSubtle}"
                            FontSize="10"
                            IsVisible="{Binding TrackingBranch, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
               </StackPanel>
@@ -104,11 +104,11 @@
                           Spacing="4"
                           VerticalAlignment="Center"
                           IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                <Border Background="#3C3C3C"
+                <Border Background="{DynamicResource IdeHeaderBg}"
                         CornerRadius="2"
                         Padding="4,1">
                   <TextBlock Text="{Binding StatusText}"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              FontSize="10"/>
                 </Border>
               </StackPanel>

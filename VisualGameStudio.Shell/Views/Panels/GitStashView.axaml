@@ -7,11 +7,11 @@
              mc:Ignorable="d" d:DesignWidth="300" d:DesignHeight="400"
              x:Class="VisualGameStudio.Shell.Views.Panels.GitStashView"
              x:DataType="vm:GitStashViewModel"
-             Background="#1E1E1E">
+             Background="{DynamicResource IdeEditorBg}">
 
   <DockPanel>
     <!-- Toolbar -->
-    <Border DockPanel.Dock="Top" Background="#252526" Padding="4">
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdePanelBg}" Padding="4">
       <StackPanel Orientation="Horizontal" Spacing="4">
         <Button Command="{Binding RefreshCommand}"
                 ToolTip.Tip="Refresh"
@@ -30,7 +30,7 @@
     </Border>
 
     <!-- Create Stash -->
-    <Border DockPanel.Dock="Top" Background="#2D2D2D" Padding="8,4">
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdeMenuBg}" Padding="8,4">
       <Grid ColumnDefinitions="*,Auto">
         <TextBox Grid.Column="0"
                  Text="{Binding StashMessage}"
@@ -46,27 +46,27 @@
 
     <!-- Loading -->
     <Border DockPanel.Dock="Top"
-            Background="#1E1E1E"
+            Background="{DynamicResource IdeEditorBg}"
             Padding="8"
             IsVisible="{Binding IsLoading}">
       <TextBlock Text="Loading stashes..."
-                 Foreground="#808080"
+                 Foreground="{DynamicResource IdeFgMuted}"
                  FontSize="11"/>
     </Border>
 
     <!-- Empty State -->
     <Border DockPanel.Dock="Top"
-            Background="#1E1E1E"
+            Background="{DynamicResource IdeEditorBg}"
             Padding="16"
             IsVisible="{Binding Stashes.Count, Converter={x:Static local:ZeroIntToBoolConverter.Instance}}">
       <StackPanel HorizontalAlignment="Center" Spacing="8">
         <TextBlock Text="📦" FontSize="32" HorizontalAlignment="Center"/>
         <TextBlock Text="No stashes"
-                   Foreground="#808080"
+                   Foreground="{DynamicResource IdeFgMuted}"
                    FontSize="12"
                    HorizontalAlignment="Center"/>
         <TextBlock Text="Use 'Stash' button to save your changes"
-                   Foreground="#606060"
+                   Foreground="{DynamicResource IdeFgSubtle}"
                    FontSize="11"
                    HorizontalAlignment="Center"/>
       </StackPanel>
@@ -89,7 +89,7 @@
                            FontWeight="SemiBold"
                            FontSize="12"/>
                 <TextBlock Text="{Binding BranchName}"
-                           Foreground="#808080"
+                           Foreground="{DynamicResource IdeFgMuted}"
                            FontSize="11"
                            VerticalAlignment="Center"/>
               </StackPanel>
@@ -97,7 +97,7 @@
               <!-- Message -->
               <TextBlock Grid.Row="1"
                          Text="{Binding Summary}"
-                         Foreground="#CCCCCC"
+                         Foreground="{DynamicResource IdeFg}"
                          FontSize="12"
                          TextTrimming="CharacterEllipsis"
                          Margin="0,2,0,0"/>
@@ -105,7 +105,7 @@
               <!-- Date -->
               <TextBlock Grid.Row="2"
                          Text="{Binding DateFormatted}"
-                         Foreground="#606060"
+                         Foreground="{DynamicResource IdeFgSubtle}"
                          FontSize="10"
                          Margin="0,2,0,0"/>
             </Grid>

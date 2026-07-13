@@ -112,7 +112,8 @@
                                 TextChanged="OnTextChanged"
                                 CaretPositionChanged="OnCaretPositionChanged"/>
 
-      <GridSplitter Grid.Row="1" Background="#3C3C3C" HorizontalAlignment="Stretch"/>
+      <!-- Background dropped: the global GridSplitter style (IdeBorder, Dark #3C3C3C) applies. -->
+      <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch"/>
 
       <editor:CodeEditorControl x:Name="BottomEditor"
                                 Grid.Row="2"
@@ -136,7 +137,8 @@
                                 TextChanged="OnTextChanged"
                                 CaretPositionChanged="OnCaretPositionChanged"/>
 
-      <GridSplitter Grid.Column="1" Background="#3C3C3C" VerticalAlignment="Stretch"/>
+      <!-- Background dropped: the global GridSplitter style (IdeBorder, Dark #3C3C3C) applies. -->
+      <GridSplitter Grid.Column="1" VerticalAlignment="Stretch"/>
 
       <editor:CodeEditorControl x:Name="RightEditor"
                                 Grid.Column="2"

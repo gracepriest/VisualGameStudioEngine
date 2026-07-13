@@ -21,7 +21,7 @@
       </Border>
 
       <!-- Data breakpoint status -->
-      <Border DockPanel.Dock="Bottom" Background="#1E1E1E" Padding="4,2"
+      <Border DockPanel.Dock="Bottom" Background="{DynamicResource IdeEditorBg}" Padding="4,2"
               IsVisible="{Binding DataBreakpointStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
         <TextBlock Text="{Binding DataBreakpointStatusMessage}"
                    Foreground="#D7BA7D"
@@ -30,7 +30,7 @@
       </Border>
 
       <!-- Watch input -->
-      <Border DockPanel.Dock="Bottom" Background="#2D2D2D" Padding="4">
+      <Border DockPanel.Dock="Bottom" Background="{DynamicResource IdeMenuBg}" Padding="4">
         <Grid ColumnDefinitions="*,Auto">
           <TextBox Grid.Column="0"
                    Text="{Binding NewWatchExpression}"
@@ -50,7 +50,7 @@
         <TabItem Header="Locals" AutomationProperties.Name="Locals Tab">
           <TreeView ItemsSource="{Binding VariableTree}"
                     SelectedItem="{Binding SelectedVariable}"
-                    Background="#252526"
+                    Background="{DynamicResource IdePanelBg}"
                     AutomationProperties.Name="Local Variables Tree">
             <TreeView.ItemTemplate>
               <TreeDataTemplate ItemsSource="{Binding Children}">
@@ -88,7 +88,7 @@
                                VerticalAlignment="Center"/>
                     <TextBlock Text=" (loading...)"
                                IsVisible="{Binding IsLoading}"
-                               Foreground="#808080"
+                               Foreground="{DynamicResource IdeFgMuted}"
                                FontStyle="Italic"
                                FontSize="11"
                                VerticalAlignment="Center"/>

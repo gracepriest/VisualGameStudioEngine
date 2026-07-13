@@ -6,27 +6,27 @@
              mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="400"
              x:Class="VisualGameStudio.Shell.Views.Panels.TimelineView"
              x:DataType="vm:TimelineViewModel"
-             Background="#1E1E1E">
+             Background="{DynamicResource IdeEditorBg}">
 
   <DockPanel>
     <!-- Header -->
-    <Border DockPanel.Dock="Top" Background="#252526" Padding="8,4">
+    <Border DockPanel.Dock="Top" Background="{DynamicResource IdePanelBg}" Padding="8,4">
       <Grid ColumnDefinitions="Auto,*,Auto,Auto">
         <TextBlock Grid.Column="0"
                    Text="Timeline"
-                   Foreground="#CCCCCC"
+                   Foreground="{DynamicResource IdeFg}"
                    FontWeight="SemiBold"
                    VerticalAlignment="Center"/>
         <TextBlock Grid.Column="1"
                    Text="{Binding FileName, StringFormat='- {0}'}"
-                   Foreground="#808080"
+                   Foreground="{DynamicResource IdeFgMuted}"
                    Margin="8,0,0,0"
                    VerticalAlignment="Center"
                    TextTrimming="CharacterEllipsis"
                    IsVisible="{Binding FileName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
         <TextBlock Grid.Column="2"
                    Text="{Binding ItemCount, StringFormat='({0})'}"
-                   Foreground="#606060"
+                   Foreground="{DynamicResource IdeFgSubtle}"
                    Margin="4,0"
                    FontSize="11"
                    VerticalAlignment="Center"
@@ -37,26 +37,26 @@
                 Background="Transparent"
                 Padding="4"
                 BorderThickness="0">
-          <TextBlock Text="&#x21BB;" FontSize="14" Foreground="#CCCCCC"/>
+          <TextBlock Text="&#x21BB;" FontSize="14" Foreground="{DynamicResource IdeFg}"/>
         </Button>
       </Grid>
     </Border>
 
     <!-- Loading indicator -->
     <Border DockPanel.Dock="Top"
-            Background="#1E1E1E"
+            Background="{DynamicResource IdeEditorBg}"
             Padding="16"
             IsVisible="{Binding IsLoading}">
       <StackPanel HorizontalAlignment="Center" Spacing="8">
         <TextBlock Text="Loading file history..."
-                   Foreground="#808080"
+                   Foreground="{DynamicResource IdeFgMuted}"
                    FontSize="12"/>
       </StackPanel>
     </Border>
 
     <!-- Error Message -->
     <Border DockPanel.Dock="Top"
-            Background="#1E1E1E"
+            Background="{DynamicResource IdeEditorBg}"
             Padding="16"
             IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
       <StackPanel HorizontalAlignment="Center" Spacing="8">
@@ -72,18 +72,18 @@
 
     <!-- Empty State -->
     <Border DockPanel.Dock="Top"
-            Background="#1E1E1E"
+            Background="{DynamicResource IdeEditorBg}"
             Padding="16"
             IsVisible="{Binding !HasItems}">
       <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8"
                   IsVisible="{Binding !IsLoading}">
         <TextBlock Text="No file selected"
-                   Foreground="#808080"
+                   Foreground="{DynamicResource IdeFgMuted}"
                    FontSize="12"
                    HorizontalAlignment="Center"
                    IsVisible="{Binding CurrentFilePath, Converter={x:Static StringConverters.IsNullOrEmpty}}"/>
         <TextBlock Text="Open a file to view its Git history"
-                   Foreground="#606060"
+                   Foreground="{DynamicResource IdeFgSubtle}"
                    FontSize="11"
                    HorizontalAlignment="Center"/>
       </StackPanel>
@@ -93,7 +93,7 @@
     <ListBox ItemsSource="{Binding Items}"
              SelectedItem="{Binding SelectedItem}"
              IsVisible="{Binding HasItems}"
-             Background="#1E1E1E"
+             Background="{DynamicResource IdeEditorBg}"
              BorderThickness="0">
       <ListBox.Styles>
         <Style Selector="ListBoxItem">
@@ -102,10 +102,10 @@
           <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         </Style>
         <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-          <Setter Property="Background" Value="#2A2D2E"/>
+          <Setter Property="Background" Value="{DynamicResource IdeListHover}"/>
         </Style>
         <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-          <Setter Property="Background" Value="#094771"/>
+          <Setter Property="Background" Value="{DynamicResource IdeListSelected}"/>
         </Style>
       </ListBox.Styles>
       <ListBox.ItemTemplate>
@@ -132,7 +132,7 @@
               <!-- Commit message -->
               <TextBlock Grid.Row="0" Grid.Column="1"
                          Text="{Binding DisplayText}"
-                         Foreground="#CCCCCC"
+                         Foreground="{DynamicResource IdeFg}"
                          FontSize="12"
                          TextTrimming="CharacterEllipsis"/>
 
@@ -152,10 +152,10 @@
                            Foreground="#DCDCAA"
                            FontSize="11"/>
                 <TextBlock Text=","
-                           Foreground="#606060"
+                           Foreground="{DynamicResource IdeFgSubtle}"
                            FontSize="11"/>
                 <TextBlock Text="{Binding RelativeDate}"
-                           Foreground="#808080"
+                           Foreground="{DynamicResource IdeFgMuted}"
                            FontSize="11"/>
               </StackPanel>
             </Grid>

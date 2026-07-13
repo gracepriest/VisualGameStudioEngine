@@ -4,15 +4,15 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="80"
              x:Class="VisualGameStudio.Shell.Views.Controls.FindReplaceControl"
-             Background="#252526"
+             Background="{DynamicResource IdePanelBg}"
              Padding="8,4">
 
   <UserControl.Styles>
     <Style Selector="TextBox">
-      <Setter Property="Background" Value="#3C3C3C"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
-      <Setter Property="BorderBrush" Value="#3C3C3C"/>
-      <Setter Property="CaretBrush" Value="#CCCCCC"/>
+      <Setter Property="Background" Value="{DynamicResource IdeInputBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource IdeBorder}"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource IdeFg}"/>
       <Setter Property="MinHeight" Value="24"/>
       <Setter Property="Padding" Value="6,2"/>
       <Setter Property="FontSize" Value="12"/>
@@ -25,18 +25,18 @@
     </Style>
     <Style Selector="Button.findButton">
       <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
       <Setter Property="Padding" Value="6,2"/>
       <Setter Property="MinWidth" Value="24"/>
       <Setter Property="MinHeight" Value="24"/>
       <Setter Property="BorderThickness" Value="0"/>
     </Style>
     <Style Selector="Button.findButton:pointerover /template/ ContentPresenter">
-      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
     </Style>
     <Style Selector="ToggleButton.optionButton">
       <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="#808080"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFgMuted}"/>
       <Setter Property="Padding" Value="4,2"/>
       <Setter Property="MinWidth" Value="24"/>
       <Setter Property="MinHeight" Value="24"/>
@@ -47,12 +47,12 @@
       <Setter Property="FontWeight" Value="Bold"/>
     </Style>
     <Style Selector="ToggleButton.optionButton:checked">
-      <Setter Property="Background" Value="#094771"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Background" Value="{DynamicResource IdeListSelected}"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
       <Setter Property="BorderBrush" Value="#007ACC"/>
     </Style>
     <Style Selector="ToggleButton.optionButton:pointerover /template/ ContentPresenter">
-      <Setter Property="Background" Value="#3C3C3C"/>
+      <Setter Property="Background" Value="{DynamicResource IdeHeaderBg}"/>
     </Style>
   </UserControl.Styles>
 
@@ -83,7 +83,7 @@
       <TextBlock Grid.Column="2"
                  x:Name="MatchCountDisplay"
                  Text="{Binding MatchCountText, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                 Foreground="#808080"
+                 Foreground="{DynamicResource IdeFgMuted}"
                  FontSize="11"
                  VerticalAlignment="Center"
                  Margin="8,0"/>

@@ -27,7 +27,7 @@
         <ListBox.ItemTemplate>
           <DataTemplate>
             <TextBlock Text="{Binding DisplayText}"
-                       Foreground="#CCCCCC"
+                       Foreground="{DynamicResource IdeFg}"
                        FontFamily="Cascadia Code, Consolas, monospace"
                        FontSize="12"
                        Padding="4,2"/>

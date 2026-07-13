@@ -7,14 +7,14 @@
              x:Class="VisualGameStudio.Shell.Views.Controls.PeekDefinitionControl"
              x:DataType="vm:PeekDefinitionViewModel">
 
-  <Border Background="#1E1E1E"
+  <Border Background="{DynamicResource IdeEditorBg}"
           BorderBrush="#007ACC"
           BorderThickness="1"
           CornerRadius="4">
     <DockPanel>
       <!-- Header -->
       <Border DockPanel.Dock="Top"
-              Background="#252526"
+              Background="{DynamicResource IdeContextBg}"
               Padding="8,4">
         <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto">
           <!-- Navigation arrows (when multiple definitions) -->
@@ -44,11 +44,11 @@
                        Foreground="#DCDCAA"
                        FontSize="12"/>
             <TextBlock Text="{Binding DefinitionLine, StringFormat='Line {0}'}"
-                       Foreground="#808080"
+                       Foreground="{DynamicResource IdeFgMuted}"
                        FontSize="11"
                        VerticalAlignment="Center"/>
             <TextBlock Text="{Binding Definitions.Count, StringFormat='({0} definition(s))'}"
-                       Foreground="#606060"
+                       Foreground="{DynamicResource IdeFgSubtle}"
                        FontSize="10"
                        VerticalAlignment="Center"
                        IsVisible="{Binding Definitions.Count, Converter={StaticResource GreaterThanOneConverter}}"/>
@@ -74,18 +74,18 @@
 
       <!-- Loading State -->
       <Border DockPanel.Dock="Top"
-              Background="#1E1E1E"
+              Background="{DynamicResource IdeEditorBg}"
               Padding="16"
               IsVisible="{Binding IsLoading}">
         <TextBlock Text="Loading definition..."
-                   Foreground="#808080"
+                   Foreground="{DynamicResource IdeFgMuted}"
                    FontSize="12"
                    HorizontalAlignment="Center"/>
       </Border>
 
       <!-- Error State -->
       <Border DockPanel.Dock="Top"
-              Background="#1E1E1E"
+              Background="{DynamicResource IdeEditorBg}"
               Padding="16"
               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
         <TextBlock Text="{Binding ErrorMessage}"
@@ -98,7 +98,7 @@
       <ScrollViewer IsVisible="{Binding HasDefinition}"
                     HorizontalScrollBarVisibility="Auto"
                     VerticalScrollBarVisibility="Auto">
-        <Border Background="#1E1E1E" Padding="8">
+        <Border Background="{DynamicResource IdeEditorBg}" Padding="8">
           <SelectableTextBlock Text="{Binding DefinitionCode}"
                                FontFamily="Cascadia Code, Consolas, monospace"
                                FontSize="12"
