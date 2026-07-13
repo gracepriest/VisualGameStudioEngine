@@ -229,7 +229,13 @@ public partial class NewProjectWizardViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void GoBack() => BackRequested?.Invoke(this, EventArgs.Empty);
+    private void GoBack()
+    {
+        // Clear any prior create error so returning to window 1 and coming back
+        // doesn't re-show a stale error banner on the shared VM.
+        ClearError();
+        BackRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     [RelayCommand]
     private void Cancel() => Cancelled?.Invoke(this, EventArgs.Empty);

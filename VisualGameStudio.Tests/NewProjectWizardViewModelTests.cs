@@ -248,4 +248,17 @@ public class NewProjectWizardViewModelTests
         Assert.That(vm.ShowFrameworkSelector, Is.False);
         Assert.That(vm.ShowCppStandardSelector, Is.True);
     }
+
+    [Test]
+    public void GoBack_ClearsAnyPriorCreateError()
+    {
+        var vm = NewVm(out _);
+        vm.HasError = true;
+        vm.ErrorMessage = "boom";
+
+        vm.GoBackCommand.Execute(null);
+
+        Assert.That(vm.HasError, Is.False);
+        Assert.That(vm.ErrorMessage, Is.Null);
+    }
 }
