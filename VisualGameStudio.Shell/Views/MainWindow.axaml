@@ -634,8 +634,12 @@
     <!-- Main Content - Activity Bar + Dock Control -->
     <Grid ColumnDefinitions="Auto,*">
 
-      <!-- Activity Bar (VS Code-style icon strip with badges) -->
-      <Border Grid.Column="0" Background="#333333" Width="48"
+      <!-- Activity Bar (VS Code-style icon strip with badges). Strip stays dark in Light
+           (IdeActivityBarBg Light == #2C2C2C, by design) and goes true black in HC.
+           The dimmed rest-state icon color (#808080, in the activityBarButton style) and
+           the green Debug glyph (#89D185) are left literal — they read correctly on the
+           always-dark bar and are not dark-identical to IdeActivityBarFg. -->
+      <Border Grid.Column="0" Background="{DynamicResource IdeActivityBarBg}" Width="48"
               IsVisible="{Binding !IsZenMode}"
               AutomationProperties.Name="Activity Bar">
         <StackPanel Spacing="0" Margin="0,4,0,0">
@@ -670,7 +674,7 @@
             <Panel>
               <TextBlock Text="&#x2442;" FontSize="22"
                          HorizontalAlignment="Center" VerticalAlignment="Center"
-                         Foreground="#CCCCCC"/>
+                         Foreground="{DynamicResource IdeActivityBarFg}"/>
               <controls:BadgeControl Count="{Binding SourceControlBadgeCount}"
                                      Kind="Info"
                                      HorizontalAlignment="Right"
@@ -715,7 +719,7 @@
             <Panel>
               <TextBlock Text="&#x2B29;" FontSize="22"
                          HorizontalAlignment="Center" VerticalAlignment="Center"
-                         Foreground="#CCCCCC"/>
+                         Foreground="{DynamicResource IdeActivityBarFg}"/>
               <controls:BadgeControl Count="{Binding ExtensionsBadgeCount}"
                                      Kind="Info"
                                      HorizontalAlignment="Right"
