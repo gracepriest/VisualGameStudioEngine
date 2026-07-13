@@ -18,11 +18,14 @@
        LeftBackground/RightBackground, e.g. Added #1E3A1E == IdeDiffAddedBg, Removed
        #3A1E1E == IdeDiffRemovedBg) bound straight to Background; theming them needs a C#
        IBrush+FindResource refactor, so they stay literal for now (Light diff rows render
-       dark — known limitation). Intentional LEFT-LITERAL chrome (no key has these Dark
-       values): #333333 (toolbar-button BG + summary/nav chips — its Foreground IS themed
-       via IdeFg), #555555 (button border + separators), #444444 (button hover), #404040
-       (change-count badge), #2D2D3D (fold placeholder), #1A1A1A (minimap),
-       #4EC9B0/#F48771/#DCDCAA (diff summary glyphs), #D4D4D4/#569CD6 (syntax). -->
+       dark — known limitation). Toolbar-button/badge/separator chrome was NORMALIZED to
+       the IdeSecondary* family (approved near-variant normalization; small Dark drift
+       #333333/#404040->#3C3C3C, #555555->#5A5A5A, #444444->#4A4A4A — see commit body).
+       Intentional LEFT-LITERAL chrome: #333333 diff-summary chip (its content is the
+       literal semantic glyphs #4EC9B0/#F48771/#DCDCAA; on IdeSecondaryBg's LIGHT face
+       #E5E5E5 the yellow ~N would drop to ~1.2:1 contrast, so the chip stays dark in all
+       themes to keep them readable), #2D2D3D (fold placeholder), #1A1A1A (minimap),
+       #D4D4D4/#569CD6 (syntax). -->
   <Window.Styles>
     <Style Selector="TextBlock.diffLine">
       <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace"/>
@@ -32,10 +35,14 @@
       <Setter Property="Width" Value="45"/>
       <Setter Property="Padding" Value="4,0"/>
     </Style>
+    <!-- APPROVED near-variant normalization (disclosed in the commit body): this button
+         chrome was #333333/#555555/#444444 — near-variants of the IdeSecondary* family
+         (Dark #3C3C3C/#5A5A5A/#4A4A4A). Normalized so the buttons render correctly in
+         Light (#E5E5E5 face, dark text) and HC instead of dark-on-dark. -->
     <Style Selector="Button.toolbarBtn">
-      <Setter Property="Background" Value="#333333"/>
-      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
-      <Setter Property="BorderBrush" Value="#555555"/>
+      <Setter Property="Background" Value="{DynamicResource IdeSecondaryBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeSecondaryFg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource IdeSecondaryBorder}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="6,2"/>
       <Setter Property="FontSize" Value="11"/>
@@ -43,7 +50,7 @@
       <Setter Property="MinHeight" Value="22"/>
     </Style>
     <Style Selector="Button.toolbarBtn:pointerover">
-      <Setter Property="Background" Value="#444444"/>
+      <Setter Property="Background" Value="{DynamicResource IdeSecondaryHover}"/>
     </Style>
     <Style Selector="Border.gapFiller">
       <Setter Property="Background" Value="{DynamicResource IdePanelBg}"/>
@@ -80,8 +87,8 @@
                          Text="{Binding ModifiedLines, StringFormat='~{0}'}"/>
             </StackPanel>
           </Border>
-          <!-- Change count badge -->
-          <Border Background="#404040" CornerRadius="8" Padding="8,2"
+          <!-- Change count badge (normalized: #404040 -> IdeSecondaryBg, same approved family) -->
+          <Border Background="{DynamicResource IdeSecondaryBg}" CornerRadius="8" Padding="8,2"
                   IsVisible="{Binding ChangeCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
             <TextBlock Foreground="{DynamicResource IdeFg}" FontSize="11" VerticalAlignment="Center"
                        Text="{Binding ChangeCount, StringFormat='{}{0} changes'}"/>
@@ -95,7 +102,8 @@
                   ToolTip.Tip="Previous Change (Shift+F7)" IsEnabled="{Binding ChangeCount, Converter={x:Static local:PositiveIntToBoolConverter.Instance}}">
             <TextBlock Text="^" FontWeight="Bold" Foreground="{DynamicResource IdeFg}" FontSize="11"/>
           </Button>
-          <Border Background="#333333" CornerRadius="3" Padding="4,2" VerticalAlignment="Center">
+          <!-- Nav counter chip (normalized: #333333 -> IdeSecondaryBg, same approved family) -->
+          <Border Background="{DynamicResource IdeSecondaryBg}" CornerRadius="3" Padding="4,2" VerticalAlignment="Center">
             <StackPanel Orientation="Horizontal">
               <TextBlock Foreground="{DynamicResource IdeFgMuted}" FontSize="10" VerticalAlignment="Center"
                          Text="{Binding CurrentChangeIndex}"/>
@@ -110,7 +118,7 @@
             <TextBlock Text="v" FontWeight="Bold" Foreground="{DynamicResource IdeFg}" FontSize="11"/>
           </Button>
 
-          <Border Width="1" Background="#555555" Margin="4,2"/>
+          <Border Width="1" Background="{DynamicResource IdeSecondaryBorder}" Margin="4,2"/>
 
           <!-- Fold toggle -->
           <ToggleButton IsChecked="{Binding FoldUnchangedRegions}"
@@ -127,7 +135,7 @@
             <TextBlock Text="|||" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
           </ToggleButton>
 
-          <Border Width="1" Background="#555555" Margin="4,2"/>
+          <Border Width="1" Background="{DynamicResource IdeSecondaryBorder}" Margin="4,2"/>
 
           <Button Content="Close" Command="{Binding $parent[Window].Close}"
                   Classes="toolbarBtn" Width="55"/>
