@@ -10,13 +10,13 @@
         Width="500" Height="450"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Inline Variable" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
-      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+      <TextBlock Text="Inline Variable" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
         <TextBlock.Text>
           <MultiBinding StringFormat="Replace usages of '{0}' with its initializer expression">
             <Binding Path="VariableName"/>
@@ -27,17 +27,17 @@
 
     <!-- Variable Info -->
     <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" Margin="0,0,0,16">
-      <TextBlock Grid.Row="0" Grid.Column="0" Text="Variable:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Variable:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding VariableName}" FontFamily="Consolas" Foreground="#9CDCFE" Margin="0,0,0,4"/>
 
-      <TextBlock Grid.Row="1" Grid.Column="0" Text="Type:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Type:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding VariableType, TargetNullValue='(inferred)'}" FontFamily="Consolas" Foreground="#4EC9B0" Margin="0,0,0,4"/>
 
-      <TextBlock Grid.Row="2" Grid.Column="0" Text="Scope:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Scope:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ContainingMethod, TargetNullValue='(class level)'}" FontFamily="Consolas" Foreground="#DCDCAA" Margin="0,0,0,4"/>
 
-      <TextBlock Grid.Row="3" Grid.Column="0" Text="Usages:" Foreground="#808080" Margin="0,0,8,4"/>
-      <TextBlock Grid.Row="3" Grid.Column="1" Foreground="#CCCCCC" Margin="0,0,0,4">
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="Usages:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="3" Grid.Column="1" Foreground="{DynamicResource IdeFg}" Margin="0,0,0,4">
         <TextBlock.Text>
           <MultiBinding StringFormat="{}{0} usage(s)">
             <Binding Path="UsageCount"/>
@@ -49,12 +49,12 @@
     <!-- Declaration -->
     <TextBlock DockPanel.Dock="Top"
                Text="Declaration:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Padding="8"
@@ -69,12 +69,12 @@
     <!-- Expression to inline -->
     <TextBlock DockPanel.Dock="Top"
                Text="Expression to inline:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Padding="8"
@@ -90,17 +90,17 @@
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
       <CheckBox IsChecked="{Binding RemoveDeclaration}"
                 Content="Remove variable declaration after inlining"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 Margin="0,0,0,4"/>
       <CheckBox IsChecked="{Binding AddParenthesesIfNeeded}"
                 Content="Add parentheses around expression if needed"
-                Foreground="#CCCCCC"/>
+                Foreground="{DynamicResource IdeFg}"/>
     </StackPanel>
 
     <!-- Warning Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding WarningMessage}"
-               Foreground="#CCA700"
+               Foreground="{DynamicResource IdeWarningFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -109,7 +109,7 @@
     <!-- Error Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding ErrorMessage}"
-               Foreground="#F48771"
+               Foreground="{DynamicResource IdeErrorFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -118,12 +118,12 @@
     <!-- Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="Preview:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16"
@@ -144,7 +144,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Processing..." Foreground="#808080"/>
+      <TextBlock Text="Processing..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -153,6 +153,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Inline"

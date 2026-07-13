@@ -10,13 +10,13 @@
         Width="600" Height="650"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Extract Interface" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
-      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+      <TextBlock Text="Extract Interface" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
         <TextBlock.Text>
           <MultiBinding StringFormat="Extract interface from class '{0}'">
             <Binding Path="ClassName"/>
@@ -30,7 +30,7 @@
       <!-- Interface Name -->
       <TextBlock Grid.Row="0" Grid.Column="0"
                  Text="Interface name:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <TextBox Grid.Row="0" Grid.Column="1"
@@ -42,7 +42,7 @@
       <!-- Accessibility -->
       <TextBlock Grid.Row="1" Grid.Column="0"
                  Text="Accessibility:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <ComboBox Grid.Row="1" Grid.Column="1"
@@ -55,13 +55,13 @@
       <!-- File Location -->
       <TextBlock Grid.Row="2" Grid.Column="0"
                  Text="Location:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Top"
                  Margin="0,4,12,8"/>
       <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,8">
         <RadioButton IsChecked="{Binding CreateInNewFile}"
                      Content="Create in new file"
-                     Foreground="#CCCCCC"
+                     Foreground="{DynamicResource IdeFg}"
                      GroupName="Location"
                      Margin="0,0,0,4"/>
         <TextBox Text="{Binding FileName}"
@@ -70,7 +70,7 @@
                  Margin="20,0,0,4"/>
         <RadioButton IsChecked="{Binding CreateInSameFile}"
                      Content="Create in same file"
-                     Foreground="#CCCCCC"
+                     Foreground="{DynamicResource IdeFg}"
                      GroupName="Location"/>
       </StackPanel>
 
@@ -78,13 +78,13 @@
       <CheckBox Grid.Row="3" Grid.Column="1"
                 IsChecked="{Binding ImplementInterface}"
                 Content="Add Implements clause to class"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 Margin="0,0,0,8"/>
     </Grid>
 
     <!-- Members Selection -->
     <TextBlock DockPanel.Dock="Top"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4">
       <TextBlock.Text>
@@ -100,8 +100,8 @@
     </StackPanel>
 
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16"
@@ -131,7 +131,7 @@
     <!-- Error Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding ErrorMessage}"
-               Foreground="#F48771"
+               Foreground="{DynamicResource IdeErrorFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -140,12 +140,12 @@
     <!-- Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="Preview:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16"
@@ -166,7 +166,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Processing..." Foreground="#808080"/>
+      <TextBlock Text="Processing..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -175,6 +175,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Extract"

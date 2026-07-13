@@ -24,9 +24,7 @@
             <ToggleButton Classes="toolbarButton"
                           IsChecked="{Binding IsFilterByCurrentFile}"
                           ToolTip.Tip="Filter by current file"
-                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
-                          Background="Transparent" BorderThickness="0"
-                          AutomationProperties.Name="Filter by current file">
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                          AutomationProperties.Name="Filter by current file">
               <StackPanel Orientation="Horizontal" Spacing="3">
                 <TextBlock Text="&#x1F4C4;" FontSize="12" VerticalAlignment="Center"/>
                 <TextBlock Text="{Binding IsFilterByCurrentFile, Converter={x:Static vm:ProblemsView_Converters.FileScopeTextConverter}}"
@@ -41,9 +39,7 @@
             <ToggleButton Classes="toolbarButton"
                           IsChecked="{Binding ShowErrors}"
                           ToolTip.Tip="Toggle errors"
-                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
-                          Background="Transparent" BorderThickness="0"
-                          AutomationProperties.Name="Toggle Errors">
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                          AutomationProperties.Name="Toggle Errors">
               <StackPanel Orientation="Horizontal" Spacing="3">
                 <Border Width="14" Height="14" CornerRadius="7"
                         Background="#F14C4C" VerticalAlignment="Center">
@@ -61,9 +57,7 @@
             <ToggleButton Classes="toolbarButton"
                           IsChecked="{Binding ShowWarnings}"
                           ToolTip.Tip="Toggle warnings"
-                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
-                          Background="Transparent" BorderThickness="0"
-                          AutomationProperties.Name="Toggle Warnings">
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                          AutomationProperties.Name="Toggle Warnings">
               <StackPanel Orientation="Horizontal" Spacing="3">
                 <TextBlock Text="&#x26A0;" Foreground="#CCA700" FontSize="13"
                            VerticalAlignment="Center" Margin="0,-1,0,0"/>
@@ -77,9 +71,7 @@
             <ToggleButton Classes="toolbarButton"
                           IsChecked="{Binding ShowInfo}"
                           ToolTip.Tip="Toggle info"
-                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
-                          Background="Transparent" BorderThickness="0"
-                          AutomationProperties.Name="Toggle Info">
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                          AutomationProperties.Name="Toggle Info">
               <StackPanel Orientation="Horizontal" Spacing="3">
                 <TextBlock Text="&#x2139;" Foreground="#3794FF" FontSize="13"
                            VerticalAlignment="Center" Margin="0,-1,0,0"/>
@@ -95,9 +87,7 @@
             <ToggleButton Classes="toolbarButton"
                           IsChecked="{Binding IsGroupedByFile}"
                           ToolTip.Tip="Group by file"
-                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
-                          Background="Transparent" BorderThickness="0"
-                          AutomationProperties.Name="Group by file">
+                          Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                          AutomationProperties.Name="Group by file">
               <TextBlock Text="&#x1F4C1;" FontSize="12" VerticalAlignment="Center"/>
             </ToggleButton>
 
@@ -105,9 +95,7 @@
             <Button Classes="toolbarButton"
                     Command="{Binding CollapseAllCommand}"
                     ToolTip.Tip="Collapse All"
-                    Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
-                    Background="Transparent" BorderThickness="0"
-                    AutomationProperties.Name="Collapse All">
+                    Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                    AutomationProperties.Name="Collapse All">
               <TextBlock Text="&#x2796;" FontSize="10" VerticalAlignment="Center"/>
             </Button>
 
@@ -115,9 +103,7 @@
             <Button Classes="toolbarButton"
                     Command="{Binding ExpandAllCommand}"
                     ToolTip.Tip="Expand All"
-                    Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"
-                    Background="Transparent" BorderThickness="0"
-                    AutomationProperties.Name="Expand All">
+                    Padding="4,2" FontSize="11" MinWidth="0" MinHeight="0"                    AutomationProperties.Name="Expand All">
               <TextBlock Text="&#x2795;" FontSize="10" VerticalAlignment="Center"/>
             </Button>
           </StackPanel>

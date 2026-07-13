@@ -10,13 +10,13 @@
         Width="600" Height="600"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Pull Members Up" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
-      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+      <TextBlock Text="Pull Members Up" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
         <TextBlock.Text>
           <MultiBinding StringFormat="Move members from '{0}' to a base class or interface">
             <Binding Path="SourceTypeName"/>
@@ -27,7 +27,7 @@
 
     <!-- Source Type -->
     <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" RowDefinitions="Auto" Margin="0,0,0,16">
-      <TextBlock Grid.Row="0" Grid.Column="0" Text="Source:" Foreground="#808080" Margin="0,0,8,0"/>
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Source:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,0"/>
       <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SourceTypeDeclaration}"
                  FontFamily="Consolas" Foreground="#4EC9B0"/>
     </Grid>
@@ -35,7 +35,7 @@
     <!-- Destination Selection -->
     <TextBlock DockPanel.Dock="Top"
                Text="Pull to:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <ComboBox DockPanel.Dock="Top"
@@ -47,8 +47,8 @@
         <DataTemplate>
           <StackPanel Orientation="Horizontal" Spacing="8">
             <TextBlock Text="{Binding Name}" FontFamily="Consolas" Foreground="#4EC9B0"/>
-            <TextBlock Text="{Binding KindDisplay}" Foreground="#808080" FontSize="11"/>
-            <TextBlock Text="(external)" Foreground="#CCA700" FontSize="11" IsVisible="{Binding !IsInSameFile}"/>
+            <TextBlock Text="{Binding KindDisplay}" Foreground="{DynamicResource IdeFgMuted}" FontSize="11"/>
+            <TextBlock Text="(external)" Foreground="{DynamicResource IdeWarningFg}" FontSize="11" IsVisible="{Binding !IsInSameFile}"/>
           </StackPanel>
         </DataTemplate>
       </ComboBox.ItemTemplate>
@@ -57,7 +57,7 @@
     <!-- Members Selection -->
     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
       <TextBlock Text="Members to pull up:"
-                 Foreground="#808080"
+                 Foreground="{DynamicResource IdeFgMuted}"
                  FontSize="11"
                  VerticalAlignment="Center"/>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
@@ -67,8 +67,8 @@
     </DockPanel>
 
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,12"
@@ -90,7 +90,7 @@
                              Foreground="#DCDCAA"/>
                   <TextBlock Text="{Binding Accessibility}"
                              FontSize="10"
-                             Foreground="#808080"
+                             Foreground="{DynamicResource IdeFgMuted}"
                              VerticalAlignment="Center"/>
                 </StackPanel>
               </CheckBox>
@@ -102,26 +102,26 @@
 
     <!-- Options (only for base class) -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12" IsVisible="{Binding IsBaseClassSelected}">
-      <TextBlock Text="Options:" Foreground="#808080" FontSize="11" Margin="0,0,0,4"/>
+      <TextBlock Text="Options:" Foreground="{DynamicResource IdeFgMuted}" FontSize="11" Margin="0,0,0,4"/>
       <CheckBox IsChecked="{Binding MakeAbstract}"
                 Content="Make abstract (add MustOverride in base class)"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 Margin="0,0,0,4"/>
       <CheckBox IsChecked="{Binding KeepImplementation}"
                 Content="Keep implementation in derived class"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 IsEnabled="{Binding !MakeAbstract}"/>
     </StackPanel>
 
     <!-- Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="Preview:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Padding="8"
@@ -137,7 +137,7 @@
     <!-- Error Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding ErrorMessage}"
-               Foreground="#F48771"
+               Foreground="{DynamicResource IdeErrorFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -149,7 +149,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Analyzing class hierarchy..." Foreground="#808080"/>
+      <TextBlock Text="Analyzing class hierarchy..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -158,6 +158,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Pull Up"

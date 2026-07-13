@@ -10,13 +10,13 @@
         Width="550" Height="550"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Move Type to File" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
-      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+      <TextBlock Text="Move Type to File" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
         <TextBlock.Text>
           <MultiBinding StringFormat="Move {0} '{1}' to a new file">
             <Binding Path="TypeKind"/>
@@ -31,7 +31,7 @@
       <!-- New File Name -->
       <TextBlock Grid.Row="0" Grid.Column="0"
                  Text="New file name:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2"
@@ -43,7 +43,7 @@
       <!-- Target Directory -->
       <TextBlock Grid.Row="1" Grid.Column="0"
                  Text="Target directory:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <TextBox Grid.Row="1" Grid.Column="1"
@@ -59,28 +59,28 @@
       <!-- Options -->
       <TextBlock Grid.Row="2" Grid.Column="0"
                  Text="Options:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Top"
                  Margin="0,4,12,8"/>
       <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,8">
         <CheckBox IsChecked="{Binding IncludeImports}"
                   Content="Include imports/using statements"
-                  Foreground="#CCCCCC"
+                  Foreground="{DynamicResource IdeFg}"
                   Margin="0,0,0,4"/>
         <CheckBox IsChecked="{Binding RemoveFromOriginalFile}"
                   Content="Remove type from original file"
-                  Foreground="#CCCCCC"
+                  Foreground="{DynamicResource IdeFg}"
                   Margin="0,0,0,4"/>
         <CheckBox IsChecked="{Binding AddToProject}"
                   Content="Add new file to project"
-                  Foreground="#CCCCCC"/>
+                  Foreground="{DynamicResource IdeFg}"/>
       </StackPanel>
     </Grid>
 
     <!-- Validation Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding ValidationMessage}"
-               Foreground="#F48771"
+               Foreground="{DynamicResource IdeErrorFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -89,12 +89,12 @@
     <!-- Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="Preview:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16"
@@ -115,7 +115,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Processing..." Foreground="#808080"/>
+      <TextBlock Text="Processing..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -124,6 +124,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Move"

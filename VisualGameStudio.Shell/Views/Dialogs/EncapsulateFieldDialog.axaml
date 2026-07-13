@@ -10,13 +10,13 @@
         Width="550" Height="550"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Encapsulate Field" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
-      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+      <TextBlock Text="Encapsulate Field" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
         <TextBlock.Text>
           <MultiBinding StringFormat="Convert field '{0}' to property ({1} references)">
             <Binding Path="FieldName"/>
@@ -31,7 +31,7 @@
       <!-- Property Name -->
       <TextBlock Grid.Row="0" Grid.Column="0"
                  Text="Property name:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <TextBox Grid.Row="0" Grid.Column="1"
@@ -43,7 +43,7 @@
       <!-- Field Name -->
       <TextBlock Grid.Row="1" Grid.Column="0"
                  Text="Backing field name:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <TextBox Grid.Row="1" Grid.Column="1"
@@ -54,7 +54,7 @@
       <!-- Property Accessibility -->
       <TextBlock Grid.Row="2" Grid.Column="0"
                  Text="Property accessibility:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <ComboBox Grid.Row="2" Grid.Column="1"
@@ -66,7 +66,7 @@
       <!-- Field Accessibility -->
       <TextBlock Grid.Row="3" Grid.Column="0"
                  Text="Field accessibility:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <ComboBox Grid.Row="3" Grid.Column="1"
@@ -78,16 +78,16 @@
       <!-- Accessors -->
       <TextBlock Grid.Row="4" Grid.Column="0"
                  Text="Accessors:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Spacing="16" Margin="0,0,0,8">
         <CheckBox IsChecked="{Binding GenerateGetter}"
                   Content="Generate Get"
-                  Foreground="#CCCCCC"/>
+                  Foreground="{DynamicResource IdeFg}"/>
         <CheckBox IsChecked="{Binding GenerateSetter}"
                   Content="Generate Set"
-                  Foreground="#CCCCCC"
+                  Foreground="{DynamicResource IdeFg}"
                   IsEnabled="{Binding !IsReadOnly}"/>
       </StackPanel>
 
@@ -95,14 +95,14 @@
       <CheckBox Grid.Row="5" Grid.Column="1"
                 IsChecked="{Binding UpdateReferences}"
                 Content="Update all references to use property"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 Margin="0,0,0,8"/>
     </Grid>
 
     <!-- Error Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding ErrorMessage}"
-               Foreground="#F48771"
+               Foreground="{DynamicResource IdeErrorFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -111,12 +111,12 @@
     <!-- Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="Preview:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16"
@@ -137,7 +137,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Encapsulating field..." Foreground="#808080"/>
+      <TextBlock Text="Encapsulating field..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -146,6 +146,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Encapsulate"

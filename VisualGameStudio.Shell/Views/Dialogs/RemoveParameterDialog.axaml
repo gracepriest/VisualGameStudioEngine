@@ -10,13 +10,13 @@
         Width="500" Height="550"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Remove Parameter" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
-      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+      <TextBlock Text="Remove Parameter" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
         <TextBlock.Text>
           <MultiBinding StringFormat="Select parameters to remove from '{0}'">
             <Binding Path="MethodName"/>
@@ -36,12 +36,12 @@
     <!-- Current Signature -->
     <TextBlock DockPanel.Dock="Top"
                Text="Current signature:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Padding="8"
@@ -57,7 +57,7 @@
     <Grid DockPanel.Dock="Top" RowDefinitions="Auto,*" Margin="0,0,0,12">
       <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
         <TextBlock Text="Parameters:"
-                   Foreground="#808080"
+                   Foreground="{DynamicResource IdeFgMuted}"
                    FontSize="11"
                    VerticalAlignment="Center"/>
         <Button Content="Select All"
@@ -72,8 +72,8 @@
       </StackPanel>
 
       <Border Grid.Row="1"
-              Background="#252526"
-              BorderBrush="#3C3C3C"
+              Background="{DynamicResource IdePanelBg}"
+              BorderBrush="{DynamicResource IdeBorder}"
               BorderThickness="1"
               CornerRadius="4"
               Height="150">
@@ -88,7 +88,7 @@
                       <TextBlock Text="{Binding Index, StringFormat='[{0}]'}"
                                  FontFamily="Consolas"
                                  FontSize="11"
-                                 Foreground="#808080"
+                                 Foreground="{DynamicResource IdeFgMuted}"
                                  VerticalAlignment="Center"/>
                       <TextBlock Text="{Binding DisplayText}"
                                  FontFamily="Consolas"
@@ -108,7 +108,7 @@
     <!-- Call Sites Option -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
       <CheckBox IsChecked="{Binding UpdateCallSites}"
-                Foreground="#CCCCCC">
+                Foreground="{DynamicResource IdeFg}">
         <CheckBox.Content>
           <TextBlock>
             <TextBlock.Text>
@@ -120,7 +120,7 @@
         </CheckBox.Content>
       </CheckBox>
       <TextBlock Text="Arguments at selected positions will be removed from all call sites."
-                 Foreground="#808080"
+                 Foreground="{DynamicResource IdeFgMuted}"
                  FontSize="11"
                  Margin="24,4,0,0"
                  IsVisible="{Binding UpdateCallSites}"/>
@@ -129,7 +129,7 @@
     <!-- Error Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding ErrorMessage}"
-               Foreground="#F48771"
+               Foreground="{DynamicResource IdeErrorFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -138,12 +138,12 @@
     <!-- Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="Preview:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16"
@@ -164,7 +164,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Processing..." Foreground="#808080"/>
+      <TextBlock Text="Processing..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -173,6 +173,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Remove"

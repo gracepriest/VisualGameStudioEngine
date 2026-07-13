@@ -10,13 +10,13 @@
         Width="500" Height="500"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Inline Field" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
-      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+      <TextBlock Text="Inline Field" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
         <TextBlock.Text>
           <MultiBinding StringFormat="Replace usages of field '{0}' with its initializer expression">
             <Binding Path="FieldName"/>
@@ -27,21 +27,21 @@
 
     <!-- Field Info -->
     <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,16">
-      <TextBlock Grid.Row="0" Grid.Column="0" Text="Field:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Field:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding FieldName}" FontFamily="Consolas" Foreground="#9CDCFE" Margin="0,0,0,4"/>
 
-      <TextBlock Grid.Row="1" Grid.Column="0" Text="Type:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Type:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding FieldType, TargetNullValue='(inferred)'}" FontFamily="Consolas" Foreground="#4EC9B0" Margin="0,0,0,4"/>
 
-      <TextBlock Grid.Row="2" Grid.Column="0" Text="Access:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Access:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
         <TextBlock Text="{Binding Accessibility}" FontFamily="Consolas" Foreground="#569CD6"/>
         <TextBlock Text=" Shared" FontFamily="Consolas" Foreground="#569CD6" IsVisible="{Binding IsShared}"/>
         <TextBlock Text=" ReadOnly" FontFamily="Consolas" Foreground="#569CD6" IsVisible="{Binding IsReadOnly}"/>
       </StackPanel>
 
-      <TextBlock Grid.Row="3" Grid.Column="0" Text="References:" Foreground="#808080" Margin="0,0,8,4"/>
-      <TextBlock Grid.Row="3" Grid.Column="1" Foreground="#CCCCCC" Margin="0,0,0,4">
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="References:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="3" Grid.Column="1" Foreground="{DynamicResource IdeFg}" Margin="0,0,0,4">
         <TextBlock.Text>
           <MultiBinding StringFormat="{}{0} reference(s)">
             <Binding Path="ReferenceCount"/>
@@ -53,12 +53,12 @@
     <!-- Expression to inline -->
     <TextBlock DockPanel.Dock="Top"
                Text="Expression to inline:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Padding="8"
@@ -73,12 +73,12 @@
     <!-- References List -->
     <TextBlock DockPanel.Dock="Top"
                Text="References:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,12"
@@ -91,7 +91,7 @@
             <TextBlock Text="{Binding DisplayText}"
                        FontFamily="Consolas"
                        FontSize="11"
-                       Foreground="#808080"/>
+                       Foreground="{DynamicResource IdeFgMuted}"/>
           </DataTemplate>
         </ListBox.ItemTemplate>
       </ListBox>
@@ -101,21 +101,21 @@
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
       <CheckBox IsChecked="{Binding InlineAcrossFiles}"
                 Content="Inline across all files in the project"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 Margin="0,0,0,4"/>
       <CheckBox IsChecked="{Binding RemoveDeclaration}"
                 Content="Remove field declaration after inlining"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 Margin="0,0,0,4"/>
       <CheckBox IsChecked="{Binding AddParenthesesIfNeeded}"
                 Content="Add parentheses around expression if needed"
-                Foreground="#CCCCCC"/>
+                Foreground="{DynamicResource IdeFg}"/>
     </StackPanel>
 
     <!-- Warning Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding WarningMessage}"
-               Foreground="#CCA700"
+               Foreground="{DynamicResource IdeWarningFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -124,7 +124,7 @@
     <!-- Error Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding ErrorMessage}"
-               Foreground="#F48771"
+               Foreground="{DynamicResource IdeErrorFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -133,12 +133,12 @@
     <!-- Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="Preview:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16"
@@ -159,7 +159,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Processing..." Foreground="#808080"/>
+      <TextBlock Text="Processing..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -168,6 +168,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Inline"

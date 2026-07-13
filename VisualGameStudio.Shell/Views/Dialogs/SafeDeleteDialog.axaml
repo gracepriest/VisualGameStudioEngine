@@ -10,13 +10,13 @@
         Width="550" Height="550"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Safe Delete" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
-      <TextBlock Foreground="#808080" Margin="0,4,0,0">
+      <TextBlock Text="Safe Delete" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
         <TextBlock.Text>
           <MultiBinding StringFormat="Delete {0} '{1}'">
             <Binding Path="SymbolKind"/>
@@ -28,51 +28,51 @@
 
     <!-- Symbol Info -->
     <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,16">
-      <TextBlock Grid.Row="0" Grid.Column="0" Text="Symbol:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Symbol:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
         <TextBlock Text="{Binding SymbolName}" FontFamily="Consolas" Foreground="#4FC1FF"/>
-        <TextBlock Text=" : " Foreground="#808080" IsVisible="{Binding SymbolType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
-        <TextBlock Text="{Binding SymbolType}" FontFamily="Consolas" Foreground="#4EC9B0" IsVisible="{Binding SymbolType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <TextBlock Text=" : " Foreground="{DynamicResource IdeFgMuted}" IsVisible="{Binding SymbolType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <TextBlock Text="{Binding SymbolType}" FontFamily="Consolas" Foreground="{DynamicResource IdeSuccessFg}" IsVisible="{Binding SymbolType, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
       </StackPanel>
 
-      <TextBlock Grid.Row="1" Grid.Column="0" Text="Kind:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Kind:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SymbolKind}"
                  FontFamily="Consolas" Foreground="#569CD6" Margin="0,0,0,4"/>
 
-      <TextBlock Grid.Row="2" Grid.Column="0" Text="Access:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Access:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Accessibility}"
                  FontFamily="Consolas" Foreground="#569CD6" Margin="0,0,0,4"/>
 
-      <TextBlock Grid.Row="3" Grid.Column="0" Text="Scope:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="Scope:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
         <TextBlock Text="{Binding ContainingType, TargetNullValue=''}" FontFamily="Consolas" Foreground="#DCDCAA"/>
-        <TextBlock Text="." Foreground="#808080" IsVisible="{Binding ContainingMethod, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <TextBlock Text="." Foreground="{DynamicResource IdeFgMuted}" IsVisible="{Binding ContainingMethod, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
         <TextBlock Text="{Binding ContainingMethod}" FontFamily="Consolas" Foreground="#DCDCAA" IsVisible="{Binding ContainingMethod, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
       </StackPanel>
 
-      <TextBlock Grid.Row="4" Grid.Column="0" Text="Usages:" Foreground="#808080" Margin="0,0,8,4"/>
+      <TextBlock Grid.Row="4" Grid.Column="0" Text="Usages:" Foreground="{DynamicResource IdeFgMuted}" Margin="0,0,8,4"/>
       <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
-        <TextBlock Foreground="#CCCCCC">
+        <TextBlock Foreground="{DynamicResource IdeFg}">
           <TextBlock.Text>
             <MultiBinding StringFormat="{}{0} usage(s)">
               <Binding Path="UsageCount"/>
             </MultiBinding>
           </TextBlock.Text>
         </TextBlock>
-        <TextBlock Text=" - Can safely delete" Foreground="#4EC9B0" IsVisible="{Binding CanSafelyDelete}"/>
-        <TextBlock Text=" - Has usages!" Foreground="#F48771" IsVisible="{Binding !CanSafelyDelete}"/>
+        <TextBlock Text=" - Can safely delete" Foreground="{DynamicResource IdeSuccessFg}" IsVisible="{Binding CanSafelyDelete}"/>
+        <TextBlock Text=" - Has usages!" Foreground="{DynamicResource IdeErrorFg}" IsVisible="{Binding !CanSafelyDelete}"/>
       </StackPanel>
     </Grid>
 
     <!-- Declaration -->
     <TextBlock DockPanel.Dock="Top"
                Text="Declaration:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Padding="8"
@@ -90,13 +90,13 @@
     <!-- Usages List -->
     <TextBlock DockPanel.Dock="Top"
                Text="Usages:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"
                IsVisible="{Binding !CanSafelyDelete}"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,12"
@@ -116,7 +116,7 @@
               <TextBlock Text="{Binding DisplayText}"
                          FontFamily="Consolas"
                          FontSize="11"
-                         Foreground="#808080"
+                         Foreground="{DynamicResource IdeFgMuted}"
                          TextTrimming="CharacterEllipsis"/>
             </StackPanel>
           </DataTemplate>
@@ -126,17 +126,17 @@
 
     <!-- Warning Message -->
     <Border DockPanel.Dock="Top"
-            Background="#433821"
-            BorderBrush="#6B5A2E"
+            Background="{DynamicResource IdeWarningBg}"
+            BorderBrush="{DynamicResource IdeWarningBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Padding="8"
             Margin="0,0,0,12"
             IsVisible="{Binding WarningMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
       <StackPanel Orientation="Horizontal" Spacing="8">
-        <TextBlock Text="!" FontWeight="Bold" Foreground="#CCA700"/>
+        <TextBlock Text="!" FontWeight="Bold" Foreground="{DynamicResource IdeWarningFg}"/>
         <TextBlock Text="{Binding WarningMessage}"
-                   Foreground="#CCA700"
+                   Foreground="{DynamicResource IdeWarningFg}"
                    FontSize="11"
                    TextWrapping="Wrap"/>
       </StackPanel>
@@ -145,7 +145,7 @@
     <!-- Error Message -->
     <TextBlock DockPanel.Dock="Top"
                Text="{Binding ErrorMessage}"
-               Foreground="#F48771"
+               Foreground="{DynamicResource IdeErrorFg}"
                FontSize="11"
                Margin="0,0,0,8"
                TextWrapping="Wrap"
@@ -155,27 +155,27 @@
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12" IsVisible="{Binding !CanSafelyDelete}">
       <CheckBox IsChecked="{Binding ForceDelete}"
                 Content="Force delete (ignore usages)"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 Margin="0,0,0,4"/>
       <CheckBox IsChecked="{Binding CommentOutUsages}"
                 Content="Comment out usages instead of leaving errors"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 IsEnabled="{Binding ForceDelete}"/>
     </StackPanel>
 
     <!-- Safe to delete message -->
     <Border DockPanel.Dock="Top"
-            Background="#2D4F3E"
-            BorderBrush="#3E6B51"
+            Background="{DynamicResource IdeSuccessBg}"
+            BorderBrush="{DynamicResource IdeSuccessBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Padding="8"
             Margin="0,0,0,12"
             IsVisible="{Binding CanSafelyDelete}">
       <StackPanel Orientation="Horizontal" Spacing="8">
-        <TextBlock Text="✓" FontWeight="Bold" Foreground="#4EC9B0"/>
+        <TextBlock Text="✓" FontWeight="Bold" Foreground="{DynamicResource IdeSuccessFg}"/>
         <TextBlock Text="Symbol has no usages. Safe to delete."
-                   Foreground="#4EC9B0"
+                   Foreground="{DynamicResource IdeSuccessFg}"
                    FontSize="11"/>
       </StackPanel>
     </Border>
@@ -186,7 +186,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Analyzing usages..." Foreground="#808080"/>
+      <TextBlock Text="Analyzing usages..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -195,6 +195,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Delete"

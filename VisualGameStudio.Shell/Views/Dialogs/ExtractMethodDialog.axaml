@@ -10,14 +10,14 @@
         Width="550" Height="500"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        Background="#1E1E1E">
+        Background="{DynamicResource IdeBg}">
 
   <DockPanel Margin="16">
     <!-- Header -->
     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-      <TextBlock Text="Extract Method" FontSize="16" FontWeight="Bold" Foreground="#CCCCCC"/>
+      <TextBlock Text="Extract Method" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
       <TextBlock Text="Extract the selected code into a new method"
-                 Foreground="#808080" Margin="0,4,0,0"/>
+                 Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0"/>
     </StackPanel>
 
     <!-- Method Configuration -->
@@ -25,7 +25,7 @@
       <!-- Method Name -->
       <TextBlock Grid.Row="0" Grid.Column="0"
                  Text="Method name:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <TextBox Grid.Row="0" Grid.Column="1"
@@ -37,7 +37,7 @@
       <!-- Access Modifier -->
       <TextBlock Grid.Row="1" Grid.Column="0"
                  Text="Access:"
-                 Foreground="#CCCCCC"
+                 Foreground="{DynamicResource IdeFg}"
                  VerticalAlignment="Center"
                  Margin="0,0,12,8"/>
       <ComboBox Grid.Row="1" Grid.Column="1"
@@ -51,13 +51,13 @@
       <CheckBox Grid.Row="2" Grid.Column="1"
                 IsChecked="{Binding CreateAsFunction}"
                 Content="Create as Function (with return value)"
-                Foreground="#CCCCCC"
+                Foreground="{DynamicResource IdeFg}"
                 Margin="0,0,0,8"/>
 
       <!-- Error Message -->
       <TextBlock Grid.Row="3" Grid.Column="1"
                  Text="{Binding ErrorMessage}"
-                 Foreground="#F48771"
+                 Foreground="{DynamicResource IdeErrorFg}"
                  FontSize="11"
                  IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
     </Grid>
@@ -65,12 +65,12 @@
     <!-- Selected Code Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="Selected code:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16"
@@ -88,12 +88,12 @@
     <!-- Method Preview -->
     <TextBlock DockPanel.Dock="Top"
                Text="New method preview:"
-               Foreground="#808080"
+               Foreground="{DynamicResource IdeFgMuted}"
                FontSize="11"
                Margin="0,0,0,4"/>
     <Border DockPanel.Dock="Top"
-            Background="#252526"
-            BorderBrush="#3C3C3C"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
             BorderThickness="1"
             CornerRadius="4"
             Margin="0,0,0,16">
@@ -113,7 +113,7 @@
                 HorizontalAlignment="Center"
                 IsVisible="{Binding IsLoading}"
                 Margin="0,0,0,16">
-      <TextBlock Text="Extracting..." Foreground="#808080"/>
+      <TextBlock Text="Extracting..." Foreground="{DynamicResource IdeFgMuted}"/>
     </StackPanel>
 
     <!-- Buttons -->
@@ -122,6 +122,7 @@
                 HorizontalAlignment="Right"
                 Spacing="8">
       <Button Content="Cancel"
+              Classes="secondary"
               Command="{Binding CancelCommand}"
               Width="80"/>
       <Button Content="Extract"
