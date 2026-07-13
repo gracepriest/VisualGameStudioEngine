@@ -14,6 +14,11 @@ public static class HighlightingLoader
     private static IHighlightingDefinition? _darkDefinition;
     private static IHighlightingDefinition? _lightDefinition;
     private static IHighlightingDefinition? _highContrastDefinition;
+    private static IHighlightingDefinition? _cppDarkDefinition;
+    private static IHighlightingDefinition? _cppLightDefinition;
+
+    private static readonly string[] CppExtensions =
+        { ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx", ".hh", ".hxx", ".inl" };
 
     /// <summary>
     /// Maps language IDs to their TextMate-derived highlighting definitions.
@@ -42,6 +47,15 @@ public static class HighlightingLoader
                 new[] { ".bas", ".bl", ".basic", ".mod", ".cls", ".class" },
                 definition);
             _isRegistered = true;
+        }
+
+        // CAUTION: LoadDefinitionFromResource takes the FULL manifest resource
+        // name — a bare "Cpp.xshd" returns null and the if-guard would silently
+        // leave AvaloniaEdit's light-only built-in active.
+        var cpp = GetCppDefinitionForTheme(isDark: true);
+        if (cpp != null)
+        {
+            HighlightingManager.Instance.RegisterHighlighting("C++", CppExtensions, cpp);
         }
     }
 
@@ -90,6 +104,14 @@ public static class HighlightingLoader
                 new[] { ".bas", ".bl", ".basic", ".mod", ".cls", ".class" },
                 definition);
             _basicLangDefinition = definition;
+        }
+
+        // Keep the themed C++ definition in sync (no HC variant in Phase 1 —
+        // high contrast falls back to the dark palette).
+        var cpp = GetCppDefinitionForTheme(isDark, isHighContrast);
+        if (cpp != null)
+        {
+            HighlightingManager.Instance.RegisterHighlighting("C++", CppExtensions, cpp);
         }
     }
 
@@ -286,6 +308,22 @@ public static class HighlightingLoader
     private static IHighlightingDefinition? LoadBasicLangDefinition()
     {
         return LoadDefinitionFromResource("VisualGameStudio.Editor.Highlighting.BasicLang.xshd");
+    }
+
+    /// <summary>
+    /// Returns the themed C++ highlighting definition. High contrast has no
+    /// dedicated C++ variant in Phase 1 and uses the dark palette.
+    /// </summary>
+    private static IHighlightingDefinition? GetCppDefinitionForTheme(bool isDark, bool isHighContrast = false)
+    {
+        if (isDark || isHighContrast)
+        {
+            _cppDarkDefinition ??= LoadDefinitionFromResource("VisualGameStudio.Editor.Highlighting.Cpp.xshd");
+            return _cppDarkDefinition;
+        }
+
+        _cppLightDefinition ??= LoadDefinitionFromResource("VisualGameStudio.Editor.Highlighting.CppLight.xshd");
+        return _cppLightDefinition;
     }
 
     private static IHighlightingDefinition? LoadDefinitionFromResource(string resourceName)

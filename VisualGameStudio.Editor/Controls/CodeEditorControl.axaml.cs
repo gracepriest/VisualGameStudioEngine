@@ -395,6 +395,11 @@ public partial class CodeEditorControl : UserControl
     {
         _languageService = languageService;
         _documentFilePath = filePath;
+
+        // Apply file-appropriate highlighting now that the path is known.
+        // No-ops before OnInitialized (_textEditor is null); whichever hook
+        // fires last wins — both orders end with the correct highlighting.
+        SetHighlightingForFile(filePath);
     }
 
     /// <summary>
@@ -495,11 +500,20 @@ public partial class CodeEditorControl : UserControl
         // Register syntax highlighting
         HighlightingLoader.RegisterHighlighting();
 
-        // Apply BasicLang highlighting
-        var highlighting = HighlightingManager.Instance.GetDefinition("BasicLang");
-        if (highlighting != null)
+        // Apply file-appropriate highlighting when the document path is already
+        // known (SetLanguageService may run before OnInitialized); otherwise
+        // default to BasicLang (untitled documents).
+        if (!string.IsNullOrEmpty(_documentFilePath))
         {
-            _textEditor.SyntaxHighlighting = highlighting;
+            SetHighlightingForFile(_documentFilePath);
+        }
+        else
+        {
+            var highlighting = HighlightingManager.Instance.GetDefinition("BasicLang");
+            if (highlighting != null)
+            {
+                _textEditor.SyntaxHighlighting = highlighting;
+            }
         }
 
         // Setup folding
