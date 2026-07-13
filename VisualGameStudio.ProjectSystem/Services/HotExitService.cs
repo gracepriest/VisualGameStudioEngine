@@ -27,6 +27,9 @@ public class HotExitService : IHotExitService
 
         LoadSettings();
         _settingsService.SettingChanged += OnSettingChanged;
+
+        // Name the hot-exit consumer for the settings-consumer registry (Phase 0 feature).
+        SettingsConsumerRegistry.RegisterConsumer("files.hotExit", "HotExitService → unsaved-content backup mode");
     }
 
     private void LoadSettings()

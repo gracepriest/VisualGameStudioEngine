@@ -28,6 +28,13 @@ public class AutoSaveService : IAutoSaveService
 
         // Listen for settings changes
         _settingsService.SettingChanged += OnSettingChanged;
+
+        // Name the auto-save consumers so the Phase 3 settings-consumer contract test knows these
+        // dialog settings are live (files.autoSave / files.autoSaveDelay are surfaced by the
+        // Settings dialog; files.autoSaveSkipOnErrors is an extra key this service also honors).
+        SettingsConsumerRegistry.RegisterConsumer("files.autoSave", "AutoSaveService → auto-save mode");
+        SettingsConsumerRegistry.RegisterConsumer("files.autoSaveDelay", "AutoSaveService → auto-save debounce delay");
+        SettingsConsumerRegistry.RegisterConsumer("files.autoSaveSkipOnErrors", "AutoSaveService → skip auto-save when file has errors");
     }
 
     private void LoadSettings()

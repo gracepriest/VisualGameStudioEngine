@@ -552,6 +552,12 @@ public partial class MainWindowViewModel : ViewModelBase
             ZoomLevel = _settingsService.Get(SettingsKeys.ZoomLevel, 100);
         }
 
+        // Trim-trailing-whitespace-on-save is consumed by SaveDocumentCoreAsync (verified working).
+        // Name it so the Phase 3 settings-consumer contract test knows it is live.
+        SettingsConsumerRegistry.RegisterConsumer(
+            "editor.trimTrailingWhitespaceOnSave",
+            "MainWindowViewModel.SaveDocumentCoreAsync → trim trailing whitespace before save");
+
         // ── Activity bar badge subscriptions ──
         // Source Control badge: track staged + unstaged change counts
         GitChanges.StagedChanges.CollectionChanged += (_, _) => UpdateSourceControlBadge();

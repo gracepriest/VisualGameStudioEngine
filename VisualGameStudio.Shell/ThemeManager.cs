@@ -54,6 +54,17 @@ public static class ThemeManager
     /// </summary>
     private static readonly VsCodeThemeLoader _themeLoader = new();
 
+    static ThemeManager()
+    {
+        // ThemeManager is the sole consumer of the color-theme setting: it reads
+        // workbench.colorTheme at startup (ResolveStartupThemeName) and applies the matching
+        // Avalonia RequestedThemeVariant. Name that consumer so the Phase 3 contract test knows
+        // this dialog setting is live.
+        SettingsConsumerRegistry.RegisterConsumer(
+            "workbench.colorTheme",
+            "ThemeManager.ResolveStartupThemeName → RequestedThemeVariant");
+    }
+
     /// <summary>
     /// Gets the names of all loaded extension themes.
     /// </summary>

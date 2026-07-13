@@ -21,6 +21,20 @@ public partial class CodeEditorDocumentView : UserControl
     private CodeEditorDocumentViewModel? _subscribedVm;
     private bool _editorEventsWired;
 
+    static CodeEditorDocumentView()
+    {
+        // ApplyEditorSettings is the consumer for every editor.* setting that maps onto a live
+        // editor property. Register the consumers here (once, at type initialization) so the
+        // Phase 3 contract test can prove these dialog settings are actually wired. The five below
+        // are the pre-existing consumers (font family/size/ligatures, line numbers, word wrap);
+        // Task 2.1 adds the rest alongside their wiring in ApplyEditorSettings.
+        SettingsConsumerRegistry.RegisterConsumer("editor.fontFamily", "CodeEditorDocumentView.ApplyEditorSettings → EditorFontFamily");
+        SettingsConsumerRegistry.RegisterConsumer("editor.fontSize", "CodeEditorDocumentView.ApplyEditorSettings → EditorFontSize");
+        SettingsConsumerRegistry.RegisterConsumer("editor.fontLigatures", "CodeEditorDocumentView.ApplyEditorSettings → EnableFontLigatures");
+        SettingsConsumerRegistry.RegisterConsumer("editor.lineNumbers", "CodeEditorDocumentView.ApplyEditorSettings → ShowLineNumbers");
+        SettingsConsumerRegistry.RegisterConsumer("editor.wordWrap", "CodeEditorDocumentView.ApplyEditorSettings → WordWrap");
+    }
+
     public CodeEditorDocumentView()
     {
         InitializeComponent();
