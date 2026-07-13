@@ -13,7 +13,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// </summary>
     public sealed class CppSplitResult
     {
-        public Dictionary<string, string> Files { get; } = new();          // fileName → content
+        // fileName → content. OrdinalIgnoreCase: generated files land on Windows-y
+        // case-insensitive file systems, so "game.g.h" and "Game.g.h" are the SAME file —
+        // colliding names must throw (via Add), never silently coexist or overwrite.
+        public Dictionary<string, string> Files { get; } = new(StringComparer.OrdinalIgnoreCase);
         public bool HasBasicLangMain { get; set; }
         public bool UsesFramework { get; set; }
         public string ProjectHeaderFileName { get; set; } = "";
@@ -31,6 +34,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// .g.cpp definition files, so user C++ files can <c>#include "&lt;Module&gt;.g.h"</c>.
         /// <paramref name="combined"/> is the already-optimized combined IR;
         /// <paramref name="unitModules"/> supplies only the module-name roster.
+        /// PRECONDITION: <paramref name="projectName"/> must be filename-safe — it is used
+        /// verbatim in emitted file names (&lt;Project&gt;.g.h etc.). Callers (the Task-4
+        /// builder passes AssemblyName/ProjectName) own that guarantee; no transformation
+        /// happens here. A module name that collides with a reserved output file name
+        /// (BasicLangRuntime, &lt;Project&gt;.main, &lt;Project&gt;.__shared, any case) throws
+        /// <see cref="ArgumentException"/> rather than silently overwriting output.
         /// </summary>
         public CppSplitResult GenerateSplit(IRModule combined, string projectName,
                                             IReadOnlyList<IRModule> unitModules, bool emitMain)
@@ -90,34 +99,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // Definition sections are captured FIRST so _usesFramework and the framework
             // call set reflect real usage before the runtime header renders LAST.
-            result.Files[projectHeaderName] = CaptureSection(() =>
-                EmitAggregateHeader(combined, standaloneFunctions, templateFunctions));
+            result.Files.Add(projectHeaderName, CaptureSection(() =>
+                EmitAggregateHeader(combined, standaloneFunctions, templateFunctions)));
 
             foreach (var name in moduleNames)
             {
                 var functions = buckets[name];
                 if (functions.Count == 0) continue;   // module contributes no definitions
                 var fileName = name + ".g.cpp";
-                result.Files[fileName] = CaptureSection(() => EmitDefinitionUnit(projectHeaderName, functions));
+                result.Files.Add(fileName, CaptureSection(() => EmitDefinitionUnit(projectHeaderName, functions)));
                 result.TranslationUnitFileNames.Add(fileName);
             }
 
             if (sharedBucket.Count > 0)
             {
                 var fileName = projectName + ".__shared.g.cpp";
-                result.Files[fileName] = CaptureSection(() => EmitDefinitionUnit(projectHeaderName, sharedBucket));
+                result.Files.Add(fileName, CaptureSection(() => EmitDefinitionUnit(projectHeaderName, sharedBucket)));
                 result.TranslationUnitFileNames.Add(fileName);
             }
 
             if (emitMain)
             {
                 var fileName = projectName + ".main.g.cpp";
-                result.Files[fileName] = CaptureSection(() =>
+                result.Files.Add(fileName, CaptureSection(() =>
                 {
                     WriteLine($"#include \"{projectHeaderName}\"");
                     WriteLine();
                     GenerateMainFunction(combined);
-                });
+                }));
                 result.TranslationUnitFileNames.Add(fileName);
             }
 
@@ -127,14 +136,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             foreach (var name in moduleNames)
             {
                 if (name.Equals(projectName, StringComparison.OrdinalIgnoreCase)) continue;
-                result.Files[name + ".g.h"] = CaptureSection(() =>
+                result.Files.Add(name + ".g.h", CaptureSection(() =>
                 {
                     WriteLine("#pragma once");
                     WriteLine($"#include \"{projectHeaderName}\"");
-                });
+                }));
             }
 
-            result.Files[RuntimeHeaderFileName] = CaptureSection(() => EmitRuntimeHeader(combined));
+            result.Files.Add(RuntimeHeaderFileName, CaptureSection(() => EmitRuntimeHeader(combined)));
             result.UsesFramework = _usesFramework;
             return result;
         }
@@ -169,6 +178,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private void EmitAggregateHeader(IRModule module, List<IRFunction> standaloneFunctions,
                                          List<IRFunction> templateFunctions)
         {
+            // KEEP IN SYNC with Generate() section order (CppCodeGenerator.cs): forward decls →
+            // enums → delegates → interfaces → classes → static inits → globals → externs → functions.
             WriteLine("#pragma once");
             WriteLine($"#include \"{RuntimeHeaderFileName}\"");
             WriteLine();
@@ -284,22 +295,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         /// <summary>
         /// Split-mode variant of GenerateStaticMemberInitializations: `inline` prefix makes
-        /// the out-of-class definition header-safe (C++17 inline variables, D3).
+        /// the out-of-class definition header-safe (C++17 inline variables, D3). Delegates to
+        /// the shared core in CppCodeGenerator.cs — one emission shape, two prefixes.
         /// </summary>
         private void EmitInlineStaticMemberInitializations(IRClass irClass)
         {
-            var className = SanitizeName(irClass.Name);
-
-            foreach (var field in irClass.Fields.Where(f => f.IsStatic))
-            {
-                var type = MapType(field.Type);
-                var name = SanitizeName(field.Name);
-                var defaultValue = field.Initializer != null
-                    ? (field.Initializer is IRConstant c ? EmitConstant(c) : GetValueName(field.Initializer))
-                    : GetDefaultValue(field.Type);
-
-                WriteLine($"inline {type} {className}::{name} = {defaultValue};");
-            }
+            EmitStaticMemberInitializationsCore(irClass, prefix: "inline ");
         }
 
         /// <summary>One per-module .g.cpp: the module's non-template standalone definitions.</summary>
@@ -325,10 +326,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("#pragma once");
             WriteLine("// requires -std=c++20 (coroutines)");
 
+            // "iterator": Generator<T> uses std::default_sentinel_t (declared in <iterator>);
+            // split mode compiles the runtime in every build, so don't rely on transitive includes.
             var includes = new HashSet<string>
             {
                 "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib",
-                "ctime", "functional", "coroutine", "exception",
+                "ctime", "functional", "coroutine", "exception", "iterator",
                 "unordered_map", "unordered_set", "stdexcept"
             };
             foreach (var inc in _headerIncludes)
@@ -369,10 +372,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             WriteLine("// VisualGameStudioEngine framework function declarations");
             WriteLine("// Link with VisualGameStudioEngine.dll");
+            WriteLine("#ifndef FRAMEWORK_API");
             WriteLine("#ifdef _WIN32");
             WriteLine("#define FRAMEWORK_API __declspec(dllimport)");
             WriteLine("#else");
             WriteLine("#define FRAMEWORK_API");
+            WriteLine("#endif");
             WriteLine("#endif");
             WriteLine();
             WriteLine("extern \"C\" {");
@@ -381,6 +386,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"    FRAMEWORK_API {pair.Value};");
             }
             WriteLine("}");
+            // Don't leak the helper macro into user translation units that include this header.
+            WriteLine("#undef FRAMEWORK_API");
         }
     }
 }

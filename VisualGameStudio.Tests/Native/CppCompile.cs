@@ -126,50 +126,114 @@ public static class CppCompile
 
             File.WriteAllText(srcPath, cppSource);
 
-            // Compile.
-            var (compilerExe, argsTemplate) = compiler;
-            var compileArgs = string.Format(argsTemplate, srcPath, exePath);
-            var compilePsi = new ProcessStartInfo(compilerExe, compileArgs)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = tmpDir
-            };
-            using (var cproc = Process.Start(compilePsi))
-            {
-                var c = RunToCompletion(cproc!, 120000);
-                Assert.That(c.Exited, Is.True,
-                    $"C++ compiler timed out after 120000 ms:\n{c.StdOut}\n{c.StdErr}\n--- source ---\n{cppSource}");
-                Assert.That(c.ExitCode, Is.EqualTo(0),
-                    $"C++ compilation failed (exit {c.ExitCode}):\n{c.StdOut}\n{c.StdErr}\n--- source ---\n{cppSource}");
-            }
-
-            Assert.That(File.Exists(exePath), Is.True, $"compiler produced no executable at {exePath}");
-
-            // Run.
-            var runPsi = new ProcessStartInfo(exePath)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = tmpDir
-            };
-            using (var rproc = Process.Start(runPsi))
-            {
-                var r = RunToCompletion(rproc!, 30000);
-                Assert.That(r.Exited, Is.True,
-                    $"compiled program timed out after 30000 ms:\n{r.StdOut}\n{r.StdErr}");
-                Assert.That(r.ExitCode, Is.EqualTo(0),
-                    $"compiled program exited with {r.ExitCode}:\n{r.StdOut}\n{r.StdErr}");
-                return r.StdOut;
-            }
+            return CompileAndRunCore(tmpDir, srcPath, exePath, compiler,
+                                     $"--- source ---\n{cppSource}");
         }
         finally
         {
             try { Directory.Delete(tmpDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// Multi-file variant of <see cref="CompileAndRun(string,ValueTuple{string,string})"/> for
+    /// split emission: writes every (fileName -> content) in <paramref name="files"/> into a
+    /// fresh temp dir, compiles the named <paramref name="translationUnits"/> together on ONE
+    /// command line into a single executable, runs it (asserting exit code 0), and returns its
+    /// captured stdout.
+    ///
+    /// The TU names are joined with <c>" "</c> before substitution, which relies on the args
+    /// template quoting <c>{0}</c> (both the clang/g++ and MSVC templates from
+    /// <see cref="FindRunCompiler"/> do) so the expansion becomes <c>"a.cpp" "b.cpp"</c>. Bare
+    /// file names resolve because the compiler runs with the temp dir as working directory —
+    /// which also makes quote-includes among the generated files work.
+    /// </summary>
+    public static string CompileAndRunFiles(
+        IReadOnlyDictionary<string, string> files,
+        IEnumerable<string> translationUnits,
+        (string exe, string argsTemplate) compiler)
+    {
+        var tuList = translationUnits.ToList();
+        Assert.That(tuList, Is.Not.Empty, "no translation units to compile");
+        foreach (var tu in tuList)
+            Assert.That(files.ContainsKey(tu), Is.True, $"translation unit '{tu}' has no file content");
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), "bl-splitc-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmpDir);
+        var exePath = Path.Combine(tmpDir, "prog" + (OperatingSystem.IsWindows() ? ".exe" : ""));
+
+        try
+        {
+            foreach (var kv in files)
+                File.WriteAllText(Path.Combine(tmpDir, kv.Key), kv.Value);
+
+            // Failure context: every non-runtime file (the runtime header is big and stable;
+            // errors there would still name it by file:line in the compiler output).
+            var context = string.Join("\n", files
+                .Where(kv => !kv.Key.Equals("BasicLangRuntime.g.h", StringComparison.OrdinalIgnoreCase))
+                .Select(kv => $"--- {kv.Key} ---\n{kv.Value}"));
+
+            return CompileAndRunCore(tmpDir, string.Join("\" \"", tuList), exePath, compiler, context);
+        }
+        finally
+        {
+            try { Directory.Delete(tmpDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// Shared compile+run tail: formats the compiler args template with
+    /// (<paramref name="sourcesForTemplate"/>, <paramref name="exePath"/>), compiles in
+    /// <paramref name="tmpDir"/> (asserting exit 0 with compiler output plus
+    /// <paramref name="failureContext"/> in the message), runs the produced exe (asserting
+    /// exit 0), and returns its stdout.
+    /// </summary>
+    private static string CompileAndRunCore(
+        string tmpDir,
+        string sourcesForTemplate,
+        string exePath,
+        (string exe, string argsTemplate) compiler,
+        string failureContext)
+    {
+        // Compile.
+        var (compilerExe, argsTemplate) = compiler;
+        var compileArgs = string.Format(argsTemplate, sourcesForTemplate, exePath);
+        var compilePsi = new ProcessStartInfo(compilerExe, compileArgs)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = tmpDir
+        };
+        using (var cproc = Process.Start(compilePsi))
+        {
+            var c = RunToCompletion(cproc!, 120000);
+            Assert.That(c.Exited, Is.True,
+                $"C++ compiler timed out after 120000 ms:\n{c.StdOut}\n{c.StdErr}\n{failureContext}");
+            Assert.That(c.ExitCode, Is.EqualTo(0),
+                $"C++ compilation failed (exit {c.ExitCode}):\n{c.StdOut}\n{c.StdErr}\n{failureContext}");
+        }
+
+        Assert.That(File.Exists(exePath), Is.True, $"compiler produced no executable at {exePath}");
+
+        // Run.
+        var runPsi = new ProcessStartInfo(exePath)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = tmpDir
+        };
+        using (var rproc = Process.Start(runPsi))
+        {
+            var r = RunToCompletion(rproc!, 30000);
+            Assert.That(r.Exited, Is.True,
+                $"compiled program timed out after 30000 ms:\n{r.StdOut}\n{r.StdErr}");
+            Assert.That(r.ExitCode, Is.EqualTo(0),
+                $"compiled program exited with {r.ExitCode}:\n{r.StdOut}\n{r.StdErr}");
+            return r.StdOut;
         }
     }
 }

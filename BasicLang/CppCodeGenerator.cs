@@ -78,6 +78,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Generate header
             GenerateHeader(module);
 
+            // KEEP IN SYNC with GenerateSplit/EmitAggregateHeader (CppCodeGenerator.Split.cs):
+            // the section order below (forward decls → enums → delegates → interfaces →
+            // classes → static inits → globals → externs → functions) is mirrored there.
             // Generate forward declarations for classes
             if (module.Classes.Count > 0)
             {
@@ -756,10 +759,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         private void GenerateStaticMemberInitializations(IRClass irClass)
         {
-            var className = SanitizeName(irClass.Name);
-            var staticFields = irClass.Fields.Where(f => f.IsStatic).ToList();
+            EmitStaticMemberInitializationsCore(irClass, prefix: "");
+        }
 
-            foreach (var field in staticFields)
+        /// <summary>
+        /// Shared core for out-of-class static member definitions. Combined emission uses no
+        /// prefix (single TU); split emission passes <c>"inline "</c> so the definitions are
+        /// header-safe under multiple inclusion (C++17 inline variables, D3).
+        /// </summary>
+        private void EmitStaticMemberInitializationsCore(IRClass irClass, string prefix)
+        {
+            var className = SanitizeName(irClass.Name);
+
+            foreach (var field in irClass.Fields.Where(f => f.IsStatic))
             {
                 var type = MapType(field.Type);
                 var name = SanitizeName(field.Name);
@@ -767,7 +779,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     ? (field.Initializer is IRConstant c ? EmitConstant(c) : GetValueName(field.Initializer))
                     : GetDefaultValue(field.Type);
 
-                WriteLine($"{type} {className}::{name} = {defaultValue};");
+                WriteLine($"{prefix}{type} {className}::{name} = {defaultValue};");
             }
         }
 
