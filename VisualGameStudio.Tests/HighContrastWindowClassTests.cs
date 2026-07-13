@@ -58,4 +58,10 @@ public class HighContrastWindowClassTests
 
         Assert.That(classes, Is.EqualTo(new[] { "someOtherClass" }));
     }
+
+    [Test]
+    public void ApplyHighContrastClass_WhenClassesNull_DoesNotThrow()
+    {
+        Assert.DoesNotThrow(() => ThemeManager.ApplyHighContrastClass(null!, true));
+    }
 }

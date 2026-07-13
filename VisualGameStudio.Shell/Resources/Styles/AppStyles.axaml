@@ -783,4 +783,8 @@
 
   <!-- ========== END HIGH CONTRAST OVERRIDES ========== -->
 
+  <!-- GUARD: do NOT add new base/component styles below this line. The HC block above
+       must stay LAST — Avalonia has no specificity, so any style declared after it runs
+       later and silently un-overrides the HC theme. New styles go up with the base styles. -->
+
 </Styles>
