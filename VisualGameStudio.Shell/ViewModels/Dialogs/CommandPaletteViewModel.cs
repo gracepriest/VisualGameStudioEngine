@@ -398,6 +398,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("Git", "Commit", null, () => vm.GitChanges?.CommitCommand.Execute(null));
         AddCommand("Git", "Pull", null, () => vm.GitChanges?.PullCommand.Execute(null));
         AddCommand("Git", "Push", null, () => vm.GitChanges?.PushCommand.Execute(null));
+        AddCommand("Git", "Sync", null, () => vm.GitChanges?.SyncCommand.Execute(null));
         AddCommand("Git", "Fetch", null, () => vm.GitBranches?.FetchCommand.Execute(null));
         AddCommand("Git", "Stage All", null, () => vm.GitChanges?.StageAllCommand.Execute(null));
         AddCommand("Git", "Unstage All", null, () => vm.GitChanges?.UnstageAllCommand.Execute(null));

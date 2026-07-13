@@ -582,6 +582,10 @@ public partial class MainWindowViewModel : ViewModelBase
         // (very heavy, ~40-service) MainWindowViewModel.
         RegisterBuildAndLspSettingsConsumers();
 
+        // Status-bar Sync button: it raised SyncRequested but had ZERO subscribers, so clicking it
+        // did nothing. Route it to the Git panel's Sync flow (pull-then-push, git.confirmSync-gated).
+        StatusBar.SyncRequested += OnStatusBarSyncRequested;
+
         // ── Activity bar badge subscriptions ──
         // Source Control badge: track staged + unstaged change counts
         GitChanges.StagedChanges.CollectionChanged += (_, _) => UpdateSourceControlBadge();
@@ -598,6 +602,16 @@ public partial class MainWindowViewModel : ViewModelBase
     private void UpdateSourceControlBadge()
     {
         SourceControlBadgeCount = GitChanges.StagedChanges.Count + GitChanges.UnstagedChanges.Count;
+    }
+
+    /// <summary>
+    /// Handles the status-bar Sync button (its <see cref="StatusBarViewModel.SyncRequested"/> event
+    /// previously had no subscriber). Delegates to the Git panel's Sync command, which pulls then
+    /// pushes and honors the <c>git.confirmSync</c> confirmation setting.
+    /// </summary>
+    private void OnStatusBarSyncRequested(object? sender, EventArgs e)
+    {
+        GitChanges?.SyncCommand.Execute(null);
     }
 
     private async Task LoadExtensionContributionsAsync()

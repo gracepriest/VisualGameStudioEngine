@@ -29,6 +29,10 @@ public static class ServiceConfiguration
         services.AddSingleton<IDebugService, DebugService>();
         services.AddSingleton<ILaunchConfigurationService, LaunchConfigurationService>();
         services.AddSingleton<IGitService, GitService>();
+        // Background periodic `git fetch` (git.autoFetch / git.autoFetchInterval). Resolved eagerly
+        // at startup (App.OnFrameworkInitializationCompleted) so its timer arms; disposed with the
+        // container on shutdown.
+        services.AddSingleton<GitAutoFetchService>();
         services.AddSingleton<IBookmarkService, BookmarkService>();
         services.AddSingleton<IRefactoringService, RefactoringService>();
         services.AddSingleton<ISnippetService, SnippetService>();

@@ -11,6 +11,7 @@ public partial class GitChangesViewModel : ViewModelBase
     private readonly IGitService _gitService;
     private readonly IDialogService _dialogService;
     private readonly IOutputService _outputService;
+    private readonly ISettingsService? _settingsService;
 
     [ObservableProperty]
     private bool _isGitRepository;
@@ -116,16 +117,39 @@ public partial class GitChangesViewModel : ViewModelBase
     [ObservableProperty]
     private bool _hasUncommittedChanges;
 
-    public GitChangesViewModel(IGitService gitService, IDialogService dialogService, IOutputService outputService)
+    public GitChangesViewModel(IGitService gitService, IDialogService dialogService, IOutputService outputService, ISettingsService? settingsService = null)
     {
         _gitService = gitService;
         _dialogService = dialogService;
         _outputService = outputService;
+        _settingsService = settingsService;
 
         _gitService.StatusChanged += OnGitStatusChanged;
 
+        // git.confirmSync gates the pull / push / sync operations with a confirmation dialog.
+        SettingsConsumerRegistry.RegisterConsumer(
+            "git.confirmSync",
+            "GitChangesViewModel → confirmation prompt before pull / push / sync");
+
         // Start auto-refresh timer
         StartAutoRefreshTimer();
+    }
+
+    /// <summary>
+    /// <c>git.confirmSync</c> (schema default true): whether pull / push / sync ask for confirmation
+    /// first. Pure static seam so the gate rule is pinned headlessly.
+    /// </summary>
+    public static bool ShouldConfirmSync(ISettingsService? settings)
+        => settings?.Get("git.confirmSync", true) ?? true;
+
+    /// <summary>
+    /// Returns true when the operation may proceed: either <c>git.confirmSync</c> is off, or the user
+    /// accepted the confirmation dialog.
+    /// </summary>
+    private async Task<bool> ConfirmSyncGateAsync(string title, string message)
+    {
+        if (!ShouldConfirmSync(_settingsService)) return true;
+        return await _dialogService.ConfirmAsync(title, message);
     }
 
     private void OnGitStatusChanged(object? sender, EventArgs e)
@@ -447,40 +471,55 @@ public partial class GitChangesViewModel : ViewModelBase
     [RelayCommand]
     private async Task PullAsync()
     {
+        if (!await ConfirmSyncGateAsync("Pull", "Pull changes from the remote?")) return;
+        await PullCoreAsync();
+    }
+
+    /// <summary>Pulls from the remote (no confirmation gate — callers gate first). Returns success.</summary>
+    private async Task<bool> PullCoreAsync()
+    {
         _outputService.WriteLine("Pulling from remote...");
         var result = await _gitService.PullAsync();
 
         if (result.Success)
         {
             _outputService.WriteLine("Pull completed successfully.");
+            return true;
+        }
+
+        _outputService.WriteLine($"Pull failed: {result.ErrorMessage}");
+
+        if (result.HasConflicts && result.ConflictedFiles.Count > 0)
+        {
+            _outputService.WriteLine($"Merge conflicts detected in {result.ConflictedFiles.Count} file(s):");
+            foreach (var file in result.ConflictedFiles)
+            {
+                _outputService.WriteLine($"  - {file}");
+            }
+
+            await _dialogService.ShowMessageAsync(
+                "Merge Conflicts",
+                $"Merge conflicts detected in {result.ConflictedFiles.Count} file(s). Please resolve the conflicts and commit.");
+
+            MergeConflictsDetected?.Invoke(this, result.ConflictedFiles);
         }
         else
         {
-            _outputService.WriteLine($"Pull failed: {result.ErrorMessage}");
-
-            if (result.HasConflicts && result.ConflictedFiles.Count > 0)
-            {
-                _outputService.WriteLine($"Merge conflicts detected in {result.ConflictedFiles.Count} file(s):");
-                foreach (var file in result.ConflictedFiles)
-                {
-                    _outputService.WriteLine($"  - {file}");
-                }
-
-                await _dialogService.ShowMessageAsync(
-                    "Merge Conflicts",
-                    $"Merge conflicts detected in {result.ConflictedFiles.Count} file(s). Please resolve the conflicts and commit.");
-
-                MergeConflictsDetected?.Invoke(this, result.ConflictedFiles);
-            }
-            else
-            {
-                await _dialogService.ShowMessageAsync("Pull Failed", result.ErrorMessage ?? "Unknown error");
-            }
+            await _dialogService.ShowMessageAsync("Pull Failed", result.ErrorMessage ?? "Unknown error");
         }
+
+        return false;
     }
 
     [RelayCommand]
     private async Task PushAsync()
+    {
+        if (!await ConfirmSyncGateAsync("Push", "Push local commits to the remote?")) return;
+        await PushCoreAsync();
+    }
+
+    /// <summary>Pushes to the remote (no confirmation gate — callers gate first). Returns success.</summary>
+    private async Task<bool> PushCoreAsync()
     {
         _outputService.WriteLine("Pushing to remote...");
         var result = await _gitService.PushAsync();
@@ -488,11 +527,29 @@ public partial class GitChangesViewModel : ViewModelBase
         if (result.Success)
         {
             _outputService.WriteLine("Push completed successfully.");
+            return true;
         }
-        else
+
+        _outputService.WriteLine($"Push failed: {result.ErrorMessage}");
+        await _dialogService.ShowMessageAsync("Push Failed", result.ErrorMessage ?? "Unknown error");
+        return false;
+    }
+
+    /// <summary>
+    /// Synchronizes with the remote: pull then push (VS Code's "Sync" button). Confirmed once (when
+    /// <c>git.confirmSync</c> is on) rather than once per leg; the push is skipped if the pull fails
+    /// (e.g. merge conflicts) so unmerged work is never pushed. Wired to the status-bar Sync button
+    /// via <c>StatusBarViewModel.SyncRequested</c>.
+    /// </summary>
+    [RelayCommand]
+    private async Task SyncAsync()
+    {
+        if (!_gitService.IsGitRepository) return;
+        if (!await ConfirmSyncGateAsync("Sync", "Synchronize with the remote (pull, then push)?")) return;
+
+        if (await PullCoreAsync())
         {
-            _outputService.WriteLine($"Push failed: {result.ErrorMessage}");
-            await _dialogService.ShowMessageAsync("Push Failed", result.ErrorMessage ?? "Unknown error");
+            await PushCoreAsync();
         }
     }
 

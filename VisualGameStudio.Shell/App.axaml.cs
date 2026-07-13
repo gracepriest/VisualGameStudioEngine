@@ -5,6 +5,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using VisualGameStudio.Core.Abstractions.Services;
+using VisualGameStudio.ProjectSystem.Services;
 using VisualGameStudio.Shell.Configuration;
 using VisualGameStudio.Shell.ViewModels;
 using VisualGameStudio.Shell.Views;
@@ -86,6 +87,13 @@ public partial class App : Application
         // throw here would reach Program.cs's [FATAL] and keep the IDE from launching at all.
         try { ThemeManager.ApplyFromSettings(); }
         catch (Exception ex) { LogCrash("THEME_APPLY", ex); }
+
+        // Arm the background git auto-fetch timer (git.autoFetch / git.autoFetchInterval). Resolving
+        // the singleton constructs it and starts its timer; it self-gates on whether a repo is open,
+        // and the DI container disposes it on shutdown. Nothing else references it, so it must be
+        // resolved explicitly here or it would never be created.
+        try { _ = Services.GetRequiredService<GitAutoFetchService>(); }
+        catch (Exception ex) { LogCrash("GIT_AUTOFETCH_START", ex); }
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
