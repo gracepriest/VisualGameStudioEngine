@@ -996,10 +996,10 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         }
         else
         {
-            // Auto-add extension if none
+            // Auto-add extension if none (language-aware: C++ projects default to .cpp)
             if (!Path.HasExtension(name))
             {
-                name += ".bas";
+                name += _projectService.CurrentProject.Language == ProjectLanguage.Cpp ? ".cpp" : ".bas";
             }
 
             var filePath = Path.Combine(targetDir, name);
@@ -1056,6 +1056,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             ".html" or ".htm" => "<!DOCTYPE html>\n<html>\n<head>\n    <title></title>\n</head>\n<body>\n</body>\n</html>\n",
             ".css" => "/* Styles */\n",
             ".js" or ".ts" => "// " + fileName + "\n",
+            ".cpp" or ".cc" or ".cxx" or ".c" => $"// {fileName}\n",
+            ".h" or ".hpp" => "#pragma once\n",
             _ => $"' {fileName}\n' Created: {DateTime.Now:yyyy-MM-dd}\n\n"
         };
     }
@@ -1087,7 +1089,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         if (!Path.HasExtension(fileName))
         {
-            fileName += ".bas";
+            fileName += _projectService.CurrentProject.Language == ProjectLanguage.Cpp ? ".cpp" : ".bas";
         }
 
         var filePath = Path.Combine(targetDir, fileName);

@@ -2309,3 +2309,4 @@ git commit -m "feat(cpp): Phase 1 complete - C++ projects build & run from CLI a
 - clangd IntelliSense, LSP registry, downloads, `compile_commands.json` on project open (Phase 3 — Phase 1 only emits it on build)
 - Native debugging via lldb-dap/gdb (Phase 4)
 - Incremental `.o` caching, response files for long MSVC command lines, C++ Toggle-Comment/`//` support, C-family indentation strategy, Find-in-Files/Command-Palette filter extensions, CMake import (Phase 5 backlog)
+- Known Phase 1 edge: adding .cpp/.h files to a BASICLANG project via Solution Explorer creates Compile items that the BasicLang pipeline will lex and fail on loudly — mixing guards are Phase 2 (BL6008 covers only the reverse direction)
