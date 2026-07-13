@@ -19,10 +19,10 @@
        #3A1E1E == IdeDiffRemovedBg) bound straight to Background; theming them needs a C#
        IBrush+FindResource refactor, so they stay literal for now (Light diff rows render
        dark — known limitation). Intentional LEFT-LITERAL chrome (no key has these Dark
-       values): #333333 (toolbar-button + summary/nav chips), #555555 (button border +
-       separators), #444444 (button hover), #404040 (change-count badge), #2D2D3D (fold
-       placeholder), #1A1A1A (minimap), #4EC9B0/#F48771/#DCDCAA (diff summary glyphs),
-       #D4D4D4/#569CD6 (syntax). -->
+       values): #333333 (toolbar-button BG + summary/nav chips — its Foreground IS themed
+       via IdeFg), #555555 (button border + separators), #444444 (button hover), #404040
+       (change-count badge), #2D2D3D (fold placeholder), #1A1A1A (minimap),
+       #4EC9B0/#F48771/#DCDCAA (diff summary glyphs), #D4D4D4/#569CD6 (syntax). -->
   <Window.Styles>
     <Style Selector="TextBlock.diffLine">
       <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace"/>
@@ -34,7 +34,7 @@
     </Style>
     <Style Selector="Button.toolbarBtn">
       <Setter Property="Background" Value="#333333"/>
-      <Setter Property="Foreground" Value="#CCCCCC"/>
+      <Setter Property="Foreground" Value="{DynamicResource IdeFg}"/>
       <Setter Property="BorderBrush" Value="#555555"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="6,2"/>
