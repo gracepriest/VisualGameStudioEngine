@@ -79,6 +79,11 @@ public partial class App : Application
         try { ThemeManager.EnsureGlobalWindowClassHook(); }
         catch (Exception ex) { LogCrash("THEME_HOOK", ex); }
 
+        // Re-register imported VS Code themes from their saved file paths BEFORE applying the saved
+        // theme, so a workbench.colorTheme that names an imported theme resolves instead of falling
+        // back to Dark. Missing files are pruned. Must precede ApplyFromSettings.
+        ReloadImportedThemesAtStartup(Services);
+
         // Apply the saved theme now that the single store is loaded and before any window is
         // constructed. (Moved out of Initialize(), which runs before the DI container exists —
         // reading the retired legacy %APPDATA% file there is exactly what split the two stores.)
@@ -187,6 +192,26 @@ public partial class App : Application
         catch (Exception ex)
         {
             LogCrash("SETTINGS_LOAD", ex);
+        }
+    }
+
+    /// <summary>
+    /// Re-registers imported VS Code themes from their saved file paths (workbench.importedThemes)
+    /// so a saved theme that names one resolves at startup. Blocks like
+    /// <see cref="LoadUserSettingsAtStartup"/> — same pre-dispatcher-loop deadlock hazard, so the
+    /// await chain is detached onto the thread pool via Task.Run. Never rethrows: a broken/missing
+    /// theme file must not stop the IDE from launching.
+    /// </summary>
+    public static void ReloadImportedThemesAtStartup(IServiceProvider services)
+    {
+        try
+        {
+            var settingsService = services.GetRequiredService<ISettingsService>();
+            Task.Run(() => ThemeManager.ReloadImportedThemesAsync(settingsService)).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            LogCrash("IMPORTED_THEMES_RELOAD", ex);
         }
     }
 }

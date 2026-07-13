@@ -1061,6 +1061,10 @@ public class SettingsService : ISettingsService, IDisposable
                     enumVals: new[] { "welcomePage", "none", "newUntitledFile" }),
                 Prop("workbench.sideBar.location", SettingsPropertyType.String, "Side Bar Location", "left", "Controls the location of the sidebar. Takes effect after restart.",
                     enumVals: new[] { "left", "right" }),
+                // Not shown in the dialog: file paths of imported VS Code theme JSON files, reloaded at
+                // startup so an imported theme survives a restart.
+                Prop("workbench.importedThemes", SettingsPropertyType.Array, "Imported Themes", null,
+                    "File paths of imported VS Code theme JSON files, reloaded at startup."),
             }
         });
 

@@ -54,6 +54,9 @@ public static class ThemeManager
     /// </summary>
     private static readonly VsCodeThemeLoader _themeLoader = new();
 
+    /// <summary>Settings key holding the file paths of imported VS Code theme JSON files.</summary>
+    public const string ImportedThemesKey = "workbench.importedThemes";
+
     static ThemeManager()
     {
         // ThemeManager is the sole consumer of the color-theme setting: it reads
@@ -63,6 +66,13 @@ public static class ThemeManager
         SettingsConsumerRegistry.RegisterConsumer(
             "workbench.colorTheme",
             "ThemeManager.ResolveStartupThemeName → RequestedThemeVariant");
+
+        // Imported (extension) theme file paths are persisted here and reloaded at startup
+        // (ReloadImportedThemesAsync) before the saved theme is applied, so an imported theme
+        // survives a restart. Not a dialog setting, but named for discoverability.
+        SettingsConsumerRegistry.RegisterConsumer(
+            ImportedThemesKey,
+            "ThemeManager.ReloadImportedThemesAsync → re-register imported themes at startup");
     }
 
     /// <summary>
@@ -141,6 +151,11 @@ public static class ThemeManager
         ThemeVariant variant;
         switch (themeName)
         {
+            case "Dark":
+                variant = ThemeVariant.Dark;
+                IsDark = true;
+                IsHighContrast = false;
+                break;
             case "Light":
                 variant = ThemeVariant.Light;
                 IsDark = false;
@@ -154,7 +169,14 @@ public static class ThemeManager
                 IsDark = true;
                 IsHighContrast = true;
                 break;
-            default: // "Dark"
+            default:
+                // Unknown theme name — e.g. a saved workbench.colorTheme naming an imported theme
+                // whose JSON file was deleted (so it never got re-registered at startup), or a stale
+                // name. Fall back to Dark, but say so instead of silently rendering Dark as if the
+                // saved theme applied. (Extension themes were already handled above.)
+                System.Diagnostics.Debug.WriteLine(
+                    $"[ThemeManager] Unknown theme '{themeName}'; falling back to Dark.");
+                themeName = "Dark";
                 variant = ThemeVariant.Dark;
                 IsDark = true;
                 IsHighContrast = false;
@@ -203,6 +225,72 @@ public static class ThemeManager
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// True if <paramref name="themeName"/> names a built-in theme or a currently-loaded extension
+    /// theme. Pure (no Avalonia) so the unknown-theme fallback is unit-testable — <see cref="Apply"/>
+    /// early-returns when <c>Application.Current</c> is null, which it is in the headless suite.
+    /// </summary>
+    public static bool IsKnownTheme(string? themeName)
+        => themeName is "Dark" or "Light" or "High Contrast"
+           || (themeName != null && _extensionThemes.ContainsKey(themeName));
+
+    /// <summary>
+    /// The theme name <see cref="Apply"/> would actually render for <paramref name="themeName"/>:
+    /// the name itself when known, otherwise "Dark" (the graceful fallback for a saved theme whose
+    /// file is missing). Mirrors the fallback branch in <see cref="Apply"/>.
+    /// </summary>
+    public static string ResolveEffectiveThemeName(string? themeName)
+        => IsKnownTheme(themeName) ? themeName! : "Dark";
+
+    /// <summary>
+    /// Re-registers previously imported VS Code theme files listed under
+    /// <see cref="ImportedThemesKey"/> so an imported theme survives a restart. MUST run before
+    /// <see cref="ApplyFromSettings"/> (see <c>App.OnFrameworkInitializationCompleted</c>) so that a
+    /// saved <c>workbench.colorTheme</c> naming an imported theme resolves instead of silently
+    /// falling back to Dark. Missing / unreadable files are pruned from the setting so the list does
+    /// not accumulate stale paths (a deleted theme file then reports "unknown theme" via
+    /// <see cref="Apply"/> rather than resurrecting). No Avalonia dependency — safe to run pre-UI /
+    /// off the UI thread.
+    /// </summary>
+    public static async Task ReloadImportedThemesAsync(ISettingsService? service)
+    {
+        if (service == null) return;
+
+        var paths = service.Get<List<string>>(ImportedThemesKey, new List<string>()) ?? new List<string>();
+        if (paths.Count == 0) return;
+
+        var surviving = new List<string>();
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) continue; // prune missing
+            var label = await LoadVsCodeThemeFileAsync(path).ConfigureAwait(false);
+            if (label != null) surviving.Add(path); // prune unreadable/invalid too
+        }
+
+        // Rewrite the list only if it actually shrank, so we don't schedule a needless save.
+        if (surviving.Count != paths.Count)
+        {
+            service.Set(ImportedThemesKey, surviving, SettingsScope.User);
+        }
+    }
+
+    /// <summary>
+    /// Records <paramref name="filePath"/> under <see cref="ImportedThemesKey"/> (idempotent) so it
+    /// is reloaded on the next launch by <see cref="ReloadImportedThemesAsync"/>. Call after a
+    /// successful <see cref="LoadVsCodeThemeFileAsync"/> from the import UI.
+    /// </summary>
+    public static void RememberImportedThemePath(ISettingsService? service, string? filePath)
+    {
+        if (service == null || string.IsNullOrWhiteSpace(filePath)) return;
+
+        var paths = service.Get<List<string>>(ImportedThemesKey, new List<string>()) ?? new List<string>();
+        if (!paths.Contains(filePath, StringComparer.OrdinalIgnoreCase))
+        {
+            paths.Add(filePath);
+            service.Set(ImportedThemesKey, paths, SettingsScope.User);
         }
     }
 

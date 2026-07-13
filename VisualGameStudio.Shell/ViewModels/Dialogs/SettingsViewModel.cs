@@ -669,10 +669,21 @@ public partial class SettingsViewModel : ViewModelBase
     {
         if (_settingsService != null)
         {
+            // SetRawJsonAsync updates the in-memory store synchronously (before its first await), so
+            // the effective value is current on the next line even though the disk write is async.
             _ = _settingsService.SetRawJsonAsync(JsonEditorContent, ActiveScope);
             LoadFromService();
             RefreshAllScopeBadges();
             RefreshCategoryModifiedCounts();
+
+            // A raw-JSON edit can change workbench.colorTheme. Only the combo's SetStringSetting path
+            // applied the theme live before; route JSON edits through ThemeManager too so the theme
+            // switches the moment the user saves the JSON (not on next launch).
+            var newTheme = _settingsService.Get<string>("workbench.colorTheme", "Dark", SettingsScope.Effective);
+            if (!string.Equals(newTheme, ThemeManager.CurrentTheme, StringComparison.Ordinal))
+            {
+                ThemeManager.Apply(newTheme);
+            }
         }
     }
 

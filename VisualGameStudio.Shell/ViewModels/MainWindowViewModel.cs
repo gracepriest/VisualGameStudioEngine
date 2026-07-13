@@ -6586,6 +6586,9 @@ $"""
             }
 
             ThemeManager.Apply(themeName);
+            // Persist through the same key the Settings dialog uses so the choice survives a restart
+            // (the quick picker previously applied live but wrote nothing).
+            _settingsService?.Set("workbench.colorTheme", themeName, SettingsScope.User);
             StatusText = $"Theme changed to: {themeName}";
             ShowNotification($"Theme: {themeName}", "info");
         }
@@ -6623,6 +6626,10 @@ $"""
             if (label != null)
             {
                 ThemeManager.Apply(label);
+                // Persist both the active theme name and the source file path so the imported theme
+                // is re-registered (ReloadImportedThemesAsync) and re-applied on the next launch.
+                _settingsService?.Set("workbench.colorTheme", label, SettingsScope.User);
+                ThemeManager.RememberImportedThemePath(_settingsService, filePath);
                 StatusText = $"Theme imported and applied: {label}";
                 ShowNotification($"Theme: {label}", "info");
             }
