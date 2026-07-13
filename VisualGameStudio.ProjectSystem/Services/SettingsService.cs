@@ -1121,7 +1121,7 @@ public class SettingsService : ISettingsService, IDisposable
                 Prop("basiclang.compiler.backend", SettingsPropertyType.String, "Compiler Backend", "CSharp", "The default compilation backend.",
                     enumVals: new[] { "CSharp", "MSIL", "LLVM", "CPP" }),
                 Prop("basiclang.lsp.path", SettingsPropertyType.String, "LSP Server Path", "", "Path to the BasicLang LSP server executable. Leave empty for auto-detection."),
-                Prop("basiclang.lsp.autoStart", SettingsPropertyType.Boolean, "Auto Start LSP", true, "Automatically start the LSP server when a BasicLang file is opened."),
+                Prop("basiclang.lsp.autoStart", SettingsPropertyType.Boolean, "Auto Start LSP", true, "Automatically start the LSP server when the IDE launches. When off, use the \"Start Language Server\" command to start it manually."),
             }
         });
 

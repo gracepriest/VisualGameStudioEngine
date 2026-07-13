@@ -102,21 +102,27 @@ public sealed class GitAutoFetchService : IDisposable
 
     private async Task OnTimerElapsedAsync()
     {
-        if (_disposed) return;
-
-        // Re-read enabled/repo state at tick time (settings may have changed since arming), and
-        // skip the tick if the previous fetch has not finished (a slow network must not stack
-        // overlapping git processes).
-        if (!ShouldFetchNow(ResolveAutoFetchEnabled(_settingsService), _gitService.IsGitRepository)) return;
-
-        lock (_timerLock)
-        {
-            if (_fetchInFlight) return;
-            _fetchInFlight = true;
-        }
-
+        // The Elapsed subscription is effectively async-void on a threadpool thread: ANY exception
+        // that escapes this method — including one from the guard prologue (settings read,
+        // IsGitRepository) — would take down the process. The entire body is therefore inside
+        // try/catch: a background fetch, or even deciding whether to fetch, must never crash the IDE.
+        var acquired = false;
         try
         {
+            if (_disposed) return;
+
+            // Re-read enabled/repo state at tick time (settings may have changed since arming), and
+            // skip the tick if the previous fetch has not finished (a slow network must not stack
+            // overlapping git processes).
+            if (!ShouldFetchNow(ResolveAutoFetchEnabled(_settingsService), _gitService.IsGitRepository)) return;
+
+            lock (_timerLock)
+            {
+                if (_fetchInFlight) return;
+                _fetchInFlight = true;
+                acquired = true;
+            }
+
             await _gitService.FetchAsync();
         }
         catch (Exception ex)
@@ -126,7 +132,12 @@ public sealed class GitAutoFetchService : IDisposable
         }
         finally
         {
-            lock (_timerLock) { _fetchInFlight = false; }
+            // Only the tick that actually claimed the in-flight flag may release it — otherwise a
+            // skipped tick would clear a concurrent fetch's flag and let ticks stack.
+            if (acquired)
+            {
+                lock (_timerLock) { _fetchInFlight = false; }
+            }
         }
     }
 
