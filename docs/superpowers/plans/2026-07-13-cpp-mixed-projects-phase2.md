@@ -21,7 +21,7 @@
 - The IR optimizer runs **only on the CombinedIR** (Compiler.cs:268–287). Split emission MUST generate from the optimized CombinedIR (using per-unit IRs only for attribution/counting) or it silently bypasses the optimizer — the exact hidden-bug class the July probe fleet found.
 - `#CppInclude` tokens are accumulated **globally** in the Preprocessor with zero per-file attribution and land only on `CombinedIR.CppIncludes` (Preprocessor.cs:23–29; Compiler.cs:148, 273–277).
 - Framework externs are inserted by a **post-generation string hack**: search output for first `using namespace std;`, insert used-only `extern "C"` block (CppCodeGenerator.cs:202–217). `_usesFramework` is set during body generation (:2335–2340). `GenerateFrameworkExternDeclarations` holds the full name→declaration catalog (:2349+).
-- `int main` is ALWAYS emitted today (`GenerateMainFunction` default true; both production call sites use default options; zero BasicLang `Main` → runtime stub "No Main function found", exit 0) (CppCodeGenerator.cs:196–200, 1793–1823, 3447).
+- `int main` is ALWAYS emitted today (`GenerateMainFunction` default true; both native-pipeline call sites — Program.cs:545, BuildService.cs:568 — use default options; zero BasicLang `Main` → runtime stub "No Main function found", exit 0) (CppCodeGenerator.cs:196–200, 1793–1823, 3447). An implementer's grep will also find BackendRegistry.cs:36/42, MultiTargetCompiler.cs:54, and Program.cs demo paths constructing the generator — none passes `GenerateMainFunction=false` on any path Tasks 5/7 touch; leave them alone.
 - Class method bodies exist BOTH in `module.Functions` and via `IRClass.Methods[].Implementation`; `IsClassMethod` (:222–234) does identity-based exclusion — any partition of `module.Functions` must reuse it or methods emit twice.
 - `IsCppProject` routing key exists (ProjectFile.cs:45–46). Dozens of `Does.Contain` tests pin the single-string `Generate()` output (CppBackendTests, CppCollectionTests, CppPassthroughTests) — that API must remain untouched.
 
@@ -80,6 +80,8 @@
 - **D7 — Converged output layout = `bin/<config>/` (no TFM), exe named `AssemblyName ?? ProjectName`.** Native output has no TFM; this is what Path B ships and tests pin. Backend=Cpp BasicLang projects MOVE from `bin/<config>/<TFM>/` (CLI) / `bin/Debug/` (IDE, OutputPath-honoring) to `bin/<config>/`. `<OutputPath>` is ignored for native builds (matches Path B today). Run flows keep working: CLI probe list is updated; IDE trusts `ExecutablePath`.
 - **D8 — Mixed is not a project kind (spec §1).** No Language change, no new templates. `Language=Cpp` + `.bas` files and `Language=BasicLang` + `Backend=Cpp` + `.cpp` files both converge on the same builder. `Language` keeps selecting only templates/default-extension.
 - **D9 — Entry-point scanning of user C++ is a comment/string-stripped textual heuristic.** `int|auto main(`, `wmain(`, `WinMain(` count as candidates. Preprocessor-conditional mains can overcount (documented limitation; the error names every candidate file so the user can restructure). Pre-link enforcement is required because 0/2-main linker errors don't parse (recon).
+- **D10 — Direction-B symbols are consumed at GLOBAL scope, not `Logic::…`.** The backend emits user code with bare global names (no C++ namespaces; `CppCodeGenOptions.Namespace` is dead). The spec §3 sketch shows `Logic::CalculateScore` — the actual call is `CalculateScore(...)` after including the module shim. Consistent with the spec's "boundary types are exactly the backend's existing model" rule; namespacing generated code is backlog.
+- **D11 — Module-name → file-name handling is OrdinalIgnoreCase throughout.** Module names come verbatim from `Path.GetFileNameWithoutExtension` (ModuleResolver.cs:316–319), so `logic.bas` yields module `logic`. Split emission normalizes the sanitized module name to PascalCase-as-authored (use the name as-is) but ALL comparisons — the module==project shim-skip, generated-name dedupe, and the toolchain's duplicate-basename guard — are OrdinalIgnoreCase, because `obj/gen` lands on case-insensitive filesystems (Windows) where `game.g.h` and `Game.g.h` are the same file. Test fixtures in this plan use PascalCase file names (`Logic.bas`) so the literal filename assertions hold.
 
 **New diagnostic IDs introduced by this plan:**
 
@@ -143,7 +145,7 @@ obj/gen/Game.main.g.cpp        int main(...) → calls BasicLang Main; ONLY when
 
 ```csharp
 using BasicLang.Compiler;
-using BasicLang.Compiler.CodeGen;
+using BasicLang.Compiler.CodeGen.CPlusPlus;   // CppCodeGenerator + CppSplitResult live HERE (see CppBackendTests.cs:8)
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -171,8 +173,8 @@ public class CppSplitEmissionTests
     public void Split_TwoModules_EmitsRuntimeAggregateShimsAndPerModuleCpp()
     {
         var r = Split(emitMain: true,
-            ("logic.bas", "Function CalculateScore(hits As Integer) As Integer\n    Return hits * 10\nEnd Function\nSub Main()\n    PrintLine CalculateScore(3)\nEnd Sub"),
-            ("player.bas", "Function PlayerTag() As String\n    Return \"p1\"\nEnd Function"));
+            ("Logic.bas", "Function CalculateScore(hits As Integer) As Integer\n    Return hits * 10\nEnd Function\nSub Main()\n    PrintLine CalculateScore(3)\nEnd Sub"),
+            ("Player.bas", "Function PlayerTag() As String\n    Return \"p1\"\nEnd Function"));
         Assert.That(r.Files.Keys, Is.SupersetOf(new[] {
             "BasicLangRuntime.g.h", "Game.g.h", "Logic.g.h", "Player.g.h",
             "Logic.g.cpp", "Player.g.cpp", "Game.main.g.cpp" }));
@@ -193,7 +195,7 @@ public class CppSplitEmissionTests
     [Test]
     public void Split_EmitMainFalse_OmitsMainTu()
     {
-        var r = Split(emitMain: false, ("logic.bas", "Sub Main()\n    PrintLine \"hi\"\nEnd Sub"));
+        var r = Split(emitMain: false, ("Logic.bas", "Sub Main()\n    PrintLine \"hi\"\nEnd Sub"));
         Assert.That(r.HasBasicLangMain, Is.True);                    // detection independent of emission
         Assert.That(r.Files.Keys, Has.None.EqualTo("Game.main.g.cpp"));
         Assert.That(string.Join("|", r.Files.Values), Does.Not.Contain("int main("));
@@ -202,7 +204,7 @@ public class CppSplitEmissionTests
     [Test]
     public void Split_HeadersHaveNoMainAndCppsHaveNoPragmaOnce()
     {
-        var r = Split(emitMain: true, ("logic.bas", "Sub Main()\nEnd Sub"));
+        var r = Split(emitMain: true, ("Logic.bas", "Sub Main()\nEnd Sub"));
         foreach (var (name, content) in r.Files)
         {
             if (name.EndsWith(".g.h")) Assert.That(content, Does.StartWith("#pragma once"), name);
@@ -213,7 +215,7 @@ public class CppSplitEmissionTests
     [Test]
     public void Split_ClassAndGenerics_LiveEntirelyInAggregateHeader()
     {
-        var r = Split(emitMain: true, ("logic.bas",
+        var r = Split(emitMain: true, ("Logic.bas",
             "Class Player\n    Public Name As String\n    Function Tag() As String\n        Return Name\n    End Function\nEnd Class\nSub Main()\n    Dim p As New Player()\nEnd Sub"));
         Assert.That(r.Files["Game.g.h"], Does.Contain("class Player"));
         Assert.That(r.Files["Logic.g.cpp"], Does.Not.Contain("class Player"));
@@ -222,7 +224,7 @@ public class CppSplitEmissionTests
     [Test]
     public void Split_RuntimeHeader_ContainsRuntimeAndFrameworkCatalogOnce()
     {
-        var r = Split(emitMain: true, ("logic.bas", "Sub Main()\n    Dim xs As New List(Of Integer)\n    xs.Add(1)\nEnd Sub"));
+        var r = Split(emitMain: true, ("Logic.bas", "Sub Main()\n    Dim xs As New List(Of Integer)\n    xs.Add(1)\nEnd Sub"));
         var rt = r.Files["BasicLangRuntime.g.h"];
         Assert.That(rt, Does.Contain("namespace BasicLang"));        // collections/Task/Generator home
         Assert.That(rt, Does.Contain("Framework_Initialize"));       // full catalog, always
@@ -232,9 +234,12 @@ public class CppSplitEmissionTests
     [Test]
     public void Split_ModuleNamedLikeProject_SkipsShimWithoutCollision()
     {
+        // deliberately lower-case on disk: module name comes back verbatim as "game",
+        // and the shim-skip comparison MUST be OrdinalIgnoreCase (D11) or obj/gen gets
+        // game.g.h AND Game.g.h — the same file on Windows, silently overwritten
         var r = Split(emitMain: true, ("game.bas", "Sub Main()\nEnd Sub"));
-        // module "Game" == project "Game": aggregate header IS the surface; exactly one Game.g.h
-        Assert.That(r.Files.Keys.Count(k => k == "Game.g.h"), Is.EqualTo(1));
+        Assert.That(r.Files.Keys.Count(k => k.Equals("Game.g.h", StringComparison.OrdinalIgnoreCase)),
+                    Is.EqualTo(1));
     }
 
     [Test]
@@ -282,7 +287,7 @@ public CppSplitResult GenerateSplit(IRModule combined, string projectName,
   - Emit body/definition sections FIRST (so `_usesFramework` and helper-usage flags are populated before the runtime header is rendered), capturing: per-`combined.Functions` standalone definitions (excluding class methods via the existing `IsClassMethod`), grouped by `IRFunction.ModuleName` (sanitize; empty/unknown → `__shared` bucket); template functions are NOT captured here — they go declaration+definition into the aggregate header.
   - Capture the aggregate-header sections in the exact `Generate()` order: fwd decls, enums, delegates, interfaces, classes, static member inits (prefix `inline `), globals (emit as `inline` definitions), extern "C" user decls, standalone fn declarations, template fn full definitions.
   - Render the runtime header LAST: `#pragma once`, the full std-include superset (union of the fixed set + coroutine/exception + unordered_map/unordered_set/stdexcept + `_headerIncludes`), user `#CppInclude` tokens from `combined.CppIncludes` (global, deduped), `using namespace std;`, `CppRuntimeSources` consts + `CppCollectionsRuntime.Source`, then the FULL framework extern catalog (refactor `GenerateFrameworkExternDeclarations` so the whole name→declaration map can be rendered unconditionally; the used-only string-insert hack in `Generate()` stays untouched).
-  - Assemble: runtime header; `<SafeProject>.g.h` = pragma once + `#include "BasicLangRuntime.g.h"` + aggregate sections; per input module (sanitized name from each unit `IRModule`'s name) a shim `<Module>.g.h` unless it equals `<SafeProject>`; per module WITH captured definitions a `<Module>.g.cpp` = `#include "<SafeProject>.g.h"` + definitions; `emitMain` → `<SafeProject>.main.g.cpp` reusing `GenerateMainFunction`'s body logic (set `HasBasicLangMain` from a case-insensitive standalone `Main` lookup on `combined` regardless of `emitMain`).
+  - Assemble: runtime header; `<SafeProject>.g.h` = pragma once + `#include "BasicLangRuntime.g.h"` + aggregate sections; per input module (sanitized name from each unit `IRModule`'s name, used as-authored) a shim `<Module>.g.h` unless it equals `<SafeProject>` **OrdinalIgnoreCase** (D11 — module names come verbatim from file basenames, and `game.g.h` vs `Game.g.h` are the same file on Windows); per module WITH captured definitions a `<Module>.g.cpp` = `#include "<SafeProject>.g.h"` + definitions; `emitMain` → `<SafeProject>.main.g.cpp` reusing `GenerateMainFunction`'s body logic (set `HasBasicLangMain` from a case-insensitive standalone `Main` lookup on `combined` regardless of `emitMain`).
   - Populate `TranslationUnitFileNames` with every emitted `.g.cpp`.
   3. Expose `internal bool UsesFramework` and set `result.UsesFramework = _usesFramework` after definition capture.
 
@@ -305,7 +310,7 @@ Expected: all PASS (legacy single-string output byte-stable).
 
 - [ ] **Step 1: Write the failing/probing tests.** Reuse the `CppCompile` helper's compiler discovery (`FindRunCompiler`) but compile a **directory of files**: write all `CppSplitResult.Files` into a temp dir, compile `TranslationUnitFileNames` + a hand-written consumer TU, run, assert stdout. Cases (all `Assert.Ignore` when no compiler):
   1. `Split_MultiModuleProgram_CompilesAndRuns` — modules Logic+Main across 2 files, `PrintLine CalculateScore(3)` → stdout `30`.
-  2. `Split_DirectionB_UserCppCallsBasicLang` — user `consumer.cpp` does `#include "Logic.g.h"`, calls `CalculateScore(4)`, prints; BasicLang has NO Main; `emitMain:false`; user TU provides `int main`. Asserts C++→BasicLang interop through the shim header — **the Phase 2 headline feature**.
+  2. `Split_DirectionB_UserCppCallsBasicLang` — BasicLang side authored as `Logic.bas` (PascalCase per D11); user `consumer.cpp` does `#include "Logic.g.h"` and calls `CalculateScore(4)` at GLOBAL scope (D10 — no `Logic::` namespace), prints; BasicLang has NO Main; `emitMain:false`; user TU provides `int main`. Asserts C++→BasicLang interop through the shim header — **the Phase 2 headline feature**.
   3. `Split_CollectionsAsyncIterators_CompileThroughSharedRuntimeHeader` — one module using `List(Of T)`, one `Async Function`, one `Iterator Function`; compiles (runtime lives once in the shared header; templates ODR-fine).
   4. `Split_ClassAcrossModules_SharedPtrRoundTrip` — module A defines `Class Player`, module B function takes/returns it; user main constructs via generated API (`std::make_shared<Player>()`), calls B's function, prints.
 - [ ] **Step 2: Run.** `dotnet test ... --filter "FullyQualifiedName~CppSplitCompileTests"` — expect failures/ignores; iterate.
@@ -402,20 +407,27 @@ New `Build` flow (replaces the BL6008 guard):
    headers/others ignored (reachable via include path).
 2. blSources OR userTus empty+empty → BL6007 (reworded).
 3. If blSources.Any(): run the transpile stage:
-   - new BasicCompiler(new CompilerOptions { TargetBackend = "cpp", … }) .CompileProjectFiles(blSources)
-   - semantic failure → map result.AllErrors to CppDiagnostic {FilePath, Line, Column, Code from the
-     error if present else "BL0000"-style passthrough, Message} → failed result (Error List clickable
-     via the existing FormatNormalized echo).
-   - catch CppCapabilityException → single error diagnostic, code "BL6001" (matches the IDE's existing
-     meaning for capability violations).
-   - basicLangMainCount = per-unit standalone Main count (case-insensitive) from result.Units —
+   - KEEP the BasicCompiler instance: `var compiler = new BasicCompiler(new CompilerOptions
+     { TargetBackend = "cpp", … }); var result = compiler.CompileProjectFiles(blSources);`
+   - semantic/parse failure → **`SemanticError` has NO FilePath, and `result.Units` is EMPTY on
+     failure** (Compiler.cs returns via FinalizeResult before Units is populated). Attribute errors
+     per-unit via `compiler.Registry.Modules` → each unit's `Errors` + `FilePath` — mirror the
+     existing `BuildService.MapCompilerDiagnostics` pattern (BuildService.cs:795–829), with a
+     fallback diagnostic pinned to the .blproj for anything unattributable. Map into CppDiagnostic
+     {FilePath, Line, Column, Code from the error if present, Message} → failed result (Error List
+     clickable via the existing FormatNormalized echo).
+   - basicLangMainCount = per-unit standalone Main count (case-insensitive) from
+     `compiler.Registry.Modules` per-unit IRs (failure-safe; result.Units only fills on success) —
      NOT from CombinedIR (combiner silently dedupes; Task 3 probe documents this).
 4. Entry rule: cppMains = userTus.Select(t => (t, NativeEntryPoints.CountCppMains(File.ReadAllText(t)))).
    diagnostics = NativeEntryPoints.Apply(isExe, basicLangMainCount, cppMains) → fail if any.
    emitMain = isExe && basicLangMainCount == 1 (the single-entry winner is BasicLang's Main).
-5. If transpiled: GenerateSplit(combinedIR, name, unitIRs, emitMain); CLEAN obj/gen of *.g.h/*.g.cpp
-   (stale files from renamed modules would otherwise still compile), write Files, generatedTus =
-   TranslationUnitFileNames as absolute paths.
+5. If transpiled: GenerateSplit(combinedIR, name, unitIRs, emitMain) — **wrap THIS call in the
+   CppCapabilityException catch** (the capability gate throws from codegen, not from
+   CompileProjectFiles, which does no codegen) → single error diagnostic, code "BL6001" (matches
+   the IDE's existing meaning for capability violations). CLEAN obj/gen of *.g.h/*.g.cpp first
+   (stale files from renamed modules would otherwise still compile; deletion is OrdinalIgnoreCase-
+   safe on Windows per D11), write Files, generatedTus = TranslationUnitFileNames as absolute paths.
 6. Toolchain null → BL6005 (now ALL native projects — D6).
 7. request.SourceFiles = userTus + generatedTus; IncludeDirs = [projectDir, objGenDir, …items];
    engine lib: existing NativeLib resolution UNCHANGED, plus auto-append (and DLL deploy) when
@@ -427,11 +439,11 @@ New `Build` flow (replaces the BL6008 guard):
 
 - [ ] **Step 1: Write the failing tests** in `MixedProjectBuildTests` (`[NonParallelizable]`; toolchain-skip pattern; temp-dir + retry teardown; follow `CppProjectCliBuildTests` helper shapes — write `.blproj` + sources, call `CppProjectBuilder.Build(ProjectFile.Load(...), "Debug")`):
   1. `Mixed_LanguageCppProject_WithBasFile_BuildsAndRuns` — `Language=Cpp` project: `main.cpp` (has `int main`, includes `"Logic.g.h"`, calls `CalculateScore`), `logic.bas` (no Main). Succeeds; run exe → expected stdout. **Direction B through the real builder.**
-  2. `Mixed_BasicLangNativeProject_WithUserCpp_DirectionA` — `Language` absent, `<Backend>Cpp</Backend>`: `app.bas` with `Sub Main` + `#CppInclude "helper.h"` + `::`-call into user `helper.h` (header-only) sitting NEXT TO the .blproj. Succeeds (proves projectDir include wiring; impossible on the old path). Run → stdout.
+  2. `Mixed_BasicLangNativeProject_WithUserCpp_DirectionA` — `Language` absent, `<Backend>Cpp</Backend>`: `App.bas` with `Sub Main` + `#CppInclude "helper.h"` + `::`-call into user `helper.h` (header-only) sitting NEXT TO the .blproj. Succeeds (proves projectDir include wiring; impossible on the old path). Run → stdout.
   3. `Mixed_PureBasicLang_NativeBackend_StillBuilds` — no user .cpp at all; BL6007 must NOT fire; exe at `bin/Debug/<name>.exe` (converged layout).
   4. `Mixed_BothMains_FailsBL6012` / `Mixed_ExeNoMain_FailsBL6011` / `Mixed_LibraryWithMain_FailsBL6013`.
-  5. `Mixed_NoToolchain_Simulation` — can't uninstall toolchains; instead assert the BL6005 diagnostic path via the existing pattern used by `Build_CppLanguageProject_NoToolchain_…` (skip if unforceable — that existing test's mechanism decides).
-  6. `Mixed_SemanticError_SurfacesAsClickableDiagnostic` — `.bas` with a type error → failed result, diagnostic has FilePath=logic.bas + Line>0.
+  5. `Mixed_NoToolchain_HardFailsBL6005` — follow the existing `Build_NoToolchain_FailsWithBL6005` (CppProjectCliBuildTests.cs:153) mechanism exactly: it is an environment BRANCH, not a simulation seam — assert BL6005 when `CppToolchain.Find() == null`, assert its absence otherwise.
+  6. `Mixed_SemanticError_SurfacesAsClickableDiagnostic` — `.bas` with a type error → failed result, diagnostic has FilePath ending `Logic.bas` + Line>0 (exercises the Registry.Modules attribution path — `result.Units` is empty on failure).
   7. `Mixed_CompileCommands_IncludesGeneratedAndUserTus_AndObjGenInclude` — parse `obj/compile_commands.json`, assert entries for `main.cpp` AND `Logic.g.cpp`, and `-I`/`/I` containing `obj\gen`.
   8. `Mixed_StaleGeneratedFiles_AreCleaned` — pre-create `obj/gen/Old.g.cpp` with garbage; build; assert it is gone and build succeeded.
 - [ ] **Step 2: Run → FAIL** (BL6008 fires / APIs missing).
@@ -464,7 +476,7 @@ New `Build` flow (replaces the BL6008 guard):
 - [ ] **Step 1: Failing tests.** `ManagedBackend_CppSource_FailsBL6014` — `CompileProjectFiles` with a `.cpp` in the list and `TargetBackend="csharp"` → `Success=false`, one error whose message contains `BL6014` and the file name, and NO BasicLang parse errors for that file (fail fast, don't lex it). Same for `"msil"`/`"llvm"` via `[TestCase]`. `NativeBackend_CppSourceInList_IsIgnoredNotLexed` — with `TargetBackend="cpp"`, C-family files in the list are silently skipped (the builder passes only .bas, but defensive: no parse errors from them).
 - [ ] **Step 2: Run → FAIL** (today: lexer explosion on managed, parse errors on cpp).
 - [ ] **Step 3: Implement** at the top of `CompileProjectFiles`: partition input by C-family extensions `{.cpp,.cc,.cxx,.c,.h,.hpp}`; if any and backend is managed → add error (`BL6014: C/C++ source files require the native C++ backend (<Backend>Cpp</Backend>): <files>`) matching the existing `SemanticError` shape (embed the code in the message if the type has no code field) and return failure; if backend is cpp → drop them from the lex list silently. Managed behavior for `.bas`-only projects unchanged.
-- [ ] **Step 4: Run new tests + `CompilerTests`/`BuildServicePipelineTests` smoke** (IDE managed path picks the guard up for free via `CompileProjectFiles`). PASS.
+- [ ] **Step 4: Run new tests + `CompilationTests`/`BuildServicePipelineTests` smoke** (the fixture is named `CompilationTests`, NOT `CompilerTests` — an empty `--filter` match errors out; IDE managed path picks the guard up for free via `CompileProjectFiles`). PASS.
 - [ ] **Step 5: Commit.** `git commit -m "feat(cpp): BL6014 - C++ sources on managed backends fail with actionable error (spec §9)"`
 
 ---
@@ -477,9 +489,9 @@ New `Build` flow (replaces the BL6008 guard):
 - Modify: `VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs` (F5 guard :3224–3234)
 - Test: extend `VisualGameStudio.Tests/Services/BuildServicePipelineTests.cs`
 
-- [ ] **Step 1: Failing tests.** `IdeBuild_MixedProject_Succeeds_AndFiresBuildCompletedWithDiagnostics` — in-process BuildService on a mixed fixture (Language=BasicLang + TargetBackend=Cpp + user .cpp): success path sets `ExecutablePath` under `bin/<config>/`; then introduce a C++ error → `BuildCompleted` fires with a per-file `DiagnosticItem` (FilePath endsWith the .cpp, Line > 0) — NOT one blob. `IdeBuild_BackendCppPureBasicLang_RoutesThroughSharedBuilder` — assert converged layout + parsed diagnostics on a semantic error. Update any existing BuildServicePipelineTests pinning BL6002/6003/6004 or the OutputPath-honoring exe location.
+- [ ] **Step 1: Failing tests.** `IdeBuild_MixedProject_Succeeds_AndFiresBuildCompletedWithDiagnostics` — in-process BuildService on a mixed fixture (Language=BasicLang + TargetBackend=Cpp + user .cpp): success path sets `ExecutablePath` under `bin/<config>/`; then introduce a C++ error → `BuildCompleted` fires with a per-file `DiagnosticItem` (FilePath endsWith the .cpp, Line > 0) — NOT one blob. `IdeBuild_BackendCppPureBasicLang_RoutesThroughSharedBuilder` — assert converged layout + parsed diagnostics on a semantic error. Known dying pins to update: `Build_ConsoleAppTemplate_Cpp_ProducesCppSource_NotCs` (BuildServicePipelineTests.cs:114–147) pins THREE behaviors this task deletes — `GeneratedFileName` ends with `.cpp`, `.cpp` files in the OutputPath-honoring dir, and no-toolchain → source-only success (:142–146, the direct D6 casualty) — rewrite it for the converged path; also reword the assertion MESSAGE at BuildServicePipelineTests.cs:455 that mentions "BL6002" (Task 11's retirement grep will flag it).
 - [ ] **Step 2: Run → FAIL.**
-- [ ] **Step 3: Implement.** Routing: `if (project.Language == ProjectLanguage.Cpp || project.TargetBackend == BackendType.Cpp) → BuildCppProject(...)` — same no-throw contract, same fall-through to shared finalization (the `BuildCompleted` invariant at :380 — NO new early returns). Delete `CompileGeneratedCpp` + the cpp codegen arm + BL6002/6003/6004 emission sites. Then delete `CppToolchain.CompileToExecutable` (grep first: Program.cs caller went in Task 5, this task removes the IDE one; any test pinning it gets updated/removed) and `EngineDeployment.UsesEngineCpp` if orphaned. Widen the F5 guard: `Language==Cpp || TargetBackend==Cpp` → existing "Native C++ debugging arrives in a later phase — use Ctrl+F5" message.
+- [ ] **Step 3: Implement.** Routing: `if (project.Language == ProjectLanguage.Cpp || project.TargetBackend == TargetBackend.Cpp) → BuildCppProject(...)` — the enum is named `TargetBackend` (VisualGameStudio.Core/Models/BasicLangProject.cs:51–57: CSharp, Cpp, LLVM, MSIL); there is NO `BackendType`. Same no-throw contract, same fall-through to shared finalization (the `BuildCompleted` invariant at :380 — NO new early returns). Delete `CompileGeneratedCpp` + the cpp codegen arm + BL6002/6003/6004 emission sites (verified complete caller set: CompileToExecutable = Program.cs:803 [gone in Task 5] + BuildService.cs:1135; UsesEngineCpp = Program.cs:786 + BuildService.cs:1110; BL6002/6003/6004 emission = BuildService.cs:1099/1122/1141; NO test calls either API directly). Then delete `CppToolchain.CompileToExecutable` and `EngineDeployment.UsesEngineCpp`. Widen the F5 guard (MainWindowViewModel.cs:3226) to `Language == ProjectLanguage.Cpp || TargetBackend == TargetBackend.Cpp` → existing "Native C++ debugging arrives in a later phase — use Ctrl+F5" message.
 - [ ] **Step 4: Run.** `--filter "FullyQualifiedName~BuildServicePipelineTests|FullyQualifiedName~TemplateBuildSweepTests"` (the native BasicLang templates now build through the converged path) → PASS.
 - [ ] **Step 5: Commit.** `git commit -m "feat(cpp): IDE builds all native projects via shared CppProjectBuilder; legacy single-TU path deleted (BL6002-6004 retired)"`
 
@@ -505,12 +517,12 @@ New `Build` flow (replaces the BL6008 guard):
 **Files:**
 - Modify: `BasicLang/LSP/LspProjectContext.cs` (filter in `GetBlprojSourceFiles` :366–397; reconcile sibling patterns :340 via the shared list)
 - Modify: `BasicLang/LSP/TextDocumentSyncHandler.cs` (:32–47) + `BasicLang/LSP/DocumentManager.cs` (`UpdateDocument`) — defense-in-depth non-BasicLang URI gate
-- Test: `VisualGameStudio.Tests/LSP/LspMixedProjectTests.cs` (create; follow the existing LSP test fixtures' harness pattern — locate via `Grep "LspProjectContext" VisualGameStudio.Tests/`)
+- Test: `VisualGameStudio.Tests/LSP/LspMixedProjectTests.cs` (create — NOTE: no existing test exercises `LspProjectContext`; this fixture is its FIRST. Construct `LspProjectContextProvider` directly: both types are `public` (LspProjectContext.cs:19, 130) and BasicLang has `InternalsVisibleTo("VisualGameStudio.Tests")`. Pattern-match the harness style of the fixtures in `VisualGameStudio.Tests/LSP/` — namespace is `VisualGameStudio.Tests.LSP`)
 
 - [ ] **Step 1: Failing tests.** `MixedBlproj_ProjectContext_ExcludesCppItems` — .blproj with `.bas` + `.cpp` + `.h` Compile items: project context's file set / module registry contains the `.bas` module but NO module named after the `.cpp` basename, and IndeterminateImports does not contain it. `CppFileSharingBasename_DoesNotPolluteRealModule` — `logic.bas` + `logic.cpp`: the `Logic` module's symbols come from the `.bas` only (the MergeFrom hazard). `DidOpen_CppUri_PublishesNoDiagnostics_AndRegistersNoDocument` — via DocumentManager directly.
 - [ ] **Step 2: Run → FAIL** (junk modules registered today).
 - [ ] **Step 3: Implement.** Use `ProjectFile.BasicLangSourceExtensions` (added in Task 4) as the single whitelist: filter in `GetBlprojSourceFiles` (NOT inside `ProjectFile.GetSourceFiles` — builder partition depends on it); replace the sibling-scan literal pattern list with patterns derived from the same array (adds `.basic`/`.class`, closing the recon-noted inconsistency). DocumentManager.UpdateDocument: early-return (no registration, no diagnostics) for URIs whose extension is not in the whitelist; `GetTextDocumentAttributes` answers non-BasicLang URIs as `"plaintext"`.
-- [ ] **Step 4: Run new fixture + the whole LSP test group** (`--filter "FullyQualifiedName~Lsp"`) → PASS.
+- [ ] **Step 4: Run new fixture + the whole LSP test group** — use `--filter "FullyQualifiedName~LSP|FullyQualifiedName~Lsp"` (the LSP-folder fixtures live in namespace `VisualGameStudio.Tests.LSP`, uppercase; only four fixtures elsewhere literally contain "Lsp", and vstest `~` matching may be case-sensitive) → PASS.
 - [ ] **Step 5: Commit.** `git commit -m "fix(lsp): BasicLang server ignores non-BasicLang files in mixed projects (single shared extension whitelist)"`
 
 ---
@@ -542,10 +554,14 @@ Expected: 0 failures (baseline 2691 + new tests; 1 pre-existing conditional skip
 
 - [ ] **Step 2: CLI smoke (through the real binary).**
 
+There is NO native-BasicLang template id (CLI ids: console, classlib, game, empty, webapi, sln, test, cpp-console, cpp-library, cpp-game — and `console` pins `<TargetBackend>CSharp</TargetBackend>`). Hand-write the fixture:
+
 ```powershell
-$d = "$env:TEMP\MixedSmoke"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
-BasicLang/bin/Release/net8.0/BasicLang.exe new console-native -n MixedSmoke -o $d   # or hand-write a Backend=Cpp .blproj if no such template id — check `new --list`
-# add logic.bas (CalculateScore, no Main) + main.cpp (#include "Logic.g.h", int main prints CalculateScore(3))
+$d = "$env:TEMP\MixedSmoke"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory $d | Out-Null
+# Write (with the Write tool, not Set-Content) MixedSmoke.blproj:
+#   <Project><PropertyGroup><OutputType>Exe</OutputType><Backend>Cpp</Backend></PropertyGroup>
+#   <ItemGroup><Compile Include="Logic.bas"/><Compile Include="main.cpp"/></ItemGroup></Project>
+# plus Logic.bas (CalculateScore, NO Main) and main.cpp (#include "Logic.g.h", int main prints CalculateScore(3))
 BasicLang/bin/Release/net8.0/BasicLang.exe build $d\MixedSmoke.blproj              # succeeds
 & "$d\bin\Debug\MixedSmoke.exe"                                                     # prints 30
 Get-Content $d\obj\compile_commands.json                                            # entries for main.cpp AND Logic.g.cpp
