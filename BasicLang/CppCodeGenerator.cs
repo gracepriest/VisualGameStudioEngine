@@ -12,7 +12,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// C++ code generator - transpiles IR to C++
     /// Targets C++17 for modern language features
     /// </summary>
-    public class CppCodeGenerator : CodeGeneratorBase
+    public partial class CppCodeGenerator : CodeGeneratorBase
     {
         // Not readonly: swapped temporarily while rendering inline lambda bodies
         private StringBuilder _output;
@@ -46,6 +46,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override string BackendName => "C++";
         public override TargetPlatform Target => TargetPlatform.Cpp;
+
+        /// <summary>True when the last Generate/GenerateSplit saw Framework_* calls (link decision input).</summary>
+        internal bool UsesFramework => _usesFramework;
 
         public CppCodeGenerator(CppCodeGenOptions options = null)
         {
@@ -332,38 +335,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private void EmitDotNetSurfaceHelpers()
         {
-            WriteLine("// Minimal .NET-surface runtime (DateTime helpers)");
-            WriteLine("namespace BasicLangRt {");
-            Indent();
-            WriteLine("inline std::time_t Now() { return std::time(nullptr); }");
-            WriteLine("inline std::string FormatTime(std::time_t t, const std::string& netFormat = \"\") {");
-            Indent();
-            WriteLine("std::string fmt = netFormat.empty() ? std::string(\"%Y-%m-%d %H:%M:%S\") : netFormat;");
-            WriteLine("if (!netFormat.empty()) {");
-            Indent();
-            WriteLine("auto replaceAll = [&fmt](const std::string& from, const std::string& to) {");
-            WriteLine("    size_t pos = 0;");
-            WriteLine("    while ((pos = fmt.find(from, pos)) != std::string::npos) { fmt.replace(pos, from.size(), to); pos += to.size(); }");
-            WriteLine("};");
-            WriteLine("// lowercase tokens first so mm/MM cannot interfere");
-            WriteLine("replaceAll(\"yyyy\", \"%Y\"); replaceAll(\"ss\", \"%S\"); replaceAll(\"mm\", \"%M\");");
-            WriteLine("replaceAll(\"dd\", \"%d\"); replaceAll(\"HH\", \"%H\"); replaceAll(\"MM\", \"%m\");");
-            Unindent();
-            WriteLine("}");
-            WriteLine("std::tm tmv{};");
-            WriteLine("#ifdef _WIN32");
-            WriteLine("localtime_s(&tmv, &t);");
-            WriteLine("#else");
-            WriteLine("localtime_r(&t, &tmv);");
-            WriteLine("#endif");
-            WriteLine("char buf[128];");
-            WriteLine("std::strftime(buf, sizeof(buf), fmt.c_str(), &tmv);");
-            WriteLine("return std::string(buf);");
-            Unindent();
-            WriteLine("}");
-            Unindent();
-            WriteLine("}");
-            WriteLine();
+            SpliceRuntimeSource(CppRuntimeSources.DotNetSurfaceHelpers);
         }
 
         /// <summary>
@@ -376,71 +348,30 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // otherwise a collections-only module would emit an empty `namespace BasicLang { }`.
             if (hasAsync || hasIterators)
             {
-            WriteLine("namespace BasicLang {");
-            Indent();
-
-            if (hasAsync)
-            {
-                WriteLine("// Synchronous Task<T> emulation: type-correct, no scheduler");
-                WriteLine("template <typename T> struct Task {");
-                Indent();
-                WriteLine("T Value;");
-                WriteLine("T get() const { return Value; }");
-                Unindent();
-                WriteLine("};");
-                WriteLine("template <> struct Task<void> { void get() const { } };");
+                WriteLine("namespace BasicLang {");
+                if (hasAsync)
+                    SpliceRuntimeSource(CppRuntimeSources.TaskEmulation);
+                if (hasIterators)
+                    SpliceRuntimeSource(CppRuntimeSources.GeneratorCoroutine);
+                WriteLine("}");
                 WriteLine();
-            }
-
-            if (hasIterators)
-            {
-                WriteLine("template <typename T> struct Generator {");
-                Indent();
-                WriteLine("struct promise_type {");
-                Indent();
-                WriteLine("T current;");
-                WriteLine("Generator get_return_object() { return Generator{ std::coroutine_handle<promise_type>::from_promise(*this) }; }");
-                WriteLine("std::suspend_always initial_suspend() noexcept { return {}; }");
-                WriteLine("std::suspend_always final_suspend() noexcept { return {}; }");
-                WriteLine("std::suspend_always yield_value(T v) { current = v; return {}; }");
-                WriteLine("void return_void() {}");
-                WriteLine("void unhandled_exception() { std::terminate(); }");
-                Unindent();
-                WriteLine("};");
-                WriteLine("std::coroutine_handle<promise_type> h;");
-                WriteLine("Generator() : h(nullptr) {}");
-                WriteLine("explicit Generator(std::coroutine_handle<promise_type> handle) : h(handle) {}");
-                WriteLine("Generator(Generator&& other) noexcept : h(other.h) { other.h = nullptr; }");
-                WriteLine("Generator(const Generator&) = delete;");
-                WriteLine("Generator& operator=(Generator&& other) noexcept { if (this != &other) { if (h) h.destroy(); h = other.h; other.h = nullptr; } return *this; }");
-                WriteLine("~Generator() { if (h) h.destroy(); }");
-                WriteLine("struct iterator {");
-                Indent();
-                WriteLine("std::coroutine_handle<promise_type> h;");
-                WriteLine("iterator& operator++() { h.resume(); return *this; }");
-                WriteLine("T operator*() const { return h.promise().current; }");
-                WriteLine("bool operator!=(std::default_sentinel_t) const { return !h.done(); }");
-                Unindent();
-                WriteLine("};");
-                WriteLine("iterator begin() { h.resume(); return iterator{ h }; }");
-                WriteLine("std::default_sentinel_t end() { return {}; }");
-                Unindent();
-                WriteLine("};");
-            }
-
-            Unindent();
-            WriteLine("}");
-            WriteLine();
             }
 
             // The collections runtime opens its OWN `namespace BasicLang { … }`, so it is
             // emitted OUTSIDE the block just closed above (a sibling namespace re-open) to
             // avoid double-nesting into BasicLang::BasicLang::List.
             if (usesCollections)
-            {
-                foreach (var line in CppCollectionsRuntime.Source.Split('\n'))
-                    WriteLine(line.TrimEnd('\r'));
-            }
+                SpliceRuntimeSource(CppCollectionsRuntime.Source);
+        }
+
+        /// <summary>
+        /// Emit a pre-indented runtime source const line-by-line through WriteLine (indent
+        /// level must be 0: the consts carry their own indentation).
+        /// </summary>
+        private void SpliceRuntimeSource(string source)
+        {
+            foreach (var line in source.Split('\n'))
+                WriteLine(line.TrimEnd('\r'));
         }
 
         /// <summary>
@@ -2343,13 +2274,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// Generate extern "C" declarations for Framework_* functions used in the code.
-        /// These match the signatures in VisualGameStudioEngine/framework.h.
+        /// Map of Framework_* function name to its C declaration (without __declspec).
+        /// These match the signatures in VisualGameStudioEngine/framework.h. Shared by the
+        /// legacy used-only extern insert (Generate) and the full-catalog runtime header
+        /// (GenerateSplit, D5).
         /// </summary>
-        private string GenerateFrameworkExternDeclarations()
-        {
-            // Map of Framework_* function name to its C declaration (without __declspec)
-            var signatures = new Dictionary<string, string>
+        private static readonly Dictionary<string, string> FrameworkSignatures
+            = new Dictionary<string, string>
             {
                 // Core
                 ["Framework_Initialize"] = "bool Framework_Initialize(int width, int height, const char* title)",
@@ -2455,6 +2386,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 ["Framework_SetMousePosition"] = "void Framework_SetMousePosition(int x, int y)",
             };
 
+        /// <summary>
+        /// Generate extern "C" declarations for Framework_* functions used in the code.
+        /// </summary>
+        private string GenerateFrameworkExternDeclarations()
+        {
             var sb = new StringBuilder();
             sb.AppendLine("// VisualGameStudioEngine framework function declarations");
             sb.AppendLine("// Link with VisualGameStudioEngine.dll");
@@ -2468,7 +2404,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             foreach (var funcName in _frameworkFunctionsUsed.OrderBy(f => f))
             {
-                if (signatures.TryGetValue(funcName, out var sig))
+                if (FrameworkSignatures.TryGetValue(funcName, out var sig))
                 {
                     sb.AppendLine($"    FRAMEWORK_API {sig};");
                 }
