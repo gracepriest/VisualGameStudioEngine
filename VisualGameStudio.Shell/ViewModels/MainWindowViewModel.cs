@@ -4248,7 +4248,9 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
 
-        if (_languageService.IsConnected)
+        // Same gate as GoToDefinition: the BasicLang server answers unknown URIs
+        // as if they were BasicLang files, so never query it for non-BasicLang docs.
+        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
         {
             var location = await _languageService.GetImplementationAsync(
                 activeDoc.FilePath,

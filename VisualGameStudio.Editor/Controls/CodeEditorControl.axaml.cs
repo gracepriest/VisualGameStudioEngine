@@ -1897,15 +1897,25 @@ public partial class CodeEditorControl : UserControl
 
     private void UpdateFoldings()
     {
-        // If LSP is available, request folding ranges asynchronously — but only
-        // for BasicLang sources: the BasicLang server answers unknown URIs as if
-        // they were BasicLang files, so the gate prevents wrong results, not just
-        // waste. Non-BasicLang files (e.g. .cpp) fall through to the regex
-        // strategy, which yields nothing for C++ — correct-and-quiet for Phase 1.
+        // Non-BasicLang files (e.g. .cpp) get NO folding at all in Phase 1.
+        // Two reasons: the BasicLang server answers unknown URIs as if they were
+        // BasicLang files (actively wrong results, not just waste), and the regex
+        // fallback produces GARBAGE folds for C++ — BasicLangFoldingStrategy's
+        // StartPattern matches `if`/`for`/`while`/`class`/`namespace`/... at line
+        // start case-insensitively, no End pattern ever matches C++, so every
+        // keyword line becomes an "(unclosed)" fold spanning to end-of-file.
+        // Clear any stale folds and bail. (clangd brings real folding in Phase 3.)
+        if (!string.IsNullOrEmpty(_documentFilePath)
+            && !VisualGameStudio.Core.Utilities.BasicLangFileTypes.IsBasicLangSourceFile(_documentFilePath))
+        {
+            _foldingManager?.UpdateFoldings(Array.Empty<NewFolding>(), -1);
+            return;
+        }
+
+        // If LSP is available, request folding ranges asynchronously
         if (!_isUpdatingFoldings && _isFoldingEnabled
             && _foldingManager != null && _textEditor?.Document != null && _textEditor?.TextArea != null
-            && _languageService != null && _languageService.IsConnected && !string.IsNullOrEmpty(_documentFilePath)
-            && VisualGameStudio.Core.Utilities.BasicLangFileTypes.IsBasicLangSourceFile(_documentFilePath))
+            && _languageService != null && _languageService.IsConnected && !string.IsNullOrEmpty(_documentFilePath))
         {
             _ = UpdateFoldingsFromLspAsync();
             return;
