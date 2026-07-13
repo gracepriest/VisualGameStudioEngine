@@ -14,7 +14,10 @@ public partial class NewProjectConfigureView : Window
 
     private readonly NewProjectWizardViewModel? _vm;
 
-    public WizardOutcome Outcome { get; private set; } = WizardOutcome.Back;
+    // The Back/Create buttons set Outcome explicitly via their handlers; an X-close
+    // (window chrome) leaves this default so the whole wizard dismisses (spec: Cancel
+    // from either window ends the flow).
+    public WizardOutcome Outcome { get; private set; } = WizardOutcome.Cancelled;
     public ProjectCreationResult? Result { get; private set; }
 
     public NewProjectConfigureView()

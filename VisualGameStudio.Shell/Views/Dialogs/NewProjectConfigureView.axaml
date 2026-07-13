@@ -28,6 +28,14 @@
                 IsVisible="{Binding SelectedTemplate, Converter={x:Static ObjectConverters.IsNotNull}}">
           <StackPanel>
             <TextBlock Text="{Binding SelectedTemplate.Name}" FontSize="16" FontWeight="SemiBold"/>
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+              <TextBlock Text="{Binding SelectedLanguageOption.Display}" FontSize="12"
+                         Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+              <TextBlock Text="·" FontSize="12"
+                         Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+              <TextBlock Text="{Binding SelectedBackend.Name}" FontSize="12"
+                         Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+            </StackPanel>
             <TextBlock Text="{Binding SelectedTemplate.Description}" TextWrapping="Wrap"
                        Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" Margin="0,6,0,0"/>
             <ItemsControl ItemsSource="{Binding SelectedTemplate.Tags}" Margin="0,10,0,0">

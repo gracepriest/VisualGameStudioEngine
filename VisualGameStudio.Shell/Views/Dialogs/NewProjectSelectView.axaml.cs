@@ -27,25 +27,31 @@ public partial class NewProjectSelectView : Window
     private async void OnNextRequested(object? sender, EventArgs e)
     {
         if (_vm == null) return;
-
-        _configureOpen = true;
-        var configure = new NewProjectConfigureView(_vm);
-        await configure.ShowDialog(this);
-        _configureOpen = false;
-
-        switch (configure.Outcome)
+        try
         {
-            case NewProjectConfigureView.WizardOutcome.Created:
-                _result = configure.Result;
-                Close(_result);
-                break;
-            case NewProjectConfigureView.WizardOutcome.Cancelled:
-                _result = null;
-                Close(_result);
-                break;
-            case NewProjectConfigureView.WizardOutcome.Back:
-                // stay on this window with state preserved
-                break;
+            _configureOpen = true;
+            var configure = new NewProjectConfigureView(_vm);
+            await configure.ShowDialog(this);
+            _configureOpen = false;
+
+            switch (configure.Outcome)
+            {
+                case NewProjectConfigureView.WizardOutcome.Created:
+                    _result = configure.Result;
+                    Close(_result);
+                    break;
+                case NewProjectConfigureView.WizardOutcome.Cancelled:
+                    _result = null;
+                    Close(_result);
+                    break;
+                case NewProjectConfigureView.WizardOutcome.Back:
+                    // stay on this window with state preserved
+                    break;
+            }
+        }
+        catch (Exception)
+        {
+            _configureOpen = false; // never leave the guard wedged if window 2 threw
         }
     }
 
