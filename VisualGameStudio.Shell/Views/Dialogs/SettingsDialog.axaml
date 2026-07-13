@@ -314,9 +314,12 @@
             <!-- Keyboard shortcuts (shown only for Keyboard category) -->
             <DockPanel IsVisible="{Binding SelectedCategory.Id, Converter={x:Static views:SettingsDialog.IsKeyboardCategory}}"
                        Margin="0,8,0,0">
+              <!-- Honest read-only reference (Decision D4): the whole grid is IsReadOnly so the
+                   Shortcut column can't be edited (editing was placebo — it reset on reopen and
+                   rebound nothing). The list is generated from the real key bindings. -->
               <DataGrid ItemsSource="{Binding Shortcuts}"
                         AutoGenerateColumns="False"
-                        IsReadOnly="False"
+                        IsReadOnly="True"
                         CanUserReorderColumns="False"
                         CanUserSortColumns="False"
                         GridLinesVisibility="Horizontal"
@@ -324,7 +327,7 @@
                         MaxHeight="400">
                 <DataGrid.Columns>
                   <DataGridTextColumn Header="Action" Binding="{Binding Action}" IsReadOnly="True" Width="200"/>
-                  <DataGridTextColumn Header="Shortcut" Binding="{Binding CurrentBinding}" Width="150"/>
+                  <DataGridTextColumn Header="Shortcut" Binding="{Binding CurrentBinding}" IsReadOnly="True" Width="150"/>
                   <DataGridTextColumn Header="Default" Binding="{Binding DefaultBinding}" IsReadOnly="True" Width="150"/>
                 </DataGrid.Columns>
               </DataGrid>

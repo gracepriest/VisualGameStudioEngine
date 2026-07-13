@@ -1282,22 +1282,19 @@ public partial class SettingsViewModel : ViewModelBase
 
     private void InitializeShortcuts()
     {
-        Shortcuts.Add(new KeyboardShortcut { Action = "Save", CurrentBinding = "Ctrl+S", DefaultBinding = "Ctrl+S" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Save All", CurrentBinding = "Ctrl+Shift+S", DefaultBinding = "Ctrl+Shift+S" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Open File", CurrentBinding = "Ctrl+O", DefaultBinding = "Ctrl+O" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "New Project", CurrentBinding = "Ctrl+Shift+N", DefaultBinding = "Ctrl+Shift+N" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Find", CurrentBinding = "Ctrl+F", DefaultBinding = "Ctrl+F" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Replace", CurrentBinding = "Ctrl+H", DefaultBinding = "Ctrl+H" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Find in Files", CurrentBinding = "Ctrl+Shift+F", DefaultBinding = "Ctrl+Shift+F" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Go to Definition", CurrentBinding = "F12", DefaultBinding = "F12" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Find References", CurrentBinding = "Shift+F12", DefaultBinding = "Shift+F12" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Build", CurrentBinding = "Ctrl+Shift+B", DefaultBinding = "Ctrl+Shift+B" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Start Debugging", CurrentBinding = "F5", DefaultBinding = "F5" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Step Over", CurrentBinding = "F10", DefaultBinding = "F10" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Step Into", CurrentBinding = "F11", DefaultBinding = "F11" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Toggle Breakpoint", CurrentBinding = "F9", DefaultBinding = "F9" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Comment Line", CurrentBinding = "Ctrl+/", DefaultBinding = "Ctrl+/" });
-        Shortcuts.Add(new KeyboardShortcut { Action = "Duplicate Line", CurrentBinding = "Ctrl+D", DefaultBinding = "Ctrl+D" });
+        // Honest read-only reference (Decision D4): generated from the shared shortcut registry
+        // whose global entries mirror MainWindow.axaml's real Window.KeyBindings (cross-validated by
+        // KeyboardShortcutRegistryTests). CurrentBinding == DefaultBinding because the grid is a
+        // reference, not an editor — the old hand-maintained list had wrong gestures and gaps.
+        foreach (var s in KeyboardShortcutRegistry.All)
+        {
+            Shortcuts.Add(new KeyboardShortcut
+            {
+                Action = s.DisplayName,
+                CurrentBinding = s.DisplayGesture,
+                DefaultBinding = s.DisplayGesture
+            });
+        }
     }
 
     [RelayCommand]
@@ -1620,16 +1617,9 @@ public partial class SettingsViewModel : ViewModelBase
                     ShowBuildOutput = settings.ShowBuildOutput;
                     DefaultConfiguration = settings.DefaultConfiguration ?? DefaultConfiguration;
 
-                    if (settings.Shortcuts != null)
-                    {
-                        foreach (var shortcut in Shortcuts)
-                        {
-                            if (settings.Shortcuts.TryGetValue(shortcut.Action, out var binding))
-                            {
-                                shortcut.CurrentBinding = binding;
-                            }
-                        }
-                    }
+                    // The keyboard grid is an honest read-only reference generated from the real
+                    // key bindings (Decision D4) — don't let stale legacy "Shortcuts" data override
+                    // it (that was placebo rebinding that reset on reopen and rebound nothing).
                 }
             }
         }
