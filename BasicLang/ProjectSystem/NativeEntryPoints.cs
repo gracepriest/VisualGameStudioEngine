@@ -28,13 +28,18 @@ namespace BasicLang.Compiler.ProjectSystem
     ///   overcount. The BL6012 message names every candidate file so the
     ///   user can restructure.
     /// - Digit separators (`10'000`, `0xFF'FF`, `1'000'000`) are told apart
-    ///   from char-literal quotes by a local rule: a `'` is a separator iff
-    ///   BOTH its immediately preceding and following characters are hex
-    ///   digits (`[0-9a-fA-F]`); otherwise it opens a char literal. This
-    ///   misreads a `u8'a'`-style UTF-8 char literal whose sole content
-    ///   character is itself a hex letter (prev `8`, next `a`, both hex
-    ///   digits) as a digit separator instead of a char literal —
-    ///   astronomically rare in practice, not worth extra state to special-case.
+    ///   from char-literal quotes by a MEMORYLESS local rule: a `'` is a
+    ///   separator iff BOTH its immediately preceding and following characters
+    ///   are hex digits (`[0-9a-fA-F]`); otherwise it opens a char literal.
+    ///   Having no memory, the rule can misclassify — e.g. the CLOSING quote
+    ///   of a `u8'a'`-style UTF-8 char literal (prev `a`, next another hex
+    ///   digit) reads as a separator, and the OPENING quote's partner then
+    ///   flips quote parity. A flipped parity would otherwise let the char-
+    ///   literal scan run to EOF hunting a match, hiding every entry point
+    ///   after it. The blast radius is capped to a SINGLE LINE: char-literal
+    ///   consumption stops at an unescaped newline (real char literals never
+    ///   span one), so at worst one physical line is misread, never the rest
+    ///   of the file. Astronomically rare in practice.
     /// - Raw string literals `R"delim(...)delim"` (optionally preceded by a
     ///   `u8`/`L`/`u`/`U` encoding prefix) are recognized as a unit and their
     ///   entire span is stripped, so embedded quotes/braces inside them never
@@ -55,8 +60,15 @@ namespace BasicLang.Compiler.ProjectSystem
         // specifier, and/or a function-try-block `try`. WinMain/wWinMain are
         // matched by name alone because real signatures interpose WINAPI/
         // CALLBACK between the return type and the name.
+        // The noexcept condition can itself nest parens (noexcept(noexcept(...)))
+        // so its argument is matched with a bounded balanced-paren sub-pattern
+        // (up to a couple of nesting levels — enough for the common forms) rather
+        // than a flat [^)]*. The trailing `{` is still required, so a declaration
+        // like `int main() noexcept(true);` stays a non-match.
         private const string EntryPointTail =
-            @"\s*(?:->\s*int\s*)?(?:noexcept(?:\s*\([^)]*\))?\s*)?(?:try\s*)?\{";
+            @"\s*(?:->\s*int\s*)?" +
+            @"(?:noexcept\s*(?:\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?\s*)?" +
+            @"(?:try\s*)?\{";
 
         private static readonly Regex EntryPointDefinition = new Regex(
             @"(?:\b(?:int|auto)\s+(?:main|wmain)\s*\([^;{)]*\)" + EntryPointTail + ")" +
@@ -83,16 +95,18 @@ namespace BasicLang.Compiler.ProjectSystem
         /// Applies the entry-point rule and returns the resulting diagnostics
         /// (empty when the project is well-formed). <paramref name="cppMains"/>
         /// is one (file, main-count) pair per scanned C++ source; zero-count
-        /// entries are ignored. Candidate order in messages is deterministic:
-        /// BasicLang's Main first, then C++ files in caller-supplied order.
+        /// entries are ignored and duplicate file paths are merged (their
+        /// counts summed) so each file is named once in the message. Candidate
+        /// order in messages is deterministic: BasicLang's Main first, then C++
+        /// files in caller-supplied (first-seen) order.
         /// </summary>
         public static List<CppDiagnostic> Apply(bool isExe, int basicLangMainCount,
             List<(string file, int count)> cppMains)
         {
             var diagnostics = new List<CppDiagnostic>();
-            var cppCandidates = (cppMains ?? new List<(string file, int count)>())
-                .Where(m => m.count > 0)
-                .ToList();
+            var cppCandidates = MergeByFile(
+                (cppMains ?? new List<(string file, int count)>())
+                    .Where(m => m.count > 0));
             var total = basicLangMainCount + cppCandidates.Sum(m => m.count);
 
             if (isExe)
@@ -142,11 +156,38 @@ namespace BasicLang.Compiler.ProjectSystem
             List<(string file, int count)> cppCandidates)
         {
             var parts = new List<string>();
-            for (var i = 0; i < basicLangMainCount; i++)
+            // Fold repeated BasicLang mains the same way the C++ side folds a
+            // file's count, so the reachable duplicate-Sub-Main case (see the
+            // per-unit IR probe) reads "Main (BasicLang) (x2)" not a repeat.
+            if (basicLangMainCount == 1)
                 parts.Add("Main (BasicLang)");
+            else if (basicLangMainCount > 1)
+                parts.Add($"Main (BasicLang) (x{basicLangMainCount})");
             foreach (var (file, count) in cppCandidates)
                 parts.Add(count == 1 ? $"{file}: main" : $"{file}: main (x{count})");
             return string.Join(", ", parts);
+        }
+
+        // Collapses duplicate file paths into one entry with summed counts,
+        // preserving first-seen order so message candidate order stays
+        // deterministic. Defends message quality if a caller scans a file more
+        // than once.
+        private static List<(string file, int count)> MergeByFile(
+            IEnumerable<(string file, int count)> entries)
+        {
+            var merged = new List<(string file, int count)>();
+            var indexByFile = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var (file, count) in entries)
+            {
+                if (indexByFile.TryGetValue(file, out var idx))
+                    merged[idx] = (file, merged[idx].count + count);
+                else
+                {
+                    indexByFile[file] = merged.Count;
+                    merged.Add((file, count));
+                }
+            }
+            return merged;
         }
 
         /// <summary>
@@ -207,7 +248,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 else if (c == '"')
                 {
                     // String literal; backslash escapes the next char.
-                    i = ConsumeQuotedLiteral(source, i, n, '"');
+                    i = ConsumeQuotedLiteral(source, i, n, '"', boundToLine: false);
                     sb.Append(' ');
                 }
                 else if (c == '\'')
@@ -220,8 +261,11 @@ namespace BasicLang.Compiler.ProjectSystem
                     }
                     else
                     {
-                        // Char literal; backslash escapes the next char.
-                        i = ConsumeQuotedLiteral(source, i, n, '\'');
+                        // Char literal; backslash escapes the next char. Bounded
+                        // to one line so a mis-classified quote (memoryless
+                        // digit-separator rule) can't desync the scan past a
+                        // newline and swallow a real main below it.
+                        i = ConsumeQuotedLiteral(source, i, n, '\'', boundToLine: true);
                         sb.Append(' ');
                     }
                 }
@@ -259,12 +303,17 @@ namespace BasicLang.Compiler.ProjectSystem
         // Consumes a "..." or '...' literal starting at the opening quote and
         // returns the index just past its closing quote (or n at EOF). A
         // backslash always consumes the next character, so \" / \\ don't
-        // terminate the literal early.
-        private static int ConsumeQuotedLiteral(string source, int i, int n, char quote)
+        // terminate the literal early. When <paramref name="boundToLine"/> is
+        // set (char literals), an unescaped newline also terminates the scan
+        // (the newline itself is left for the caller to re-process) — real
+        // char literals never span a line, and this bounds any quote-parity
+        // desync to a single line instead of the rest of the file.
+        private static int ConsumeQuotedLiteral(string source, int i, int n, char quote, bool boundToLine)
         {
             i++; // skip opening quote
             while (i < n)
             {
+                if (boundToLine && source[i] == '\n') break;
                 if (source[i] == '\\') { i += 2; continue; }
                 if (source[i] == quote) { i++; break; }
                 i++;

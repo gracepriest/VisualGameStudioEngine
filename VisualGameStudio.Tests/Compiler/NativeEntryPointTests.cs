@@ -112,6 +112,50 @@ public class NativeEntryPointTests
     }
 
     // ========================================================================
+    // Task 3 hardening, review follow-up: balanced-paren noexcept, bounded
+    // char-literal desync, and precedence-hazard pins.
+    // ========================================================================
+
+    // --- Follow-up 1: noexcept condition may itself nest parens ---
+    [TestCase("int main() noexcept(noexcept(foo())) { }", 1)]
+    [TestCase("int main() noexcept(true) { }", 1)]
+    [TestCase("int main() noexcept(noexcept(x));", 0)]   // declaration: no body brace
+    public void CountMains_NoexceptNestedParens(string source, int expected)
+        => Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(expected));
+
+    // --- Follow-up 2: a mis-classified char-literal quote must not swallow
+    // a real main on a LATER line. `u8'a'` closing quote is seen as a char-
+    // literal opener by the memoryless separator rule; without the newline
+    // cap in char-literal consumption it runs to EOF and hides the main.
+    [Test]
+    public void CountMains_CharLiteralDesync_IsBoundedToOneLine()
+    {
+        var source = "auto c = u8'a';\nint main() { }";
+        Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(1));
+    }
+
+    // The coordinator's `0xa'A` form does not actually desync (both quote
+    // neighbors are hex digits, so it's classified as a separator), but pin
+    // it too: the following-line main is counted regardless.
+    [Test]
+    public void CountMains_HexNeighborQuote_DoesNotSwallowNextLineMain()
+    {
+        var source = "auto x = 0xa'A;\nint main() { }";
+        Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(1));
+    }
+
+    // --- Follow-up 4: precedence hazards (currently pass; pin them) ---
+    // Comment look-alikes INSIDE a raw string are text, not comments/code.
+    [TestCase("const char* s = R\"(// int main(){} /* int main(){} */)\"; int main(){}", 1)]
+    // An `R\"` sequence INSIDE an ordinary string literal is not a raw string.
+    [TestCase("const char* s = \"x R\\\"(y)\\\" z\"; int main(){}", 1)]
+    // Word-boundary: names merely containing WinMain/wWinMain are not entry points.
+    [TestCase("int MyWinMainWrapper() { }", 0)]
+    [TestCase("int wWinMainish() { }", 0)]
+    public void CountMains_PrecedenceHazards(string source, int expected)
+        => Assert.That(NativeEntryPoints.CountCppMains(source), Is.EqualTo(expected));
+
+    // ========================================================================
     // Apply — the Exe/Library entry-point rule
     // ========================================================================
 
@@ -202,6 +246,44 @@ public class NativeEntryPointTests
 
         // Zero-count entries alone are not entry points at all.
         Assert.That(NativeEntryPoints.Apply(false, 0, new() { ("empty.cpp", 0) }), Is.Empty);
+    }
+
+    // --- review follow-up 3: fold repeated BasicLang mains like the C++ side ---
+    [Test]
+    public void Rule_Exe_TwoBasicLangMains_IsBL6012_FoldedWithCount()
+    {
+        var d = NativeEntryPoints.Apply(true, 2, new());
+        Assert.That(d, Has.Count.EqualTo(1));
+        Assert.That(d[0].Code, Is.EqualTo("BL6012"));
+        Assert.That(d[0].Message, Does.Contain("Main (BasicLang) (x2)"));
+        Assert.That(d[0].Message, Does.Contain("(2)")); // total entry-point count
+        // Folded — the label appears exactly once, not repeated.
+        Assert.That(d[0].Message.IndexOf("Main (BasicLang)", StringComparison.Ordinal),
+            Is.EqualTo(d[0].Message.LastIndexOf("Main (BasicLang)", StringComparison.Ordinal)));
+    }
+
+    [Test]
+    public void Rule_Exe_TwoBasicLangMainsPlusCpp_IsBL6012_TotalThree()
+    {
+        var d = NativeEntryPoints.Apply(true, 2, new() { ("game.cpp", 1) });
+        Assert.That(d[0].Code, Is.EqualTo("BL6012"));
+        Assert.That(d[0].Message, Does.Contain("Main (BasicLang) (x2)").And.Contain("game.cpp: main"));
+        Assert.That(d[0].Message, Does.Contain("(3)")); // total across both languages
+    }
+
+    // --- review follow-up 5: duplicate C++ file paths are merged (counts summed) ---
+    [Test]
+    public void Rule_DuplicateCppFileEntries_AreMergedByPath_WithSummedCount()
+    {
+        var d = NativeEntryPoints.Apply(true, 0, new() { ("a.cpp", 1), ("a.cpp", 1) });
+        Assert.That(d, Has.Count.EqualTo(1));
+        Assert.That(d[0].Code, Is.EqualTo("BL6012"));
+        Assert.That(d[0].Message, Does.Contain("a.cpp: main (x2)"));
+        Assert.That(d[0].Message, Does.Contain("(2)")); // total
+        // Listed exactly once after merge.
+        Assert.That(d[0].Message.IndexOf("a.cpp", StringComparison.Ordinal),
+            Is.EqualTo(d[0].Message.LastIndexOf("a.cpp", StringComparison.Ordinal)));
+        Assert.That(d[0].FilePath, Is.EqualTo("a.cpp"));
     }
 
     // ========================================================================
