@@ -585,12 +585,17 @@ End Sub
         Assert.That(result.ExecutablePath!.Replace('\\', '/'), Does.Not.Contain("net8.0"));
 
         // Runs and prints — proves it is a real native exe, not a leftover .cpp.
+        // Bound the read so a hypothetical hanging binary fails cleanly.
         var psi = new System.Diagnostics.ProcessStartInfo(result.ExecutablePath!)
         { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
         using var proc = System.Diagnostics.Process.Start(psi)!;
-        var stdout = await proc.StandardOutput.ReadToEndAsync();
-        proc.WaitForExit(30000);
-        Assert.That(stdout, Does.Contain("pure-bl-cpp-ok"));
+        var readTask = proc.StandardOutput.ReadToEndAsync();
+        if (await Task.WhenAny(readTask, Task.Delay(30000)) != readTask)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            Assert.Fail("built native exe did not exit within 30s");
+        }
+        Assert.That(readTask.Result, Does.Contain("pure-bl-cpp-ok"));
 
         // A semantic error must produce a PARSED per-file .bas diagnostic (the
         // CppProjectBuilder transpile feed), not a raw toolchain blob.

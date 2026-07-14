@@ -334,7 +334,7 @@ public class BuildService : IBuildService
             // C++ backend (TargetBackend=Cpp, transpiled to native) build through
             // the SAME CppProjectBuilder the CLI uses — one native-project path, no
             // IDE-side reimplementation (the CLI mirror is ProjectFile.IsNativeProject).
-            if (project.Language == ProjectLanguage.Cpp || project.TargetBackend == TargetBackend.Cpp)
+            if (project.IsNativeBuild)
             {
                 // BuildCppProject never throws (exceptions map to a failed result)
                 // so execution ALWAYS falls through to the shared finalization
@@ -584,24 +584,6 @@ public class BuildService : IBuildService
                         extension = ".cs";
                         break;
                 }
-            }
-            catch (BasicLang.Compiler.CodeGen.CPlusPlus.CppCapabilityException capEx)
-            {
-                // The C++ backend refuses constructs it cannot lower — report each
-                // capability diagnostic instead of a bare exception message.
-                result.Success = false;
-                foreach (var diagnostic in capEx.Diagnostics)
-                {
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL6001",
-                        Message = $"C++ backend: {diagnostic}",
-                        FilePath = project.FilePath,
-                        Severity = DiagnosticSeverity.Error
-                    });
-                    _outputService.WriteError($"  C++ backend: {diagnostic}", OutputCategory.Build);
-                }
-                return result;
             }
             catch (Exception genEx)
             {

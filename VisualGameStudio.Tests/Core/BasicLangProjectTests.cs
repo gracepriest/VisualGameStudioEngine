@@ -216,6 +216,33 @@ public class BasicLangProjectTests
 
         Assert.That(project.TargetBackend, Is.EqualTo(TargetBackend.MSIL));
     }
+
+    [Test]
+    public void IsNativeBuild_LanguageCpp_IsTrue()
+    {
+        // A hand-written C++ project routes through CppProjectBuilder.
+        var project = new BasicLangProject { Language = ProjectLanguage.Cpp };
+
+        Assert.That(project.IsNativeBuild, Is.True);
+    }
+
+    [Test]
+    public void IsNativeBuild_TargetBackendCpp_IsTrue()
+    {
+        // A BasicLang project on the C++ backend also builds natively.
+        var project = new BasicLangProject { TargetBackend = TargetBackend.Cpp };
+
+        Assert.That(project.IsNativeBuild, Is.True);
+    }
+
+    [Test]
+    public void IsNativeBuild_DefaultCSharpProject_IsFalse()
+    {
+        // Default: BasicLang language + C# backend = managed build.
+        var project = new BasicLangProject();
+
+        Assert.That(project.IsNativeBuild, Is.False);
+    }
 }
 
 [TestFixture]

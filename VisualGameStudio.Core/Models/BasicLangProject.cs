@@ -10,6 +10,9 @@ public class BasicLangProject
     public TargetBackend TargetBackend { get; set; } = TargetBackend.CSharp;
     public ProjectLanguage Language { get; set; } = ProjectLanguage.BasicLang;
 
+    /// <summary>True when this project builds to a native binary (C++ language OR C++ backend) — routed through CppProjectBuilder.</summary>
+    public bool IsNativeBuild => Language == ProjectLanguage.Cpp || TargetBackend == TargetBackend.Cpp;
+
     /// <summary>C++-only settings; null for BasicLang projects. Modeled so IDE saves round-trip them.</summary>
     public CppProjectSettings? CppSettings { get; set; }
     public string Version { get; set; } = "1.0";
