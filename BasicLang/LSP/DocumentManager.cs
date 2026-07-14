@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
+using BasicLang.Compiler.ProjectSystem;
 using BasicLang.Compiler.SemanticAnalysis;
 using OmniSharp.Extensions.LanguageServer.Protocol;
 
@@ -94,6 +95,20 @@ namespace BasicLang.Compiler.LSP
         /// </summary>
         public DocumentState UpdateDocument(DocumentUri uri, string content)
         {
+            // Defense-in-depth: this server only understands BasicLang source.
+            // A URI with a recognizable non-BasicLang extension (e.g. a .cpp/.h
+            // translation unit from a mixed project) is never registered,
+            // parsed, or published — it would otherwise be lexed/parsed AS
+            // BasicLang by the error-recovering parser and silently pollute the
+            // module/symbol registry. URIs with no recognizable extension
+            // (untitled/virtual buffers) are let through unchanged to preserve
+            // existing single-file-analysis behavior for brand-new unsaved
+            // documents. No first-party client sends non-BasicLang URIs to this
+            // server today (the IDE gates by extension and routes .cpp to a
+            // separate clangd configuration).
+            if (!IsPotentiallyBasicLangUri(uri))
+                return null;
+
             // Resolve the document's project (nearest .blproj or sibling files)
             // so semantic analysis can see cross-file symbols.
             var projectContext = GetProjectContext(uri, content);
@@ -146,6 +161,32 @@ namespace BasicLang.Compiler.LSP
 
             _documents[uri] = state;
             return state;
+        }
+
+        /// <summary>
+        /// True unless the URI has a non-empty extension that is NOT in
+        /// <see cref="ProjectFile.BasicLangSourceExtensions"/> — i.e. rejects
+        /// recognizable non-BasicLang files (.cpp/.h/.hpp/... from a mixed
+        /// project) while letting extensionless URIs (untitled/virtual
+        /// buffers, which carry no project-file evidence either way) pass
+        /// through unchanged, preserving existing single-file-analysis
+        /// behavior for brand-new unsaved documents.
+        /// </summary>
+        private static bool IsPotentiallyBasicLangUri(DocumentUri uri)
+        {
+            try
+            {
+                var extension = System.IO.Path.GetExtension(uri?.Path)?.ToLowerInvariant();
+                if (string.IsNullOrEmpty(extension))
+                    return true;
+
+                return Array.IndexOf(ProjectFile.BasicLangSourceExtensions, extension) >= 0;
+            }
+            catch
+            {
+                // Best-effort: never let an unexpected URI shape break the server
+                return true;
+            }
         }
 
         private static string GetParseCacheKey(DocumentUri uri, string contentHash)

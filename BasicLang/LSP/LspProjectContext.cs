@@ -335,9 +335,12 @@ namespace BasicLang.Compiler.LSP
                 current = Path.GetDirectoryName(current);
             }
 
-            // Fallback: sibling source files in the same directory (implicit project)
+            // Fallback: sibling source files in the same directory (implicit project).
+            // Patterns are derived from the shared whitelist so this list can never
+            // drift from the one used for .blproj Compile-item filtering above (it
+            // used to be a hand-maintained literal list missing .basic/.class).
             var siblings = new List<string> { filePath };
-            foreach (var pattern in new[] { "*.bas", "*.bl", "*.mod", "*.cls" })
+            foreach (var pattern in ProjectFile.BasicLangSourceExtensions.Select(ext => "*" + ext))
             {
                 try
                 {
@@ -377,7 +380,19 @@ namespace BasicLang.Compiler.LSP
                 try
                 {
                     var projectFile = ProjectFile.Load(blprojPath);
+                    // ProjectFile.GetSourceFiles() returns ALL <Compile> items —
+                    // in a mixed BasicLang/C++ project that includes .cpp/.h
+                    // translation units (CppProjectBuilder and
+                    // GetCppTranslationUnits depend on the unfiltered set, so
+                    // the whitelist is applied HERE, at the LSP's own choke
+                    // point, not inside ProjectFile itself). Without this, a
+                    // .cpp file gets lexed/parsed as BasicLang by the
+                    // error-recovering parser and silently registers a junk
+                    // module under its basename (or merges into a same-named
+                    // .bas module via ModuleSymbols.MergeFrom).
                     files = projectFile.GetSourceFiles()
+                        .Where(f => ProjectFile.BasicLangSourceExtensions.Contains(
+                            Path.GetExtension(f).ToLowerInvariant()))
                         .Select(Path.GetFullPath)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .ToList();

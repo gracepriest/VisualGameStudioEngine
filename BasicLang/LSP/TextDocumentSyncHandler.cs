@@ -31,7 +31,15 @@ namespace BasicLang.Compiler.LSP
 
         public override TextDocumentAttributes GetTextDocumentAttributes(DocumentUri uri)
         {
-            return new TextDocumentAttributes(uri, "basiclang");
+            // Answer non-BasicLang URIs (e.g. .cpp/.h in a mixed project) as
+            // plaintext so this server never claims ownership of them.
+            // Extensionless URIs (untitled/virtual buffers) keep the prior
+            // "basiclang" default.
+            var extension = System.IO.Path.GetExtension(uri?.Path)?.ToLowerInvariant();
+            var isBasicLang = string.IsNullOrEmpty(extension)
+                || System.Array.IndexOf(
+                       BasicLang.Compiler.ProjectSystem.ProjectFile.BasicLangSourceExtensions, extension) >= 0;
+            return new TextDocumentAttributes(uri, isBasicLang ? "basiclang" : "plaintext");
         }
 
         public override Task<Unit> Handle(DidOpenTextDocumentParams request, CancellationToken cancellationToken)

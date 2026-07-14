@@ -17,6 +17,13 @@ namespace BasicLang.Compiler.LSP
         /// </summary>
         public void PublishDiagnostics(ILanguageServerFacade server, DocumentState state)
         {
+            // DocumentManager.UpdateDocument returns null for URIs it refuses to
+            // register (non-BasicLang extensions in a mixed project) — callers
+            // in TextDocumentSyncHandler pass that straight through, so this
+            // must no-op rather than NRE on state.Diagnostics/state.Uri below.
+            if (state == null)
+                return;
+
             var diagnostics = new List<OmniSharp.Extensions.LanguageServer.Protocol.Models.Diagnostic>();
 
             foreach (var diag in state.Diagnostics)
