@@ -86,7 +86,11 @@ public class MixedProjectBuildTests
         { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
         using var proc = System.Diagnostics.Process.Start(psi)!;
         var stdout = proc.StandardOutput.ReadToEnd();
-        proc.WaitForExit(30000);
+        if (!proc.WaitForExit(30000))
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            Assert.Fail($"produced exe did not exit within 30s: {exePath}");
+        }
         Assert.That(proc.ExitCode, Is.EqualTo(0), $"exe exited {proc.ExitCode}");
         return stdout;
     }

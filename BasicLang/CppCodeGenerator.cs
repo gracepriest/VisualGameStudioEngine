@@ -225,15 +225,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return result;
         }
 
-        private bool IsClassMethod(IRFunction function, IRModule module)
+        /// <summary>
+        /// True when <paramref name="function"/> is a class member (method / constructor /
+        /// property accessor) rather than a standalone function — class-member
+        /// implementations also live in <c>module.Functions</c>, so free-function passes
+        /// filter them out with this. Static + internal so the ProjectSystem builder can
+        /// count standalone BasicLang mains with the identical rule. Null-hardened so a
+        /// partially-built IR unit can't NRE it.
+        /// </summary>
+        internal static bool IsClassMethod(IRFunction function, IRModule module)
         {
+            if (module?.Classes == null)
+                return false;
             foreach (var irClass in module.Classes.Values)
             {
-                if (irClass.Methods.Any(m => m.Implementation == function))
+                if (irClass.Methods != null && irClass.Methods.Any(m => m.Implementation == function))
                     return true;
-                if (irClass.Constructors.Any(c => c.Implementation == function))
+                if (irClass.Constructors != null && irClass.Constructors.Any(c => c.Implementation == function))
                     return true;
-                if (irClass.Properties.Any(p => p.Getter == function || p.Setter == function))
+                if (irClass.Properties != null && irClass.Properties.Any(p => p.Getter == function || p.Setter == function))
                     return true;
             }
             return false;

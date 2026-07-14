@@ -88,7 +88,9 @@ namespace BasicLang.Compiler.ProjectSystem
                 unitIRs = compilation.Units.Select(u => u.IR).Where(ir => ir != null).ToList();
                 // Count Main from the PER-UNIT IRs, never CombinedIR: the combiner is
                 // first-wins on duplicate cross-file Sub Main, so CombinedIR has at most
-                // one (Task 3 probe pins this). Registry.Modules is failure-safe.
+                // one (Task 3 probe pins this). Registry.Modules == compilation.Units here
+                // (we already returned on failure); it is used only for failure-safety
+                // symmetry with MapTranspileDiagnostics, which reads the registry directly.
                 basicLangMainCount = CountBasicLangMains(compiler.Registry.Modules.Select(u => u.IR));
             }
 
@@ -113,18 +115,22 @@ namespace BasicLang.Compiler.ProjectSystem
             var generatedTus = new List<string>();
             if (blSources.Count > 0)
             {
-                // Stale generated files from renamed/removed modules would otherwise still
-                // compile — clean before regenerating (OrdinalIgnoreCase-safe on Windows).
-                CleanGeneratedDir(objGenDir);
-                Directory.CreateDirectory(objGenDir);
-
                 // GenerateSplit's precondition: projectName must be filename-safe (it is
                 // used verbatim in <Project>.g.h etc). The builder owns that guarantee.
                 var safeProject = SanitizeProjectName(outputName);
                 try
                 {
+                    // Stale generated files from renamed/removed modules would otherwise
+                    // still compile — clean before regenerating (OrdinalIgnoreCase-safe on
+                    // Windows). Clean + createdir + write share the codegen's failure
+                    // mapping so an IO fault (disk full, perms, locked obj/gen) is a clean
+                    // diagnostic in the CLI too, not an escaping throw.
+                    CleanGeneratedDir(objGenDir);
+                    Directory.CreateDirectory(objGenDir);
                     split = new CppCodeGenerator().GenerateSplit(
                         compilation.CombinedIR, safeProject, unitIRs, emitMain);
+                    foreach (var kv in split.Files)
+                        File.WriteAllText(Path.Combine(objGenDir, kv.Key), kv.Value);
                 }
                 catch (CppCapabilityException ex)
                 {
@@ -138,9 +144,13 @@ namespace BasicLang.Compiler.ProjectSystem
                     Fail(result, "BL6001", ex.Message, project.FilePath);
                     return result;
                 }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    Fail(result, "BL6006", "Failed to write generated C++ to obj/gen: " + ex.Message,
+                        project.FilePath);
+                    return result;
+                }
 
-                foreach (var kv in split.Files)
-                    File.WriteAllText(Path.Combine(objGenDir, kv.Key), kv.Value);
                 generatedTus = split.TranslationUnitFileNames
                     .Select(n => Path.Combine(objGenDir, n))
                     .ToList();
@@ -409,11 +419,11 @@ namespace BasicLang.Compiler.ProjectSystem
         /// <summary>
         /// Counts standalone BasicLang <c>Main</c> functions (case-insensitive) across
         /// the per-unit IRs. Standalone = not external, not a lambda, and not a class
-        /// method (class-method implementations also live in module.Functions — the same
-        /// distinction CppCodeGenerator.IsClassMethod makes when picking free functions).
-        /// Counting per-unit (rather than from the combined IR) is deliberate: the IR
-        /// combiner keeps only the first Sub Main across files, so the combined module
-        /// undercounts a duplicate-entry error.
+        /// method — the shared <see cref="CppCodeGenerator.IsClassMethod"/> makes exactly
+        /// the same distinction the free-function codegen passes use. Counting per-unit
+        /// (rather than from the combined IR) is deliberate: the IR combiner keeps only
+        /// the first Sub Main across files, so the combined module undercounts a
+        /// duplicate-entry error.
         /// </summary>
         private static int CountBasicLangMains(IEnumerable<IRModule> unitModules)
         {
@@ -425,29 +435,18 @@ namespace BasicLang.Compiler.ProjectSystem
                 {
                     if (fn == null || fn.IsExternal || fn.IsLambda) continue;
                     if (!string.Equals(fn.Name, "Main", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (IsClassMethod(fn, module)) continue;
+                    if (CppCodeGenerator.IsClassMethod(fn, module)) continue;
                     count++;
                 }
             }
             return count;
         }
 
-        // Local copy of CppCodeGenerator.IsClassMethod (that one is private): a function
-        // is a class member iff it is some class's method/constructor/accessor impl.
-        private static bool IsClassMethod(IRFunction function, IRModule module)
-        {
-            if (module.Classes == null) return false;
-            foreach (var irClass in module.Classes.Values)
-            {
-                if (irClass.Methods != null && irClass.Methods.Any(m => m.Implementation == function)) return true;
-                if (irClass.Constructors != null && irClass.Constructors.Any(c => c.Implementation == function)) return true;
-                if (irClass.Properties != null && irClass.Properties.Any(p => p.Getter == function || p.Setter == function)) return true;
-            }
-            return false;
-        }
-
         // Filename-safe token for GenerateSplit's precondition: keep [A-Za-z0-9_],
-        // replace everything else with '_', fall back to "Program" when empty.
+        // replace everything else with '_', fall back to "Program" when empty. The
+        // generated aggregate-header basename (<safe>.g.h) intentionally diverges from the
+        // unsanitized exe name — users #include the per-module shim (<Module>.g.h), not the
+        // aggregate, so the sanitized project token never surfaces in user-facing code.
         private static string SanitizeProjectName(string name)
         {
             if (string.IsNullOrEmpty(name)) return "Program";
