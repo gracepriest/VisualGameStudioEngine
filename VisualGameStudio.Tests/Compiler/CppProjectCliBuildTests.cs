@@ -139,14 +139,17 @@ public class CppProjectCliBuildTests
     }
 
     [Test]
-    public void Build_BasicLangSourcesPresent_FailsWithBL6008()
+    public void Build_MixedSources_NoLongerRejected()
     {
+        // BL6008 is retired (Phase 2): a Language=Cpp project may now contain BasicLang
+        // sources — they are transpiled and compiled alongside the user C++.
         var project = MakeCppProject(("main.cpp", "int main() { return 0; }\n"),
                                      ("logic.bas", "Module M\nEnd Module\n"));
         var result = CppProjectBuilder.Build(project, "Debug");
-        Assert.That(result.Success, Is.False);
-        Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain("BL6008"));
-        Assert.That(result.Diagnostics.First(d => d.Code == "BL6008").Message, Does.Contain("logic.bas"));
+        Assert.That(result.Diagnostics.Select(d => d.Code), Does.Not.Contain("BL6008"));
+        if (CppToolchain.Find() != null)
+            Assert.That(result.Success, Is.True, "mixed build failed:\n" + result.RawToolchainOutput
+                + "\n" + string.Join("\n", result.Diagnostics.Select(CppDiagnosticsParser.FormatNormalized)));
     }
 
     [Test]

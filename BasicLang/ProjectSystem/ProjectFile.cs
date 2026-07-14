@@ -54,6 +54,15 @@ namespace BasicLang.Compiler.ProjectSystem
         /// <summary>File extensions treated as C++ translation units (headers are not compiled).</summary>
         public static readonly string[] CppTranslationUnitExtensions = { ".cpp", ".cc", ".cxx", ".c" };
 
+        /// <summary>
+        /// File extensions treated as BasicLang source (the default-glob set). Single
+        /// source of truth shared by the default source glob below and consumers that
+        /// need to tell BasicLang sources apart from C++ translation units
+        /// (CppProjectBuilder's mixed-source partition, and the LSP file filter).
+        /// </summary>
+        public static readonly string[] BasicLangSourceExtensions =
+            { ".bas", ".bl", ".basic", ".mod", ".cls", ".class" };
+
         // Windows desktop UI frameworks (require the net*-windows TFM)
         public bool UseWindowsForms { get; set; } = false;
         public bool UseWpf { get; set; } = false;
@@ -357,19 +366,11 @@ namespace BasicLang.Compiler.ProjectSystem
 
             if (SourceFiles.Count == 0)
             {
-                // Default: all .bas, .bl, .basic, .mod, .cls, and .class files
-                foreach (var file in Directory.GetFiles(projectDir, "*.bas", SearchOption.AllDirectories))
-                    yield return file;
-                foreach (var file in Directory.GetFiles(projectDir, "*.bl", SearchOption.AllDirectories))
-                    yield return file;
-                foreach (var file in Directory.GetFiles(projectDir, "*.basic", SearchOption.AllDirectories))
-                    yield return file;
-                foreach (var file in Directory.GetFiles(projectDir, "*.mod", SearchOption.AllDirectories))
-                    yield return file;
-                foreach (var file in Directory.GetFiles(projectDir, "*.cls", SearchOption.AllDirectories))
-                    yield return file;
-                foreach (var file in Directory.GetFiles(projectDir, "*.class", SearchOption.AllDirectories))
-                    yield return file;
+                // Default: all .bas, .bl, .basic, .mod, .cls, and .class files (same
+                // patterns, same order as before — driven off the shared extension list).
+                foreach (var ext in BasicLangSourceExtensions)
+                    foreach (var file in Directory.GetFiles(projectDir, "*" + ext, SearchOption.AllDirectories))
+                        yield return file;
             }
             else
             {
