@@ -1431,6 +1431,16 @@ namespace BasicLang.Compiler.AST
     {
         public string Name { get; set; }
 
+        /// <summary>
+        /// True when <see cref="Name"/> is a verbatim ::-qualified foreign C++ name in
+        /// expression position — a free-function reference (<c>mathlib::freeAdd</c>,
+        /// <c>::globalFn</c>) or a global variable/constant read (<c>mathlib::kAnswer</c>).
+        /// The parser stitches the '::' segments; the semantic analyzer types it opaquely as
+        /// <see cref="TypeKind.Foreign"/> (never resolving the namespace head as a variable),
+        /// and the C++ backend emits the name verbatim (bypassing SanitizeName).
+        /// </summary>
+        public bool IsForeignQualified { get; set; }
+
         public IdentifierExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);

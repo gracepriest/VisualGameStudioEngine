@@ -713,4 +713,149 @@ End Sub";
             output, compiler.Value, new[] { header });
         Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("5\n10\n20\n"));  // Add(2,3), n, m
     }
+
+    // ==================================================================
+    // Phase 2 — ::-qualified FREE FUNCTIONS and GLOBAL VARIABLES/CONSTANTS in
+    // EXPRESSION position (not just types and instance members).
+    //
+    //   Dim fa = mathlib::freeAdd(3, 4)   ' free-function CALL
+    //   Dim ans = mathlib::kAnswer        ' global constant READ
+    //   Dim x = ::globalTriple(7)         ' leading-'::' global-scope call
+    //   ns::sub::compute()                ' multi-segment call
+    //
+    // Both forms previously failed at the PARSER (BL3001 Unexpected token '::').
+    // They must parse, type as opaque Foreign, and codegen VERBATIM (bypassing
+    // SanitizeName), exactly like the existing '::' type/member machinery.
+    // ==================================================================
+
+    [Test]
+    public void Cpp_ForeignFreeFunction_NamespaceQualified_CompilesAndRuns()
+    {
+        var source = @"
+#CppInclude ""lib.h""
+Sub Main()
+    Dim x = mathlib::freeAdd(3, 4)
+    Console.WriteLine(x)
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // Emitted verbatim (NOT sanitized to 'mathlibfreeAdd').
+        Assert.That(output, Does.Contain("mathlib::freeAdd(3, 4)"),
+            "a foreign free-function call must be emitted verbatim with its '::' scope");
+        Assert.That(output, Does.Not.Contain("mathlibfreeAdd"),
+            "SanitizeName must not strip '::' from a foreign free-function name");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        var header = new KeyValuePair<string, string>(
+            "lib.h",
+            "#pragma once\nnamespace mathlib { inline int freeAdd(int a, int b) { return a + b; } }\n");
+        var run = VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(
+            output, compiler.Value, new[] { header });
+        Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("7\n"));  // 3 + 4
+    }
+
+    [Test]
+    public void Cpp_ForeignGlobalConstant_Read_CompilesAndRuns()
+    {
+        var source = @"
+#CppInclude ""lib.h""
+Sub Main()
+    Dim ans = mathlib::kAnswer
+    Console.WriteLine(ans)
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("mathlib::kAnswer"),
+            "a foreign global constant read must be emitted verbatim with its '::' scope");
+        Assert.That(output, Does.Not.Contain("mathlibkAnswer"));
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        var header = new KeyValuePair<string, string>(
+            "lib.h",
+            "#pragma once\nnamespace mathlib { const int kAnswer = 42; }\n");
+        var run = VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(
+            output, compiler.Value, new[] { header });
+        Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("42\n"));
+    }
+
+    [Test]
+    public void Cpp_ForeignFreeFunction_LeadingGlobalScope_CompilesAndRuns()
+    {
+        // Leading '::' — a global-scope-qualified free function.
+        var source = @"
+#CppInclude ""lib.h""
+Sub Main()
+    Dim x = ::globalTriple(7)
+    Console.WriteLine(x)
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("::globalTriple(7)"),
+            "a leading-'::' global-scope call must be emitted verbatim");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        var header = new KeyValuePair<string, string>(
+            "lib.h",
+            "#pragma once\ninline int globalTriple(int n) { return n * 3; }\n");
+        var run = VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(
+            output, compiler.Value, new[] { header });
+        Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("21\n"));  // 7 * 3
+    }
+
+    [Test]
+    public void Cpp_ForeignFreeFunction_ResultPassedAsArgument()
+    {
+        // The foreign result is consumed inline as a call argument (no intermediate temp).
+        var source = @"
+#CppInclude ""lib.h""
+Sub Main()
+    Console.WriteLine(mathlib::freeAdd(10, 20))
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("mathlib::freeAdd(10, 20)"),
+            "a foreign free-function result consumed inline must be emitted verbatim at the use site");
+        // Exactly one occurrence (rendered once, at the consumption site).
+        var calls = output!.Split(new[] { "mathlib::freeAdd(10, 20)" }, System.StringSplitOptions.None).Length - 1;
+        Assert.That(calls, Is.EqualTo(1),
+            "a foreign call consumed as an argument must be emitted once, not duplicated");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        var header = new KeyValuePair<string, string>(
+            "lib.h",
+            "#pragma once\nnamespace mathlib { inline int freeAdd(int a, int b) { return a + b; } }\n");
+        var run = VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(
+            output, compiler.Value, new[] { header });
+        Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("30\n"));  // 10 + 20
+    }
+
+    [Test]
+    public void Cpp_ForeignFreeFunction_MultiSegment()
+    {
+        // A multi-segment '::' free-function name: ns::sub::compute().
+        var source = @"
+#CppInclude ""lib.h""
+Sub Main()
+    Dim x = ns::sub::compute()
+    Console.WriteLine(x)
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("ns::sub::compute()"),
+            "a multi-segment '::' free-function name must round-trip verbatim");
+        Assert.That(output, Does.Not.Contain("nssubcompute"));
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        var header = new KeyValuePair<string, string>(
+            "lib.h",
+            "#pragma once\nnamespace ns { namespace sub { inline int compute() { return 99; } } }\n");
+        var run = VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(
+            output, compiler.Value, new[] { header });
+        Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("99\n"));
+    }
 }

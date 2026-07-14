@@ -448,8 +448,14 @@ namespace BasicLang.Compiler.IR
                     }
 
                     // Optimization: If the value is a direct call or op result,
-                    // rename it to the variable instead of creating a separate assignment
-                    if (initValue is IRCall call)
+                    // rename it to the variable instead of creating a separate assignment.
+                    // EXCEPT a ::-qualified foreign C++ free-function call: its result is an
+                    // opaque Foreign pseudo-type with no declarable C++ temp, so it must flow
+                    // through an IRAssignment (like a foreign field read) — the C++ backend
+                    // then folds declaration + init into `auto x = ns::f(args);` and renders
+                    // the call inline. Renaming it to the local would emit a bare statement
+                    // that DROPS the assignment.
+                    if (initValue is IRCall call && call.Type?.Kind != TypeKind.Foreign)
                     {
                         call.Name = localVar.Name;
                     }
@@ -3157,6 +3163,16 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(IdentifierExpressionNode node)
         {
+            // A ::-qualified foreign C++ global/constant read (mathlib::kAnswer, ::kMax).
+            // Emit a bare reference by verbatim name — NOT a declared local (its '::' name is
+            // not a real identifier). The C++ backend renders the IRVariable name verbatim
+            // because its type is Foreign (SanitizeName would strip the '::').
+            if (node.IsForeignQualified)
+            {
+                _expressionResult = new IRVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
+                return;
+            }
+
             // Check if this identifier was resolved as an imported symbol
             var symbol = _semanticAnalyzer.GetNodeSymbol(node);
             if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))

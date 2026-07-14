@@ -489,4 +489,92 @@ public class ForeignFeatureGuardTests
         Assert.DoesNotThrow(
             () => new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false }).Generate(module));
     }
+
+    // ------------------------------------------------------------------
+    // Phase 2 — ::-qualified FREE FUNCTIONS and GLOBAL VARIABLES in expression
+    // position must ALSO be honesty-gated. A `Dim x = ns::f(...)` / `Dim x = ns::v`
+    // binds an inferred Foreign-typed local, so the shared ModuleTypeWalker declared-
+    // type walk rejects it on the non-C++ backends (proved WITHOUT #CppInclude, so the
+    // ONLY thing that can trip the guard is the foreign local's type, not the header).
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void CSharp_ForeignFreeFunctionCall_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Sub Main()\nDim x = mathlib::freeAdd(3, 4)\nEnd Sub",
+            runPreprocessor: false);
+        Assert.That(module.CppIncludes, Is.Empty, "sanity: no #CppInclude present");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new ImprovedCSharpCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("C#"));
+        Assert.That(ex.Message, Does.Contain("mathlib::freeAdd"));
+    }
+
+    [Test]
+    public void LLVM_ForeignFreeFunctionCall_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Sub Main()\nDim x = mathlib::freeAdd(3, 4)\nEnd Sub",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("mathlib::freeAdd"));
+    }
+
+    [Test]
+    public void MSIL_ForeignFreeFunctionCall_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Sub Main()\nDim x = mathlib::freeAdd(3, 4)\nEnd Sub",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("mathlib::freeAdd"));
+    }
+
+    [Test]
+    public void CSharp_ForeignGlobalRead_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Sub Main()\nDim ans = mathlib::kAnswer\nEnd Sub",
+            runPreprocessor: false);
+        Assert.That(module.CppIncludes, Is.Empty, "sanity: no #CppInclude present");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new ImprovedCSharpCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("C#"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
+
+    [Test]
+    public void LLVM_ForeignGlobalRead_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Sub Main()\nDim ans = mathlib::kAnswer\nEnd Sub",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
+
+    [Test]
+    public void MSIL_ForeignGlobalRead_ThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Sub Main()\nDim ans = mathlib::kAnswer\nEnd Sub",
+            runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
 }

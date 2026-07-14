@@ -4156,6 +4156,21 @@ namespace BasicLang.Compiler
                 return castNode;
             }
 
+            // ::-qualified foreign C++ name in EXPRESSION position — a free-function
+            // reference (mathlib::freeAdd, ns::sub::compute) or a global variable/constant
+            // (mathlib::kAnswer), plus the leading-'::' global-scope form (::globalFn).
+            // Stitched into one verbatim IdentifierExpressionNode (IsForeignQualified); a
+            // trailing '(args)' postfix becomes a CallExpressionNode (a free-function CALL),
+            // a bare name stays an opaque foreign VALUE. This must precede the plain
+            // identifier branch so `id ::` is captured as one foreign name rather than the
+            // identifier alone (leaving a dangling '::' that ParsePrimary would reject).
+            if (Check(TokenType.ScopeResolution) ||
+                ((Check(TokenType.Identifier) || (!IsAtEnd() && IsSoftExpressionKeyword(Peek().Type)))
+                 && PeekNext().Type == TokenType.ScopeResolution))
+            {
+                return ParseForeignQualifiedNameExpression();
+            }
+
             // Identifier (soft keywords like First/Take are valid identifiers outside
             // their query-clause positions)
             if (Check(TokenType.Identifier) || (!IsAtEnd() && IsSoftExpressionKeyword(Peek().Type)))
@@ -4564,6 +4579,44 @@ namespace BasicLang.Compiler
             }
             // Fall back to the standard identifier error for a genuinely bad token.
             return Consume(TokenType.Identifier, message);
+        }
+
+        /// <summary>
+        /// Parse a ::-qualified foreign C++ name in EXPRESSION position, returning it as an
+        /// IdentifierExpressionNode carrying the verbatim '::'-joined string with
+        /// <see cref="IdentifierExpressionNode.IsForeignQualified"/> set. Handles a LEADING '::'
+        /// (global scope: <c>::name</c>) and identifier chains (<c>a::b::c</c>). Each segment is
+        /// consumed via <see cref="ConsumeForeignNameSegment"/> so keyword-spelled C++ names
+        /// (<c>std::string</c>, <c>ns::First</c>) pass through verbatim. A trailing '(args)' is
+        /// later turned into a CallExpressionNode by ParsePostfix (a free-function CALL); a bare
+        /// name is an opaque foreign VALUE (a global variable / constant read). This mirrors the
+        /// '::' stitch loop in ParseType so the type and expression sides stay in lock-step.
+        /// </summary>
+        private ExpressionNode ParseForeignQualifiedNameExpression()
+        {
+            var start = Peek();
+            var sb = new System.Text.StringBuilder();
+            if (Match(TokenType.ScopeResolution))
+            {
+                // Leading '::' — a global-scope-qualified name.
+                sb.Append("::");
+                sb.Append(ConsumeForeignNameSegment("Expected name after '::'").Lexeme);
+            }
+            else
+            {
+                // First segment is an identifier or a keyword-spelled soft keyword.
+                sb.Append(Advance().Lexeme);
+            }
+            while (Match(TokenType.ScopeResolution))
+            {
+                sb.Append("::");
+                sb.Append(ConsumeForeignNameSegment("Expected name after '::'").Lexeme);
+            }
+            return new IdentifierExpressionNode(start.Line, start.Column)
+            {
+                Name = sb.ToString(),
+                IsForeignQualified = true
+            };
         }
 
         private bool Check(TokenType type)

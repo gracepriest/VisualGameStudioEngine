@@ -606,6 +606,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (value is IRFieldAccess foreignField && foreignField.Type?.Kind == TypeKind.Foreign)
                 return RenderForeignFieldAccess(foreignField);
 
+            // A foreign ::-qualified FREE-FUNCTION call (mathlib::freeAdd(3,4), ::globalFn(x))
+            // is opaque like a foreign instance call: no valid C++ temp type, so it is rendered
+            // inline (verbatim '::' name, bypassing SanitizeName) at each use site.
+            if (value is IRCall foreignFreeCall && foreignFreeCall.Type?.Kind == TypeKind.Foreign)
+                return RenderForeignFreeCall(foreignFreeCall);
+
+            // A foreign ::-qualified GLOBAL/CONSTANT read is an IRVariable whose Foreign type
+            // name is a verbatim C++ scope path (mathlib::kAnswer, ::kMax). Emit it verbatim —
+            // SanitizeName would strip the '::' to "mathlibkAnswer". (A foreign LOCAL such as
+            // `Dim m As std::mutex` has a plain name WITHOUT '::' and is unaffected by this.)
+            if (value is IRVariable foreignGlobal && foreignGlobal.Type?.Kind == TypeKind.Foreign
+                && foreignGlobal.Name != null && foreignGlobal.Name.Contains("::"))
+                return foreignGlobal.Name;
+
             // The IRBuilder names result values after their assignment target (an IRAwait
             // named "x" for `Dim x = Await ...`, an IRBinaryOp named "total" for
             // `total = total + i`). The base implementation ignores .Name for
@@ -1311,6 +1325,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         if (operand is IRInstanceMethodCall foreignCall
                             && foreignCall.Type?.Kind == TypeKind.Foreign)
                             _inlinedForeignCalls.Add(foreignCall);
+                        // A ::-qualified foreign FREE-FUNCTION call consumed as an operand is
+                        // likewise rendered inline (GetValueName -> RenderForeignFreeCall); record
+                        // it so Visit(IRCall) suppresses the duplicate standalone statement.
+                        else if (operand is IRCall foreignFreeCall
+                            && foreignFreeCall.Type?.Kind == TypeKind.Foreign)
+                            _inlinedForeignCalls.Add(foreignFreeCall);
                     }
 
                     if (instruction is IRValue value && !(value is IRConstant))
@@ -1928,6 +1948,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRCall call)
         {
+            // A ::-qualified foreign C++ free-function call (mathlib::freeAdd(3,4),
+            // ::globalFn(x)) is opaque like a foreign instance call: its result type is a
+            // synthetic Foreign pseudo-type with no valid C++ temp, so it is rendered inline
+            // (verbatim, bypassing SanitizeName) at each use site by GetValueName. When the
+            // result is CONSUMED (arg / initializer / condition) it is rendered there, so
+            // suppress the duplicate standalone statement; emit `expr;` only when discarded.
+            if (call.Type?.Kind == TypeKind.Foreign)
+            {
+                if (_inlinedForeignCalls.Contains(call))
+                    return;
+                WriteLine($"{RenderForeignFreeCall(call)};");
+                return;
+            }
+
             var args = call.Arguments.Select(GetValueName).ToList();
             var functionName = call.FunctionName;
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
@@ -2771,6 +2805,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var op = MemberAccessOp(fieldAccess.Object);
             var field = SanitizeName(fieldAccess.FieldName);
             return $"{obj}{op}{field}";
+        }
+
+        /// <summary>
+        /// Render a foreign ::-qualified free-function call as an inline C++ expression
+        /// (ns::func(args)). The verbatim '::'-qualified FunctionName is emitted as-is —
+        /// SanitizeName would strip the '::' to "nsfunc". Arguments render normally, so a
+        /// nested foreign call/read argument collapses inline too. Like foreign instance calls,
+        /// this is rendered at each use site rather than stored to an (undeclarable) foreign temp.
+        /// </summary>
+        private string RenderForeignFreeCall(IRCall call)
+        {
+            var args = string.Join(", ", call.Arguments.Select(GetValueName));
+            return $"{call.FunctionName}({args})";
         }
 
         /// <summary>

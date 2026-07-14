@@ -5089,6 +5089,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(IdentifierExpressionNode node)
         {
+            // A ::-qualified foreign C++ name (free function / global) in expression position
+            // is opaque: type it Foreign as a WHOLE. Short-circuit BEFORE scope resolution so
+            // the namespace head (e.g. 'mathlib' in mathlib::kAnswer) is never looked up as a
+            // variable — that would raise "Undefined identifier". The C++ backend emits the
+            // verbatim name; the managed backends reject it via the Foreign type guard.
+            if (node.IsForeignQualified)
+            {
+                SetNodeType(node, new TypeInfo(node.Name, TypeKind.Foreign));
+                return;
+            }
+
             // Handle 'Me' keyword - refers to current class instance
             if (node.Name.Equals("Me", StringComparison.OrdinalIgnoreCase))
             {
@@ -5330,6 +5341,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(CallExpressionNode node)
         {
+            // A ::-qualified foreign C++ free-function call (mathlib::freeAdd(3, 4),
+            // ::globalFn(x), ns::sub::compute()). The whole call is opaque foreign: type its
+            // result Foreign so the C++ backend renders it verbatim & inline, evaluate the
+            // arguments (so they lower), and never try to resolve the foreign name as a
+            // declared function (which would report an undefined identifier / bad arg count).
+            if (node.Callee is IdentifierExpressionNode foreignCallee && foreignCallee.IsForeignQualified)
+            {
+                node.Callee.Accept(this);
+                foreach (var arg in node.Arguments)
+                    arg.Accept(this);
+                SetNodeType(node, new TypeInfo(foreignCallee.Name, TypeKind.Foreign));
+                return;
+            }
+
             node.Callee.Accept(this);
 
             var calleeType = GetNodeType(node.Callee);
