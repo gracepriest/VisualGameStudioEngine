@@ -38,7 +38,6 @@ namespace BasicLang.Compiler.ProjectSystem
         public const string EngineImportLibName = "VisualGameStudioEngine.lib";
 
         private const string WrapperUsingDirective = "using RaylibWrapper;";
-        private const string CppFrameworkMarker = "#define FRAMEWORK_API";
 
         /// <summary>True if the generated C# uses the BasicLang game engine.</summary>
         public static bool UsesEngine(string generatedCode)
@@ -55,21 +54,6 @@ namespace BasicLang.Compiler.ProjectSystem
             // the directive at the start of a line.
             return generatedCode.StartsWith(WrapperUsingDirective, StringComparison.Ordinal)
                 || generatedCode.Contains("\n" + WrapperUsingDirective);
-        }
-
-        /// <summary>
-        /// True if generated C++ uses the game engine. The Cpp backend emits a
-        /// line-anchored <c>#define FRAMEWORK_API</c> preprocessor block above
-        /// its extern "C" Framework_* declarations whenever engine calls are
-        /// present; string literals are emitted inside statements and can never
-        /// put that directive at the start of a line.
-        /// </summary>
-        public static bool UsesEngineCpp(string generatedCpp)
-        {
-            if (string.IsNullOrEmpty(generatedCpp))
-                return false;
-            return generatedCpp.StartsWith(CppFrameworkMarker, StringComparison.Ordinal)
-                || generatedCpp.Contains("\n" + CppFrameworkMarker);
         }
 
         /// <summary>Path to the engine import library under <paramref name="baseDir"/>, or null.</summary>

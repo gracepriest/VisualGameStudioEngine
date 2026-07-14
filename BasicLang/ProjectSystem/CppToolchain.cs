@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 
 namespace BasicLang.Compiler.ProjectSystem
 {
@@ -274,10 +273,9 @@ namespace BasicLang.Compiler.ProjectSystem
         private (bool Success, string Output) RunProcess(
             string executable, string arguments, string workingDirectory, string expectedOutput)
         {
-            // NOTE: unlike the legacy CompileToExecutable body, this helper drains
-            // stdout/stderr via async reads — compilers overflow the ~4KB pipe
-            // buffer with error dumps and deadlock naive sync ReadToEnd() code.
-            // Success = exit 0 (+ output file exists when expected).
+            // NOTE: this helper drains stdout/stderr via async reads — compilers
+            // overflow the ~4KB pipe buffer with error dumps and deadlock naive
+            // sync ReadToEnd() code. Success = exit 0 (+ output file exists when expected).
             var psi = new ProcessStartInfo(executable, arguments)
             {
                 RedirectStandardOutput = true,
@@ -307,61 +305,5 @@ namespace BasicLang.Compiler.ProjectSystem
             }
         }
 
-        /// <summary>
-        /// Compile a generated .cpp to an executable. When
-        /// <paramref name="engineLibPath"/> is set (a path to
-        /// VisualGameStudioEngine.lib) it is linked in so Framework_* imports
-        /// resolve. Returns success plus the combined compiler output.
-        /// </summary>
-        public (bool Success, string Output) CompileToExecutable(
-            string cppFilePath, string exePath, string engineLibPath = null, string workingDirectory = null)
-        {
-            string arguments;
-            if (_vcvarsPath != null)
-            {
-                // MSVC: vcvars64 sets up INCLUDE/LIB/PATH, then cl compiles and
-                // links in one step. /EHsc for exceptions, C++20 for coroutines.
-                var lib = engineLibPath != null ? $" \"{engineLibPath}\"" : string.Empty;
-                arguments = "/s /c \"\"" + _vcvarsPath + "\" >nul && cl /nologo /std:c++20 /EHsc \"" +
-                            cppFilePath + "\"" + lib + " /Fe:\"" + exePath + "\"\"";
-            }
-            else
-            {
-                // clang++/g++ accept an MSVC import library as a linker input file.
-                var lib = engineLibPath != null ? $" \"{engineLibPath}\"" : string.Empty;
-                arguments = $"-std=c++20 \"{cppFilePath}\"{lib} -o \"{exePath}\"";
-            }
-
-            var psi = new ProcessStartInfo(_executable, arguments)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            if (!string.IsNullOrEmpty(workingDirectory))
-                psi.WorkingDirectory = workingDirectory;
-
-            try
-            {
-                using var proc = Process.Start(psi);
-                var stdout = proc.StandardOutput.ReadToEnd();
-                var stderr = proc.StandardError.ReadToEnd();
-                if (!proc.WaitForExit(CompileTimeoutMs))
-                {
-                    try { proc.Kill(); } catch { /* already gone */ }
-                    return (false, $"C++ compiler timed out after {CompileTimeoutMs / 1000}s.");
-                }
-
-                var output = new StringBuilder();
-                if (!string.IsNullOrWhiteSpace(stdout)) output.AppendLine(stdout.Trim());
-                if (!string.IsNullOrWhiteSpace(stderr)) output.AppendLine(stderr.Trim());
-                return (proc.ExitCode == 0 && File.Exists(exePath), output.ToString().Trim());
-            }
-            catch (Exception ex)
-            {
-                return (false, $"Failed to invoke {DisplayName}: {ex.Message}");
-            }
-        }
     }
 }

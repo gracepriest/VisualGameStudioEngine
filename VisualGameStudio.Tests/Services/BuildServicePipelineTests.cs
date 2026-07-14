@@ -107,12 +107,20 @@ public class BuildServicePipelineTests
     }
 
     // ------------------------------------------------------------------
-    // 3. console-app template (native/Cpp): backend honesty
+    // 3. console-app template (native/Cpp): converged native layout
     // ------------------------------------------------------------------
 
     [Test]
-    public async Task Build_ConsoleAppTemplate_Cpp_ProducesCppSource_NotCs()
+    public async Task Build_ConsoleAppTemplate_Cpp_ConvergesOnNativeLayout()
     {
+        // Converged path (Phase 2 Task 7): a TargetBackend=Cpp BasicLang project no
+        // longer stops at a transpiled .cpp — it builds through the SAME
+        // CppProjectBuilder as Language=Cpp, landing a native exe in bin/<config>/
+        // (no TFM subfolder). The old single-TU IDE path (GeneratedFileName=.cpp,
+        // a .cpp left in OutputPath, no-toolchain "source-only success") is deleted.
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+
         var project = await CreateTemplateProjectAsync("console-app", SolutionTypes.Native, "PipelineNative");
         Assert.That(project.TargetBackend, Is.EqualTo(TargetBackend.Cpp),
             "native solution template did not set TargetBackend=Cpp — test setup is wrong");
@@ -120,30 +128,22 @@ public class BuildServicePipelineTests
         var (result, output) = await BuildAsync(project);
 
         Assert.That(result.Success, Is.True,
-            "console-app (Cpp backend) failed to build in-process.\n" + Describe(result, output));
+            "console-app (Cpp backend) failed to build through the converged native path.\n" + Describe(result, output));
+        Assert.That(result.ExecutablePath, Is.Not.Null.And.Not.Empty,
+            "converged native build reported no executable.\n" + Describe(result, output));
+        Assert.That(File.Exists(result.ExecutablePath), Is.True,
+            $"Reported executable does not exist: {result.ExecutablePath}");
 
-        Assert.That(result.GeneratedFileName, Does.EndWith(".cpp"),
-            $"Cpp backend reported generated file '{result.GeneratedFileName}' — expected a .cpp.\n" +
-            Describe(result, output));
-
-        Assert.That(result.OutputPath, Is.Not.Null.And.Not.Empty, "no output path reported");
-        var cppFiles = Directory.GetFiles(result.OutputPath!, "*.cpp");
-        Assert.That(cppFiles, Is.Not.Empty,
-            "Cpp backend claimed success but wrote no .cpp file.\n" + Describe(result, output));
-
-        var csFiles = Directory.GetFiles(result.OutputPath!, "*.cs");
-        Assert.That(csFiles, Is.Empty,
-            "Cpp backend generated C# output (.cs) — 'Backend: Cpp' is lying:\n" +
-            string.Join("\n", csFiles) + "\n" + Describe(result, output));
-
-        // With a C++ toolchain installed the build now produces a native exe
-        // (see Build_ConsoleAppTemplate_Cpp_ProducesRunnableExe); without one
-        // it stays source-only and must not claim an executable.
-        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
-        {
-            Assert.That(result.ExecutablePath, Is.Null.Or.Empty,
-                "no toolchain available, yet the Cpp build claimed an executable.");
-        }
+        // Converged layout: bin/<config>/<name>.exe — never the managed TFM layout.
+        var projectDir = Path.GetDirectoryName(project.FilePath)!;
+        var convergedExe = Path.Combine(projectDir, "bin", "Debug", "PipelineNative.exe");
+        Assert.That(File.Exists(convergedExe), Is.True,
+            "native exe must land at bin/<config>/<name>.exe (converged layout).\n" + Describe(result, output));
+        Assert.That(result.ExecutablePath!.Replace('\\', '/'), Does.Not.Contain("net8.0"),
+            "native output must not use a managed TFM subfolder.");
+        // Diagnostics are the parsed CppProjectBuilder feed, not a raw blob (a
+        // clean build simply carries none) — the Error List route stays intact.
+        Assert.That(result.Errors, Is.Empty, Describe(result, output));
     }
 
     // ------------------------------------------------------------------
@@ -452,8 +452,198 @@ End Sub
         var (result, output) = await BuildAsync(project);
 
         Assert.That(result.Success, Is.False,
-            "Language=Cpp must hard-fail without a toolchain (unlike the transpile backend's BL6002 soft warning)");
+            "a native project must hard-fail without a toolchain (the legacy transpile-backend source-only warning is retired)");
         Assert.That(result.Diagnostics.Select(x => x.Id), Does.Contain("BL6005"));
+    }
+
+    // ------------------------------------------------------------------
+    // 7. Convergence (Phase 2 Task 7): ALL native IDE builds — Language=Cpp AND
+    //    a BasicLang project on the C++ backend (TargetBackend=Cpp) — route
+    //    through the shared CppProjectBuilder. The legacy single-TU IDE path
+    //    (combined .cpp -> CppToolchain.CompileToExecutable, BL6002-6004) is gone.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task IdeBuild_MixedProject_Succeeds_AndFiresBuildCompletedWithDiagnostics()
+    {
+        // A mixed native project (TargetBackend=Cpp BasicLang): a hand-written .cpp
+        // that #includes a GENERATED shim (Logic.g.h) and a .bas providing the
+        // function — impossible on the old single-TU IDE path, which only ever
+        // emitted one combined .cpp.
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+
+        var dir = Path.Combine(_rootDir, "MixedIde");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "main.cpp"),
+            "#include \"Logic.g.h\"\n" +
+            "int main() {\n" +
+            "    std::cout << \"score=\" << CalculateScore(5) << std::endl;\n" +
+            "    return 0;\n" +
+            "}\n");
+        File.WriteAllText(Path.Combine(dir, "Logic.bas"),
+            "Function CalculateScore(hits As Integer) As Integer\n    Return hits * 10\nEnd Function\n");
+        var blproj = Path.Combine(dir, "MixedIde.blproj");
+        File.WriteAllText(blproj, """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>MixedIde</ProjectName>
+                <OutputType>Exe</OutputType>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="main.cpp" />
+                <Compile Include="Logic.bas" />
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+        var project = await new ProjectSerializer().LoadAsync(blproj);
+
+        // Phase 1: a clean mixed build succeeds, exe under bin/<config>/, and
+        // BuildCompleted fires (the Error List's only diagnostics feed).
+        var okOutput = new RecordingOutput();
+        var okService = new BuildService(okOutput);
+        BuildCompletedEventArgs? okCompleted = null;
+        okService.BuildCompleted += (_, e) => okCompleted = e;
+        using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
+        {
+            var okResult = await okService.BuildProjectAsync(project, cts.Token);
+
+            Assert.That(okResult.Success, Is.True, Describe(okResult, okOutput));
+            Assert.That(okResult.ExecutablePath, Is.Not.Null.And.Not.Empty, Describe(okResult, okOutput));
+            Assert.That(File.Exists(okResult.ExecutablePath), Is.True,
+                $"reported executable does not exist: {okResult.ExecutablePath}");
+            var convergedExe = Path.Combine(dir, "bin", "Debug", "MixedIde.exe");
+            Assert.That(File.Exists(convergedExe), Is.True,
+                "mixed native exe must land at bin/<config>/<name>.exe.\n" + Describe(okResult, okOutput));
+            Assert.That(okResult.ExecutablePath!.Replace('\\', '/'), Does.Not.Contain("net8.0"),
+                "native output must not use a managed TFM subfolder.");
+            Assert.That(okCompleted, Is.Not.Null, "BuildCompleted did not fire for a mixed native build");
+        }
+
+        // Phase 2: a C++ error in the user TU must surface via BuildCompleted as a
+        // per-FILE diagnostic (endsWith main.cpp, Line>0) — not one opaque blob,
+        // not a missed feed.
+        File.WriteAllText(Path.Combine(dir, "main.cpp"),
+            "#include \"Logic.g.h\"\nint main() { undeclared_symbol; return CalculateScore(1); }\n");
+        var errOutput = new RecordingOutput();
+        var errService = new BuildService(errOutput);
+        BuildCompletedEventArgs? errCompleted = null;
+        errService.BuildCompleted += (_, e) => errCompleted = e;
+        using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
+        {
+            var errResult = await errService.BuildProjectAsync(project, cts.Token);
+
+            Assert.That(errResult.Success, Is.False, Describe(errResult, errOutput));
+            Assert.That(errCompleted, Is.Not.Null, "BuildCompleted did not fire for a failed mixed native build");
+            Assert.That(errCompleted!.Result, Is.SameAs(errResult));
+            var cppDiag = errCompleted.Result.Diagnostics.FirstOrDefault(d =>
+                d.Severity == DiagnosticSeverity.Error &&
+                d.FilePath?.EndsWith("main.cpp", StringComparison.OrdinalIgnoreCase) == true);
+            Assert.That(cppDiag, Is.Not.Null,
+                "a C++ error must reach the Error List as a per-file diagnostic.\n" + Describe(errResult, errOutput));
+            Assert.That(cppDiag!.Line, Is.GreaterThan(0), "per-file C++ diagnostic must carry a line");
+        }
+    }
+
+    [Test]
+    public async Task IdeBuild_BackendCppPureBasicLang_RoutesThroughSharedBuilder()
+    {
+        // A pure-.bas project on the C++ backend (no <Language>Cpp>, no user .cpp):
+        // it must converge on bin/<config>/<name>.exe via CppProjectBuilder, NOT the
+        // old transpile path (a .cpp dropped into config.OutputPath).
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+
+        var dir = Path.Combine(_rootDir, "PureBlIde");
+        Directory.CreateDirectory(dir);
+        var basPath = Path.Combine(dir, "App.bas");
+        File.WriteAllText(basPath, "Sub Main()\n    Console.WriteLine(\"pure-bl-cpp-ok\")\nEnd Sub\n");
+        var blproj = Path.Combine(dir, "PureBlIde.blproj");
+        File.WriteAllText(blproj, """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>PureBlIde</ProjectName>
+                <OutputType>Exe</OutputType>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="App.bas" />
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+        var project = await new ProjectSerializer().LoadAsync(blproj);
+
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.True, Describe(result, output));
+        var convergedExe = Path.Combine(dir, "bin", "Debug", "PureBlIde.exe");
+        Assert.That(File.Exists(convergedExe), Is.True,
+            "TargetBackend=Cpp pure-BasicLang project must converge on bin/<config>/<name>.exe.\n" + Describe(result, output));
+        Assert.That(File.Exists(Path.Combine(dir, "bin", "Debug", "net8.0", "PureBlIde.exe")), Is.False,
+            "must NOT build to the old managed bin/<config>/<TFM>/ layout");
+        Assert.That(result.ExecutablePath!.Replace('\\', '/'), Does.Not.Contain("net8.0"));
+
+        // Runs and prints — proves it is a real native exe, not a leftover .cpp.
+        var psi = new System.Diagnostics.ProcessStartInfo(result.ExecutablePath!)
+        { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var stdout = await proc.StandardOutput.ReadToEndAsync();
+        proc.WaitForExit(30000);
+        Assert.That(stdout, Does.Contain("pure-bl-cpp-ok"));
+
+        // A semantic error must produce a PARSED per-file .bas diagnostic (the
+        // CppProjectBuilder transpile feed), not a raw toolchain blob.
+        File.WriteAllText(basPath, "Sub Main()\n    Dim x As Integer = missingFunction(1)\nEnd Sub\n");
+        var (errResult, errOutput) = await BuildAsync(project);
+        Assert.That(errResult.Success, Is.False, Describe(errResult, errOutput));
+        var basDiag = errResult.Errors.FirstOrDefault(d =>
+            d.FilePath?.EndsWith("App.bas", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.That(basDiag, Is.Not.Null,
+            "a BasicLang semantic error in a native project must be attributed to the .bas file.\n" + Describe(errResult, errOutput));
+        Assert.That(basDiag!.Line, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task IdeManagedBuild_SemanticError_ReportedOnce()
+    {
+        // MapCompilerDiagnostics reference-dedup gap: FinalizeResult ->
+        // WithInlineLocation replaces each located AllErrors entry with a fresh
+        // prefixed COPY, so plain reference-dedup missed it and the SAME semantic
+        // error was reported TWICE (once attributed to its file, once as an orphan
+        // double-prefixed with "Error at line ..."). One source error must now
+        // yield exactly one diagnostic, attributed to the .bas, non-double-prefixed.
+        var dir = Path.Combine(_rootDir, "ManagedDupErr");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "Program.bas"),
+            "Function Broken() As Integer\n    Return Undefined123\nEnd Function\n");
+        File.WriteAllText(Path.Combine(dir, "ManagedDupErr.blproj"), """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>ManagedDupErr</ProjectName>
+                <OutputType>Exe</OutputType>
+                <TargetBackend>CSharp</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="Program.bas" />
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+        var project = await new ProjectSerializer().LoadAsync(Path.Combine(dir, "ManagedDupErr.blproj"));
+
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.False, Describe(result, output));
+        var errs = result.Errors.ToList();
+        Assert.That(errs.Count, Is.EqualTo(1),
+            "a single managed semantic error must be reported exactly once (the dedup gap double-reported it).\n"
+            + Describe(result, output));
+        Assert.That(errs[0].FilePath?.EndsWith("Program.bas", StringComparison.OrdinalIgnoreCase), Is.True,
+            "the diagnostic must be attributed to its source file.\n" + Describe(result, output));
+        Assert.That(errs[0].Message, Does.Not.StartWith("Error at line"),
+            "must be the original message, not the WithInlineLocation double-prefixed copy");
+        Assert.That(result.Diagnostics.Any(d => d.Message.StartsWith("Error at line")), Is.False,
+            "no diagnostic may carry the WithInlineLocation double-prefix");
     }
 
     // ------------------------------------------------------------------

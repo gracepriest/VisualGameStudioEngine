@@ -329,8 +329,12 @@ public class BuildService : IBuildService
 
             BuildProgress?.Invoke(this, new BuildProgressEventArgs("Starting build...", 0));
 
-            // ---------- Language=Cpp: route to the shared native builder ----------
-            if (project.Language == ProjectLanguage.Cpp)
+            // ---------- Native projects: route to the shared native builder ----------
+            // Both Language=Cpp (hand-written C++) and a BasicLang project on the
+            // C++ backend (TargetBackend=Cpp, transpiled to native) build through
+            // the SAME CppProjectBuilder the CLI uses — one native-project path, no
+            // IDE-side reimplementation (the CLI mirror is ProjectFile.IsNativeProject).
+            if (project.Language == ProjectLanguage.Cpp || project.TargetBackend == TargetBackend.Cpp)
             {
                 // BuildCppProject never throws (exceptions map to a failed result)
                 // so execution ALWAYS falls through to the shared finalization
@@ -564,10 +568,9 @@ public class BuildService : IBuildService
             {
                 switch (backend)
                 {
-                    case "cpp":
-                        generatedCode = new BasicLang.Compiler.CodeGen.CPlusPlus.CppCodeGenerator().Generate(compilation.CombinedIR);
-                        extension = ".cpp";
-                        break;
+                    // No "cpp" case: native projects (Language=Cpp OR TargetBackend=Cpp)
+                    // route to BuildCppProject/CppProjectBuilder above and never reach
+                    // this managed codegen switch.
                     case "llvm":
                         generatedCode = new BasicLang.Compiler.CodeGen.LLVM.LLVMCodeGenerator().Generate(compilation.CombinedIR);
                         extension = ".ll";
@@ -623,16 +626,6 @@ public class BuildService : IBuildService
             var generatedFilePath = Path.Combine(outputDir, result.GeneratedFileName);
             await File.WriteAllTextAsync(generatedFilePath, generatedCode, cancellationToken);
             _outputService.WriteLine($"Generated: {generatedFilePath}", OutputCategory.Build);
-
-            // ---------- Cpp backend: compile the generated source to an exe ----------
-            if (backend == "cpp")
-            {
-                BuildProgress?.Invoke(this, new BuildProgressEventArgs("Compiling C++...", 85));
-                var cppOk = CompileGeneratedCpp(generatedFilePath, generatedCode, project, outputDir, result);
-                _outputService.WriteLine($"Output directory: {outputDir}", OutputCategory.Build);
-                result.Success = cppOk;
-                return result;
-            }
 
             // ---------- Other non-.NET backends stop at source ----------
             if (backend != "csharp")
@@ -799,6 +792,7 @@ public class BuildService : IBuildService
         var units = compiler.Registry.Modules.ToList();
 
         var attributed = new HashSet<SemanticError>(ReferenceEqualityComparer.Instance);
+        var attributedList = new List<SemanticError>();
         foreach (var unit in units)
         {
             foreach (var error in unit.Errors)
@@ -806,13 +800,21 @@ public class BuildService : IBuildService
                 if (attributed.Add(error))
                 {
                     AddCompilerDiagnostic(result, error, unit.FilePath);
+                    attributedList.Add(error);
                 }
             }
         }
 
-        // Parse errors and infrastructure errors are only in AllErrors. If exactly
-        // one unit failed without per-unit errors, they can only belong to it.
-        var orphans = compilation.AllErrors.Where(e => !attributed.Contains(e)).ToList();
+        // A genuine orphan is an AllErrors entry that reached no unit (parse /
+        // infrastructure errors) — neither reference-attributed NOR a value-duplicate
+        // of an already-attributed per-unit error. FinalizeResult -> WithInlineLocation
+        // replaces each located AllErrors entry with a fresh prefixed COPY, so plain
+        // reference-dedup misses it and the same semantic error is double-reported
+        // (once attributed to its file, once as an orphan with the "Error at line ..."
+        // double-prefix). Value-dedup by location + message-suffix suppresses that.
+        var orphans = compilation.AllErrors
+            .Where(e => !attributed.Contains(e) && !IsDuplicateOfAttributed(e, attributedList))
+            .ToList();
         string? fallbackPath = null;
         var unattributedFailedUnits = units
             .Where(u => u.Status == CompilationStatus.Error && u.Errors.Count == 0)
@@ -826,6 +828,26 @@ public class BuildService : IBuildService
         {
             AddCompilerDiagnostic(result, error, fallbackPath);
         }
+    }
+
+    // True when <paramref name="candidate"/> (an AllErrors entry) is the
+    // WithInlineLocation rewrite of an already-attributed per-unit error: same
+    // location, and the candidate's message is the per-unit message with only a
+    // "<Severity> at line L, column C: " prefix prepended (so it ends with it).
+    private static bool IsDuplicateOfAttributed(SemanticError candidate, List<SemanticError> attributed)
+    {
+        var cm = candidate.Message ?? string.Empty;
+        foreach (var a in attributed)
+        {
+            if (a.Line != candidate.Line || a.Column != candidate.Column)
+                continue;
+            var am = a.Message ?? string.Empty;
+            // EndsWith subsumes exact equality; require a non-empty per-unit message
+            // so an empty message can't match every candidate at the same location.
+            if (am.Length > 0 && cm.EndsWith(am, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     private void AddCompilerDiagnostic(BuildResult result, SemanticError error, string? filePath)
@@ -1077,86 +1099,6 @@ public class BuildService : IBuildService
         result.ExecutablePath = cpp.ExecutablePath;
         result.OutputPath = cpp.OutputPath;
         return result;
-    }
-
-    /// <summary>
-    /// Compile generated C++ to a runnable executable with a discovered
-    /// toolchain (clang++/g++/MSVC). Game programs link against the engine
-    /// import library and get the native DLL deployed next to the exe. When no
-    /// toolchain is installed, the build stays source-only with an honest
-    /// warning instead of "Succeeded" followed by Run's "No executable found".
-    /// </summary>
-    private bool CompileGeneratedCpp(
-        string generatedFilePath, string generatedCode, BasicLangProject project, string outputDir, BuildResult result)
-    {
-        var toolchain = BasicLang.Compiler.ProjectSystem.CppToolchain.Find();
-        if (toolchain == null)
-        {
-            var warning = "No C++ toolchain found (looked for clang++, g++, and MSVC via vswhere). " +
-                          $"Generated source only: {generatedFilePath} — install a C++ compiler to build an executable.";
-            result.Diagnostics.Add(new DiagnosticItem
-            {
-                Id = "BL6002",
-                Message = warning,
-                FilePath = project.FilePath,
-                Severity = DiagnosticSeverity.Warning
-            });
-            _outputService.WriteError($"Warning: {warning}", OutputCategory.Build);
-            return true; // source generation itself succeeded
-        }
-
-        // Game programs: link the engine import library so Framework_* resolves.
-        string? engineLibPath = null;
-        var usesEngine = BasicLang.Compiler.ProjectSystem.EngineDeployment.UsesEngineCpp(generatedCode);
-        if (usesEngine)
-        {
-            engineLibPath = CandidateNativeEngineDirs()
-                .Select(BasicLang.Compiler.ProjectSystem.EngineDeployment.GetImportLibPath)
-                .FirstOrDefault(p => p != null);
-            if (engineLibPath == null)
-            {
-                var error = $"This program uses the game engine, but {BasicLang.Compiler.ProjectSystem.EngineDeployment.EngineImportLibName} " +
-                            "was not found next to the IDE binaries — the C++ build cannot link. Install the engine SDK beside the IDE.";
-                result.Diagnostics.Add(new DiagnosticItem
-                {
-                    Id = "BL6003",
-                    Message = error,
-                    FilePath = project.FilePath,
-                    Severity = DiagnosticSeverity.Error
-                });
-                _outputService.WriteError(error, OutputCategory.Build);
-                return false;
-            }
-            _outputService.WriteLine($"Linking engine: {engineLibPath}", OutputCategory.Build);
-        }
-
-        var exePath = Path.Combine(outputDir, $"{project.Name}.exe");
-        _outputService.WriteLine($"Compiling C++ with {toolchain.DisplayName}...", OutputCategory.Build);
-        var (success, compilerOutput) = toolchain.CompileToExecutable(generatedFilePath, exePath, engineLibPath, outputDir);
-
-        if (!success)
-        {
-            result.Diagnostics.Add(new DiagnosticItem
-            {
-                Id = "BL6004",
-                Message = $"C++ compilation failed: {compilerOutput}",
-                FilePath = project.FilePath,
-                Severity = DiagnosticSeverity.Error
-            });
-            _outputService.WriteError($"C++ build error: {compilerOutput}", OutputCategory.Build);
-            return false;
-        }
-
-        result.ExecutablePath = exePath;
-        _outputService.WriteLine($"Executable: {exePath}", OutputCategory.Build);
-
-        // The engine DLL is loaded at runtime — put it next to the game.
-        if (usesEngine)
-        {
-            DeployNativeEngine(outputDir);
-        }
-
-        return true;
     }
 
     /// <summary>
