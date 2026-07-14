@@ -403,14 +403,6 @@ namespace BasicLang.Compiler.Driver
             }
         }
 
-        // A project builds natively (through CppProjectBuilder) when it is a
-        // Language=Cpp project OR a BasicLang project targeting the C++ backend.
-        static bool IsNativeProject(ProjectFile project) =>
-            project.IsCppProject ||
-            (project.Backend != null &&
-             (project.Backend.Equals("cpp", StringComparison.OrdinalIgnoreCase) ||
-              project.Backend.Equals("c++", StringComparison.OrdinalIgnoreCase)));
-
         static async Task<int> HandleBuildCommand(string[] args)
         {
             var projectPath = FindProjectFile(args.FirstOrDefault(a => !a.StartsWith("-")));
@@ -441,7 +433,7 @@ namespace BasicLang.Compiler.Driver
 
             // ---------- Native projects (Language=Cpp, or a BasicLang project on the
             // C++ backend): both route through the single native-project orchestrator. ----------
-            if (IsNativeProject(project))
+            if (project.IsNativeProject)
             {
                 try
                 {
@@ -830,7 +822,7 @@ namespace BasicLang.Compiler.Driver
             // Native projects (Language=Cpp, or a BasicLang project on the C++
             // backend) probe the native exe paths FIRST so a stale managed .dll
             // from before a language/backend switch is never relaunched.
-            var possiblePaths = IsNativeProject(project)
+            var possiblePaths = project.IsNativeProject
                 ? new[]
                 {
                     Path.Combine(projectDir, "bin", configuration, $"{exeName}.exe"),   // native layout (CppProjectBuilder)

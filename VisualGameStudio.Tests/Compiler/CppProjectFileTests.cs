@@ -138,6 +138,68 @@ public class CppProjectFileTests
     }
 
     [Test]
+    public void IsNativeProject_LanguageCpp_IsTrue()
+    {
+        var path = WriteProject("""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup><ProjectName>Test</ProjectName><Language>Cpp</Language></PropertyGroup>
+            </BasicLangProject>
+            """);
+        Assert.That(ProjectFile.Load(path).IsNativeProject, Is.True);
+    }
+
+    [Test]
+    public void IsNativeProject_BackendCpp_NoLanguage_IsTrue()
+    {
+        // A BasicLang project (no <Language>) on the C++ backend still builds
+        // natively — this is the Task-5 route the private predicate missed.
+        var path = WriteProject("""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup><ProjectName>Test</ProjectName><TargetBackend>Cpp</TargetBackend></PropertyGroup>
+            </BasicLangProject>
+            """);
+        var project = ProjectFile.Load(path);
+        Assert.That(project.IsCppProject, Is.False, "no <Language>Cpp> — not a C++-language project");
+        Assert.That(project.IsNativeProject, Is.True);
+    }
+
+    [Test]
+    public void IsNativeProject_BackendCPlusPlusSpelling_IsTrue()
+    {
+        var path = WriteProject("""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup><ProjectName>Test</ProjectName><TargetBackend>C++</TargetBackend></PropertyGroup>
+            </BasicLangProject>
+            """);
+        Assert.That(ProjectFile.Load(path).IsNativeProject, Is.True);
+    }
+
+    [TestCase("CSharp")]
+    [TestCase("LLVM")]
+    [TestCase("MSIL")]
+    public void IsNativeProject_ManagedBackends_AreFalse(string backend)
+    {
+        var path = WriteProject($"""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup><ProjectName>Test</ProjectName><TargetBackend>{backend}</TargetBackend></PropertyGroup>
+            </BasicLangProject>
+            """);
+        Assert.That(ProjectFile.Load(path).IsNativeProject, Is.False);
+    }
+
+    [Test]
+    public void IsNativeProject_DefaultProject_IsFalse()
+    {
+        // No <Language>, no <TargetBackend> — the default is a managed C# project.
+        var path = WriteProject("""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup><ProjectName>Test</ProjectName></PropertyGroup>
+            </BasicLangProject>
+            """);
+        Assert.That(ProjectFile.Load(path).IsNativeProject, Is.False);
+    }
+
+    [Test]
     public void GetCppTranslationUnits_ExplicitCompileItems_FiltersToTuExtensions()
     {
         File.WriteAllText(Path.Combine(_dir, "main.cpp"), "// tu");

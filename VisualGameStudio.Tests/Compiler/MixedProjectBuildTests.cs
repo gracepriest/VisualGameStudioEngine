@@ -371,48 +371,11 @@ public class MixedProjectBuildTests
     // legacy single-TU CLI path (CppToolchain.CompileToExecutable directly,
     // raw diagnostics, old bin/<config>/<TFM> layout). These tests pin that it
     // now goes through the same CppProjectBuilder as Language=Cpp projects.
+    // Spawn/timeout policy lives in the shared CliTestHarness.
     // ------------------------------------------------------------------
 
-    private static string CliPath()
-    {
-        var cliPath = Path.Combine(AppContext.BaseDirectory, "BasicLang.exe");
-        Assert.That(File.Exists(cliPath), Is.True,
-            "BasicLang.exe not deployed next to the tests — project reference output changed?");
-        return cliPath;
-    }
-
-    private static async Task<(int ExitCode, string StdOut, string StdErr)> RunCli(
-        string workingDir, params string[] args)
-    {
-        using var process = new System.Diagnostics.Process
-        {
-            StartInfo = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = CliPath(),
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                WorkingDirectory = workingDir,
-            }
-        };
-        foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
-        process.Start();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        try
-        {
-            await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // Kill the whole tree (BasicLang.exe spawns the C++ toolchain) —
-            // otherwise a timed-out compile leaks cl.exe/clang++ processes.
-            try { process.Kill(entireProcessTree: true); } catch { }
-            Assert.Fail($"CLI timed out after 5 minutes: BasicLang.exe {string.Join(" ", args)}");
-        }
-        return (process.ExitCode, await stdout, await stderr);
-    }
+    private static Task<(int ExitCode, string StdOut, string StdErr)> RunCli(
+        string workingDir, params string[] args) => CliTestHarness.RunCli(workingDir, args);
 
     [Test]
     public async Task Cli_Build_MixedProject_BothDirections_AndRun()

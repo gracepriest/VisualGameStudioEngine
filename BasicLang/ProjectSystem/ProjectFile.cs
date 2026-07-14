@@ -45,6 +45,14 @@ namespace BasicLang.Compiler.ProjectSystem
         public bool IsCppProject =>
             string.Equals(Language, "Cpp", StringComparison.OrdinalIgnoreCase);
 
+        // A project builds natively (through CppProjectBuilder) when it is a
+        // Language=Cpp project OR a BasicLang project targeting the C++ backend.
+        public bool IsNativeProject =>
+            IsCppProject ||
+            (Backend != null &&
+             (Backend.Equals("cpp", StringComparison.OrdinalIgnoreCase) ||
+              Backend.Equals("c++", StringComparison.OrdinalIgnoreCase)));
+
         // C++-only settings (ignored for BasicLang projects)
         public string CppStandard { get; set; } = "c++20";
         public List<string> IncludeDirs { get; set; } = new List<string>();

@@ -191,49 +191,12 @@ public class CppProjectCliBuildTests
 
     // ------------------------------------------------------------------
     // CLI e2e: spawn BasicLang.exe (deployed next to the tests) and drive
-    // build / run / new end-to-end.
+    // build / run / new end-to-end. Spawn/timeout policy lives in the shared
+    // CliTestHarness.
     // ------------------------------------------------------------------
 
-    private static string CliPath()
-    {
-        var cliPath = Path.Combine(AppContext.BaseDirectory, "BasicLang.exe");
-        Assert.That(File.Exists(cliPath), Is.True,
-            "BasicLang.exe not deployed next to the tests — project reference output changed?");
-        return cliPath;
-    }
-
-    private static async Task<(int ExitCode, string StdOut, string StdErr)> RunCli(
-        string workingDir, params string[] args)
-    {
-        using var process = new System.Diagnostics.Process
-        {
-            StartInfo = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = CliPath(),
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                WorkingDirectory = workingDir,
-            }
-        };
-        foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
-        process.Start();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        try
-        {
-            await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // Kill the whole tree (BasicLang.exe spawns the C++ toolchain) —
-            // otherwise a timed-out compile leaks cl.exe/clang++ processes.
-            try { process.Kill(entireProcessTree: true); } catch { }
-            Assert.Fail($"CLI timed out after 5 minutes: BasicLang.exe {string.Join(" ", args)}");
-        }
-        return (process.ExitCode, await stdout, await stderr);
-    }
+    private static Task<(int ExitCode, string StdOut, string StdErr)> RunCli(
+        string workingDir, params string[] args) => CliTestHarness.RunCli(workingDir, args);
 
     [Test]
     public async Task Cli_Build_CppProject_ProducesExe()
