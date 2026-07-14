@@ -53,12 +53,14 @@ namespace BasicLang.Compiler
     /// </summary>
     public class BasicCompiler
     {
-        // C/C++ translation-unit + header extensions. Header-inclusive (unlike
-        // ProjectFile.CppTranslationUnitExtensions, which only lists compilable
-        // units) because a stray .h/.hpp fed to the BasicLang lexer explodes just
-        // as badly as a .cpp does. See BL6014 guard in CompileProjectFiles.
+        // C/C++ translation-unit + header extensions. Header-INCLUSIVE variant of
+        // the shared compile-unit-only ProjectFile.CppTranslationUnitExtensions —
+        // derived from it (never re-listed) so the two C-family lists can't drift —
+        // plus .h/.hpp, because a stray header fed to the BasicLang lexer explodes
+        // just as badly as a .cpp does. See BL6014 guard in CompileProjectFiles.
         private static readonly string[] CFamilySourceExtensions =
-            { ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp" };
+            ProjectSystem.ProjectFile.CppTranslationUnitExtensions
+                .Concat(new[] { ".h", ".hpp" }).ToArray();
 
         private readonly ModuleResolver _resolver;
         private readonly ModuleRegistry _registry;
