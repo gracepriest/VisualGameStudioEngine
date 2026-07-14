@@ -996,7 +996,12 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         }
         else
         {
-            // Auto-add extension if none (language-aware: C++ projects default to .cpp)
+            // Auto-add extension if none (language-aware: C++ projects default to .cpp).
+            // Deliberately keyed on Language, not IsNativeBuild: a "mixed" native project
+            // (Language=BasicLang, TargetBackend=Cpp) is still authored primarily in BasicLang,
+            // so an extension-less new item there defaults to .bas. The user can still create a
+            // .cpp/.h file in any project (native or not) by typing the extension explicitly —
+            // GetTemplateContent/GetItemTypeForExtension are extension-driven, not language-gated.
             if (!Path.HasExtension(name))
             {
                 name += _projectService.CurrentProject.Language == ProjectLanguage.Cpp ? ".cpp" : ".bas";
@@ -1087,6 +1092,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var fileName = await _dialogService.PromptAsync("New File", "Enter file name:", "NewFile.bas");
         if (string.IsNullOrWhiteSpace(fileName)) return;
 
+        // See StartInlineNewFile's ConfirmNewItemAsync above for why this stays keyed on
+        // Language rather than IsNativeBuild.
         if (!Path.HasExtension(fileName))
         {
             fileName += _projectService.CurrentProject.Language == ProjectLanguage.Cpp ? ".cpp" : ".bas";
@@ -1219,7 +1226,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             _projectService.CurrentProject.Items.Add(new ProjectItem
             {
                 Include = relativePath,
-                ItemType = ProjectItemType.Compile
+                ItemType = GetItemTypeForExtension(Path.GetFileName(filePath))
             });
         }
 

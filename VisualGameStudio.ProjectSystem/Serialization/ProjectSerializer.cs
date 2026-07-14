@@ -62,15 +62,14 @@ public class ProjectSerializer
                 {
                     project.Language = lang;
                 }
-                if (project.Language == ProjectLanguage.Cpp)
+
+                // CppStandard is parsed regardless of Language: a Language=BasicLang project with
+                // TargetBackend=Cpp (a "mixed" native project) also carries C++ settings.
+                var cppStandard = propertyGroup.Element("CppStandard")?.Value;
+                if (!string.IsNullOrEmpty(cppStandard))
                 {
                     project.CppSettings ??= new CppProjectSettings();
-
-                    var cppStandard = propertyGroup.Element("CppStandard")?.Value;
-                    if (!string.IsNullOrEmpty(cppStandard))
-                    {
-                        project.CppSettings.CppStandard = cppStandard;
-                    }
+                    project.CppSettings.CppStandard = cppStandard;
                 }
             }
             else
@@ -209,8 +208,12 @@ public class ProjectSerializer
                     project.Language == ProjectLanguage.Cpp
                         ? new XElement("Language", project.Language.ToString())
                         : null,
-                    project.Language == ProjectLanguage.Cpp
-                        ? new XElement("CppStandard", project.CppSettings?.CppStandard ?? "c++20")
+                    // Emitted whenever C++ settings carry a standard — independent of Language, so a
+                    // Language=BasicLang + TargetBackend=Cpp (mixed) project also round-trips it. A
+                    // BasicLang project must NOT gain a <Language> element (kept above, unconditional
+                    // on CppStandard) per design decision D8.
+                    !string.IsNullOrEmpty(project.CppSettings?.CppStandard)
+                        ? new XElement("CppStandard", project.CppSettings!.CppStandard)
                         : null
                 )
             )
