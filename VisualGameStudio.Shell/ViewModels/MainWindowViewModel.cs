@@ -1665,6 +1665,9 @@ public partial class MainWindowViewModel : ViewModelBase
     private async void FallbackToLspHover(CodeEditorDocumentViewModel? document, DataTipEvaluationRequestEventArgs e)
     {
         if (document == null || e.Line <= 0 || e.Column <= 0) return;
+        // BasicLang LSP hover only for BasicLang source files — the server answers
+        // unknown URIs as if they were BasicLang.
+        if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
         // intellisense.quickInfo also gates the debug-datatip → LSP hover fallback (read at use).
         if (_settingsService != null && !_settingsService.Get("intellisense.quickInfo", true)) return;
         try
@@ -2101,6 +2104,9 @@ public partial class MainWindowViewModel : ViewModelBase
             EventHandler<DocumentHighlightRequestEventArgs>? onDocHighlight = async (s, e) =>
             {
                 if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
+                // BasicLang document highlight only for BasicLang source files — the
+                // server answers unknown URIs as if they were BasicLang.
+                if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
                 try
                 {
                     var result = await _languageService.GetDocumentHighlightsAsync(document.FilePath, e.Line, e.Column);
@@ -4197,8 +4203,10 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc == null) return;
 
-        // Try LSP document symbols first for current document
-        if (_languageService.IsConnected && activeDoc.FilePath != null)
+        // Try LSP document symbols first for current document — BasicLang only:
+        // the server answers unknown URIs as if they were BasicLang files.
+        if (_languageService.IsConnected && activeDoc.FilePath != null &&
+            BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
         {
             try
             {
@@ -4405,6 +4413,9 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
+        // BasicLang type-definition lookup only for BasicLang source files — the
+        // server answers unknown URIs as if they were BasicLang.
+        if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;
 
         var location = await _languageService.GetTypeDefinitionAsync(
             activeDoc.FilePath,
@@ -4624,8 +4635,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
         StatusText = $"Finding references for '{word}'...";
 
-        // Try language service first
-        if (_languageService.IsConnected)
+        // Try language service first — BasicLang only: the server answers unknown
+        // URIs as if they were BasicLang files.
+        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
         {
             var references = await _languageService.FindReferencesAsync(
                 activeDoc.FilePath,
@@ -4871,8 +4883,9 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Try LSP rename first (supports cross-file rename via WorkspaceEdit)
-        if (_languageService.IsConnected)
+        // Try LSP rename first (supports cross-file rename via WorkspaceEdit) — BasicLang
+        // only: the server answers unknown URIs as if they were BasicLang files.
+        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
         {
             var newName = await _dialogService.ShowInputDialogAsync(
                 "Rename Symbol",
@@ -7386,6 +7399,9 @@ $"""
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
+        // BasicLang selection ranges only for BasicLang source files — the server
+        // answers unknown URIs as if they were BasicLang.
+        if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;
 
         if (_currentSelectionRange == null)
         {
@@ -7503,6 +7519,12 @@ $"""
     {
         try
         {
+            // Code lenses are only ever populated for BasicLang source files (see
+            // RefreshCodeLensesAsync's gate), so this should be unreachable for a
+            // non-BasicLang document — guard anyway so a clicked lens never sends
+            // an LSP request for a .cpp/.h URI the server would misinterpret.
+            if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
+
             switch (info.CommandName)
             {
                 case "basiclang.showReferences":
@@ -7596,6 +7618,10 @@ $"""
     private async Task<int> FormatDocumentContentAsync(CodeEditorDocumentViewModel doc)
     {
         if (doc.FilePath == null || !_languageService.IsConnected) return 0;
+        // BasicLang formatting only for BasicLang source files — the server answers
+        // unknown URIs as if they were BasicLang. Silent no-op (0 edits applied) so
+        // format-on-save never corrupts a .cpp buffer with BasicLang-formatter edits.
+        if (!BasicLangFileTypes.IsBasicLangSourceFile(doc.FilePath)) return 0;
 
         var edits = await _languageService.FormatDocumentAsync(doc.FilePath, BuildFormattingOptions());
         if (edits.Count == 0) return 0;
@@ -7630,6 +7656,9 @@ $"""
     private async Task OnTypeFormattingAsync(CodeEditorDocumentViewModel document, int line, int column, string triggerCharacter)
     {
         if (document.FilePath == null || !_languageService.IsConnected) return;
+        // BasicLang on-type formatting only for BasicLang source files — the server
+        // answers unknown URIs as if they were BasicLang.
+        if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
 
         var edits = await _languageService.OnTypeFormattingAsync(document.FilePath, line, column, triggerCharacter);
         if (edits.Count > 0)
@@ -7666,6 +7695,9 @@ $"""
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
+        // BasicLang code actions only for BasicLang source files — the server
+        // answers unknown URIs as if they were BasicLang.
+        if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;
 
         if (!_languageService.IsConnected)
         {
