@@ -170,7 +170,7 @@
 | Solution with multiple projects | Yes | Yes | DONE | `BasicLangSolution.cs`, `SolutionSerializer.cs` |
 | Build configurations (Debug/Release) | Yes | Yes | DONE | `BuildConfigurationDialogViewModel.cs` |
 | Recent projects | Yes | Yes | DONE | `RecentProjectsService.cs` |
-| New project dialog | Yes | Yes | DONE | `NewProjectDialog.axaml.cs` |
+| New project dialog | Yes | Yes | DONE | two-window wizard: `NewProjectSelectView.axaml.cs`, `NewProjectConfigureView.axaml.cs` |
 | File add/remove/rename | Yes | Yes | DONE | `ProjectService` manages `ProjectItem` list |
 | Document outline | Yes | Yes | DONE | `DocumentOutlineView.axaml.cs` |
 | Multi-root workspaces | Yes | No | GAP | Single solution/project only |
