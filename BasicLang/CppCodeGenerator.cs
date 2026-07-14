@@ -600,6 +600,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (value is IRInstanceMethodCall foreignCall && foreignCall.Type?.Kind == TypeKind.Foreign)
                 return RenderForeignMethodCall(foreignCall);
 
+            // A foreign ::-qualified data-member READ (c.field) is opaque the same way:
+            // its result is a synthetic "T::field" pseudo-type, never a real C++ temp, so
+            // it is rendered inline wherever consumed (Dim x = c.field -> auto x = c.field).
+            if (value is IRFieldAccess foreignField && foreignField.Type?.Kind == TypeKind.Foreign)
+                return RenderForeignFieldAccess(foreignField);
+
             // The IRBuilder names result values after their assignment target (an IRAwait
             // named "x" for `Dim x = Await ...`, an IRBinaryOp named "total" for
             // `total = total + i`). The base implementation ignores .Name for
@@ -2753,6 +2759,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
+        /// Render a foreign ::-qualified data-member read as an inline C++ expression
+        /// (obj.field). The receiver is rendered inline too, so a member read off a
+        /// foreign call (m.foo().field) collapses into one opaque expression. Data-member
+        /// reads are idempotent and side-effect-free, so inlining at each use site is safe
+        /// even when the value is consumed more than once.
+        /// </summary>
+        private string RenderForeignFieldAccess(IRFieldAccess fieldAccess)
+        {
+            var obj = GetValueName(fieldAccess.Object);
+            var op = MemberAccessOp(fieldAccess.Object);
+            var field = SanitizeName(fieldAccess.FieldName);
+            return $"{obj}{op}{field}";
+        }
+
+        /// <summary>
         /// Lower `x.ToString(...)` by the receiver's static type. Returns null
         /// when the receiver isn't a known .NET-surface type (user classes may
         /// legitimately define their own ToString).
@@ -2824,6 +2845,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRFieldAccess fieldAccess)
         {
+            // A foreign ::-qualified data-member read has a synthetic pseudo-type that is
+            // not a real C++ type, so its result temp is never pre-declared
+            // (DeclareLocalsAndTemporaries skips foreign temps). Like a foreign method call,
+            // it is rendered inline at each use site (GetValueName -> RenderForeignFieldAccess);
+            // emitting a standalone `t = c.field;` here would assign an undeclared temp. A
+            // discarded read is a side-effect-free no-op, so suppressing the statement is safe.
+            if (fieldAccess.Type?.Kind == TypeKind.Foreign)
+                return;
+
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             var result = GetValueName(fieldAccess);
 

@@ -670,4 +670,47 @@ End Sub";
             Does.Contain("Cannot infer the type of an opaque C++ expression"),
             "the rejection must be a clean, actionable BasicLang diagnostic (never non-compiling C++)");
     }
+
+    // ==================================================================
+    // Bug (foreign data-member read) — reading a data member off a '::'-qualified
+    // foreign value (`Dim x = c.n`) materialized an opaque foreign-typed temp that
+    // DeclareLocalsAndTemporaries skips (its pseudo-type "mathlib::Calc::n" is not a
+    // real C++ type), then emitted `t1 = c.n;` — an assignment to an UNDECLARED temp
+    // (C2065) plus a cascade `operator <<` ambiguity. Foreign METHOD calls worked
+    // (inlined via GetValueName); foreign FIELD reads were never given the same inline
+    // treatment. Fix: render a foreign data-member read inline at each use site,
+    // exactly like a foreign method call.
+    // ==================================================================
+
+    [Test]
+    public void Cpp_ForeignDataMemberRead_InlinesAtUseSite_CompilesAndRuns()
+    {
+        var source = @"
+#CppInclude ""calc.h""
+Sub Main()
+    Dim c As New mathlib::Calc()
+    Dim sum = c.Add(2, 3)   ' foreign method call  (already worked)
+    Dim nn = c.n            ' foreign data member  (the bug)
+    Dim mm = c.m
+    Console.WriteLine(sum)
+    Console.WriteLine(nn)
+    Console.WriteLine(mm)
+End Sub";
+        var output = CompileToCppFull(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // The read is inlined into its consumer, never stored to an undeclared temp.
+        Assert.That(output, Does.Contain("auto nn = c.n;"),
+            "a foreign data-member read must be inlined into its consumer");
+        Assert.That(output, Does.Contain("auto mm = c.m;"));
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler");
+        var header = new KeyValuePair<string, string>(
+            "calc.h",
+            "#pragma once\nnamespace mathlib { struct Calc { " +
+            "int Add(int a, int b) const { return a + b; } int n = 10; int m = 20; }; }\n");
+        var run = VisualGameStudio.Tests.Native.CppCompile.CompileAndRun(
+            output, compiler.Value, new[] { header });
+        Assert.That(run.Replace("\r\n", "\n"), Is.EqualTo("5\n10\n20\n"));  // Add(2,3), n, m
+    }
 }
