@@ -1,7 +1,7 @@
 # C++ as a Peer Language in Visual Game Studio — Design
 
 **Date:** 2026-07-11
-**Status:** Approved design, pre-planning
+**Status:** Phase 1 shipped (pure C++ projects). Phase 2 IMPLEMENTED on branch `worktree-cpp-phase2` — mixed BasicLang+C++ projects, converged native pipeline (per-module split emission, entry-point rule, obj/gen include wiring, legacy single-TU path deleted from CLI+IDE, LSP filtered/gated). Phases 3 (clangd) and 4 (native debugging) not started.
 **Approach:** Protocol-first (clangd + lldb-dap/gdb rented via existing LSP/DAP infrastructure; builds driven by the existing `CppToolchain`)
 
 ## Goal
