@@ -363,4 +363,134 @@ public class MixedProjectBuildTests
         Assert.That(File.Exists(stale), Is.False, "stale Old.g.cpp must be removed before regeneration");
         Assert.That(result.Success, Is.True, "build failed:\n" + result.RawToolchainOutput + "\n" + DiagCodes(result));
     }
+
+    // ------------------------------------------------------------------
+    // Task 5: CLI routing — spawn the real BasicLang.exe (deployed next to the
+    // tests) and drive `build`/`run` end-to-end. Before Task 5, a BasicLang
+    // project on the C++ backend (no <Language>Cpp>) went down a separate,
+    // legacy single-TU CLI path (CppToolchain.CompileToExecutable directly,
+    // raw diagnostics, old bin/<config>/<TFM> layout). These tests pin that it
+    // now goes through the same CppProjectBuilder as Language=Cpp projects.
+    // ------------------------------------------------------------------
+
+    private static string CliPath()
+    {
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "BasicLang.exe");
+        Assert.That(File.Exists(cliPath), Is.True,
+            "BasicLang.exe not deployed next to the tests — project reference output changed?");
+        return cliPath;
+    }
+
+    private static async Task<(int ExitCode, string StdOut, string StdErr)> RunCli(
+        string workingDir, params string[] args)
+    {
+        using var process = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = CliPath(),
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = workingDir,
+            }
+        };
+        foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
+        process.Start();
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        try
+        {
+            await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromMinutes(5)).Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Kill the whole tree (BasicLang.exe spawns the C++ toolchain) —
+            // otherwise a timed-out compile leaks cl.exe/clang++ processes.
+            try { process.Kill(entireProcessTree: true); } catch { }
+            Assert.Fail($"CLI timed out after 5 minutes: BasicLang.exe {string.Join(" ", args)}");
+        }
+        return (process.ExitCode, await stdout, await stderr);
+    }
+
+    [Test]
+    public async Task Cli_Build_MixedProject_BothDirections_AndRun()
+    {
+        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+
+        var project = MakeProject(
+            LanguageCppBlproj("MixedCliApp"),
+            ("main.cpp", """
+                #include "Logic.g.h"
+                int main() {
+                    std::cout << "score=" << CalculateScore(5) << std::endl;
+                    return 0;
+                }
+                """),
+            ("Logic.bas", "Function CalculateScore(hits As Integer) As Integer\n    Return hits * 10\nEnd Function\n"));
+
+        var (exitBuild, buildOut, buildErr) = await RunCli(_dir, "build", project.FilePath);
+        Assert.That(exitBuild, Is.EqualTo(0), $"build failed:\nSTDOUT:\n{buildOut}\nSTDERR:\n{buildErr}");
+
+        var exePath = Path.Combine(_dir, "bin", "Debug", "MixedCliApp.exe");
+        Assert.That(File.Exists(exePath), Is.True, $"expected exe at converged layout {exePath}");
+
+        var (exitRun, runOut, runErr) = await RunCli(_dir, "run", project.FilePath);
+        Assert.That(exitRun, Is.EqualTo(0), $"run failed:\nSTDOUT:\n{runOut}\nSTDERR:\n{runErr}");
+        Assert.That(runOut, Does.Contain("score=50"));
+    }
+
+    [Test]
+    public async Task Cli_Build_BackendCppBasicLangProject_LandsInConvergedLayout()
+    {
+        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+
+        // Plain BasicLang project (no <Language>Cpp>) targeting the C++ backend —
+        // before Task 5 this built via the legacy single-TU path to
+        // bin/<config>/<TFM>/<name>.exe; it must now converge on
+        // bin/<config>/<name>.exe, the same layout CppProjectBuilder gives
+        // Language=Cpp projects.
+        var project = MakeProject(
+            BackendCppBlproj("BackendCliApp"),
+            ("App.bas", "Sub Main()\n    Console.WriteLine(\"backend-cpp-ok\")\nEnd Sub\n"));
+
+        var (exitBuild, buildOut, buildErr) = await RunCli(_dir, "build", project.FilePath);
+        Assert.That(exitBuild, Is.EqualTo(0), $"build failed:\nSTDOUT:\n{buildOut}\nSTDERR:\n{buildErr}");
+
+        var convergedExe = Path.Combine(_dir, "bin", "Debug", "BackendCliApp.exe");
+        Assert.That(File.Exists(convergedExe), Is.True,
+            $"expected the converged native layout bin/Debug/BackendCliApp.exe; not found (dir contents: " +
+            string.Join(", ", Directory.GetFiles(_dir, "*", SearchOption.AllDirectories)) + ")");
+
+        var oldManagedExe = Path.Combine(_dir, "bin", "Debug", "net8.0", "BackendCliApp.exe");
+        Assert.That(File.Exists(oldManagedExe), Is.False,
+            "must NOT build to the old managed bin/<config>/<TFM>/ layout (that was the legacy single-TU CLI path)");
+
+        var (exitRun, runOut, runErr) = await RunCli(_dir, "run", project.FilePath);
+        Assert.That(exitRun, Is.EqualTo(0), $"run failed:\nSTDOUT:\n{runOut}\nSTDERR:\n{runErr}");
+        Assert.That(runOut, Does.Contain("backend-cpp-ok"));
+    }
+
+    [Test]
+    public async Task Cli_Build_MixedProject_CppError_EmitsNormalizedDiagnostic()
+    {
+        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+
+        // A BasicLang/native-backend project with a bad hand-written .cpp: before
+        // Task 5 this hit the legacy CLI arm (CppToolchain.CompileToExecutable),
+        // whose failure path dumped the toolchain's raw output rather than a
+        // normalized file(line,col) diagnostic. It must now go through
+        // CppProjectBuilder like a Language=Cpp project does.
+        var project = MakeProject(
+            BackendCppBlproj("BadCliApp"),
+            ("main.cpp", "int main() { undeclared_symbol; return 0; }\n"));
+
+        var (exit, stdout, stderr) = await RunCli(_dir, "build", project.FilePath);
+
+        Assert.That(exit, Is.Not.EqualTo(0));
+        // Normalized MSBuild-style location: main.cpp(1,...): error ...
+        Assert.That(stdout + stderr, Does.Match(@"main\.cpp\(1[,)]"),
+            $"expected a normalized file(line[,col]) diagnostic, not a raw toolchain blob.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+    }
 }

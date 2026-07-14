@@ -403,6 +403,14 @@ namespace BasicLang.Compiler.Driver
             }
         }
 
+        // A project builds natively (through CppProjectBuilder) when it is a
+        // Language=Cpp project OR a BasicLang project targeting the C++ backend.
+        static bool IsNativeProject(ProjectFile project) =>
+            project.IsCppProject ||
+            (project.Backend != null &&
+             (project.Backend.Equals("cpp", StringComparison.OrdinalIgnoreCase) ||
+              project.Backend.Equals("c++", StringComparison.OrdinalIgnoreCase)));
+
         static async Task<int> HandleBuildCommand(string[] args)
         {
             var projectPath = FindProjectFile(args.FirstOrDefault(a => !a.StartsWith("-")));
@@ -431,8 +439,9 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
-            // ---------- Language=Cpp: user-authored C++, no BasicLang pipeline ----------
-            if (project.IsCppProject)
+            // ---------- Native projects (Language=Cpp, or a BasicLang project on the
+            // C++ backend): both route through the single native-project orchestrator. ----------
+            if (IsNativeProject(project))
             {
                 try
                 {
@@ -540,12 +549,6 @@ namespace BasicLang.Compiler.Driver
 
                 switch (backend)
                 {
-                    case "cpp":
-                    case "c++":
-                        var cppGen = new CodeGen.CPlusPlus.CppCodeGenerator();
-                        generatedCode = cppGen.Generate(combinedIR);
-                        extension = ".cpp";
-                        break;
                     case "llvm":
                         var llvmGen = new CodeGen.LLVM.LLVMCodeGenerator();
                         generatedCode = llvmGen.Generate(combinedIR);
@@ -767,72 +770,6 @@ namespace BasicLang.Compiler.Driver
                         }
                     }
                 }
-                else if (backend == "cpp" || backend == "c++")
-                {
-                    // Compile the generated C++ to an exe with a discovered
-                    // toolchain (IDE BuildService parity — CppToolchain is the
-                    // shared implementation).
-                    var toolchain = ProjectSystem.CppToolchain.Find();
-                    if (toolchain == null)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Yellow;
-                        Console.WriteLine("  Warning: no C++ toolchain found (clang++/g++/MSVC). Generated source only.");
-                        Console.ResetColor();
-                    }
-                    else
-                    {
-                        var cppBaseDir = AppContext.BaseDirectory;
-                        string cppEngineLib = null;
-                        var usesEngineCpp = EngineDeployment.UsesEngineCpp(generatedCode);
-                        if (usesEngineCpp)
-                        {
-                            cppEngineLib = EngineDeployment.GetImportLibPath(cppBaseDir);
-                            if (cppEngineLib == null)
-                            {
-                                Console.ForegroundColor = ConsoleColor.Red;
-                                Console.Error.WriteLine($"  Error: this program uses the game engine, but {EngineDeployment.EngineImportLibName} was not found next to the compiler ({cppBaseDir}) — the C++ build cannot link.");
-                                Console.ResetColor();
-                                success = false;
-                            }
-                        }
-
-                        if (success)
-                        {
-                            Console.WriteLine($"  Compiling C++ with {toolchain.DisplayName}...");
-                            var exePath = Path.Combine(outputDir, outputFileName + ".exe");
-                            var (cppOk, cppOutput) = toolchain.CompileToExecutable(outputPath, exePath, cppEngineLib, outputDir);
-                            if (!cppOk)
-                            {
-                                Console.ForegroundColor = ConsoleColor.Red;
-                                Console.Error.WriteLine("  C++ compilation failed!");
-                                Console.Error.WriteLine("  " + cppOutput.Replace("\n", "\n  "));
-                                Console.ResetColor();
-                                success = false;
-                            }
-                            else
-                            {
-                                Console.WriteLine($"  Executable: {exePath}");
-                                if (usesEngineCpp)
-                                {
-                                    foreach (var nativeDll in EngineDeployment.GetNativeDllPaths(cppBaseDir))
-                                    {
-                                        try
-                                        {
-                                            File.Copy(nativeDll, Path.Combine(outputDir, Path.GetFileName(nativeDll)), overwrite: true);
-                                            Console.WriteLine($"  Deployed engine runtime: {Path.GetFileName(nativeDll)}");
-                                        }
-                                        catch (Exception copyEx)
-                                        {
-                                            Console.ForegroundColor = ConsoleColor.Yellow;
-                                            Console.WriteLine($"  Warning: could not deploy {Path.GetFileName(nativeDll)}: {copyEx.Message}");
-                                            Console.ResetColor();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
                 if (success)
                 {
@@ -890,9 +827,10 @@ namespace BasicLang.Compiler.Driver
             // Check multiple possible locations for the output.
             // NOTE: outputDir here is ALREADY projectDir/bin/<config>/<TFM> —
             // base the native entries on projectDir, or the paths double up.
-            // Language=Cpp projects probe the native exe paths FIRST so a stale
-            // managed .dll from before a language switch is never relaunched.
-            var possiblePaths = project.IsCppProject
+            // Native projects (Language=Cpp, or a BasicLang project on the C++
+            // backend) probe the native exe paths FIRST so a stale managed .dll
+            // from before a language/backend switch is never relaunched.
+            var possiblePaths = IsNativeProject(project)
                 ? new[]
                 {
                     Path.Combine(projectDir, "bin", configuration, $"{exeName}.exe"),   // native layout (CppProjectBuilder)
