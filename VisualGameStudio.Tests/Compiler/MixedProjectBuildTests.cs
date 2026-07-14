@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BasicLang.Compiler;
 using BasicLang.Compiler.ProjectSystem;
 using NUnit.Framework;
 
@@ -455,5 +456,95 @@ public class MixedProjectBuildTests
         // Normalized MSBuild-style location: main.cpp(1,...): error ...
         Assert.That(stdout + stderr, Does.Match(@"main\.cpp\(1[,)]"),
             $"expected a normalized file(line[,col]) diagnostic, not a raw toolchain blob.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+    }
+
+    // ------------------------------------------------------------------
+    // Task 6: BL6014 — BasicCompiler.CompileProjectFiles is the shared choke
+    // point BOTH the CLI (managed backends) and the IDE call. It must never
+    // hand a C/C++ file to the BasicLang lexer: on a managed backend that's a
+    // fail-fast, actionable BL6014 error; on the native backend the C-family
+    // files are silently dropped (CppProjectBuilder compiles them
+    // separately). These are in-process BasicCompiler calls, not CLI spawns —
+    // no toolchain needed, they run unconditionally.
+    // ------------------------------------------------------------------
+
+    private string WriteSource(string name, string content)
+    {
+        var full = Path.Combine(_dir, name);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, content);
+        return full;
+    }
+
+    [TestCase("csharp")]
+    [TestCase("msil")]
+    [TestCase("llvm")]
+    public void ManagedBackend_CppSource_FailsBL6014(string backend)
+    {
+        var bas = WriteSource("Logic.bas", "Sub Main()\nEnd Sub\n");
+        var cpp = WriteSource("foreign.cpp", "int add(int a,int b){return a+b;}\n");
+
+        var compiler = new BasicCompiler(new CompilerOptions { TargetBackend = backend });
+        var result = compiler.CompileProjectFiles(new[] { bas, cpp });
+
+        Assert.That(result.Success, Is.False);
+        // Fail-fast proxy: the guard must short-circuit BEFORE anything ever
+        // tries to lex foreign.cpp as BasicLang — exactly one error (the
+        // guard's), never a pile of lexer/parser errors from the C++ content.
+        Assert.That(result.AllErrors.Count, Is.EqualTo(1),
+            "guard must fail fast with exactly one error, not fall through to lexing foreign.cpp: " +
+            string.Join("; ", result.AllErrors.Select(e => e.Message)));
+        var msg = result.AllErrors[0].Message;
+        Assert.That(msg, Does.Contain("BL6014"));
+        Assert.That(msg, Does.Contain("foreign.cpp"));
+        Assert.That(msg, Does.Not.Contain("unexpected token"),
+            "must be the guard's message, not a lexer/parser artifact");
+    }
+
+    [TestCase("cpp")]
+    [TestCase("c++")]
+    public void NativeBackend_CppSourceInList_IsIgnoredNotLexed(string backend)
+    {
+        var bas = WriteSource("App.bas", "Sub Main()\nEnd Sub\n");
+        // Deliberately NOT valid BasicLang — if the guard failed to drop this
+        // before the register/preprocess loop, lexing it would blow up.
+        var cpp = WriteSource("foreign.cpp", "#include <vector>\nint add(int a,int b){return a+b;}\n");
+
+        var compiler = new BasicCompiler(new CompilerOptions { TargetBackend = backend });
+        var result = compiler.CompileProjectFiles(new[] { bas, cpp });
+
+        Assert.That(result.Success, Is.True,
+            "the .cpp must be silently dropped, not lexed: " + string.Join("; ", result.AllErrors.Select(e => e.Message)));
+        Assert.That(result.AllErrors.Any(e => e.Message.Contains("foreign.cpp")), Is.False,
+            "no error may reference the dropped C++ file");
+    }
+
+    [TestCase("csharp")]
+    public void ManagedBackend_HeaderFile_AlsoFailsBL6014(string backend)
+    {
+        var bas = WriteSource("Logic.bas", "Sub Main()\nEnd Sub\n");
+        var header = WriteSource("foreign.h", "#pragma once\nint add(int a, int b);\n");
+
+        var compiler = new BasicCompiler(new CompilerOptions { TargetBackend = backend });
+        var result = compiler.CompileProjectFiles(new[] { bas, header });
+
+        Assert.That(result.Success, Is.False);
+        Assert.That(result.AllErrors.Any(e => e.Message.Contains("BL6014") && e.Message.Contains("foreign.h")), Is.True,
+            "a bare header must also trigger BL6014 on a managed backend: " +
+            string.Join("; ", result.AllErrors.Select(e => e.Message)));
+    }
+
+    [TestCase("csharp")]
+    public void ManagedBackend_PureBasicLang_Unaffected(string backend)
+    {
+        var bas = WriteSource("Logic.bas", "Sub Main()\nEnd Sub\n");
+
+        var compiler = new BasicCompiler(new CompilerOptions { TargetBackend = backend });
+        var result = compiler.CompileProjectFiles(new[] { bas });
+
+        Assert.That(result.Success, Is.True,
+            "a managed project with no C-family files must be totally unaffected by the BL6014 guard: " +
+            string.Join("; ", result.AllErrors.Select(e => e.Message)));
+        Assert.That(result.AllErrors.Any(e => e.Message.Contains("BL6014")), Is.False);
     }
 }

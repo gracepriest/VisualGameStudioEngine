@@ -53,6 +53,13 @@ namespace BasicLang.Compiler
     /// </summary>
     public class BasicCompiler
     {
+        // C/C++ translation-unit + header extensions. Header-inclusive (unlike
+        // ProjectFile.CppTranslationUnitExtensions, which only lists compilable
+        // units) because a stray .h/.hpp fed to the BasicLang lexer explodes just
+        // as badly as a .cpp does. See BL6014 guard in CompileProjectFiles.
+        private static readonly string[] CFamilySourceExtensions =
+            { ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp" };
+
         private readonly ModuleResolver _resolver;
         private readonly ModuleRegistry _registry;
         private readonly DependencyGraph _dependencyGraph;
@@ -213,6 +220,39 @@ namespace BasicLang.Compiler
                 {
                     result.AllErrors.Add(new SemanticError("No source files found.", 0, 0));
                     return FinalizeResult(result, startTime);
+                }
+
+                // BL6014: C/C++ sources must never reach the BasicLang lexer. On a
+                // managed backend (C#/MSIL/LLVM) that's a hard, actionable error —
+                // mixing C++ with a managed backend isn't supported; the project
+                // must target the native C++ backend instead. On the native (cpp)
+                // backend, C-family files are the native builder's job
+                // (CppProjectBuilder compiles them separately) — CompileProjectFiles
+                // should only ever see the transpilable BasicLang half, but drop
+                // them defensively in case a caller didn't already filter.
+                var cFamilyFiles = files
+                    .Where(f => CFamilySourceExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
+                    .ToList();
+                if (cFamilyFiles.Count > 0)
+                {
+                    var backend = _options.TargetBackend?.ToLowerInvariant();
+                    var isNativeBackend = backend == "cpp" || backend == "c++";
+
+                    if (!isNativeBackend)
+                    {
+                        var names = string.Join(", ", cFamilyFiles.Select(Path.GetFileName));
+                        result.AllErrors.Add(new SemanticError(
+                            $"BL6014: C/C++ source files require the native C++ backend (set <Backend>Cpp</Backend> or use a C++ project). " +
+                            $"Offending files: {names}. Mixing C++ with a managed backend (C#/MSIL/LLVM) is not supported.",
+                            0, 0) { ErrorCode = "BL6014" });
+                        return FinalizeResult(result, startTime);
+                    }
+
+                    // Native backend: silently drop — the native builder handles
+                    // these separately. It's fine for this to leave `files` empty
+                    // (a C++-only native project has nothing for the BasicLang
+                    // transpile half to do); the phases below tolerate an empty set.
+                    files = files.Except(cFamilyFiles, StringComparer.OrdinalIgnoreCase).ToList();
                 }
 
                 // Register + preprocess every file up front.
