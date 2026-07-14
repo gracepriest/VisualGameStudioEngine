@@ -62,7 +62,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 // Explicit <Compile> items get a message about THOSE items; only the
                 // no-items case actually ran the directory glob.
                 var message = project.SourceFiles.Count > 0
-                    ? "No C++ translation units among the project's <Compile> items (listed items may be missing on disk or headers-only)."
+                    ? "No C++ translation units or BasicLang sources among the project's <Compile> items (listed items may be missing on disk or headers-only)."
                     : "Project contains no C++ translation units and no BasicLang sources (looked under "
                       + projectDir + ", excluding bin/ and obj/).";
                 Fail(result, "BL6007", message, project.FilePath);
@@ -321,12 +321,19 @@ namespace BasicLang.Compiler.ProjectSystem
 
         /// <summary>
         /// Maps a failed transpile's errors into build diagnostics with the best file
-        /// attribution available — mirrors BuildService.MapCompilerDiagnostics (a
-        /// different assembly's consumer, so the logic is duplicated deliberately, not
-        /// shared): per-unit errors carry the unit's file path; the SemanticError type
-        /// has no path of its own. Orphaned AllErrors (parse/infrastructure errors live
-        /// only there, with the owning unit's Errors empty) fall back to the single
-        /// failed unit when unambiguous, else to the .blproj.
+        /// attribution available (loosely modeled on BuildService.MapCompilerDiagnostics,
+        /// a different assembly's consumer): per-unit errors carry the unit's file path;
+        /// the SemanticError type has no path of its own. Each DISTINCT source error
+        /// yields exactly one diagnostic — never a second copy pinned to the .blproj.
+        ///
+        /// The subtlety: FinalizeResult -> WithInlineLocation REPLACES every located
+        /// (Line &gt; 0) AllErrors entry with a fresh, message-prefixed copy ("Error at
+        /// line L, column C: &lt;original&gt;") while leaving unit.Errors holding the
+        /// ORIGINAL object. So the rewritten AllErrors copy is no longer reference-equal
+        /// to the already-attributed per-unit error; a reference-only dedup would leak it
+        /// through as a spurious .blproj orphan with a double-prefixed message. Orphan
+        /// detection therefore also matches by VALUE (same line+column, and the AllErrors
+        /// message ends with the attributed per-unit message).
         /// </summary>
         private static void MapTranspileDiagnostics(CppProjectBuildResult result,
             BasicCompiler compiler, CompilationResult compilation, string projectFilePath)
@@ -335,13 +342,26 @@ namespace BasicLang.Compiler.ProjectSystem
             // CompilationResult.Units was populated (e.g. parse errors).
             var units = compiler.Registry.Modules.ToList();
 
+            // Per-unit errors carry the unit's file path — the clean, non-prefixed
+            // message straight off unit.Errors. Reference-dedup so a single error object
+            // shared across units is attributed once.
             var attributed = new HashSet<SemanticError>(ReferenceEqualityComparer.Instance);
+            var attributedList = new List<SemanticError>();
             foreach (var unit in units)
                 foreach (var error in unit.Errors)
                     if (attributed.Add(error))
+                    {
                         AddTranspileDiagnostic(result, error, unit.FilePath);
+                        attributedList.Add(error);
+                    }
 
-            var orphans = compilation.AllErrors.Where(e => !attributed.Contains(e)).ToList();
+            // A genuine orphan is an AllErrors entry that reached no unit (parse /
+            // infrastructure errors) — neither reference-attributed NOR a value-duplicate
+            // of an attributed per-unit error (WithInlineLocation copy).
+            var orphans = compilation.AllErrors
+                .Where(e => !attributed.Contains(e) && !IsDuplicateOfAttributed(e, attributedList))
+                .ToList();
+
             string fallbackPath = null;
             var unattributedFailedUnits = units
                 .Where(u => u.Status == CompilationStatus.Error && u.Errors.Count == 0)
@@ -351,6 +371,26 @@ namespace BasicLang.Compiler.ProjectSystem
 
             foreach (var error in orphans)
                 AddTranspileDiagnostic(result, error, fallbackPath ?? projectFilePath);
+        }
+
+        // True when <paramref name="candidate"/> (an AllErrors entry) is the
+        // WithInlineLocation rewrite of an already-attributed per-unit error: same
+        // location, and the candidate's message is the per-unit message with only a
+        // "<Severity> at line L, column C: " prefix prepended (so it ends with it).
+        private static bool IsDuplicateOfAttributed(SemanticError candidate, List<SemanticError> attributed)
+        {
+            var cm = candidate.Message ?? string.Empty;
+            foreach (var a in attributed)
+            {
+                if (a.Line != candidate.Line || a.Column != candidate.Column)
+                    continue;
+                var am = a.Message ?? string.Empty;
+                // EndsWith subsumes exact equality; require a non-empty per-unit message
+                // so an empty message can't match every candidate at the same location.
+                if (am.Length > 0 && cm.EndsWith(am, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
         }
 
         private static void AddTranspileDiagnostic(CppProjectBuildResult result, SemanticError error, string filePath)

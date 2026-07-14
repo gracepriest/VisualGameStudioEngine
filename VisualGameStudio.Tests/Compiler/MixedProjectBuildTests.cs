@@ -245,6 +245,10 @@ public class MixedProjectBuildTests
     [Test]
     public void Mixed_SemanticError_SurfacesAsClickableDiagnostic()
     {
+        // One undefined-call statement = exactly one semantic error. It must yield exactly
+        // ONE diagnostic, attributed to Logic.bas, with the ORIGINAL message — never a
+        // second copy pinned to the .blproj, and never the "Error at line ..." double-prefix
+        // that FinalizeResult -> WithInlineLocation stamps onto the AllErrors copy.
         var project = MakeProject(
             LanguageCppBlproj("Semantic"),
             ("Logic.bas", "Function Broken() As Integer\n    Return Undefined123\nEnd Function\n"));
@@ -252,10 +256,45 @@ public class MixedProjectBuildTests
         var result = CppProjectBuilder.Build(project, "Debug");
 
         Assert.That(result.Success, Is.False);
-        var fileDiag = result.Diagnostics.FirstOrDefault(d =>
-            d.FilePath != null && d.FilePath.EndsWith("Logic.bas", StringComparison.OrdinalIgnoreCase));
-        Assert.That(fileDiag, Is.Not.Null, "expected a diagnostic attributed to Logic.bas: " + DiagCodes(result));
-        Assert.That(fileDiag!.Line, Is.GreaterThan(0));
+
+        var errorDiags = result.Diagnostics.Where(d => !d.IsWarning).ToList();
+        Assert.That(errorDiags.Count, Is.EqualTo(1), "one source error must produce one diagnostic: " + DiagCodes(result));
+
+        var diag = errorDiags[0];
+        Assert.That(diag.FilePath, Is.Not.Null.And.EndWith("Logic.bas"));
+        Assert.That(diag.Line, Is.GreaterThan(0));
+        Assert.That(result.Diagnostics.Any(d => d.FilePath != null
+            && d.FilePath.EndsWith(".blproj", StringComparison.OrdinalIgnoreCase)), Is.False,
+            "no diagnostic may be pinned to the .blproj when a source attribution exists");
+        Assert.That(diag.Message, Does.Not.StartWith("Error at line"),
+            "must be the original message, not the double-prefixed WithInlineLocation copy");
+    }
+
+    // ------------------------------------------------------------------
+    // Framework auto-link — a BasicLang game that calls Framework_* builtins with NO
+    // explicit <NativeLib> still links the engine import lib and deploys its DLL.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Mixed_FrameworkCall_AutoLinksEngineLib_AndDeploysDll()
+    {
+        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        if (EngineDeployment.LocateImportLib() == null)
+            Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built on this machine)");
+
+        var project = MakeProject(
+            BackendCppBlproj("FwGame"),
+            ("App.bas", "Sub Main()\n    GameShutdown()\nEnd Sub\n"));
+
+        var result = CppProjectBuilder.Build(project, "Debug");
+
+        Assert.That(result.Success, Is.True, "build failed:\n" + result.RawToolchainOutput + "\n" + DiagCodes(result));
+        // Do NOT run the exe — it makes an engine call. Only verify the deploy: the runtime
+        // DLL must sit next to the exe, proving the auto-link path resolved the engine lib
+        // even though no <NativeLib> item was declared.
+        var binDebug = Path.Combine(_dir, "bin", "Debug");
+        Assert.That(File.Exists(Path.Combine(binDebug, "VisualGameStudioEngine.dll")), Is.True,
+            "engine DLL must be deployed next to the exe via the framework auto-link path");
     }
 
     // ------------------------------------------------------------------
