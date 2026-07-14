@@ -105,6 +105,16 @@ namespace BasicLang.Compiler.CodeGen
         /// </summary>
         private static void CheckInstruction(IRInstruction inst, string backendName, bool rejectCollections, string ownInlineLanguage)
         {
+            // An INLINE-consumed foreign construct whose result never binds to a declared
+            // local/field/param/return (so ModuleTypeWalker's declared-type walk never sees it):
+            //   Console.WriteLine(ns::f(...))   -> a foreign-typed IRCall
+            //   Console.WriteLine(ns::v)        -> a foreign IRVariable read (name has "::"),
+            //                                      which only ever appears as an OPERAND.
+            // Without this, the '::' was stripped by the backend's SanitizeName and the managed
+            // program compiled "successfully" into broken code (undefined identifier). Reject it
+            // here with the same clean foreign-not-supported diagnostic.
+            RejectInlineForeign(inst, backendName);
+
             switch (inst)
             {
                 case IRNewObject no:
@@ -143,6 +153,128 @@ namespace BasicLang.Compiler.CodeGen
                     if (tc.FinallyBlock?.Instructions != null)
                         foreach (var i in tc.FinallyBlock.Instructions)
                             CheckInstruction(i, backendName, rejectCollections, ownInlineLanguage);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Reject an INLINE-consumed ::-qualified foreign C++ construct: a foreign-typed
+        /// <see cref="IRCall"/> (a free-function call, which also surfaces as a standalone
+        /// instruction) and a foreign value in any OPERAND position — a foreign free-function
+        /// call (<see cref="IRCall"/>) or a global/constant read (<see cref="IRVariable"/> whose
+        /// name contains "::"). These never bind to a declared position, so the declared-type
+        /// walk misses them; the foreign global read never even surfaces as its own instruction.
+        /// Managed-backend-only (the C++ backend never runs this checker).
+        /// </summary>
+        private static void RejectInlineForeign(IRInstruction inst, string backendName)
+        {
+            // The instruction itself is a foreign free-function call (result discarded).
+            if (inst is IRCall selfCall && selfCall.Type?.Kind == TypeKind.Foreign)
+                ThrowInlineForeign(backendName, selfCall.FunctionName);
+
+            // A foreign value consumed as an operand (call arg, condition, assignment/return
+            // value, ...): the free-function call or the global/constant read.
+            foreach (var op in EnumerateValueOperands(inst))
+            {
+                if (op is IRCall opCall && opCall.Type?.Kind == TypeKind.Foreign)
+                    ThrowInlineForeign(backendName, opCall.FunctionName);
+                if (op is IRVariable opVar && opVar.Type?.Kind == TypeKind.Foreign
+                    && opVar.Name != null && opVar.Name.Contains("::"))
+                    ThrowInlineForeign(backendName, opVar.Name);
+            }
+        }
+
+        private static void ThrowInlineForeign(string backendName, string construct) =>
+            throw new ForeignFeatureException(
+                $"The {backendName} backend does not support the '::'-qualified foreign C++ " +
+                $"construct '{construct}'; C++ passthrough (free functions / globals) is only " +
+                "available on the C++ backend.");
+
+        /// <summary>
+        /// The direct IRValue operands an instruction CONSUMES — the positions where an inline
+        /// foreign value flows into another expression. Mirrors the operand walk in
+        /// CppCodeGenerator (kept in step with the IR node kinds the compiler actually emits).
+        /// </summary>
+        private static IEnumerable<IRValue> EnumerateValueOperands(IRInstruction instruction)
+        {
+            switch (instruction)
+            {
+                case IRInstanceMethodCall mc:
+                    if (mc.Object != null) yield return mc.Object;
+                    foreach (var a in mc.Arguments) yield return a;
+                    break;
+                case IRCall call:
+                    if (call.CalleeValue != null) yield return call.CalleeValue;
+                    foreach (var a in call.Arguments) yield return a;
+                    break;
+                case IRBaseMethodCall bc:
+                    foreach (var a in bc.Arguments) yield return a;
+                    break;
+                case IRNewObject no:
+                    foreach (var a in no.Arguments) yield return a;
+                    break;
+                case IRFieldAccess fa:
+                    if (fa.Object != null) yield return fa.Object;
+                    break;
+                case IRFieldStore fs:
+                    if (fs.Object != null) yield return fs.Object;
+                    if (fs.Value != null) yield return fs.Value;
+                    break;
+                case IRStore st:
+                    if (st.Value != null) yield return st.Value;
+                    if (st.Address != null) yield return st.Address;
+                    break;
+                case IRAssignment asn:
+                    if (asn.Value != null) yield return asn.Value;
+                    break;
+                case IRReturn ret:
+                    if (ret.Value != null) yield return ret.Value;
+                    break;
+                case IRBinaryOp bin:
+                    if (bin.Left != null) yield return bin.Left;
+                    if (bin.Right != null) yield return bin.Right;
+                    break;
+                case IRCompare cmp:
+                    if (cmp.Left != null) yield return cmp.Left;
+                    if (cmp.Right != null) yield return cmp.Right;
+                    break;
+                case IRUnaryOp un:
+                    if (un.Operand != null) yield return un.Operand;
+                    break;
+                case IRCast cast:
+                    if (cast.Value != null) yield return cast.Value;
+                    break;
+                case IRConditionalBranch cbr:
+                    if (cbr.Condition != null) yield return cbr.Condition;
+                    break;
+                case IRSwitch sw:
+                    if (sw.Value != null) yield return sw.Value;
+                    break;
+                case IRIndexerAccess ia:
+                    if (ia.Collection != null) yield return ia.Collection;
+                    foreach (var i in ia.Indices) yield return i;
+                    break;
+                case IRIndexerStore ist:
+                    if (ist.Collection != null) yield return ist.Collection;
+                    foreach (var i in ist.Indices) yield return i;
+                    if (ist.Value != null) yield return ist.Value;
+                    break;
+                case IRArrayStore ast:
+                    if (ast.Array != null) yield return ast.Array;
+                    if (ast.Index != null) yield return ast.Index;
+                    if (ast.Value != null) yield return ast.Value;
+                    break;
+                case IRThrow th:
+                    if (th.Exception != null) yield return th.Exception;
+                    break;
+                case IRYield y:
+                    if (y.Value != null) yield return y.Value;
+                    break;
+                case IRAwait aw:
+                    if (aw.Expression != null) yield return aw.Expression;
+                    break;
+                case IRForEach fe:
+                    if (fe.Collection != null) yield return fe.Collection;
                     break;
             }
         }

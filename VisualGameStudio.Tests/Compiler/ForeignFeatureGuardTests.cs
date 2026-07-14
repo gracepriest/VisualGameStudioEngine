@@ -577,4 +577,88 @@ public class ForeignFeatureGuardTests
         Assert.That(ex!.Message, Does.Contain("MSIL"));
         Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
     }
+
+    // ------------------------------------------------------------------
+    // HONESTY GAP (Phase 2 inline): the foreign free-function call / global read consumed
+    // INLINE — its result never bound to a declared local/field/param/return — bypassed the
+    // ModuleTypeWalker declared-type walk AND the old IRNewObject-only instruction scan, so
+    // `Console.WriteLine(ns::f(...))` / `Console.WriteLine(ns::v)` compiled "successfully" on
+    // C#/LLVM/MSIL and emitted BROKEN code (SanitizeName stripped '::' -> undefined identifier).
+    // The guard now also rejects a foreign-typed IRCall and a foreign IRVariable read (name
+    // contains '::') found in any OPERAND position. Proved WITHOUT #CppInclude (the inline
+    // foreign construct itself is what must trip the guard, not the header).
+    // ------------------------------------------------------------------
+
+    private const string InlineForeignCallSource =
+        "Sub Main()\nConsole.WriteLine(mathlib::freeAdd(1, 2))\nEnd Sub";
+    private const string InlineForeignGlobalSource =
+        "Sub Main()\nConsole.WriteLine(mathlib::kAnswer)\nEnd Sub";
+
+    [Test]
+    public void CSharp_InlineForeignFreeFunctionCall_ThrowsCleanError()
+    {
+        var module = BuildModule(InlineForeignCallSource, runPreprocessor: false);
+        Assert.That(module.CppIncludes, Is.Empty, "sanity: no #CppInclude present");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new ImprovedCSharpCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("C#"));
+        Assert.That(ex.Message, Does.Contain("mathlib::freeAdd"));
+    }
+
+    [Test]
+    public void LLVM_InlineForeignFreeFunctionCall_ThrowsCleanError()
+    {
+        var module = BuildModule(InlineForeignCallSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("mathlib::freeAdd"));
+    }
+
+    [Test]
+    public void MSIL_InlineForeignFreeFunctionCall_ThrowsCleanError()
+    {
+        var module = BuildModule(InlineForeignCallSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("mathlib::freeAdd"));
+    }
+
+    [Test]
+    public void CSharp_InlineForeignGlobalRead_ThrowsCleanError()
+    {
+        var module = BuildModule(InlineForeignGlobalSource, runPreprocessor: false);
+        Assert.That(module.CppIncludes, Is.Empty, "sanity: no #CppInclude present");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new ImprovedCSharpCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("C#"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
+
+    [Test]
+    public void LLVM_InlineForeignGlobalRead_ThrowsCleanError()
+    {
+        var module = BuildModule(InlineForeignGlobalSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
+
+    [Test]
+    public void MSIL_InlineForeignGlobalRead_ThrowsCleanError()
+    {
+        var module = BuildModule(InlineForeignGlobalSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
 }
