@@ -61,6 +61,17 @@ namespace BasicLang.Compiler.IR
                     {
                         AddEdge(block, target);
                     }
+                    // Pattern cases (constant/range/comparison/Or/When from a Select Case)
+                    // carry their target block by reference just like the integral Cases. The
+                    // parser routes EVERY case value into PatternCases (Cases stays empty), so
+                    // WITHOUT these edges the case-body blocks are unreachable from entry and
+                    // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them — silently
+                    // dropping every Select Case branch (same failure class as the For Each/Try
+                    // structured edges below).
+                    foreach (var patternCase in switchInst.PatternCases)
+                    {
+                        AddEdge(block, patternCase.Target);
+                    }
                 }
                 // IRReturn has no successors
 

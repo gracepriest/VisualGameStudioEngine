@@ -193,20 +193,52 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     break;
 
                 case IRSwitch sw:
-                    // The C++ switch lowering (CppCodeGenerator.Visit(IRSwitch)) emits only
-                    // integral `case` labels + gotos and drops PATTERN cases entirely — it cannot
-                    // carry a '::'-qualified foreign C++ VALUE in a Select-Case expression, a Case
-                    // constant, a range/comparison, or a When guard. Left alone these silently
-                    // MISCOMPILE (the case is dropped, or SanitizeName strips the '::' to an
-                    // undefined identifier). Reject any foreign value in a switch position with a
-                    // clean capability diagnostic, honoring the honesty matrix on the C++ backend
-                    // too. (Non-foreign pattern Select Case is a separate pre-existing gap.)
+                    // Two independent C++ Select Case gaps, both rejected cleanly here (honesty
+                    // matrix). (1) A '::'-qualified foreign C++ VALUE in the Select-Case expression,
+                    // a Case constant, a range/comparison, or a When guard cannot be lowered
+                    // (SanitizeName would strip the '::' to an undefined identifier) — reject it.
                     foreach (var op in IROperandWalker.EnumerateOperands(sw))
                         if (IROperandWalker.ForeignName(op) is string foreignName)
                             diags.Add($"a '::'-qualified foreign C++ value ('{foreignName}') in a " +
                                       $"Select Case / Case / When position (in '{funcName}') is not " +
                                       "supported on the C++ backend; foreign case values and guards " +
                                       "cannot be lowered — use an If/ElseIf chain instead");
+                    // (2) The if/else-if goto lowering (CppCodeGenerator.Visit(IRSwitch)) handles
+                    // constant/range/comparison/Or/Nothing patterns (+ When guards), but NOT type
+                    // patterns (RTTI), tuple deconstruction, or variable bindings — reject those.
+                    foreach (var pc in sw.PatternCases)
+                        CheckSwitchPattern(pc, funcName, diags);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Reject the Select Case pattern kinds the C++ backend cannot lower. Constant, range,
+        /// comparison, Nothing and Or patterns (and When guards over them) lower fine; type,
+        /// tuple and binding patterns do not. Recurses into Or alternatives so a nested
+        /// unsupported alternative (e.g. <c>Case 1 Or Is String</c>) is caught too.
+        /// </summary>
+        private void CheckSwitchPattern(IRPatternCase pc, string funcName, List<string> diags)
+        {
+            switch (pc)
+            {
+                case IRTypePatternCase:
+                    diags.Add($"Select Case with a type pattern (Case Is <Type> / Case x As <Type>) " +
+                              $"(in '{funcName}') is not supported on the C++ backend; use constant, " +
+                              "range (a To b), comparison (Is > n), or Or patterns");
+                    break;
+                case IRTuplePatternCase:
+                    diags.Add($"Select Case with a tuple/deconstruction pattern (in '{funcName}') is not " +
+                              "supported on the C++ backend; use constant, range, comparison, or Or patterns");
+                    break;
+                case IRBindingPatternCase:
+                    diags.Add($"Select Case with a binding pattern (Case name When ...) (in '{funcName}') is " +
+                              "not supported on the C++ backend; use a comparison (Case Is > 0) or a When " +
+                              "guard over outer variables (Case value When <condition>)");
+                    break;
+                case IROrPatternCase or:
+                    foreach (var alt in or.Alternatives)
+                        CheckSwitchPattern(alt, funcName, diags);
                     break;
             }
         }

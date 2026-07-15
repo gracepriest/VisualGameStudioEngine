@@ -2440,20 +2440,109 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public override void Visit(IRSwitch switchInst)
         {
             var value = GetValueName(switchInst.Value);
-            
-            WriteLine($"switch ({value}) {{");
-            Indent();
-            
+
+            // C++'s native `switch` only accepts integral compile-time-constant labels, so it
+            // cannot express range/comparison/When/Or patterns or even a string constant. The
+            // BasicLang parser routes EVERY `Select Case` value into IRSwitch.PatternCases
+            // (Cases stays empty), so lower the whole switch to an if/else-if chain of gotos:
+            // one boolean test per case, in source order (first match wins), falling through to
+            // the default target. Type/tuple/binding patterns have no clean C++ lowering and are
+            // rejected up front by CppCapabilityChecker, so only value-comparison patterns reach
+            // here. (Legacy integral Cases are handled in the same ordered chain for robustness,
+            // though the parser never populates them today.)
             foreach (var (caseValue, target) in switchInst.Cases)
             {
-                var caseVal = GetValueName(caseValue);
-                WriteLine($"case {caseVal}: goto {LabelName(target.Name)};");
+                WriteLine($"if ({value} == {ValueText(caseValue)}) {{ goto {LabelName(target.Name)}; }}");
             }
-            
-            WriteLine($"default: goto {LabelName(switchInst.DefaultTarget.Name)};");
-            
-            Unindent();
-            WriteLine("}");
+
+            foreach (var patternCase in switchInst.PatternCases)
+            {
+                var cond = PatternCaseCondition(value, patternCase);
+                WriteLine($"if ({cond}) {{ goto {LabelName(patternCase.Target.Name)}; }}");
+            }
+
+            WriteLine($"goto {LabelName(switchInst.DefaultTarget.Name)};");
+        }
+
+        /// <summary>
+        /// Full boolean C++ condition that is true when the discriminant <paramref name="value"/>
+        /// matches <paramref name="pc"/> — the value/range/comparison test AND its optional When
+        /// guard. Type/tuple/binding patterns are rejected by CppCapabilityChecker and never reach
+        /// here.
+        /// </summary>
+        private string PatternCaseCondition(string value, IRPatternCase pc)
+        {
+            var match = PatternMatchCondition(value, pc);
+            if (pc.WhenGuard != null)
+                return $"({match}) && ({RenderInline(pc.WhenGuard)})";
+            return match;
+        }
+
+        /// <summary>The value/range/comparison test for a single pattern case (no When guard).</summary>
+        private string PatternMatchCondition(string value, IRPatternCase pc)
+        {
+            switch (pc)
+            {
+                case IRConstantPatternCase c:
+                    return $"{value} == {ValueText(c.Value)}";
+                case IRRangePatternCase r:
+                    return $"({value} >= {ValueText(r.LowerBound)} && {value} <= {ValueText(r.UpperBound)})";
+                case IRComparisonPatternCase cmp:
+                    return $"{value} {MapCasePatternOperator(cmp.Operator)} {ValueText(cmp.CompareValue)}";
+                case IRNothingPatternCase:
+                    return $"{value} == nullptr";
+                case IROrPatternCase or:
+                    if (or.Alternatives.Count == 0) return "false";
+                    return "(" + string.Join(" || ", or.Alternatives.Select(a => PatternMatchCondition(value, a))) + ")";
+                default:
+                    // Unreachable: CppCapabilityChecker rejects type/tuple/binding patterns before
+                    // emission. Fail loudly rather than silently drop if that guard is ever bypassed.
+                    throw new CppCapabilityException(new List<string>
+                    {
+                        $"Select Case pattern '{pc.GetType().Name}' has no C++ lowering"
+                    });
+            }
+        }
+
+        /// <summary>VB Case comparison operator ('=','&lt;&gt;','&gt;','&lt;','&gt;=','&lt;=') to its C++ form.</summary>
+        private static string MapCasePatternOperator(string op) => op switch
+        {
+            "=" => "==",
+            "<>" => "!=",
+            _ => op   // >, <, >=, <= are identical in C++
+        };
+
+        /// <summary>
+        /// Render a pattern VALUE (a constant, a range bound, a comparison operand). These are
+        /// evaluated as instructions BEFORE the switch (or are IRConstants), so reference them by
+        /// their value name / literal — never re-inline, which could duplicate a side-effecting
+        /// bound expression (e.g. `Case Foo() To Bar()`).
+        /// </summary>
+        private string ValueText(IRValue v) => v is IRConstant c ? EmitConstant(c) : GetValueName(v);
+
+        /// <summary>
+        /// Render an un-emitted expression tree (a suppressed When guard) as an inline C++
+        /// expression. The guard is built with IRBuilder._suppressEmit set, so its operand
+        /// instructions never entered a block; GetValueName alone would reference undeclared
+        /// temps. Recurse over the common guard shapes (binary/compare/unary over
+        /// constants/variables); fall back to GetValueName for leaves (variables, already-emitted
+        /// values, inline foreign calls).
+        /// </summary>
+        private string RenderInline(IRValue v)
+        {
+            switch (v)
+            {
+                case IRConstant c:
+                    return EmitConstant(c);
+                case IRBinaryOp b:
+                    return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
+                case IRCompare cmp:
+                    return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";
+                case IRUnaryOp u:
+                    return $"({MapUnaryOperator(u.Operation)}{RenderInline(u.Operand)})";
+                default:
+                    return GetValueName(v);
+            }
         }
         
         public override void Visit(IRPhi phi)
