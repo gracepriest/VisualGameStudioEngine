@@ -1,0 +1,91 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        xmlns:services="using:VisualGameStudio.Core.Abstractions.Services"
+        mc:Ignorable="d" d:DesignWidth="760" d:DesignHeight="560"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.NewProjectSelectView"
+        x:DataType="vm:NewProjectWizardViewModel"
+        Title="New project — select a project type"
+        Width="760" Height="580" MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True" ShowInTaskbar="False">
+
+  <Design.DataContext>
+    <vm:NewProjectWizardDesignViewModel/>
+  </Design.DataContext>
+
+  <Grid RowDefinitions="Auto,*,Auto">
+    <Border Grid.Row="0" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="20,16">
+      <StackPanel>
+        <TextBlock Text="Select a project type" FontSize="22" FontWeight="SemiBold"/>
+        <TextBlock Text="Choose a language, backend, and template to get started"
+                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+      </StackPanel>
+    </Border>
+
+    <Grid Grid.Row="1" ColumnDefinitions="300,*">
+      <!-- Left: filters -->
+      <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" BorderThickness="0,0,1,0">
+        <StackPanel Margin="16" Spacing="12">
+          <StackPanel>
+            <TextBlock Text="Language" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <ComboBox ItemsSource="{Binding Languages}"
+                      SelectedItem="{Binding SelectedLanguageOption}"
+                      HorizontalAlignment="Stretch"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Backend" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <ComboBox ItemsSource="{Binding Backends}"
+                      SelectedItem="{Binding SelectedBackend}"
+                      HorizontalAlignment="Stretch"/>
+            <TextBlock Text="{Binding SelectedBackend.SolutionType.Description}"
+                       TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                       Margin="0,6,0,0"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Platform" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <ComboBox ItemsSource="{Binding Platforms}"
+                      SelectedItem="{Binding SelectedPlatform}"
+                      HorizontalAlignment="Stretch"/>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="Project type" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <ComboBox ItemsSource="{Binding Categories}"
+                      SelectedItem="{Binding SelectedCategory}"
+                      HorizontalAlignment="Stretch"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- Right: search + template list -->
+      <Grid Grid.Column="1" RowDefinitions="Auto,*" Margin="16">
+        <TextBox Grid.Row="0" Watermark="Search templates..." Text="{Binding SearchText}" Margin="0,0,0,8"/>
+        <ListBox Grid.Row="1"
+                 ItemsSource="{Binding VisibleTemplates}"
+                 SelectedItem="{Binding SelectedTemplate}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="services:ProjectTemplate">
+              <StackPanel Margin="4">
+                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding ShortDescription}" FontSize="12"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                           TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Grid>
+    </Grid>
+
+    <Border Grid.Row="2" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="20,12">
+      <Grid ColumnDefinitions="*,Auto,Auto">
+        <Button Grid.Column="1" Content="Cancel" Command="{Binding CancelCommand}" MinWidth="80" Margin="0,0,8,0"/>
+        <Button Grid.Column="2" Content="Next" Command="{Binding GoNextCommand}"
+                IsEnabled="{Binding CanGoNext}" Classes="accent" MinWidth="80"/>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

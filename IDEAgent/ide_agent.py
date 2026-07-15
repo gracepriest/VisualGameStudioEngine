@@ -222,7 +222,7 @@ Focus on the project system in VisualGameStudio.ProjectSystem/:
 - IProjectTemplateService/ProjectTemplateService: project/item templates
 - IFileService/FileService: file I/O operations
 - SolutionExplorerViewModel: tree view of project files
-- CreateProjectViewModel, NewProjectViewModel: project creation dialogs
+- NewProjectWizardViewModel (NewProjectSelectView/NewProjectConfigureView): two-window New Project wizard; CreateProjectViewModel: legacy single-window dialog (preserved, unused)
 - BuildConfigurationDialogViewModel: Debug/Release configuration
 
 Project files: .blproj (XML format), .bas source files
@@ -604,7 +604,7 @@ Dialog ViewModels (Shell/ViewModels/Dialogs/) -- grouped by function:
     SettingsDialogViewModel, BuildConfigurationDialogViewModel
 
   Project:
-    CreateProjectDialogViewModel, NewProjectViewModel
+    NewProjectWizardViewModel, CreateProjectViewModel (legacy)
 
   Other:
     FindReplaceDialogViewModel, DiffViewerDialogViewModel,
