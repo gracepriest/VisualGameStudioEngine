@@ -35,7 +35,10 @@ Each would cost days, and each fails as **nothing happening** rather than an err
 
 ## Repo rules that will bite you
 
+- **⚠ THE COMPILER WILL NOT CATCH NULLABLE MISUSE.** `CS8604` ("possible null reference argument") is in `NoWarn` in **both** `VisualGameStudio.Shell/VisualGameStudio.Shell.csproj:13` and `VisualGameStudio.Core/VisualGameStudio.Core.csproj:10`. Passing a `string?` into a `string` parameter compiles **silently — not even a warning**. So `string?` annotations here are documentation, not enforcement. This matters most in Task 7 (~26 call sites): naming, tests, and review are the ONLY guards. (Found by Task 2's code review.)
+- **⚠ GREP CANNOT PROVE DEAD CODE IN THIS REPO.** Task 1 learned this the hard way: `ILspClientService.cs` — verified "100% dead" by 5 scouts and 2 adversarial reviewers — declared a live enum into the *same namespace* as a live file, so it bound implicitly with **no `using` directive and no textual reference to find**. Only the compiler knows. Tasks 5–7 move/delete more files in `Core/Abstractions/Services` — build, don't just grep.
 - **PowerShell is the shell.** Use Read/Edit/Write/Grep/Glob — a PreToolUse hook blocks `grep`/`cat`/`find`/`sed` via Bash.
+- **The full suite takes ~14-15 min and its output EXCEEDS the PowerShell tool's 30000-char truncation**, which silently eats the summary line and makes a normal run look like a crash. Redirect to a file and read the tail.
 - **NEVER round-trip repo files through `Get-Content`/`Set-Content`** — it corrupts these BOM-less UTF-8 files (has caused mojibake 3×). Use Edit/Write. For multi-line commit messages, write a file and `git commit -F`.
 - **After AXAML changes, `dotnet clean` before building** — stale cache causes crashes.
 - **Test BOTH entry points.** The IDE build delegates to the CLI engine; a fix verified through one can break the other.
@@ -470,7 +473,7 @@ public void Descriptor_LanguageId_ComesFromTheFile_NotAConstant()
 
 - [ ] **Step 2: Run — expect FAIL**
 
-- [ ] **Step 3: Implement.** `LanguageServerDescriptor` = `Id`, `DisplayName`, `Extensions`, launch inputs, `LanguageIdFor(path)` (delegating to `LanguageFileTypes.GetLanguageId`), `SettingsKey`. Static factories `BasicLang(compilerPath)` / `Clangd(clangdPath)` — **neither takes project-scoped state (D1)**. Extract `LanguageService.BuildStartInfo(descriptor, workspaceRoot)` as a **pure static**. Replace the hardcoded `languageId = "basiclang"` constant (**`:330`** — the plan originally said `:331`, which is `version = 1`; grep for the literal rather than trusting either) with `_descriptor.LanguageIdFor(path)`. `LanguageService` takes a descriptor in its ctor **with a BasicLang default** so `ServiceConfiguration.cs:28` and `SettingsConsumerContractTests.cs:77` keep compiling until Task 6.
+- [ ] **Step 3: Implement.** `LanguageServerDescriptor` = `Id`, `DisplayName`, `Extensions`, launch inputs, `LanguageIdFor(path)` (delegating to **`LanguageFileTypes.GetLspLanguageId`** — note: renamed from `GetLanguageId` during Task 2's review, because the unqualified name was the *inverted default*: it belonged to the narrow/nullable/dangerous function while the safe total one was qualified. Do NOT use `GetEditorLanguageId` here — that's the extension host's total map), `SettingsKey`. Static factories `BasicLang(compilerPath)` / `Clangd(clangdPath)` — **neither takes project-scoped state (D1)**. Extract `LanguageService.BuildStartInfo(descriptor, workspaceRoot)` as a **pure static**. Replace the hardcoded `languageId = "basiclang"` constant (**`:330`** — the plan originally said `:331`, which is `version = 1`; grep for the literal rather than trusting either) with `_descriptor.LanguageIdFor(path)`. `LanguageService` takes a descriptor in its ctor **with a BasicLang default** so `ServiceConfiguration.cs:28` and `SettingsConsumerContractTests.cs:77` keep compiling until Task 6.
 
 ⚠ **Preserve the hardening at `:154-159` (BOM-less `StandardInputEncoding`), `:165-177` (stderr drain), `:183-187` (Latin1 framing reader).** These are the 2026 CRITICAL fixes. Any new start path must inherit all three. The stderr drain is not optional for clangd.
 
@@ -938,7 +941,7 @@ git commit -m "test(cpp): clangd end-to-end IntelliSense in a mixed project"
 - [ ] `Grep: _languageService\.` **`--glob "*.cs"`** → zero hits outside the registry. (`CallHierarchyViewModel.cs` and `TypeHierarchyViewModel.cs` each hold 2 — they're in scope via Task 7 Step 4.)
 - [ ] `Grep: LspClientManager|ILspClient` **`--glob "*.cs"`** → zero hits. ⚠ Do NOT grep repo-wide: this plan document, the Phase 1/2 plans, `ide-parity-scorecard.md`, and `IDEAgent/ide_agent.py` all mention them in prose and will always match.
 - [ ] `Grep: offset-encoding` **`--glob "*.cs"`** → zero hits.
-- [ ] `Grep: HasExtensionProviders|NotifyDocumentOpenedAsync` → every languageId argument comes from the **total** `GetEditorLanguageId`, never the nullable `GetLanguageId`. (Task 2's ⛔ — a null here throws at runtime and the compiler will not catch it.)
+- [ ] `Grep: HasExtensionProviders|NotifyDocumentOpenedAsync` → every languageId argument comes from the **total** `GetEditorLanguageId`, never the nullable `GetLspLanguageId`. (Task 2's ⛔ — a null here throws `ArgumentNullException` at runtime, and `CS8604` is in `NoWarn` so the compiler emits **no warning at all**.)
 - [ ] Both entry points exercised (CLI + IDE BuildService).
 - [ ] **User IDE smoke** (Phases 1 and 2 both caught real defects only here — do not skip):
   1. Open a mixed project → `.cpp` gets completion + hover + as-you-type squigglies
