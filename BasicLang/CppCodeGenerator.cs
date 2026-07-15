@@ -1320,7 +1320,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // inline; recording it here suppresses the duplicate standalone
                     // statement, so the opaque call runs EXACTLY ONCE — never as both an
                     // inline expression AND a discarded `expr;` statement.
-                    foreach (var operand in EnumerateOperands(instruction))
+                    foreach (var operand in IROperandWalker.EnumerateOperands(instruction))
                     {
                         if (operand is IRInstanceMethodCall foreignCall
                             && foreignCall.Type?.Kind == TypeKind.Foreign)
@@ -1355,101 +1355,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             IRStore st when st.Address is IRVariable sv => sv.Name,
             _ => null
         };
-
-        /// <summary>
-        /// Enumerate the direct IRValue operands an instruction CONSUMES — the sites where a
-        /// foreign ::-qualified call value flows into another expression. Used to decide which
-        /// foreign calls are rendered inline (and so must not also emit a standalone
-        /// statement). Supersedes the old receiver-only ForeignCallReceiverOf scan by covering
-        /// argument, store, return, condition, cast, and arithmetic positions too.
-        ///
-        /// The switch is intentionally scoped to the IR node kinds THIS C++ backend emits;
-        /// LLVM-oriented / not-produced-here nodes (IRGetElementPtr, IRPhi, IRArrayAlloc,
-        /// IRTupleElement, ...) are omitted. A foreign call never appears as their operand.
-        /// </summary>
-        private static IEnumerable<IRValue> EnumerateOperands(IRInstruction instruction)
-        {
-            switch (instruction)
-            {
-                case IRInstanceMethodCall mc:
-                    if (mc.Object != null) yield return mc.Object;
-                    foreach (var a in mc.Arguments) yield return a;
-                    break;
-                case IRCall call:
-                    if (call.CalleeValue != null) yield return call.CalleeValue;
-                    foreach (var a in call.Arguments) yield return a;
-                    break;
-                case IRBaseMethodCall bc:
-                    foreach (var a in bc.Arguments) yield return a;
-                    break;
-                case IRNewObject no:
-                    foreach (var a in no.Arguments) yield return a;
-                    break;
-                case IRFieldAccess fa:
-                    if (fa.Object != null) yield return fa.Object;
-                    break;
-                case IRFieldStore fs:
-                    if (fs.Object != null) yield return fs.Object;
-                    if (fs.Value != null) yield return fs.Value;
-                    break;
-                case IRStore st:
-                    if (st.Value != null) yield return st.Value;
-                    if (st.Address != null) yield return st.Address;
-                    break;
-                case IRAssignment asn:
-                    if (asn.Value != null) yield return asn.Value;
-                    break;
-                case IRReturn ret:
-                    if (ret.Value != null) yield return ret.Value;
-                    break;
-                case IRBinaryOp bin:
-                    if (bin.Left != null) yield return bin.Left;
-                    if (bin.Right != null) yield return bin.Right;
-                    break;
-                case IRCompare cmp:
-                    if (cmp.Left != null) yield return cmp.Left;
-                    if (cmp.Right != null) yield return cmp.Right;
-                    break;
-                case IRUnaryOp un:
-                    if (un.Operand != null) yield return un.Operand;
-                    break;
-                case IRCast cast:
-                    if (cast.Value != null) yield return cast.Value;
-                    break;
-                case IRConditionalBranch cbr:
-                    if (cbr.Condition != null) yield return cbr.Condition;
-                    break;
-                case IRSwitch sw:
-                    if (sw.Value != null) yield return sw.Value;
-                    break;
-                case IRIndexerAccess ia:
-                    if (ia.Collection != null) yield return ia.Collection;
-                    foreach (var i in ia.Indices) yield return i;
-                    break;
-                case IRIndexerStore ist:
-                    if (ist.Collection != null) yield return ist.Collection;
-                    foreach (var i in ist.Indices) yield return i;
-                    if (ist.Value != null) yield return ist.Value;
-                    break;
-                case IRArrayStore ast:
-                    if (ast.Array != null) yield return ast.Array;
-                    if (ast.Index != null) yield return ast.Index;
-                    if (ast.Value != null) yield return ast.Value;
-                    break;
-                case IRThrow th:
-                    if (th.Exception != null) yield return th.Exception;
-                    break;
-                case IRYield y:
-                    if (y.Value != null) yield return y.Value;
-                    break;
-                case IRAwait aw:
-                    if (aw.Expression != null) yield return aw.Expression;
-                    break;
-                case IRForEach fe:
-                    if (fe.Collection != null) yield return fe.Collection;
-                    break;
-            }
-        }
 
         private static bool IsDateTimeNowAccess(IRFieldAccess fieldAccess) =>
             fieldAccess.Object is IRVariable staticReceiver &&

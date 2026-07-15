@@ -496,6 +496,12 @@ public class ForeignFeatureGuardTests
     // binds an inferred Foreign-typed local, so the shared ModuleTypeWalker declared-
     // type walk rejects it on the non-C++ backends (proved WITHOUT #CppInclude, so the
     // ONLY thing that can trip the guard is the foreign local's type, not the header).
+    //
+    // NOTE: these BOUND-form tests (`Dim x = ns::f()` / `Dim x = ns::v`) are caught by the
+    // pre-existing DECLARED-type walk (ModuleTypeWalker.AllTypes sees the inferred Foreign
+    // local), NOT by RejectInlineForeign. The INLINE-form tests further below
+    // (`Console.WriteLine(ns::...)`, `Case ns::const`, `When ns::call(...)`) are the ones that
+    // exercise the operand scan — keep both so a regression in either guard path is caught.
     // ------------------------------------------------------------------
 
     [Test]
@@ -660,5 +666,120 @@ public class ForeignFeatureGuardTests
             () => new MSILCodeGenerator().Generate(module));
         Assert.That(ex!.Message, Does.Contain("MSIL"));
         Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
+
+    // ------------------------------------------------------------------
+    // HONESTY GAP (Phase 2 switch/case/when): a foreign ::-qualified value used in a
+    // Select-Case value, a `Case ns::const`, or a `When ns::call(...)` guard is ANOTHER inline
+    // operand position that never binds to a declared local. The declared-type walk misses it,
+    // and the old operand scan yielded only IRSwitch.Value (not Cases[]/PatternCases[]). Left
+    // alone the managed backends emitted broken code (`case mathlib:` / `when mathlibisValid(y)`).
+    // The shared IROperandWalker now surfaces case + pattern operands (When guard, range,
+    // comparison, constant, recursing Or/Tuple) so the guard rejects them cleanly. Proved
+    // WITHOUT #CppInclude (the foreign switch construct itself is what trips the guard).
+    // ------------------------------------------------------------------
+
+    private const string CaseForeignConstSource =
+        "Sub Main()\nDim y As Integer = 42\nSelect Case y\nCase mathlib::kAnswer\nConsole.WriteLine(\"m\")\nEnd Select\nEnd Sub";
+    private const string WhenForeignGuardSource =
+        "Sub Main()\nDim y As Integer = 5\nSelect Case y\nCase Is > 0 When mathlib::isValid(y)\nConsole.WriteLine(\"v\")\nEnd Select\nEnd Sub";
+
+    [Test]
+    public void CSharp_CaseForeignConstant_ThrowsCleanError()
+    {
+        var module = BuildModule(CaseForeignConstSource, runPreprocessor: false);
+        Assert.That(module.CppIncludes, Is.Empty, "sanity: no #CppInclude present");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new ImprovedCSharpCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("C#"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
+
+    [Test]
+    public void LLVM_CaseForeignConstant_ThrowsCleanError()
+    {
+        var module = BuildModule(CaseForeignConstSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
+
+    [Test]
+    public void MSIL_CaseForeignConstant_ThrowsCleanError()
+    {
+        var module = BuildModule(CaseForeignConstSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("mathlib::kAnswer"));
+    }
+
+    [Test]
+    public void CSharp_WhenForeignGuard_ThrowsCleanError()
+    {
+        var module = BuildModule(WhenForeignGuardSource, runPreprocessor: false);
+        Assert.That(module.CppIncludes, Is.Empty, "sanity: no #CppInclude present");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new ImprovedCSharpCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("C#"));
+        Assert.That(ex.Message, Does.Contain("mathlib::isValid"));
+    }
+
+    [Test]
+    public void LLVM_WhenForeignGuard_ThrowsCleanError()
+    {
+        var module = BuildModule(WhenForeignGuardSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new LLVMCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("LLVM"));
+        Assert.That(ex.Message, Does.Contain("mathlib::isValid"));
+    }
+
+    [Test]
+    public void MSIL_WhenForeignGuard_ThrowsCleanError()
+    {
+        var module = BuildModule(WhenForeignGuardSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("MSIL"));
+        Assert.That(ex.Message, Does.Contain("mathlib::isValid"));
+    }
+
+    // ------------------------------------------------------------------
+    // C++ side of the switch/case/when gap: the C++ switch lowering drops PATTERN cases and
+    // cannot carry a foreign case value / guard (verified: even a plain `Case 42` is dropped —
+    // a separate pre-existing gap). Rather than SILENTLY miscompile a foreign construct, the C++
+    // backend rejects foreign values in switch positions with a clean CppCapabilityException.
+    // This keeps the honesty matrix intact on the NATIVE backend too (no silent miscompile
+    // anywhere). Foreign free-calls / globals OUTSIDE a switch still compile+run on C++
+    // (covered by CppPassthroughTests) — only the switch positions are rejected.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Cpp_CaseForeignConstant_RejectedWithCleanCapabilityError()
+    {
+        var module = BuildModule(CaseForeignConstSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false }).Generate(module));
+        Assert.That(string.Join("; ", ex!.Diagnostics), Does.Contain("mathlib::kAnswer"));
+        Assert.That(string.Join("; ", ex.Diagnostics), Does.Contain("Select Case"));
+    }
+
+    [Test]
+    public void Cpp_WhenForeignGuard_RejectedWithCleanCapabilityError()
+    {
+        var module = BuildModule(WhenForeignGuardSource, runPreprocessor: false);
+
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false }).Generate(module));
+        Assert.That(string.Join("; ", ex!.Diagnostics), Does.Contain("mathlib::isValid"));
     }
 }

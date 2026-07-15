@@ -191,6 +191,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                                   "iterate .Keys or .Values instead");
                     }
                     break;
+
+                case IRSwitch sw:
+                    // The C++ switch lowering (CppCodeGenerator.Visit(IRSwitch)) emits only
+                    // integral `case` labels + gotos and drops PATTERN cases entirely — it cannot
+                    // carry a '::'-qualified foreign C++ VALUE in a Select-Case expression, a Case
+                    // constant, a range/comparison, or a When guard. Left alone these silently
+                    // MISCOMPILE (the case is dropped, or SanitizeName strips the '::' to an
+                    // undefined identifier). Reject any foreign value in a switch position with a
+                    // clean capability diagnostic, honoring the honesty matrix on the C++ backend
+                    // too. (Non-foreign pattern Select Case is a separate pre-existing gap.)
+                    foreach (var op in IROperandWalker.EnumerateOperands(sw))
+                        if (IROperandWalker.ForeignName(op) is string foreignName)
+                            diags.Add($"a '::'-qualified foreign C++ value ('{foreignName}') in a " +
+                                      $"Select Case / Case / When position (in '{funcName}') is not " +
+                                      "supported on the C++ backend; foreign case values and guards " +
+                                      "cannot be lowered — use an If/ElseIf chain instead");
+                    break;
             }
         }
 

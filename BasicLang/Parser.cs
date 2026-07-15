@@ -3053,6 +3053,16 @@ namespace BasicLang.Compiler
                 var t = Previous();
                 return new LiteralExpressionNode(t.Line, t.Column) { Value = null, LiteralType = TokenType.Nothing };
             }
+            // ::-qualified foreign C++ name as a simple Case value (Case ns::const, Case ::kMax).
+            // Reuse the same foreign-name stitcher as full expression parsing so a foreign
+            // constant in a Case value is captured VERBATIM (and honesty-guarded), not truncated
+            // to its head identifier ('mathlib') with the '::' segment dropped. Must precede the
+            // plain-identifier branch so `id ::` is captured whole.
+            if (Check(TokenType.ScopeResolution) ||
+                (Check(TokenType.Identifier) && PeekNext().Type == TokenType.ScopeResolution))
+            {
+                return ParseForeignQualifiedNameExpression();
+            }
             if (Check(TokenType.Identifier))
             {
                 var t = Advance();
