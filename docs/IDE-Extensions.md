@@ -157,12 +157,18 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
 
 ### LSP Client
 
-Generic Language Server Protocol client for connecting to any LSP server.
+BasicLang is the only wired language server. `LanguageService` speaks LSP to
+`BasicLang.exe --lsp` over stdio and is registered as a singleton in
+`VisualGameStudio.Shell/Configuration/ServiceConfiguration.cs:28`. There is **no**
+generic "connect to any LSP server" client — routing a second server (clangd, for
+C/C++) is Phase 3a work, in progress.
+
+Resolve `ILanguageService` from DI; do not construct a client directly.
 
 ```csharp
-var client = new LspClient();
-await client.StartAsync("path/to/language-server.exe", "--stdio");
-var completions = await client.RequestCompletionAsync(uri, position);
+var language = services.GetRequiredService<ILanguageService>();
+IReadOnlyList<CompletionItem> completions =
+    await language.GetCompletionsAsync(uri, line, column);
 ```
 
 ### DAP Client
