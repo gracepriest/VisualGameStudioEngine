@@ -8,25 +8,15 @@ namespace VisualGameStudio.Core.Utilities;
 /// </summary>
 public static class BasicLangFileTypes
 {
-    private static readonly string[] SourceExtensions =
-    {
-        ".bas", ".bl", ".mod", ".cls", ".class"
-    };
-
     /// <summary>
     /// Returns true when the given path is a BasicLang source file that should
     /// be synced with (and routed to) the BasicLang language server.
     /// </summary>
+    /// <remarks>
+    /// The extension list lives in <see cref="LanguageFileTypes"/> — the single source
+    /// of truth shared with the C++/clangd routing and the extension-host map. This
+    /// method keeps its own name and signature because it has many callers.
+    /// </remarks>
     public static bool IsBasicLangSourceFile(string? path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-
-        foreach (var extension in SourceExtensions)
-        {
-            if (path.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
-    }
+        => LanguageFileTypes.IsBasicLangSourceFile(path);
 }

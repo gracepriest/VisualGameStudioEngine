@@ -1913,7 +1913,7 @@ public partial class MainWindowViewModel : ViewModelBase
             // Notify extension host about opened document (for all file types)
             if (_extensionService.IsExtensionHostRunning)
             {
-                var langId = GetLanguageIdForFile(filePath);
+                var langId = LanguageFileTypes.GetEditorLanguageId(filePath);
                 _ = _extensionService.NotifyDocumentOpenedAsync(filePath, langId, 1, content);
             }
 
@@ -2060,7 +2060,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
                     // Try extension host providers if built-in LSP returned nothing
                     if (hover == null &&
-                        _extensionService.HasExtensionProviders(GetLanguageIdForFile(document.FilePath)))
+                        _extensionService.HasExtensionProviders(LanguageFileTypes.GetEditorLanguageId(document.FilePath)))
                     {
                         var extResult = await _extensionService.RequestHoverAsync(
                             document.FilePath, e.Line, e.Column);
@@ -2183,7 +2183,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     // Try extension host providers if LSP returned nothing
                     if ((completions == null || completions.Count == 0) &&
                         document.FilePath != null &&
-                        _extensionService.HasExtensionProviders(GetLanguageIdForFile(document.FilePath)))
+                        _extensionService.HasExtensionProviders(LanguageFileTypes.GetEditorLanguageId(document.FilePath)))
                     {
                         var extResult = await _extensionService.RequestCompletionAsync(
                             document.FilePath, e.Line, e.Column);
@@ -7804,52 +7804,6 @@ $"""
                 await _fileService.WriteFileAsync(filePath, string.Join("\n", lines));
             }
         }
-    }
-
-    /// <summary>
-    /// Gets fallback completions when LSP is not connected
-    /// </summary>
-    /// <summary>
-    /// Gets a language ID from a file path based on extension.
-    /// </summary>
-    private static string GetLanguageIdForFile(string filePath)
-    {
-        var ext = System.IO.Path.GetExtension(filePath)?.ToLowerInvariant();
-        return ext switch
-        {
-            ".html" or ".htm" => "html",
-            ".css" => "css",
-            ".scss" => "scss",
-            ".less" => "less",
-            ".js" => "javascript",
-            ".jsx" => "javascriptreact",
-            ".ts" => "typescript",
-            ".tsx" => "typescriptreact",
-            ".json" => "json",
-            ".jsonc" => "jsonc",
-            ".md" or ".markdown" => "markdown",
-            ".xml" => "xml",
-            ".yaml" or ".yml" => "yaml",
-            ".py" => "python",
-            ".rs" => "rust",
-            ".go" => "go",
-            ".cs" => "csharp",
-            ".java" => "java",
-            ".cpp" or ".cc" or ".cxx" => "cpp",
-            ".c" => "c",
-            ".h" or ".hpp" => "cpp",
-            ".lua" => "lua",
-            ".bas" or ".bl" => "basiclang",
-            ".blproj" => "basiclang",
-            ".sql" => "sql",
-            ".sh" or ".bash" => "shellscript",
-            ".ps1" => "powershell",
-            ".php" => "php",
-            ".rb" => "ruby",
-            ".swift" => "swift",
-            ".kt" or ".kts" => "kotlin",
-            _ => ext?.TrimStart('.') ?? "plaintext",
-        };
     }
 
     /// <summary>
