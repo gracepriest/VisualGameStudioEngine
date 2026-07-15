@@ -19,18 +19,19 @@ public class LanguageFileTypesTests
     [TestCase("a.hxx", "cpp")]           // regression: was omitted
     [TestCase("a.inl", "cpp")]           // regression: only HighlightingLoader knew this one
     [TestCase("A.CPP", "cpp")]           // case-insensitive
-    public void GetLanguageId_MapsKnownExtensions(string path, string expected)
-        => Assert.That(LanguageFileTypes.GetLanguageId(path), Is.EqualTo(expected));
+    public void GetLspLanguageId_MapsKnownExtensions(string path, string expected)
+        => Assert.That(LanguageFileTypes.GetLspLanguageId(path), Is.EqualTo(expected));
 
     // `.h` is C++ here BY DECISION (spec §4 assigns .h to clangd). Pin it so nobody "fixes" it to "c".
     [Test]
-    public void GetLanguageId_DotH_IsCpp_ByDecision()
-        => Assert.That(LanguageFileTypes.GetLanguageId("a.h"), Is.EqualTo("cpp"));
+    public void GetLspLanguageId_DotH_IsCpp_ByDecision()
+        => Assert.That(LanguageFileTypes.GetLspLanguageId("a.h"), Is.EqualTo("cpp"));
 
     // `.c` is intentionally NOT in the LSP map for Phase 3a — keep it minimal and honest.
+    // (HighlightingLoader.CppExtensions DOES list .c, for colouring only. Deliberate.)
     [Test]
-    public void GetLanguageId_DotC_IsNotRouted_InPhase3a()
-        => Assert.That(LanguageFileTypes.GetLanguageId("a.c"), Is.Null);
+    public void GetLspLanguageId_DotC_IsNotRouted_InPhase3a()
+        => Assert.That(LanguageFileTypes.GetLspLanguageId("a.c"), Is.Null);
 
     // The LSP map is nullable ON PURPOSE: null means "no language server owns this file".
     [TestCase("a.txt")]
@@ -38,8 +39,8 @@ public class LanguageFileTypesTests
     [TestCase("noextension")]
     [TestCase("")]
     [TestCase(null)]
-    public void GetLanguageId_UnknownOrEmpty_ReturnsNull(string? path)
-        => Assert.That(LanguageFileTypes.GetLanguageId(path), Is.Null);
+    public void GetLspLanguageId_UnknownOrEmpty_ReturnsNull(string? path)
+        => Assert.That(LanguageFileTypes.GetLspLanguageId(path), Is.Null);
 
     // ---- The EXTENSION-HOST map is a DIFFERENT, TOTAL function. ----
 
@@ -76,11 +77,15 @@ public class LanguageFileTypesTests
         => Assert.That(LanguageFileTypes.GetEditorLanguageId(path), Is.EqualTo("cpp"));
 
     // Unchanged verbatim behavior from the original ~30-language map: the editor map
-    // still distinguishes .c as "c", and still knows .blproj.
+    // still distinguishes .c as "c", and still knows .blproj. The last two pin the exact
+    // fallback contract: an unknown extension yields the BARE extension, and a path with
+    // no extension yields "" (NOT "plaintext" — only a null path yields that).
     [TestCase("a.c", "c")]
     [TestCase("a.blproj", "basiclang")]
     [TestCase("a.unknownext", "unknownext")]
-    public void GetEditorLanguageId_PreservesOriginalBehavior(string path, string expected)
+    [TestCase("noextension", "")]
+    [TestCase(null, "plaintext")]
+    public void GetEditorLanguageId_PreservesOriginalBehavior(string? path, string expected)
         => Assert.That(LanguageFileTypes.GetEditorLanguageId(path), Is.EqualTo(expected));
 
     // Where both maps DO agree, they must not drift apart again.
@@ -89,17 +94,17 @@ public class LanguageFileTypesTests
     [TestCase("a.h")]
     public void TheTwoMaps_AgreeOnLanguagesTheyBothKnow(string path)
         => Assert.That(LanguageFileTypes.GetEditorLanguageId(path),
-                       Is.EqualTo(LanguageFileTypes.GetLanguageId(path)));
+                       Is.EqualTo(LanguageFileTypes.GetLspLanguageId(path)));
 
     // Every extension the LSP map routes must get the same id from the editor map.
     [Test]
     public void TheTwoMaps_NeverDisagreeOnAnyRoutedExtension()
     {
-        foreach (var ext in LanguageFileTypes.AllKnownExtensions)
+        foreach (var ext in LanguageFileTypes.LspRoutedExtensions)
         {
             var path = "f" + ext;
             Assert.That(LanguageFileTypes.GetEditorLanguageId(path),
-                Is.EqualTo(LanguageFileTypes.GetLanguageId(path)),
+                Is.EqualTo(LanguageFileTypes.GetLspLanguageId(path)),
                 $"maps disagree on {ext}");
         }
     }
@@ -107,7 +112,7 @@ public class LanguageFileTypesTests
     [Test]
     public void IsCppSourceFile_And_IsBasicLangSourceFile_AreDisjoint()
     {
-        foreach (var ext in LanguageFileTypes.AllKnownExtensions)
+        foreach (var ext in LanguageFileTypes.LspRoutedExtensions)
         {
             var p = "f" + ext;
             Assert.That(LanguageFileTypes.IsCppSourceFile(p) && BasicLangFileTypes.IsBasicLangSourceFile(p),
@@ -115,14 +120,25 @@ public class LanguageFileTypesTests
         }
     }
 
-    // AllKnownExtensions is the disjointness/agreement surface — it must actually
+    // LspRoutedExtensions is the disjointness/agreement surface — it must actually
     // cover both languages, or the loops above pass vacuously.
     [Test]
-    public void AllKnownExtensions_CoversBothLanguages()
+    public void LspRoutedExtensions_CoversBothLanguages()
     {
-        Assert.That(LanguageFileTypes.AllKnownExtensions, Does.Contain(".bas"));
-        Assert.That(LanguageFileTypes.AllKnownExtensions, Does.Contain(".cpp"));
-        Assert.That(LanguageFileTypes.AllKnownExtensions, Is.All.StartWith("."));
+        Assert.That(LanguageFileTypes.LspRoutedExtensions, Does.Contain(".bas"));
+        Assert.That(LanguageFileTypes.LspRoutedExtensions, Does.Contain(".cpp"));
+        Assert.That(LanguageFileTypes.LspRoutedExtensions, Is.All.StartWith("."));
+    }
+
+    // It is the LSP-ROUTED set, not "everything the class knows" — the editor map knows
+    // many more. Pin the boundary so the name stays honest.
+    [Test]
+    public void LspRoutedExtensions_IsTheRoutedSetOnly_NotTheEditorMap()
+    {
+        Assert.That(LanguageFileTypes.LspRoutedExtensions, Does.Not.Contain(".py"));
+        Assert.That(LanguageFileTypes.LspRoutedExtensions, Does.Not.Contain(".c"));
+        Assert.That(LanguageFileTypes.LspRoutedExtensions,
+            Is.All.Matches<string>(e => LanguageFileTypes.GetLspLanguageId("f" + e) != null));
     }
 
     [TestCase("a.cpp", true)]

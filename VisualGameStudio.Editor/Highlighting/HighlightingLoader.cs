@@ -18,10 +18,19 @@ public static class HighlightingLoader
     private static IHighlightingDefinition? _cppLightDefinition;
 
     /// <summary>
-    /// Authoritative C++ extension list for HighlightingManager registration.
-    /// The <c>extensions</c> attribute inside the .xshd files is inert metadata —
-    /// only this array drives GetDefinitionByExtension lookups.
+    /// Authoritative C++ extension list <b>for syntax highlighting</b> (HighlightingManager
+    /// registration). The <c>extensions</c> attribute inside the .xshd files is inert
+    /// metadata — only this array drives GetDefinitionByExtension lookups.
     /// </summary>
+    /// <remarks>
+    /// This is NOT the LSP routing list, and the two are deliberately not merged.
+    /// <c>LanguageFileTypes.CppExtensions</c> (VisualGameStudio.Core) decides which files
+    /// go to clangd; this array decides which files get C++ colouring.
+    /// <b>The difference is intentional:</b> this list includes <c>.c</c> so C files are
+    /// highlighted as C++, while the routing list omits <c>.c</c> because C is not routed
+    /// to clangd in Phase 3a. Dropping <c>.c</c> here to "match" would silently break C
+    /// syntax highlighting.
+    /// </remarks>
     private static readonly string[] CppExtensions =
         { ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx", ".hh", ".hxx", ".inl" };
 

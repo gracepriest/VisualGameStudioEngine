@@ -7,7 +7,7 @@ namespace VisualGameStudio.Core.Utilities;
 ///
 /// <list type="bullet">
 /// <item>
-///   <see cref="GetLanguageId"/> — <b>LSP routing</b>. Answers "which language server
+///   <see cref="GetLspLanguageId"/> — <b>LSP routing</b>. Answers "which language server
 ///   owns this file?". Knows basiclang and cpp only, and returns <c>null</c> for
 ///   everything else, because null means "no server owns this".
 /// </item>
@@ -17,11 +17,30 @@ namespace VisualGameStudio.Core.Utilities;
 ///   never returns null, falling back to the bare extension and then "plaintext".
 ///   <c>ExtensionService.HasExtensionProviders</c> does <c>ContainsKey(languageId)</c>,
 ///   which throws <see cref="System.ArgumentNullException"/> on null — so extension-host
-///   call sites must use this map, never the nullable one.
+///   call sites must use this map, never the LSP one.
 /// </item>
 /// </list>
 ///
-/// Where both maps know a language they must agree; the tests pin that.
+/// <para>
+/// <b>The type system does NOT enforce that split, so do not rely on it.</b> CS8604
+/// ("possible null reference argument") is in <c>NoWarn</c> for both this project
+/// (<c>VisualGameStudio.Core.csproj</c>) and <c>VisualGameStudio.Shell.csproj</c>, so
+/// passing the nullable <see cref="GetLspLanguageId"/> result into a non-nullable
+/// <c>string</c> parameter compiles clean — not even a warning someone might catch in
+/// review. The <c>string?</c> annotation here is documentation, not enforcement; naming
+/// and review are the only guards. That is why the narrow, dangerous map is named
+/// <c>GetLspLanguageId</c> rather than the tempting, generic <c>GetLanguageId</c> —
+/// there should be no "default" name for a maintainer to fall into.
+/// </para>
+///
+/// <para>
+/// Related list, deliberately NOT merged: <c>HighlightingLoader.CppExtensions</c>
+/// (VisualGameStudio.Editor) drives syntax highlighting and additionally includes
+/// <c>.c</c>, because C files should be highlighted as C++. This map omits <c>.c</c>
+/// because C is not routed to clangd in Phase 3a. Both are correct — keep them separate.
+/// </para>
+///
+/// Where both maps here know a language they must agree; the tests pin that.
 /// </summary>
 public static class LanguageFileTypes
 {
@@ -37,7 +56,9 @@ public static class LanguageFileTypes
     /// <summary>
     /// Extensions routed to the C++ language server (clangd).
     /// <c>.h</c> is treated as C++ by decision — clangd handles it.
-    /// <c>.c</c> is intentionally absent: C is not routed in Phase 3a.
+    /// <c>.c</c> is intentionally absent: C is not routed in Phase 3a. Note that
+    /// <c>HighlightingLoader.CppExtensions</c> DOES list <c>.c</c>; that divergence is
+    /// deliberate and must not be "fixed" — see the remarks on this class.
     /// </summary>
     private static readonly string[] CppExtensions =
     {
@@ -45,16 +66,19 @@ public static class LanguageFileTypes
     };
 
     /// <summary>
-    /// Every extension that <see cref="GetLanguageId"/> routes, across all languages.
+    /// Every extension that <see cref="GetLspLanguageId"/> routes, across all languages.
+    /// This is the LSP-routed set only — <see cref="GetEditorLanguageId"/> knows many
+    /// more extensions that never appear here.
     /// </summary>
-    public static IReadOnlyList<string> AllKnownExtensions { get; } =
+    public static IReadOnlyList<string> LspRoutedExtensions { get; } =
         BasicLangExtensions.Concat(CppExtensions).ToArray();
 
     /// <summary>
     /// LSP routing: returns the language ID of the server that owns this file, or
     /// <c>null</c> when no language server does. Callers are expected to handle null.
+    /// <b>Never pass this to the extension host</b> — see the remarks on this class.
     /// </summary>
-    public static string? GetLanguageId(string? path)
+    public static string? GetLspLanguageId(string? path)
     {
         var ext = GetExtension(path);
         if (ext is null) return null;
@@ -68,19 +92,19 @@ public static class LanguageFileTypes
     /// Returns true when the path is a C++ source or header file routed to clangd.
     /// </summary>
     public static bool IsCppSourceFile(string? path)
-        => GetLanguageId(path) == CppId;
+        => GetLspLanguageId(path) == CppId;
 
     /// <summary>
     /// Returns true when the path is a BasicLang source file routed to the BasicLang
     /// language server. <see cref="BasicLangFileTypes.IsBasicLangSourceFile"/> delegates here.
     /// </summary>
     public static bool IsBasicLangSourceFile(string? path)
-        => GetLanguageId(path) == BasicLangId;
+        => GetLspLanguageId(path) == BasicLangId;
 
     /// <summary>
     /// Extension host: the ~30-language editor map. <b>Total — never returns null.</b>
-    /// Unknown extensions fall back to the bare extension, and a path with no extension
-    /// at all falls back to "plaintext".
+    /// Unknown extensions fall back to the bare extension (the empty string when the path
+    /// has no extension at all); only a null path yields "plaintext".
     /// </summary>
     public static string GetEditorLanguageId(string? path)
     {
