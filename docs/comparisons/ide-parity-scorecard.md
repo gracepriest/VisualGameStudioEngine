@@ -103,7 +103,7 @@
 | Folding ranges | Yes | Yes | DONE | `FoldingRangeHandler.cs` |
 | Execute command | Yes | Yes | DONE | `ExecuteCommandHandler.cs` |
 | Diagnostic tags | Yes | Yes | DONE | `DiagnosticsService.cs` |
-| Multi-language LSP | Yes | Yes | DONE | `LspClientManager.cs` supports 12 languages |
+| Multi-language LSP | Yes | No | GAP | `LanguageService.cs` is hard-wired to BasicLang only; clangd routing for C/C++ is Phase 3a, in progress |
 | TextMate grammars | Yes | Yes | DONE | `TextMateService.cs` for non-BasicLang files |
 | Inline values (debug) | Yes | Yes | DONE | `InlineDebugValueRenderer.cs` |
 | Copilot / AI assist | Yes | No | GAP | No AI completion integration |

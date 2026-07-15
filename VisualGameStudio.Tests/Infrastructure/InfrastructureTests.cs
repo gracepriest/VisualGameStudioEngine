@@ -9,19 +9,6 @@ namespace VisualGameStudio.Tests.Infrastructure;
 public class InfrastructureTests
 {
     [Test]
-    public void LspTypes_ShouldBeAccessible()
-    {
-        // Verify LSP types can be instantiated
-        var position = new VisualGameStudio.Core.LSP.Position { Line = 0, Character = 0 };
-        var range = new VisualGameStudio.Core.LSP.LspRange { Start = position, End = position };
-        var location = new VisualGameStudio.Core.LSP.Location { Uri = "test", Range = range };
-
-        Assert.That(position.Line, Is.EqualTo(0));
-        Assert.That(range.Start, Is.Not.Null);
-        Assert.That(location.Uri, Is.EqualTo("test"));
-    }
-
-    [Test]
     public void DapTypes_ShouldBeAccessible()
     {
         // Verify DAP types can be instantiated

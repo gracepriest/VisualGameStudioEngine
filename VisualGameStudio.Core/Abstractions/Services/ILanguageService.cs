@@ -226,6 +226,22 @@ public class CompletionItem
     public bool Preselect { get; set; }
 }
 
+/// <summary>
+/// How a completion item's insert text should be interpreted on commit.
+/// </summary>
+/// <remarks>
+/// Relocated here in Phase 3a when the dead generic LSP client stack was deleted.
+/// That stack declared this enum into this same namespace, so the live
+/// <see cref="CompletionItem"/> above resolved it implicitly with no using
+/// directive — it was the one live type among the ~40 that file declared.
+/// It now lives next to its only consumer. See git history for the origin.
+/// </remarks>
+public enum InsertTextFormat
+{
+    PlainText = 1,
+    Snippet = 2
+}
+
 public enum CompletionItemKind
 {
     Text = 1,

@@ -55,7 +55,7 @@ code editor and project system for the BasicLang programming language.
 Service interfaces and models. NO implementations live here.
 - 29 service interfaces in Abstractions/Services/:
   ILanguageService, IProjectService, IBuildService, IDebugService, IFileService,
-  IRefactoringService, IFindReplaceService, ILspClientService, ISettingsService,
+  IRefactoringService, IFindReplaceService, ISettingsService,
   IBookmarkService, IDialogService, IOutputService, ISnippetService,
   INavigationService, ICodeMetricsService, ICodeFormattingService,
   ISymbolSearchService, ITerminalService, ICodeAnalysisService, ITaskListService,
@@ -68,10 +68,11 @@ Service interfaces and models. NO implementations live here.
 
 ### Layer 2: ProjectSystem (VisualGameStudio.ProjectSystem)
 Concrete service implementations. 29 services in Services/:
-- LanguageService: LSP client connecting to BasicLang.exe --lsp via stdin/stdout
+- LanguageService: LSP client connecting to BasicLang.exe --lsp via stdin/stdout.
+  This is the ONLY LSP client in the app. There is no generic multi-language LSP
+  infrastructure; clangd routing for C/C++ is Phase 3a work, in progress.
 - DebugService: DAP client connecting to BasicLang.exe debug via stdin/stdout JSON
 - BuildService: Invokes BasicLang.exe build on .blproj files
-- LspClientService: Generic multi-language LSP client infrastructure (12 languages)
 - All other service implementations (FileService, GitService, etc.)
 
 ### Layer 3: Editor (VisualGameStudio.Editor)
@@ -454,7 +455,6 @@ IDebugService                     -> DebugService                    | DAP clien
 IFileService                      -> FileService                     | File I/O operations
 IRefactoringService               -> RefactoringService              | Code refactoring operations
 IFindReplaceService               -> FindReplaceService              | Find/replace in files
-ILspClientService                 -> LspClientService                | Generic multi-language LSP
 IDapClientService                 -> DapClientService                | Generic DAP client
 ISettingsService                  -> SettingsService                 | User preferences
 IBookmarkService                  -> BookmarkService                 | Code bookmarks
@@ -510,7 +510,7 @@ Visual Game Studio IDE -- Architecture Overview
 |  29 Service implementations                               |
 |  LanguageService (LSP) | DebugService (DAP)               |
 |  BuildService | ProjectService | GitService               |
-|  LspClientService | DapClientService                      |
+|  DapClientService                                         |
 +-----------------------------------------------------------+
 |                    Layer 1: CORE                          |
 |  29 Service interfaces (ILanguageService, etc.)           |
