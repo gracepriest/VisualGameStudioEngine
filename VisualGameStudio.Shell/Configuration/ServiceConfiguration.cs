@@ -31,6 +31,11 @@ public static class ServiceConfiguration
         // process. A registry that built services lazily outside the container would never be
         // disposed and would orphan a server child process on every exit.
         //
+        // Every consumer routes through ILanguageServiceRegistry (Task 7): there is deliberately NO
+        // `ILanguageService` singleton to inject directly. A second registration would spawn a
+        // second `dotnet --lsp` child process that nothing routes to, starts, stops or disposes —
+        // orphaned for the life of the IDE, with nothing failing to say so.
+        //
         // BasicLang only, for now. clangd needs a resolved executable path (ClangdLocator, Task 11)
         // before a descriptor for it can exist; Task 12 adds it here.
         services.AddSingleton<ILanguageServiceRegistry>(sp => new LanguageServiceRegistry(new[]
@@ -39,19 +44,6 @@ public static class ServiceConfiguration
                 sp.GetRequiredService<IOutputService>(),
                 sp.GetRequiredService<ISettingsService>())
         }));
-        // ⚠ TEMPORARY SHIM — Task 7 removes this registration.
-        // The ~26 call sites that still inject ILanguageService assume one server and gate on
-        // `IsBasicLangSourceFile`; Task 7 converts them to route through the registry. Until then
-        // they must keep working, and they must reach the SAME instance the registry holds:
-        // registering LanguageService a second time here would spawn a second `dotnet --lsp` child
-        // process that nothing ever routes to, starts or stops — orphaned for the life of the IDE,
-        // with nothing failing to say so. LanguageServiceRegistryTests pins this resolves to one
-        // object.
-        services.AddSingleton<ILanguageService>(sp =>
-            sp.GetRequiredService<ILanguageServiceRegistry>().GetFor("x.bas")
-            ?? throw new InvalidOperationException(
-                "No BasicLang language server is registered — every existing ILanguageService " +
-                "call site would silently do nothing."));
         services.AddSingleton<IDebugService, DebugService>();
         services.AddSingleton<ILaunchConfigurationService, LaunchConfigurationService>();
         services.AddSingleton<IGitService, GitService>();

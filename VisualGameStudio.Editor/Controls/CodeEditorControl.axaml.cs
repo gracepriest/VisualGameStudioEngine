@@ -1959,22 +1959,10 @@ public partial class CodeEditorControl : UserControl
 
     private void UpdateFoldings()
     {
-        // Non-BasicLang files (e.g. .cpp) get NO folding at all in Phase 1.
-        // Two reasons: the BasicLang server answers unknown URIs as if they were
-        // BasicLang files (actively wrong results, not just waste), and the regex
-        // fallback produces GARBAGE folds for C++ — BasicLangFoldingStrategy's
-        // StartPattern matches `if`/`for`/`while`/`class`/`namespace`/... at line
-        // start case-insensitively, no End pattern ever matches C++, so every
-        // keyword line becomes an "(unclosed)" fold spanning to end-of-file.
-        // Clear any stale folds and bail. (clangd brings real folding in Phase 3.)
-        if (!string.IsNullOrEmpty(_documentFilePath)
-            && !VisualGameStudio.Core.Utilities.BasicLangFileTypes.IsBasicLangSourceFile(_documentFilePath))
-        {
-            _foldingManager?.UpdateFoldings(Array.Empty<NewFolding>(), -1);
-            return;
-        }
-
-        // If LSP is available, request folding ranges asynchronously
+        // If a language server owns this file and is connected, ask IT for folding ranges.
+        // _languageService is the ALREADY-ROUTED service for this document — SetLanguageService is
+        // handed the registry's GetFor(filePath) result — so this reaches BasicLang for .bas and
+        // clangd for .cpp once clangd is registered, and is simply null for files no server serves.
         if (!_isUpdatingFoldings && _isFoldingEnabled
             && _foldingManager != null && _textEditor?.Document != null && _textEditor?.TextArea != null
             && _languageService != null && _languageService.IsConnected && !string.IsNullOrEmpty(_documentFilePath))
@@ -1982,7 +1970,21 @@ public partial class CodeEditorControl : UserControl
             _ = UpdateFoldingsFromLspAsync();
             return;
         }
-        // Fall back to local regex-based folding strategy
+
+        // No connected server for this file. The regex fallback (BasicLangFoldingStrategy) is
+        // BasicLang-SPECIFIC: its StartPattern matches `if`/`for`/`while`/`class`/`namespace`/... at
+        // line start case-insensitively, and no End pattern ever matches C++, so on a .cpp file every
+        // keyword line becomes an "(unclosed)" fold spanning to end-of-file. Only run it for BasicLang
+        // files (and untitled/no-path editors, which default to BasicLang like the highlighting does);
+        // clear any stale folds for everything else. (clangd brings real .cpp folding once registered.)
+        if (!string.IsNullOrEmpty(_documentFilePath)
+            && !VisualGameStudio.Core.Utilities.BasicLangFileTypes.IsBasicLangSourceFile(_documentFilePath))
+        {
+            _foldingManager?.UpdateFoldings(Array.Empty<NewFolding>(), -1);
+            return;
+        }
+
+        // Fall back to local regex-based folding strategy (BasicLang)
         ApplyFoldings(null);
     }
 

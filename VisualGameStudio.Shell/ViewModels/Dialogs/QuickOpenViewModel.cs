@@ -9,7 +9,6 @@ namespace VisualGameStudio.Shell.ViewModels.Dialogs;
 public partial class QuickOpenViewModel : ViewModelBase
 {
     private readonly IProjectService _projectService;
-    private readonly ILanguageService _languageService;
     private readonly List<QuickOpenItem> _allItems = new();
     private CancellationTokenSource? _searchCts;
 
@@ -34,10 +33,12 @@ public partial class QuickOpenViewModel : ViewModelBase
     public event EventHandler<QuickOpenResult>? ItemSelected;
     public event EventHandler? Cancelled;
 
-    public QuickOpenViewModel(IProjectService projectService, ILanguageService languageService)
+    // Symbols are parsed from file text (LoadSymbolsAsync/ParseSymbols), not fetched from a
+    // language server — this VM never used the ILanguageService it used to be handed, so it is
+    // not injected. LSP-backed symbol search lives in MainWindowViewModel.GoToWorkspaceSymbolAsync.
+    public QuickOpenViewModel(IProjectService projectService)
     {
         _projectService = projectService;
-        _languageService = languageService;
     }
 
     public void Open(QuickOpenMode mode)

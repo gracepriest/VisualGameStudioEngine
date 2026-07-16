@@ -353,24 +353,20 @@ public class LanguageServiceRegistryTests
     // ---- DI ----------------------------------------------------------------
 
     /// <summary>
-    /// ⚠ The whole point of the temporary <c>ILanguageService</c> shim: the ~26 call sites that
-    /// still inject it must reach the SAME BasicLang service the registry holds. Two instances
-    /// would mean two `dotnet --lsp` child processes, one of them orphaned — and nothing else
-    /// would fail. This fails loudly the moment someone splits the registrations.
+    /// Task 7 removed the temporary <c>ILanguageService</c> shim: every consumer now routes through
+    /// <see cref="ILanguageServiceRegistry"/>, so there must be NO directly-injectable
+    /// <c>ILanguageService</c>. Re-adding one would register a second <c>LanguageService</c> — a
+    /// second `dotnet --lsp` child process that nothing routes to, starts, stops or disposes, and
+    /// nothing else would fail to say so. This fails loudly if someone reintroduces the shim.
     /// </summary>
     [Test]
-    public void Di_ILanguageServiceResolvesToTheRegistrysBasicLangServer()
+    public void Di_DoesNotRegisterADirectLanguageServiceShim()
     {
         using var provider = BuildProvider();
 
-        var direct = provider.GetRequiredService<ILanguageService>();
-        var viaRegistry = provider.GetRequiredService<ILanguageServiceRegistry>().GetFor("x.bas");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(direct, Is.SameAs(viaRegistry), "two BasicLang instances = two server processes, one orphaned");
-            Assert.That(direct.Descriptor.Id, Is.EqualTo("basiclang"));
-        });
+        Assert.That(provider.GetService<ILanguageService>(), Is.Null,
+            "consumers must route through ILanguageServiceRegistry; a direct ILanguageService " +
+            "registration would spawn a second, orphaned server process");
     }
 
     /// <summary>
@@ -390,24 +386,6 @@ public class LanguageServiceRegistryTests
 
         Assert.That(IsDisposed(basicLang!), Is.True,
             "the container did not reach the registry's servers — every exit orphans them");
-    }
-
-    /// <summary>
-    /// The cost of the shim: the container tracks the instance returned by the
-    /// <c>ILanguageService</c> factory as well as the registry that already owns it, so the
-    /// BasicLang service is disposed TWICE on shutdown. That is safe today, and this pins it —
-    /// a Dispose that threw on its second call would crash the IDE on every exit.
-    /// </summary>
-    [Test]
-    public void Di_DisposingTheContainerIsSafe_ThoughTheShimIsDisposedTwice()
-    {
-        var provider = BuildProvider();
-        var viaShim = provider.GetRequiredService<ILanguageService>();
-        var viaRegistry = provider.GetRequiredService<ILanguageServiceRegistry>().GetFor("x.bas");
-        Assert.That(viaShim, Is.SameAs(viaRegistry), "precondition: one instance, tracked by both");
-
-        Assert.DoesNotThrow(() => provider.Dispose());
-        Assert.That(IsDisposed(viaShim), Is.True);
     }
 
     // Only BasicLang until Task 11 resolves a clangd path for Task 12 to register.

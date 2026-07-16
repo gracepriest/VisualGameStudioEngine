@@ -270,6 +270,29 @@ public class DiagnosticsAggregatorTests
         Assert.That(messages, Is.EqualTo(new[] { "build" }));
     }
 
+    // ---- Multi-server isolation (Task 7 routing) ---------------------------
+
+    // With >1 language server, the Error List holds both BasicLang (.bas) and clangd (.cpp)
+    // diagnostics. Per-file aggregation is what keeps one server's lifecycle from wiping another's:
+    // when a reconnected BasicLang server re-sends didOpen and a clean .bas file publishes an empty
+    // list, clangd's .cpp errors must survive. This is the invariant that makes the ONLY global
+    // Clear() (project close, in MainWindowViewModel.OnProjectClosed) the correct — and only — way
+    // one server's activity ever removes another's diagnostics.
+    [Test]
+    public void SetFileDiagnostics_BasicLangCleanPublish_DoesNotWipeCppDiagnostics()
+    {
+        var aggregator = new DiagnosticsAggregator();
+        aggregator.SetFileDiagnostics(@"C:\Proj\Engine.cpp", new[] { Diag("cpp-error") }); // from clangd
+
+        // BasicLang reconnects and re-publishes a now-clean .bas file (empty = "file is clean").
+        aggregator.SetFileDiagnostics(@"C:\Proj\Game.bas", Array.Empty<DiagnosticItem>());
+
+        var snapshot = aggregator.GetSnapshot();
+        Assert.That(snapshot, Has.Count.EqualTo(1), "the .bas clean publish must not touch the .cpp file's diagnostics");
+        Assert.That(snapshot[0].Message, Is.EqualTo("cpp-error"));
+        Assert.That(snapshot[0].FilePath, Is.EqualTo(@"C:\Proj\Engine.cpp"));
+    }
+
     // ---- Clear -------------------------------------------------------------
 
     [Test]
@@ -282,6 +305,22 @@ public class DiagnosticsAggregatorTests
         aggregator.Clear();
 
         Assert.That(aggregator.GetSnapshot(), Is.Empty);
+    }
+
+    // The project-close semantics behind MainWindowViewModel's single global Clear(): closing a
+    // project drops EVERY server's diagnostics for its files (BasicLang AND C++) — a per-server
+    // clear would strand clangd's now-orphaned .cpp errors after the project is gone.
+    [Test]
+    public void Clear_RemovesBothBasicLangAndCppDiagnostics()
+    {
+        var aggregator = new DiagnosticsAggregator();
+        aggregator.SetFileDiagnostics(@"C:\Proj\Game.bas", new[] { Diag("bas-error") });
+        aggregator.SetFileDiagnostics(@"C:\Proj\Engine.cpp", new[] { Diag("cpp-error") });
+
+        aggregator.Clear();
+
+        Assert.That(aggregator.GetSnapshot(), Is.Empty,
+            "project close must clear every server's diagnostics, not just one language's");
     }
 
     // ---- Thread safety -----------------------------------------------------

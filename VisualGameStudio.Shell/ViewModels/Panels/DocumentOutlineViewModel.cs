@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
+using VisualGameStudio.Core.Utilities;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
@@ -112,6 +113,32 @@ public partial class DocumentOutlineViewModel : ViewModelBase
             SymbolKind.Constant => "K",
             _ => "?"
         };
+    }
+
+    /// <summary>
+    /// Text-parser outline fallback used when no language server owns/serves the file.
+    /// <para>
+    /// ⚠ The parser (<see cref="UpdateOutline"/>) is BasicLang-specific: it keys on
+    /// <c>Module</c>/<c>Class</c>/<c>Sub</c>/<c>Function</c>/… at line start (case-insensitively)
+    /// and treats only <c>'</c>/<c>REM</c> as comments — so on a C++ file <c>class Foo {</c> yields
+    /// a bogus "Foo" class node and <c>//</c> comments are parsed as code. Applying it to a .cpp
+    /// (or any non-BasicLang) file produces a wrong, partial outline. Route the file to its own
+    /// language server's <c>documentSymbol</c> instead (clangd for .cpp once registered); only fall
+    /// back to this parser for BasicLang, and clear the outline for everything else.
+    /// </para>
+    /// </summary>
+    public void UpdateOutlineFromTextFallback(string filePath, string content)
+    {
+        if (BasicLangFileTypes.IsBasicLangSourceFile(filePath))
+        {
+            UpdateOutline(filePath, content);
+        }
+        else
+        {
+            // No BasicLang parse for a non-BasicLang file: show an empty outline rather than a
+            // wrong one (and clear any stale outline left over from the previously active file).
+            Clear();
+        }
     }
 
     /// <summary>

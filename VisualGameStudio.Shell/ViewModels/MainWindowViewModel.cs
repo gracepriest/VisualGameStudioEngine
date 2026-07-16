@@ -50,7 +50,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IProjectService _projectService;
     private readonly IBuildService _buildService;
     private readonly IDebugService _debugService;
-    private readonly ILanguageService _languageService;
+    private readonly ILanguageServiceRegistry _languageServices;
     private readonly IDialogService _dialogService;
     private readonly IFileService _fileService;
     private readonly IBookmarkService _bookmarkService;
@@ -342,7 +342,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IProjectService projectService,
         IBuildService buildService,
         IDebugService debugService,
-        ILanguageService languageService,
+        ILanguageServiceRegistry languageServices,
         IDialogService dialogService,
         IFileService fileService,
         IBookmarkService bookmarkService,
@@ -388,7 +388,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _projectService = projectService;
         _buildService = buildService;
         _debugService = debugService;
-        _languageService = languageService;
+        _languageServices = languageServices;
         _dialogService = dialogService;
         _fileService = fileService;
         _bookmarkService = bookmarkService;
@@ -530,12 +530,19 @@ public partial class MainWindowViewModel : ViewModelBase
         // Wire up "Open in Terminal" from Solution Explorer
         SolutionExplorer.OpenInTerminalRequested += OnOpenInTerminalRequested;
 
-        // Subscribe to language service diagnostics for error highlighting
-        _languageService.DiagnosticsReceived += OnDiagnosticsReceived;
-
-        // Re-sync open documents whenever the server (re)connects — a crashed
-        // and auto-restarted server has lost all didOpen state.
-        _languageService.ConnectionChanged += OnLanguageServiceConnectionChanged;
+        // Subscribe to EVERY registered server's diagnostics and connection state. Both handlers
+        // key off the document uri, so BasicLang's .bas diagnostics and clangd's .cpp diagnostics
+        // coexist, and each reconnected server re-syncs only its own documents. Today the registry
+        // holds BasicLang only; clangd (Task 12) participates automatically once registered — the
+        // set is fixed at registry construction, so subscribing here covers every server there will be.
+        foreach (var service in _languageServices.All)
+        {
+            // Diagnostics → error highlighting + Error List (aggregated per file).
+            service.DiagnosticsReceived += OnDiagnosticsReceived;
+            // Re-sync open documents whenever a server (re)connects — a crashed and auto-restarted
+            // server has lost all didOpen state.
+            service.ConnectionChanged += OnLanguageServiceConnectionChanged;
+        }
 
         // Start language service — unless the user turned off basiclang.lsp.autoStart, in which
         // case it stays off until the "Start Language Server" command is run (command palette).
@@ -556,7 +563,7 @@ public partial class MainWindowViewModel : ViewModelBase
         // outright. Servers needing a root are started on ProjectOpened instead.
         if (ShouldAutoStartLanguageServer(_settingsService))
         {
-            _ = _languageService.StartAsync(_projectService.CurrentProject?.ProjectDirectory);
+            _ = BasicLangLspService?.StartAsync(_projectService.CurrentProject?.ProjectDirectory);
         }
 
         // Load recent projects and subscribe to changes
@@ -1052,10 +1059,11 @@ public partial class MainWindowViewModel : ViewModelBase
         // Remove blame cache for closed document
         _blameCache.Remove(filePath);
 
-        // Notify LSP that the document was closed
-        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(filePath))
+        // Notify the owning LSP server that the document was closed
+        var closeSvc = _languageServices.GetFor(filePath);
+        if (closeSvc is { IsConnected: true })
         {
-            _ = _languageService.CloseDocumentAsync(filePath);
+            _ = closeSvc.CloseDocumentAsync(filePath);
         }
 
         // Notify extension host (for all file types)
@@ -1066,27 +1074,43 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// When the language server (re)connects, re-send didOpen for every open
-    /// BasicLang document: documents opened before the initial connect were
-    /// never announced, and a crashed+restarted server has lost all state.
-    /// Also surfaces the connection state in the status bar.
+    /// The BasicLang language server, reached through the registry's routing. Used only for the
+    /// BasicLang-specific lifecycle that predates per-file routing: the constructor's rootless
+    /// autostart and the manual "Start Language Server" command. Both are BasicLang-only BY DESIGN
+    /// — BasicLang is the one server safe to start rootless (it resolves nothing against a project
+    /// root). Servers that need a workspace root (clangd) are started on <c>ProjectOpened</c> via
+    /// <see cref="ILanguageServiceRegistry.StartAllAsync"/> (Task 12), which refuses a rootless
+    /// start outright — never here. Routing a representative BasicLang path is how the shim used to
+    /// reach this same instance; feature calls route by the real document path instead.
+    /// </summary>
+    private ILanguageService? BasicLangLspService => _languageServices.GetFor("_.bas");
+
+    /// <summary>
+    /// When a language server (re)connects, re-send didOpen for every open document THAT SERVER
+    /// owns: documents opened before it connected were never announced, and a crashed+restarted
+    /// server has lost all didOpen state. Also surfaces the connection state in the status bar.
     /// </summary>
     private void OnLanguageServiceConnectionChanged(object? sender, bool connected)
     {
+        // LanguageService raises these events with itself as sender, so this is the specific
+        // server whose state changed — re-sync only the documents it owns.
+        var service = sender as ILanguageService;
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            if (connected)
+            if (connected && service != null)
             {
                 foreach (var doc in _openDocuments.Values.ToList())
                 {
-                    if (doc.FilePath != null && BasicLangFileTypes.IsBasicLangSourceFile(doc.FilePath))
+                    // Route by each doc's path so a reconnected BasicLang server never re-opens a
+                    // .cpp document (and clangd never re-opens a .bas one).
+                    if (doc.FilePath != null && ReferenceEquals(_languageServices.GetFor(doc.FilePath), service))
                     {
-                        _ = _languageService.OpenDocumentAsync(doc.FilePath, doc.Text ?? "");
+                        _ = service.OpenDocumentAsync(doc.FilePath, doc.Text ?? "");
                     }
                 }
                 StatusText = "Language server connected";
             }
-            else
+            else if (!connected)
             {
                 StatusText = "Language server disconnected — IntelliSense unavailable";
             }
@@ -1148,7 +1172,15 @@ public partial class MainWindowViewModel : ViewModelBase
             settingsSvc.SetWorkspacePath(null);
         }
 
-        // Drop the closed project's diagnostics from the Error List
+        // Drop the closed project's diagnostics from the Error List.
+        //
+        // This global Clear() is CORRECT even with multiple language servers: the project is
+        // closing, so every file it contained — BasicLang AND C++ — is going away, and their
+        // diagnostics with it. It is NOT a per-server operation and must not become one: a
+        // BasicLang-only clear would leave clangd's now-orphaned .cpp diagnostics stranded in the
+        // Error List after the project is gone. This is also the ONLY Clear() call — no
+        // server restart/disconnect path clears diagnostics, so one server's lifecycle can never
+        // wipe another's (per-file aggregation keeps them isolated; see DiagnosticsAggregatorTests).
         _diagnosticsAggregator.Clear();
         ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
     }
@@ -1680,14 +1712,15 @@ public partial class MainWindowViewModel : ViewModelBase
     private async void FallbackToLspHover(CodeEditorDocumentViewModel? document, DataTipEvaluationRequestEventArgs e)
     {
         if (document == null || e.Line <= 0 || e.Column <= 0) return;
-        // BasicLang LSP hover only for BasicLang source files — the server answers
-        // unknown URIs as if they were BasicLang.
-        if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
+        // Route to the server that owns this file (BasicLang for .bas, clangd for .cpp once
+        // registered); do nothing for files no server serves.
+        var svc = _languageServices.GetFor(document.FilePath);
+        if (svc is not { IsConnected: true }) return;
         // intellisense.quickInfo also gates the debug-datatip → LSP hover fallback (read at use).
         if (_settingsService != null && !_settingsService.Get("intellisense.quickInfo", true)) return;
         try
         {
-            var hover = await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column);
+            var hover = await svc.GetHoverAsync(document.FilePath, e.Line, e.Column);
             document.ProvideHoverResult(hover);
         }
         catch (Exception ex)
@@ -1919,10 +1952,12 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             var content = await _fileService.ReadFileAsync(filePath);
 
-            // Notify LSP about opened document (.bas/.bl/.mod/.cls/.class)
-            if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(filePath))
+            // Notify the owning LSP server about the opened document (BasicLang for .bas/.bl/.mod/
+            // .cls/.class, clangd for .cpp/.h once registered; nothing for files no server serves).
+            var openSvc = _languageServices.GetFor(filePath);
+            if (openSvc is { IsConnected: true })
             {
-                await _languageService.OpenDocumentAsync(filePath, content);
+                await openSvc.OpenDocumentAsync(filePath, content);
             }
 
             // Notify extension host about opened document (for all file types)
@@ -1935,7 +1970,10 @@ public partial class MainWindowViewModel : ViewModelBase
             var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
             {
                 FilePath = filePath,
-                LanguageService = _languageService,
+                // The already-routed service for this file, handed to the editor control via
+                // SetLanguageService — so the control's folding reaches clangd for .cpp and
+                // BasicLang for .bas, and is null for files no server serves.
+                LanguageService = _languageServices.GetFor(filePath),
                 GitService = _gitService
             };
             document.SetContent(content);
@@ -2047,7 +2085,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 try
                 {
-                    if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
+                    if (e == null || document.FilePath == null || !_languageServices.IsConnectedFor(document.FilePath)) return;
                     await OnTypeFormattingAsync(document, e.Line, e.Column, e.TriggerCharacter);
                 }
                 catch (Exception ex)
@@ -2066,11 +2104,12 @@ public partial class MainWindowViewModel : ViewModelBase
                     // the toggle is live. Error/diagnostic tooltips are separate (editor marker
                     // service) and stay regardless.
                     if (_settingsService != null && !_settingsService.Get("intellisense.quickInfo", true)) return;
-                    // BasicLang LSP hover only for BasicLang source files —
-                    // the server answers unknown URIs as if they were
-                    // BasicLang. Other file types go to extension providers.
-                    var hover = BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)
-                        ? await _languageService.GetHoverAsync(document.FilePath, e.Line, e.Column)
+                    // Route hover to the server that owns this file (BasicLang for .bas, clangd for
+                    // .cpp once registered). Files no server serves fall through to the extension
+                    // providers below.
+                    var hoverSvc = _languageServices.GetFor(document.FilePath);
+                    var hover = hoverSvc is { IsConnected: true }
+                        ? await hoverSvc.GetHoverAsync(document.FilePath, e.Line, e.Column)
                         : null;
 
                     // Try extension host providers if built-in LSP returned nothing
@@ -2099,10 +2138,11 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 try
                 {
-                    if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
-                    // BasicLang signature help only in BasicLang source files
-                    if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
-                    var help = await _languageService.GetSignatureHelpAsync(document.FilePath, e.Line, e.Column);
+                    if (e == null || document.FilePath == null) return;
+                    // Route signature help to the server that owns this file.
+                    var sigSvc = _languageServices.GetFor(document.FilePath);
+                    if (sigSvc is not { IsConnected: true }) return;
+                    var help = await sigSvc.GetSignatureHelpAsync(document.FilePath, e.Line, e.Column);
                     document.ProvideSignatureHelp(help);
                 }
                 catch (Exception ex)
@@ -2115,13 +2155,13 @@ public partial class MainWindowViewModel : ViewModelBase
             // Wire up document highlight on caret position change
             EventHandler<DocumentHighlightRequestEventArgs>? onDocHighlight = async (s, e) =>
             {
-                if (e == null || document.FilePath == null || !_languageService.IsConnected) return;
-                // BasicLang document highlight only for BasicLang source files — the
-                // server answers unknown URIs as if they were BasicLang.
-                if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
+                if (e == null || document.FilePath == null) return;
+                // Route document highlights to the server that owns this file.
+                var hlSvc = _languageServices.GetFor(document.FilePath);
+                if (hlSvc is not { IsConnected: true }) return;
                 try
                 {
-                    var result = await _languageService.GetDocumentHighlightsAsync(document.FilePath, e.Line, e.Column);
+                    var result = await hlSvc.GetDocumentHighlightsAsync(document.FilePath, e.Line, e.Column);
                     if (result.Count > 0)
                     {
                         var highlights = result.Select(r => new DocumentHighlightInfo
@@ -2159,20 +2199,21 @@ public partial class MainWindowViewModel : ViewModelBase
                 var (requestId, requestToken) = completionCoordinator.BeginRequest();
 
                 IReadOnlyList<CompletionItem>? completions = null;
-                var serverConnected = _languageService.IsConnected;
-                // The BasicLang LSP/fallback list belongs ONLY in BasicLang
-                // source files: the server answers unknown URIs with its full
-                // keyword/snippet dump, so an ungated request pops BasicLang
-                // IntelliSense in .txt/.json/.html files. Non-BasicLang files
-                // still get extension-host completions below.
+                // Route the LSP request to the server that owns this file. Routing — not a BasicLang
+                // check — is now what keeps a .txt/.json request off the BasicLang server: GetFor
+                // returns null for files no server serves. A .cpp routes to clangd once registered.
+                var completionSvc = _languageServices.GetFor(document.FilePath);
+                var serverConnected = completionSvc is { IsConnected: true };
+                // Still needed below: the hard-coded fallback is a BasicLang keyword/snippet dump and
+                // belongs ONLY in BasicLang files (a keyword dump never belongs in .cpp/.txt).
                 var isBasicLangDocument = BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath);
                 var requestFailed = false;
 
                 try
                 {
-                    if (serverConnected && isBasicLangDocument)
+                    if (serverConnected)
                     {
-                        completions = await _languageService.GetCompletionsAsync(
+                        completions = await completionSvc!.GetCompletionsAsync(
                             document.FilePath ?? "",
                             e.Line,
                             e.Column,
@@ -2255,10 +2296,11 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     var version = System.Threading.Interlocked.Increment(ref documentVersion);
 
-                    if (_languageService.IsConnected &&
-                        BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath))
+                    // Notify the owning LSP server of the change (BasicLang for .bas, clangd for .cpp).
+                    var changeSvc = _languageServices.GetFor(document.FilePath);
+                    if (changeSvc is { IsConnected: true })
                     {
-                        await _languageService.ChangeDocumentAsync(document.FilePath!, newText, version);
+                        await changeSvc.ChangeDocumentAsync(document.FilePath!, newText, version);
                     }
 
                     // Notify extension host (for all file types)
@@ -2595,9 +2637,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task NotifyLspDocumentSavedAsync(CodeEditorDocumentViewModel doc)
     {
-        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(doc.FilePath))
+        // Notify the owning LSP server of the save (BasicLang for .bas, clangd for .cpp).
+        var svc = _languageServices.GetFor(doc.FilePath);
+        if (svc is { IsConnected: true })
         {
-            try { await _languageService.SaveDocumentAsync(doc.FilePath!, doc.Text); }
+            try { await svc.SaveDocumentAsync(doc.FilePath!, doc.Text); }
             catch { }
         }
     }
@@ -2722,7 +2766,14 @@ public partial class MainWindowViewModel : ViewModelBase
     private async Task StartLanguageServerAsync()
     {
         StatusText = "Starting language server...";
-        await _languageService.StartAsync(_projectService.CurrentProject?.ProjectDirectory);
+        // BasicLang only, by design (see BasicLangLspService). Root-needing servers (clangd) are
+        // started on ProjectOpened via the registry's StartAllAsync (Task 12), not from here — this
+        // command must keep working with no project open, where a rootless StartAllAsync would throw.
+        var svc = BasicLangLspService;
+        if (svc != null)
+        {
+            await svc.StartAsync(_projectService.CurrentProject?.ProjectDirectory);
+        }
     }
 
     [RelayCommand]
@@ -4221,14 +4272,15 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc == null) return;
 
-        // Try LSP document symbols first for current document — BasicLang only:
-        // the server answers unknown URIs as if they were BasicLang files.
-        if (_languageService.IsConnected && activeDoc.FilePath != null &&
-            BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
+        // Try LSP document symbols first for the current document, from the server that owns it
+        // (BasicLang for .bas, clangd for .cpp once registered). Files no server serves fall through
+        // to the text-based dialog below.
+        var symbolSvc = activeDoc.FilePath != null ? _languageServices.GetFor(activeDoc.FilePath) : null;
+        if (symbolSvc is { IsConnected: true } && activeDoc.FilePath != null)
         {
             try
             {
-                var symbols = await _languageService.GetDocumentSymbolsAsync(activeDoc.FilePath);
+                var symbols = await symbolSvc.GetDocumentSymbolsAsync(activeDoc.FilePath);
                 if (symbols.Count > 0)
                 {
                     var symbolNames = FlattenSymbols(symbols).Select(s => $"{s.Name} ({s.Kind})").ToList();
@@ -4272,7 +4324,12 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task GoToWorkspaceSymbolAsync()
     {
-        if (!_languageService.IsConnected)
+        // A workspace-symbol search spans the whole workspace, which in a mixed project means every
+        // language — so query EVERY connected server and merge, rather than only whichever one the
+        // singleton used to hold (that silently missed C++ symbols in a mixed project, and vice
+        // versa). Only report "not connected" when no server at all is up.
+        var connectedServers = _languageServices.All.Where(s => s.IsConnected).ToList();
+        if (connectedServers.Count == 0)
         {
             StatusText = "Language server not connected";
             return;
@@ -4287,8 +4344,14 @@ public partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            // Use LSP workspace/symbol request to search across the entire workspace
-            var workspaceSymbols = await _languageService.GetWorkspaceSymbolsAsync(query);
+            // Merge workspace/symbol results from every connected server. One server erroring or
+            // returning nothing just contributes nothing — it must not sink the others' results.
+            var workspaceSymbols = new List<WorkspaceSymbolInfo>();
+            foreach (var server in connectedServers)
+            {
+                try { workspaceSymbols.AddRange(await server.GetWorkspaceSymbolsAsync(query)); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[WorkspaceSymbol] {server.Descriptor.Id}: {ex.Message}"); }
+            }
 
             if (workspaceSymbols.Count == 0)
             {
@@ -4430,12 +4493,12 @@ public partial class MainWindowViewModel : ViewModelBase
     private async Task GoToTypeDefinitionAsync()
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
-        if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
-        // BasicLang type-definition lookup only for BasicLang source files — the
-        // server answers unknown URIs as if they were BasicLang.
-        if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;
+        if (activeDoc?.FilePath == null) return;
+        // Route to the server that owns this file (BasicLang for .bas, clangd for .cpp).
+        var svc = _languageServices.GetFor(activeDoc.FilePath);
+        if (svc is not { IsConnected: true }) return;
 
-        var location = await _languageService.GetTypeDefinitionAsync(
+        var location = await svc.GetTypeDefinitionAsync(
             activeDoc.FilePath,
             activeDoc.CaretLine,
             activeDoc.CaretColumn);
@@ -4456,13 +4519,12 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
 
-        // Try language service first — only for BasicLang sources: the BasicLang
-        // server answers unknown URIs as if they were BasicLang files, so an
-        // ungated F12 in a .cpp would get actively wrong locations. Non-BasicLang
-        // files skip straight to the text-search fallback below.
-        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
+        // Try the language service that owns this file first (BasicLang for .bas, clangd for .cpp
+        // once registered); files no server serves skip straight to the text-search fallback below.
+        var svc = _languageServices.GetFor(activeDoc.FilePath);
+        if (svc is { IsConnected: true })
         {
-            var location = await _languageService.GetDefinitionAsync(
+            var location = await svc.GetDefinitionAsync(
                 activeDoc.FilePath,
                 activeDoc.CaretLine,
                 activeDoc.CaretColumn);
@@ -4484,11 +4546,11 @@ public partial class MainWindowViewModel : ViewModelBase
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
 
-        // Same gate as GoToDefinition: the BasicLang server answers unknown URIs
-        // as if they were BasicLang files, so never query it for non-BasicLang docs.
-        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
+        // Route to the server that owns this file (BasicLang for .bas, clangd for .cpp).
+        var svc = _languageServices.GetFor(activeDoc.FilePath);
+        if (svc is { IsConnected: true })
         {
-            var location = await _languageService.GetImplementationAsync(
+            var location = await svc.GetImplementationAsync(
                 activeDoc.FilePath,
                 activeDoc.CaretLine,
                 activeDoc.CaretColumn);
@@ -4653,11 +4715,12 @@ public partial class MainWindowViewModel : ViewModelBase
 
         StatusText = $"Finding references for '{word}'...";
 
-        // Try language service first — BasicLang only: the server answers unknown
-        // URIs as if they were BasicLang files.
-        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
+        // Try the language service that owns this file first (BasicLang for .bas, clangd for .cpp);
+        // files no server serves fall through to the text search below.
+        var svc = _languageServices.GetFor(activeDoc.FilePath);
+        if (svc is { IsConnected: true })
         {
-            var references = await _languageService.FindReferencesAsync(
+            var references = await svc.FindReferencesAsync(
                 activeDoc.FilePath,
                 activeDoc.CaretLine,
                 activeDoc.CaretColumn);
@@ -4901,9 +4964,10 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Try LSP rename first (supports cross-file rename via WorkspaceEdit) — BasicLang
-        // only: the server answers unknown URIs as if they were BasicLang files.
-        if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath))
+        // Try LSP rename first (supports cross-file rename via WorkspaceEdit), from the server that
+        // owns this file — BasicLang for .bas, clangd for .cpp once registered.
+        var svc = _languageServices.GetFor(activeDoc.FilePath);
+        if (svc is { IsConnected: true })
         {
             var newName = await _dialogService.ShowInputDialogAsync(
                 "Rename Symbol",
@@ -4912,7 +4976,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
             if (string.IsNullOrEmpty(newName) || newName == word) return;
 
-            var lspEdit = await _languageService.RenameAsync(
+            var lspEdit = await svc.RenameAsync(
                 activeDoc.FilePath, activeDoc.CaretLine, activeDoc.CaretColumn, newName);
 
             if (lspEdit != null)
@@ -4923,7 +4987,10 @@ public partial class MainWindowViewModel : ViewModelBase
             }
         }
 
-        // Fall back to refactoring service rename
+        // Fall back to the refactoring-service rename. It is BasicLang-SPECIFIC (it parses the file
+        // as BasicLang), so it must not run for other languages — a .cpp with no clangd gets no
+        // rename rather than a BasicLang-parsed one.
+        if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;
         var viewModel = new RenameDialogViewModel(_refactoringService, _fileService);
         await viewModel.InitializeAsync(activeDoc.FilePath, activeDoc.CaretLine, activeDoc.CaretColumn, word);
 
@@ -6104,7 +6171,8 @@ public partial class MainWindowViewModel : ViewModelBase
         var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
         {
             FilePath = name,
-            LanguageService = _languageService,
+            // Untitled files are .bas, so this routes to BasicLang (see the OpenFileAsync seam).
+            LanguageService = _languageServices.GetFor(name),
             GitService = _gitService
         };
         document.SetContent("");
@@ -7357,7 +7425,7 @@ $"""
     private async Task ShowCallHierarchyAsync()
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
-        if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
+        if (activeDoc?.FilePath == null || !_languageServices.IsConnectedFor(activeDoc.FilePath)) return;
 
         var word = GetWordAtCaret(activeDoc);
         await CallHierarchy.ShowHierarchyAsync(new CallHierarchyRequest
@@ -7387,7 +7455,7 @@ $"""
     private async Task ShowTypeHierarchyAsync()
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
-        if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
+        if (activeDoc?.FilePath == null || !_languageServices.IsConnectedFor(activeDoc.FilePath)) return;
 
         var word = GetWordAtCaret(activeDoc);
         await TypeHierarchy.ShowHierarchyAsync(new TypeHierarchyRequest
@@ -7416,16 +7484,16 @@ $"""
     private async Task ExpandSelectionAsync()
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
-        if (activeDoc?.FilePath == null || !_languageService.IsConnected) return;
-        // BasicLang selection ranges only for BasicLang source files — the server
-        // answers unknown URIs as if they were BasicLang.
-        if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;
+        if (activeDoc?.FilePath == null) return;
+        // Route selection ranges to the server that owns this file (BasicLang for .bas, clangd for .cpp).
+        var svc = _languageServices.GetFor(activeDoc.FilePath);
+        if (svc is not { IsConnected: true }) return;
 
         if (_currentSelectionRange == null)
         {
             // Get fresh selection ranges from LSP
             var positions = new List<(int line, int column)> { (activeDoc.CaretLine, activeDoc.CaretColumn) };
-            var ranges = await _languageService.GetSelectionRangesAsync(activeDoc.FilePath, positions);
+            var ranges = await svc.GetSelectionRangesAsync(activeDoc.FilePath, positions);
             if (ranges.Count > 0)
             {
                 _currentSelectionRange = ranges[0];
@@ -7453,19 +7521,24 @@ $"""
     {
         try
         {
-            if (_languageService.IsConnected && BasicLangFileTypes.IsBasicLangSourceFile(filePath))
+            // Ask the server that owns this file for documentSymbol — BasicLang for .bas, clangd for
+            // .cpp once registered. The text-parser fallback is BasicLang-specific and produces a
+            // wrong, partial outline for C++ (it parses `class Foo {` as a node and `//` as code), so
+            // it only runs for BasicLang files; anything else with no server gets an empty outline.
+            var svc = _languageServices.GetFor(filePath);
+            if (svc is { IsConnected: true })
             {
-                await DocumentOutline.UpdateOutlineFromLspAsync(filePath, _languageService);
+                await DocumentOutline.UpdateOutlineFromLspAsync(filePath, svc);
             }
             else
             {
-                DocumentOutline.UpdateOutline(filePath, content);
+                DocumentOutline.UpdateOutlineFromTextFallback(filePath, content);
             }
         }
         catch
         {
-            // Fallback to text-based parsing
-            DocumentOutline.UpdateOutline(filePath, content);
+            // Fallback to text-based parsing — BasicLang only (see above).
+            DocumentOutline.UpdateOutlineFromTextFallback(filePath, content);
         }
     }
 
@@ -7476,10 +7549,15 @@ $"""
     {
         try
         {
-            if (!_languageService.IsConnected || document.FilePath == null) return;
+            if (document.FilePath == null) return;
+            // Code lens stays BasicLang-only in Phase 3a: HandleCodeLensCommandAsync dispatches on
+            // literal "basiclang.*" command names, so a clangd lens would render but do nothing when
+            // clicked. TODO(Phase 3b): drop this gate and route once clangd command names are handled.
             if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
+            var svc = _languageServices.GetFor(document.FilePath);
+            if (svc is not { IsConnected: true }) return;
 
-            var lenses = await _languageService.GetCodeLensAsync(document.FilePath);
+            var lenses = await svc.GetCodeLensAsync(document.FilePath);
             if (lenses.Count > 0)
             {
                 document.ShowCodeLenses(lenses.Select(l => new CodeLensItemInfo
@@ -7508,10 +7586,13 @@ $"""
     {
         try
         {
-            if (!_languageService.IsConnected || document.FilePath == null) return;
-            if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
+            if (document.FilePath == null) return;
+            // Route semantic tokens to the server that owns this file (BasicLang for .bas, clangd for
+            // .cpp once registered) — the editor decodes the token data, which is server-agnostic.
+            var svc = _languageServices.GetFor(document.FilePath);
+            if (svc is not { IsConnected: true }) return;
 
-            var result = await _languageService.GetSemanticTokensAsync(document.FilePath, cancellationToken);
+            var result = await svc.GetSemanticTokensAsync(document.FilePath, cancellationToken);
             if (cancellationToken.IsCancellationRequested) return;
 
             if (result?.Data != null && result.Data.Length > 0)
@@ -7541,7 +7622,13 @@ $"""
             // RefreshCodeLensesAsync's gate), so this should be unreachable for a
             // non-BasicLang document — guard anyway so a clicked lens never sends
             // an LSP request for a .cpp/.h URI the server would misinterpret.
+            // The command names below are literal "basiclang.*", so this whole handler is
+            // BasicLang-specific by construction. TODO(Phase 3b): handle clangd's lens commands.
             if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
+
+            // BasicLang-gated above, so this routes to the BasicLang server.
+            var svc = _languageServices.GetFor(document.FilePath);
+            if (svc is not { IsConnected: true }) return;
 
             switch (info.CommandName)
             {
@@ -7549,7 +7636,7 @@ $"""
                     // Find references for the symbol on this line
                     if (document.FilePath != null)
                     {
-                        var refs = await _languageService.FindReferencesAsync(
+                        var refs = await svc.FindReferencesAsync(
                             document.FilePath, info.Line, 1);
                         if (refs.Count > 0)
                         {
@@ -7580,7 +7667,7 @@ $"""
                 case "basiclang.goToDefinition":
                     if (document.FilePath != null)
                     {
-                        var def = await _languageService.GetDefinitionAsync(
+                        var def = await svc.GetDefinitionAsync(
                             document.FilePath, info.Line, 1);
                         if (def != null)
                         {
@@ -7615,7 +7702,7 @@ $"""
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
 
-        if (!_languageService.IsConnected)
+        if (!_languageServices.IsConnectedFor(activeDoc.FilePath))
         {
             StatusText = "Language server not connected";
             return;
@@ -7635,13 +7722,14 @@ $"""
     /// </summary>
     private async Task<int> FormatDocumentContentAsync(CodeEditorDocumentViewModel doc)
     {
-        if (doc.FilePath == null || !_languageService.IsConnected) return 0;
-        // BasicLang formatting only for BasicLang source files — the server answers
-        // unknown URIs as if they were BasicLang. Silent no-op (0 edits applied) so
-        // format-on-save never corrupts a .cpp buffer with BasicLang-formatter edits.
-        if (!BasicLangFileTypes.IsBasicLangSourceFile(doc.FilePath)) return 0;
+        if (doc.FilePath == null) return 0;
+        // Route to the server that owns this file (BasicLang for .bas, clangd for .cpp once
+        // registered). Silent no-op (0 edits applied) when no server serves it, so format-on-save
+        // never corrupts a buffer no language server owns.
+        var svc = _languageServices.GetFor(doc.FilePath);
+        if (svc is not { IsConnected: true }) return 0;
 
-        var edits = await _languageService.FormatDocumentAsync(doc.FilePath, BuildFormattingOptions());
+        var edits = await svc.FormatDocumentAsync(doc.FilePath, BuildFormattingOptions());
         if (edits.Count == 0) return 0;
 
         // Apply the edits in reverse order to preserve offsets.
@@ -7673,12 +7761,12 @@ $"""
 
     private async Task OnTypeFormattingAsync(CodeEditorDocumentViewModel document, int line, int column, string triggerCharacter)
     {
-        if (document.FilePath == null || !_languageService.IsConnected) return;
-        // BasicLang on-type formatting only for BasicLang source files — the server
-        // answers unknown URIs as if they were BasicLang.
-        if (!BasicLangFileTypes.IsBasicLangSourceFile(document.FilePath)) return;
+        if (document.FilePath == null) return;
+        // Route to the server that owns this file (BasicLang for .bas, clangd for .cpp).
+        var svc = _languageServices.GetFor(document.FilePath);
+        if (svc is not { IsConnected: true }) return;
 
-        var edits = await _languageService.OnTypeFormattingAsync(document.FilePath, line, column, triggerCharacter);
+        var edits = await svc.OnTypeFormattingAsync(document.FilePath, line, column, triggerCharacter);
         if (edits.Count > 0)
         {
             // Apply the edits in reverse order to preserve offsets
@@ -7713,11 +7801,9 @@ $"""
     {
         var activeDoc = _dockFactory.GetActiveDocument() as CodeEditorDocumentViewModel;
         if (activeDoc?.FilePath == null) return;
-        // BasicLang code actions only for BasicLang source files — the server
-        // answers unknown URIs as if they were BasicLang.
-        if (!BasicLangFileTypes.IsBasicLangSourceFile(activeDoc.FilePath)) return;
-
-        if (!_languageService.IsConnected)
+        // Route to the server that owns this file (BasicLang for .bas, clangd for .cpp).
+        var svc = _languageServices.GetFor(activeDoc.FilePath);
+        if (svc is not { IsConnected: true })
         {
             StatusText = "Language server not connected";
             return;
@@ -7740,7 +7826,7 @@ $"""
             startCol = endCol = activeDoc.CaretColumn;
         }
 
-        var actions = await _languageService.GetCodeActionsAsync(
+        var actions = await svc.GetCodeActionsAsync(
             activeDoc.FilePath, startLine, startCol, endLine, endCol);
 
         if (actions.Count == 0)

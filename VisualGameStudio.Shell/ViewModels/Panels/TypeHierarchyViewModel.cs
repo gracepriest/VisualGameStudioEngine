@@ -11,7 +11,7 @@ namespace VisualGameStudio.Shell.ViewModels.Panels;
 /// </summary>
 public partial class TypeHierarchyViewModel : Tool
 {
-    private readonly ILanguageService _languageService;
+    private readonly ILanguageServiceRegistry _languageServices;
 
     [ObservableProperty]
     private ObservableCollection<TypeHierarchyItem> _rootItems = new();
@@ -30,9 +30,9 @@ public partial class TypeHierarchyViewModel : Tool
 
     public event EventHandler<TypeHierarchyNavigationEventArgs>? NavigationRequested;
 
-    public TypeHierarchyViewModel(ILanguageService languageService)
+    public TypeHierarchyViewModel(ILanguageServiceRegistry languageServices)
     {
-        _languageService = languageService;
+        _languageServices = languageServices;
         Id = "TypeHierarchy";
         Title = "Type Hierarchy";
     }
@@ -150,8 +150,13 @@ public partial class TypeHierarchyViewModel : Tool
         if (depth >= MaxDepth) return;
         if (!visited.Add($"{item.FilePath}|{item.Line}|{item.Column}|{item.Name}")) return;
 
+        // Route by the node's own file — a supertype can live in a different file, and in a mixed
+        // project each node is served by whichever language server owns it.
+        var languageService = _languageServices.GetFor(item.FilePath);
+        if (languageService is not { IsConnected: true }) return;
+
         // Get supertypes from language service
-        var supertypes = await _languageService.GetSupertypesAsync(
+        var supertypes = await languageService.GetSupertypesAsync(
             item.FilePath, item.Line, item.Column);
 
         foreach (var supertype in supertypes)
@@ -176,8 +181,12 @@ public partial class TypeHierarchyViewModel : Tool
 
     private async Task LoadSubtypesAsync(TypeHierarchyItem item)
     {
+        // Route by the node's own file (see LoadSupertypesAsync).
+        var languageService = _languageServices.GetFor(item.FilePath);
+        if (languageService is not { IsConnected: true }) return;
+
         // Get subtypes from language service
-        var subtypes = await _languageService.GetSubtypesAsync(
+        var subtypes = await languageService.GetSubtypesAsync(
             item.FilePath, item.Line, item.Column);
 
         foreach (var subtype in subtypes)

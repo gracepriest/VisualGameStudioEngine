@@ -11,7 +11,7 @@ namespace VisualGameStudio.Shell.ViewModels.Panels;
 /// </summary>
 public partial class CallHierarchyViewModel : Tool
 {
-    private readonly ILanguageService _languageService;
+    private readonly ILanguageServiceRegistry _languageServices;
 
     [ObservableProperty]
     private ObservableCollection<CallHierarchyItem> _rootItems = new();
@@ -30,9 +30,9 @@ public partial class CallHierarchyViewModel : Tool
 
     public event EventHandler<CallHierarchyNavigationEventArgs>? NavigationRequested;
 
-    public CallHierarchyViewModel(ILanguageService languageService)
+    public CallHierarchyViewModel(ILanguageServiceRegistry languageServices)
     {
-        _languageService = languageService;
+        _languageServices = languageServices;
         Id = "CallHierarchy";
         Title = "Call Hierarchy";
     }
@@ -176,8 +176,14 @@ public partial class CallHierarchyViewModel : Tool
 
     private async Task LoadIncomingCallsAsync(CallHierarchyItem item)
     {
+        // Route by the node's own file — a caller can live in a different file, and in a mixed
+        // project each node is served by whichever language server owns it. No connected server
+        // for this file (unowned, or clangd not yet registered) → no calls to add.
+        var languageService = _languageServices.GetFor(item.FilePath);
+        if (languageService is not { IsConnected: true }) return;
+
         // Get incoming calls (callers) from language service
-        var callers = await _languageService.GetIncomingCallsAsync(
+        var callers = await languageService.GetIncomingCallsAsync(
             item.FilePath, item.Line, item.Column);
 
         foreach (var caller in callers)
@@ -206,8 +212,12 @@ public partial class CallHierarchyViewModel : Tool
 
     private async Task LoadOutgoingCallsAsync(CallHierarchyItem item)
     {
+        // Route by the node's own file (see LoadIncomingCallsAsync).
+        var languageService = _languageServices.GetFor(item.FilePath);
+        if (languageService is not { IsConnected: true }) return;
+
         // Get outgoing calls (callees) from language service
-        var callees = await _languageService.GetOutgoingCallsAsync(
+        var callees = await languageService.GetOutgoingCallsAsync(
             item.FilePath, item.Line, item.Column);
 
         foreach (var callee in callees)
