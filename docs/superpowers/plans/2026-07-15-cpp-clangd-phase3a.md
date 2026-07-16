@@ -847,12 +847,23 @@ public void Emit_WithBrokenSource_LeavesPreviousHeadersIntact()
     Assert.That(File.ReadAllText(Path.Combine(dir, "obj", "gen", "Logic.g.h")), Is.EqualTo(before));
 }
 
+// ⚠ ERRATUM — FOURTH instance of the same antipattern, and Task 9's implementer proved it.
+// `Does.Contain(objGen)` does NOT catch an include-ORDER shuffle: both dirs are still present
+// after a shuffle, so the assertion stays green while `#include "Logic.g.h"` resolves against
+// the wrong directory. ORDER is the thing under test here. Parse the -I tokens and assert the
+// exact ordered list.
 [Test]
-public void Emit_IncludePath_ContainsProjectDirAndObjGen()   // makes #include "Logic.g.h" resolve
+public void Emit_IncludePath_ContainsProjectDirAndObjGenInOrder()   // makes #include "Logic.g.h" resolve
 {
     IntelliSenseEmitter.Emit(projectFile, "Debug", null);
-    var json = File.ReadAllText(Path.Combine(dir, "obj", "compile_commands.json"));
-    Assert.That(json, Does.Contain(Path.Combine(dir, "obj", "gen")));
+    var db = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "obj", "compile_commands.json")))!;
+    var includes = db[0]!["arguments"]!.AsArray()
+        .Select(a => a!.GetValue<string>())
+        .Where(a => a.StartsWith("-I"))
+        .Select(a => a.Substring(2))
+        .ToArray();
+    Assert.That(includes, Is.EqualTo(new[] { dir, Path.Combine(dir, "obj", "gen") }),
+        "include ORDER is load-bearing — projectDir then objGen then <IncludeDir> items");
 }
 
 // MANDATORY — the game-project hole. See the ⛔ above. A game project with an
@@ -924,6 +935,15 @@ git commit -m "feat(cpp): toolchain-free IntelliSense emission seam shared with 
 
 **Files:**
 - Modify: `VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs` (`OnProjectOpenedCoreAsync` `:936`)
+
+### ⚠ D2 — DECIDE THIS: does project-open probe for a toolchain?
+
+Task 9 handed you an explicit decision. `IntelliSenseEmitter.Emit(project, config, toolchain)` **never probes on its own, by design** — the caller supplies the toolchain or `null`. So project-open must choose:
+
+- **`CppToolchain.Find()`** → the compile database matches what a real build would produce (on this machine: MSVC, `cl` + `/std:c++20`). But `Find()` **shells out to vswhere and can take seconds** — on the UI-adjacent open path.
+- **`null`** → fast, no process spawn, database uses the `clang++` / `-std=c++20` default.
+
+Task 9's read (and mine): **`null` is probably right for open, with a refresh after a build** — but decide it **explicitly** and say what you decided. Note the interaction: clangd selects its driver mode from `arguments[0]`, so a `clang++`-flavored database on an MSVC machine is *coherent* (Task 9 pairs Kind+driver from the same source, never mixed) — it just may not match the real build's flags exactly. Judge whether that divergence matters for IntelliSense fidelity.
 
 - [ ] **Step 1: Write the failing test** — opening a native project invokes the emitter once, off the UI thread, and a second open cancels the first.
 - [ ] **Step 2: Run — expect FAIL**
