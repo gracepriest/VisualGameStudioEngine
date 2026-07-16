@@ -14,14 +14,14 @@ namespace VisualGameStudio.Tests.Core;
 /// (<c>ShellProfileDetector.FindOnPath</c>) probed <c>Path.Combine(dir, name)</c> literally, which
 /// only ever worked because every caller passed an explicit <c>"pwsh.exe"</c>/<c>"bash.exe"</c>.
 /// A bare <c>"clangd"</c> would have silently found nothing on Windows — exactly the silent-failure
-/// class this phase exists to kill. <see cref="FindIn"/>'s PATHEXT expansion is therefore the
-/// load-bearing behavior here, and it is asserted directly.</para>
+/// class this phase exists to kill. <see cref="ExecutableLocator.FindIn"/>'s PATHEXT resolution is
+/// therefore the load-bearing behavior here, and it is asserted directly.</para>
 ///
 /// <para>Every environmental input (PATH, PATHEXT, file existence, OS) is an explicit parameter of
 /// the pure <see cref="ExecutableLocator.FindIn"/>/<see cref="ExecutableLocator.CandidateNames"/>
 /// core, so these tests pin the rules on any machine — clangd is not installed on the dev box, and
-/// a probe that depended on it being installed would be untestable. <see cref="Find_"/>-prefixed
-/// tests cover the thin environment-reading wrapper separately, against a real file on a real PATH.</para>
+/// a probe that depended on it being installed would be untestable. The <c>Find_</c>-prefixed tests
+/// cover the thin environment-reading wrapper separately, against a real file on a real PATH.</para>
 /// </summary>
 [TestFixture]
 public class ExecutableLocatorTests
@@ -42,23 +42,40 @@ public class ExecutableLocatorTests
     // ──────────────────────────────────────────────────────────────────
 
     [Test]
-    public void CandidateNames_BareName_OnWindows_ExpandsWithPathExt()
+    public void CandidateNames_BareName_OnWindows_ResolvesThroughPathExt_AndNotLiterally()
     {
         var names = ExecutableLocator.CandidateNames("clangd", WinPathExt, isWindows: true);
 
         // Exact sequence, not "contains": these names are combined into a path that is handed to
         // Process.Start, and their ORDER decides which of two co-located files wins.
-        Assert.That(names, Is.EqualTo(new[] { "clangd", "clangd.COM", "clangd.EXE", "clangd.BAT", "clangd.CMD" }));
+        // The bare "clangd" is deliberately ABSENT — on Windows an extension in PATHEXT is what
+        // makes a file executable by name, so a literal extensionless file is not a candidate.
+        Assert.That(names, Is.EqualTo(new[] { "clangd.COM", "clangd.EXE", "clangd.BAT", "clangd.CMD" }));
     }
 
     [Test]
     public void CandidateNames_NameAlreadyCarryingAPathExtExtension_IsLiteralOnly()
     {
-        // ShellProfileDetector's three call sites pass explicit ".exe" names. Expanding those to
-        // "pwsh.exe.COM" etc. would be nonsense; the literal must be the only candidate, which is
-        // also what makes the lift behavior-preserving for those callers.
+        // Expanding "pwsh.exe" to "pwsh.exe.COM" etc. would be nonsense; the literal must be the
+        // only candidate.
         Assert.That(ExecutableLocator.CandidateNames("pwsh.exe", WinPathExt, isWindows: true),
             Is.EqualTo(new[] { "pwsh.exe" }));
+    }
+
+    // These three names ARE ShellProfileDetector's three call sites (:114, :209, :324) — the only
+    // callers FindOnPath ever had. Each carries an extension in PATHEXT, so each is probed
+    // literally and only literally: the same single candidate the deleted FindOnPath probed, in a
+    // search that still walks PATH in order with the same existence check. So the lift selects the
+    // same FILE for the terminal profiles; Find now additionally returns it as an absolute path,
+    // which is identical for the absolute PATH entries these shells actually live under. Pinned
+    // here rather than reasoned about once in a review.
+    [TestCase("pwsh.exe")]
+    [TestCase("bash.exe")]
+    [TestCase("nu.exe")]
+    public void CandidateNames_TheLiftedShellProfileDetectorCallSites_AreUnaffected(string name)
+    {
+        Assert.That(ExecutableLocator.CandidateNames(name, WinPathExt, isWindows: true),
+            Is.EqualTo(new[] { name }));
     }
 
     [Test]
@@ -70,11 +87,12 @@ public class ExecutableLocatorTests
     }
 
     [Test]
-    public void CandidateNames_ExtensionNotInPathExt_StillExpands()
+    public void CandidateNames_ExtensionNotInPathExt_IsTreatedAsAStem()
     {
-        // "clangd.old" is not executable by extension, so PATHEXT expansion still applies.
+        // "tool.old" is not executable by extension, so it is a stem to resolve through PATHEXT
+        // rather than a name to probe literally — the same rule as a bare name.
         Assert.That(ExecutableLocator.CandidateNames("tool.old", ".EXE", isWindows: true),
-            Is.EqualTo(new[] { "tool.old", "tool.old.EXE" }));
+            Is.EqualTo(new[] { "tool.old.EXE" }));
     }
 
     [Test]
@@ -88,12 +106,17 @@ public class ExecutableLocatorTests
     [TestCase(null)]
     [TestCase("")]
     [TestCase("   ")]
-    public void CandidateNames_MissingPathExt_FallsBackToBuiltInDefaults(string? pathExt)
+    [TestCase(";;;")]      // parses to nothing, which is not the same as being unset
+    [TestCase(" ; ; ")]
+    public void CandidateNames_UnusablePathExt_FallsBackToBuiltInDefaults(string? pathExt)
     {
         var names = ExecutableLocator.CandidateNames("clangd", pathExt, isWindows: true);
 
-        Assert.That(names, Is.EqualTo(new[] { "clangd", "clangd.COM", "clangd.EXE", "clangd.BAT", "clangd.CMD" }),
-            "an unset PATHEXT must not silently disable the .exe probe");
+        // Since the bare name is not a candidate, an empty extension list would mean NO candidates
+        // and a search that silently never matches. The fallback must survive a PATHEXT that is
+        // present but yields nothing, not merely one that is absent.
+        Assert.That(names, Is.EqualTo(new[] { "clangd.COM", "clangd.EXE", "clangd.BAT", "clangd.CMD" }),
+            "an unusable PATHEXT must not silently disable the probe entirely");
     }
 
     [Test]
@@ -101,7 +124,7 @@ public class ExecutableLocatorTests
     {
         var names = ExecutableLocator.CandidateNames("clangd", " .EXE ; EXE ;; .CMD ", isWindows: true);
 
-        Assert.That(names, Is.EqualTo(new[] { "clangd", "clangd.EXE", "clangd.CMD" }));
+        Assert.That(names, Is.EqualTo(new[] { "clangd.EXE", "clangd.CMD" }));
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -124,6 +147,37 @@ public class ExecutableLocatorTests
         // case-insensitive, so this path opens the same file (which is exactly why the probe found
         // it above). Pinned ordinally so a future change to that construction is a deliberate one.
         Assert.That(found, Is.EqualTo(@"C:\tools\llvm\clangd.EXE"));
+    }
+
+    [Test]
+    public void FindIn_ExtensionlessShimBesideTheExe_TheExeWins()
+    {
+        // THE hazard: MSYS2 / Cygwin / git-for-windows install extensionless shims beside real
+        // .exes, so this pair in one directory is an ordinary shape — not a contrivance. Probing
+        // the literal name first would return the shim, which Windows' own name resolution would
+        // never select, and the caller would spawn a plausible-looking path that does not work.
+        var found = ExecutableLocator.FindIn(
+            "clangd",
+            pathValue: @"C:\msys64\usr\bin",
+            pathExtValue: WinPathExt,
+            fileExists: Existing(
+                @"C:\msys64\usr\bin\clangd",       // the extensionless shim
+                @"C:\msys64\usr\bin\clangd.exe"),  // the real executable
+            isWindows: true);
+
+        Assert.That(found, Is.EqualTo(@"C:\msys64\usr\bin\clangd.EXE"));
+    }
+
+    [Test]
+    public void FindIn_OnNonWindows_AnExtensionlessFileIsTheAnswer()
+    {
+        // The mirror image: dropping the bare name is a WINDOWS rule. On POSIX an extensionless
+        // file is exactly what an executable looks like, so it must still be found.
+        var expected = Path.Combine("/usr/bin", "clangd");
+
+        Assert.That(ExecutableLocator.FindIn(
+            "clangd", "/usr/bin", WinPathExt, Existing(expected), isWindows: false),
+            Is.EqualTo(expected));
     }
 
     [Test]
@@ -268,6 +322,45 @@ public class ExecutableLocatorTests
         {
             Environment.SetEnvironmentVariable("PATH", originalPath);
             try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Test]
+    [NonParallelizable] // mutates the process-wide PATH and working directory
+    public void Find_RelativePathEntry_StillYieldsAnAbsolutePath()
+    {
+        // A relative PATH entry is legal and resolves against the CURRENT working directory. Task 12
+        // spawns whatever comes back, so a relative result would silently re-resolve against the
+        // child's working directory instead. Staged for real rather than injected: FindIn cannot see
+        // a working directory at all, so only the wrapper can be held to this.
+        var root = Path.Combine(Path.GetTempPath(), $"ExecutableLocator_rel_{Guid.NewGuid():N}");
+        var toolDir = Path.Combine(root, "toolbin");
+        Directory.CreateDirectory(toolDir);
+        var bareName = "vgs_relative_probe";
+        var exe = Path.Combine(toolDir, bareName + ".exe");
+        File.WriteAllText(exe, "not a real executable — only its PATH is under test");
+
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var originalCwd = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            Environment.SetEnvironmentVariable("PATH", "toolbin"); // relative, on purpose
+
+            var found = ExecutableLocator.Find(bareName);
+
+            Assert.That(found, Is.Not.Null, "a relative PATH entry must still be searched");
+            Assert.That(Path.IsPathRooted(found), Is.True,
+                $"the hit must be absolute, but was \"{found}\"");
+            // The exact file, not merely something rooted: temp paths can differ from the staged
+            // spelling, so compare the resolved forms.
+            Assert.That(Path.GetFullPath(found!), Is.EqualTo(Path.GetFullPath(exe)).IgnoreCase);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCwd;
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            try { Directory.Delete(root, true); } catch { /* best effort */ }
         }
     }
 }

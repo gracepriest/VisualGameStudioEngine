@@ -6,24 +6,24 @@ using System.Runtime.InteropServices;
 namespace VisualGameStudio.Core.Utilities;
 
 /// <summary>
-/// Searches PATH for a named executable and returns the path of the first match: the PATH entry it
-/// was found under, joined to the file name.
+/// Searches PATH for a named executable and returns the absolute path of the first match.
 ///
 /// <para><b>Why a path and not a name.</b> Callers that hand the result to
 /// <see cref="System.Diagnostics.ProcessStartInfo.FileName"/> need the path, not the name: a bare
-/// name resolves against the child's own search rules, which are not the ones applied here. Note
-/// the result is only as absolute as the PATH entry it came from — a relative entry (<c>.</c>,
-/// <c>bin</c>) yields a relative path, which resolves against the CURRENT working directory when
-/// spawned. PATH entries are absolute by convention, not by guarantee.</para>
+/// name resolves against the child's own search rules, which are not the ones applied here. For
+/// the same reason <see cref="Find"/> returns an ABSOLUTE path — PATH entries are absolute by
+/// convention but not by guarantee, and a relative hit would re-resolve against the spawner's
+/// working directory. (<see cref="FindIn"/>, being pure, cannot read the working directory and so
+/// returns the hit as joined; <see cref="Find"/> is where that is settled.)</para>
 ///
 /// <para><b>PATHEXT.</b> On Windows an executable named <c>clangd</c> is a file called
 /// <c>clangd.exe</c>; a literal <c>File.Exists(dir + "clangd")</c> finds nothing. This class
-/// expands a name that does not already carry an executable extension across PATHEXT, so callers
+/// resolves a name that does not already carry an executable extension THROUGH PATHEXT, so callers
 /// may pass the bare tool name on every platform. (The predecessor of this code —
 /// <c>ShellProfileDetector.FindOnPath</c> — probed literally, and worked only because each of its
 /// callers spelled out <c>"pwsh.exe"</c>/<c>"bash.exe"</c>/<c>"nu.exe"</c>. Such names are
-/// unaffected by the expansion: a name whose extension is already in PATHEXT is probed literally
-/// and only literally.)</para>
+/// unaffected: a name whose extension is already in PATHEXT is probed literally and only
+/// literally.)</para>
 ///
 /// <para>The environment is read in <see cref="Find"/> alone; <see cref="FindIn"/> and
 /// <see cref="CandidateNames"/> are pure functions of their arguments, so every rule above can be
@@ -41,16 +41,27 @@ public static class ExecutableLocator
     private const string DefaultWindowsPathExt = ".COM;.EXE;.BAT;.CMD";
 
     /// <summary>
-    /// Finds <paramref name="executable"/> on the current process's PATH, or null if it is not
-    /// there. <paramref name="executable"/> may be a bare name (<c>"clangd"</c>) or carry an
-    /// extension (<c>"pwsh.exe"</c>).
+    /// Finds <paramref name="executable"/> on the current process's PATH and returns its absolute
+    /// path, or null if it is not there. <paramref name="executable"/> may be a bare name
+    /// (<c>"clangd"</c>) or carry an extension (<c>"pwsh.exe"</c>).
     /// </summary>
+    /// <remarks>
+    /// The hit is resolved to an absolute path because a PATH entry may be relative (<c>.</c>,
+    /// <c>bin</c>), and a relative result would re-resolve against the working directory of
+    /// whoever spawns it — not necessarily this one. That resolution is not a new behavior being
+    /// introduced: the existence probe below already interpreted the path against THIS process's
+    /// working directory, so this pins the very file just proven to exist, at the moment of proof.
+    /// It belongs here rather than in <see cref="FindIn"/> because the working directory is
+    /// environment, and <see cref="FindIn"/> is pure.
+    /// </remarks>
     public static string? Find(string? executable) => FindIn(
         executable,
         Environment.GetEnvironmentVariable("PATH"),
         Environment.GetEnvironmentVariable("PATHEXT"),
         File.Exists,
-        RuntimeInformation.IsOSPlatform(OSPlatform.Windows));
+        RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) is string hit
+            ? Path.GetFullPath(hit)
+            : null;
 
     /// <summary>
     /// The <see cref="Find"/> rule with every environmental input supplied explicitly.
@@ -116,13 +127,24 @@ public static class ExecutableLocator
     /// The file names to probe for <paramref name="executable"/>, in priority order.
     /// </summary>
     /// <returns>
-    /// Off Windows, or when the name already ends in an extension listed in
-    /// <paramref name="pathExtValue"/>: the name alone. Otherwise: the name, followed by the name
-    /// plus each PATHEXT extension (trimmed, dot-prefixed, de-duplicated case-insensitively).
+    /// Off Windows: the name alone (POSIX has no PATHEXT). On Windows, when the name already ends
+    /// in an extension listed in <paramref name="pathExtValue"/>: the name alone. Otherwise: the
+    /// name plus each PATHEXT extension (trimmed, dot-prefixed, de-duplicated case-insensitively) —
+    /// the bare name is NOT among them.
     /// </returns>
     /// <remarks>
-    /// The bare name leads even on Windows, preserving the predecessor's exact behavior for names
-    /// that have no extension at all; PATHEXT candidates are additions, never replacements.
+    /// <para>
+    /// Dropping the bare name on Windows is what makes this match Windows' own resolution of a bare
+    /// command: an extension in PATHEXT is what makes a file executable BY NAME, so a bare
+    /// <c>clangd</c> means "the clangd executable", not "a file literally called clangd".
+    /// </para>
+    /// <para>
+    /// It is also the difference between finding clangd and finding a decoy. MSYS2, Cygwin and
+    /// git-for-windows all install extensionless shims beside real <c>.exe</c>s, so
+    /// <c>clangd</c> and <c>clangd.exe</c> in one directory is an ordinary shape — and returning
+    /// the extensionless one would hand the caller a path to spawn that Windows' own name
+    /// resolution would never have selected.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<string> CandidateNames(
         string executable,
@@ -143,21 +165,35 @@ public static class ExecutableLocator
             }
         }
 
-        var names = new List<string>(extensions.Count + 1) { executable };
+        var names = new List<string>(extensions.Count);
         foreach (var ext in extensions)
             names.Add(executable + ext);
         return names;
     }
 
-    /// <summary>Splits a PATHEXT value into normalized, de-duplicated extensions.</summary>
+    /// <summary>
+    /// Splits a PATHEXT value into normalized, de-duplicated extensions, falling back to
+    /// <see cref="DefaultWindowsPathExt"/> when it yields none.
+    /// </summary>
+    /// <remarks>
+    /// The fallback covers an empty parse (<c>";;;"</c>), not just an empty value: since the bare
+    /// name is not a candidate on Windows, returning zero extensions here would mean zero candidates
+    /// and a search that silently never matches anything.
+    /// </remarks>
     private static IReadOnlyList<string> ParseExtensions(string? pathExtValue)
     {
-        var raw = string.IsNullOrWhiteSpace(pathExtValue) ? DefaultWindowsPathExt : pathExtValue;
+        var parsed = SplitExtensions(pathExtValue);
+        return parsed.Count > 0 ? parsed : SplitExtensions(DefaultWindowsPathExt);
+    }
 
+    private static List<string> SplitExtensions(string? pathExtValue)
+    {
         var result = new List<string>();
+        if (string.IsNullOrWhiteSpace(pathExtValue)) return result;
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var part in raw.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var part in pathExtValue.Split(';', StringSplitOptions.RemoveEmptyEntries))
         {
             var ext = part.Trim();
             if (ext.Length == 0) continue;
