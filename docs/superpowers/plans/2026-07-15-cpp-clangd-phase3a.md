@@ -47,7 +47,27 @@ Each would cost days, and each fails as **nothing happening** rather than an err
 2. **Capabilities discarded** — `initialize`'s result is thrown away (`LanguageService.cs:317`); there is no `Capabilities` member anywhere; every feature method is wrapped in `catch { return Array.Empty<>(); }`. clangd failing looks identical to clangd working on an empty file. → Task 3.
 3. **Position encoding is accidentally correct and structurally unpinned** — `character = column - 1` works only because AvaloniaEdit's `Caret.Column` is UTF-16 code units and LSP defaults to UTF-16. `positionEncoding`/`offsetEncoding` have **zero matches repo-wide**. Anyone adding the widely-copy-pasted `--offset-encoding=utf-8` clangd flag shifts every position on every non-ASCII line, with no test to catch it. → Task 3 pins it deliberately (DONE, `5ada16f`); **never pass `--offset-encoding`**.
 
-   ### ⛔ UNRESOLVED — clangd's non-standard `offsetEncoding` (verify in Task 11/12 BEFORE trusting the pin)
+   ### ✅ RESOLVED EMPIRICALLY (Jul 16) — clangd IS installed now; Step 0 is ANSWERED
+
+   **clangd 22.1.6 is installed at `C:\Users\melvi\.vgs\tools\clangd_22.1.6\bin\clangd.exe`** (standalone 26.9 MB release; deliberately **NOT** on PATH, and **NOT** full LLVM — `winget install LLVM.LLVM` would put `clang++` on PATH, making `CppToolchain.Find()` return ClangLike and turning Task 10's D2 pin **vacuous**: `args[0] == "clang++"` would then pass whether or not open probed. Keep PATH clean.)
+
+   **Raw `initialize` result, real clangd, with our exact Task 3 client capabilities:**
+   ```
+   result.offsetEncoding          ---> "utf-16"     (the NON-STANDARD field — it IS real)
+   capabilities.positionEncoding  ---> "utf-16"     (the standard field — also present)
+   result top-level keys: capabilities, offsetEncoding, serverInfo
+   ```
+
+   **Verdict — the hypothesis was HALF right, and the right half is load-bearing:**
+   1. **`offsetEncoding` genuinely exists.** clangd sends it top-level in `result`. **Task 3's parser reads only `capabilities.positionEncoding` and ignores it entirely.**
+   2. **But clangd negotiated `utf-16`, not utf-8 — BECAUSE Task 3 advertised `general.positionEncodings: ["utf-16"]`.** clangd honored our advertisement and echoed it in **both** fields. **The pin is the reason the failure doesn't fire.** It is not belt-and-braces; it is load-bearing.
+
+   **What this means for you (Task 12):**
+   - **DO NOT remove or weaken `general.positionEncodings: ["utf-16"]`.** It is what makes clangd choose utf-16. Without it clangd's default is **utf-8**, and every position on every non-ASCII line silently shifts.
+   - **`--offset-encoding=utf-8` remains forbidden** — it would override the negotiation the pin won.
+   - ⚠ **We still cannot DETECT a mismatch.** Since `offsetEncoding` exists and we don't parse it, a future clangd (or a flag someone adds) answering utf-8 would be invisible. **Consider reading `result.offsetEncoding` and failing loudly on anything but utf-16** — cheap now, and it converts "safe because we asked nicely" into "safe because we check."
+
+   ### ⛔ SUPERSEDED — the original unresolved warning, kept for context
    Task 3's code review raised this at **moderate confidence, unverified against a real clangd binary** — nobody has run one yet (it isn't installed on this machine). **Do not treat it as settled either way; go and check.**
 
    clangd historically negotiates encoding via a **non-standard `offsetEncoding`** field that predates LSP 3.17's standard `positionEncoding`, and reports it in its initialize result. Task 3's parser reads **only** `positionEncoding`, and defaults a missing value to `utf-16` (correct per LSP 3.17 — omitted *means* utf-16).
@@ -1026,11 +1046,16 @@ You are the task that launches and kills a clangd **process**, and `token.Regist
 
 Note how this interacts with Task 6's rootless design: BasicLang keeps its rootless constructor autostart (it survives that), and **clangd can only ever start through `StartAllAsync`, which throws on a null root** — so clangd cannot start rootless by construction. Your job is the *second* project, not the first.
 
-- [ ] **Step 0 (BLOCKING — do this before anything else): dump real clangd's initialize result and settle the `offsetEncoding` question.**
+- [x] **Step 0 — DONE (Jul 16). ANSWERED EMPIRICALLY against real clangd 22.1.6.** See landmine #3's ✅ box for the raw result. Summary: **`result.offsetEncoding` IS real and IS sent** (top-level, alongside `capabilities` and `serverInfo`), and **Task 3's parser ignores it**. But clangd answered **`utf-16` in both fields** *because Task 3 advertises `general.positionEncodings: ["utf-16"]`* — **the pin is what wins the negotiation, not luck.**
 
-See landmine #3's ⛔ box. Task 3's review flagged, unverified, that clangd may negotiate encoding via a **non-standard `offsetEncoding`** field predating LSP 3.17. Task 3's parser reads only `positionEncoding` and defaults a missing value to utf-16. If clangd sends `offsetEncoding: "utf-8"` and omits `positionEncoding`, we silently believe utf-16 and **every position on every non-ASCII line is wrong, with the capability we added to detect it reporting all-clear.**
+  **Your remaining obligations from Step 0:**
+  1. **Never remove or weaken the utf-16 advertisement.** clangd's own default is utf-8; the pin is the only reason it chose utf-16.
+  2. **Never pass `--offset-encoding`** — it would override the negotiation the pin won.
+  3. **STRONGLY CONSIDER: read `result.offsetEncoding` and fail loudly on anything but `utf-16`.** We currently cannot *detect* a mismatch — a future clangd, or a stray flag, answering utf-8 would be invisible, and every position on every non-ASCII line would silently shift. Cheap now; it turns "safe because we asked nicely" into "safe because we check." **This is the one thing in Phase 3a that can silently corrupt every position we send.**
 
-Run a real clangd, capture the raw initialize result, and report what it actually sends. If `offsetEncoding` is present: extend `ParseServerCapabilities` to read it, expose it on `ServerCapabilities`, and make a utf-8 answer **fail loudly** rather than default. Do NOT proceed to Step 1 on an assumption — this is the one thing in Phase 3a that can silently corrupt every position we send.
+  **clangd is at `C:\Users\melvi\.vgs\tools\clangd_22.1.6\bin\clangd.exe`, deliberately NOT on PATH** — point `cpp.clangd.path` at it (which also exercises Task 11's override). ⚠ **Do NOT `winget install LLVM.LLVM`**: `clang++` on PATH makes `CppToolchain.Find()` return ClangLike and turns Task 10's D2 pin **vacuous**.
+
+  ⚠ **Probing clangd by hand:** interactive stdin/stdout pipes from PowerShell did **not** work (two attempts wedged, one with empty stderr). **File redirection does:** frame the message to a file as exact bytes and `clangd.exe --log=error < in.bin > out.bin`; EOF makes clangd shut down after replying. And **drain stderr** — an undrained pipe wedges it (that is what hung the first attempt, exactly as this plan warns about `LspClientManager`).
 
 - [ ] **Step 1: Write the failing tests** — clangd absent → registry degrades (BasicLang unaffected, `IsConnectedFor("a.cpp")` false, status text says not found, **no exception**); clangd present → started with `--compile-commands-dir=<projectDir>/obj` and **no `--offset-encoding`**.
 - [ ] **Step 2: Run — expect FAIL**
