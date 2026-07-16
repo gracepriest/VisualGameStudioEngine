@@ -8,7 +8,14 @@ using VisualGameStudio.Core.Models;
 namespace VisualGameStudio.ProjectSystem.Services;
 
 /// <summary>
-/// LSP client that communicates with BasicLang language server
+/// LSP client driving ONE language server, whose identity — what to launch, which files it
+/// owns, which <c>languageId</c> to announce them with — comes entirely from its
+/// <see cref="LanguageServerDescriptor"/>. Everything else on this class is server-agnostic:
+/// every request is keyed by uri + position.
+/// <para>
+/// One instance per server. Every field below (the process, the reader/writer, the request-id
+/// space, the restart budget) is single-server state that a second server would corrupt.
+/// </para>
 /// </summary>
 public class LanguageService : ILanguageService
 {
@@ -22,7 +29,7 @@ public class LanguageService : ILanguageService
     private readonly object _lock = new();
     /// <summary>Frame serializer whose waits (lock AND write) are all token-bounded.</summary>
     private readonly LspFrameWriter _frameWriter = new();
-    private readonly string _compilerPath;
+    private readonly LanguageServerDescriptor _descriptor;
     private readonly IOutputService _outputService;
 
     /// <summary>
@@ -43,6 +50,13 @@ public class LanguageService : ILanguageService
     private int _disconnectHandled;
 
     public bool IsConnected { get; private set; }
+
+    /// <summary>
+    /// Who this instance talks to. Fixed for the lifetime of the service — a descriptor is pure
+    /// identity, so re-pointing one at another server would only mean constructing another
+    /// service.
+    /// </summary>
+    public LanguageServerDescriptor Descriptor => _descriptor;
 
     /// <summary>What the last successful handshake reported; only meaningful while connected.</summary>
     private ServerCapabilities? _capabilities;
@@ -98,41 +112,68 @@ public class LanguageService : ILanguageService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    public LanguageService(IOutputService outputService, ISettingsService? settingsService = null)
+    /// <param name="descriptor">
+    /// Which server this instance drives. Defaults to BasicLang — resolved from the
+    /// <c>basiclang.lsp.path</c> override or the auto-probe — so the DI registration and the
+    /// existing call sites keep working until the registry constructs one service per
+    /// descriptor. A default parameter cannot BE the descriptor (it is not a compile-time
+    /// constant), hence the null sentinel.
+    /// </param>
+    public LanguageService(
+        IOutputService outputService,
+        ISettingsService? settingsService = null,
+        LanguageServerDescriptor? descriptor = null)
     {
         _outputService = outputService;
+        _descriptor = descriptor ?? CreateBasicLangDescriptor(settingsService);
+    }
 
-        // A user-supplied override (Settings → BasicLang → "LSP Server Path") wins whenever it
-        // names a file that exists; otherwise fall back to the auto-probe below. Settings are
-        // loaded at startup (App.LoadUserSettingsAtStartup) before this singleton is constructed
-        // via MainWindowViewModel, so the value is available here in the constructor.
-        // basiclang.lsp.path is honored as a compiler-path override for the spawned `--lsp` server.
+    /// <summary>
+    /// The default descriptor: BasicLang, launched from the <c>basiclang.lsp.path</c> override
+    /// when it names an existing file, otherwise from the auto-probe.
+    /// </summary>
+    /// <remarks>
+    /// The settings read — and therefore the <see cref="SettingsConsumerRegistry"/> registration
+    /// that must sit next to it — lives HERE rather than in the constructor, because the path has
+    /// to be resolved before there is a descriptor to hold it. A caller supplying its own
+    /// descriptor has already resolved the path by its own route, and registering a consumer on
+    /// its behalf would claim a read this class does not perform.
+    /// <para>
+    /// Settings are loaded at startup (App.LoadUserSettingsAtStartup) before this singleton is
+    /// constructed via MainWindowViewModel, so the value is available during construction.
+    /// </para>
+    /// </remarks>
+    private static LanguageServerDescriptor CreateBasicLangDescriptor(ISettingsService? settingsService)
+    {
         SettingsConsumerRegistry.RegisterConsumer(
-            "basiclang.lsp.path",
+            LanguageServerDescriptor.BasicLangSettingsKey,
             "LanguageService → BasicLang compiler path override for the spawned --lsp server");
 
-        var overridePath = ResolveLspPathOverride(settingsService?.Get<string>("basiclang.lsp.path", ""));
-        if (overridePath != null)
-        {
-            _compilerPath = overridePath;
-            return;
-        }
+        // A user-supplied override (Settings → BasicLang → "LSP Server Path") wins whenever it
+        // names a file that exists; otherwise fall back to the auto-probe.
+        var overridePath = ResolveLspPathOverride(
+            settingsService?.Get<string>(LanguageServerDescriptor.BasicLangSettingsKey, ""));
 
-        // Find the BasicLang compiler
+        return LanguageServerDescriptor.BasicLang(overridePath ?? ProbeBasicLangCompilerPath());
+    }
+
+    /// <summary>
+    /// Finds BasicLang.dll: next to the IDE, else the solution's Release build, else its Debug
+    /// build. Returns the last candidate even when nothing exists — the caller reports a missing
+    /// server against the path it actually looked for.
+    /// </summary>
+    private static string ProbeBasicLangCompilerPath()
+    {
         var baseDir = AppContext.BaseDirectory;
-        _compilerPath = Path.Combine(baseDir, "BasicLang.dll");
+
+        var deployed = Path.Combine(baseDir, "BasicLang.dll");
+        if (File.Exists(deployed)) return deployed;
 
         // Fall back to development paths
-        if (!File.Exists(_compilerPath))
-        {
-            // Try Release build in same solution
-            _compilerPath = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "BasicLang", "bin", "Release", "net8.0", "BasicLang.dll"));
-        }
-        if (!File.Exists(_compilerPath))
-        {
-            // Try Debug build in same solution
-            _compilerPath = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"));
-        }
+        var release = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "BasicLang", "bin", "Release", "net8.0", "BasicLang.dll"));
+        if (File.Exists(release)) return release;
+
+        return Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"));
     }
 
     /// <summary>
@@ -147,6 +188,91 @@ public class LanguageService : ILanguageService
         var trimmed = configuredPath.Trim();
         var exists = fileExists ?? File.Exists;
         return exists(trimmed) ? trimmed : null;
+    }
+
+    /// <summary>
+    /// The ProcessStartInfo to launch <paramref name="descriptor"/>'s server with, for a session
+    /// rooted at <paramref name="workspaceRoot"/>. Pure and static so every launch rule can be
+    /// pinned headlessly, without spawning a server.
+    /// </summary>
+    /// <param name="directoryExists">
+    /// Injectable existence probe for the working directory; defaults to
+    /// <see cref="Directory.Exists(string)"/>. Mirrors <see cref="ResolveWorkingDirectory"/> and
+    /// <see cref="ResolveLspPathOverride"/> — this assembly has no <c>InternalsVisibleTo</c> for
+    /// the test project, so a public static with an injectable dependency is the only seam a test
+    /// can reach.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// ⚠ <b>THIS IS THE ONLY PLACE A LANGUAGE SERVER IS CONFIGURED TO START.</b> It takes the
+    /// descriptor rather than letting each descriptor build its own ProcessStartInfo precisely so
+    /// that the three hardening fixes below cannot be forgotten by a server added later. Each of
+    /// them was a real, silent wedge:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><b>BOM-less StandardInputEncoding</b> — accessing
+    /// <c>Process.StandardInput</c> sets <c>AutoFlush=true</c>, which flushes the wrapper
+    /// StreamWriter and writes the encoding preamble. With <c>Encoding.UTF8</c> (BOM) that injects
+    /// EF BB BF into the server's stdin, corrupting the first Content-Length header — the server
+    /// never replies.</description></item>
+    /// <item><description><b>RedirectStandardError</b> — stderr MUST be redirected AND drained
+    /// (the caller's <c>ErrorDataReceived</c> + <c>BeginErrorReadLine</c>). An undrained stderr
+    /// fills its ~4KB pipe buffer and the server blocks forever. Not optional for clangd, which is
+    /// chatty on stderr.</description></item>
+    /// <item><description>The <b>Latin1 framing reader</b> lives at the call site (it wraps the
+    /// started process's stdout), so it is not visible here — but it is the third of the set:
+    /// Content-Length is a BYTE count, and a UTF-8 reader over-reads on any multi-byte character
+    /// and corrupts the framing of every subsequent message.</description></item>
+    /// </list>
+    /// <para>
+    /// ⚠ <b>SERVER ARGUMENTS — READ BEFORE ADDING ANY ENCODING FLAG.</b> Never pass clangd's
+    /// <c>--offset-encoding=utf-8</c> (widely copy-pasted from blog posts and other editors'
+    /// configs) or any other encoding override. This client converts LSP positions as
+    /// <c>character = column - 1</c> at 12+ call sites against AvaloniaEdit's <c>Caret.Column</c>,
+    /// which is a 1-based UTF-16 code-unit index — so utf-16 is the ONLY encoding it can read. It
+    /// is negotiated explicitly via <c>general.positionEncodings</c>; see
+    /// <see cref="BuildClientCapabilities"/> and <see cref="ServerCapabilities.Utf16"/>. A utf-8
+    /// override shifts every position on every line containing a non-ASCII character, silently and
+    /// with no error anywhere.
+    /// </para>
+    /// <para>
+    /// The workspace root is normalized ONCE, here, and the normalized value is what the
+    /// descriptor derives its arguments from and what the working directory is probed for — so a
+    /// server's <c>--compile-commands-dir</c> and its cwd can never disagree about what the root
+    /// IS. See <see cref="NormalizeWorkspaceRoot"/>.
+    /// </para>
+    /// </remarks>
+    public static ProcessStartInfo BuildStartInfo(
+        LanguageServerDescriptor descriptor,
+        string? workspaceRoot,
+        Func<string, bool>? directoryExists = null)
+    {
+        var root = NormalizeWorkspaceRoot(workspaceRoot);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = descriptor.FileName,
+            Arguments = descriptor.ArgumentsFor(root),
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
+        };
+
+        // Without this the server inherits the IDE's cwd — wherever the IDE happened to be
+        // launched from, and meaningless to the server. Left unset (== "") when the root names no
+        // existing directory: Process.Start THROWS on a missing WorkingDirectory, and an unusable
+        // root must cost us the cwd, not the whole language server.
+        var workingDirectory = ResolveWorkingDirectory(root, directoryExists);
+        if (workingDirectory != null)
+        {
+            startInfo.WorkingDirectory = workingDirectory;
+        }
+
+        return startInfo;
     }
 
     /// <inheritdoc />
@@ -183,50 +309,24 @@ public class LanguageService : ILanguageService
             _cts = new CancellationTokenSource();
 
             // Log the path being used
-            _outputService.WriteLine($"[LSP] Looking for BasicLang at: {_compilerPath}", OutputCategory.Debug);
+            _outputService.WriteLine(
+                $"[LSP] Looking for {_descriptor.DisplayName} at: {_descriptor.ServerPath}",
+                OutputCategory.Debug);
 
-            if (!File.Exists(_compilerPath))
+            // ServerPath, NOT StartInfo.FileName: BasicLang's FileName is "dotnet", resolved via
+            // PATH, for which File.Exists is always false. See LanguageServerDescriptor.ServerPath.
+            if (!File.Exists(_descriptor.ServerPath))
             {
-                _outputService.WriteError($"[LSP] BasicLang.dll not found at: {_compilerPath}", OutputCategory.Build);
+                _outputService.WriteError(
+                    $"[LSP] {_descriptor.DisplayName} not found at: {_descriptor.ServerPath}",
+                    OutputCategory.Build);
                 return;
             }
 
-            // ⚠ SERVER ARGUMENTS — READ BEFORE ADDING ANY ENCODING FLAG.
-            // Never pass clangd's "--offset-encoding=utf-8" (widely copy-pasted from
-            // blog posts and other editors' configs) or any other encoding override.
-            // This client converts LSP positions as `character = column - 1` at 12+
-            // call sites against AvaloniaEdit's Caret.Column, which is a 1-based
-            // UTF-16 code-unit index — so utf-16 is the ONLY encoding it can read.
-            // We negotiate it explicitly via general.positionEncodings; see
-            // BuildClientCapabilities and ServerCapabilities.Utf16. A utf-8 override
-            // shifts every position on every line containing a non-ASCII character,
-            // silently and with no error anywhere.
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                Arguments = $"\"{_compilerPath}\" --lsp",
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                // MUST be BOM-less: accessing Process.StandardInput sets AutoFlush=true,
-                // which flushes the wrapper StreamWriter and writes the encoding preamble.
-                // With Encoding.UTF8 (BOM) that injects EF BB BF into the server's stdin,
-                // corrupting the first Content-Length header — the server never replies.
-                StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
-            };
+            var startInfo = BuildStartInfo(_descriptor, workspaceRoot);
 
-            // Without this the server inherits the IDE's cwd — wherever the IDE happened
-            // to be launched from, and meaningless to the server.
             var requestedRoot = NormalizeWorkspaceRoot(workspaceRoot);
-            var workingDirectory = ResolveWorkingDirectory(workspaceRoot);
-            if (workingDirectory != null)
-            {
-                startInfo.WorkingDirectory = workingDirectory;
-            }
-            else if (requestedRoot != null)
+            if (requestedRoot != null && string.IsNullOrEmpty(startInfo.WorkingDirectory))
             {
                 // Say so rather than swallowing it: a root that names no directory is a
                 // caller bug, and this whole change exists to kill silent LSP failures.
@@ -237,7 +337,8 @@ public class LanguageService : ILanguageService
                     OutputCategory.Build);
             }
 
-            _outputService.WriteLine($"[LSP] Starting: dotnet \"{_compilerPath}\" --lsp", OutputCategory.Debug);
+            _outputService.WriteLine(
+                $"[LSP] Starting: {startInfo.FileName} {startInfo.Arguments}", OutputCategory.Debug);
 
             _serverProcess = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             _serverProcess.ErrorDataReceived += (s, e) =>
@@ -624,12 +725,31 @@ public class LanguageService : ILanguageService
     {
         if (!IsConnected) return;
 
+        // A document this server does not own must never be announced to it: the languageId
+        // would either be another server's (a lie the server cannot detect) or absent (the
+        // serializer omits nulls — a malformed didOpen, silently). Report and drop instead.
+        //
+        // Reported rather than thrown even though the descriptor throws: didOpen is fired
+        // and forgotten (`_ = OpenDocumentAsync(...)`) at the reconnect re-sync, so an
+        // exception here would become an unobserved task exception and vanish. Routing is the
+        // caller's job; being loud about a routing bug is ours.
+        if (!_descriptor.Owns(uri))
+        {
+            _outputService.WriteError(
+                $"[LSP] Not announcing '{uri}' to the {_descriptor.DisplayName} language server — " +
+                $"it owns {string.Join(", ", _descriptor.Extensions)}. This is a routing bug.",
+                OutputCategory.Build);
+            return;
+        }
+
         await SendNotificationAsync("textDocument/didOpen", new
         {
             textDocument = new
             {
                 uri = PathToUri(uri),
-                languageId = "basiclang",
+                // From the FILE, not a per-server constant: a server can own more than one
+                // language (clangd: .cpp and .h are both "cpp"; "c" the day .c is routed).
+                languageId = _descriptor.LanguageIdFor(uri),
                 version = 1,
                 text
             }

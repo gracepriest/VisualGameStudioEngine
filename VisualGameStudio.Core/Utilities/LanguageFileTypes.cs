@@ -74,6 +74,23 @@ public static class LanguageFileTypes
         BasicLangExtensions.Concat(CppExtensions).ToArray();
 
     /// <summary>
+    /// The inverse of <see cref="GetLspLanguageId"/>: every extension routed to
+    /// <paramref name="languageId"/>, empty when no language server owns that id.
+    /// </summary>
+    /// <remarks>
+    /// A projection of the SAME arrays <see cref="GetLspLanguageId"/> reads, not a second copy
+    /// of the mapping — so the forward and inverse answers cannot drift apart.
+    /// <c>LanguageServerDescriptor.Extensions</c> is built from this rather than hand-listing
+    /// extensions per server, which is how a server silently stops owning a file type.
+    /// </remarks>
+    public static IReadOnlyList<string> LspExtensionsFor(string? languageId) => languageId switch
+    {
+        BasicLangId => BasicLangExtensions,
+        CppId => CppExtensions,
+        _ => Array.Empty<string>()
+    };
+
+    /// <summary>
     /// LSP routing: returns the language ID of the server that owns this file, or
     /// <c>null</c> when no language server does. Callers are expected to handle null.
     /// <b>Never pass this to the extension host</b> — see the remarks on this class.

@@ -25,6 +25,9 @@ public static class ServiceConfiguration
         services.AddSingleton<IProjectService, ProjectService>();
         services.AddSingleton<ISolutionService, SolutionService>();
         services.AddSingleton<IBuildService, BuildService>();
+        // Resolves to the BasicLang server: LanguageService's descriptor parameter defaults to it,
+        // since the container has no LanguageServerDescriptor to inject. The registry replaces this
+        // with one service per descriptor.
         services.AddSingleton<ILanguageService, LanguageService>();
         services.AddSingleton<IDebugService, DebugService>();
         services.AddSingleton<ILaunchConfigurationService, LaunchConfigurationService>();
