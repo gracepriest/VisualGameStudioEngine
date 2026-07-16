@@ -474,11 +474,15 @@ The Task 5 tests below pin (a) — `Clangd(...)` is a **1-arg** factory. `obj` m
 - [ ] **Step 1: Write the failing tests**
 
 ```csharp
+// ⚠ ERRATUM — as originally written this test CANNOT PASS. Task 4 added a
+// `Directory.Exists` guard, and `C:\proj` doesn't exist, so WorkingDirectory is null.
+// BuildStartInfo therefore needs the injectable `directoryExists` seam (matching
+// `ResolveWorkingDirectory`/`ResolveLspPathOverride`); tests pass `_ => true`.
 [Test]
 public void Descriptor_BasicLang_ProducesUnchangedStartInfo()
 {
     var d = LanguageServerDescriptor.BasicLang(compilerPath: @"C:\x\BasicLang.dll");
-    var psi = LanguageService.BuildStartInfo(d, workspaceRoot: @"C:\proj");
+    var psi = LanguageService.BuildStartInfo(d, workspaceRoot: @"C:\proj", directoryExists: _ => true);
     Assert.Multiple(() =>
     {
         Assert.That(psi.FileName, Is.EqualTo("dotnet"));
@@ -490,14 +494,22 @@ public void Descriptor_BasicLang_ProducesUnchangedStartInfo()
 
 // D1 (decided — see the box above): the descriptor holds NO project-scoped state.
 // --compile-commands-dir is DERIVED from workspaceRoot at BuildStartInfo time.
+//
+// ⚠ ERRATUM — `Does.Contain` HERE IS A BUG, AND IT WAS CAUGHT BY MUTATION TESTING.
+// Task 5's implementer deliberately broke clangd's argument QUOTING and this assertion
+// STILL PASSED. Real project paths contain spaces; CommandLineToArgvW would split the
+// token and clangd would ignore the fragment — SILENTLY. Assert the exact token, not a
+// substring. This is the same lesson Task 3's review taught about `positionEncodings`:
+// substring assertions pass while the thing under test is broken. Do not use Does.Contain
+// for anything whose exact bytes reach a process or a wire.
 [Test]
 public void Descriptor_Clangd_DerivesCompileCommandsDirFromWorkspaceRoot()
 {
     var d = LanguageServerDescriptor.Clangd(clangdPath: @"C:\llvm\clangd.exe");   // no project state
-    var psi = LanguageService.BuildStartInfo(d, workspaceRoot: @"C:\proj");
+    var psi = LanguageService.BuildStartInfo(d, workspaceRoot: @"C:\proj", directoryExists: _ => true);
     Assert.That(psi.FileName, Is.EqualTo(@"C:\llvm\clangd.exe"));
-    Assert.That(psi.Arguments, Does.Contain(@"--compile-commands-dir=C:\proj\obj"),
-        "must match CompileCommandsWriter's output dir: <projectDir>/obj");
+    // exact-token, quoting-sensitive — NOT Does.Contain. A path with spaces must survive argv splitting.
+    Assert.That(psi.Arguments, Is.EqualTo(@"--compile-commands-dir=C:\proj\obj"));
     Assert.That(psi.Arguments, Does.Not.Contain("--offset-encoding"),
         "Never pass --offset-encoding: the client's column math is utf-16 only. See plan landmine #3.");
 }
@@ -535,11 +547,17 @@ git commit -m "refactor(lsp): extract server identity into LanguageServerDescrip
 
 **⚠ DI is load-bearing.** The orphan-on-exit fix is `App.axaml.cs:129` `(Services as IDisposable)?.Dispose()`. A registry that lazily `new`s a service **outside the container is never disposed and re-orphans clangd on every exit** — exactly the bug `LspClientManager.GetClientAsync` would have shipped. The registry MUST be the DI singleton and MUST dispose its children.
 
+### ⚠ Two things Task 5 hands you — read before starting
+
+1. **`Descriptor` lives on the concrete `LanguageService`, NOT on `ILanguageService`.** Task 5 deliberately left the interface alone (no consumer existed yet). **Your own test below does `GetFor(path)!.Descriptor.Id`, so YOU must lift it to the interface.** Add `ILanguageService.cs` to your file list.
+2. **The rootless-autostart decision lands here** (see landmine #1's ⛔ box). `MainWindowViewModel:553` autostarts the server in the **constructor**, before any project is open, and `StartCoreAsync` won't re-root a connected server — so today the server runs rootless for the whole session. **BasicLang survives that; clangd does not** (no root → no `compile_commands.json` → silent garbage). Task 5 confirmed the shape of the failure: with a null root, `--compile-commands-dir` is **omitted entirely** and clangd falls back to searching upward from each file, which won't find `obj/`. Your `StartAllAsync(workspaceRoot)` is the natural home for the fix: start servers on `ProjectOpened`, not in a constructor. **Decide it, and say what you decided.**
+
 **Files:**
 - Create: `VisualGameStudio.Core/Abstractions/Services/ILanguageServiceRegistry.cs`
 - Create: `VisualGameStudio.ProjectSystem/Services/LanguageServiceRegistry.cs`
+- Modify: `VisualGameStudio.Core/Abstractions/Services/ILanguageService.cs` — lift `Descriptor` onto the interface (see above)
 - Modify: `VisualGameStudio.Shell/Configuration/ServiceConfiguration.cs:28`
-- Test: `VisualGameStudio.Tests/LSP/LanguageServiceRegistryTests.cs`
+- Test: `VisualGameStudio.Tests/LSP/LanguageServiceRegistryTests.cs` (Task 5 named its file `LanguageServerDescriptorTests.cs` precisely to leave this name free for you)
 
 - [ ] **Step 1: Write the failing tests** (use fakes — do NOT start real processes)
 
