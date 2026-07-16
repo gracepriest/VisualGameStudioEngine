@@ -29,6 +29,12 @@ namespace BasicLang.Compiler.ProjectSystem
         /// write; false means the caller must stop and return the result as-is.</summary>
         public bool Completed { get; set; }
         public CppCompileRequest Request { get; set; }
+        /// <summary>The resolved toolchain, or NULL — legitimately so on the IntelliSense
+        /// path, which does not require one (the emitter falls back to the blessed clang++
+        /// identity). Non-null whenever <see cref="Completed"/> is true on a BUILD, because
+        /// EmitCore hard-fails BL6005 first; that is the only reason Build may dereference
+        /// it unguarded. The declared type cannot express this, and BasicLang.csproj has
+        /// CS8602/CS8604 in NoWarn, so the compiler will not warn a future caller either.</summary>
         public CppToolchain Toolchain { get; set; }
         /// <summary>Resolved engine import library whose DLLs need deploying, or null.
         /// Always null on the IntelliSense path (link-time concern).</summary>
@@ -99,8 +105,14 @@ namespace BasicLang.Compiler.ProjectSystem
         /// obj/compile_commands.json. Used by <see cref="Build"/> (which continues to
         /// compile/link) and by <see cref="IntelliSenseEmitter"/> (which stops here).
         ///
-        /// <paramref name="forIntelliSense"/> bypasses the gates that are BUILD rules
-        /// rather than IntelliSense rules — none of them changes a compile flag:
+        /// <paramref name="forIntelliSense"/> is a MODE SELECTOR, not just a gate switch: it
+        /// also suppresses build-progress messages, skips creating bin/&lt;config&gt; (opening
+        /// a project is not a build), and makes a failed compile-database write fatal rather
+        /// than advisory (the database is IntelliSense's whole deliverable, but only a hint
+        /// to a build). Grep <c>forIntelliSense</c> for the full set of sites.
+        ///
+        /// The gates it bypasses are the ones that are BUILD rules rather than IntelliSense
+        /// rules — none of them changes a compile flag:
         /// <list type="bullet">
         /// <item>BL6007 no-sources — a project mid-creation still deserves completion.</item>
         /// <item>The entry-point rule — a project with no <c>Sub Main</c> YET would
@@ -137,6 +149,8 @@ namespace BasicLang.Compiler.ProjectSystem
             var outputDir = Path.Combine(projectDir, "bin", configuration);
             if (!forIntelliSense)
                 Directory.CreateDirectory(outputDir);
+            // NOTE: reported on BOTH paths, but for IntelliSense this is where output WOULD
+            // go — the directory is deliberately not created, so it may not exist.
             result.OutputPath = outputDir;
             outcome.OutputDir = outputDir;
 
@@ -602,10 +616,11 @@ namespace BasicLang.Compiler.ProjectSystem
         /// Deletes stale generated files so a renamed/removed module's old .g.cpp/.g.h can
         /// never be picked up by a later compile, and returns the ones it could NOT delete.
         ///
-        /// Deletion stays best-effort ON PURPOSE: from Phase 3a on, clangd holds obj/gen
-        /// headers open, so promoting a locked file to a hard BL6006 would let the editor
-        /// break the build. But a skipped file must not be SILENT either — a stale one that
-        /// survives goes on to be compiled. The caller surfaces each failure as a warning.
+        /// Deletion stays best-effort ON PURPOSE: any process may hold a transient handle on
+        /// a generated file — an indexer, antivirus, a concurrent build, an open editor —
+        /// and promoting that to a hard BL6006 would let an unrelated process break the
+        /// build. But a skipped file must not be SILENT either: a stale one that survives
+        /// goes on to be compiled. The caller surfaces each failure as a warning.
         /// </summary>
         private static List<string> CleanGeneratedDir(string objGenDir)
         {

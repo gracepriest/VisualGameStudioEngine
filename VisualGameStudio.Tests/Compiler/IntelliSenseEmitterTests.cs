@@ -236,18 +236,98 @@ public class IntelliSenseEmitterTests
             ("App.bas", MainSource));
 
         // Pin the premise: the very same project through Build() fails at the lib gate.
-        var built = CppProjectBuilder.Build(ProjectFile.Load(project.FilePath), "Debug");
-        Assert.That(built.Success, Is.False);
-        Assert.That(built.Diagnostics.Select(d => d.Code), Does.Contain("BL6009"),
-            "premise: Build() must reject the unresolvable library: " + DiagCodes(built));
+        // Build() probes for itself and hard-fails BL6005 at section 6 — BEFORE the lib gate
+        // — when nothing is installed, so the premise is only observable with a toolchain
+        // present. (Emit below is unconditional: it is handed toolchain: null explicitly.)
+        if (CppToolchain.Find() != null)
+        {
+            var built = CppProjectBuilder.Build(ProjectFile.Load(project.FilePath), "Debug");
+            Assert.That(built.Success, Is.False);
+            Assert.That(built.Diagnostics.Select(d => d.Code), Does.Contain("BL6009"),
+                "premise: Build() must reject the unresolvable library: " + DiagCodes(built));
+        }
 
         var r = IntelliSenseEmitter.Emit(project, "Debug", toolchain: null);
 
         Assert.Multiple(() =>
         {
             Assert.That(r.Success, Is.True, "a missing link-time .lib must not deny IntelliSense: " + DiagCodes(r));
-            Assert.That(File.Exists(CompileCommandsPath), Is.True);
-            Assert.That(File.Exists(ObjGen("BasicLangRuntime.g.h")), Is.True);
+            Assert.That(File.Exists(CompileCommandsPath), Is.True,
+                "the compile database is what Build()'s BL6009 return would have skipped");
+        });
+    }
+
+    // Task 8's review demanded that a stale file we FAIL to delete must not be skipped
+    // SILENTLY: it survives and goes on to be compiled. Deletion stays best-effort (any
+    // process may hold a transient handle; a hard failure would let an unrelated process
+    // break the build), so the warning is the entire contract — and a contract nothing
+    // asserts is a comment.
+    //
+    // The locked file MUST be a STALE one (no Zombie module exists, so Zombie.g.h is not in
+    // the fresh set). Locking a file that IS in the fresh set exercises a different branch:
+    // the write throws and it surfaces as BL6006. Mutation-verified both ways.
+    [Test]
+    public void Emit_WhenStaleGeneratedFileIsLocked_SucceedsButWarns()
+    {
+        var project = WriteProject(Blproj("App"), ("App.bas", MainSource));
+        Assert.That(IntelliSenseEmitter.Emit(project, "Debug", null).Success, Is.True);
+
+        var zombie = ObjGen("Zombie.g.h");
+        File.WriteAllText(zombie, "#pragma once\n// from a module that no longer exists\n");
+
+        CppProjectBuildResult r;
+        using (new FileStream(zombie, FileMode.Open, FileAccess.Read, FileShare.None))
+            r = IntelliSenseEmitter.Emit(project, "Debug", null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Success, Is.True,
+                "a file another process holds must not fail emission: " + DiagCodes(r));
+            Assert.That(r.Messages.Where(m => m.Contains("Zombie.g.h")), Is.Not.Empty,
+                "an undeletable STALE file must be reported — it survives and gets compiled");
+            Assert.That(File.Exists(zombie), Is.True, "sanity: the lock did prevent the delete");
+        });
+    }
+
+    // The compile database is only a HINT to a build (advisory) but IS the deliverable for
+    // IntelliSense — so the same IO fault is fatal on one path and a warning on the other.
+    // That divergence is deliberate and newly introduced, so it gets pinned on both sides.
+    // Making the path a DIRECTORY is what makes WriteAllText throw.
+    [Test]
+    public void Emit_WhenCompileDatabaseCannotBeWritten_FailsBL6006()
+    {
+        var project = WriteProject(Blproj("App"), ("App.bas", MainSource));
+        Directory.CreateDirectory(CompileCommandsPath);
+
+        var r = IntelliSenseEmitter.Emit(project, "Debug", toolchain: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Success, Is.False, "IntelliSense without a compile database is not a success");
+            Assert.That(r.Diagnostics.Select(d => d.Code), Does.Contain("BL6006"), DiagCodes(r));
+            Assert.That(File.Exists(ObjGen("BasicLangRuntime.g.h")), Is.True,
+                "the headers were already written — the failure is the database, not codegen");
+        });
+    }
+
+    // The other side of that divergence: the identical fault must NOT fail a build.
+    [Test]
+    public void Build_WhenCompileDatabaseCannotBeWritten_StillSucceeds()
+    {
+        if (CppToolchain.Find() == null)
+            Assert.Ignore("Build() needs a real toolchain to reach the compile step");
+
+        var project = WriteProject(Blproj("App"), ("App.bas", MainSource));
+        Directory.CreateDirectory(CompileCommandsPath);
+
+        var r = CppProjectBuilder.Build(project, "Debug");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Success, Is.True,
+                "an unwritable compile database is ADVISORY for a build: " + DiagCodes(r));
+            Assert.That(r.Messages.Where(m => m.Contains("could not write compilation database")),
+                Is.Not.Empty, "...but it must still say so");
         });
     }
 
