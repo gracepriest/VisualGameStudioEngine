@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Utilities;
 
@@ -14,7 +15,14 @@ namespace VisualGameStudio.ProjectSystem.Services;
 /// </summary>
 public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
 {
-    private readonly IReadOnlyList<ILanguageService> _services;
+    /// <summary>
+    /// The registered servers. A <see cref="ReadOnlyCollection{T}"/>, not the backing array, so
+    /// <see cref="All"/> can hand it out directly: <c>IReadOnlyList&lt;T&gt;</c> is a read-only
+    /// VIEW, not a read-only object — a caller who downcast <c>All</c> back to <c>ILanguageService[]</c>
+    /// could swap a server out from under the registry. Same defence <c>LanguageFileTypes</c>
+    /// applies to its routing arrays; this class must not hand out a mutable handle to its own state.
+    /// </summary>
+    private readonly ReadOnlyCollection<ILanguageService> _services;
 
     /// <summary>
     /// languageId → the one server serving it. Built once: routing is a hot path
@@ -35,7 +43,7 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        _services = services.ToArray();
+        _services = new ReadOnlyCollection<ILanguageService>(services.ToArray());
 
         // An empty registry is not a degenerate case that "just routes nothing" — it is a DI
         // mistake that presents as every IntelliSense feature in the IDE quietly doing nothing,

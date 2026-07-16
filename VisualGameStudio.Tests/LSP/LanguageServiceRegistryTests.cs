@@ -129,6 +129,14 @@ public class LanguageServiceRegistryTests
         Assert.That(r.All, Is.EquivalentTo(new[] { bl.Object, cl.Object }));
     }
 
+    // IReadOnlyList is a read-only VIEW, not a read-only object: had All handed back its backing
+    // array, a caller could downcast it and swap a server out from under the registry. Pinned so
+    // the returned object is genuinely not the mutable array — same defence LanguageFileTypes
+    // applies to its routing arrays.
+    [Test]
+    public void All_CannotBeDowncastToTheMutableBackingArray() =>
+        Assert.That(RegistryOf(FakeBasicLang(), FakeClangd()).All, Is.Not.AssignableTo<ILanguageService[]>());
+
     // ---- Per-server connection state ---------------------------------------
 
     // THE regression this whole task exists to prevent.
