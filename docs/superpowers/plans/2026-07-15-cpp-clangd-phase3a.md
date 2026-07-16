@@ -1005,6 +1005,12 @@ git commit -m "feat(cpp): clangd discovery via PATH with a cpp.clangd.path overr
 - Modify: `VisualGameStudio.ProjectSystem/Services/LanguageServiceRegistry.cs` (start clangd when a native project opens and clangd resolves)
 - Modify: `VisualGameStudio.Shell/ViewModels/StatusBarViewModel.cs`, `VisualGameStudio.Shell/Views/Controls/StatusBarControl.axaml`
 
+### ⛔ `token.Register(() => process.Kill())` WOULD RUN ON THE UI THREAD. Found by Task 10's review.
+
+`IntelliSenseEmissionService` calls `_current?.Cancel()` **synchronously on the caller** (the UI thread that raised `ProjectOpened`). That's O(1) today **only because nothing registers a cancellation callback** — `RunAsync` merely polls `IsCancellationRequested`. **Cancellation callbacks run synchronously on the canceller's thread.**
+
+You are the task that launches and kills a clangd **process**, and `token.Register(() => process.Kill())` is the obvious way anyone would wire teardown. **The moment you write that, process teardown runs on the UI thread.** If you need cancellation to kill clangd, register the callback **inside** a `Task.Run`, or use a mechanism that doesn't run on the canceller's thread.
+
 ### ⛔ PROJECT SWITCH — `StartAllAsync` does NOT re-root. Found by Task 6; it is YOURS to fix.
 
 `StartAsync` **no-ops on an already-connected server** (`StartCoreAsync`'s `if (IsConnected) return;`). So opening project B while clangd is connected to project A leaves clangd **rooted at A**, silently answering from the wrong compilation database — right-looking completions and diagnostics for the wrong project. **Re-rooting requires `StopAllAsync()` then `StartAllAsync(newRoot)`.** Task 6 documented this on the interface but correctly left the fix to you (it owns startup; you own the clangd lifecycle).
