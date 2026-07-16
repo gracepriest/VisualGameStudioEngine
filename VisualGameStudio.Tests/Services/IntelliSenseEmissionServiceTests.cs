@@ -427,6 +427,39 @@ public class IntelliSenseEmissionServiceTests
         Assert.That(calls, Is.Zero, "a disposed service must not schedule work");
     }
 
+    // The _disposed guard above only covers requests arriving AFTER Dispose. This covers the one
+    // already QUEUED at the moment of disposal: shutdown must not hand the thread pool a fresh
+    // multi-second front-end run on the way out. Dispose deliberately does not WAIT (that would
+    // hold shutdown behind a compile) — cancelling is the whole mechanism, so it needs a test.
+    [Test]
+    public async Task Dispose_CancelsAnAlreadyQueuedEmission()
+    {
+        using var firstEntered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var seen = new ConcurrentQueue<string>();
+
+        var svc = Service((_, configuration) =>
+        {
+            seen.Enqueue(configuration);
+            if (configuration == "First") { firstEntered.Set(); release.Wait(Patience); }
+            return Ok();
+        });
+
+        var t1 = svc.RequestEmit(Project(), "First");
+        Assert.That(firstEntered.Wait(Patience), Is.True, "sanity: the first emission must be in flight");
+
+        // Queued behind the in-flight one, so it has not reached the emitter yet.
+        var t2 = svc.RequestEmit(Project(), "Queued");
+
+        svc.Dispose();
+        release.Set();
+        await Task.WhenAll(t1, t2);
+
+        Assert.That(seen, Is.EqualTo(new[] { "First" }),
+            "an emission queued at the moment of disposal must never start: the IDE is shutting down "
+            + "and its artifacts would be regenerated on next open anyway");
+    }
+
     /// <summary>Thread-safe recording IOutputService — emission runs on the pool.</summary>
     private sealed class RecordingOutput : IOutputService
     {

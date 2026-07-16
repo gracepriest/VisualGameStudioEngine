@@ -14,8 +14,12 @@ namespace VisualGameStudio.ProjectSystem.Services;
 /// caller of a multi-second, non-incremental operation:
 /// </para>
 /// <list type="bullet">
-/// <item><b>Off the calling thread.</b> The whole body runs inside <c>Task.Run</c>, so nothing —
-/// not even the pre-flight checks — executes on the UI thread that raised ProjectOpened.</item>
+/// <item><b>Off the calling thread.</b> The expensive part — the front-end run — is inside
+/// <c>Task.Run</c>. What executes on the caller is only the native-project gate and the supersede
+/// bookkeeping: all O(1), none blocking. <c>Cancel()</c> is O(1) ONLY because nothing registers a
+/// cancellation callback — callbacks run synchronously on the canceller's thread, so if any are
+/// ever added (Tasks 11-13 kill a clangd process; <c>token.Register(() =&gt; process.Kill())</c> is
+/// the obvious way to wire it) they must move inside the <c>Task.Run</c>.</item>
 /// <item><b>Coalesced.</b> A superseded request never runs. N rapid opens cost the in-flight
 /// emission plus the last one, not N front-end runs.</item>
 /// <item><b>Serialized.</b> Emissions never overlap: two of them writing <c>obj/gen</c> for the
@@ -104,11 +108,15 @@ public sealed class IntelliSenseEmissionService : IIntelliSenseEmissionService, 
             // ⚠ Superseding is unconditional — it does NOT compare projects. That is correct only
             // because IProjectService holds ONE project: OpenProjectAsync closes the current one
             // before firing ProjectOpened, and SolutionService never opens projects through it. So
-            // a superseded request is always for a project that is now CLOSED. If emission ever
-            // grows a second trigger (Phase 3b's .bas-save / .blproj-change) or the IDE learns to
-            // hold several projects open, this must key on the project — otherwise opening a
-            // 3-project solution would emit for the first and last and silently skip the middle
-            // one, leaving it with no compile database and no error to say so.
+            // a superseded request is always for a project that is now CLOSED.
+            //
+            // THE precondition is single-project, and nothing else. Phase 3b's extra triggers
+            // (.bas-save, .blproj-change) are harmless on their own: with one project open, a
+            // save-triggered emission superseding an open-triggered one is the SAME project, which
+            // is exactly what superseding is for. The day the IDE holds several projects open,
+            // this must key on the project — otherwise opening a 3-project solution emits for the
+            // first and last and silently skips the middle one, leaving it with no compile
+            // database and no error to say so.
             _current?.Cancel();
             var cts = new CancellationTokenSource();
             _current = cts;
