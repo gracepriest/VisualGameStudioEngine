@@ -964,7 +964,13 @@ git commit -m "feat(ide): emit IntelliSense headers and compile_commands on proj
 
 **Why reuse:** `basiclang.lsp.path` is **precisely** the "user overrides a tool path, else auto-probe" feature — clone it end to end. Schema `SettingsService.cs:1204`; dialog `SettingsViewModel.cs:1011` (`MakeText`, `:1040-1041`) + property map `:1286` + load `:1592`; consumer + `SettingsConsumerRegistry.RegisterConsumer` at `LanguageService.cs:72-81`; and the pure injectable rule `ResolveLspPathOverride(configuredPath, fileExists)` at `:106-112` (override wins only if non-empty AND the file exists, else null = auto-probe).
 
-**Discovery:** `CppToolchain.Find()` (`:52-105`) is **NOT reusable** — it proves "can compile" by running `--version` on a bare name and **never retains a path**; clangd must be spawned by absolute path. `ShellProfileDetector.FindOnPath` (`:393-413`) **is** a real PATH search returning an absolute path — but it's `internal static` and does not apply `PATHEXT`. Lift it to `Core/Utilities/ExecutableLocator.cs` and add `PATHEXT` handling for Windows.
+**Discovery:** `CppToolchain.Find()` (`:52-105`) is **NOT reusable** — it proves "can compile" by running `--version` on a bare name and **never retains a path**; clangd must be spawned by path. `ShellProfileDetector.FindOnPath` (`:393-413`) **is** a real PATH search — but it's `internal static` and does not apply `PATHEXT`. Lift it to `Core/Utilities/ExecutableLocator.cs` and add `PATHEXT` handling for Windows.
+
+> **⚠ ERRATUM — the plan said `FindOnPath` "returns an absolute path". FALSE**, caught by Task 11's implementer in its own self-review (it had made the identical overclaim and checked rather than reasoned). It returns `Path.Combine(pathEntry, name)` — **as absolute as the PATH entry, no more.** A relative PATH entry (legal, if unusual) yields a **relative** path. The replacement `ExecutableLocator.Find` inherits this deliberately; normalizing via `Path.GetFullPath` would resolve against the CWD, an unasked-for behavior change. **Task 12 spawns this path — know that it is not guaranteed absolute.**
+>
+> Two more verified behaviors from Task 11, so nobody re-derives them:
+> - **The returned extension is spelled from `PATHEXT`** (`clangd.EXE`), **not from disk** (`clangd.exe`). Functional — Windows paths are case-insensitive, which is how the match was made — but it is **not the file's canonical name. Don't display it as one.**
+> - Search is **directory-major**: PATH order outranks PATHEXT order, matching Windows.
 
 **Files:**
 - Create: `VisualGameStudio.Core/Utilities/ExecutableLocator.cs`, `VisualGameStudio.ProjectSystem/Services/ClangdLocator.cs`
