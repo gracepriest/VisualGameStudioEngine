@@ -1249,6 +1249,22 @@ public class SettingsService : ISettingsService, IDisposable
                 Prop("git.confirmSync", SettingsPropertyType.Boolean, "Confirm Sync", true, "Confirm before synchronizing."),
             }
         });
+
+        // C++ tooling. Its own group rather than an entry under "basiclang": that group is the
+        // BasicLang language's own settings, and C++ is a peer language here, not a BasicLang
+        // feature.
+        RegisterSchema(new SettingsSchema
+        {
+            Id = "cpp",
+            Title = "C++",
+            Description = "C++ language and tooling settings",
+            Order = 10,
+            Properties = new List<SettingsPropertySchema>
+            {
+                Prop(LanguageServerDescriptor.ClangdSettingsKey, SettingsPropertyType.String, "clangd Path", "",
+                    "Path to the clangd executable, used for C++ IntelliSense. Leave empty to search PATH."),
+            }
+        });
     }
 
     private static SettingsPropertySchema Prop(

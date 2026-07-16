@@ -71,6 +71,9 @@ public class SettingsConsumerContractTests
         MainWindowViewModel.RegisterBuildAndLspSettingsConsumers();  // build.* + basiclang.lsp.autoStart
         MainWindowViewModel.RegisterEditorSaveSettingsConsumers();   // editor.formatOnSave + trimTrailingWhitespaceOnSave
 
+        // ---- Static-class registrants: call the method that performs the read. ----
+        _ = ClangdLocator.Locate(service);                           // cpp.clangd.path
+
         // ---- Instance-ctor registrants: construct a cheap instance (mocks for the deps). ----
         _ = new DockFactory(service);                                   // workbench.startupEditor + sideBar.location
         _ = new ProjectService(new Mock<IFileService>().Object, service);   // basiclang.compiler.backend

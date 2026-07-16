@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using VisualGameStudio.Core.Utilities;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
@@ -111,7 +112,7 @@ public static class ShellProfileDetector
         }
 
         // Fallback: check PATH
-        var pwshOnPath = FindOnPath("pwsh.exe");
+        var pwshOnPath = ExecutableLocator.Find("pwsh.exe");
         if (pwshOnPath != null)
         {
             profiles.Add(new ShellProfile
@@ -206,7 +207,7 @@ public static class ShellProfileDetector
         }
 
         // Fallback: check PATH
-        var bashOnPath = FindOnPath("bash.exe");
+        var bashOnPath = ExecutableLocator.Find("bash.exe");
         if (bashOnPath != null && bashOnPath.Contains("Git", StringComparison.OrdinalIgnoreCase))
         {
             profiles.Add(new ShellProfile
@@ -321,7 +322,7 @@ public static class ShellProfileDetector
     /// </summary>
     private static void DetectNushell(List<ShellProfile> profiles)
     {
-        var nuOnPath = FindOnPath("nu.exe");
+        var nuOnPath = ExecutableLocator.Find("nu.exe");
         if (nuOnPath != null)
         {
             profiles.Add(new ShellProfile
@@ -386,31 +387,6 @@ public static class ShellProfileDetector
     // ──────────────────────────────────────────────────────────────────
     //  Helpers
     // ──────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Searches PATH for the given executable name.
-    /// </summary>
-    internal static string? FindOnPath(string executable)
-    {
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(pathEnv)) return null;
-
-        var separator = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? ';' : ':';
-        foreach (var dir in pathEnv.Split(separator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            try
-            {
-                var full = System.IO.Path.Combine(dir.Trim(), executable);
-                if (File.Exists(full))
-                    return full;
-            }
-            catch
-            {
-                // skip invalid paths
-            }
-        }
-        return null;
-    }
 
     /// <summary>
     /// Reads a string value from the Windows registry (HKLM or HKCU).

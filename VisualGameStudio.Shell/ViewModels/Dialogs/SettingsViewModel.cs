@@ -418,6 +418,10 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private bool _lspAutoStart = true;
 
+    // -- C++ Settings --
+    [ObservableProperty]
+    private string _clangdPath = "";
+
     // -- Minimap Settings --
     [ObservableProperty]
     private bool _minimapEnabled = true;
@@ -879,6 +883,7 @@ public partial class SettingsViewModel : ViewModelBase
             "debug" => "Debug",
             "git" => "Git",
             "basiclang" => "BasicLang",
+            "cpp" => "C++",
             "intellisense" => "IntelliSense",
             "build" => "Build",
             "files" => "Files",
@@ -905,10 +910,11 @@ public partial class SettingsViewModel : ViewModelBase
             // are kept so a future real Debug setting can re-enable the category with one line here.
             new() { Id = "git", Name = "Git", Icon = "\u2387", Order = 5 },
             new() { Id = "basiclang", Name = "BasicLang", Icon = "\u2663", Order = 6 },
-            new() { Id = "intellisense", Name = "IntelliSense", Icon = "\u2726", Order = 7 },
-            new() { Id = "build", Name = "Build", Icon = "\u2692", Order = 8 },
-            new() { Id = "files", Name = "Files", Icon = "\u2630", Order = 9 },
-            new() { Id = "keyboard", Name = "Keyboard", Icon = "\u2328", Order = 10 },
+            new() { Id = "cpp", Name = "C++", Icon = "\u29c9", Order = 7 },
+            new() { Id = "intellisense", Name = "IntelliSense", Icon = "\u2726", Order = 8 },
+            new() { Id = "build", Name = "Build", Icon = "\u2692", Order = 9 },
+            new() { Id = "files", Name = "Files", Icon = "\u2630", Order = 10 },
+            new() { Id = "keyboard", Name = "Keyboard", Icon = "\u2328", Order = 11 },
         };
 
         RefreshCategoryModifiedCounts();
@@ -932,6 +938,7 @@ public partial class SettingsViewModel : ViewModelBase
                 "debug" => "Debug",
                 "git" => "Git",
                 "basiclang" => "BasicLang",
+                "cpp" => "C++",
                 "intellisense" => "IntelliSense",
                 "build" => "Build",
                 "files" => "Files",
@@ -1010,6 +1017,9 @@ public partial class SettingsViewModel : ViewModelBase
             MakeCombo("basiclang.compiler.backend", "Compiler Backend", "The default compilation backend for BasicLang projects.", "BasicLang", nameof(CompilerBackend), CompilerBackends, "CSharp"),
             MakeText("basiclang.lsp.path", "LSP Server Path", "Path to the BasicLang LSP server executable. Leave empty for auto-detection.", "BasicLang", nameof(LspServerPath), ""),
             MakeBool("basiclang.lsp.autoStart", "Auto Start LSP", "Automatically start the LSP server when a BasicLang file is opened.", "BasicLang", nameof(LspAutoStart), true),
+
+            // ===== C++ =====
+            MakeText(LanguageServerDescriptor.ClangdSettingsKey, "clangd Path", "Path to the clangd executable, used for C++ IntelliSense. Leave empty to search PATH.", "C++", nameof(ClangdPath), ""),
 
             // ===== IntelliSense =====
             MakeBool("intellisense.autoComplete", "Enable Auto Complete", "Show completion suggestions as you type.", "IntelliSense", nameof(EnableAutoComplete), true),
@@ -1172,6 +1182,7 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(StartupEditor) => StartupEditor,
         nameof(SideBarLocation) => SideBarLocation,
         nameof(LspServerPath) => LspServerPath,
+        nameof(ClangdPath) => ClangdPath,
         nameof(MinimapSide) => MinimapSide,
         _ => ""
     };
@@ -1194,6 +1205,7 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(StartupEditor): StartupEditor = value; break;
             case nameof(SideBarLocation): SideBarLocation = value; break;
             case nameof(LspServerPath): LspServerPath = value; break;
+            case nameof(ClangdPath): ClangdPath = value; break;
             case nameof(MinimapSide): MinimapSide = value; break;
         }
 
@@ -1285,6 +1297,7 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(CompilerBackend) => "basiclang.compiler.backend",
         nameof(LspServerPath) => "basiclang.lsp.path",
         nameof(LspAutoStart) => "basiclang.lsp.autoStart",
+        nameof(ClangdPath) => LanguageServerDescriptor.ClangdSettingsKey,
         nameof(EnableAutoComplete) => "intellisense.autoComplete",
         nameof(ShowQuickInfo) => "intellisense.quickInfo",
         nameof(ShowSignatureHelp) => "intellisense.signatureHelp",
@@ -1591,6 +1604,7 @@ public partial class SettingsViewModel : ViewModelBase
         CompilerBackend = _settingsService.Get("basiclang.compiler.backend", "CSharp", scope);
         LspServerPath = _settingsService.Get("basiclang.lsp.path", "", scope);
         LspAutoStart = _settingsService.Get("basiclang.lsp.autoStart", true, scope);
+        ClangdPath = _settingsService.Get(LanguageServerDescriptor.ClangdSettingsKey, "", scope);
     }
 
     private void LoadSettings()
