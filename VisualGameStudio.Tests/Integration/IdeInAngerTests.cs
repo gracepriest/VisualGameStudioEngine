@@ -318,7 +318,10 @@ End Sub
         {
             using (var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
             {
-                await lsp.StartAsync(startCts.Token);
+                // Started with a REAL workspace root: everything asserted below (capabilities,
+                // hover, completion, diagnostics) is what the real BasicLang --lsp server does
+                // when initialize actually carries rootUri/rootPath/workspaceFolders.
+                await lsp.StartAsync(fixture.RootDir, startCts.Token);
             }
             Assert.That(lsp.IsConnected, Is.True, "LanguageService failed to connect.\n" + output.Dump());
             Assert.That(lsp.ServerProcessId, Is.Not.Null, "Server process id was not recorded");

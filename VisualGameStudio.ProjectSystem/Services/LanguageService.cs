@@ -47,6 +47,20 @@ public class LanguageService : ILanguageService
     /// <summary>What the last successful handshake reported; only meaningful while connected.</summary>
     private ServerCapabilities? _capabilities;
 
+    /// <summary>
+    /// The workspace root the current (or most recent) server process was started with.
+    /// <para>
+    /// Held in a field rather than only threaded through as a parameter because
+    /// <see cref="TryRestartAsync"/> re-enters <see cref="StartCoreAsync"/> with no caller
+    /// to supply it. A restart that dropped the root would silently downgrade the server —
+    /// clangd would come back up unable to find compile_commands.json and answer with
+    /// garbage diagnostics, with nothing in the log to connect it to the crash.
+    /// </para>
+    /// Assigned inside <see cref="StartCoreAsync"/> past its early-returns, so it always
+    /// describes the server that was actually started.
+    /// </summary>
+    private string? _workspaceRoot;
+
     /// <inheritdoc />
     /// <remarks>
     /// Derived from <see cref="IsConnected"/> rather than cleared at each teardown.
@@ -127,7 +141,8 @@ public class LanguageService : ILanguageService
         return exists(trimmed) ? trimmed : null;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken = default)
+    /// <inheritdoc />
+    public Task StartAsync(string? workspaceRoot = null, CancellationToken cancellationToken = default)
     {
         // A disposed service must never start a server again — and only an
         // EXPLICIT (user-initiated) start clears a previous Stop. Auto-restart
@@ -137,13 +152,17 @@ public class LanguageService : ILanguageService
         if (_disposed) return Task.CompletedTask;
 
         _stopping = false;
-        return StartCoreAsync(cancellationToken);
+        return StartCoreAsync(workspaceRoot, cancellationToken);
     }
 
-    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    private async Task StartCoreAsync(string? workspaceRoot, CancellationToken cancellationToken)
     {
         if (IsConnected) return;
         if (_stopping || _disposed) return;
+
+        // Past the early-returns: we are committed to starting a server, so this is
+        // the root that server will have. Auto-restart reads it back (see the field).
+        _workspaceRoot = workspaceRoot;
 
         try
         {
@@ -185,6 +204,17 @@ public class LanguageService : ILanguageService
                 StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
             };
 
+            // Without this the server inherits the IDE's cwd, which is wherever the IDE
+            // happened to be launched from — meaningless to the server. Guarded on
+            // Directory.Exists because Process.Start THROWS on a non-existent
+            // WorkingDirectory: an unusable root must cost us the cwd, not the whole
+            // language server. The root still reaches the server via initialize params,
+            // which are not filesystem-dependent.
+            if (!string.IsNullOrWhiteSpace(workspaceRoot) && Directory.Exists(workspaceRoot))
+            {
+                startInfo.WorkingDirectory = workspaceRoot;
+            }
+
             _outputService.WriteLine($"[LSP] Starting: dotnet \"{_compilerPath}\" --lsp", OutputCategory.Debug);
 
             _serverProcess = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -223,7 +253,7 @@ public class LanguageService : ILanguageService
 
             try
             {
-                await InitializeAsync(initCts.Token);
+                await InitializeAsync(workspaceRoot, initCts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -436,14 +466,74 @@ public class LanguageService : ILanguageService
         return provider.ValueKind is JsonValueKind.True or JsonValueKind.Object;
     }
 
-    private async Task InitializeAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Builds the <c>initialize</c> request params for a server rooted at
+    /// <paramref name="workspaceRoot"/> (a local directory path), or with no workspace
+    /// at all when it is null/blank. Pure and static so the wire shape can be asserted
+    /// headlessly; does no filesystem I/O.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A server with no root has no project. This client used to hardcode
+    /// <c>rootUri: null</c> — under which clangd cannot locate
+    /// <c>compile_commands.json</c> and reports every translation unit as broken,
+    /// silently and with no error on either side.
+    /// </para>
+    /// <para>
+    /// ⚠ Built as a dictionary so that "no workspace" OMITS the three members outright.
+    /// An anonymous type would have to write <c>rootUri = null</c> and lean on the
+    /// caller serializing with <c>DefaultIgnoreCondition.WhenWritingNull</c> to make
+    /// them disappear — coupling the wire shape to a serializer setting configured far
+    /// away. Omission is a correctness requirement here, not a formatting preference.
+    /// </para>
+    /// <para>
+    /// All three members are sent because servers disagree on which they read:
+    /// <c>rootPath</c> is deprecated but still honoured by older servers, <c>rootUri</c>
+    /// superseded it, and <c>workspaceFolders</c> superseded that.
+    /// </para>
+    /// </remarks>
+    public static object BuildInitializeParams(string? workspaceRoot)
     {
-        var initParams = new
+        var initParams = new Dictionary<string, object?>
         {
-            processId = Environment.ProcessId,
-            rootUri = (string?)null,
-            capabilities = BuildClientCapabilities()
+            ["processId"] = Environment.ProcessId,
+            ["capabilities"] = BuildClientCapabilities()
         };
+
+        if (!string.IsNullOrWhiteSpace(workspaceRoot))
+        {
+            var root = workspaceRoot.Trim();
+            var uri = PathToUri(root);
+
+            initParams["rootUri"] = uri;
+            // rootPath carries a PATH, not a URI — sending the URI here is a common
+            // copy-paste error that servers accept and then resolve nothing against.
+            initParams["rootPath"] = root;
+            initParams["workspaceFolders"] = new[] { new { uri, name = WorkspaceFolderName(root) } };
+        }
+
+        return initParams;
+    }
+
+    /// <summary>
+    /// Display label for a workspace folder: the directory's own name.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Path.GetFileName(string)"/> alone returns "" for any path ending in a
+    /// separator (<c>C:\proj\</c>) — and a workspaceFolders entry with an empty name is
+    /// malformed, which is worse than sending no folder at all. Drive/UNC roots have no
+    /// name component to take, so they fall back to the path itself.
+    /// </remarks>
+    private static string WorkspaceFolderName(string root)
+    {
+        var trimmed = Path.TrimEndingDirectorySeparator(root);
+        var name = Path.GetFileName(trimmed);
+        return string.IsNullOrEmpty(name) ? trimmed : name;
+    }
+
+    private async Task InitializeAsync(string? workspaceRoot, CancellationToken cancellationToken)
+    {
+        var initParams = BuildInitializeParams(workspaceRoot);
 
         // No need to clear _capabilities first: IsConnected is false for the whole of
         // this method (StartCoreAsync returns early if already connected and only sets
@@ -810,7 +900,9 @@ public class LanguageService : ILanguageService
 
             CleanupConnection();
 
-            try { await StartCoreAsync(CancellationToken.None); } catch { }
+            // Restart with the SAME workspace root the crashed server had — a restart
+            // that silently dropped it would leave the server rootless (see _workspaceRoot).
+            try { await StartCoreAsync(_workspaceRoot, CancellationToken.None); } catch { }
 
             if (IsConnected)
             {

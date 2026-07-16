@@ -130,6 +130,99 @@ public class CapabilityNegotiationTests
     private static JsonNode SerializeClientCapabilities() =>
         JsonSerializer.SerializeToNode(LanguageService.BuildClientCapabilities())!;
 
+    // ---- Workspace root ----------------------------------------------------
+
+    private static JsonObject SerializeInitializeParams(string? workspaceRoot) =>
+        JsonSerializer.SerializeToNode(LanguageService.BuildInitializeParams(workspaceRoot))!.AsObject();
+
+    // THE ROOT. The client used to send `rootUri: null` and nothing else. A server with
+    // no workspace root has no project: clangd cannot locate compile_commands.json and
+    // answers with garbage diagnostics for every translation unit — silently, with no
+    // error on either side.
+    //
+    // Asserts the PATH of each member rather than the presence of a substring: `rootUri`
+    // sitting under the wrong parent is exactly as invisible to a server as `rootUri`
+    // absent, and both read as green to a `Does.Contain` assertion.
+    //
+    // The expected URI is written out literally rather than calling PathToUri. Deriving
+    // it from the code under test would make this flip together with the code and pin
+    // nothing at all.
+    [Test]
+    public void InitializeParams_WithWorkspaceRoot_SendsRootUriRootPathAndWorkspaceFolders()
+    {
+        const string root = @"C:\projects\My Game";
+        const string expectedUri = "file:///C:/projects/My%20Game";
+
+        var parms = SerializeInitializeParams(root);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parms["rootUri"]?.GetValue<string>(), Is.EqualTo(expectedUri),
+                "rootUri must be a percent-encoded file:// URI at the top level of initialize params");
+            Assert.That(parms["rootPath"]?.GetValue<string>(), Is.EqualTo(root),
+                "rootPath is the deprecated-but-still-widely-read sibling of rootUri; it carries a PATH, not a URI");
+
+            var folders = parms["workspaceFolders"]?.AsArray();
+            Assert.That(folders, Is.Not.Null, "workspaceFolders must be sent");
+            Assert.That(folders!.Count, Is.EqualTo(1));
+            Assert.That(folders[0]?["uri"]?.GetValue<string>(), Is.EqualTo(expectedUri),
+                "a workspaceFolders entry is {uri, name} — bare strings are malformed and worse than sending none");
+            Assert.That(folders[0]?["name"]?.GetValue<string>(), Is.EqualTo("My Game"));
+        });
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    public void InitializeParams_NoWorkspaceRoot_OmitsRootMembers_RatherThanSendingNull(string? root)
+    {
+        var parms = SerializeInitializeParams(root);
+
+        // ContainsKey, NOT `parms["rootUri"] is null`: an absent member and a member whose
+        // value is JSON `null` both read back as a null JsonNode. "This client has no
+        // workspace" and "rootUri: null" are different messages, and only omission is
+        // correct. Omission must also be structural — it cannot depend on the caller
+        // happening to serialize with DefaultIgnoreCondition.WhenWritingNull.
+        Assert.Multiple(() =>
+        {
+            Assert.That(parms.ContainsKey("rootUri"), Is.False);
+            Assert.That(parms.ContainsKey("rootPath"), Is.False);
+            Assert.That(parms.ContainsKey("workspaceFolders"), Is.False);
+        });
+    }
+
+    // A workspaceFolders entry's `name` is a display label derived from the directory
+    // name. Path.GetFileName alone returns "" for a path with a trailing separator —
+    // an empty label is exactly the malformed entry this guards against.
+    [TestCase(@"C:\projects\My Game", "My Game")]
+    [TestCase(@"C:\projects\My Game\", "My Game")]
+    [TestCase(@"C:\projects\Game", "Game")]
+    [TestCase(@"\\build-server\shared\Game", "Game")]
+    [TestCase(@"C:\projets\Jeu Vidéo", "Jeu Vidéo")]
+    public void InitializeParams_WorkspaceFolderName_IsDirectoryName_EvenWithTrailingSeparator(
+        string root, string expectedName)
+    {
+        var parms = SerializeInitializeParams(root);
+
+        Assert.That(parms["workspaceFolders"]?.AsArray()[0]?["name"]?.GetValue<string>(),
+            Is.EqualTo(expectedName));
+    }
+
+    [TestCase(null)]
+    [TestCase(@"C:\projects\Game")]
+    public void InitializeParams_AlwaysCarryProcessIdAndCapabilities(string? root)
+    {
+        // Adding the workspace root must not displace what initialize already carried.
+        var parms = SerializeInitializeParams(root);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parms["processId"]?.GetValue<int>(), Is.EqualTo(Environment.ProcessId));
+            Assert.That(parms["capabilities"]?["general"]?["positionEncodings"], Is.Not.Null,
+                "the negotiated position encoding must survive alongside the workspace root");
+        });
+    }
+
     // ---- Parser edge cases -------------------------------------------------
 
     [Test]

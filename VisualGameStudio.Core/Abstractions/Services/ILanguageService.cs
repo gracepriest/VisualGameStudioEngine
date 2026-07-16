@@ -37,9 +37,20 @@ public interface ILanguageService : IDisposable
     event EventHandler<DiagnosticsEventArgs>? DiagnosticsReceived;
 
     /// <summary>
-    /// Start the language server
+    /// Start the language server, rooted at <paramref name="workspaceRoot"/>.
     /// </summary>
-    Task StartAsync(CancellationToken cancellationToken = default);
+    /// <param name="workspaceRoot">
+    /// Local directory path the server should treat as the workspace — sent as
+    /// <c>rootUri</c>/<c>rootPath</c>/<c>workspaceFolders</c> and used as the server
+    /// process's working directory. Null means "no workspace is open", under which the
+    /// server resolves nothing against a project.
+    /// <para>
+    /// ⚠ Only honoured by the call that actually STARTS the server: this is a no-op
+    /// when a server is already connected, so passing a root to a running service does
+    /// NOT re-root it. A workspace opened after the server started needs a restart.
+    /// </para>
+    /// </param>
+    Task StartAsync(string? workspaceRoot = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Stop the language server

@@ -539,9 +539,18 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Start language service — unless the user turned off basiclang.lsp.autoStart, in which
         // case it stays off until the "Start Language Server" command is run (command palette).
+        //
+        // ⚠ The root is normally NULL here: this is the constructor, and no project has been
+        // opened yet (ProjectOpened is only subscribed above). We pass whatever is known rather
+        // than hardcoding null so a project already open at construction is honoured, but the
+        // autostarted server is in practice rootless for the whole session — StartAsync does
+        // NOT re-root an already-connected server. Re-rooting on project open needs a restart
+        // (or workspace/didChangeWorkspaceFolders, which would mean advertising the
+        // workspace.workspaceFolders client capability). Deferred — see the plan's Task 6
+        // (registry) / Task 10 (emit-on-project-open), which own this area.
         if (ShouldAutoStartLanguageServer(_settingsService))
         {
-            _ = _languageService.StartAsync();
+            _ = _languageService.StartAsync(_projectService.CurrentProject?.ProjectDirectory);
         }
 
         // Load recent projects and subscribe to changes
@@ -2696,12 +2705,18 @@ public partial class MainWindowViewModel : ViewModelBase
     /// Manually starts the BasicLang language server. Surfaced in the command palette so the server
     /// can still be brought up when <c>basiclang.lsp.autoStart</c> is off (or after a manual stop).
     /// StartAsync is a no-op if the service is already connected or has been disposed.
+    /// <para>
+    /// Unlike the autostart in the constructor, this runs long after startup, so the open
+    /// project's directory is usually available — making this the path that actually gives the
+    /// server a workspace root today. (Consequently, "Stop Language Server" then "Start Language
+    /// Server" is the current way to re-root a server that autostarted before a project was open.)
+    /// </para>
     /// </summary>
     [RelayCommand]
     private async Task StartLanguageServerAsync()
     {
         StatusText = "Starting language server...";
-        await _languageService.StartAsync();
+        await _languageService.StartAsync(_projectService.CurrentProject?.ProjectDirectory);
     }
 
     [RelayCommand]
