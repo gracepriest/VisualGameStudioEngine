@@ -31,7 +31,16 @@ Each would cost days, and each fails as **nothing happening** rather than an err
 
 1. **`rootUri = (string?)null`** (`LanguageService.cs:300`) — clangd resolves `compile_commands.json` from the workspace root. With none it falls back to per-file heuristics and emits garbage. → Task 4.
 2. **Capabilities discarded** — `initialize`'s result is thrown away (`LanguageService.cs:317`); there is no `Capabilities` member anywhere; every feature method is wrapped in `catch { return Array.Empty<>(); }`. clangd failing looks identical to clangd working on an empty file. → Task 3.
-3. **Position encoding is accidentally correct and structurally unpinned** — `character = column - 1` works only because AvaloniaEdit's `Caret.Column` is UTF-16 code units and LSP defaults to UTF-16. `positionEncoding`/`offsetEncoding` have **zero matches repo-wide**. Anyone adding the widely-copy-pasted `--offset-encoding=utf-8` clangd flag shifts every position on every non-ASCII line, with no test to catch it. → Task 3 pins it deliberately; **never pass `--offset-encoding`**.
+3. **Position encoding is accidentally correct and structurally unpinned** — `character = column - 1` works only because AvaloniaEdit's `Caret.Column` is UTF-16 code units and LSP defaults to UTF-16. `positionEncoding`/`offsetEncoding` have **zero matches repo-wide**. Anyone adding the widely-copy-pasted `--offset-encoding=utf-8` clangd flag shifts every position on every non-ASCII line, with no test to catch it. → Task 3 pins it deliberately (DONE, `5ada16f`); **never pass `--offset-encoding`**.
+
+   ### ⛔ UNRESOLVED — clangd's non-standard `offsetEncoding` (verify in Task 11/12 BEFORE trusting the pin)
+   Task 3's code review raised this at **moderate confidence, unverified against a real clangd binary** — nobody has run one yet (it isn't installed on this machine). **Do not treat it as settled either way; go and check.**
+
+   clangd historically negotiates encoding via a **non-standard `offsetEncoding`** field that predates LSP 3.17's standard `positionEncoding`, and reports it in its initialize result. Task 3's parser reads **only** `positionEncoding`, and defaults a missing value to `utf-16` (correct per LSP 3.17 — omitted *means* utf-16).
+
+   **The hazard:** if clangd replies `offsetEncoding: "utf-8"` and omits `positionEncoding`, `ParseServerCapabilities` silently returns `"utf-16"` — **reconstructing landmine #3 exactly, for the exact server this phase targets.** Every position on every non-ASCII line would be wrong, silently, and the capability we added to detect it would report all-clear.
+
+   **What Task 11/12 must do:** with a real clangd, dump its raw initialize result. If it sends `offsetEncoding`, the parser must read it too and `ServerCapabilities` must expose it — and a mismatch (server says utf-8, client is utf-16-only) must FAIL LOUDLY, not default. Note that today's only defense is a code comment saying "don't pass the flag" — which is precisely the class of protection this plan's own philosophy rejects.
 
 ## Repo rules that will bite you
 
@@ -894,6 +903,12 @@ git commit -m "feat(cpp): clangd discovery via PATH with a cpp.clangd.path overr
 **Files:**
 - Modify: `VisualGameStudio.ProjectSystem/Services/LanguageServiceRegistry.cs` (start clangd when a native project opens and clangd resolves)
 - Modify: `VisualGameStudio.Shell/ViewModels/StatusBarViewModel.cs`, `VisualGameStudio.Shell/Views/Controls/StatusBarControl.axaml`
+
+- [ ] **Step 0 (BLOCKING — do this before anything else): dump real clangd's initialize result and settle the `offsetEncoding` question.**
+
+See landmine #3's ⛔ box. Task 3's review flagged, unverified, that clangd may negotiate encoding via a **non-standard `offsetEncoding`** field predating LSP 3.17. Task 3's parser reads only `positionEncoding` and defaults a missing value to utf-16. If clangd sends `offsetEncoding: "utf-8"` and omits `positionEncoding`, we silently believe utf-16 and **every position on every non-ASCII line is wrong, with the capability we added to detect it reporting all-clear.**
+
+Run a real clangd, capture the raw initialize result, and report what it actually sends. If `offsetEncoding` is present: extend `ParseServerCapabilities` to read it, expose it on `ServerCapabilities`, and make a utf-8 answer **fail loudly** rather than default. Do NOT proceed to Step 1 on an assumption — this is the one thing in Phase 3a that can silently corrupt every position we send.
 
 - [ ] **Step 1: Write the failing tests** — clangd absent → registry degrades (BasicLang unaffected, `IsConnectedFor("a.cpp")` false, status text says not found, **no exception**); clangd present → started with `--compile-commands-dir=<projectDir>/obj` and **no `--offset-encoding`**.
 - [ ] **Step 2: Run — expect FAIL**
