@@ -29,7 +29,6 @@ public class LanguageService : ILanguageService
     private readonly object _lock = new();
     /// <summary>Frame serializer whose waits (lock AND write) are all token-bounded.</summary>
     private readonly LspFrameWriter _frameWriter = new();
-    private readonly LanguageServerDescriptor _descriptor;
     private readonly IOutputService _outputService;
 
     /// <summary>
@@ -56,7 +55,7 @@ public class LanguageService : ILanguageService
     /// identity, so re-pointing one at another server would only mean constructing another
     /// service.
     /// </summary>
-    public LanguageServerDescriptor Descriptor => _descriptor;
+    public LanguageServerDescriptor Descriptor { get; }
 
     /// <summary>What the last successful handshake reported; only meaningful while connected.</summary>
     private ServerCapabilities? _capabilities;
@@ -125,7 +124,7 @@ public class LanguageService : ILanguageService
         LanguageServerDescriptor? descriptor = null)
     {
         _outputService = outputService;
-        _descriptor = descriptor ?? CreateBasicLangDescriptor(settingsService);
+        Descriptor = descriptor ?? CreateBasicLangDescriptor(settingsService);
     }
 
     /// <summary>
@@ -310,20 +309,20 @@ public class LanguageService : ILanguageService
 
             // Log the path being used
             _outputService.WriteLine(
-                $"[LSP] Looking for {_descriptor.DisplayName} at: {_descriptor.ServerPath}",
+                $"[LSP] Looking for {Descriptor.DisplayName} at: {Descriptor.ServerPath}",
                 OutputCategory.Debug);
 
             // ServerPath, NOT StartInfo.FileName: BasicLang's FileName is "dotnet", resolved via
             // PATH, for which File.Exists is always false. See LanguageServerDescriptor.ServerPath.
-            if (!File.Exists(_descriptor.ServerPath))
+            if (!File.Exists(Descriptor.ServerPath))
             {
                 _outputService.WriteError(
-                    $"[LSP] {_descriptor.DisplayName} not found at: {_descriptor.ServerPath}",
+                    $"[LSP] {Descriptor.DisplayName} not found at: {Descriptor.ServerPath}",
                     OutputCategory.Build);
                 return;
             }
 
-            var startInfo = BuildStartInfo(_descriptor, workspaceRoot);
+            var startInfo = BuildStartInfo(Descriptor, workspaceRoot);
 
             var requestedRoot = NormalizeWorkspaceRoot(workspaceRoot);
             if (requestedRoot != null && string.IsNullOrEmpty(startInfo.WorkingDirectory))
@@ -733,11 +732,11 @@ public class LanguageService : ILanguageService
         // and forgotten (`_ = OpenDocumentAsync(...)`) at the reconnect re-sync, so an
         // exception here would become an unobserved task exception and vanish. Routing is the
         // caller's job; being loud about a routing bug is ours.
-        if (!_descriptor.Owns(uri))
+        if (!Descriptor.Owns(uri))
         {
             _outputService.WriteError(
-                $"[LSP] Not announcing '{uri}' to the {_descriptor.DisplayName} language server — " +
-                $"it owns {string.Join(", ", _descriptor.Extensions)}. This is a routing bug.",
+                $"[LSP] Not announcing '{uri}' to the {Descriptor.DisplayName} language server — " +
+                $"it owns {string.Join(", ", Descriptor.Extensions)}. This is a routing bug.",
                 OutputCategory.Build);
             return;
         }
@@ -749,7 +748,7 @@ public class LanguageService : ILanguageService
                 uri = PathToUri(uri),
                 // From the FILE, not a per-server constant: a server can own more than one
                 // language (clangd: .cpp and .h are both "cpp"; "c" the day .c is routed).
-                languageId = _descriptor.LanguageIdFor(uri),
+                languageId = Descriptor.LanguageIdFor(uri),
                 version = 1,
                 text
             }

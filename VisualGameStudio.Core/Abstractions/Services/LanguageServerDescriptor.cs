@@ -76,7 +76,56 @@ public sealed class LanguageServerDescriptor
         FileName = fileName;
         SettingsKey = settingsKey;
         _argumentsFor = argumentsFor;
-        Extensions = languageIds.SelectMany(LanguageFileTypes.LspExtensionsFor).ToArray();
+        Extensions = ResolveExtensions(id, languageIds);
+    }
+
+    /// <summary>
+    /// The extensions <paramref name="languageIds"/> route to, and the guard that a server can
+    /// never come into existence owning nothing.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Checked PER LANGUAGE ID, not on the total: one unroutable id among several would
+    /// contribute nothing to a still-non-empty <see cref="Extensions"/> and hide completely.
+    /// <para>
+    /// Without this, <c>SelectMany</c> over an id <see cref="LanguageFileTypes.LspExtensionsFor"/>
+    /// has no case for contributes the empty set SILENTLY: the descriptor compiles, constructs,
+    /// owns no files, and routes nothing — with no error anywhere. That is the exact failure this
+    /// class is built to prevent, and the trigger is already written down in its own docs
+    /// ("clangd will own 'c' as well as 'cpp' the day .c is routed"): adding "c" to a factory's
+    /// languageIds without adding the matching case to the routing map. Failing loudly at
+    /// construction means that mistake surfaces at DI startup instead of as absent IntelliSense.
+    /// </para>
+    /// </remarks>
+    private static IReadOnlyList<string> ResolveExtensions(string id, IReadOnlyList<string> languageIds)
+    {
+        if (languageIds.Count == 0)
+        {
+            throw new ArgumentException(
+                $"Language server '{id}' declares no language ids, so it would own no files and " +
+                "route nothing.", nameof(languageIds));
+        }
+
+        var extensions = new List<string>();
+        var unroutable = new List<string>();
+
+        foreach (var languageId in languageIds)
+        {
+            var owned = LanguageFileTypes.LspExtensionsFor(languageId);
+            if (owned.Count == 0) unroutable.Add(languageId);
+            else extensions.AddRange(owned);
+        }
+
+        if (unroutable.Count > 0)
+        {
+            throw new ArgumentException(
+                $"Language server '{id}' declares language id(s) [{string.Join(", ", unroutable)}] " +
+                "that LanguageFileTypes routes no extension to, so it would own no files for them " +
+                "and route nothing — silently. Add the id to LanguageFileTypes.GetLspLanguageId " +
+                "and LspExtensionsFor, or remove it here.",
+                nameof(languageIds));
+        }
+
+        return extensions.ToArray();
     }
 
     /// <summary>Stable identifier for this server — <c>basiclang</c>, <c>clangd</c>.</summary>

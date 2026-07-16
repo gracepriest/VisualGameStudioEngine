@@ -82,11 +82,19 @@ public static class LanguageFileTypes
     /// of the mapping — so the forward and inverse answers cannot drift apart.
     /// <c>LanguageServerDescriptor.Extensions</c> is built from this rather than hand-listing
     /// extensions per server, which is how a server silently stops owning a file type.
+    /// <para>
+    /// Copies rather than handing back the private arrays themselves. <c>IReadOnlyList&lt;string&gt;</c>
+    /// is a read-only VIEW, not a read-only object: the runtime type would still be
+    /// <c>string[]</c>, and one downcast — <c>((string[])LspExtensionsFor("cpp"))[0] = ".zzz"</c> —
+    /// would corrupt <see cref="GetLspLanguageId"/> process-wide. This class is the authority on
+    /// routing; it must not hand out a handle to its own state. The copy costs two allocations at
+    /// startup.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<string> LspExtensionsFor(string? languageId) => languageId switch
     {
-        BasicLangId => BasicLangExtensions,
-        CppId => CppExtensions,
+        BasicLangId => (string[])BasicLangExtensions.Clone(),
+        CppId => (string[])CppExtensions.Clone(),
         _ => Array.Empty<string>()
     };
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BasicLang.Compiler.ProjectSystem;
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Utilities;
@@ -133,13 +134,64 @@ public class LanguageServerDescriptorTests
         });
     }
 
+    // THE PAIR. `obj` is hardcoded in TWO assemblies that cannot share a const — clangd's
+    // --compile-commands-dir here in VisualGameStudio.Core, and compile_commands.json's output dir
+    // in BasicLang's CompileCommandsWriter. Core does not reference BasicLang, and the reverse edge
+    // (compiler → IDE abstractions) would be backwards, so the duplication is justified. A comment
+    // saying "if that ever moves, both move together" is a WISH; this test is the mechanism.
+    //
+    // Both sides are computed by the real code — neither is a copy of the other's rule. If either
+    // moves, clangd reads a directory the build never writes: zero IntelliSense on every C++ file,
+    // no error on either side.
+    [Test]
+    public void CompileCommandsDir_PointsAtExactlyWhereTheBuildWritesTheCompilationDatabase()
+    {
+        var projectDir = Path.Combine(Path.GetTempPath(), "bl-ccdir-pin-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(projectDir);
+
+        try
+        {
+            // What the BUILD writes. An empty request needs no toolchain: with no source files
+            // CompileCommandsWriter emits an empty database, and the DIRECTORY is what we are here
+            // for. The path comes back from the writer itself.
+            var written = CompileCommandsWriter.Write(
+                projectDir, CppToolchainKind.ClangLike, "clang++", new CppCompileRequest());
+
+            // What the EDITOR reads.
+            var arguments = StartInfo(LanguageServerDescriptor.Clangd(@"C:\llvm\clangd.exe"), projectDir).Arguments;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Path.GetFileName(written), Is.EqualTo("compile_commands.json"),
+                    "clangd looks for this exact filename inside --compile-commands-dir");
+                Assert.That(arguments, Is.EqualTo($"\"--compile-commands-dir={Path.GetDirectoryName(written)}\""),
+                    "clangd must be pointed at exactly the directory CompileCommandsWriter writes to. " +
+                    "These are two hardcoded 'obj' literals in two assemblies that cannot share a const — " +
+                    "if you moved one, move the other.");
+                Assert.That(File.Exists(written), Is.True, "the writer must actually create the database");
+            });
+        }
+        finally
+        {
+            Directory.Delete(projectDir, recursive: true);
+        }
+    }
+
     // ---- Hardening ---------------------------------------------------------
 
-    private static IEnumerable<TestCaseData> AllDescriptors()
+    /// <summary>
+    /// THE ROSTER — every descriptor that exists. Task 12's third server is added here ONCE and
+    /// every invariant driven from it covers the newcomer automatically. Several hand-maintained
+    /// copies of this list is how one of them silently stops covering what its name claims.
+    /// </summary>
+    private static IReadOnlyList<LanguageServerDescriptor> AllDescriptors() => new[]
     {
-        yield return new TestCaseData(LanguageServerDescriptor.BasicLang(@"C:\x\BasicLang.dll")).SetName("BasicLang");
-        yield return new TestCaseData(LanguageServerDescriptor.Clangd(@"C:\llvm\clangd.exe")).SetName("Clangd");
-    }
+        LanguageServerDescriptor.BasicLang(@"C:\x\BasicLang.dll"),
+        LanguageServerDescriptor.Clangd(@"C:\llvm\clangd.exe")
+    };
+
+    private static IEnumerable<TestCaseData> AllDescriptorCases() =>
+        AllDescriptors().Select(d => new TestCaseData(d).SetName("{m}(" + d.Id + ")"));
 
     // THE 2026 CRITICAL FIXES. Every server, however launched, inherits all of them — that is
     // why BuildStartInfo takes the descriptor rather than each descriptor building its own
@@ -147,7 +199,7 @@ public class LanguageServerDescriptorTests
     //  - a BOM on stdin corrupts the first Content-Length header and the server never replies;
     //  - an undrained stderr fills the ~4KB pipe buffer and the server blocks forever — clangd
     //    is chatty on stderr, so this is not optional for it.
-    [TestCaseSource(nameof(AllDescriptors))]
+    [TestCaseSource(nameof(AllDescriptorCases))]
     public void BuildStartInfo_EveryDescriptor_InheritsTheStdioHardening(LanguageServerDescriptor descriptor)
     {
         var psi = StartInfo(descriptor, @"C:\proj");
@@ -174,8 +226,14 @@ public class LanguageServerDescriptorTests
 
     // ---- Identity ----------------------------------------------------------
 
+    // Pins the id each server announces a document with. It does NOT pin "not a constant", despite
+    // what the plan's name for it claimed: both servers have exactly one language id today, so an
+    // implementation returning the per-server constant LanguageIds[0] passes both assertions. The
+    // "reads the FILE" claim is carried by LanguageIdFor_FileTheDescriptorDoesNotOwn_Throws_*
+    // (a constant cannot refuse a file) — a test name is a claim about the regressions it catches,
+    // and this one's has been corrected to what it actually catches.
     [Test]
-    public void Descriptor_LanguageId_ComesFromTheFile_NotAConstant()
+    public void Descriptor_LanguageIdFor_AnnouncesTheRoutingMapsIdForTheFile()
     {
         Assert.That(LanguageServerDescriptor.BasicLang("x").LanguageIdFor("a.bas"), Is.EqualTo("basiclang"));
         Assert.That(LanguageServerDescriptor.Clangd("x").LanguageIdFor("a.cpp"), Is.EqualTo("cpp"));   // 1-arg per D1
@@ -251,11 +309,7 @@ public class LanguageServerDescriptorTests
     [Test]
     public void EveryLspRoutedExtension_IsOwnedByExactlyOneDescriptor()
     {
-        var descriptors = new[]
-        {
-            LanguageServerDescriptor.BasicLang("x"),
-            LanguageServerDescriptor.Clangd("x")
-        };
+        var descriptors = AllDescriptors();
 
         Assert.Multiple(() =>
         {
@@ -272,24 +326,33 @@ public class LanguageServerDescriptorTests
         });
     }
 
-    // The extension sets are written out literally rather than compared against
-    // LspExtensionsFor — deriving the expectation from the code under test would make this flip
-    // together with the code and pin nothing at all (the same reason CapabilityNegotiationTests
-    // hardcodes "utf-16").
-    [Test]
-    public void Descriptor_Extensions_AreTheExtensionsTheServerOwns()
+    /// <summary>
+    /// The extension set each server is expected to own, written out literally: deriving the
+    /// expectation from LspExtensionsFor (the code under test) would make it flip together with
+    /// the code and pin nothing at all — the same reason CapabilityNegotiationTests hardcodes
+    /// "utf-16". Keyed by server id so a descriptor added to the roster with no entry here fails
+    /// loudly rather than going unasserted.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> ExpectedExtensions = new()
     {
-        Assert.Multiple(() =>
-        {
-            Assert.That(LanguageServerDescriptor.BasicLang("x").Extensions,
-                Is.EquivalentTo(new[] { ".bas", ".bl", ".mod", ".cls", ".class" }));
-            Assert.That(LanguageServerDescriptor.Clangd("x").Extensions,
-                Is.EquivalentTo(new[] { ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".hxx", ".inl" }),
-                ".c is deliberately absent — C is not routed in Phase 3a");
-            Assert.That(LanguageFileTypes.LspExtensionsFor("no-such-language"), Is.Empty,
-                "a language no server owns must yield no extensions, not throw");
-        });
+        ["basiclang"] = new[] { ".bas", ".bl", ".mod", ".cls", ".class" },
+        // .c is deliberately absent — C is not routed in Phase 3a.
+        ["clangd"] = new[] { ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".hxx", ".inl" }
+    };
+
+    [TestCaseSource(nameof(AllDescriptorCases))]
+    public void Descriptor_Extensions_AreTheExtensionsTheServerOwns(LanguageServerDescriptor descriptor)
+    {
+        Assert.That(ExpectedExtensions.ContainsKey(descriptor.Id), Is.True,
+            $"'{descriptor.Id}' is on the roster but has no expected extension set — add one here " +
+            "rather than letting a new server's Extensions go unasserted");
+
+        Assert.That(descriptor.Extensions, Is.EquivalentTo(ExpectedExtensions[descriptor.Id]));
     }
+
+    [Test]
+    public void LspExtensionsFor_LanguageNoServerOwns_IsEmpty_NotThrow()
+        => Assert.That(LanguageFileTypes.LspExtensionsFor("no-such-language"), Is.Empty);
 
     // ServerPath is what must exist on disk; FileName is what gets started. They differ for
     // BasicLang — File.Exists("dotnet") is false (it is resolved via PATH), so probing FileName
