@@ -100,6 +100,15 @@ public sealed class IntelliSenseEmissionService : IIntelliSenseEmissionService, 
             // Supersede whatever is pending. An emission already inside the front end cannot be
             // interrupted (CompileProjectFiles takes no CancellationToken), so this only stops a
             // request that has not started — which is exactly the one worth stopping.
+            //
+            // ⚠ Superseding is unconditional — it does NOT compare projects. That is correct only
+            // because IProjectService holds ONE project: OpenProjectAsync closes the current one
+            // before firing ProjectOpened, and SolutionService never opens projects through it. So
+            // a superseded request is always for a project that is now CLOSED. If emission ever
+            // grows a second trigger (Phase 3b's .bas-save / .blproj-change) or the IDE learns to
+            // hold several projects open, this must key on the project — otherwise opening a
+            // 3-project solution would emit for the first and last and silently skip the middle
+            // one, leaving it with no compile database and no error to say so.
             _current?.Cancel();
             var cts = new CancellationTokenSource();
             _current = cts;
