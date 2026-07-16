@@ -615,6 +615,10 @@ public void EachServer_HasItsOwnRestartPolicy()
 
 **Which descriptors at this point: BasicLang ONLY.** clangd cannot be registered yet — its descriptor needs a resolved clangd path, and `ClangdLocator` doesn't exist until Task 11. Task 12 adds it. So Task 6 ships a registry with one server, which is correct and fully testable (the fakes in Step 1 cover the two-server routing).
 
+**⚠ KEEP the existing `AddSingleton<ILanguageService, LanguageService>` registration (`:28`) — resolving to the SAME BasicLang instance the registry holds, not a second one.** Task 7 converts the ~26 call sites that still inject `ILanguageService`; until then they must keep working. Two independent instances would mean two BasicLang server processes, one of them orphaned — so register the registry first and have the `ILanguageService` registration resolve out of it (`sp => sp.GetRequiredService<ILanguageServiceRegistry>().GetFor("x.bas")!` or equivalent). **Comment the duality as temporary and name Task 7 as its removal.** Add a test pinning that the two registrations resolve to the same object — it's the cheap guard against the two-process bug, and it fails loudly the moment someone splits them.
+
+- [ ] **Step 6: Full suite, then commit.** BasicLang behavior must be unchanged: same one process, same handshake, all ~26 existing call sites still functioning through the shim.
+
 **Keep `ILanguageService` registered** (resolving to the BasicLang instance) so the ~26 not-yet-converted call sites still compile — Task 7 removes that shim. Note the temporary duality in a comment.
 
 - [ ] **Step 6: Full suite**
