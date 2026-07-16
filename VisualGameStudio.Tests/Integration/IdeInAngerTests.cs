@@ -324,6 +324,22 @@ End Sub
             Assert.That(lsp.ServerProcessId, Is.Not.Null, "Server process id was not recorded");
             Assert.That(ProcessIsAlive(lsp.ServerProcessId!.Value), Is.True, "LSP server process is not running after StartAsync");
 
+            // --- capabilities: the initialize result must be CAPTURED, not discarded.
+            // These pair with the hover/completion round-trips further down: what the
+            // real server ADVERTISES here has to match what it demonstrably DOES there.
+            // (Unit tests cover the parser; only a live handshake proves we parse what
+            // the actual --lsp server sends, which returns providers as objects.)
+            Assert.That(lsp.Capabilities, Is.Not.Null, "initialize result was not captured.\n" + output.Dump());
+            Assert.Multiple(() =>
+            {
+                Assert.That(lsp.Capabilities!.HasHoverProvider, Is.True,
+                    "server must advertise hover — the hover round-trip below proves it provides it");
+                Assert.That(lsp.Capabilities!.HasCompletionProvider, Is.True,
+                    "server must advertise completion — the completion round-trip below proves it provides it");
+                Assert.That(lsp.Capabilities!.PositionEncoding, Is.EqualTo("utf-16"),
+                    "the real server must leave us on utf-16; this client's column math is utf-16 only");
+            });
+
             // --- diagnostics: open a file with a semantic error, expect a published error
             var diagnosticsTcs = new TaskCompletionSource<DiagnosticsEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
             lsp.DiagnosticsReceived += (_, e) =>
@@ -370,6 +386,15 @@ End Sub
             var serverPid = lsp.ServerProcessId!.Value;
             await WithTimeout(lsp.StopAsync(), TimeSpan.FromSeconds(15), "LanguageService.StopAsync");
             Assert.That(lsp.IsConnected, Is.False);
+
+            // Capabilities were populated by the live handshake above; once disconnected
+            // they must read null, or callers deciding "can I ask for hover?" get a yes
+            // from a server that is gone. StopAsync deliberately does NOT clear a field
+            // (CleanupConnection is not on this path) — the property derives from
+            // IsConnected precisely so every teardown path gets this for free.
+            Assert.That(lsp.Capabilities, Is.Null,
+                "capabilities must not remain readable after disconnect");
+
             AssertProcessExits(serverPid, TimeSpan.FromSeconds(10), "LSP server process");
         }
         finally

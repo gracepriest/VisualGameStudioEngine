@@ -13,6 +13,14 @@ public interface ILanguageService : IDisposable
     bool IsConnected { get; }
 
     /// <summary>
+    /// What the server reported it can do in its <c>initialize</c> result, or null
+    /// before a successful handshake. Without this, "the server does not support X"
+    /// is indistinguishable from "the server supports X and the answer is empty" —
+    /// every feature method here returns an empty list on failure.
+    /// </summary>
+    ServerCapabilities? Capabilities { get; }
+
+    /// <summary>
     /// Fires when connection state changes
     /// </summary>
     event EventHandler<bool>? ConnectionChanged;
@@ -181,6 +189,42 @@ public interface ILanguageService : IDisposable
     /// Get linked editing ranges at a position (e.g., synchronized variable renaming)
     /// </summary>
     Task<LinkedEditingRangeResult?> GetLinkedEditingRangesAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// The subset of an LSP <c>initialize</c> result this client acts on: which of the
+/// features it advertises the server actually provides, plus the position encoding
+/// the server picked. Deliberately NOT a mirror of the whole LSP spec — it carries
+/// what callers need to make a decision, and grows only when a caller needs more.
+/// </summary>
+public record ServerCapabilities
+{
+    /// <summary>
+    /// The only position encoding this client can correctly consume, and therefore
+    /// the only one it offers. LSP positions are UTF-16 code units and this client
+    /// converts them as <c>character = column - 1</c> against AvaloniaEdit's
+    /// <c>Caret.Column</c>, which is a 1-based UTF-16 code-unit index. Any other
+    /// encoding silently shifts every position on every non-ASCII line.
+    /// It is also the LSP 3.17 default when a server omits <c>positionEncoding</c>.
+    /// </summary>
+    public const string Utf16 = "utf-16";
+
+    public bool HasCompletionProvider { get; init; }
+
+    /// <summary>Server implements <c>completionItem/resolve</c> (clangd: true, BasicLang: false).</summary>
+    public bool CompletionResolveProvider { get; init; }
+
+    public bool HasHoverProvider { get; init; }
+    public bool HasDefinitionProvider { get; init; }
+    public bool HasReferencesProvider { get; init; }
+    public bool HasDocumentSymbolProvider { get; init; }
+    public bool HasSignatureHelpProvider { get; init; }
+
+    /// <summary>
+    /// The encoding the server picked from the client's offered list, verbatim.
+    /// Defaults to <see cref="Utf16"/> when the server omits it, per LSP 3.17.
+    /// </summary>
+    public string PositionEncoding { get; init; } = Utf16;
 }
 
 /// <summary>

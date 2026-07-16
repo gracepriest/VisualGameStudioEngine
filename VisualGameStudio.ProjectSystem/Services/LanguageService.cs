@@ -44,6 +44,22 @@ public class LanguageService : ILanguageService
 
     public bool IsConnected { get; private set; }
 
+    /// <summary>What the last successful handshake reported; only meaningful while connected.</summary>
+    private ServerCapabilities? _capabilities;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Derived from <see cref="IsConnected"/> rather than cleared at each teardown.
+    /// This class assigns <c>IsConnected = false</c> at five sites across four paths
+    /// (StopAsync, HandleServerDisconnect, both SendMessageAsync pipe-death catches,
+    /// and Dispose), and <see cref="CleanupConnection"/> is reached from only the
+    /// start/restart paths — so any per-site clear would silently drift out of date
+    /// as paths are added. Deriving it makes "capabilities are readable only while
+    /// connected" true by construction: a disconnected server supports nothing as far
+    /// as callers are concerned, which is the whole point of capturing this at all.
+    /// </remarks>
+    public ServerCapabilities? Capabilities => IsConnected ? _capabilities : null;
+
     /// <summary>
     /// Process ID of the most recently started language-server process, or null if a
     /// server was never started. Deliberately retained after Stop/Dispose so callers
@@ -142,6 +158,16 @@ public class LanguageService : ILanguageService
                 return;
             }
 
+            // ⚠ SERVER ARGUMENTS — READ BEFORE ADDING ANY ENCODING FLAG.
+            // Never pass clangd's "--offset-encoding=utf-8" (widely copy-pasted from
+            // blog posts and other editors' configs) or any other encoding override.
+            // This client converts LSP positions as `character = column - 1` at 12+
+            // call sites against AvaloniaEdit's Caret.Column, which is a 1-based
+            // UTF-16 code-unit index — so utf-16 is the ONLY encoding it can read.
+            // We negotiate it explicitly via general.positionEncodings; see
+            // BuildClientCapabilities and ServerCapabilities.Utf16. A utf-8 override
+            // shifts every position on every line containing a non-ASCII character,
+            // silently and with no error anywhere.
             var startInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
@@ -292,29 +318,117 @@ public class LanguageService : ILanguageService
         }
     }
 
+    /// <summary>
+    /// The client capabilities advertised to every language server. Pure and static
+    /// so the utf-16 position-encoding pin below can be asserted headlessly.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <c>general.positionEncodings</c> offers utf-16 and ONLY utf-16 — that is a
+    /// deliberate decision, not an oversight. This client converts LSP positions as
+    /// <c>character = column - 1</c> at 12+ call sites against AvaloniaEdit's
+    /// <c>Caret.Column</c> (a 1-based UTF-16 code-unit index). Offering utf-8 would
+    /// silently shift every position on every line containing a non-ASCII character.
+    /// See <see cref="ServerCapabilities.Utf16"/>.
+    /// </remarks>
+    public static object BuildClientCapabilities() => new
+    {
+        textDocument = new
+        {
+            synchronization = new { dynamicRegistration = false, willSave = false, willSaveWaitUntil = false, didSave = true },
+            completion = new { dynamicRegistration = false, completionItem = new { snippetSupport = true, documentationFormat = new[] { "plaintext", "markdown" } } },
+            hover = new { dynamicRegistration = false, contentFormat = new[] { "plaintext", "markdown" } },
+            signatureHelp = new { dynamicRegistration = false },
+            definition = new { dynamicRegistration = false },
+            references = new { dynamicRegistration = false },
+            documentSymbol = new { dynamicRegistration = false },
+            publishDiagnostics = new { relatedInformation = true }
+        },
+        general = new
+        {
+            positionEncodings = new[] { ServerCapabilities.Utf16 }
+        }
+    };
+
+    /// <summary>
+    /// Parses an LSP <c>initialize</c> result (the <c>result</c> object, i.e. the
+    /// <c>{"capabilities":{...}}</c> envelope) into <see cref="ServerCapabilities"/>.
+    /// Never throws: any non-conforming payload yields empty capabilities, because a
+    /// server whose handshake we cannot read supports nothing as far as we know.
+    /// Pure and static for testability.
+    /// </summary>
+    public static ServerCapabilities ParseServerCapabilities(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new ServerCapabilities();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return new ServerCapabilities();
+            if (!doc.RootElement.TryGetProperty("capabilities", out var caps) ||
+                caps.ValueKind != JsonValueKind.Object)
+            {
+                return new ServerCapabilities();
+            }
+
+            return new ServerCapabilities
+            {
+                HasCompletionProvider = HasProvider(caps, "completionProvider"),
+                CompletionResolveProvider =
+                    caps.TryGetProperty("completionProvider", out var completion) &&
+                    completion.ValueKind == JsonValueKind.Object &&
+                    completion.TryGetProperty("resolveProvider", out var resolve) &&
+                    resolve.ValueKind == JsonValueKind.True,
+                HasHoverProvider = HasProvider(caps, "hoverProvider"),
+                HasDefinitionProvider = HasProvider(caps, "definitionProvider"),
+                HasReferencesProvider = HasProvider(caps, "referencesProvider"),
+                HasDocumentSymbolProvider = HasProvider(caps, "documentSymbolProvider"),
+                HasSignatureHelpProvider = HasProvider(caps, "signatureHelpProvider"),
+                PositionEncoding =
+                    caps.TryGetProperty("positionEncoding", out var encoding) &&
+                    encoding.ValueKind == JsonValueKind.String
+                        ? encoding.GetString() ?? ServerCapabilities.Utf16
+                        : ServerCapabilities.Utf16
+            };
+        }
+        catch (JsonException)
+        {
+            return new ServerCapabilities();
+        }
+    }
+
+    /// <summary>
+    /// LSP types most provider capabilities as <c>boolean | XxxOptions</c>: a server
+    /// answering with the options object DOES support the feature. Absent, null and
+    /// literal false all mean unsupported.
+    /// </summary>
+    private static bool HasProvider(JsonElement capabilities, string name)
+    {
+        if (!capabilities.TryGetProperty(name, out var provider)) return false;
+
+        return provider.ValueKind is JsonValueKind.True or JsonValueKind.Object;
+    }
+
     private async Task InitializeAsync(CancellationToken cancellationToken)
     {
         var initParams = new
         {
             processId = Environment.ProcessId,
             rootUri = (string?)null,
-            capabilities = new
-            {
-                textDocument = new
-                {
-                    synchronization = new { dynamicRegistration = false, willSave = false, willSaveWaitUntil = false, didSave = true },
-                    completion = new { dynamicRegistration = false, completionItem = new { snippetSupport = true, documentationFormat = new[] { "plaintext", "markdown" } } },
-                    hover = new { dynamicRegistration = false, contentFormat = new[] { "plaintext", "markdown" } },
-                    signatureHelp = new { dynamicRegistration = false },
-                    definition = new { dynamicRegistration = false },
-                    references = new { dynamicRegistration = false },
-                    documentSymbol = new { dynamicRegistration = false },
-                    publishDiagnostics = new { relatedInformation = true }
-                }
-            }
+            capabilities = BuildClientCapabilities()
         };
 
-        await SendRequestAsync("initialize", initParams, cancellationToken);
+        // No need to clear _capabilities first: IsConnected is false for the whole of
+        // this method (StartCoreAsync returns early if already connected and only sets
+        // IsConnected after we return), so Capabilities already reads null throughout.
+        var initResult = await SendRequestAsync("initialize", initParams, cancellationToken);
+
+        // A response carrying no `result` member leaves the JsonElement Undefined, and
+        // Undefined.GetRawText() throws InvalidOperationException — NOT JsonException,
+        // so ParseServerCapabilities' catch would NOT save us. This guard is
+        // load-bearing; do not fold it into the parser's try block.
+        _capabilities = ParseServerCapabilities(
+            initResult.ValueKind == JsonValueKind.Undefined ? "" : initResult.GetRawText());
+
         await SendNotificationAsync("initialized", new { });
     }
 
