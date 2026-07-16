@@ -6,20 +6,24 @@ using System.Runtime.InteropServices;
 namespace VisualGameStudio.Core.Utilities;
 
 /// <summary>
-/// Searches PATH for a named executable and returns the full path to the first match.
+/// Searches PATH for a named executable and returns the path of the first match: the PATH entry it
+/// was found under, joined to the file name.
 ///
 /// <para><b>Why a path and not a name.</b> Callers that hand the result to
 /// <see cref="System.Diagnostics.ProcessStartInfo.FileName"/> need the path, not the name: a bare
-/// name resolves against the child's own search rules, which are not the ones applied here.</para>
+/// name resolves against the child's own search rules, which are not the ones applied here. Note
+/// the result is only as absolute as the PATH entry it came from — a relative entry (<c>.</c>,
+/// <c>bin</c>) yields a relative path, which resolves against the CURRENT working directory when
+/// spawned. PATH entries are absolute by convention, not by guarantee.</para>
 ///
 /// <para><b>PATHEXT.</b> On Windows an executable named <c>clangd</c> is a file called
 /// <c>clangd.exe</c>; a literal <c>File.Exists(dir + "clangd")</c> finds nothing. This class
 /// expands a name that does not already carry an executable extension across PATHEXT, so callers
 /// may pass the bare tool name on every platform. (The predecessor of this code —
 /// <c>ShellProfileDetector.FindOnPath</c> — probed literally, and worked only because each of its
-/// callers spelled out <c>"pwsh.exe"</c>/<c>"bash.exe"</c>/<c>"nu.exe"</c>. Those names still
-/// resolve identically here: a name whose extension is already in PATHEXT is probed literally and
-/// only literally.)</para>
+/// callers spelled out <c>"pwsh.exe"</c>/<c>"bash.exe"</c>/<c>"nu.exe"</c>. Such names are
+/// unaffected by the expansion: a name whose extension is already in PATHEXT is probed literally
+/// and only literally.)</para>
 ///
 /// <para>The environment is read in <see cref="Find"/> alone; <see cref="FindIn"/> and
 /// <see cref="CandidateNames"/> are pure functions of their arguments, so every rule above can be
@@ -29,9 +33,10 @@ public static class ExecutableLocator
 {
     /// <summary>
     /// The executable extensions assumed when PATHEXT is unset or empty — the executable subset of
-    /// the Windows default. Omitting the script extensions (.VBS/.JS/.WSF/...) is deliberate: a
-    /// language server or compiler is not shipped as one, and PATHEXT is in practice always set, so
-    /// this is a floor rather than a faithful mirror.
+    /// the Windows default. A floor rather than a faithful mirror: the script extensions
+    /// (.VBS/.JS/.WSF/...) are omitted deliberately, since the tools looked for here (a language
+    /// server, a compiler) are not shipped as scripts. Windows sets PATHEXT itself, so this is a
+    /// fallback for a stripped environment, not the normal path.
     /// </summary>
     private const string DefaultWindowsPathExt = ".COM;.EXE;.BAT;.CMD";
 

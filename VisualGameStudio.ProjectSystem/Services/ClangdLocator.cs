@@ -15,8 +15,8 @@ namespace VisualGameStudio.ProjectSystem.Services;
 ///
 /// <para><b>Null is a real answer.</b> clangd does not ship with the IDE and is not installed on
 /// every machine. Returning null (rather than the bare name <c>"clangd"</c>, or a guessed path)
-/// keeps "no C++ IntelliSense available" a fact the caller can act on up front, instead of a
-/// process spawn that fails later with a Win32 error.</para>
+/// keeps "no C++ IntelliSense available" a fact the caller can act on up front, rather than
+/// deferring it to a spawn that fails.</para>
 /// </summary>
 public static class ClangdLocator
 {
