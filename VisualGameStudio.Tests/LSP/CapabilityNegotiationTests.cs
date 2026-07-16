@@ -199,6 +199,9 @@ public class CapabilityNegotiationTests
     [TestCase(@"C:\projects\Game", "Game")]
     [TestCase(@"\\build-server\shared\Game", "Game")]
     [TestCase(@"C:\projets\Jeu Vidéo", "Jeu Vidéo")]
+    // A drive root has no name component to take; the documented fallback is the path
+    // itself. Pins that a root can never produce the empty label this method guards against.
+    [TestCase(@"C:\", @"C:\")]
     public void InitializeParams_WorkspaceFolderName_IsDirectoryName_EvenWithTrailingSeparator(
         string root, string expectedName)
     {
@@ -206,6 +209,71 @@ public class CapabilityNegotiationTests
 
         Assert.That(parms["workspaceFolders"]?.AsArray()[0]?["name"]?.GetValue<string>(),
             Is.EqualTo(expectedName));
+    }
+
+    // ---- Working directory -------------------------------------------------
+
+    // Process.Start THROWS on a non-existent WorkingDirectory, so an unusable root must
+    // cost us the cwd and not the whole language server. The existence check is injected
+    // (mirroring ResolveLspPathOverride) — this assembly has no InternalsVisibleTo for
+    // the test project, so a public static is the only reachable seam.
+    [Test]
+    public void ResolveWorkingDirectory_ExistingDirectory_IsUsed()
+    {
+        var resolved = LanguageService.ResolveWorkingDirectory(@"C:\projects\Game", _ => true);
+
+        Assert.That(resolved, Is.EqualTo(@"C:\projects\Game"));
+    }
+
+    [Test]
+    public void ResolveWorkingDirectory_MissingDirectory_IsNull_SoProcessStartCannotThrow()
+    {
+        var resolved = LanguageService.ResolveWorkingDirectory(@"C:\projects\Deleted", _ => false);
+
+        Assert.That(resolved, Is.Null,
+            "a root that names no directory must yield null (inherit the IDE cwd), never a " +
+            "WorkingDirectory that makes Process.Start throw and take the server down with it");
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    public void ResolveWorkingDirectory_NoRoot_IsNull_WithoutTouchingTheFilesystem(string? root)
+    {
+        var probed = false;
+
+        var resolved = LanguageService.ResolveWorkingDirectory(root, _ => { probed = true; return true; });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolved, Is.Null);
+            Assert.That(probed, Is.False, "no root means nothing to probe for");
+        });
+    }
+
+    // THE ASYMMETRY. The wire root and the working directory used to trim independently:
+    // BuildInitializeParams trimmed, StartCoreAsync did not — so a padded root reached
+    // `initialize` as C:\proj while the working directory was silently skipped, because
+    // Directory.Exists("  C:\proj  ") is false. Both now normalize through one rule, so
+    // they cannot disagree about what the root IS.
+    [Test]
+    public void PaddedRoot_ReachesWireAndWorkingDirectory_Identically()
+    {
+        const string padded = "  C:\\projects\\Game  ";
+        const string trimmed = @"C:\projects\Game";
+
+        var probedWith = (string?)null;
+        var workingDirectory = LanguageService.ResolveWorkingDirectory(padded, p => { probedWith = p; return true; });
+        var wireRoot = SerializeInitializeParams(padded)["rootPath"]?.GetValue<string>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(probedWith, Is.EqualTo(trimmed), "the existence check must probe the TRIMMED root");
+            Assert.That(workingDirectory, Is.EqualTo(trimmed));
+            Assert.That(wireRoot, Is.EqualTo(trimmed));
+            Assert.That(workingDirectory, Is.EqualTo(wireRoot),
+                "the working directory and the root on the wire must be the same string");
+        });
     }
 
     [TestCase(null)]

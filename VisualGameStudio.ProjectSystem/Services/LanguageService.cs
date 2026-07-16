@@ -58,6 +58,14 @@ public class LanguageService : ILanguageService
     /// </para>
     /// Assigned inside <see cref="StartCoreAsync"/> past its early-returns, so it always
     /// describes the server that was actually started.
+    /// <para>
+    /// Deliberately NOT <c>volatile</c>, unlike <see cref="_stopping"/>/<see cref="_disposed"/>
+    /// which are written and read by racing threads. The only cross-thread read is the
+    /// restart in <see cref="HandleServerDisconnect"/>, and both the <c>Interlocked.Exchange</c>
+    /// on <see cref="_disconnectHandled"/> and the <c>Task.Run</c> that schedules
+    /// <see cref="TryRestartAsync"/> establish happens-before against this write — so the
+    /// restart thread cannot observe a stale root. <c>volatile</c> here would be cargo cult.
+    /// </para>
     /// </summary>
     private string? _workspaceRoot;
 
@@ -162,6 +170,12 @@ public class LanguageService : ILanguageService
 
         // Past the early-returns: we are committed to starting a server, so this is
         // the root that server will have. Auto-restart reads it back (see the field).
+        //
+        // ⚠ MUST stay BELOW the early-returns — this placement is load-bearing. Hoisted
+        // above `if (IsConnected) return;`, a StartAsync(otherRoot) against an ALREADY
+        // CONNECTED server would poison the field without re-rooting anything, and the
+        // next crash-restart would silently bring the server back up rooted at a
+        // workspace the crashed server never had. Nothing would fail.
         _workspaceRoot = workspaceRoot;
 
         try
@@ -204,15 +218,23 @@ public class LanguageService : ILanguageService
                 StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
             };
 
-            // Without this the server inherits the IDE's cwd, which is wherever the IDE
-            // happened to be launched from — meaningless to the server. Guarded on
-            // Directory.Exists because Process.Start THROWS on a non-existent
-            // WorkingDirectory: an unusable root must cost us the cwd, not the whole
-            // language server. The root still reaches the server via initialize params,
-            // which are not filesystem-dependent.
-            if (!string.IsNullOrWhiteSpace(workspaceRoot) && Directory.Exists(workspaceRoot))
+            // Without this the server inherits the IDE's cwd — wherever the IDE happened
+            // to be launched from, and meaningless to the server.
+            var requestedRoot = NormalizeWorkspaceRoot(workspaceRoot);
+            var workingDirectory = ResolveWorkingDirectory(workspaceRoot);
+            if (workingDirectory != null)
             {
-                startInfo.WorkingDirectory = workspaceRoot;
+                startInfo.WorkingDirectory = workingDirectory;
+            }
+            else if (requestedRoot != null)
+            {
+                // Say so rather than swallowing it: a root that names no directory is a
+                // caller bug, and this whole change exists to kill silent LSP failures.
+                // Reports the normalized root — that is what was actually probed.
+                _outputService.WriteError(
+                    $"[LSP] Workspace root does not exist: {requestedRoot} — the server will " +
+                    "inherit the IDE's working directory.",
+                    OutputCategory.Build);
             }
 
             _outputService.WriteLine($"[LSP] Starting: dotnet \"{_compilerPath}\" --lsp", OutputCategory.Debug);
@@ -487,6 +509,14 @@ public class LanguageService : ILanguageService
     /// away. Omission is a correctness requirement here, not a formatting preference.
     /// </para>
     /// <para>
+    /// ⚠ CONSEQUENCE: the keys below are LOAD-BEARING and must stay camelCase by hand.
+    /// <c>JsonOptions.PropertyNamingPolicy = CamelCase</c> renames POCO/anonymous-type
+    /// PROPERTIES; dictionary KEYS are governed by <c>DictionaryKeyPolicy</c>, which is
+    /// unset — so these ship verbatim. Writing <c>["RootUri"]</c> would send
+    /// <c>RootUri</c>, the server would ignore it, and neither the compiler nor a test
+    /// would object. That is the exact silent failure this method exists to prevent.
+    /// </para>
+    /// <para>
     /// All three members are sent because servers disagree on which they read:
     /// <c>rootPath</c> is deprecated but still honoured by older servers, <c>rootUri</c>
     /// superseded it, and <c>workspaceFolders</c> superseded that.
@@ -500,9 +530,9 @@ public class LanguageService : ILanguageService
             ["capabilities"] = BuildClientCapabilities()
         };
 
-        if (!string.IsNullOrWhiteSpace(workspaceRoot))
+        var root = NormalizeWorkspaceRoot(workspaceRoot);
+        if (root != null)
         {
-            var root = workspaceRoot.Trim();
             var uri = PathToUri(root);
 
             initParams["rootUri"] = uri;
@@ -513,6 +543,49 @@ public class LanguageService : ILanguageService
         }
 
         return initParams;
+    }
+
+    /// <summary>
+    /// The single definition of "the workspace root string": trimmed, or null when there is
+    /// no usable root at all.
+    /// </summary>
+    /// <remarks>
+    /// Both consumers of a root — <see cref="BuildInitializeParams"/> (what goes on the wire)
+    /// and <see cref="ResolveWorkingDirectory"/> (what the process gets as its cwd) —
+    /// normalize through here, so the two can never disagree about what the root IS. They
+    /// each trimmed independently before, which meant <c>"  C:\proj  "</c> reached
+    /// <c>initialize</c> as <c>C:\proj</c> while the working directory was skipped entirely.
+    /// <para>
+    /// The two DO legitimately differ on whether a root is USABLE: a root naming no existing
+    /// directory still belongs on the wire (it tells the server what the client meant) but
+    /// cannot be a cwd. That distinction lives in <see cref="ResolveWorkingDirectory"/>, not here.
+    /// </para>
+    /// </remarks>
+    private static string? NormalizeWorkspaceRoot(string? workspaceRoot) =>
+        string.IsNullOrWhiteSpace(workspaceRoot) ? null : workspaceRoot.Trim();
+
+    /// <summary>
+    /// The working directory to give the language-server process: the workspace root when it
+    /// names an existing directory, otherwise null — meaning "inherit the IDE's cwd".
+    /// </summary>
+    /// <remarks>
+    /// Guarded on existence because <see cref="Process.Start()"/> THROWS on a non-existent
+    /// <see cref="ProcessStartInfo.WorkingDirectory"/>: an unusable root must cost us the cwd,
+    /// not the entire language server. The root still reaches the server via
+    /// <see cref="BuildInitializeParams"/>, which does no filesystem I/O.
+    /// <para>
+    /// Pure and static with an injectable <paramref name="directoryExists"/>, mirroring
+    /// <see cref="ResolveLspPathOverride"/> — this assembly has no <c>InternalsVisibleTo</c>
+    /// for the test project, so a public static is the only seam a test can reach.
+    /// </para>
+    /// </remarks>
+    public static string? ResolveWorkingDirectory(string? workspaceRoot, Func<string, bool>? directoryExists = null)
+    {
+        var root = NormalizeWorkspaceRoot(workspaceRoot);
+        if (root == null) return null;
+
+        var exists = directoryExists ?? Directory.Exists;
+        return exists(root) ? root : null;
     }
 
     /// <summary>
