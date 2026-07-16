@@ -36,7 +36,14 @@ Each would cost days, and each fails as **nothing happening** rather than an err
 
    Task 4 took option (a) deliberately and did NOT paper over this. Option (b) (`workspace/didChangeWorkspaceFolders`) requires advertising the `workspace.workspaceFolders` **client capability** — which Task 3's constraint explicitly forbids expanding — and the restart alternative kills the server, loses `didOpen` state, and races in-flight requests. Tasks 6/10 own that area.
 
-   **For BasicLang this is survivable** (its server doesn't need a root). **For clangd it is fatal:** no root → no `compile_commands.json` → garbage diagnostics on every TU, **silently**. **Task 12 must start clangd WITH a root rather than rely on the autostart path.** The natural fix: the registry (Task 6) starts servers on `ProjectOpened` instead of in a constructor — which is already the shape of `StartAllAsync(workspaceRoot)` in Task 6's interface. **Decide it in Task 6.**
+   **For BasicLang this is survivable** (its server doesn't need a root). **For clangd it is fatal:** no root → no `compile_commands.json` → garbage diagnostics on every TU, **silently**.
+
+   ### ✅ RESOLVED in Task 6 (`00590cc`) — but NOT the way this plan predicted
+   The plan assumed the fix was "move the constructor autostart to `ProjectOpened`". **Task 6 refused, and was right:** that would **regress BasicLang** — a lone `.bas` opened with no project would then get **no server at all** — against Task 6's own criterion that BasicLang behavior be unchanged.
+
+   Instead it made a rootless start **un-expressible**: `StartAllAsync` requires a root and **throws** otherwise, and the constructor autostart reaches only the BasicLang service (through the DI shim), so **it cannot start clangd**. Any server needing a root can only start via `StartAllAsync`. BasicLang keeps the rootless autostart it survives; **clangd cannot start rootless by construction** — closed now, with a test, and with no regression. The `MainWindowViewModel` comment naming Task 6 as this gap's fixer was corrected rather than left as a lie in the code.
+
+   ⚠ **What remains is the SECOND project, not the first** — see Task 12's ⛔ PROJECT SWITCH box.
 2. **Capabilities discarded** — `initialize`'s result is thrown away (`LanguageService.cs:317`); there is no `Capabilities` member anywhere; every feature method is wrapped in `catch { return Array.Empty<>(); }`. clangd failing looks identical to clangd working on an empty file. → Task 3.
 3. **Position encoding is accidentally correct and structurally unpinned** — `character = column - 1` works only because AvaloniaEdit's `Caret.Column` is UTF-16 code units and LSP defaults to UTF-16. `positionEncoding`/`offsetEncoding` have **zero matches repo-wide**. Anyone adding the widely-copy-pasted `--offset-encoding=utf-8` clangd flag shifts every position on every non-ASCII line, with no test to catch it. → Task 3 pins it deliberately (DONE, `5ada16f`); **never pass `--offset-encoding`**.
 
@@ -954,6 +961,12 @@ git commit -m "feat(cpp): clangd discovery via PATH with a cpp.clangd.path overr
 **Files:**
 - Modify: `VisualGameStudio.ProjectSystem/Services/LanguageServiceRegistry.cs` (start clangd when a native project opens and clangd resolves)
 - Modify: `VisualGameStudio.Shell/ViewModels/StatusBarViewModel.cs`, `VisualGameStudio.Shell/Views/Controls/StatusBarControl.axaml`
+
+### ⛔ PROJECT SWITCH — `StartAllAsync` does NOT re-root. Found by Task 6; it is YOURS to fix.
+
+`StartAsync` **no-ops on an already-connected server** (`StartCoreAsync`'s `if (IsConnected) return;`). So opening project B while clangd is connected to project A leaves clangd **rooted at A**, silently answering from the wrong compilation database — right-looking completions and diagnostics for the wrong project. **Re-rooting requires `StopAllAsync()` then `StartAllAsync(newRoot)`.** Task 6 documented this on the interface but correctly left the fix to you (it owns startup; you own the clangd lifecycle).
+
+Note how this interacts with Task 6's rootless design: BasicLang keeps its rootless constructor autostart (it survives that), and **clangd can only ever start through `StartAllAsync`, which throws on a null root** — so clangd cannot start rootless by construction. Your job is the *second* project, not the first.
 
 - [ ] **Step 0 (BLOCKING — do this before anything else): dump real clangd's initialize result and settle the `offsetEncoding` question.**
 
