@@ -29,7 +29,14 @@ Full recon lives in the auto-memory file `cpp-phase3-clangd-recon.md`. Spec: `do
 
 Each would cost days, and each fails as **nothing happening** rather than an error:
 
-1. **`rootUri = (string?)null`** (`LanguageService.cs:300`) — clangd resolves `compile_commands.json` from the workspace root. With none it falls back to per-file heuristics and emits garbage. → Task 4.
+1. **`rootUri = (string?)null`** (`LanguageService.cs:300`) — clangd resolves `compile_commands.json` from the workspace root. With none it falls back to per-file heuristics and emits garbage. → Task 4 (DONE, `e9d7c3b`) fixed the **protocol layer**. **The IDE layer is only half-delivered — see the ⛔ below.**
+
+   ### ⛔ ROOTLESS AUTOSTART — Task 6/12 MUST handle this. Do NOT assume clangd receives a root.
+   Task 4 fixed `BuildInitializeParams` and threaded `workspaceRoot` through `StartAsync` → `StartCoreAsync` → `InitializeAsync` (and persisted it in a field, so auto-restarts don't come back rootless). **But `MainWindowViewModel:544` autostarts the language server in the VIEW-MODEL CONSTRUCTOR — before any project is open — and `StartAsync` does not re-root an already-connected server.** So on the normal path the server runs **rootless for the entire session**. Only the command-palette "Start Language Server" path delivers a real root; Stop→Start is today's only re-root.
+
+   Task 4 took option (a) deliberately and did NOT paper over this. Option (b) (`workspace/didChangeWorkspaceFolders`) requires advertising the `workspace.workspaceFolders` **client capability** — which Task 3's constraint explicitly forbids expanding — and the restart alternative kills the server, loses `didOpen` state, and races in-flight requests. Tasks 6/10 own that area.
+
+   **For BasicLang this is survivable** (its server doesn't need a root). **For clangd it is fatal:** no root → no `compile_commands.json` → garbage diagnostics on every TU, **silently**. **Task 12 must start clangd WITH a root rather than rely on the autostart path.** The natural fix: the registry (Task 6) starts servers on `ProjectOpened` instead of in a constructor — which is already the shape of `StartAllAsync(workspaceRoot)` in Task 6's interface. **Decide it in Task 6.**
 2. **Capabilities discarded** — `initialize`'s result is thrown away (`LanguageService.cs:317`); there is no `Capabilities` member anywhere; every feature method is wrapped in `catch { return Array.Empty<>(); }`. clangd failing looks identical to clangd working on an empty file. → Task 3.
 3. **Position encoding is accidentally correct and structurally unpinned** — `character = column - 1` works only because AvaloniaEdit's `Caret.Column` is UTF-16 code units and LSP defaults to UTF-16. `positionEncoding`/`offsetEncoding` have **zero matches repo-wide**. Anyone adding the widely-copy-pasted `--offset-encoding=utf-8` clangd flag shifts every position on every non-ASCII line, with no test to catch it. → Task 3 pins it deliberately (DONE, `5ada16f`); **never pass `--offset-encoding`**.
 
