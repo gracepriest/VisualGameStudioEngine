@@ -771,7 +771,19 @@ This is not hypothetical: the game-app engine-`.lib` gap is **this repo's known 
 
 ⚠ Task 9's headline test uses a plain console project and will **not** catch this. The game-project test below is mandatory, not optional.
 
-**Error tolerance — decided:** broken `.bas` yields **no IR at all**. `Compiler.cs:283` (parse) and `:308` (semantic) return before `CombinedIR` is built at `:313` → `CombinedIR` is null → `GenerateSplit` has no input. There is **no partial-IR path**, and adding one is a large compiler change. But a failed transpile returns at `CppProjectBuilder.cs:86`, **before** the clean at `:128` — so **stale headers survive**, which is exactly right for IntelliSense. **Decision: regen-on-success-only, never wipe on failure.** Task 8 makes this robust rather than accidental.
+**Error tolerance — decided:** broken `.bas` yields **no IR at all**. `Compiler.cs:283` (parse) and `:308` (semantic) return before `CombinedIR` is built at `:313` → `CombinedIR` is null → `GenerateSplit` has no input. There is **no partial-IR path**, and adding one is a large compiler change. But a failed transpile returns at `CppProjectBuilder.cs:86`, **before** the clean — so **stale headers survive**, which is exactly right for IntelliSense. **Decision: regen-on-success-only, never wipe on failure.** Task 8 (DONE, `1939de0`) makes this robust rather than accidental: it reordered to generate → clean → write, so a `GenerateSplit` throw can no longer wipe the previous headers.
+
+### ⛔ ERRATUM — THIS MACHINE HAS MSVC. Do NOT build the seam around the BL6005 path.
+
+The plan repeatedly assumed "no toolchain installed → `Build()` returns `Success=false` at BL6005". **That is FALSE here**, verified twice (Task 8's implementer, then independently by its reviewer reproducing `CppToolchain.Find()`'s exact probe):
+- `clang++` and `g++` are **NOT** on PATH (both probe branches fall through), **but**
+- vswhere returns `C:\Program Files\Microsoft Visual Studio\2022\Enterprise` with `VC.Tools.x86.x64`, and `vcvars64.bat` exists → **`Find()` returns a non-null `MSVC (cl.exe)` toolchain.**
+
+So a real build here proceeds **past** BL6005 and reaches BL6009 (the known `.lib` env failure). Consequences for you:
+1. **Don't write tests that depend on the machine having no toolchain.** Pass `toolchain: null` **explicitly** to exercise the toolchain-free path — that's what the tests above do, and it's correct on toolchain-present and toolchain-absent machines alike. (Task 8's test was deliberately written to assert nothing about the good build's success for exactly this reason.)
+2. **The driver-default decision now bites in a way the plan didn't anticipate.** "Prefer the real toolchain's kind when one is installed" means that on THIS machine a real build writes `compile_commands.json` with **MSVC-style** flags (`cl.exe`, `/std:c++20`) — and clangd only parses those correctly when it recognizes a cl-style driver (it keys on `arguments[0]`, i.e. `--driver-mode=cl` behavior). **Decide explicitly what the emitter does when `Find()` returns MSVC**, and say what you decided. Emitting MSVC flags under a `clang++` driver name — or vice versa — is precisely the "silently wrong IntelliSense flags" failure this decision exists to prevent.
+
+**Task 9's precondition is CONFIRMED and now pinned by a test** (Task 8's `CppProjectBuilderCleanTests`): `obj/gen` is written unconditionally at section 5, **before** the toolchain gate at section 6.
 
 **Driver default — a real decision, not cosmetic:** `Kind`/`DriverName` come off the object `CppToolchain.Find()` returns (`Find()` at `:160`; `DriverName` declared at `CppToolchain.cs:110`; consumed at `:261`). With no toolchain you must pick one. clangd reads `arguments[0]` as the driver, and MSVC `/std:c++20` vs GNU `-std=c++20` (`CppToolchain.cs:121-138`) change how clangd parses the entry — **guessing wrong yields silently wrong IntelliSense flags**. **Decision: default `ClangLike` / `clang++`** (the spec's blessed toolchain); prefer the real toolchain's kind when one is installed.
 
@@ -797,13 +809,23 @@ public void Emit_WithNoToolchain_WritesObjGenAndCompileCommands()
     });
 }
 
+// ⚠ ERRATUM — the original of this test used `Does.Contain("clang++")` +
+// `Does.Contain("-std=c++20")` on the raw JSON. That is the THIRD instance of this plan's
+// own worst antipattern, and the weakest yet: `Does.Contain("clang++")` passes if the string
+// appears ANYWHERE — including inside a file path. The driver is `arguments[0]` SPECIFICALLY;
+// that is a structural claim and needs a structural assertion. (Task 3's review caught this
+// class on a JSON field moving to the wrong parent; Task 5 broke clangd's argument QUOTING and
+// the substring assertion still passed.) PARSE the JSON. Assert the position.
 [Test]
 public void Emit_WithNoToolchain_DefaultsToClangDriver()
 {
     IntelliSenseEmitter.Emit(projectFile, "Debug", toolchain: null);
-    var json = File.ReadAllText(Path.Combine(dir, "obj", "compile_commands.json"));
-    Assert.That(json, Does.Contain("clang++"));
-    Assert.That(json, Does.Contain("-std=c++20"), "GNU-style flags, not MSVC /std:");
+    var db = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "obj", "compile_commands.json")))!;
+    var args = db[0]!["arguments"]!.AsArray();
+    Assert.That(args[0]!.GetValue<string>(), Is.EqualTo("clang++"),
+        "clangd reads arguments[0] as the driver — it must BE the driver, not merely contain it");
+    Assert.That(args.Select(a => a!.GetValue<string>()), Has.One.EqualTo("-std=c++20"),
+        "GNU-style flag as an exact token, not MSVC /std: and not a substring of something else");
 }
 
 [Test]  // no Sub Main yet — mid-edit. Must NOT block emission.
