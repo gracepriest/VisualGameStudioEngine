@@ -35,7 +35,7 @@ Each would cost days, and each fails as **nothing happening** rather than an err
 
 ## Repo rules that will bite you
 
-- **⚠ THE COMPILER WILL NOT CATCH NULLABLE MISUSE.** `CS8604` ("possible null reference argument") is in `NoWarn` in **both** `VisualGameStudio.Shell/VisualGameStudio.Shell.csproj:13` and `VisualGameStudio.Core/VisualGameStudio.Core.csproj:10`. Passing a `string?` into a `string` parameter compiles **silently — not even a warning**. So `string?` annotations here are documentation, not enforcement. This matters most in Task 7 (~26 call sites): naming, tests, and review are the ONLY guards. (Found by Task 2's code review.)
+- **⚠ THE COMPILER WILL NOT CATCH NULLABLE MISUSE.** `CS8604` ("possible null reference argument") is in `NoWarn` in **all four** relevant projects: `VisualGameStudio.Core.csproj:10`, `VisualGameStudio.Shell.csproj:13`, `VisualGameStudio.ProjectSystem.csproj:10`, `VisualGameStudio.Editor.csproj:10`. Passing a `string?` into a `string` parameter compiles **silently — not even a warning**. So `string?` annotations here are documentation, not enforcement. This matters most in Task 7 (~26 call sites): naming, tests, and review are the ONLY guards. (Found by Task 2's code review; scope widened from 2 to 4 projects when Task 2's implementer verified it.)
 - **⚠ GREP CANNOT PROVE DEAD CODE IN THIS REPO.** Task 1 learned this the hard way: `ILspClientService.cs` — verified "100% dead" by 5 scouts and 2 adversarial reviewers — declared a live enum into the *same namespace* as a live file, so it bound implicitly with **no `using` directive and no textual reference to find**. Only the compiler knows. Tasks 5–7 move/delete more files in `Core/Abstractions/Services` — build, don't just grep.
 - **PowerShell is the shell.** Use Read/Edit/Write/Grep/Glob — a PreToolUse hook blocks `grep`/`cat`/`find`/`sed` via Bash.
 - **The full suite takes ~14-15 min and its output EXCEEDS the PowerShell tool's 30000-char truncation**, which silently eats the summary line and makes a normal run look like a crash. Redirect to a file and read the tail.
@@ -361,8 +361,9 @@ public void ClientCapabilities_AdvertisePositionEncoding_Utf16_Only()
 
 - Add a `ServerCapabilities` record to `Core/Abstractions/Services/`.
 - Extract `public static ServerCapabilities ParseServerCapabilities(string json)` and `public static object BuildClientCapabilities()` as **pure static** methods — mirrors the existing testability idiom of `ResolveLspPathOverride` (`LanguageService.cs:106-112`) and `PathToUri` (`:887`).
-- At `:317`, capture the result: `var initResult = await SendRequestAsync("initialize", ...); Capabilities = ParseServerCapabilities(initResult);`
+- At `:317`, capture the result. ⚠ **The plan's original one-liner does NOT compile:** `SendRequestAsync` returns `Task<JsonElement>`, not `Task<string>`. Keep the string seam the tests specify and pass `initResult.GetRawText()` — but **guard `JsonValueKind.Undefined` first**: `ProcessMessage:744` does `tcs.SetResult(default)` for a response with no `result` member, and `GetRawText()` on that **throws**. (Found by Task 3's implementer.)
 - In `BuildClientCapabilities`, add `general: { positionEncodings: ["utf-16"] }`.
+- **Null out `Capabilities` before every (re)negotiation** so an auto-restart whose handshake times out cannot leave the previous connection's capabilities readable as current — otherwise landmine #2 returns by the back door.
 
 **⚠ DO NOT pass `--offset-encoding=utf-8` to clangd in Task 12.** Leave a comment at the launch site saying why.
 
@@ -940,7 +941,7 @@ git commit -m "test(cpp): clangd end-to-end IntelliSense in a mixed project"
 - [ ] Full suite green (baseline count + new tests − deleted `LspClientServiceTests`). Known env flake: game-app engine `.lib` gap — stage the lib beside the compiler bin to go green. Known skip: toolchain-conditional no-toolchain contract test.
 - [ ] `Grep: _languageService\.` **`--glob "*.cs"`** → zero hits outside the registry. (`CallHierarchyViewModel.cs` and `TypeHierarchyViewModel.cs` each hold 2 — they're in scope via Task 7 Step 4.)
 - [ ] `Grep: LspClientManager|ILspClient` **`--glob "*.cs"`** → zero hits. ⚠ Do NOT grep repo-wide: this plan document, the Phase 1/2 plans, `ide-parity-scorecard.md`, and `IDEAgent/ide_agent.py` all mention them in prose and will always match.
-- [ ] `Grep: offset-encoding` **`--glob "*.cs"`** → zero hits.
+- [ ] `Grep: offset-encoding` **`--glob "*.cs"`** → **no LIVE argument**. ⚠ "Zero hits" is unsatisfiable and was wrong: Task 3 deliberately names the flag in a warning comment at the launch site (a warning that dodges the token a dev would actually type is worthless), and Task 12's own prescribed test asserts `Does.Not.Contain("--offset-encoding")`. **Permitted hits: that comment and that negative test. Anything that actually passes the flag to a process = fail.** (Caught by Task 3's implementer.)
 - [ ] `Grep: HasExtensionProviders|NotifyDocumentOpenedAsync` → every languageId argument comes from the **total** `GetEditorLanguageId`, never the nullable `GetLspLanguageId`. (Task 2's ⛔ — a null here throws `ArgumentNullException` at runtime, and `CS8604` is in `NoWarn` so the compiler emits **no warning at all**.)
 - [ ] Both entry points exercised (CLI + IDE BuildService).
 - [ ] **User IDE smoke** (Phases 1 and 2 both caught real defects only here — do not skip):
