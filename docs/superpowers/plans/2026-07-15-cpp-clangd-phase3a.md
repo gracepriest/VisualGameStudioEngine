@@ -333,11 +333,33 @@ public void ParseServerCapabilities_ReadsCompletionAndHoverProviders()
     Assert.Multiple(() =>
     {
         Assert.That(caps.HasCompletionProvider, Is.True);
-        Assert.That(caps.CompletionResolveProvider, Is.True);   // clangd = true, BasicLang = false
+        Assert.That(caps.HasCompletionResolveProvider, Is.True);
         Assert.That(caps.HasHoverProvider, Is.True);
         Assert.That(caps.PositionEncoding, Is.EqualTo("utf-16"));
     });
 }
+```
+
+> **⚠ ERRATUM (found during execution — the plan was wrong here).** This snippet originally commented
+> `CompletionResolveProvider` as *"clangd = true, BasicLang = false"*. **False.** That described
+> `SimpleLspServer` (`resolveProvider:false` at `:279`), which only runs under **`--lsp-simple`** and which
+> the client NEVER launches. The live `--lsp` server is the OmniSharp `BasicLangLanguageServer`
+> (`Program.cs:41-47`) and it returns `completionProvider.resolveProvider: **true**`. Anyone reasoning
+> about BasicLang's real capabilities from the original comment would be wrong.
+>
+> Two more facts settled by probing the live handshake (do not re-derive):
+> - The real server sends `"hoverProvider": {}` — an **empty object**, not a boolean (likewise
+>   `definitionProvider`/`referencesProvider`/`documentSymbolProvider`). So `boolean | XxxOptions` union
+>   handling is **required, not defensive** — booleans-only parsing reports every capability false.
+>   `SimpleLspServer`'s booleans are real but unreachable from the live tests.
+> - The real server sends **no** `positionEncoding` → utf-16-by-default is genuinely the live path.
+>
+> Also renamed during review: `CompletionResolveProvider` → `HasCompletionResolveProvider` (its six
+> siblings all carry `Has`), and `ParseServerCapabilities` now takes a **`JsonElement`**, not a string —
+> the string signature forced the `Undefined` guard out to the call site, which Task 12's clangd call site
+> would have had to remember independently. A thin `string` overload is retained for tests.
+
+```csharp
 
 [Test]
 public void ParseServerCapabilities_MissingProviders_AreFalse_NotThrow()
