@@ -120,15 +120,24 @@ namespace BasicLang.Compiler.ProjectSystem
                 var safeProject = SanitizeProjectName(outputName);
                 try
                 {
+                    // Generate the full file set into memory BEFORE touching obj/gen. A
+                    // codegen failure (CppCapabilityException on an unsupported construct, or
+                    // the reserved-name ArgumentException) must NOT wipe the previously
+                    // generated headers: IntelliSense (clangd) reads them between builds, so
+                    // one unsupported construct silently destroying every header is a real
+                    // regression. split.Files is fully in-memory, so generate -> clean ->
+                    // write is a safe reorder, not a redesign. (A mid-loop IO fault at the
+                    // write step below can still leave a partial set — that is a genuine
+                    // environment failure, out of scope for this surgical fix.)
+                    split = new CppCodeGenerator().GenerateSplit(
+                        compilation.CombinedIR, safeProject, unitIRs, emitMain);
                     // Stale generated files from renamed/removed modules would otherwise
-                    // still compile — clean before regenerating (OrdinalIgnoreCase-safe on
-                    // Windows). Clean + createdir + write share the codegen's failure
+                    // still compile — clean before writing the fresh set (OrdinalIgnoreCase-
+                    // safe on Windows). Clean + createdir + write share the codegen's failure
                     // mapping so an IO fault (disk full, perms, locked obj/gen) is a clean
                     // diagnostic in the CLI too, not an escaping throw.
                     CleanGeneratedDir(objGenDir);
                     Directory.CreateDirectory(objGenDir);
-                    split = new CppCodeGenerator().GenerateSplit(
-                        compilation.CombinedIR, safeProject, unitIRs, emitMain);
                     foreach (var kv in split.Files)
                         File.WriteAllText(Path.Combine(objGenDir, kv.Key), kv.Value);
                 }
