@@ -44,6 +44,14 @@ public static class ServiceConfiguration
                 sp.GetRequiredService<IOutputService>(),
                 sp.GetRequiredService<ISettingsService>())
         }));
+        // Gives clangd its obj/gen headers + obj/compile_commands.json on project open, before any
+        // build has produced them (Task 10). Singleton because its whole job is to coalesce and
+        // serialize a multi-second, non-incremental emission across requests — per-instance state
+        // that a transient registration would throw away, letting two emissions race into obj/gen.
+        // Constructed explicitly rather than by type: the class also exposes a public emitter-seam
+        // constructor for tests, and naming the production one here keeps DI from having to choose.
+        services.AddSingleton<IIntelliSenseEmissionService>(sp =>
+            new IntelliSenseEmissionService(sp.GetRequiredService<IOutputService>()));
         services.AddSingleton<IDebugService, DebugService>();
         services.AddSingleton<ILaunchConfigurationService, LaunchConfigurationService>();
         services.AddSingleton<IGitService, GitService>();

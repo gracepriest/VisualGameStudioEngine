@@ -69,6 +69,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly ISolutionService _solutionService;
     private readonly IWorkspaceService _workspaceService;
     private readonly ITaskRunnerService _taskRunnerService;
+    private readonly IIntelliSenseEmissionService _intelliSenseEmission;
     private readonly DockFactory _dockFactory;
     private readonly IWorkspaceStateStore _workspaceStateStore;
 
@@ -361,6 +362,7 @@ public partial class MainWindowViewModel : ViewModelBase
         ISolutionService solutionService,
         IWorkspaceService workspaceService,
         ITaskRunnerService taskRunnerService,
+        IIntelliSenseEmissionService intelliSenseEmission,
         DockFactory dockFactory,
         IWorkspaceStateStore workspaceStateStore,
         SolutionExplorerViewModel solutionExplorer,
@@ -407,6 +409,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _solutionService = solutionService;
         _workspaceService = workspaceService;
         _taskRunnerService = taskRunnerService;
+        _intelliSenseEmission = intelliSenseEmission;
         _dockFactory = dockFactory;
         _workspaceStateStore = workspaceStateStore;
 
@@ -962,6 +965,18 @@ public partial class MainWindowViewModel : ViewModelBase
             ? $"{_solutionService.CurrentSolution!.SolutionName} - Visual Game Studio"
             : $"{e.Project.Name} - Visual Game Studio";
         StatusText = $"Project loaded: {e.Project.Name}";
+
+        // Give clangd its obj/gen headers + obj/compile_commands.json (Task 10). Both are build
+        // outputs today, so on a fresh checkout they do not exist and C++ IntelliSense is dead
+        // until the first successful build — this closes that hole.
+        //
+        // FIRE AND FORGET, deliberately: the emission runs the whole compiler front end and takes
+        // seconds, so `_ =` is the contract, not a lapse. Awaiting it would stall project open —
+        // including the breakpoint/bookmark/layout restore below — behind a compile. The service
+        // owns the rest (native-only, off-thread, coalesced, failures to Output and never a
+        // modal), so this stays one line and there is nothing here to get wrong later.
+        _ = _intelliSenseEmission.RequestEmit(
+            e.Project, _buildService.CurrentConfiguration?.Name ?? "Debug");
 
         // Track this project in recent projects
         var projectPath = Path.Combine(e.Project.ProjectDirectory, e.Project.Name + ".blproj");
