@@ -19,26 +19,126 @@ namespace BasicLang.Compiler.ProjectSystem
     }
 
     /// <summary>
+    /// Everything <see cref="CppProjectBuilder.EmitCore"/> produces that a caller
+    /// might continue from. <see cref="Completed"/> is the only success signal:
+    /// when it is false the core already recorded the failure on the result.
+    /// </summary>
+    internal sealed class CppEmitOutcome
+    {
+        /// <summary>True when the core ran all the way through the compile-database
+        /// write; false means the caller must stop and return the result as-is.</summary>
+        public bool Completed { get; set; }
+        public CppCompileRequest Request { get; set; }
+        public CppToolchain Toolchain { get; set; }
+        /// <summary>Resolved engine import library whose DLLs need deploying, or null.
+        /// Always null on the IntelliSense path (link-time concern).</summary>
+        public string EngineLib { get; set; }
+        public string OutputDir { get; set; }
+        public bool IsExe { get; set; }
+    }
+
+    /// <summary>
     /// Builds a Language=Cpp project: gathers translation units, resolves
     /// includes/libs, emits compile_commands.json, drives CppToolchain, parses
     /// diagnostics, deploys engine DLLs. The ONLY native-project build path —
     /// shared verbatim by the CLI (Program.cs) and the IDE (BuildService) so the
     /// two entry points cannot drift.
+    ///
+    /// Everything up to and including the compile_commands.json write lives in
+    /// <see cref="EmitCore"/>, which <see cref="IntelliSenseEmitter"/> also drives
+    /// (toolchain-free, build gates bypassed). <see cref="Build"/> adds only the
+    /// compile / link / deploy tail — there is no second emission implementation.
     /// </summary>
     public static class CppProjectBuilder
     {
         public static CppProjectBuildResult Build(ProjectFile project, string configuration)
         {
             var result = new CppProjectBuildResult();
+            var emit = EmitCore(project, configuration, result,
+                CppToolchain.Find, forIntelliSense: false);
+            if (!emit.Completed)
+                return result;
+
+            var request = emit.Request;
+
+            // ---- Compile ----
+            var (ok, output) = emit.Toolchain.Compile(request);
+            ApplyCompileOutcome(result, ok, output, emit.OutputDir, project.FilePath);
+            if (!result.Success)
+                return result;
+
+            if (emit.IsExe) result.ExecutablePath = request.OutputPath;
+            result.Messages.Add($"Output: {request.OutputPath}");
+
+            // ---- Engine DLL deploy ----
+            if (emit.EngineLib != null)
+            {
+                foreach (var dll in EngineDeployment.LocateNativeDlls(emit.EngineLib))
+                {
+                    // A locked DLL (previous game run still open) must never
+                    // discard a successful build result — warn and continue,
+                    // mirroring the CLI's existing deploy precedent.
+                    try
+                    {
+                        var dest = Path.Combine(emit.OutputDir, Path.GetFileName(dll));
+                        File.Copy(dll, dest, overwrite: true);
+                        result.Messages.Add($"Deployed {Path.GetFileName(dll)}");
+                    }
+                    catch (Exception ex)
+                    {
+                        result.Messages.Add($"warning: could not deploy {Path.GetFileName(dll)}: {ex.Message}");
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// The shared emission core: partition sources, transpile, generate and write
+        /// obj/gen, resolve the toolchain, assemble the compile request, write
+        /// obj/compile_commands.json. Used by <see cref="Build"/> (which continues to
+        /// compile/link) and by <see cref="IntelliSenseEmitter"/> (which stops here).
+        ///
+        /// <paramref name="forIntelliSense"/> bypasses the gates that are BUILD rules
+        /// rather than IntelliSense rules — none of them changes a compile flag:
+        /// <list type="bullet">
+        /// <item>BL6007 no-sources — a project mid-creation still deserves completion.</item>
+        /// <item>The entry-point rule — a project with no <c>Sub Main</c> YET would
+        /// otherwise get no headers at all, which is the normal mid-edit state.</item>
+        /// <item>BL6005 no-toolchain — the entire point of the seam.</item>
+        /// <item>Native libs (BL6009) and the engine framework auto-link — LINK-time
+        /// concerns. <c>request.Libraries</c> never reaches <c>CppToolchain.FlagsFor</c>,
+        /// so libraries contribute NOTHING to a compilation database (it carries compile
+        /// flags only). Skipping them loses nothing and stops a game project whose engine
+        /// .lib does not resolve from being denied IntelliSense entirely.</item>
+        /// </list>
+        /// A transpile failure is deliberately NOT bypassed: broken source yields no IR at
+        /// all, and failing here returns BEFORE the obj/gen clean, so the last good headers
+        /// survive for clangd to keep serving. Regen-on-success-only, never wipe on failure.
+        ///
+        /// <paramref name="resolveToolchain"/> is a factory rather than a value so the probe
+        /// stays lazy and keeps its original position (after the obj/gen write) — the
+        /// ordering Task 8's test pins.
+        /// </summary>
+        internal static CppEmitOutcome EmitCore(ProjectFile project, string configuration,
+            CppProjectBuildResult result, Func<CppToolchain> resolveToolchain, bool forIntelliSense)
+        {
+            var outcome = new CppEmitOutcome();
             var projectDir = Path.GetDirectoryName(project.FilePath) ?? ".";
             var outputName = project.AssemblyName ?? project.ProjectName ?? "Program";
             var isExe = !string.Equals(project.OutputType, "Library", StringComparison.OrdinalIgnoreCase);
+            outcome.IsExe = isExe;
 
             // Native projects use bin/<config> in BOTH entry points (no TFM — it
-            // is meaningless for native output).
+            // is meaningless for native output). Only a real build creates it:
+            // opening a project in the IDE must not litter it with empty output
+            // dirs, and nothing on the IntelliSense path writes there (the compile
+            // database keys off projectDir, not the working directory).
             var outputDir = Path.Combine(projectDir, "bin", configuration);
-            Directory.CreateDirectory(outputDir);
+            if (!forIntelliSense)
+                Directory.CreateDirectory(outputDir);
             result.OutputPath = outputDir;
+            outcome.OutputDir = outputDir;
 
             var objGenDir = Path.Combine(projectDir, "obj", "gen");
 
@@ -57,7 +157,9 @@ namespace BasicLang.Compiler.ProjectSystem
                 .ToList();
 
             // ---- 2. Nothing to build ----
-            if (blSources.Count == 0 && userTus.Count == 0)
+            // Bypassed for IntelliSense: an empty project mid-creation gets a degenerate
+            // (empty) compile database rather than a hard error.
+            if (!forIntelliSense && blSources.Count == 0 && userTus.Count == 0)
             {
                 // Explicit <Compile> items get a message about THOSE items; only the
                 // no-items case actually ran the directory glob.
@@ -66,7 +168,7 @@ namespace BasicLang.Compiler.ProjectSystem
                     : "Project contains no C++ translation units and no BasicLang sources (looked under "
                       + projectDir + ", excluding bin/ and obj/).";
                 Fail(result, "BL6007", message, project.FilePath);
-                return result;
+                return outcome;
             }
 
             // ---- 3. Transpile stage (BasicLang -> C++) ----
@@ -83,7 +185,8 @@ namespace BasicLang.Compiler.ProjectSystem
                     // through the registry (mirrors BuildService.MapCompilerDiagnostics).
                     MapTranspileDiagnostics(result, compiler, compilation, project.FilePath);
                     result.Success = false;
-                    return result;
+                    return outcome;   // Completed stays false — note this returns BEFORE the
+                                      // obj/gen clean, which is what preserves stale headers.
                 }
                 unitIRs = compilation.Units.Select(u => u.IR).Where(ir => ir != null).ToList();
                 // Count Main from the PER-UNIT IRs, never CombinedIR: the combiner is
@@ -95,15 +198,21 @@ namespace BasicLang.Compiler.ProjectSystem
             }
 
             // ---- 4. Entry-point rule (pre-link, so 0/2-main cases give clickable diags) ----
-            var cppMains = userTus
-                .Select(t => (file: Path.GetFileName(t), count: NativeEntryPoints.CountCppMains(TryReadAllText(t))))
-                .ToList();
-            var entryDiags = NativeEntryPoints.Apply(isExe, basicLangMainCount, cppMains);
-            if (entryDiags.Count > 0)
+            // Bypassed for IntelliSense: "no Sub Main yet" is the normal mid-edit state and
+            // must not cost the user their headers. Skipping the block also skips reading
+            // every user TU off disk, which the rule is the only consumer of.
+            if (!forIntelliSense)
             {
-                result.Diagnostics.AddRange(entryDiags);
-                result.Success = false;
-                return result;
+                var cppMains = userTus
+                    .Select(t => (file: Path.GetFileName(t), count: NativeEntryPoints.CountCppMains(TryReadAllText(t))))
+                    .ToList();
+                var entryDiags = NativeEntryPoints.Apply(isExe, basicLangMainCount, cppMains);
+                if (entryDiags.Count > 0)
+                {
+                    result.Diagnostics.AddRange(entryDiags);
+                    result.Success = false;
+                    return outcome;
+                }
             }
             // BasicLang owns the single entry point iff it has the one Main; if the sole
             // entry is a user C++ main, basicLangMainCount == 0 so emitMain is false and
@@ -118,46 +227,58 @@ namespace BasicLang.Compiler.ProjectSystem
                 // GenerateSplit's precondition: projectName must be filename-safe (it is
                 // used verbatim in <Project>.g.h etc). The builder owns that guarantee.
                 var safeProject = SanitizeProjectName(outputName);
+
+                // ---- 5a. Pure codegen (BL6001) — no file IO happens in here. -------------
+                // Generate the full file set into memory BEFORE touching obj/gen. A codegen
+                // failure (CppCapabilityException on an unsupported construct, or the
+                // reserved-name ArgumentException) must NOT wipe the previously generated
+                // headers: IntelliSense (clangd) reads them between builds, so one
+                // unsupported construct silently destroying every header is a real
+                // regression. split.Files is fully in-memory, so generate -> clean -> write
+                // is a safe reorder, not a redesign.
                 try
                 {
-                    // Generate the full file set into memory BEFORE touching obj/gen. A
-                    // codegen failure (CppCapabilityException on an unsupported construct, or
-                    // the reserved-name ArgumentException) must NOT wipe the previously
-                    // generated headers: IntelliSense (clangd) reads them between builds, so
-                    // one unsupported construct silently destroying every header is a real
-                    // regression. split.Files is fully in-memory, so generate -> clean ->
-                    // write is a safe reorder, not a redesign. (A mid-loop IO fault at the
-                    // write step below can still leave a partial set — that is a genuine
-                    // environment failure, out of scope for this surgical fix.)
                     split = new CppCodeGenerator().GenerateSplit(
                         compilation.CombinedIR, safeProject, unitIRs, emitMain);
-                    // Stale generated files from renamed/removed modules would otherwise
-                    // still compile — clean before writing the fresh set (OrdinalIgnoreCase-
-                    // safe on Windows). Clean + createdir + write share the codegen's failure
-                    // mapping so an IO fault (disk full, perms, locked obj/gen) is a clean
-                    // diagnostic in the CLI too, not an escaping throw.
-                    CleanGeneratedDir(objGenDir);
-                    Directory.CreateDirectory(objGenDir);
-                    foreach (var kv in split.Files)
-                        File.WriteAllText(Path.Combine(objGenDir, kv.Key), kv.Value);
                 }
                 catch (CppCapabilityException ex)
                 {
                     Fail(result, "BL6001", ex.Message, project.FilePath);
-                    return result;
+                    return outcome;
                 }
                 catch (ArgumentException ex)
                 {
                     // Reserved-name collision (a module named like a generated file) — the
                     // exception message names the offending module.
                     Fail(result, "BL6001", ex.Message, project.FilePath);
-                    return result;
+                    return outcome;
                 }
-                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+
+                // ---- 5b. File IO (BL6006) — a separate try so an IO fault is never -------
+                // mislabeled as a codegen error. ArgumentException belongs to BL6006 HERE
+                // (an invalid path out of Path.Combine/WriteAllText), which is exactly why
+                // the two stages cannot share one catch list: the same exception type means
+                // "codegen rejected a name" above and "the filesystem rejected a path" here.
+                // (A mid-loop IO fault at the write step can still leave a partial set —
+                // a genuine environment failure, out of scope.)
+                try
+                {
+                    // Stale generated files from renamed/removed modules would otherwise
+                    // still compile — clean before writing the fresh set (OrdinalIgnoreCase-
+                    // safe on Windows).
+                    foreach (var stale in CleanGeneratedDir(objGenDir))
+                        result.Messages.Add($"warning: could not delete stale generated file {stale}");
+                    Directory.CreateDirectory(objGenDir);
+                    foreach (var kv in split.Files)
+                        File.WriteAllText(Path.Combine(objGenDir, kv.Key), kv.Value);
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException
+                                                             || ex is ArgumentException
+                                                             || ex is NotSupportedException)
                 {
                     Fail(result, "BL6006", "Failed to write generated C++ to obj/gen: " + ex.Message,
                         project.FilePath);
-                    return result;
+                    return outcome;
                 }
 
                 generatedTus = split.TranslationUnitFileNames
@@ -166,22 +287,42 @@ namespace BasicLang.Compiler.ProjectSystem
             }
 
             // ---- 6. Toolchain (hard requirement for ALL native projects, D6) ----
-            var toolchain = CppToolchain.Find();
-            if (toolchain == null)
+            // Deliberately after the obj/gen write: the headers must exist even when this
+            // gate fires (Task 8's test pins that ordering, Task 9 depends on it).
+            var toolchain = resolveToolchain();
+            outcome.Toolchain = toolchain;
+            if (toolchain == null && !forIntelliSense)
             {
                 Fail(result, "BL6005",
                     "No C++ toolchain found. Probed: clang++ (PATH), g++ (PATH), MSVC (vswhere). "
                     + "Install LLVM/clang (https://releases.llvm.org), MinGW-w64, or Visual Studio Build Tools.",
                     project.FilePath);
-                return result;
+                return outcome;
             }
-            result.Messages.Add($"Compiling C++ with {toolchain.DisplayName}...");
+
+            // The compiler IDENTITY, defaulted before anything dereferences it — the request's
+            // OutputPath extension already needs Kind, so a null toolchain would be an NRE
+            // here, not a missing flag. A null toolchain only reaches this line on the
+            // IntelliSense path (Build hard-fails above); clang++ is the spec's blessed
+            // toolchain, so that is the default. When a toolchain IS installed we prefer its
+            // own identity.
+            //
+            // Kind and driver ALWAYS come from the same source. clangd picks its parsing mode
+            // from arguments[0], so a "cl" driver carrying GNU flags — or a "clang++" driver
+            // carrying /std: — parses silently wrong. Pairing them here is what makes that
+            // unrepresentable, including on an MSVC machine, where a real build legitimately
+            // emits cl + /std:c++20 and clangd reads it in cl-driver mode.
+            var kind = toolchain?.Kind ?? CppToolchainKind.ClangLike;
+            var driver = toolchain?.DriverName ?? "clang++";
+
+            if (!forIntelliSense)
+                result.Messages.Add($"Compiling C++ with {toolchain.DisplayName}...");
 
             // ---- 7. Request ----
             var request = new CppCompileRequest
             {
                 OutputPath = Path.Combine(outputDir, outputName + (isExe ? ".exe"
-                    : toolchain.Kind == CppToolchainKind.Msvc ? ".lib" : ".a")),
+                    : kind == CppToolchainKind.Msvc ? ".lib" : ".a")),
                 LinkExecutable = isExe,
                 CppStandard = project.CppStandard,
                 WorkingDirectory = outputDir,
@@ -208,8 +349,13 @@ namespace BasicLang.Compiler.ProjectSystem
             request.Defines.AddRange(project.Defines);
 
             // ---- Native libs (engine lib resolves via EngineDeployment) ----
+            // Skipped wholesale for IntelliSense: libraries are LINK inputs and never reach
+            // CppToolchain.FlagsFor, so they contribute nothing to compile_commands.json.
+            // Running the block would only import its BL6009 failure — which sits BEFORE the
+            // compile-database write — and deny a game project with an unresolved engine .lib
+            // any IntelliSense at all, for zero benefit.
             string engineLib = null;
-            foreach (var lib in project.NativeLibs)
+            foreach (var lib in forIntelliSense ? Enumerable.Empty<string>() : project.NativeLibs)
             {
                 var local = Path.IsPathRooted(lib) ? lib : Path.Combine(projectDir, lib);
                 if (File.Exists(local))
@@ -238,14 +384,17 @@ namespace BasicLang.Compiler.ProjectSystem
                     }
                 }
                 Fail(result, "BL6009", $"Native library not found: {lib}", project.FilePath);
-                return result;
+                return outcome;
             }
 
             // ---- Engine framework auto-link ----
             // A mixed/BasicLang game that calls Framework_* engine functions but declares
             // no explicit <NativeLib> still needs the engine import library linked (and its
             // DLLs deployed). Only kicks in when codegen actually emitted framework calls.
-            if (split != null && split.UsesFramework && engineLib == null)
+            // Skipped for IntelliSense for the same reason as the block above (and its
+            // BL6009 is precisely this repo's known env .lib gap, on the flagship project
+            // type).
+            if (!forIntelliSense && split != null && split.UsesFramework && engineLib == null)
             {
                 engineLib = EngineDeployment.LocateImportLib();
                 if (engineLib != null)
@@ -260,51 +409,34 @@ namespace BasicLang.Compiler.ProjectSystem
                         + "the project calls Framework_* engine functions but the engine import library "
                         + "could not be located. Build the native engine (x64) or add a <NativeLib> reference.",
                         project.FilePath);
-                    return result;
+                    return outcome;
                 }
             }
+            outcome.EngineLib = engineLib;
+            outcome.Request = request;
 
-            // ---- compile_commands.json (advisory — never fails the build) ----
+            // ---- compile_commands.json ----
+            // Advisory for a BUILD (a compile that succeeds is a success even if the editor
+            // hint could not be written), but it IS the deliverable for IntelliSense — so
+            // there, a write failure is a real failure rather than a warning nobody reads.
             try
             {
-                var ccPath = CompileCommandsWriter.Write(projectDir, toolchain.Kind, toolchain.DriverName, request);
+                var ccPath = CompileCommandsWriter.Write(projectDir, kind, driver, request);
                 result.Messages.Add($"Compilation database: {ccPath}");
             }
             catch (Exception ex)
             {
+                if (forIntelliSense)
+                {
+                    Fail(result, "BL6006", "Failed to write compilation database: " + ex.Message,
+                        project.FilePath);
+                    return outcome;
+                }
                 result.Messages.Add($"warning: could not write compilation database: {ex.Message}");
             }
 
-            // ---- Compile ----
-            var (ok, output) = toolchain.Compile(request);
-            ApplyCompileOutcome(result, ok, output, outputDir, project.FilePath);
-            if (!result.Success)
-                return result;
-
-            if (isExe) result.ExecutablePath = request.OutputPath;
-            result.Messages.Add($"Output: {request.OutputPath}");
-
-            // ---- Engine DLL deploy ----
-            if (engineLib != null)
-            {
-                foreach (var dll in EngineDeployment.LocateNativeDlls(engineLib))
-                {
-                    // A locked DLL (previous game run still open) must never
-                    // discard a successful build result — warn and continue,
-                    // mirroring the CLI's existing deploy precedent.
-                    try
-                    {
-                        var dest = Path.Combine(outputDir, Path.GetFileName(dll));
-                        File.Copy(dll, dest, overwrite: true);
-                        result.Messages.Add($"Deployed {Path.GetFileName(dll)}");
-                    }
-                    catch (Exception ex)
-                    {
-                        result.Messages.Add($"warning: could not deploy {Path.GetFileName(dll)}: {ex.Message}");
-                    }
-                }
-            }
-            return result;
+            outcome.Completed = true;
+            return outcome;
         }
 
         /// <summary>
@@ -466,17 +598,27 @@ namespace BasicLang.Compiler.ProjectSystem
             return string.IsNullOrEmpty(safe) ? "Program" : safe;
         }
 
-        // Delete stale generated files so a renamed/removed module's old .g.cpp/.g.h can
-        // never be picked up by a later compile. Best-effort (a locked file is skipped).
-        private static void CleanGeneratedDir(string objGenDir)
+        /// <summary>
+        /// Deletes stale generated files so a renamed/removed module's old .g.cpp/.g.h can
+        /// never be picked up by a later compile, and returns the ones it could NOT delete.
+        ///
+        /// Deletion stays best-effort ON PURPOSE: from Phase 3a on, clangd holds obj/gen
+        /// headers open, so promoting a locked file to a hard BL6006 would let the editor
+        /// break the build. But a skipped file must not be SILENT either — a stale one that
+        /// survives goes on to be compiled. The caller surfaces each failure as a warning.
+        /// </summary>
+        private static List<string> CleanGeneratedDir(string objGenDir)
         {
-            if (!Directory.Exists(objGenDir)) return;
+            var failed = new List<string>();
+            if (!Directory.Exists(objGenDir)) return failed;
             foreach (var file in Directory.EnumerateFiles(objGenDir)
                 .Where(f => f.EndsWith(".g.cpp", StringComparison.OrdinalIgnoreCase)
                          || f.EndsWith(".g.h", StringComparison.OrdinalIgnoreCase)))
             {
-                try { File.Delete(file); } catch { /* best effort */ }
+                try { File.Delete(file); }
+                catch { failed.Add(file); }
             }
+            return failed;
         }
 
         // A translation unit that vanished between discovery and read contributes no
