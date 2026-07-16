@@ -113,6 +113,19 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
     }
 
     /// <inheritdoc />
+    public ILanguageService? GetById(string id)
+    {
+        // Linear over the (tiny, fixed) service set: this is a lifecycle-event call, not the
+        // GetFor keystroke hot path, so it does not warrant a second lookup map.
+        foreach (var service in _services)
+        {
+            if (string.Equals(service.Descriptor.Id, id, StringComparison.Ordinal)) return service;
+        }
+
+        return null;
+    }
+
+    /// <inheritdoc />
     public bool IsConnectedFor(string? path) => GetFor(path)?.IsConnected ?? false;
 
     /// <inheritdoc />

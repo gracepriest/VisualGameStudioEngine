@@ -118,6 +118,33 @@ public class LanguageServiceRegistryTests
         });
     }
 
+    // GetById reaches a specific server by identity (not by routing a document) — the path the
+    // BasicLang-only rootless autostart uses instead of a representative filename.
+    [Test]
+    public void GetById_ReturnsTheServerWithThatDescriptorId()
+    {
+        var r = RegistryOf(FakeBasicLang(), FakeClangd());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.GetById(LanguageServerDescriptor.BasicLangId)!.Descriptor.Id, Is.EqualTo("basiclang"));
+            Assert.That(r.GetById(LanguageServerDescriptor.ClangdId)!.Descriptor.Id, Is.EqualTo("clangd"));
+        });
+    }
+
+    [Test]
+    public void GetById_UnknownOrUnregisteredId_IsNull()
+    {
+        var r = RegistryOf(FakeBasicLang()); // clangd not registered
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.GetById(LanguageServerDescriptor.ClangdId), Is.Null, "clangd is not registered");
+            Assert.That(r.GetById("nope"), Is.Null);
+            Assert.That(r.GetById("BasicLang"), Is.Null, "id match is ordinal, not case-insensitive");
+        });
+    }
+
     [Test]
     public void All_ExposesEveryRegisteredServer()
     {

@@ -1074,16 +1074,17 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// The BasicLang language server, reached through the registry's routing. Used only for the
-    /// BasicLang-specific lifecycle that predates per-file routing: the constructor's rootless
+    /// The BasicLang language server, reached by identity (not by routing a document). Used only for
+    /// the BasicLang-specific lifecycle that predates per-file routing: the constructor's rootless
     /// autostart and the manual "Start Language Server" command. Both are BasicLang-only BY DESIGN
     /// — BasicLang is the one server safe to start rootless (it resolves nothing against a project
     /// root). Servers that need a workspace root (clangd) are started on <c>ProjectOpened</c> via
     /// <see cref="ILanguageServiceRegistry.StartAllAsync"/> (Task 12), which refuses a rootless
-    /// start outright — never here. Routing a representative BasicLang path is how the shim used to
-    /// reach this same instance; feature calls route by the real document path instead.
+    /// start outright — never here. Reached via <see cref="ILanguageServiceRegistry.GetById"/> so
+    /// the intent reads honestly and survives a routing-map change; feature calls use
+    /// <c>GetFor(document.FilePath)</c> instead.
     /// </summary>
-    private ILanguageService? BasicLangLspService => _languageServices.GetFor("_.bas");
+    private ILanguageService? BasicLangLspService => _languageServices.GetById(LanguageServerDescriptor.BasicLangId);
 
     /// <summary>
     /// When a language server (re)connects, re-send didOpen for every open document THAT SERVER
@@ -1095,6 +1096,11 @@ public partial class MainWindowViewModel : ViewModelBase
         // LanguageService raises these events with itself as sender, so this is the specific
         // server whose state changed — re-sync only the documents it owns.
         var service = sender as ILanguageService;
+        // TODO(Task 12): per-server status. The StatusText writes below are a single GLOBAL string
+        // with no server identity, so once a 2nd server (clangd) is registered, a down clangd firing
+        // ConnectionChanged(false) will stamp "disconnected" over a healthy BasicLang (last writer
+        // wins). Diagnostics are unaffected (keyed per-URI); only this status line lies. Designing
+        // the multi-server status UI is Task 12's remit ("status bar + graceful degradation").
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             if (connected && service != null)
@@ -6345,6 +6351,16 @@ public partial class MainWindowViewModel : ViewModelBase
             var oldPath = activeDoc.FilePath;
             activeDoc.FilePath = filePath;
             activeDoc.IsDirty = false;
+
+            // TODO(Task 12): re-route the editor's folding after a cross-language Save-As. Changing
+            // FilePath here does NOT re-derive activeDoc.LanguageService, and even if it did, the
+            // control caches the service via SetLanguageService (called once on DataContext bind,
+            // no property observer), so a .bas -> .cpp Save-As leaves folding on the stale server.
+            // Only FOLDING is affected — the VM's per-feature handlers re-route live via
+            // GetFor(document.FilePath) on every call — and it only bites once clangd is registered.
+            // The real fix (the view observing LanguageService/FilePath to re-call SetLanguageService)
+            // is view-lifecycle plumbing that can't be verified without desktop UI testing, so it is
+            // deferred to Task 12 rather than half-fixed here.
 
             // Re-register under new path
             if (oldPath != null)

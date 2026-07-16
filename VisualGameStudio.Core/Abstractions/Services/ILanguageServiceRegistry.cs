@@ -50,6 +50,20 @@ public interface ILanguageServiceRegistry : IDisposable
     ILanguageService? GetFor(string? path);
 
     /// <summary>
+    /// The registered server whose <see cref="LanguageServerDescriptor.Id"/> equals
+    /// <paramref name="id"/> (e.g. <see cref="LanguageServerDescriptor.BasicLangId"/>), or null
+    /// when none is registered.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ This is <b>not</b> routing — <see cref="GetFor"/> is how a document reaches its server.
+    /// This is for the rare caller that legitimately needs one SPECIFIC server by identity, where
+    /// no document is in hand: the BasicLang-only rootless autostart, which cannot express itself
+    /// through <see cref="GetFor"/> without a representative filename that would silently couple it
+    /// to that extension's routing never changing. Ordinal id match.
+    /// </remarks>
+    ILanguageService? GetById(string id);
+
+    /// <summary>
     /// Whether the server that owns <paramref name="path"/> is connected and ready — false when
     /// no server owns it.
     /// </summary>

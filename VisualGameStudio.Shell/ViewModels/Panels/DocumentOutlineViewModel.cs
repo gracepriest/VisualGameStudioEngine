@@ -142,9 +142,13 @@ public partial class DocumentOutlineViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Updates the outline by parsing the content directly (fallback when LSP not available)
+    /// Updates the outline by parsing the content directly. BasicLang-specific — see the warning on
+    /// <see cref="UpdateOutlineFromTextFallback"/>. <b>private on purpose</b>: the only legitimate
+    /// entry point is <see cref="UpdateOutlineFromTextFallback"/>, which gates on file type; a
+    /// direct public caller could run this parser on a .cpp file and reintroduce the bogus
+    /// <c>class Foo {</c> outline it exists to prevent.
     /// </summary>
-    public void UpdateOutline(string filePath, string content)
+    private void UpdateOutline(string filePath, string content)
     {
         CurrentFile = Path.GetFileName(filePath);
         Nodes.Clear();

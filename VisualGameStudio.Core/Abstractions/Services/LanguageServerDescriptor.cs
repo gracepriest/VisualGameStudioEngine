@@ -40,6 +40,17 @@ namespace VisualGameStudio.Core.Abstractions.Services;
 public sealed class LanguageServerDescriptor
 {
     /// <summary>
+    /// Stable <see cref="Id"/> of the BasicLang server. A const so callers that must reach this
+    /// SPECIFIC server by identity — the BasicLang-only rootless autostart via
+    /// <see cref="ILanguageServiceRegistry.GetById"/> — name it honestly instead of by a
+    /// representative filename (which would couple them to <c>.bas</c> staying routed here).
+    /// </summary>
+    public const string BasicLangId = "basiclang";
+
+    /// <summary>Stable <see cref="Id"/> of the clangd server.</summary>
+    public const string ClangdId = "clangd";
+
+    /// <summary>
     /// Settings key overriding the BasicLang compiler path used for the spawned
     /// <c>--lsp</c> server. A const because it must be read BEFORE the descriptor it
     /// configures can be built.
@@ -239,7 +250,7 @@ public sealed class LanguageServerDescriptor
     /// Path to <c>BasicLang.dll</c>, already resolved (override or probe) by the caller.
     /// </param>
     public static LanguageServerDescriptor BasicLang(string compilerPath) => new(
-        id: "basiclang",
+        id: BasicLangId,
         displayName: "BasicLang",
         languageIds: new[] { "basiclang" },
         serverPath: compilerPath,
@@ -262,7 +273,7 @@ public sealed class LanguageServerDescriptor
     /// workspace root at launch.
     /// </remarks>
     public static LanguageServerDescriptor Clangd(string clangdPath) => new(
-        id: "clangd",
+        id: ClangdId,
         displayName: "clangd",
         languageIds: new[] { "cpp" },
         serverPath: clangdPath,

@@ -4,11 +4,12 @@ using VisualGameStudio.Shell.ViewModels.Panels;
 namespace VisualGameStudio.Tests.Shell;
 
 /// <summary>
-/// The document outline's text-parser fallback (<see cref="DocumentOutlineViewModel.UpdateOutline"/>)
-/// is BasicLang-specific: it keys on <c>Module</c>/<c>Class</c>/<c>Sub</c>/… at line start
-/// (case-insensitively) and treats only <c>'</c>/<c>REM</c> as comments. Run on a C++ file it
-/// produces a wrong, partial outline — <c>class Foo {</c> becomes a bogus "Foo" node and <c>//</c>
-/// comments are parsed as code.
+/// The document outline's text parser is BasicLang-specific: it keys on
+/// <c>Module</c>/<c>Class</c>/<c>Sub</c>/… at line start (case-insensitively) and treats only
+/// <c>'</c>/<c>REM</c> as comments. Run on a C++ file it produces a wrong, partial outline —
+/// <c>class Foo {</c> becomes a bogus "Foo" node and <c>//</c> comments are parsed as code. The
+/// only public entry point is <see cref="DocumentOutlineViewModel.UpdateOutlineFromTextFallback"/>,
+/// which gates the parser on file type.
 ///
 /// <para>
 /// Task 7 routes <c>.cpp</c> to clangd's <c>documentSymbol</c> and restricts the text fallback to
