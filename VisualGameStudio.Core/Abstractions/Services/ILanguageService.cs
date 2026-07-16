@@ -8,7 +8,26 @@ namespace VisualGameStudio.Core.Abstractions.Services;
 public interface ILanguageService : IDisposable
 {
     /// <summary>
-    /// Whether the language server is connected and ready
+    /// Which server this instance drives: what to launch, which files it owns, which
+    /// <c>languageId</c> to announce them with. Fixed for the lifetime of the service.
+    /// <para>
+    /// On the interface because routing is a decision made ABOUT a service from outside it —
+    /// <see cref="ILanguageServiceRegistry"/> asks each service who it is in order to hand it
+    /// the files it owns, and callers read <see cref="LanguageServerDescriptor.DisplayName"/>
+    /// to name the right server in a message. Never null.
+    /// </para>
+    /// </summary>
+    LanguageServerDescriptor Descriptor { get; }
+
+    /// <summary>
+    /// Whether the language server is connected and ready.
+    /// <para>
+    /// ⚠ <b>Per SERVER, not global.</b> With more than one server registered, "the language
+    /// server is down" is not a fact about the IDE — BasicLang can be restarting while clangd
+    /// answers normally. A caller holding one <see cref="ILanguageService"/> is asking about
+    /// THAT server only; to ask about the server that owns a given file, use
+    /// <see cref="ILanguageServiceRegistry.IsConnectedFor"/>.
+    /// </para>
     /// </summary>
     bool IsConnected { get; }
 

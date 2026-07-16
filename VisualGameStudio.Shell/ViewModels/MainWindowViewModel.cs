@@ -546,8 +546,14 @@ public partial class MainWindowViewModel : ViewModelBase
         // autostarted server is in practice rootless for the whole session — StartAsync does
         // NOT re-root an already-connected server. Re-rooting on project open needs a restart
         // (or workspace/didChangeWorkspaceFolders, which would mean advertising the
-        // workspace.workspaceFolders client capability). Deferred — see the plan's Task 6
-        // (registry) / Task 10 (emit-on-project-open), which own this area.
+        // workspace.workspaceFolders client capability).
+        //
+        // This stays BasicLang-only and rootless by decision (Task 6). BasicLang resolves nothing
+        // against a project root, so rootless costs it nothing, and starting here is what gives a
+        // lone .bas file opened with no project any IntelliSense at all. It cannot start clangd:
+        // this reaches the BasicLang service alone, and a server that DOES need a root can only be
+        // started through ILanguageServiceRegistry.StartAllAsync, which refuses a rootless start
+        // outright. Servers needing a root are started on ProjectOpened instead.
         if (ShouldAutoStartLanguageServer(_settingsService))
         {
             _ = _languageService.StartAsync(_projectService.CurrentProject?.ProjectDirectory);
