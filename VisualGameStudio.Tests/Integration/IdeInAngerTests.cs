@@ -326,9 +326,14 @@ End Sub
 
             // --- capabilities: the initialize result must be CAPTURED, not discarded.
             // These pair with the hover/completion round-trips further down: what the
-            // real server ADVERTISES here has to match what it demonstrably DOES there.
-            // (Unit tests cover the parser; only a live handshake proves we parse what
-            // the actual --lsp server sends, which returns providers as objects.)
+            // server ADVERTISES here has to match what it demonstrably DOES there.
+            //
+            // Unit tests cover the parser; only a live handshake proves we parse what
+            // the real server actually sends. This test drives `--lsp`, i.e. the
+            // OmniSharp-based BasicLangLanguageServer (Program.cs:41-47) — NOT the
+            // `--lsp-simple` SimpleLspServer. That distinction matters: the real server
+            // sends every provider as an OBJECT ("hoverProvider": {}), so parsing that
+            // accepted only booleans would report every capability below as false.
             Assert.That(lsp.Capabilities, Is.Not.Null, "initialize result was not captured.\n" + output.Dump());
             Assert.Multiple(() =>
             {
@@ -336,8 +341,13 @@ End Sub
                     "server must advertise hover — the hover round-trip below proves it provides it");
                 Assert.That(lsp.Capabilities!.HasCompletionProvider, Is.True,
                     "server must advertise completion — the completion round-trip below proves it provides it");
+
+                // Tripwire, not a negotiation check: this server sends no `positionEncoding`
+                // at all, so this pins the LSP-default utf-16 we fall back to. It fails the
+                // day a server starts declaring utf-8 — which would silently shift every
+                // position on every non-ASCII line, since our column math is utf-16 only.
                 Assert.That(lsp.Capabilities!.PositionEncoding, Is.EqualTo("utf-16"),
-                    "the real server must leave us on utf-16; this client's column math is utf-16 only");
+                    "server must leave us on utf-16; this client's column math is utf-16 only");
             });
 
             // --- diagnostics: open a file with a semantic error, expect a published error

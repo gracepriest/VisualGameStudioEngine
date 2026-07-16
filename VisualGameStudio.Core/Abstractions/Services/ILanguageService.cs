@@ -13,10 +13,16 @@ public interface ILanguageService : IDisposable
     bool IsConnected { get; }
 
     /// <summary>
-    /// What the server reported it can do in its <c>initialize</c> result, or null
-    /// before a successful handshake. Without this, "the server does not support X"
-    /// is indistinguishable from "the server supports X and the answer is empty" —
-    /// every feature method here returns an empty list on failure.
+    /// What the connected server reported it can do in its <c>initialize</c> result.
+    /// <para>
+    /// <b>Null whenever <see cref="IsConnected"/> is false</b> — not merely before the
+    /// first handshake, but any time the service is disconnected, stopped, crashed or
+    /// disposed. Callers must therefore re-check it rather than caching the value or
+    /// null-checking only at startup: a disconnected server supports nothing.
+    /// </para>
+    /// Without this, "the server does not support X" is indistinguishable from "the
+    /// server supports X and the answer is empty" — every feature method here returns
+    /// an empty list on failure.
     /// </summary>
     ServerCapabilities? Capabilities { get; }
 
@@ -211,8 +217,11 @@ public record ServerCapabilities
 
     public bool HasCompletionProvider { get; init; }
 
-    /// <summary>Server implements <c>completionItem/resolve</c> (clangd: true, BasicLang: false).</summary>
-    public bool CompletionResolveProvider { get; init; }
+    /// <summary>
+    /// Server implements <c>completionItem/resolve</c>. Both clangd and BasicLang's
+    /// real <c>--lsp</c> server report true; the <c>--lsp-simple</c> fallback reports false.
+    /// </summary>
+    public bool HasCompletionResolveProvider { get; init; }
 
     public bool HasHoverProvider { get; init; }
     public bool HasDefinitionProvider { get; init; }

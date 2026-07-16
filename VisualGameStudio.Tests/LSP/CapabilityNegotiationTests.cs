@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.ProjectSystem.Services;
@@ -29,11 +30,37 @@ public class CapabilityNegotiationTests
         Assert.Multiple(() =>
         {
             Assert.That(caps.HasCompletionProvider, Is.True);
-            Assert.That(caps.CompletionResolveProvider, Is.True);   // clangd = true, BasicLang = false
+            Assert.That(caps.HasCompletionResolveProvider, Is.True);
             Assert.That(caps.HasHoverProvider, Is.True);
             Assert.That(caps.HasDefinitionProvider, Is.True);
             Assert.That(caps.PositionEncoding, Is.EqualTo("utf-16"));
         });
+    }
+
+    // THE GUARD. A response with no `result` member reaches us as a default/Undefined
+    // JsonElement (ProcessMessage: tcs.SetResult(default)), whose GetRawText() throws
+    // InvalidOperationException — which a `catch (JsonException)` would NOT catch. The
+    // parser takes the element precisely so no call site has to remember this.
+    [Test]
+    public void ParseServerCapabilities_UndefinedElement_ReturnsEmptyCapabilities_NotThrow()
+    {
+        ServerCapabilities caps = null!;
+
+        Assert.DoesNotThrow(() => caps = LanguageService.ParseServerCapabilities(default(JsonElement)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.HasCompletionProvider, Is.False);
+            Assert.That(caps.HasHoverProvider, Is.False);
+            Assert.That(caps.PositionEncoding, Is.EqualTo("utf-16"));
+        });
+    }
+
+    [Test]
+    public void ParseServerCapabilities_NullProvider_IsFalse()
+    {
+        var caps = LanguageService.ParseServerCapabilities("""{"capabilities":{"hoverProvider":null}}""");
+
+        Assert.That(caps.HasHoverProvider, Is.False);
     }
 
     [Test]
@@ -55,7 +82,7 @@ public class CapabilityNegotiationTests
         Assert.Multiple(() =>
         {
             Assert.That(caps.HasCompletionProvider, Is.False);
-            Assert.That(caps.CompletionResolveProvider, Is.False);
+            Assert.That(caps.HasCompletionResolveProvider, Is.False);
             Assert.That(caps.HasHoverProvider, Is.False);
             Assert.That(caps.HasDefinitionProvider, Is.False);
             Assert.That(caps.HasReferencesProvider, Is.False);
@@ -67,16 +94,41 @@ public class CapabilityNegotiationTests
 
     // THE PIN. LSP positions are UTF-16 code units and this client converts them as
     // `character = column - 1` at 12+ call sites against AvaloniaEdit's Caret.Column.
+    //
+    // Asserts the PATH, not just the presence of the substring: `positionEncodings` is
+    // only meaningful to a server under `general`. Sitting anywhere else (e.g. moved
+    // under `textDocument`) would still contain "utf-16" while negotiating nothing at
+    // all — the encoding pin would read as green and be entirely inert.
+    //
+    // The "utf-16" literal is hardcoded deliberately. Referencing ServerCapabilities.Utf16
+    // would make this test flip together with the code and assert nothing.
     [Test]
     public void ClientCapabilities_AdvertisePositionEncoding_Utf16_Only()
     {
-        var json = JsonSerializer.Serialize(LanguageService.BuildClientCapabilities());
+        var caps = SerializeClientCapabilities();
 
-        Assert.That(json, Does.Contain("utf-16"),
-            "LSP positions are UTF-16 code units; AvaloniaEdit Caret.Column matches ONLY utf-16. " +
-            "If this ever becomes utf-8, every position on every non-ASCII line shifts silently.");
-        Assert.That(json, Does.Not.Contain("utf-8"));
+        var encodings = caps["general"]?["positionEncodings"]?.AsArray();
+        Assert.That(encodings, Is.Not.Null,
+            "positionEncodings must be advertised at `general.positionEncodings` — that is the " +
+            "only place a server reads it. LSP positions are UTF-16 code units and AvaloniaEdit's " +
+            "Caret.Column matches ONLY utf-16.");
+        Assert.That(encodings!.Select(n => n!.GetValue<string>()), Is.EqualTo(new[] { "utf-16" }),
+            "utf-16 and ONLY utf-16. If this ever offers utf-8, every position on every " +
+            "non-ASCII line shifts silently, with no error anywhere.");
     }
+
+    [Test]
+    public void ClientCapabilities_DoNotAdvertisePositionEncoding_AnywhereElse()
+    {
+        var caps = SerializeClientCapabilities();
+
+        Assert.That(caps["textDocument"]?["positionEncodings"], Is.Null,
+            "positionEncodings under textDocument is inert — servers only read general.positionEncodings");
+        Assert.That(JsonSerializer.Serialize(caps), Does.Not.Contain("utf-8"));
+    }
+
+    private static JsonNode SerializeClientCapabilities() =>
+        JsonSerializer.SerializeToNode(LanguageService.BuildClientCapabilities())!;
 
     // ---- Parser edge cases -------------------------------------------------
 
@@ -135,7 +187,7 @@ public class CapabilityNegotiationTests
         Assert.Multiple(() =>
         {
             Assert.That(caps.HasCompletionProvider, Is.True);
-            Assert.That(caps.CompletionResolveProvider, Is.False);
+            Assert.That(caps.HasCompletionResolveProvider, Is.False);
         });
     }
 
@@ -179,24 +231,22 @@ public class CapabilityNegotiationTests
         });
     }
 
-    [Test]
-    public void BuildClientCapabilities_KeepsExistingAdvertisedSurface()
+    [TestCase("synchronization")]
+    [TestCase("completion")]
+    [TestCase("hover")]
+    [TestCase("signatureHelp")]
+    [TestCase("definition")]
+    [TestCase("references")]
+    [TestCase("documentSymbol")]
+    [TestCase("publishDiagnostics")]
+    public void BuildClientCapabilities_KeepsExistingAdvertisedSurface(string member)
     {
-        // The blob is extracted verbatim; this task adds `general.positionEncodings`
-        // and must not otherwise change what BasicLang is told.
-        var json = JsonSerializer.Serialize(LanguageService.BuildClientCapabilities());
+        // The blob was extracted verbatim; this task adds `general.positionEncodings`
+        // and must not otherwise change what the server is told. Asserts each member
+        // sits under `textDocument` rather than merely appearing somewhere in the JSON.
+        var caps = SerializeClientCapabilities();
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(json, Does.Contain("synchronization"));
-            Assert.That(json, Does.Contain("completion"));
-            Assert.That(json, Does.Contain("hover"));
-            Assert.That(json, Does.Contain("signatureHelp"));
-            Assert.That(json, Does.Contain("definition"));
-            Assert.That(json, Does.Contain("references"));
-            Assert.That(json, Does.Contain("documentSymbol"));
-            Assert.That(json, Does.Contain("publishDiagnostics"));
-            Assert.That(json, Does.Contain("positionEncodings"));
-        });
+        Assert.That(caps["textDocument"]?[member], Is.Not.Null,
+            $"textDocument.{member} must still be advertised");
     }
 }

@@ -352,9 +352,52 @@ public class LanguageService : ILanguageService
     /// <summary>
     /// Parses an LSP <c>initialize</c> result (the <c>result</c> object, i.e. the
     /// <c>{"capabilities":{...}}</c> envelope) into <see cref="ServerCapabilities"/>.
-    /// Never throws: any non-conforming payload yields empty capabilities, because a
+    /// Never throws: every non-conforming payload yields empty capabilities, because a
     /// server whose handshake we cannot read supports nothing as far as we know.
     /// Pure and static for testability.
+    /// </summary>
+    /// <remarks>
+    /// Takes the <see cref="JsonElement"/> directly rather than a string so callers need
+    /// no external guard. <c>Undefined</c> — what <see cref="ProcessMessage"/> hands back
+    /// for a response carrying no <c>result</c> member — is handled here as one more
+    /// non-conforming case; its <c>GetRawText()</c> throws <c>InvalidOperationException</c>
+    /// (NOT <c>JsonException</c>), so a string-based signature would push that trap onto
+    /// every call site to remember independently.
+    /// </remarks>
+    public static ServerCapabilities ParseServerCapabilities(JsonElement initializeResult)
+    {
+        if (initializeResult.ValueKind != JsonValueKind.Object) return new ServerCapabilities();
+        if (!initializeResult.TryGetProperty("capabilities", out var caps) ||
+            caps.ValueKind != JsonValueKind.Object)
+        {
+            return new ServerCapabilities();
+        }
+
+        return new ServerCapabilities
+        {
+            HasCompletionProvider = HasProvider(caps, "completionProvider"),
+            HasCompletionResolveProvider =
+                caps.TryGetProperty("completionProvider", out var completion) &&
+                completion.ValueKind == JsonValueKind.Object &&
+                completion.TryGetProperty("resolveProvider", out var resolve) &&
+                resolve.ValueKind == JsonValueKind.True,
+            HasHoverProvider = HasProvider(caps, "hoverProvider"),
+            HasDefinitionProvider = HasProvider(caps, "definitionProvider"),
+            HasReferencesProvider = HasProvider(caps, "referencesProvider"),
+            HasDocumentSymbolProvider = HasProvider(caps, "documentSymbolProvider"),
+            HasSignatureHelpProvider = HasProvider(caps, "signatureHelpProvider"),
+            PositionEncoding =
+                caps.TryGetProperty("positionEncoding", out var encoding) &&
+                encoding.ValueKind == JsonValueKind.String
+                    ? encoding.GetString() ?? ServerCapabilities.Utf16
+                    : ServerCapabilities.Utf16
+        };
+    }
+
+    /// <summary>
+    /// Convenience overload parsing raw JSON text; malformed input yields empty
+    /// capabilities. Delegates to the <see cref="JsonElement"/> overload, which is the
+    /// one the client itself uses — a server's reply is already parsed by then.
     /// </summary>
     public static ServerCapabilities ParseServerCapabilities(string json)
     {
@@ -363,32 +406,9 @@ public class LanguageService : ILanguageService
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return new ServerCapabilities();
-            if (!doc.RootElement.TryGetProperty("capabilities", out var caps) ||
-                caps.ValueKind != JsonValueKind.Object)
-            {
-                return new ServerCapabilities();
-            }
-
-            return new ServerCapabilities
-            {
-                HasCompletionProvider = HasProvider(caps, "completionProvider"),
-                CompletionResolveProvider =
-                    caps.TryGetProperty("completionProvider", out var completion) &&
-                    completion.ValueKind == JsonValueKind.Object &&
-                    completion.TryGetProperty("resolveProvider", out var resolve) &&
-                    resolve.ValueKind == JsonValueKind.True,
-                HasHoverProvider = HasProvider(caps, "hoverProvider"),
-                HasDefinitionProvider = HasProvider(caps, "definitionProvider"),
-                HasReferencesProvider = HasProvider(caps, "referencesProvider"),
-                HasDocumentSymbolProvider = HasProvider(caps, "documentSymbolProvider"),
-                HasSignatureHelpProvider = HasProvider(caps, "signatureHelpProvider"),
-                PositionEncoding =
-                    caps.TryGetProperty("positionEncoding", out var encoding) &&
-                    encoding.ValueKind == JsonValueKind.String
-                        ? encoding.GetString() ?? ServerCapabilities.Utf16
-                        : ServerCapabilities.Utf16
-            };
+            // Safe to dispose the document here: the parse copies every value it keeps
+            // (GetString allocates), so nothing in the result points back into it.
+            return ParseServerCapabilities(doc.RootElement);
         }
         catch (JsonException)
         {
@@ -401,6 +421,14 @@ public class LanguageService : ILanguageService
     /// answering with the options object DOES support the feature. Absent, null and
     /// literal false all mean unsupported.
     /// </summary>
+    /// <remarks>
+    /// Accepting the object form is required, not defensive: BasicLang's real
+    /// <c>--lsp</c> server answers <c>"hoverProvider": {}</c> — an EMPTY object — and
+    /// likewise for definition/references/documentSymbol. Accepting only
+    /// <c>JsonValueKind.True</c> would report every one of them as unsupported.
+    /// (The <c>--lsp-simple</c> fallback server does send bare booleans, so both
+    /// forms genuinely occur in this repo.)
+    /// </remarks>
     private static bool HasProvider(JsonElement capabilities, string name)
     {
         if (!capabilities.TryGetProperty(name, out var provider)) return false;
@@ -422,12 +450,9 @@ public class LanguageService : ILanguageService
         // IsConnected after we return), so Capabilities already reads null throughout.
         var initResult = await SendRequestAsync("initialize", initParams, cancellationToken);
 
-        // A response carrying no `result` member leaves the JsonElement Undefined, and
-        // Undefined.GetRawText() throws InvalidOperationException — NOT JsonException,
-        // so ParseServerCapabilities' catch would NOT save us. This guard is
-        // load-bearing; do not fold it into the parser's try block.
-        _capabilities = ParseServerCapabilities(
-            initResult.ValueKind == JsonValueKind.Undefined ? "" : initResult.GetRawText());
+        // No guard needed: ParseServerCapabilities takes the element and treats a
+        // missing/Undefined result as "told us nothing" (see its remarks).
+        _capabilities = ParseServerCapabilities(initResult);
 
         await SendNotificationAsync("initialized", new { });
     }
