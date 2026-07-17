@@ -72,7 +72,8 @@ public class LanguageServiceRegistryTests
     }
 
     // A registry holding only BasicLang must not answer for C++ — the "null silently becomes
-    // basiclang" trap. This is the state the IDE actually ships in until Task 12 registers clangd.
+    // basiclang" trap. This is the state the IDE ships in on any machine where no clangd is
+    // found (DI registers clangd only when ClangdLocator resolves one).
     [Test]
     public void GetFor_UnregisteredLanguage_IsNull()
     {

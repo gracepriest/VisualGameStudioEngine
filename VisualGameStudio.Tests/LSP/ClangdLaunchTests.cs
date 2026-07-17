@@ -81,7 +81,15 @@ public class ClangdLaunchTests
     [TearDown]
     public void TearDown()
     {
-        try { Directory.Delete(_projectDir, recursive: true); } catch { }
+        // One bounded retry: the just-stopped clangd can briefly hold this directory (its cwd /
+        // --compile-commands-dir) open, making the first delete fail and silently leaking
+        // %TEMP%\bl-clangd-launch-* dirs. Still best-effort — the final failure is swallowed.
+        try { Directory.Delete(_projectDir, recursive: true); }
+        catch
+        {
+            Thread.Sleep(250);
+            try { Directory.Delete(_projectDir, recursive: true); } catch { }
+        }
     }
 
     private static void RequireClangd(string? clangdPath)
@@ -235,6 +243,13 @@ public class ClangdLaunchTests
     }
 
     /// <summary>PIDs of every clangd currently alive (the survivor sweep's unit of account).</summary>
+    /// <remarks>
+    /// Sweeps globally by process name, so a clangd started by something ELSE on this machine
+    /// after the preExisting snapshot (say, VS Code opening mid-run) would be counted — and
+    /// killed — as an orphan. Accepted edge: impossible in-suite (NUnit runs this fixture's
+    /// tests sequentially in one process) and improbable in the seconds-wide window. If it ever
+    /// flakes, filter by command line containing the test's temp project dir instead of by name.
+    /// </remarks>
     private static List<int> ClangdPids()
     {
         var pids = new List<int>();

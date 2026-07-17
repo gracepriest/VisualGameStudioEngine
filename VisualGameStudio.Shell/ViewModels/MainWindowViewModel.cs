@@ -560,11 +560,12 @@ public partial class MainWindowViewModel : ViewModelBase
         //
         // ⚠ The root is normally NULL here: this is the constructor, and no project has been
         // opened yet (ProjectOpened is only subscribed above). We pass whatever is known rather
-        // than hardcoding null so a project already open at construction is honoured, but the
-        // autostarted server is in practice rootless for the whole session — StartAsync does
-        // NOT re-root an already-connected server. Re-rooting on project open needs a restart
-        // (or workspace/didChangeWorkspaceFolders, which would mean advertising the
-        // workspace.workspaceFolders client capability).
+        // than hardcoding null so a project already open at construction is honoured. The
+        // autostarted server runs rootless only until the first project SWITCH: StartAsync does
+        // NOT re-root an already-connected server, so the FIRST ProjectOpened's StartAllAsync
+        // no-ops on it — but switching to a different project stop-then-starts every server at
+        // the new root (Task 12). Root gained on first switch, not first open; a manual
+        // Stop/Start closes that first-open gap.
         //
         // This stays BasicLang-only and rootless by decision (Task 6). BasicLang resolves nothing
         // against a project root, so rootless costs it nothing, and starting here is what gives a
@@ -2888,9 +2889,13 @@ public partial class MainWindowViewModel : ViewModelBase
     /// StartAsync is a no-op if the service is already connected or has been disposed.
     /// <para>
     /// Unlike the autostart in the constructor, this runs long after startup, so the open
-    /// project's directory is usually available — making this the path that actually gives the
-    /// server a workspace root today. (Consequently, "Stop Language Server" then "Start Language
-    /// Server" is the current way to re-root a server that autostarted before a project was open.)
+    /// project's directory is usually available. Since Task 12, a project SWITCH re-roots every
+    /// server automatically (ProjectOpened → the registry's StartAllAsync stop-then-starts them
+    /// at the new root), so manual Stop-then-Start is no longer the only re-root path. It still
+    /// matters for the FIRST project of a session: the autostarted server is already connected,
+    /// so that first StartAllAsync no-ops on it and it stays rootless until the first switch —
+    /// a manual Stop then Start here is what gives it a root before then. (And it remains the
+    /// plain user-initiated restart.)
     /// </para>
     /// </summary>
     [RelayCommand]
