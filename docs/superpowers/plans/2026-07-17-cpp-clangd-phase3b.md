@@ -441,8 +441,10 @@ Test: `VisualGameStudio.Tests/Core/SemanticTokenLegendMapTests.cs`
 
 ```csharp
 [Test] public void SemanticTokensGate_IsAPurePredicate()
-    // extract the gate as `internal static bool ShouldRequestSemanticTokens(ServerCapabilities?)`
-    // (the repo's established public/internal-static test-seam idiom, cf. ParseCompletions);
+    // extract the gate as `public static bool ShouldRequestSemanticTokens(ServerCapabilities?)`
+    // — PUBLIC, not internal: VisualGameStudio.ProjectSystem has NO InternalsVisibleTo for the
+    // test project (the assembly says so itself, LanguageService.cs:223; only BasicLang.csproj
+    // grants IVT). cf. ParseCompletions, the public-static seam precedent.
     // exhaustive: null caps -> false, provider false -> false, provider true -> true
 [Test] public void LegendMapCache_BuildsOncePerLegendInstance()
     // Build is called once for repeated remaps of the same server (cache keyed by legend reference)
@@ -458,7 +460,8 @@ Test: `VisualGameStudio.Tests/Core/SemanticTokenLegendMapTests.cs`
     `ShouldRequestSemanticTokens(Capabilities)` is false. Truth about the downstream (the spec
     was corrected on this once already — do not regress it): at the fetch seam null and empty
     BOTH clear today (`MainWindowViewModel.cs:7746-7753` — `Data != null && Length > 0` else
-    clear; only disconnected/cancelled early-returns keep stale). A provider-less server
+    clear; stale tokens survive only the early returns — disconnected, cancelled, null
+    FilePath at `:7737` — and the catch blocks at `:7755-7759`). A provider-less server
     therefore gets its (nonexistent) tokens cleared — correct and harmless. Preserve that
     handling byte-identically; the remap slots in on the non-empty path only.
   - `RefreshSemanticTokensAsync`: `var map = SemanticTokenLegendMap.GetOrBuild(svc.Capabilities?.SemanticTokensLegend);`
@@ -517,8 +520,7 @@ Test: `VisualGameStudio.Tests/Services/RegenOnSaveCoordinatorTests.cs`
 
 ## Task 11: `.blproj` watching + the open-document nudge (⛔ GATED on S0.5)
 
-**Files:** Modify: `RegenOnSaveCoordinator.cs` (watch wiring), possibly
-`VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs` (nudge trigger, if S0.5 says yes);
+**Files:** Modify: `RegenOnSaveCoordinator.cs` (watch wiring);
 Test: extend `RegenOnSaveCoordinatorTests.cs`
 
 - [x] **Step 0 — GATE RESOLVED (measured, see S0.5): NO NUDGE SHIPS.** `didChangeWatchedFiles`
@@ -538,7 +540,7 @@ Test: extend `RegenOnSaveCoordinatorTests.cs`
   the RequestEmit gate reads the stale in-memory project, so an external edit flipping a
   project TO native needs a reopen (the emission itself reloads from disk).
 - [ ] **Step 4:** Green. **Step 5:** Full suite. **Step 6:** Commit:
-  `feat(cpp): .blproj watching wakes the regen path` (+ nudge if measured in)
+  `feat(cpp): .blproj watching wakes the regen path`
 
 ## Task 12: Resolve — model + client call
 
@@ -580,9 +582,10 @@ predicate; end-to-end truth comes from the two LIVE servers.
   parser). `ILanguageService.ResolveCompletionAsync(CompletionItem item, CancellationToken ct)`
   → returns the enriched-or-original item; implementation: gate on
   `Capabilities?.HasCompletionResolveProvider != true || item.Data is null` ⇒ return item;
-  else `SendRequestAsync("completionItem/resolve", BuildResolveParams(item))` — the builder is
-  `public static` (the test seam), serializing label/kind/data; reuse the 10s timeout; the
-  documentation/detail merge is a pure static over the reply `JsonElement` (second test seam);
+  else `SendRequestAsync("completionItem/resolve", BuildResolveParams(item))` — the builder,
+  the `ShouldResolve` predicate, AND the documentation/detail merge are ALL `public static`
+  (ProjectSystem has no InternalsVisibleTo — same rule as Task 9's gate seam), serializing
+  label/kind/data; reuse the 10s timeout;
   catch-all ⇒ original (rethrow caller-initiated OCE, the `GetCompletionsAsync` catch-shape at
   `:941-951`). ⚠ Do NOT touch `InsertTextFormat` (`ILanguageService.cs:337-341`, wire-int
   comparison at `:1508-1512`).
@@ -653,8 +656,9 @@ plus the DoD checklist below.
     1. Delete `cpp.clangd.path` from `~/.vgs/settings.json` + restart → clangd still found
        (the tools probe replaces the hand-edit workaround).
     2. Temporarily rename `~/.vgs/tools/clangd_22.1.6` to a name NOT matching `clangd*`
-       (e.g. `_backup_clangd`) — a backup still matching the pattern would OUTRANK the fresh
-       install in the tools probe. Restart → toast now offers [Download C++ tools]; click it →
+       (e.g. `_backup_clangd`) — a `clangd*` backup with `bin/clangd.exe` would still be FOUND
+       by the tools probe, so clangd never reads as missing and the toast never appears.
+       Restart → toast now offers [Download C++ tools]; click it →
        progress toast with a real bar → success toast says restart; restart → clangd Running.
        Afterwards DELETE the `_backup_clangd` dir (the fresh install replaces it; renaming it
        back would collide).
