@@ -36,14 +36,35 @@ public static class ServiceConfiguration
         // second `dotnet --lsp` child process that nothing routes to, starts, stops or disposes —
         // orphaned for the life of the IDE, with nothing failing to say so.
         //
-        // BasicLang only, for now. clangd needs a resolved executable path (ClangdLocator, Task 11)
-        // before a descriptor for it can exist; Task 12 adds it here.
-        services.AddSingleton<ILanguageServiceRegistry>(sp => new LanguageServiceRegistry(new[]
+        // The roster is machine-dependent BY DESIGN: BasicLang ships with the IDE and is always
+        // registered; clangd does not, so it is registered only when one was actually found
+        // (cpp.clangd.path override, else PATH). Registering a clangd that does not exist would
+        // spawn nothing and leave the registry claiming to own .cpp — every C++ IntelliSense
+        // request would route to a server that can never answer, which is strictly worse than
+        // routing to nothing. GetFor(".cpp") returning null IS the degraded mode, and callers
+        // already handle it (Task 7); the user is told via the status bar.
+        services.AddSingleton<ILanguageServiceRegistry>(sp =>
         {
-            new LanguageService(
-                sp.GetRequiredService<IOutputService>(),
-                sp.GetRequiredService<ISettingsService>())
-        }));
+            var outputService = sp.GetRequiredService<IOutputService>();
+            var settingsService = sp.GetRequiredService<ISettingsService>();
+
+            var languageServices = new List<ILanguageService>
+            {
+                new LanguageService(outputService, settingsService)
+            };
+
+            // Resolved ONCE, here, at container build: the descriptor is pure identity and must
+            // hold an already-resolved path (D1). A clangd installed mid-session is picked up on
+            // the next IDE start — acquiring it live is Phase 3b's job.
+            var clangdPath = ClangdLocator.Locate(settingsService);
+            if (clangdPath != null)
+            {
+                languageServices.Add(new LanguageService(
+                    outputService, settingsService, LanguageServerDescriptor.Clangd(clangdPath)));
+            }
+
+            return new LanguageServiceRegistry(languageServices);
+        });
         // Gives clangd its obj/gen headers + obj/compile_commands.json on project open, before any
         // build has produced them (Task 10). Singleton because its whole job is to coalesce and
         // serialize a multi-second, non-incremental emission across requests — per-instance state

@@ -75,13 +75,19 @@ public interface ILanguageServiceRegistry : IDisposable
     bool IsConnectedFor(string? path);
 
     /// <summary>
-    /// Start every registered server, rooted at <paramref name="workspaceRoot"/>.
+    /// Start every registered server, rooted at <paramref name="workspaceRoot"/> — <b>re-rooting
+    /// any that are already running for a different one</b>.
     /// <para>
-    /// ⚠ Servers that are already connected are unaffected: <see cref="ILanguageService.StartAsync"/>
-    /// is a no-op for them and does <b>not</b> re-root them. So this alone does not handle a project
-    /// SWITCH — calling it with project B's root while a server is still connected to project A
-    /// leaves that server rooted at A, silently answering from the wrong compilation database.
-    /// Re-rooting means <see cref="StopAllAsync"/> then <see cref="StartAllAsync"/>.
+    /// This is the project-SWITCH entry point as well as the project-open one. Calling it with
+    /// project B's root while the servers are up for project A stops and restarts them at B,
+    /// because <see cref="ILanguageService.StartAsync"/> alone no-ops on a connected server and
+    /// would leave clangd reading project A's <c>obj/compile_commands.json</c> — answering for
+    /// the wrong project, silently. Calling it with the SAME root does not disturb a running
+    /// server.
+    /// </para>
+    /// <para>
+    /// Idempotent per root, so callers may fire it on every <c>ProjectOpened</c> without tracking
+    /// what is running.
     /// </para>
     /// </summary>
     /// <param name="workspaceRoot">
@@ -98,8 +104,11 @@ public interface ILanguageServiceRegistry : IDisposable
     /// (CS8604 is in <c>NoWarn</c>), so the check is at runtime.
     /// </exception>
     /// <exception cref="AggregateException">
-    /// One or more servers failed to start. Every other server is started first: clangd failing
-    /// to launch must not cost the user BasicLang IntelliSense.
+    /// One or more servers failed to start — or, on a re-root, failed to STOP: a server that
+    /// cannot be stopped cannot be re-rooted either (its restart would no-op and pin it to the
+    /// old project), so that is a failure to start at the new root, not a detail to swallow.
+    /// Every other server is attempted regardless: clangd failing to launch must not cost the
+    /// user BasicLang IntelliSense.
     /// </exception>
     Task StartAllAsync(string workspaceRoot, CancellationToken cancellationToken = default);
 

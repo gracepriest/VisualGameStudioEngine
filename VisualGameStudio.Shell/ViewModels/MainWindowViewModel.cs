@@ -535,9 +535,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Subscribe to EVERY registered server's diagnostics and connection state. Both handlers
         // key off the document uri, so BasicLang's .bas diagnostics and clangd's .cpp diagnostics
-        // coexist, and each reconnected server re-syncs only its own documents. Today the registry
-        // holds BasicLang only; clangd (Task 12) participates automatically once registered — the
-        // set is fixed at registry construction, so subscribing here covers every server there will be.
+        // coexist, and each reconnected server re-syncs only its own documents. The set is fixed
+        // at registry construction, so this covers every server there will be — which on a machine
+        // with clangd installed is BasicLang AND clangd.
         foreach (var service in _languageServices.All)
         {
             // Diagnostics → error highlighting + Error List (aggregated per file).
@@ -545,6 +545,14 @@ public partial class MainWindowViewModel : ViewModelBase
             // Re-sync open documents whenever a server (re)connects — a crashed and auto-restarted
             // server has lost all didOpen state.
             service.ConnectionChanged += OnLanguageServiceConnectionChanged;
+
+            // Seed the status bar with every registered server, so it names what exists rather
+            // than only what has reported in. Without this a server that never connects would
+            // simply be absent from the indicator — indistinguishable from not being installed.
+            StatusBar.UpdateLanguageServerStatus(
+                service.Descriptor.Id,
+                service.Descriptor.DisplayName,
+                service.IsConnected ? LanguageServerState.Running : LanguageServerState.Stopped);
         }
 
         // Start language service — unless the user turned off basiclang.lsp.autoStart, in which
@@ -978,6 +986,16 @@ public partial class MainWindowViewModel : ViewModelBase
         _ = _intelliSenseEmission.RequestEmit(
             e.Project, _buildService.CurrentConfiguration?.Name ?? "Debug");
 
+        // Start the language servers that need a workspace root — clangd above all, which without
+        // one omits --compile-commands-dir, never finds obj/compile_commands.json, and answers
+        // from guessed flags. THIS is the only path that ever starts clangd (the constructor's
+        // autostart is BasicLang-only and rootless), and it re-roots on a project SWITCH.
+        //
+        // FIRE AND FORGET, like the emission above and for the same reason: StartAllAsync is a
+        // multi-second handshake per server (10s timeout), and awaiting it would stall project
+        // open — the breakpoint, bookmark and layout restores below — behind it.
+        _ = StartLanguageServersAsync(e.Project.ProjectDirectory);
+
         // Track this project in recent projects
         var projectPath = Path.Combine(e.Project.ProjectDirectory, e.Project.Name + ".blproj");
         if (File.Exists(projectPath))
@@ -1089,6 +1107,84 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Starts (or re-roots) every registered language server for the project that just opened.
+    /// </summary>
+    /// <remarks>
+    /// Awaited nowhere — it is launched with <c>_ =</c> from the ProjectOpened handler, so it must
+    /// swallow its own failures or they become unobserved task exceptions and vanish. A server
+    /// failing to start is reported to Output and costs only that server: the registry starts them
+    /// independently and aggregates, so a missing clangd can never take BasicLang down with it.
+    /// The status bar shows the outcome per server (each service raises ConnectionChanged either
+    /// way), which is why nothing is written here on success.
+    /// <para>
+    /// No cancellation token is passed, deliberately. The obvious wiring — cancel on project close
+    /// and <c>token.Register(() =&gt; process.Kill())</c> — would run clangd's process teardown on
+    /// whichever thread cancelled, and every canceller here is the UI thread (cancellation
+    /// callbacks run synchronously on the canceller). The servers' own Stop/Dispose already own
+    /// teardown, off this path.
+    /// </para>
+    /// </remarks>
+    private async Task StartLanguageServersAsync(string projectDirectory)
+    {
+        try
+        {
+            await _languageServices.StartAllAsync(projectDirectory);
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteError(
+                $"[LSP] One or more language servers failed to start for {projectDirectory}: {ex.Message} " +
+                "IntelliSense for the affected language is unavailable; editing and highlighting still work.",
+                OutputCategory.Build);
+        }
+    }
+
+    /// <summary>
+    /// Reports, ONCE per session, that a C++ file was opened on a machine with no clangd — the
+    /// one language whose server the IDE does not ship.
+    /// </summary>
+    /// <remarks>
+    /// Deferred to the moment a C++ file is actually opened rather than announced at startup: on a
+    /// machine without clangd, every BasicLang user would otherwise carry a permanent "clangd: Not
+    /// found" they have no use for. Opening a .cpp is exactly when its absence starts costing
+    /// something and when the user would otherwise wonder why there is no IntelliSense.
+    /// <para>
+    /// Once per session, hence the flag — a project of C++ files would otherwise fire this on
+    /// every tab. (<see cref="StatusBarViewModel.AddNotification"/>'s suppressKey does the same for
+    /// the notification centre, but not for the toast, which is the part the user actually sees.)
+    /// </para>
+    /// <para>
+    /// INFORMATIONAL ONLY, by decision: Phase 3a hints, and offering to download clangd is
+    /// Phase 3b. So it carries no action buttons — <see cref="ShowNotification(string, string)"/>,
+    /// not the actions overload.
+    /// </para>
+    /// </remarks>
+    private void ReportClangdMissingForCppFile(string filePath)
+    {
+        if (!LanguageFileTypes.IsCppSourceFile(filePath)) return;
+        // Asked of the registry rather than re-running the locator: what matters is whether the
+        // IDE actually HAS a clangd to route to, which is what DI resolved at startup.
+        if (_languageServices.GetById(LanguageServerDescriptor.ClangdId) != null) return;
+
+        // Report the state every time (the status bar is a live display, and a later seed or
+        // reconnect may have overwritten it); only the toast is once-per-session.
+        StatusBar.UpdateLanguageServerStatus(
+            LanguageServerDescriptor.ClangdId, "clangd", LanguageServerState.NotFound);
+
+        if (_clangdMissingReported) return;
+        _clangdMissingReported = true;
+
+        ShowNotification(
+            "clangd was not found, so C++ IntelliSense is unavailable — syntax highlighting and " +
+            "editing still work. Install clangd and restart the IDE, or set the " +
+            $"{LanguageServerDescriptor.ClangdSettingsKey} setting to its path.",
+            "info");
+    }
+
+    /// <summary>Guards the clangd-not-found toast to once per session; see <see cref="ReportClangdMissingForCppFile"/>.</summary>
+    private bool _clangdMissingReported;
+
+    /// <summary>
     /// The BasicLang language server, reached by identity (not by routing a document). Used only for
     /// the BasicLang-specific lifecycle that predates per-file routing: the constructor's rootless
     /// autostart and the manual "Start Language Server" command. Both are BasicLang-only BY DESIGN
@@ -1104,36 +1200,40 @@ public partial class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// When a language server (re)connects, re-send didOpen for every open document THAT SERVER
     /// owns: documents opened before it connected were never announced, and a crashed+restarted
-    /// server has lost all didOpen state. Also surfaces the connection state in the status bar.
+    /// server has lost all didOpen state. Also reports THAT server's state to the status bar.
     /// </summary>
+    /// <remarks>
+    /// ⚠ Everything here is scoped to the one server that changed. This handler is subscribed to
+    /// EVERY registered server, so anything global it wrote would be a race between them: it used
+    /// to set a single "Language server connected/disconnected — IntelliSense unavailable" status
+    /// string with no server identity, which meant a down clangd stamped "IntelliSense
+    /// unavailable" over a perfectly healthy BasicLang, last writer wins. The status bar now
+    /// tracks servers individually (<see cref="StatusBarViewModel.UpdateLanguageServerStatus"/>).
+    /// </remarks>
     private void OnLanguageServiceConnectionChanged(object? sender, bool connected)
     {
         // LanguageService raises these events with itself as sender, so this is the specific
         // server whose state changed — re-sync only the documents it owns.
         var service = sender as ILanguageService;
-        // TODO(Task 12): per-server status. The StatusText writes below are a single GLOBAL string
-        // with no server identity, so once a 2nd server (clangd) is registered, a down clangd firing
-        // ConnectionChanged(false) will stamp "disconnected" over a healthy BasicLang (last writer
-        // wins). Diagnostics are unaffected (keyed per-URI); only this status line lies. Designing
-        // the multi-server status UI is Task 12's remit ("status bar + graceful degradation").
+        if (service == null) return;
+
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            if (connected && service != null)
+            StatusBar.UpdateLanguageServerStatus(
+                service.Descriptor.Id,
+                service.Descriptor.DisplayName,
+                connected ? LanguageServerState.Running : LanguageServerState.Stopped);
+
+            if (!connected) return;
+
+            foreach (var doc in _openDocuments.Values.ToList())
             {
-                foreach (var doc in _openDocuments.Values.ToList())
+                // Route by each doc's path so a reconnected BasicLang server never re-opens a
+                // .cpp document (and clangd never re-opens a .bas one).
+                if (doc.FilePath != null && ReferenceEquals(_languageServices.GetFor(doc.FilePath), service))
                 {
-                    // Route by each doc's path so a reconnected BasicLang server never re-opens a
-                    // .cpp document (and clangd never re-opens a .bas one).
-                    if (doc.FilePath != null && ReferenceEquals(_languageServices.GetFor(doc.FilePath), service))
-                    {
-                        _ = service.OpenDocumentAsync(doc.FilePath, doc.Text ?? "");
-                    }
+                    _ = service.OpenDocumentAsync(doc.FilePath, doc.Text ?? "");
                 }
-                StatusText = "Language server connected";
-            }
-            else if (!connected)
-            {
-                StatusText = "Language server disconnected — IntelliSense unavailable";
             }
         });
     }
@@ -1979,6 +2079,13 @@ public partial class MainWindowViewModel : ViewModelBase
             if (openSvc is { IsConnected: true })
             {
                 await openSvc.OpenDocumentAsync(filePath, content);
+            }
+            else if (openSvc == null)
+            {
+                // No server owns this file. Usually that is nothing to say (.txt, .json, .md) —
+                // but for C++ it means clangd is not installed, which is worth telling the user
+                // once, because the symptom is otherwise just IntelliSense silently doing nothing.
+                ReportClangdMissingForCppFile(filePath);
             }
 
             // Notify extension host about opened document (for all file types)
@@ -6367,15 +6474,16 @@ public partial class MainWindowViewModel : ViewModelBase
             activeDoc.FilePath = filePath;
             activeDoc.IsDirty = false;
 
-            // TODO(Task 12): re-route the editor's folding after a cross-language Save-As. Changing
-            // FilePath here does NOT re-derive activeDoc.LanguageService, and even if it did, the
-            // control caches the service via SetLanguageService (called once on DataContext bind,
-            // no property observer), so a .bas -> .cpp Save-As leaves folding on the stale server.
-            // Only FOLDING is affected — the VM's per-feature handlers re-route live via
-            // GetFor(document.FilePath) on every call — and it only bites once clangd is registered.
-            // The real fix (the view observing LanguageService/FilePath to re-call SetLanguageService)
-            // is view-lifecycle plumbing that can't be verified without desktop UI testing, so it is
-            // deferred to Task 12 rather than half-fixed here.
+            // KNOWN GAP (deferred past Phase 3a): the editor's folding is not re-routed after a
+            // cross-language Save-As. Changing FilePath here does NOT re-derive
+            // activeDoc.LanguageService, and even if it did, the control caches the service via
+            // SetLanguageService (called once on DataContext bind, no property observer), so a
+            // .bas -> .cpp Save-As leaves folding on the stale server. Only FOLDING is affected —
+            // the VM's per-feature handlers re-route live via GetFor(document.FilePath) on every
+            // call. Task 12 (which registered clangd, making this reachable) assessed the fix the
+            // same way Task 7 did: the view observing LanguageService/FilePath to re-call
+            // SetLanguageService is view-lifecycle plumbing that can't be verified without desktop
+            // UI testing, so it stays signposted rather than half-fixed.
 
             // Re-register under new path
             if (oldPath != null)

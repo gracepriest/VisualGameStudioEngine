@@ -264,6 +264,28 @@ public record ServerCapabilities
     /// Defaults to <see cref="Utf16"/> when the server omits it, per LSP 3.17.
     /// </summary>
     public string PositionEncoding { get; init; } = Utf16;
+
+    /// <summary>
+    /// clangd's own <c>offsetEncoding</c>, verbatim — a <b>top-level sibling</b> of the
+    /// <c>capabilities</c> object in the <c>initialize</c> result, not a member of it.
+    /// <b>Null when the server did not send it</b>, which is every spec-conformant server
+    /// (BasicLang's included); only clangd does.
+    ///
+    /// <para>
+    /// Non-standard: it predates LSP 3.17's <see cref="PositionEncoding"/>, and real clangd 22.1.6
+    /// sends BOTH — in agreement, including when an <c>--offset-encoding</c> flag overrides the
+    /// negotiation (measured; both fields moved together). It is captured anyway because it is the
+    /// field clangd's own semantics are defined against, so it is where a divergence would surface
+    /// if a future version ever moved one without the other. See
+    /// <c>LanguageService.DescribeEncodingMismatch</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// ⚠ Null must never be read as "utf-16". "The server never said" and "the server said
+    /// utf-16" are different claims, and only the second one has been verified.
+    /// </para>
+    /// </summary>
+    public string? OffsetEncoding { get; init; }
 }
 
 /// <summary>

@@ -451,7 +451,7 @@
          classes own the background. -->
     <Border x:Name="MainStatusBar" DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}"
             AutomationProperties.Name="Status Bar">
-      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
         <!-- Status message -->
         <TextBlock Grid.Column="0"
                    Text="{Binding StatusText}"
@@ -617,8 +617,36 @@
           </TextBlock>
         </Button>
 
+        <!-- Language server status. Names EVERY known server and its own state
+             ("BasicLang: Running · clangd: Not found"), never a single global "LSP" verdict:
+             with more than one server, one server's state must not stamp over another's.
+             The dot is green only when nothing is missing (StatusBarViewModel.IsLspRunning).
+
+             Not a Button: there is nothing to click yet. StatusBarViewModel.RestartLspCommand
+             exists but raises RestartLspRequested, which NOTHING subscribes to — binding it here
+             would give the user a control that silently does nothing. (Its only other binding is
+             in Views/Controls/StatusBarControl.axaml, which is dead code — never instantiated;
+             this inline status bar is the live one.) -->
+        <Border Grid.Column="12" Padding="6,0"
+                ToolTip.Tip="{Binding StatusBar.LspStatus, StringFormat='Language servers — {0}'}"
+                AutomationProperties.Name="Language Server Status">
+          <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+            <Ellipse Width="8" Height="8" VerticalAlignment="Center">
+              <Ellipse.Fill>
+                <SolidColorBrush Color="{Binding StatusBar.IsLspRunning, Converter={x:Static local:StatusBarConverters.BoolToLspColorConverter}}"/>
+              </Ellipse.Fill>
+            </Ellipse>
+            <TextBlock Text="{Binding StatusBar.LspStatus}"
+                       VerticalAlignment="Center"
+                       Foreground="#BBBBBB"
+                       FontSize="11"
+                       MaxWidth="260"
+                       TextTrimming="CharacterEllipsis"/>
+          </StackPanel>
+        </Border>
+
         <!-- Ctrl+Shift+P hint (keyboard-focusable button) -->
-        <Button Grid.Column="12" Classes="statusBarButton"
+        <Button Grid.Column="13" Classes="statusBarButton"
                 Command="{Binding OpenCommandPaletteCommand}"
                 AutomationProperties.Name="Open Command Palette (Ctrl+Shift+P)"
                 AutomationProperties.HelpText="Open the command palette"

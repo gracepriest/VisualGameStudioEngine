@@ -33,6 +33,30 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
 
     private bool _disposed;
 
+    /// <summary>
+    /// The workspace root the servers were last started for, or null before the first start.
+    /// Read only under <see cref="_lifecycleLock"/>.
+    /// </summary>
+    private string? _startedRoot;
+
+    /// <summary>
+    /// Serializes <see cref="StartAllAsync"/>/<see cref="StopAllAsync"/> against each other.
+    /// <para>
+    /// Re-rooting is a read-modify-write over <see cref="_startedRoot"/> spanning a multi-second
+    /// stop-then-start, so two overlapping project opens could otherwise interleave into servers
+    /// rooted at different projects — the exact state this class exists to prevent, arrived at
+    /// from the other side. Uncontended in practice (project open is a UI-thread event).
+    /// </para>
+    /// <para>
+    /// Deliberately never disposed. <see cref="SemaphoreSlim.Dispose"/> only matters once
+    /// <c>AvailableWaitHandle</c> has been touched, which nothing here does — while disposing it
+    /// from <see cref="Dispose"/> (which runs on shutdown, possibly with a start still in flight)
+    /// would turn a benign race into an <see cref="ObjectDisposedException"/> on a best-effort
+    /// cleanup path.
+    /// </para>
+    /// </summary>
+    private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
+
     /// <param name="services">
     /// One service per language server, already constructed by the container.
     /// </param>
@@ -142,25 +166,76 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
                 nameof(workspaceRoot));
         }
 
-        var failures = await ForEachServerAsync(
-            service => service.StartAsync(workspaceRoot, cancellationToken)).ConfigureAwait(false);
-
-        if (failures.Count > 0)
+        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            throw new AggregateException(
-                $"{failures.Count} of {_services.Count} language server(s) failed to start.", failures);
+            // THE PROJECT SWITCH. StartAsync no-ops on an already-connected server and does NOT
+            // re-root it, so opening project B while the servers are up for project A would leave
+            // clangd reading project A's obj/compile_commands.json — answering completions and
+            // diagnostics that look right and are for the wrong project, with no error anywhere.
+            // Re-rooting means stop, THEN start.
+            //
+            // Ordinal, and against the raw root: the two ways to be wrong are not symmetric. A
+            // false "different" costs one needless restart; a false "same" leaves a server pinned
+            // to the old project silently. Ordinal only ever errs the safe way (the root comes
+            // from Project.ProjectDirectory and is stable per project, so it does not misfire in
+            // practice).
+            var reRooting = _startedRoot != null &&
+                            !string.Equals(_startedRoot, workspaceRoot, StringComparison.Ordinal);
+
+            // Set before the work: we are committed to this root either way, and a start that
+            // throws part-way must not leave the registry believing it is still rooted where it
+            // was — the next open would then skip the re-root it needs.
+            _startedRoot = workspaceRoot;
+
+            var failures = await ForEachServerAsync(async service =>
+            {
+                if (reRooting)
+                {
+                    // Per-server stop-then-start rather than two bulk phases, so that a server
+                    // which cannot stop is reported as a failure and NOT restarted. Restarting it
+                    // would no-op (it is still connected) and silently pin it to the old root
+                    // while we reported success — the very bug being fixed. Each server is
+                    // independent, so one refusing to stop cannot cost the others their re-root.
+                    await service.StopAsync().ConfigureAwait(false);
+                }
+
+                await service.StartAsync(workspaceRoot, cancellationToken).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+
+            if (failures.Count > 0)
+            {
+                throw new AggregateException(
+                    $"{failures.Count} of {_services.Count} language server(s) failed to start.", failures);
+            }
+        }
+        finally
+        {
+            _lifecycleLock.Release();
         }
     }
 
     /// <inheritdoc />
     public async Task StopAllAsync()
     {
-        var failures = await ForEachServerAsync(service => service.StopAsync()).ConfigureAwait(false);
-
-        if (failures.Count > 0)
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            throw new AggregateException(
-                $"{failures.Count} of {_services.Count} language server(s) failed to stop.", failures);
+            // No servers are rooted anywhere now, so the next start must not think it can skip
+            // the re-root.
+            _startedRoot = null;
+
+            var failures = await ForEachServerAsync(service => service.StopAsync()).ConfigureAwait(false);
+
+            if (failures.Count > 0)
+            {
+                throw new AggregateException(
+                    $"{failures.Count} of {_services.Count} language server(s) failed to stop.", failures);
+            }
+        }
+        finally
+        {
+            _lifecycleLock.Release();
         }
     }
 

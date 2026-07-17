@@ -95,9 +95,32 @@ public partial class StatusBarViewModel : ViewModelBase
     [ObservableProperty]
     private bool _buildSucceeded;
 
+    /// <summary>
+    /// Every language server the IDE knows about and its state, e.g.
+    /// <c>"BasicLang: Running · clangd: Not found"</c>. Written only by
+    /// <see cref="UpdateLanguageServerStatus"/>.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Composed per server, never a single global verdict. With more than one server, "the
+    /// language server is down" is not a fact about the IDE: BasicLang can be restarting while
+    /// clangd answers normally. The IDE used to write one global string from a handler subscribed
+    /// to EVERY server, so whichever reported last won — a down clangd told the user BasicLang's
+    /// IntelliSense was gone.
+    /// </remarks>
     [ObservableProperty]
     private string _lspStatus = "Stopped";
 
+    /// <summary>
+    /// Whether EVERY known language server is running — the status dot's green condition.
+    /// </summary>
+    /// <remarks>
+    /// Strict on purpose. The dot is a summary and cannot carry per-server nuance, so the only
+    /// honest thing it can say green about is "nothing is missing"; <see cref="LspStatus"/> is
+    /// what names which server is unhappy. A machine with no clangd stays green while nothing has
+    /// asked for C++ — clangd is only reported (as <see cref="LanguageServerState.NotFound"/>)
+    /// once a C++ file is actually opened, which is the moment its absence starts costing the
+    /// user something.
+    /// </remarks>
     [ObservableProperty]
     private bool _isLspRunning;
 
@@ -382,14 +405,47 @@ public partial class StatusBarViewModel : ViewModelBase
         DebugTarget = target ?? "";
     }
 
+    // ── Language servers ──
+    //
+    // serverId → what to show for it. Keyed by the server's stable id (not its display name) so
+    // an update is an upsert for that server and can never append a duplicate entry.
+    private readonly Dictionary<string, (string DisplayName, LanguageServerState State)> _languageServers = new(StringComparer.Ordinal);
+
     /// <summary>
-    /// Updates LSP status.
+    /// Records <paramref name="serverId"/>'s state and recomposes <see cref="LspStatus"/> /
+    /// <see cref="IsLspRunning"/> from EVERY known server.
     /// </summary>
-    public void UpdateLspStatus(bool isRunning)
+    /// <param name="serverId">
+    /// <see cref="Core.Abstractions.Services.LanguageServerDescriptor.Id"/> — the identity this
+    /// entry is upserted under.
+    /// </param>
+    /// <param name="displayName">
+    /// What to call the server in the status bar (<c>BasicLang</c>, <c>clangd</c>).
+    /// </param>
+    /// <remarks>
+    /// The whole point is that one server's state can never overwrite another's: each is stored
+    /// under its own id and rendered next to its own name. See <see cref="LspStatus"/>.
+    /// </remarks>
+    public void UpdateLanguageServerStatus(string serverId, string displayName, LanguageServerState state)
     {
-        IsLspRunning = isRunning;
-        LspStatus = isRunning ? "Running" : "Stopped";
+        _languageServers[serverId] = (displayName, state);
+
+        // Ordered by display name, not by the order servers happened to connect in — otherwise
+        // the status bar reshuffles under the user's cursor as servers come up and go down.
+        var entries = _languageServers.Values
+            .OrderBy(entry => entry.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        LspStatus = string.Join(" · ", entries.Select(e => $"{e.DisplayName}: {StateText(e.State)}"));
+        IsLspRunning = entries.Count > 0 && entries.All(e => e.State == LanguageServerState.Running);
     }
+
+    private static string StateText(LanguageServerState state) => state switch
+    {
+        LanguageServerState.Running => "Running",
+        LanguageServerState.NotFound => "Not found",
+        _ => "Stopped"
+    };
 
     /// <summary>
     /// Shows build started status.
@@ -808,4 +864,28 @@ public enum NotificationSeverity
     Warning,
     Error,
     Progress
+}
+
+/// <summary>
+/// What the status bar reports about one language server.
+/// </summary>
+public enum LanguageServerState
+{
+    /// <summary>Registered, but not currently connected — starting, restarting, crashed or stopped.</summary>
+    Stopped,
+
+    /// <summary>Connected and answering.</summary>
+    Running,
+
+    /// <summary>
+    /// The executable was never found on this machine, so the IDE could not register the server
+    /// at all.
+    /// <para>
+    /// Deliberately distinct from <see cref="Stopped"/>: a stopped server is one the IDE launched
+    /// and lost (it may come back on its own), while a not-found one was never installed and never
+    /// will be until the user does something. Collapsing the two tells the user to wait for a
+    /// recovery that cannot happen. Only clangd can be in this state — BasicLang ships with the IDE.
+    /// </para>
+    /// </summary>
+    NotFound
 }

@@ -377,6 +377,122 @@ public class LanguageServiceRegistryTests
         cl.Verify(x => x.StopAsync(), Times.Once, "clangd was left running because BasicLang's Stop threw");
     }
 
+    // ---- Project switch / re-rooting ---------------------------------------
+    //
+    // StartAsync NO-OPS on an already-connected server (StartCoreAsync: `if (IsConnected) return;`),
+    // so opening project B while clangd is connected to project A used to leave clangd rooted at A
+    // — silently answering completions and diagnostics from project A's compilation database while
+    // the user edits project B. Nothing fails; the answers merely look right and are wrong.
+    // Re-rooting is therefore Stop-then-Start, and it is the registry's job.
+
+    /// <summary>Records the lifecycle calls a service receives, in order.</summary>
+    private static List<string> RecordLifecycle(Mock<ILanguageService> mock)
+    {
+        var calls = new List<string>();
+        mock.Setup(x => x.StopAsync()).Returns(Task.CompletedTask).Callback(() => calls.Add("stop"));
+        mock.Setup(x => x.StartAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask)
+            .Callback<string?, CancellationToken>((root, _) => calls.Add($"start:{root}"));
+        return calls;
+    }
+
+    // Asserts the ORDER, not merely that both happened: a Start before the Stop would be the
+    // no-op that leaves the server rooted at the old project, and "Stop was called once, Start
+    // was called once" reads green for it.
+    [Test]
+    public async Task StartAllAsync_SecondProject_StopsThenRestartsEveryServer_AtTheNewRoot()
+    {
+        var bl = FakeBasicLang(connected: true);
+        var cl = FakeClangd(connected: true);
+        var blCalls = RecordLifecycle(bl);
+        var clCalls = RecordLifecycle(cl);
+        using var r = RegistryOf(bl, cl);
+
+        await r.StartAllAsync(@"C:\projects\A");
+        await r.StartAllAsync(@"C:\projects\B");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(clCalls, Is.EqualTo(new[] { @"start:C:\projects\A", "stop", @"start:C:\projects\B" }),
+                "clangd must be stopped before being restarted at project B — a bare StartAsync no-ops " +
+                "on a connected server and leaves it rooted at project A's compile_commands.json");
+            Assert.That(blCalls, Is.EqualTo(new[] { @"start:C:\projects\A", "stop", @"start:C:\projects\B" }));
+        });
+    }
+
+    // The first project must not pay for a teardown that has nothing to tear down.
+    [Test]
+    public async Task StartAllAsync_FirstProject_StartsWithoutStopping()
+    {
+        var cl = FakeClangd();
+        var calls = RecordLifecycle(cl);
+        using var r = RegistryOf(FakeBasicLang(), cl);
+
+        await r.StartAllAsync(@"C:\projects\A");
+
+        Assert.That(calls, Is.EqualTo(new[] { @"start:C:\projects\A" }));
+    }
+
+    // Re-opening the SAME project (or a second ProjectOpened for it) must not bounce a healthy
+    // server: the restart costs a multi-second handshake and drops every didOpen.
+    [Test]
+    public async Task StartAllAsync_SameRootTwice_DoesNotRestart()
+    {
+        var cl = FakeClangd(connected: true);
+        var calls = RecordLifecycle(cl);
+        using var r = RegistryOf(FakeBasicLang(connected: true), cl);
+
+        await r.StartAllAsync(@"C:\projects\A");
+        await r.StartAllAsync(@"C:\projects\A");
+
+        Assert.That(calls, Is.EqualTo(new[] { @"start:C:\projects\A", @"start:C:\projects\A" }),
+            "the same root must never trigger a Stop");
+    }
+
+    // A server whose Stop throws is NOT silently re-Started: its StartAsync would no-op (it may
+    // still be connected) and leave it rooted at the old project while we reported success. The
+    // failure is surfaced, and the OTHER servers still re-root.
+    [Test]
+    public void StartAllAsync_ReRoot_AServerThatCannotStop_IsReportedAndNotLeftMisRooted()
+    {
+        var bl = FakeBasicLang(connected: true);
+        var cl = FakeClangd(connected: true);
+        var blCalls = RecordLifecycle(bl);
+        cl.Setup(x => x.StopAsync()).ThrowsAsync(new InvalidOperationException("clangd will not stop"));
+        using var r = RegistryOf(bl, cl);
+
+        Assert.DoesNotThrowAsync(() => r.StartAllAsync(@"C:\projects\A"));
+        Assert.ThrowsAsync<AggregateException>(() => r.StartAllAsync(@"C:\projects\B"));
+
+        cl.Verify(x => x.StartAsync(@"C:\projects\B", It.IsAny<CancellationToken>()), Times.Never,
+            "a server that failed to stop is still rooted at project A — restarting it would no-op " +
+            "and silently pin it there while we claimed it had moved");
+        Assert.That(blCalls, Is.EqualTo(new[] { @"start:C:\projects\A", "stop", @"start:C:\projects\B" }),
+            "clangd's failure must not cost BasicLang its re-root");
+    }
+
+    // ---- Graceful degradation when clangd is not installed ------------------
+
+    // clangd does not ship with the IDE. On a machine without it the registry holds BasicLang
+    // alone: C++ files get no server (highlighting still works — that is Phase 1), and nothing
+    // throws. BasicLang must be entirely unaffected.
+    [Test]
+    public void ClangdAbsent_RegistryDegrades_WithoutThrowing_AndBasicLangIsUnaffected()
+    {
+        var bl = FakeBasicLang(connected: true);
+        using var r = RegistryOf(bl);
+
+        Assert.DoesNotThrowAsync(() => r.StartAllAsync(@"C:\projects\A"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.GetFor("a.cpp"), Is.Null, "no clangd is registered, so nothing owns .cpp");
+            Assert.That(r.IsConnectedFor("a.cpp"), Is.False);
+            Assert.That(r.GetById("clangd"), Is.Null);
+            Assert.That(r.IsConnectedFor("a.bas"), Is.True, "BasicLang must be untouched by clangd's absence");
+        });
+        bl.Verify(x => x.StartAsync(@"C:\projects\A", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     // ---- DI ----------------------------------------------------------------
 
     /// <summary>
@@ -415,15 +531,47 @@ public class LanguageServiceRegistryTests
             "the container did not reach the registry's servers — every exit orphans them");
     }
 
-    // Only BasicLang until Task 11 resolves a clangd path for Task 12 to register.
+    // BasicLang ships with the IDE, so it is registered unconditionally — on every machine,
+    // whatever clangd's fate. This half of the roster can be asserted outright.
     [Test]
-    public void Di_RegistersBasicLangOnly()
+    public void Di_AlwaysRegistersBasicLang()
     {
         using var provider = BuildProvider();
 
         var ids = provider.GetRequiredService<ILanguageServiceRegistry>().All.Select(s => s.Descriptor.Id);
 
-        Assert.That(ids, Is.EqualTo(new[] { "basiclang" }));
+        Assert.That(ids, Does.Contain("basiclang"));
+    }
+
+    /// <summary>
+    /// clangd is registered EXACTLY when one was found, and never otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Cannot be a fixed expectation: clangd does not ship with the IDE, so the roster genuinely
+    /// differs per machine — an unconditional <c>Is.EqualTo(new[] { "basiclang" })</c> would fail
+    /// on any dev box with clangd on PATH, and the opposite would fail on every box without it.
+    /// So it asserts the RULE — DI's roster agrees with the locator's answer — which holds on both.
+    /// <para>
+    /// <see cref="BuildProvider"/> swaps in a loose <see cref="ISettingsService"/> mock whose
+    /// <c>Get&lt;string&gt;</c> returns null, so there is no <c>cpp.clangd.path</c> override in
+    /// play and the locator's answer here is the PATH probe alone — which is exactly what the
+    /// container is resolving through.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Di_RegistersClangd_ExactlyWhenTheLocatorFindsOne()
+    {
+        var located = ClangdLocator.ResolveClangdPath(configuredPath: null);
+        using var provider = BuildProvider();
+
+        var ids = provider.GetRequiredService<ILanguageServiceRegistry>().All.Select(s => s.Descriptor.Id);
+
+        Assert.That(ids, Is.EqualTo(located == null
+            ? new[] { "basiclang" }
+            : new[] { "basiclang", "clangd" }),
+            located == null
+                ? "no clangd on this machine, so the registry must hold BasicLang alone"
+                : $"clangd was found at {located}, so it must be registered and route .cpp");
     }
 
     private static ServiceProvider BuildProvider()

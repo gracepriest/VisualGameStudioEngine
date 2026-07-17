@@ -392,6 +392,148 @@ public class CapabilityNegotiationTests
         });
     }
 
+    // ---- clangd's non-standard offsetEncoding ------------------------------
+
+    // Probed against REAL clangd 22.1.6 (Task 12, Step 0). Its initialize result carries
+    // BOTH `capabilities.positionEncoding` (the standard 3.17 field) and a TOP-LEVEL
+    // `offsetEncoding` — clangd's own, which predates the spec. Both answered "utf-16",
+    // but only BECAUSE this client advertises general.positionEncodings:["utf-16"]:
+    // clangd's own default is utf-8. The pin wins the negotiation; it is not luck.
+    //
+    // Reading it is the difference between "safe because we asked nicely" and "safe
+    // because we checked" — see DescribeEncodingMismatch below.
+    [Test]
+    public void ParseServerCapabilities_ReadsClangdsTopLevelOffsetEncoding()
+    {
+        // The shape real clangd replies with, trimmed to the members this client reads.
+        var json = """
+        {"capabilities":{"positionEncoding":"utf-16","hoverProvider":true},
+         "offsetEncoding":"utf-16",
+         "serverInfo":{"name":"clangd","version":"22.1.6"}}
+        """;
+
+        var caps = LanguageService.ParseServerCapabilities(json);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.PositionEncoding, Is.EqualTo("utf-16"));
+            Assert.That(caps.OffsetEncoding, Is.EqualTo("utf-16"));
+            Assert.That(caps.HasHoverProvider, Is.True, "the sibling member must not displace the capabilities parse");
+        });
+    }
+
+    // Null means "the server never said", which is NOT the claim "the server said utf-16".
+    // Only the latter is a verified answer; conflating them would make the guard vacuous
+    // for every server that omits the field.
+    [Test]
+    public void ParseServerCapabilities_NoOffsetEncoding_IsNull_NotUtf16()
+    {
+        var caps = LanguageService.ParseServerCapabilities("""{"capabilities":{}}""");
+
+        Assert.That(caps.OffsetEncoding, Is.Null);
+    }
+
+    // THE PARENT. offsetEncoding is a SIBLING of capabilities, not a member of it. Read
+    // from the wrong parent it would answer null forever and the guard would never fire —
+    // green, and completely inert. (Same failure mode as positionEncodings under the wrong
+    // parent, above.)
+    [Test]
+    public void ParseServerCapabilities_OffsetEncodingNestedInsideCapabilities_IsNotRead()
+    {
+        var caps = LanguageService.ParseServerCapabilities("""{"capabilities":{"offsetEncoding":"utf-8"}}""");
+
+        Assert.That(caps.OffsetEncoding, Is.Null,
+            "a value nested inside capabilities is not clangd's top-level offsetEncoding");
+    }
+
+    // A top-level offsetEncoding must survive a result this parser otherwise treats as
+    // non-conforming — otherwise a reply with no `capabilities` member could smuggle utf-8
+    // past the guard.
+    [Test]
+    public void ParseServerCapabilities_OffsetEncodingSurvivesAMissingCapabilitiesMember()
+    {
+        var caps = LanguageService.ParseServerCapabilities("""{"offsetEncoding":"utf-8"}""");
+
+        Assert.That(caps.OffsetEncoding, Is.EqualTo("utf-8"));
+    }
+
+    [TestCase("""{"capabilities":{},"offsetEncoding":123}""")]
+    [TestCase("""{"capabilities":{},"offsetEncoding":null}""")]
+    [TestCase("""{"capabilities":{},"offsetEncoding":{"value":"utf-8"}}""")]
+    public void ParseServerCapabilities_NonStringOffsetEncoding_IsNull_NotThrow(string json)
+    {
+        ServerCapabilities caps = null!;
+
+        Assert.DoesNotThrow(() => caps = LanguageService.ParseServerCapabilities(json));
+        Assert.That(caps.OffsetEncoding, Is.Null);
+    }
+
+    // ---- The encoding guard ------------------------------------------------
+    //
+    // THE ONE THING IN PHASE 3A THAT CAN SILENTLY CORRUPT EVERY POSITION WE SEND.
+    // Positions convert as `character = column - 1` against AvaloniaEdit's Caret.Column
+    // (1-based UTF-16 code units) at 12+ call sites. A server answering utf-8 shifts every
+    // position on every line containing a non-ASCII character — with no error on either
+    // side, and a server-supplied textEdit would then land in the wrong place.
+
+    [Test]
+    public void DescribeEncodingMismatch_ServerAgreedUtf16_IsNull()
+    {
+        var caps = new ServerCapabilities { PositionEncoding = "utf-16", OffsetEncoding = "utf-16" };
+
+        Assert.That(LanguageService.DescribeEncodingMismatch(caps), Is.Null);
+    }
+
+    // A silent server is safe: LSP 3.17 defaults positionEncoding to utf-16, and a server
+    // that never sends clangd's field has not claimed anything to contradict it. BasicLang's
+    // own server is this case — the guard must not break it.
+    [Test]
+    public void DescribeEncodingMismatch_ServerSaidNothing_IsNull_PerTheLspDefault()
+    {
+        Assert.That(LanguageService.DescribeEncodingMismatch(new ServerCapabilities()), Is.Null);
+    }
+
+    [TestCase("utf-8")]
+    [TestCase("utf-32")]
+    public void DescribeEncodingMismatch_PositionEncodingIsNotUtf16_IsReported(string encoding)
+    {
+        var caps = new ServerCapabilities { PositionEncoding = encoding };
+
+        Assert.That(LanguageService.DescribeEncodingMismatch(caps), Does.Contain(encoding));
+    }
+
+    // THE DIVERGENCE. A reply whose standard field reads utf-16 while clangd's own field says
+    // utf-8 must still be refused — offsetEncoding is what clangd's semantics are defined
+    // against, so it wins where they disagree.
+    //
+    // ⚠ This shape is SYNTHETIC, deliberately. Real clangd 22.1.6 moves both fields together
+    // (measured: `--offset-encoding=utf-8` produced utf-8 in BOTH), so no clangd shipping today
+    // is known to answer like this — do not read this test as evidence that one does. It pins
+    // that the second read is a real check rather than decoration, for a future version or a
+    // server that borrows the extension without the standard field.
+    [Test]
+    public void DescribeEncodingMismatch_ClangdOffsetEncodingIsUtf8_IsReported_EvenWhenPositionEncodingLooksFine()
+    {
+        var caps = new ServerCapabilities { PositionEncoding = "utf-16", OffsetEncoding = "utf-8" };
+
+        var mismatch = LanguageService.DescribeEncodingMismatch(caps);
+
+        Assert.That(mismatch, Is.Not.Null,
+            "reading only the standard field is how a utf-8 clangd stays invisible");
+        Assert.That(mismatch, Does.Contain("utf-8"));
+    }
+
+    // Casing is not the contract — an "UTF-16" is still utf-16 and must not take C++
+    // IntelliSense down over a spelling difference.
+    [TestCase("UTF-16")]
+    [TestCase("Utf-16")]
+    public void DescribeEncodingMismatch_Utf16InAnyCasing_IsAccepted(string encoding)
+    {
+        var caps = new ServerCapabilities { PositionEncoding = encoding, OffsetEncoding = encoding };
+
+        Assert.That(LanguageService.DescribeEncodingMismatch(caps), Is.Null);
+    }
+
     [TestCase("synchronization")]
     [TestCase("completion")]
     [TestCase("hover")]

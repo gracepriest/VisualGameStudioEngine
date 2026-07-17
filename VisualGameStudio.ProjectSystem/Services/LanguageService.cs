@@ -48,6 +48,29 @@ public class LanguageService : ILanguageService
     /// <summary>Interlocked guard so a single crash (read-loop EOF + Process.Exited) is handled once.</summary>
     private int _disconnectHandled;
 
+    /// <summary>
+    /// Makes <see cref="StartCoreAsync"/> single-flight. Without it, two concurrent starts both
+    /// pass the <c>IsConnected</c> check (neither has connected yet) and BOTH spawn a server:
+    /// the second overwrites <c>_serverProcess</c>/<c>_writer</c>/<c>_reader</c>, orphaning the
+    /// first process past IDE exit (Dispose only kills the one it can still see) while the first
+    /// start's read loop keeps reading the SECOND server's stdout through the swapped field —
+    /// two loops on one stream, corrupting the byte-exact framing for both.
+    /// <para>
+    /// Not hypothetical: the shell fire-and-forgets BasicLang's rootless autostart from the
+    /// MainWindowViewModel constructor and <c>StartAllAsync</c> from ProjectOpened, and a project
+    /// auto-opened at launch fires the second inside the first's multi-second handshake. The
+    /// second caller now waits, then sees <c>IsConnected</c> and no-ops — same net effect as
+    /// arriving late. Hold time is bounded by the 10s initialize timeout.
+    /// </para>
+    /// <para>
+    /// Deliberately never disposed, for the same reason as the registry's lifecycle lock: nothing
+    /// touches <c>AvailableWaitHandle</c>, so disposal frees nothing — while disposing it from
+    /// <see cref="Dispose"/> mid-start would turn a benign shutdown race into an
+    /// <see cref="ObjectDisposedException"/>.
+    /// </para>
+    /// </summary>
+    private readonly SemaphoreSlim _startGate = new(1, 1);
+
     public bool IsConnected { get; private set; }
 
     /// <summary>
@@ -290,6 +313,22 @@ public class LanguageService : ILanguageService
 
     private async Task StartCoreAsync(string? workspaceRoot, CancellationToken cancellationToken)
     {
+        // Single-flight (see _startGate). The IsConnected check MUST be inside the gate: a
+        // concurrent caller has to wait for the in-flight start to finish and then observe its
+        // outcome, not race past the check while it is still false.
+        await _startGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            await StartLockedAsync(workspaceRoot, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _startGate.Release();
+        }
+    }
+
+    private async Task StartLockedAsync(string? workspaceRoot, CancellationToken cancellationToken)
+    {
         if (IsConnected) return;
         if (_stopping || _disposed) return;
 
@@ -519,14 +558,24 @@ public class LanguageService : ILanguageService
     public static ServerCapabilities ParseServerCapabilities(JsonElement initializeResult)
     {
         if (initializeResult.ValueKind != JsonValueKind.Object) return new ServerCapabilities();
+
+        // Read BEFORE the capabilities guard below, and from the RESULT rather than from
+        // `capabilities`: clangd's offsetEncoding is a top-level sibling of that object. Read
+        // from the wrong parent it would answer null forever and DescribeEncodingMismatch
+        // would be inert — green, and checking nothing.
+        var offsetEncoding = ReadString(initializeResult, "offsetEncoding");
+
         if (!initializeResult.TryGetProperty("capabilities", out var caps) ||
             caps.ValueKind != JsonValueKind.Object)
         {
-            return new ServerCapabilities();
+            // Still carries offsetEncoding: a reply we otherwise consider non-conforming must
+            // not be able to smuggle a utf-8 claim past the guard by omitting `capabilities`.
+            return new ServerCapabilities { OffsetEncoding = offsetEncoding };
         }
 
         return new ServerCapabilities
         {
+            OffsetEncoding = offsetEncoding,
             HasCompletionProvider = HasProvider(caps, "completionProvider"),
             HasCompletionResolveProvider =
                 caps.TryGetProperty("completionProvider", out var completion) &&
@@ -538,13 +587,75 @@ public class LanguageService : ILanguageService
             HasReferencesProvider = HasProvider(caps, "referencesProvider"),
             HasDocumentSymbolProvider = HasProvider(caps, "documentSymbolProvider"),
             HasSignatureHelpProvider = HasProvider(caps, "signatureHelpProvider"),
-            PositionEncoding =
-                caps.TryGetProperty("positionEncoding", out var encoding) &&
-                encoding.ValueKind == JsonValueKind.String
-                    ? encoding.GetString() ?? ServerCapabilities.Utf16
-                    : ServerCapabilities.Utf16
+            PositionEncoding = ReadString(caps, "positionEncoding") ?? ServerCapabilities.Utf16
         };
     }
+
+    /// <summary>
+    /// The value of <paramref name="name"/> on <paramref name="obj"/> when it is a JSON string,
+    /// otherwise null. Absent, null, and a non-string value are all "the server did not say".
+    /// </summary>
+    private static string? ReadString(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    /// <summary>
+    /// Checks the encodings a server actually reported against the only one this client can
+    /// read. Returns <b>null when the handshake is safe</b>, otherwise a message naming what the
+    /// server said and why it cannot be used.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ <b>This is the one check standing between us and silently corrupting every position we
+    /// send.</b> Positions convert as <c>character = column - 1</c> against AvaloniaEdit's
+    /// <c>Caret.Column</c> (1-based UTF-16 code units) at 12+ call sites, so utf-16 is the only
+    /// encoding this client can consume — and <b>clangd's own default is utf-8</b>. It answers
+    /// utf-16 solely because <see cref="BuildClientCapabilities"/> pins
+    /// <c>general.positionEncodings</c> to utf-16. That pin winning the negotiation is what makes
+    /// us correct; this function is what makes us KNOW it won, rather than assume it.
+    /// <para>
+    /// Both fields are checked because nothing guarantees they agree. ⚠ Measured, not assumed:
+    /// against real clangd 22.1.6 an <c>--offset-encoding=utf-8</c> flag moves BOTH fields to
+    /// utf-8, so for that version the standard field alone would have caught it. The second read
+    /// is therefore defence in depth, not the load-bearing check: <c>offsetEncoding</c> is the
+    /// field clangd's own semantics predate the standard one with, so a version — or another
+    /// server borrowing the extension — that moved only its own field would be invisible to the
+    /// standard read alone. It costs one string compare.
+    /// </para>
+    /// <para>
+    /// A server that reports NOTHING is safe, not suspicious: LSP 3.17 defaults positionEncoding
+    /// to utf-16, and <see cref="ServerCapabilities.OffsetEncoding"/> is null for every server but
+    /// clangd. Casing is not part of the contract — an "UTF-16" is still utf-16, and must not cost
+    /// the user their language server over a spelling difference.
+    /// </para>
+    /// </remarks>
+    public static string? DescribeEncodingMismatch(ServerCapabilities capabilities)
+    {
+        var reported = new List<string>();
+
+        if (!IsUtf16(capabilities.PositionEncoding))
+        {
+            reported.Add($"capabilities.positionEncoding={capabilities.PositionEncoding}");
+        }
+
+        // Null means "never sent" — not a claim, and nothing to contradict.
+        if (capabilities.OffsetEncoding != null && !IsUtf16(capabilities.OffsetEncoding))
+        {
+            reported.Add($"offsetEncoding={capabilities.OffsetEncoding}");
+        }
+
+        if (reported.Count == 0) return null;
+
+        return $"the server negotiated a position encoding this client cannot read " +
+               $"({string.Join(", ", reported)}). Only utf-16 is supported: LSP positions are " +
+               "converted as `character = column - 1` against AvaloniaEdit's 1-based UTF-16 " +
+               "Caret.Column, so any other encoding shifts every position on every line " +
+               "containing a non-ASCII character. Check that no --offset-encoding argument is " +
+               "passed and that general.positionEncodings still advertises utf-16.";
+    }
+
+    private static bool IsUtf16(string? encoding) =>
+        string.Equals(encoding, ServerCapabilities.Utf16, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Convenience overload parsing raw JSON text; malformed input yields empty
@@ -716,6 +827,20 @@ public class LanguageService : ILanguageService
         // No guard needed: ParseServerCapabilities takes the element and treats a
         // missing/Undefined result as "told us nothing" (see its remarks).
         _capabilities = ParseServerCapabilities(initResult);
+
+        // REFUSE a server whose position encoding we cannot read, rather than connecting and
+        // mis-placing every position on every non-ASCII line for the rest of the session. Loud
+        // and dead beats quiet and wrong: the failure is a visible "no IntelliSense" plus this
+        // message, instead of hovers that point one character off and server textEdits that
+        // land in the wrong place. Thrown (not returned) so StartCoreAsync's catch performs the
+        // same CleanupConnection any other failed handshake gets; the server is never announced
+        // connected, and nothing auto-restarts a start that never succeeded.
+        var mismatch = DescribeEncodingMismatch(_capabilities);
+        if (mismatch != null)
+        {
+            throw new InvalidOperationException(
+                $"{Descriptor.DisplayName}: {mismatch}");
+        }
 
         await SendNotificationAsync("initialized", new { });
     }
