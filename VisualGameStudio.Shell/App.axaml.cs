@@ -129,37 +129,6 @@ public partial class App : Application
                 try { (Services as IDisposable)?.Dispose(); }
                 catch (Exception ex) { LogCrash("SHUTDOWN_DISPOSE", ex); }
             };
-
-            // Auto-load TestProject for debugging
-            desktop.MainWindow.Opened += async (s, e) =>
-            {
-                await Dispatcher.UIThread.InvokeAsync(async () =>
-                {
-                    var projectService = Services.GetRequiredService<IProjectService>();
-                    var testProjectPath = @"C:\Users\melvi\Documents\TestProject\TestProject.blproj";
-                    if (System.IO.File.Exists(testProjectPath))
-                    {
-                        try
-                        {
-                            await projectService.OpenProjectAsync(testProjectPath);
-
-                            // Auto-open Program.bas and set a breakpoint for testing
-                            var programBasPath = @"C:\Users\melvi\Documents\TestProject\Program.bas";
-                            if (System.IO.File.Exists(programBasPath))
-                            {
-                                // Set breakpoints for testing variable inspection
-                                mainViewModel.Breakpoints.AddBreakpoint(programBasPath, 14); // Dim counter
-                                mainViewModel.Breakpoints.AddBreakpoint(programBasPath, 19); // Inside loop - PrintLine with i
-                                mainViewModel.Breakpoints.AddBreakpoint(programBasPath, 31); // After function call
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Failed to auto-load project: {ex.Message}");
-                        }
-                    }
-                }, DispatcherPriority.Background);
-            };
         }
 
         base.OnFrameworkInitializationCompleted();
