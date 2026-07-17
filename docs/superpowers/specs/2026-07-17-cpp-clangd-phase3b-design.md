@@ -22,7 +22,9 @@ deferred by the 3a plan's "Deferred to Phase 3b" section, plus the hygiene item 
    info+actions ⇒ `autoDismiss=false`). A permanent **Tools → Download C++ Tools…** menu item is
    the discoverability and retry path — the toast stays once-per-session
    (`_clangdMissingReported`, `:1190`); a declined or failed download is retried from the menu,
-   so no new suppression states are introduced.
+   so no new suppression states are introduced. When clangd is already resolved, the menu item
+   shows an informational toast naming the resolved path ("clangd is already installed at <path>")
+   and does nothing else — re-download/repair is a non-goal in 3b.
 3. Recorded for completeness: the startup status-bar presentation ("clangd: Stopped" + non-green
    dot before a project opens) stays **as-is** (user decision at the 3a smoke).
 
@@ -134,8 +136,10 @@ all steps injectable pure-static seams (the class's only test seam, by its own d
 - **Step 0 (plan time):** capture real clangd 22.1.6's legend from its `initialize` reply — the
   3a plan's "clangd's 0 is variable" claim is UNVERIFIED in-repo — and pin the remap test with
   the captured data. BasicLang's legend maps names to themselves: zero behavior change, pinned.
-- **Preserved distinction:** null result (error) keeps stale tokens; empty data clears
-  (`MainWindowViewModel.cs:7746-7753`) — the remap path must not collapse the two.
+- **Preserved behavior:** today a null result AND empty data both clear the tokens
+  (`MainWindowViewModel.cs:7746-7753` — `Data != null && Length > 0` else clear; errors become
+  null at `LanguageService.cs:2346-2349`), and only the disconnected/cancelled early returns
+  keep stale tokens. The remap path must not change any of that existing handling.
 - Theme `semanticTokenColors` (parsed but consumer-less — `VsCodeThemeLoader.cs:126-136`) stays
   dead: explicit non-goal.
 
@@ -158,7 +162,10 @@ all steps injectable pure-static seams (the class's only test seam, by its own d
   Interval pinned in the plan at **1.5–2 s** (an emission runs the whole non-cancellable
   front end + optimizer, seconds per run — `IIntelliSenseEmissionService.cs:16-17`). No
   flush-on-dispose: `IntelliSenseEmissionService.Dispose` already refuses to hold shutdown for
-  an emission, the coordinator follows suit.
+  an emission, the coordinator follows suit. **The debounce ships as a small shared helper**
+  (Core.Utilities, the `ScheduleSave` mechanics extracted) — the 3a deferred list asked for the
+  shared helper explicitly, and the coordinator plus `.blproj` watching gives it two consumers
+  on day one; migrating `SettingsService` itself onto it is optional follow-up, not 3b churn.
 - **Invocation:** `RequestEmit(CurrentProject, currentConfiguration)` — same expression as the
   project-open call site (`MainWindowViewModel.cs:988-989`). `RequestEmit`'s unconditional
   supersede is pre-blessed for exactly this trigger by its own comment
@@ -210,9 +217,10 @@ all steps injectable pure-static seams (the class's only test seam, by its own d
 
 ## 6. Hygiene
 
-- **Task 0:** remove the dev leftover at `App.axaml.cs:133-144` that hardcodes auto-opening
-  `C:\Users\melvi\Documents\TestProject\TestProject.blproj` on every startup. It pollutes every
-  launch on this machine and would re-trigger under any future restart flow.
+- **Task 0:** remove the dev leftover at `App.axaml.cs:133-162` — the whole `MainWindow.Opened`
+  handler, which hardcodes auto-opening `C:\Users\melvi\Documents\TestProject\TestProject.blproj`
+  AND auto-adds three breakpoints (`:151-153`). It pollutes every launch on this machine and
+  would re-trigger under any future restart flow.
 
 ## Non-goals (all recorded, none silently dropped)
 
@@ -224,7 +232,12 @@ Hot-add server roster (user decision); transport honesty gap in `LanguageService
 the settings workstream; §1's no-settings-write design removes this feature's exposure to it);
 migrating `OpenVsxClient` onto `FileDownloader`; the dead `SemanticTokensRefreshNeeded` debounce
 in `CodeEditorControl` and the dead `RestartLspRequested` stub (noted for the plan as delete-or-
-leave decisions, not features).
+leave decisions, not features); re-download/repair of an already-resolved clangd.
+
+One 3a-deferred bullet is closed rather than carried: "clangd's tolerance for full-text
+`contentChanges` when it advertises incremental sync — verify empirically" was de-facto verified
+by 3a's Task 13 e2e, which drove full-text didChange updates against real clangd 22.1.6
+throughout (they parse, answer, and heal a late compile database). No further work.
 
 ## Testing strategy (3a discipline carries over)
 
