@@ -815,6 +815,7 @@ public partial class MainWindowViewModel : ViewModelBase
         RefreshRecentProjects();
     }
 
+    // Mirrored in ClangdE2ETests.OnClangdDiagnostics — keep the shape in sync.
     private void OnDiagnosticsReceived(object? sender, DiagnosticsEventArgs e)
     {
         try

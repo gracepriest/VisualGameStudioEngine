@@ -119,6 +119,30 @@ public class ClangdE2ETests
     private const string BrokenCpp = "int answer() { return 42 }\n";
 
     // ------------------------------------------------------------------
+    // Timing constants
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Bound on every polled server answer. Generous by design: clangd answered the launch
+    /// tests in ~150ms on this hardware, but parsing/indexing a real TU (and BasicLang's
+    /// post-didOpen analysis) takes seconds — this is a ceiling for CI-grade slowness, never
+    /// an expectation.
+    /// </summary>
+    private static readonly TimeSpan ServerAnswerTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Bound on the race test's edit-probe healing loop — roughly 6-9× the 5-7s the heal
+    /// measured on this hardware (clangd's ~5s CDB freshness window plus one rebuild).
+    /// </summary>
+    private static readonly TimeSpan HealBudget = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// Gap between edit-probes in the healing loop: ≈7 probes crosses clangd's ~5s CDB
+    /// freshness window, so the window is straddled well within <see cref="HealBudget"/>.
+    /// </summary>
+    private static readonly TimeSpan EditProbeCadence = TimeSpan.FromMilliseconds(700);
+
+    // ------------------------------------------------------------------
     // Fixture state
     // ------------------------------------------------------------------
 
@@ -177,6 +201,13 @@ public class ClangdE2ETests
     // Setup / teardown
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// Emission, then servers, then didOpen — deliberately in that order: headers and the
+    /// compile database are on disk before clangd starts. The shell's project-open fires
+    /// emission and server-start as independent fire-and-forgets and CANNOT guarantee this
+    /// ordering; the late-database ordering the shell can produce is pinned separately in
+    /// <see cref="DidOpen_BeforeTheCompileDbExists_HealsThroughSubsequentEdits_OnceItAppears"/>.
+    /// </summary>
     [OneTimeSetUp]
     public async Task EmitStartAndOpen()
     {
@@ -193,10 +224,12 @@ public class ClangdE2ETests
         _mainCpp = WriteFile("main.cpp", MainCpp);
         _brokenCpp = WriteFile("broken.cpp", BrokenCpp);
 
-        // EMIT FIRST — the deterministic ordering (headers + compile db on disk before clangd
-        // starts). The shell's project-open fires emission and server-start as independent
-        // fire-and-forgets and cannot guarantee this; the late-db case is pinned separately in
-        // DidOpen_BeforeTheCompileDbExists_ReopenAfterItAppears_GetsTheRealFlags.
+        // EMIT FIRST — the deterministic ordering; see the method doc for why, and for the
+        // pointer to where the late-database ordering is pinned. The doc's cref is
+        // IDE-checked only (this project emits no XML doc file, so `dotnet build` skips
+        // cref validation — probed empirically with a bogus cref: no CS1574); the nameof
+        // below is what actually breaks the BUILD if the race test is ever renamed.
+        _ = nameof(DidOpen_BeforeTheCompileDbExists_HealsThroughSubsequentEdits_OnceItAppears);
         var emit = IntelliSenseEmitter.Emit(ProjectFile.Load(blprojPath), "Debug", toolchain: null);
         Assert.That(emit.Success, Is.True, "emission precondition failed: " + DiagCodes(emit));
         Assert.That(File.Exists(ObjGen(ProjectName + ".g.h")), Is.True,
@@ -271,8 +304,9 @@ public class ClangdE2ETests
         var completions = await PollUntilAsync(
             () => _clangd.GetCompletionsAsync(_mainCpp, line: 5, column: 12),
             c => c.Count > 0,
-            TimeSpan.FromSeconds(30),
-            "clangd completion after 'std::st' in main.cpp");
+            ServerAnswerTimeout,
+            "clangd completion after 'std::st' in main.cpp",
+            _output.Dump);
 
         Assert.That(completions, Is.Not.Empty);
         Assert.That(completions.Any(c => c.Label.Trim().StartsWith("string", StringComparison.Ordinal)),
@@ -294,8 +328,9 @@ public class ClangdE2ETests
         var hover = await PollUntilAsync(
             () => _clangd.GetHoverAsync(_mainCpp, line: 6, column: 20),
             h => h != null,
-            TimeSpan.FromSeconds(30),
-            "clangd hover over the CalculateScore call in main.cpp");
+            ServerAnswerTimeout,
+            "clangd hover over the CalculateScore call in main.cpp",
+            _output.Dump);
 
         Assert.That(hover!.Contents, Is.Not.Empty, "hover arrived but carried no contents");
         Assert.That(hover.Contents, Does.Contain("CalculateScore"),
@@ -314,8 +349,9 @@ public class ClangdE2ETests
         var publish = await PollUntilAsync(
             () => Task.FromResult(LatestPublishFor(_brokenCpp)),
             p => p != null && p.Value.Diagnostics.Count > 0,
-            TimeSpan.FromSeconds(30),
-            "clangd publishDiagnostics for broken.cpp");
+            ServerAnswerTimeout,
+            "clangd publishDiagnostics for broken.cpp",
+            _output.Dump);
 
         var errors = publish!.Value.Diagnostics
             .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
@@ -341,8 +377,9 @@ public class ClangdE2ETests
         var mainPublish = await PollUntilAsync(
             () => Task.FromResult(LatestPublishFor(_mainCpp)),
             p => p != null,
-            TimeSpan.FromSeconds(30),
-            "clangd publishDiagnostics for main.cpp");
+            ServerAnswerTimeout,
+            "clangd publishDiagnostics for main.cpp",
+            _output.Dump);
         Assert.That(mainPublish!.Value.Diagnostics.Any(
                 d => d.Message.Contains("file not found", StringComparison.OrdinalIgnoreCase)),
             Is.False,
@@ -365,8 +402,9 @@ public class ClangdE2ETests
         var location = await PollUntilAsync(
             () => _clangd.GetDefinitionAsync(_mainCpp, line: 7, column: 6),
             l => l != null,
-            TimeSpan.FromSeconds(30),
-            "clangd textDocument/definition on 'Player' in main.cpp");
+            ServerAnswerTimeout,
+            "clangd textDocument/definition on 'Player' in main.cpp",
+            _output.Dump);
 
         // Exact identity, not a substring grope: the resolved path must sit UNDER obj\gen and
         // BE a .g.h — this single assertion is what proves the Direction-B include path.
@@ -410,8 +448,9 @@ public class ClangdE2ETests
         var completions = await PollUntilAsync(
             () => _basicLang.GetCompletionsAsync(_logicBas, line: 9, column: 5),
             c => c.Count > 0,
-            TimeSpan.FromSeconds(30),
-            "BasicLang completion inside CalculateScore's body in Logic.bas");
+            ServerAnswerTimeout,
+            "BasicLang completion inside CalculateScore's body in Logic.bas",
+            _output.Dump);
 
         Assert.That(completions.Any(c => c.Label == "Dim"), Is.True,
             "the answer must be BasicLang-shaped (the 'Dim' keyword — something clangd could " +
@@ -467,7 +506,11 @@ public class ClangdE2ETests
             var publishes = new List<(string FilePath, IReadOnlyList<DiagnosticItem> Diagnostics)>();
             var publishesLock = new object();
 
-            service = new LanguageService(_output ?? new RecordingOutput(), null,
+            // Its OWN traffic log: NUnit's alphabetical order interleaves this test between
+            // the shared-fixture tests, and borrowing _output would mix two servers' worlds
+            // into one dump.
+            var raceOutput = new RecordingOutput();
+            service = new LanguageService(raceOutput, null,
                 LanguageServerDescriptor.Clangd(clangdPath!));
             service.DiagnosticsReceived += (_, e) =>
             {
@@ -489,8 +532,9 @@ public class ClangdE2ETests
                 () => Task.FromResult(LatestFor(publishes, publishesLock, mainCpp)),
                 p => p != null && p.Value.Diagnostics.Any(
                     d => d.Message.Contains("file not found", StringComparison.OrdinalIgnoreCase)),
-                TimeSpan.FromSeconds(30),
-                "the 'Logic.g.h' file-not-found diagnostic under fallback flags (empty compile db)");
+                ServerAnswerTimeout,
+                "the 'Logic.g.h' file-not-found diagnostic under fallback flags (empty compile db)",
+                raceOutput.Dump);
 
             // The database appears late — the race's exact artifact — and the user keeps
             // working: edit-probes (didChange with a version bump and an appended trailing
@@ -509,7 +553,7 @@ public class ClangdE2ETests
             var objGenPrefix = Path.GetFullPath(Path.Combine(dir, "obj", "gen")) + Path.DirectorySeparatorChar;
             LocationInfo? location = null;
             var version = 2;
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
+            var deadline = DateTime.UtcNow + HealBudget;
             while (DateTime.UtcNow < deadline)
             {
                 var candidate = await service.GetDefinitionAsync(mainCpp, line: 7, column: 6);
@@ -524,13 +568,16 @@ public class ClangdE2ETests
                 // never rebuild the AST.
                 await service.ChangeDocumentAsync(mainCpp, MainCpp + $"// probe {version}\n", version);
                 version++;
-                await Task.Delay(700);
+                await Task.Delay(EditProbeCadence);
             }
 
             Assert.That(location, Is.Not.Null,
-                "45s of edits after the compile database appeared never got clangd onto the " +
-                "real flags — the launch race would NOT self-heal in a live session, which " +
-                "turns the fire-and-forget emission/start ordering into a real product bug");
+                $"{HealBudget.TotalSeconds:F0}s of edits after the compile database appeared " +
+                "never got clangd onto the real flags — the launch race would NOT self-heal " +
+                "in a live session, which turns the fire-and-forget emission/start ordering " +
+                "into a real product bug" +
+                Environment.NewLine + "--- LSP traffic (tail) ---" + Environment.NewLine +
+                Tail(raceOutput.Dump()));
 
             var fullPath = Path.GetFullPath(location!.Uri);
             Assert.That(fullPath, Does.StartWith(objGenPrefix).IgnoreCase,
@@ -639,8 +686,16 @@ public class ClangdE2ETests
     /// (clangd parses the TU after didOpen; BasicLang analyzes after didOpen), so every
     /// judgment call polls up to a generous bound rather than sleeping a fixed amount.
     /// </summary>
+    /// <param name="traffic">
+    /// Where the LSP traffic log lives (a <see cref="RecordingOutput.Dump"/>), appended
+    /// tail-truncated to the timeout verdict. This is what makes RecordingOutput's promise
+    /// — "failures show the real traffic, not a bare assertion message" — hold on the
+    /// TIMEOUT path too, not only on explicit Assert messages; same idiom as
+    /// IdeInAngerTests' polled verdicts.
+    /// </param>
     private static async Task<T> PollUntilAsync<T>(
-        Func<Task<T>> probe, Func<T, bool> accepted, TimeSpan timeout, string what)
+        Func<Task<T>> probe, Func<T, bool> accepted, TimeSpan timeout, string what,
+        Func<string>? traffic = null)
     {
         var deadline = DateTime.UtcNow + timeout;
         var last = default(T);
@@ -651,9 +706,25 @@ public class ClangdE2ETests
             await Task.Delay(300);
         }
 
-        Assert.Fail($"Timed out after {timeout.TotalSeconds:F0}s waiting for: {what}");
+        var message = $"Timed out after {timeout.TotalSeconds:F0}s waiting for: {what}";
+        if (traffic != null)
+        {
+            message += Environment.NewLine + "--- LSP traffic (tail) ---" + Environment.NewLine
+                       + Tail(traffic());
+        }
+        Assert.Fail(message);
         return last!; // unreachable — Assert.Fail throws
     }
+
+    /// <summary>
+    /// The last <paramref name="maxChars"/> of <paramref name="text"/> — recent traffic is
+    /// what explains a timeout, and an unbounded dump would bury the verdict line.
+    /// </summary>
+    private static string Tail(string text, int maxChars = 8000) =>
+        text.Length <= maxChars
+            ? text
+            : $"… ({text.Length - maxChars:N0} earlier chars truncated)" + Environment.NewLine
+              + text.Substring(text.Length - maxChars);
 
     private static void KillIfAlive(int? pid)
     {
