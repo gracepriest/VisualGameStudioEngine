@@ -938,6 +938,8 @@ public class SettingsService : ISettingsService, IDisposable
         }
     }
 
+    // KEEP IN SYNC: these debounce mechanics are extracted as Core.Utilities.TrailingEdgeDebouncer —
+    // behavioral changes here should be mirrored there (migrating this method onto the helper is deliberately deferred).
     private void ScheduleSave(SettingsScope scope)
     {
         if (scope == SettingsScope.User)

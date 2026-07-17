@@ -21,6 +21,11 @@ namespace VisualGameStudio.Core.Utilities;
 /// the consumer's own flush path, not here. <see cref="Signal"/> after dispose is a
 /// no-op. Exceptions thrown by <c>fire</c> are swallowed and do not prevent later
 /// cycles — the consumer owns its own error reporting.
+///
+/// Thread-safe: all mutable state is guarded by a single lock. Fires do NOT
+/// serialize: a new cycle's fire can start while a previous slow fire is still
+/// running — consumers whose fires must not overlap own that gating themselves
+/// (e.g. a regen coordinator's single-flight request gate).
 /// </summary>
 public sealed class TrailingEdgeDebouncer : IDisposable
 {
@@ -32,6 +37,16 @@ public sealed class TrailingEdgeDebouncer : IDisposable
 
     public TrailingEdgeDebouncer(TimeSpan quietPeriod, Action fire)
     {
+        if (quietPeriod < TimeSpan.Zero)
+        {
+            // Never swallow this into a silent never-fire: -1ms IS
+            // Timeout.InfiniteTimeSpan, which Task.Delay accepts and waits on
+            // forever with no exception at all.
+            throw new ArgumentOutOfRangeException(nameof(quietPeriod), quietPeriod,
+                "The quiet period must be non-negative. A negative value would become a " +
+                "silent never-fire: -1ms is Timeout.InfiniteTimeSpan, which Task.Delay " +
+                "accepts and never completes.");
+        }
         _quietPeriod = quietPeriod;
         _fire = fire ?? throw new ArgumentNullException(nameof(fire));
     }
@@ -58,13 +73,18 @@ public sealed class TrailingEdgeDebouncer : IDisposable
         {
             try
             {
+                // With the ctor guard, OCE is the only exception this delay can throw.
                 await Task.Delay(_quietPeriod, token).ConfigureAwait(false);
-                if (!token.IsCancellationRequested)
-                {
-                    _fire();
-                }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            if (token.IsCancellationRequested) return;
+            try
+            {
+                _fire();
+            }
             catch { /* consumer owns error reporting; a throwing fire must not kill later cycles */ }
         });
     }
