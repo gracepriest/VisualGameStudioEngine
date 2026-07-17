@@ -40,6 +40,16 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
     private string? _startedRoot;
 
     /// <summary>
+    /// True while the last start/stop transition did not complete cleanly. Set at the entry of
+    /// every transition, cleared only after a failure-free pass, so any failure — a stop that
+    /// threw, a start that threw, even a first-ever partial start — forces the NEXT call, whatever
+    /// its root, to re-root (stop-then-start) every server instead of trusting bookkeeping a
+    /// half-completed transition wrote. Read/written only under <see cref="_lifecycleLock"/>,
+    /// like <see cref="_startedRoot"/>.
+    /// </summary>
+    private bool _rootIsDirty;
+
+    /// <summary>
     /// Serializes <see cref="StartAllAsync"/>/<see cref="StopAllAsync"/> against each other.
     /// <para>
     /// Re-rooting is a read-modify-write over <see cref="_startedRoot"/> spanning a multi-second
@@ -180,12 +190,21 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
             // to the old project silently. Ordinal only ever errs the safe way (the root comes
             // from Project.ProjectDirectory and is stable per project, so it does not misfire in
             // practice).
-            var reRooting = _startedRoot != null &&
-                            !string.Equals(_startedRoot, workspaceRoot, StringComparison.Ordinal);
+            var reRooting = _rootIsDirty ||
+                            (_startedRoot != null &&
+                             !string.Equals(_startedRoot, workspaceRoot, StringComparison.Ordinal));
 
-            // Set before the work: we are committed to this root either way, and a start that
-            // throws part-way must not leave the registry believing it is still rooted where it
-            // was — the next open would then skip the re-root it needs.
+            // Two pieces of bookkeeping, each guarding one direction of the failed-pass problem.
+            // _startedRoot is committed EARLY (before the risky work) so that a pass that fails
+            // part-way records where the servers were HEADED: a healthy server that did move must
+            // be re-rooted by a later switch BACK to the old root, which a still-recorded old root
+            // would skip as "same root". _rootIsDirty is set here and cleared only after a fully
+            // clean pass, so a RETRY of the same root after a failure re-roots too — otherwise the
+            // early-committed root makes the retry compute reRooting=false, never re-attempt the
+            // failed stop, and report success while a still-connected server answers from the old
+            // project's compile database. Together: any failure forces a full re-root on the next
+            // call, at the cost of one needless bounce of the servers that were healthy.
+            _rootIsDirty = true;
             _startedRoot = workspaceRoot;
 
             var failures = await ForEachServerAsync(async service =>
@@ -208,6 +227,8 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
                 throw new AggregateException(
                     $"{failures.Count} of {_services.Count} language server(s) failed to start.", failures);
             }
+
+            _rootIsDirty = false;
         }
         finally
         {
@@ -222,7 +243,10 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
         try
         {
             // No servers are rooted anywhere now, so the next start must not think it can skip
-            // the re-root.
+            // the re-root. Same dirty-flag discipline as StartAllAsync: set before the risky
+            // work, cleared only after a failure-free pass, so a stop that threw leaves a server
+            // still connected somewhere and the next start re-roots it rather than no-oping.
+            _rootIsDirty = true;
             _startedRoot = null;
 
             var failures = await ForEachServerAsync(service => service.StopAsync()).ConfigureAwait(false);
@@ -232,6 +256,8 @@ public sealed class LanguageServiceRegistry : ILanguageServiceRegistry
                 throw new AggregateException(
                     $"{failures.Count} of {_services.Count} language server(s) failed to stop.", failures);
             }
+
+            _rootIsDirty = false;
         }
         finally
         {

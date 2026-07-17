@@ -1174,10 +1174,13 @@ public partial class MainWindowViewModel : ViewModelBase
         if (_clangdMissingReported) return;
         _clangdMissingReported = true;
 
+        // "restart the IDE" must attach to BOTH remedies: ClangdLocator.Locate runs once inside
+        // the DI factory (ServiceConfiguration), so a changed setting is exactly as
+        // restart-bound as a fresh install — wording that promises hot-reload would be a lie.
         ShowNotification(
             "clangd was not found, so C++ IntelliSense is unavailable — syntax highlighting and " +
-            "editing still work. Install clangd and restart the IDE, or set the " +
-            $"{LanguageServerDescriptor.ClangdSettingsKey} setting to its path.",
+            $"editing still work. Install clangd, or point the {LanguageServerDescriptor.ClangdSettingsKey} " +
+            "setting at it; either way, restart the IDE to pick it up.",
             "info");
     }
 

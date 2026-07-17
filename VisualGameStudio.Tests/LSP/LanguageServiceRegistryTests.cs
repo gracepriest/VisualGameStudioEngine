@@ -471,6 +471,93 @@ public class LanguageServiceRegistryTests
             "clangd's failure must not cost BasicLang its re-root");
     }
 
+    /// <summary>
+    /// Like <see cref="RecordLifecycle"/>, but the FIRST StopAsync throws (recorded as
+    /// "stop:throw"); every later stop succeeds. Models a server that hung on one shutdown and
+    /// recovered — the setup both dirty-flag tests below share.
+    /// </summary>
+    private static List<string> RecordLifecycleWithOneStopFailure(Mock<ILanguageService> mock)
+    {
+        var calls = new List<string>();
+        var stops = 0;
+        mock.Setup(x => x.StopAsync()).Returns(() =>
+        {
+            if (++stops == 1)
+            {
+                calls.Add("stop:throw");
+                return Task.FromException(new InvalidOperationException("clangd hung on shutdown (once)"));
+            }
+
+            calls.Add("stop");
+            return Task.CompletedTask;
+        });
+        mock.Setup(x => x.StartAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask)
+            .Callback<string?, CancellationToken>((root, _) => calls.Add($"start:{root}"));
+        return calls;
+    }
+
+    // The adjudicated Task-12 review defect: StartAllAsync commits _startedRoot BEFORE the
+    // stop-then-start loop, so after a failed A→B pass a RETRY of B used to compute
+    // reRooting=false, never re-attempt the stop, and report success — while (at the
+    // ILanguageService contract level) a still-connected clangd no-ops its StartAsync and keeps
+    // answering from project A's compile_commands.json. The _rootIsDirty flag makes any failed
+    // pass force a full re-root on the next call, whatever its root.
+    [Test]
+    public async Task StartAllAsync_RetryAfterFailedStop_ReAttemptsTheStop()
+    {
+        var bl = FakeBasicLang(connected: true);
+        var cl = FakeClangd(connected: true);
+        RecordLifecycle(bl);
+        var clCalls = RecordLifecycleWithOneStopFailure(cl);
+        using var r = RegistryOf(bl, cl);
+
+        await r.StartAllAsync(@"C:\projects\A");
+        Assert.ThrowsAsync<AggregateException>(() => r.StartAllAsync(@"C:\projects\B"),
+            "the failed pass must still be reported — the fix is about the RETRY, not the failure");
+
+        await r.StartAllAsync(@"C:\projects\B"); // the retry must succeed, not throw
+
+        Assert.That(clCalls, Is.EqualTo(new[]
+            { @"start:C:\projects\A", "stop:throw", "stop", @"start:C:\projects\B" }),
+            "the retry of project B must re-attempt the stop the failed pass could not complete — " +
+            "trusting the _startedRoot=B that half-finished pass wrote computes reRooting=false, " +
+            "skips the stop, and a still-connected clangd would no-op its StartAsync and keep " +
+            "answering from project A's compile database while the retry reports success");
+    }
+
+    // The other direction, which the early commit of _startedRoot exists to keep correct (and the
+    // reason a naive set-_startedRoot-only-on-success is NOT the fix): BasicLang genuinely moved
+    // to B during the failed pass, so a switch BACK to A must re-root it — a registry still
+    // believing "rooted at A" would compute reRooting=false and silently pin it at B. Passes
+    // before and after the dirty-flag fix; kept as the regression pin for the direction the fix
+    // must not break.
+    [Test]
+    public async Task StartAllAsync_SwitchBackAfterFailedReRoot_ReRootsTheHealthyServer()
+    {
+        var bl = FakeBasicLang(connected: true);
+        var cl = FakeClangd(connected: true);
+        var blCalls = RecordLifecycle(bl);
+        var clCalls = RecordLifecycleWithOneStopFailure(cl);
+        using var r = RegistryOf(bl, cl);
+
+        await r.StartAllAsync(@"C:\projects\A");
+        Assert.ThrowsAsync<AggregateException>(() => r.StartAllAsync(@"C:\projects\B"));
+
+        await r.StartAllAsync(@"C:\projects\A"); // switch BACK after the failed pass
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blCalls, Is.EqualTo(new[]
+                { @"start:C:\projects\A", "stop", @"start:C:\projects\B", "stop", @"start:C:\projects\A" }),
+                "BasicLang really moved to project B during the failed pass; the switch back must " +
+                "re-root it to A, not trust bookkeeping that says it never left");
+            Assert.That(clCalls, Is.EqualTo(new[]
+                { @"start:C:\projects\A", "stop:throw", "stop", @"start:C:\projects\A" }),
+                "clangd must get its stop re-attempted and be started at A");
+        });
+    }
+
     // ---- Graceful degradation when clangd is not installed ------------------
 
     // clangd does not ship with the IDE. On a machine without it the registry holds BasicLang

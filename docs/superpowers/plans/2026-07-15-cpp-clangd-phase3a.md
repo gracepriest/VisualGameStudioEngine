@@ -1069,6 +1069,14 @@ git add -A
 git commit -m "feat(cpp): launch clangd per project with status-bar state and graceful degradation"
 ```
 
+### ✅ CORRECTION (Jul 16, post-review) — the `_startedRoot` early-commit dispute, adjudicated
+
+Task 12's review flagged committing `_startedRoot = workspaceRoot` **before** the stop-then-start loop as a re-root bug; the original implementer traced it and rejected the finding as a designed edge. **Two independent reviewers adjudicated on Jul 16: the defect is real at the `ILanguageService` contract level** — after a failed A→B pass, a retry of B computed `reRooting=false`, never re-attempted the failed stop, and reported success while a still-connected server (per the interface contract, `StartAsync` no-ops when connected) kept answering from A's compile database. **It is unreachable with the shipped transport** (`LanguageService.StopAsync` flips `IsConnected = false` before any throw site, and `StartAsync` swallows all failures), so no user could hit it today — but the registry must be correct against the contract, not against one implementation's accidents, or it is wrong for every mock and any future honest transport.
+
+**Fixed with a `_rootIsDirty` flag** (set at transition entry, cleared only after a failure-free pass), NOT by moving the `_startedRoot` commit later: a late commit fixes same-root retry but breaks switch-back — the healthy server that genuinely moved to B during the failed pass would be silently pinned there when the user returns to A. Early commit + dirty flag covers both directions, at the cost of one needless bounce of healthy servers after a failure. Pinned by `StartAllAsync_RetryAfterFailedStop_ReAttemptsTheStop` (fails against the old code) and `StartAllAsync_SwitchBackAfterFailedReRoot_ReRootsTheHealthyServer` (the direction the fix must not break).
+
+**Spun off, deliberately NOT fixed in Phase 3a:** the transport's own honesty gap — `LanguageService.StartAsync` reports start failures as success (its catch swallows them, making the registry's documented `AggregateException` dead code on the start path) and `StopAsync`'s failure path can orphan the child process. That is a separate follow-up task; fixing it here would have widened Task 12's blast radius mid-review.
+
 ---
 
 ## Task 13: End-to-end — clangd actually answers
