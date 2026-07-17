@@ -72,8 +72,17 @@ LLVM-dir probe ships with **pure injectable-seam tests only**; no local integrat
 exists. The DI-exactness pin test auto-follows the chain because it calls production
 `ResolveClangdPath` (spec-reviewer-verified).
 
-**S0.5 — `workspace/didChangeWatchedFiles` (Task 11's gate):** measurement IN FLIGHT at plan
-time. Task 11 carries the blocking gate — do not start it before the verdict is recorded there.
+**S0.5 — `workspace/didChangeWatchedFiles`: MEASURED — does NOT heal.** clangd 22.1.6 accepts
+the notification (stderr logs receipt, no error) and does NOTHING with it — no CDB load, no
+re-parse, for both Created-late and Changed-existing databases; run twice per variant with
+passing controls (didChange healed in ~0.2s every time; db-present-from-start fixture clean).
+clangd never sends `client/registerCapability` for file watches; its initialize reply declares
+`compilationDatabase: {automaticReload: true}` — "I re-stat the CDB myself on my next build",
+and only a `didChange` on the open file triggers that build. **Task 11's gate resolves to the
+NO-NUDGE branch.** Two hazards to pin in comments: (1) the notification is accepted SILENTLY —
+code that sends it gets false confidence, do not re-add it expecting CDB reload; (2) after a
+healing edit, the FIRST publishDiagnostics still carries stale errors for ~60-150ms (preamble
+rebuild in flight) — never latch the first publish after an edit.
 
 ## Environment rules (violating these costs real time — all verified)
 
@@ -286,9 +295,14 @@ Test: extend `VisualGameStudio.Tests/Core/ExecutableLocatorTests.cs`,
     style ONLY (locate vswhere, run `-property installationPath` with a short wait — this runs
     at DI time ONCE; measure: vswhere alone is ~1s, acceptable; document that the 35s hazard
     was the compiler SPAWN probes, not vswhere).
-  - `~/.vgs/tools` root: default from UserProfile, injectable for tests (8th duplication of the
-    `.vgs` path — add the same one-line comment the other 7 sites carry; the canonical helper
-    remains future work, do not build it here).
+  - `~/.vgs/tools` root: default from UserProfile, injectable for tests. This is the ~8th
+    duplication of the `.vgs` path construction; the other sites carry NO shared convention
+    comment (claims-verified — do not hunt for one to copy). Write a NEW one-line comment:
+    "another copy of the ~/.vgs root — the canonical path helper remains future work". Do not
+    build the helper here.
+  - Also truth-repair the now-stale test remark at `LanguageServiceRegistryTests.cs:643-646`
+    ("the locator's answer here is the PATH probe alone") — after this task the production
+    chain is override → tools → PATH → LLVM dirs; the test auto-follows, the remark must too.
 - [ ] **Step 4:** Green. Also confirm `Di_RegistersClangd_ExactlyWhenTheLocatorFindsOne` still
   passes — it calls production `ResolveClangdPath` so it auto-follows; on THIS machine it now
   finds the installed clangd via the tools probe even with no setting. **Step 5:** Full suite.
@@ -301,7 +315,10 @@ Modify: `VisualGameStudio.Tests/LSP/ClangdLaunchTests.cs:34-103`,
 `VisualGameStudio.Tests/LSP/ClangdE2ETests.cs:163-198`
 
 - [ ] **Step 1:** Extract the duplicated `LocateClangd`/`ProbeVgsToolsDir`/`RequireClangd` trio
-  into `internal static class ClangdTestDiscovery` (keep the ordinal-descending pick HERE —
+  into `internal static class ClangdTestDiscovery`. ⚠ Extract by MEMBER, not by line range: in
+  `ClangdLaunchTests` the trio is INTERLEAVED with the fixture's `SetUp`/`TearDown` (:71-93 sit
+  between `ProbeVgsToolsDir` and `RequireClangd`) — a range-guided cut would nuke the setup.
+  (Keep the ordinal-descending pick HERE —
   tests want "any working clangd", the comment must say so explicitly and point at the
   production probe's numeric compare as the deliberate difference). Both fixtures delegate;
   behavior byte-identical; keep each fixture's ignore-message wording.
@@ -329,6 +346,7 @@ orchestration lives in a small testable `ClangdDownloadFlow` class in the Shell 
 [Test] public async Task FailedInstall_NamesTheFailingStep()
 [Test] public async Task ProgressTuples_BecomeZeroToOneFractions()                   // (14099389, 28198778) -> 0.5 within tolerance; -1 total -> indeterminate
 [Test] public async Task ConcurrentTrigger_ReportsAlreadyInProgress()                // installer single-flight surfaces as a toast, not a queued dup
+[Test] public async Task NonWindowsPlatform_ReportsNotSupportedAndDoesNotDownload()  // spec §1's POSIX sentence — injectable isWindows; exact toast wording
 ```
 
 - [ ] **Step 2:** FAIL. **Step 3: Implement.**
@@ -418,23 +436,36 @@ Test: `VisualGameStudio.Tests/Core/SemanticTokenLegendMapTests.cs`
 (`GetSemanticTokensAsync` gate); Test: extend `CapabilityNegotiationTests` (gate) +
 `SemanticTokenLegendMapTests` (cache behavior)
 
-- [ ] **Step 1: Write the failing tests:**
+- [ ] **Step 1: Write the failing tests.** ⚠ There is NO scripted/fake LSP server harness in
+  this suite (claims-verified) — do not invent one. Test through the seams that exist:
 
 ```csharp
-[Test] public async Task GetSemanticTokens_WhenServerLacksTheProvider_DoesNotSendTheRequest()
-    // scripted-pipe server that FAILS the test if a semanticTokens request arrives; capability parsed false
+[Test] public void SemanticTokensGate_IsAPurePredicate()
+    // extract the gate as `internal static bool ShouldRequestSemanticTokens(ServerCapabilities?)`
+    // (the repo's established public/internal-static test-seam idiom, cf. ParseCompletions);
+    // exhaustive: null caps -> false, provider false -> false, provider true -> true
 [Test] public void LegendMapCache_BuildsOncePerLegendInstance()
     // Build is called once for repeated remaps of the same server (cache keyed by legend reference)
 ```
 
+  The negative wire assertion ("no request actually leaves for a provider-less server") is NOT
+  economically testable without a fake-server harness — both live servers advertise the
+  provider. Recorded, not silently dropped: the gate predicate test + the positive-path e2e
+  (Task 14 proves requests DO flow when the provider exists) are the coverage; the predicate
+  is called from exactly one place (assert via a code-review note in the task report).
 - [ ] **Step 2:** FAIL. **Step 3: Implement.**
   - `LanguageService.GetSemanticTokensAsync`: early-return null when
-    `Capabilities?.HasSemanticTokensProvider != true` (null result = the existing
-    keep-stale-nothing-happens path; do NOT return empty — empty means clear).
+    `ShouldRequestSemanticTokens(Capabilities)` is false. Truth about the downstream (the spec
+    was corrected on this once already — do not regress it): at the fetch seam null and empty
+    BOTH clear today (`MainWindowViewModel.cs:7746-7753` — `Data != null && Length > 0` else
+    clear; only disconnected/cancelled early-returns keep stale). A provider-less server
+    therefore gets its (nonexistent) tokens cleared — correct and harmless. Preserve that
+    handling byte-identically; the remap slots in on the non-empty path only.
   - `RefreshSemanticTokensAsync`: `var map = SemanticTokenLegendMap.GetOrBuild(svc.Capabilities?.SemanticTokensLegend);`
     (small static cache, `ConditionalWeakTable` or reference-keyed dictionary; null legend ⇒
-    identity) then `document.UpdateSemanticTokens(map.RemapData(result.Data))`. Null/empty
-    handling stays byte-identical (null ⇒ nothing, empty ⇒ clear — the spec-corrected truth).
+    identity) then `document.UpdateSemanticTokens(map.RemapData(result.Data))` — remap only on
+    the non-empty branch; the null/empty-both-clear handling stays byte-identical (see Step 3's
+    truth note above).
   - REWRITE the false comment at `:7738-7739`: the delta decode is server-agnostic; the
     type/modifier indices are legend-relative and are remapped HERE to BasicLang's canonical
     order before the editor sees them.
@@ -445,7 +476,8 @@ Test: `VisualGameStudio.Tests/Core/SemanticTokenLegendMapTests.cs`
 
 **Files:** Create: `VisualGameStudio.ProjectSystem/Services/RegenOnSaveCoordinator.cs`;
 Modify: `VisualGameStudio.Shell/Configuration/ServiceConfiguration.cs` (singleton, constructed
-with the emission service + project service + event aggregator);
+with the emission service + project service + event aggregator **+ the build service** — the
+fire expression needs `CurrentConfiguration`, four dependencies, not three);
 Test: `VisualGameStudio.Tests/Services/RegenOnSaveCoordinatorTests.cs`
 
 - [ ] **Step 1: Write the failing tests** (fakes: `IEventAggregator` real instance is fine,
@@ -477,8 +509,9 @@ Test: `VisualGameStudio.Tests/Services/RegenOnSaveCoordinatorTests.cs`
   (emission costs seconds and is non-cancellable in flight; 1.5s absorbs auto-save bursts
   without adding perceptible staleness). Dispose: dispose debouncer + subscription.
   DI: singleton, constructed eagerly with the app (it must exist to subscribe — document that
-  a lazily-resolved singleton nobody injects never subscribes; give it a forcing construction
-  like other eager singletons in `ServiceConfiguration`).
+  a lazily-resolved singleton nobody injects never subscribes). The forcing-construction
+  precedent lives in `App.axaml.cs:100` (`GetRequiredService<GitAutoFetchService>()` at
+  startup), NOT in ServiceConfiguration — add the same forcing line beside it.
 - [ ] **Step 4:** Green. **Step 5:** Full suite. **Step 6:** Commit:
   `feat(cpp): .bas saves regenerate IntelliSense headers — debounced, filtered, trailing-edge`
 
@@ -488,21 +521,15 @@ Test: `VisualGameStudio.Tests/Services/RegenOnSaveCoordinatorTests.cs`
 `VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs` (nudge trigger, if S0.5 says yes);
 Test: extend `RegenOnSaveCoordinatorTests.cs`
 
-- [ ] **Step 0 — ⛔ BLOCKING GATE: record the measured `workspace/didChangeWatchedFiles`
-  verdict here before implementing.** The measurement was in flight when this plan was
-  written. Outcomes: (a) **heals** ⇒ implement the nudge: after an emission completes
-  (`RequestEmit`'s returned task), send `didChangeWatchedFiles` (Created/Changed for
-  `obj/compile_commands.json` + changed `obj/gen/*.g.h`) to the clangd service via a new
-  `ILanguageService.NotifyWatchedFilesChangedAsync` — protocol-level, no interaction with the
-  per-document didChange version counters; (b) **does not heal** ⇒ NO nudge ships; add the
-  one-paragraph rationale comment at the coordinator (typing heals; a `.bas`-save regen means
-  the user is editing `.bas`) and mark the nudge as measured-out in the plan correction.
-  Either way, record the verdict + evidence citation IN THIS SECTION as a plan correction
-  before Task 11's implementation commit.
+- [x] **Step 0 — GATE RESOLVED (measured, see S0.5): NO NUDGE SHIPS.** `didChangeWatchedFiles`
+  is a measured no-op in clangd 22.1.6. The coordinator gains a one-paragraph rationale
+  comment: typing heals (~0.2s once the db is right); a `.bas`-save regen means the user is
+  editing `.bas` anyway; and — pin this so nobody re-adds it — clangd ACCEPTS
+  `didChangeWatchedFiles` silently and does nothing with it (it self-reloads the CDB via its
+  `compilationDatabase.automaticReload` contract on the next didChange-triggered build).
 - [ ] **Step 1: Write the failing tests** — `.blproj` watch: external change → debounced emit;
   IDE-side save suppressed (`SuppressNotifications` window); watch starts on project open,
-  stops on close (drive via the stub project service's events). Plus, if S0.5=(a): nudge sent
-  after emit completes, routed only to the server owning `.cpp`.
+  stops on close (drive via the stub project service's events).
 - [ ] **Step 2:** FAIL. **Step 3: Implement.** `FileWatcherService.WatchFile(<project>.blproj)`
   (the DEAD-but-complete service — `FileWatcherService.cs:10-226`, DI-registered at
   `ServiceConfiguration.cs:89`; this is its first production caller, note it in the commit) +
@@ -516,22 +543,34 @@ Test: extend `RegenOnSaveCoordinatorTests.cs`
 ## Task 12: Resolve — model + client call
 
 **Files:** Modify: `VisualGameStudio.Core/Abstractions/Services/ILanguageService.cs:310-332`
-(`CompletionItem` + interface method), `VisualGameStudio.ProjectSystem/Services/LanguageService.cs`
-(`ParseCompletions` :1477-1518, new `ResolveCompletionAsync`);
-Test: `VisualGameStudio.Tests/LSP/CompletionResolveTests.cs` (new; scripted-pipe server
-per the `CapabilityNegotiationTests` idiom + one live BasicLang test)
+(`CompletionItem` + interface method) **and the STALE doc comment at `:250-254`** — it claims
+"Both clangd and BasicLang's real `--lsp` server report true" for resolve; S0.3 measured clangd
+FALSE. Truth-repair it (the same discipline as the :7738-7739 comment in Task 9).
+`VisualGameStudio.ProjectSystem/Services/LanguageService.cs` (`ParseCompletions` :1477-1518,
+new `ResolveCompletionAsync`);
+Test: `VisualGameStudio.Tests/LSP/ClientCompletionResolveTests.cs` — ⚠ the name
+`CompletionResolveTests` is TAKEN: `VisualGameStudio.Tests/LSP/CompletionResolveTests.cs:16`
+already declares that class (a SERVER-side fixture testing BasicLang's CompletionHandler).
+This new file tests the CLIENT side; cross-signpost the two fixtures' headers.
+
+⚠ There is NO scripted/fake LSP server harness in this suite (claims-verified). The wire-level
+tests use the repo's established pure-seam idiom instead: make the resolve REQUEST BUILDER a
+`public static` (like `ParseCompletions`) and assert its exact JSON; gate logic is a pure
+predicate; end-to-end truth comes from the two LIVE servers.
 
 - [ ] **Step 1: Write the failing tests:**
 
 ```csharp
 [Test] public void ParseCompletions_PreservesTheDataField()               // JsonElement round-trips; exact re-serialization compare
 [Test] public void ParseCompletions_NoData_LeavesDataNull()
-[Test] public async Task Resolve_GateFalse_DoesNotSendAndReturnsOriginal() // scripted server FAILS on any resolve request; capability false (this IS clangd 22's reality, S0.3)
-[Test] public async Task Resolve_SendsTheItemBack_WithDataIntact()         // wire-level: exact JSON body assert on what reaches the server (never Does.Contain)
-[Test] public async Task Resolve_MergesDocumentationAndDetail_FromTheReply()
-[Test] public async Task Resolve_ServerError_ReturnsTheOriginalItem()
+[Test] public void ShouldResolve_IsAPurePredicate()                        // caps null / provider false / provider true x data null / data present — exhaustive truth table
+[Test] public void BuildResolveParams_EmitsTheExactJson()                  // public static builder; exact serialized-body compare incl. data round-trip (never Does.Contain)
+[Test] public async Task Resolve_MergesDocumentationAndDetail_FromAReplyElement()
+    // the merge is a pure function over a parsed reply JsonElement — test it directly with fixture JSON
 [Test] public async Task Resolve_AgainstTheRealBasicLangServer_FillsLazyDocs()
-    // live `dotnet BasicLang.dll --lsp` (existing live-handshake idiom): complete a .NET member, resolve it, assert Documentation non-empty
+    // live idiom = ClangdE2ETests.cs:241-243: `new LanguageService(_output)` auto-probes the BasicLang.dll deployed beside the test assembly; complete a .NET member, resolve, assert Documentation non-empty
+[Test] public async Task Resolve_AgainstRealClangd_GatesOffAndReturnsTheOriginal()
+    // real clangd advertises resolveProvider FALSE (S0.3) — the gate-off path tested against the genuine article, conditional via ClangdTestDiscovery
 ```
 
 - [ ] **Step 2:** FAIL. **Step 3: Implement.** `CompletionItem` gains
@@ -541,11 +580,12 @@ per the `CapabilityNegotiationTests` idiom + one live BasicLang test)
   parser). `ILanguageService.ResolveCompletionAsync(CompletionItem item, CancellationToken ct)`
   → returns the enriched-or-original item; implementation: gate on
   `Capabilities?.HasCompletionResolveProvider != true || item.Data is null` ⇒ return item;
-  else `SendRequestAsync("completionItem/resolve", <the item serialized with label/kind/data>)`
-  reusing the 10s timeout; merge `documentation` (string|MarkupContent.value) and `detail`
-  into a new record instance; catch-all ⇒ original (rethrow caller-initiated OCE, the
-  `GetCompletionsAsync` catch-shape at `:941-951`). ⚠ Do NOT touch `InsertTextFormat`
-  (`ILanguageService.cs:337-341`, wire-int comparison at `:1508-1512`).
+  else `SendRequestAsync("completionItem/resolve", BuildResolveParams(item))` — the builder is
+  `public static` (the test seam), serializing label/kind/data; reuse the 10s timeout; the
+  documentation/detail merge is a pure static over the reply `JsonElement` (second test seam);
+  catch-all ⇒ original (rethrow caller-initiated OCE, the `GetCompletionsAsync` catch-shape at
+  `:941-951`). ⚠ Do NOT touch `InsertTextFormat` (`ILanguageService.cs:337-341`, wire-int
+  comparison at `:1508-1512`).
 - [ ] **Step 4:** Green (live BasicLang test RUNS — the compiler build exists beside the test
   output as in the existing live tests). **Step 5:** Full suite. **Step 6:** Commit:
   `feat(lsp): completionItem/resolve — data preserved, capability-gated, BasicLang lazy docs live`
@@ -557,7 +597,8 @@ per the `CapabilityNegotiationTests` idiom + one live BasicLang test)
 `VisualGameStudio.Editor/Completion/CompletionData.cs` (updatable description),
 `VisualGameStudio.Editor/Controls/CodeEditorControl.axaml.cs` (selection-changed wiring);
 Test: `VisualGameStudio.Tests/Shell/CompletionKindMapTests.cs` (new) + resolve-coordination
-tests in `CompletionResolveTests.cs`
+tests in `ClientCompletionResolveTests.cs` (Task 12's file — NOT the pre-existing server-side
+`CompletionResolveTests`)
 
 - [ ] **Step 1: Write the failing tests:**
 
@@ -568,9 +609,11 @@ tests in `CompletionResolveTests.cs`
 ```
 
 - [ ] **Step 2:** FAIL. **Step 3: Implement.**
-  - `ConvertCompletionKind`: complete the switch (EnumMember, Event, Operator, TypeParameter,
-    File, Folder, Reference, Unit, Color, Struct, Constant — glyphs largely exist,
-    `CompletionData.cs:148-150`); the exhaustive test kills the silent `_ => Text` funnel.
+  - `ConvertCompletionKind`: complete the switch. Claims-verified add-list (10 kinds):
+    **EnumMember, Event, Operator, TypeParameter, File, Folder, Reference, Unit, Value, Color**
+    — `Struct` and `Constant` are ALREADY mapped (`:682-683`), and `Value` is the one earlier
+    drafts missed. Glyphs largely exist (`CompletionData.cs:138-155`). The exhaustive test is
+    the contract and kills the silent `_ => Text` funnel regardless of any list here.
   - `CompletionData.Description` becomes settable-with-notification (the AvaloniaEdit tooltip
     reads it at selection time — `INotifyPropertyChanged` on the data item + re-assigning the
     tooltip content on change; verify against the fetched AvaloniaEdit source behavior:
@@ -609,9 +652,12 @@ plus the DoD checklist below.
   - **USER IDE SMOKE (do not skip — 3a/2/1 all caught real defects only here):**
     1. Delete `cpp.clangd.path` from `~/.vgs/settings.json` + restart → clangd still found
        (the tools probe replaces the hand-edit workaround).
-    2. Temporarily rename `~/.vgs/tools/clangd_22.1.6` + restart → toast now offers
-       [Download C++ tools]; click it → progress toast with a real bar → success toast says
-       restart; restart → clangd Running. (Restores the dir either way.)
+    2. Temporarily rename `~/.vgs/tools/clangd_22.1.6` to a name NOT matching `clangd*`
+       (e.g. `_backup_clangd`) — a backup still matching the pattern would OUTRANK the fresh
+       install in the tools probe. Restart → toast now offers [Download C++ tools]; click it →
+       progress toast with a real bar → success toast says restart; restart → clangd Running.
+       Afterwards DELETE the `_backup_clangd` dir (the fresh install replaces it; renaming it
+       back would collide).
     3. Tools → Download C++ Tools… with clangd resolved → "already installed at <path>", no download.
     4. Open the mixed project → `.cpp` semantic colors: a class renders like a BasicLang class,
        a `const` local does NOT render struck-through (the readonly/deprecated shuffle, live).
