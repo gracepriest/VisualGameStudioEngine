@@ -199,8 +199,11 @@ all steps injectable pure-static seams (the class's only test seam, by its own d
   (`LanguageService.cs:580-584`), consumed nowhere today, i.e. a free gate. Reuses
   `SendRequestAsync`'s 10 s timeout machinery; on any error returns the original item.
   Recon corrected the plan's premise: BasicLang's REAL `--lsp` server has `ResolveProvider = true`
-  with a working handler (`CompletionHandler.cs:41-87`), so both languages benefit; the
-  `--lsp-simple` fallback reports false and no-ops through the gate.
+  with a working handler (`CompletionHandler.cs:41-87`); the `--lsp-simple` fallback reports
+  false and no-ops through the gate. **AMENDED post-Step-0 (measured 2026-07-17): clangd 22.1.6
+  itself advertises `resolveProvider: false`** — it does not implement resolve at all
+  (documentation arrives inline), so the feature's live beneficiary is BasicLang; clangd gates
+  off cleanly, and a future clangd that adds resolve lights up with zero client changes.
 - **UI:** hook `CompletionList.SelectionChanged` (public AvaloniaEdit event) to fire a background
   resolve for the selected item — never through `CompletionSession`'s pending-request gate
   (it would starve word triggers; `CompletionSession.cs:40-46`). **Refresh hazard (recon):**
