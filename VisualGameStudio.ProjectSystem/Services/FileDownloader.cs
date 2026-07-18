@@ -7,9 +7,9 @@ namespace VisualGameStudio.ProjectSystem.Services;
 /// hygiene. This is the download loop of <c>OpenVsxClient.DownloadVsixToFileAsync</c> lifted
 /// into a standalone class, fixing three hazards of the original:
 ///
-/// <para><b>Why an infinite client timeout plus a per-call deadline:</b> <c>OpenVsxClient</c>
-/// sets <c>Timeout = TimeSpan.FromSeconds(30)</c> on its <see cref="HttpClient"/>
-/// (<c>OpenVsxClient.cs:36</c>). Under <see cref="HttpCompletionOption.ResponseHeadersRead"/>
+/// <para><b>Why an infinite client timeout plus a per-call deadline:</b> the
+/// <see cref="OpenVsxClient"/> constructor sets <c>Timeout = TimeSpan.FromSeconds(30)</c> on its
+/// <see cref="HttpClient"/>. Under <see cref="HttpCompletionOption.ResponseHeadersRead"/>
 /// that timeout covers the WHOLE body read, so any transfer longer than 30 seconds is aborted
 /// mid-stream. Here the client's timeout is <see cref="Timeout.InfiniteTimeSpan"/> and each
 /// call bounds itself with a caller-chosen deadline via a linked
@@ -30,6 +30,13 @@ namespace VisualGameStudio.ProjectSystem.Services;
 /// <see cref="OperationCanceledException"/> would be indistinguishable from a caller
 /// cancellation. A caller cancellation still surfaces as
 /// <see cref="OperationCanceledException"/>.</para>
+///
+/// <para><b>Redirects are followed</b> (the default <see cref="HttpClientHandler.AllowAutoRedirect"/>
+/// behavior is deliberately left on): GitHub release assets answer with a 302 to a CDN host,
+/// so following redirects is load-bearing for the clangd download.</para>
+///
+/// <para><b>Not safe for concurrent calls against the same <c>destinationPath</c>:</b> both
+/// calls would stream through the same <c>.partial</c> staging path.</para>
 /// </summary>
 public sealed class FileDownloader : IDisposable
 {
@@ -41,7 +48,7 @@ public sealed class FileDownloader : IDisposable
         _httpClient = new HttpClient
         {
             // Per-call deadlines only — see the class doc for why the 30s client-wide
-            // timeout of OpenVsxClient (OpenVsxClient.cs:36) is a trap for streamed bodies.
+            // timeout of the OpenVsxClient constructor is a trap for streamed bodies.
             Timeout = Timeout.InfiniteTimeSpan
         };
         _httpClient.DefaultRequestHeaders.UserAgent.Add(ProductInfoHeaderValue.Parse("VisualGameStudio/1.0"));
@@ -57,7 +64,9 @@ public sealed class FileDownloader : IDisposable
     /// <param name="deadline">Upper bound on the whole transfer. When it fires (and the caller's
     /// <paramref name="ct"/> is not cancelled) the call throws <see cref="TimeoutException"/>.</param>
     /// <param name="progress">Optional per-chunk reporter of (bytes downloaded so far, total bytes
-    /// or -1 when the server sent no Content-Length).</param>
+    /// or -1 when the server sent no Content-Length). <c>Report</c> runs inline on the transfer
+    /// loop — it is NOT marshaled to any SynchronizationContext, so UI consumers must wrap their
+    /// handler in <see cref="Progress{T}"/> to get back to their own context.</param>
     /// <param name="ct">Caller cancellation; surfaces as <see cref="OperationCanceledException"/>.</param>
     public async Task DownloadAsync(
         string url,
@@ -108,10 +117,11 @@ public sealed class FileDownloader : IDisposable
             File.Move(partialPath, destinationPath, overwrite: true);
             completed = true;
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException oce) when (!ct.IsCancellationRequested)
         {
             // The linked source fired but the caller's token did not: that is the deadline.
-            throw new TimeoutException($"Download of '{url}' did not complete within the deadline of {deadline}.");
+            // The OCE rides along as InnerException so failure reports keep the abort stack.
+            throw new TimeoutException($"Download of '{url}' did not complete within the deadline of {deadline}.", oce);
         }
         finally
         {

@@ -109,7 +109,100 @@ public class FileDownloaderTests
         Assert.That(reports[^1].bytesDownloaded, Is.EqualTo((long)payload.Length));
     }
 
+    [Test]
+    public async Task Download_FollowsRedirect_AndFetchesTheFinalBody()
+    {
+        // GitHub release assets answer with a 302 to a CDN host; the downloader relies on the
+        // default handler's AllowAutoRedirect. This is the ONLY test in the suite that can
+        // exercise the real redirect path (ClangdInstaller's tests inject a fake downloader).
+        var payload = DeterministicBytes(64 * 1024);
+        var requestLog = new List<string>();
+        var finalUrl = ""; // assigned right after the server binds, before any request can arrive
+        using var server = new LoopbackServer(async ctx =>
+        {
+            lock (requestLog)
+            {
+                requestLog.Add(ctx.Request.Url!.PathAndQuery);
+            }
+
+            if (ctx.Request.Url!.PathAndQuery == "/release-asset")
+            {
+                ctx.Response.StatusCode = (int)HttpStatusCode.Found; // 302, like GitHub -> CDN
+                ctx.Response.Headers["Location"] = finalUrl;
+            }
+            else
+            {
+                ctx.Response.ContentLength64 = payload.Length;
+                await ctx.Response.OutputStream.WriteAsync(payload);
+            }
+        });
+        finalUrl = server.BaseUrl + "cdn-object";
+
+        var destination = Path.Combine(_tempDir, "redirected.bin");
+        using var downloader = new FileDownloader();
+
+        await downloader.DownloadAsync(server.BaseUrl + "release-asset", destination, TimeSpan.FromSeconds(30));
+
+        var actual = await File.ReadAllBytesAsync(destination);
+        Assert.That(actual.SequenceEqual(payload), Is.True, "the bytes behind the redirect must land");
+
+        string[] observed;
+        lock (requestLog)
+        {
+            observed = requestLog.ToArray();
+        }
+        Assert.That(observed, Is.EqualTo(new[] { "/release-asset", "/cdn-object" }),
+            "exactly two requests must arrive: the 302 hop, then the followed Location");
+    }
+
+    [Test]
+    public async Task Download_CreatesMissingDestinationDirectories()
+    {
+        var payload = DeterministicBytes(16 * 1024);
+        using var server = new LoopbackServer(async ctx =>
+        {
+            ctx.Response.ContentLength64 = payload.Length;
+            await ctx.Response.OutputStream.WriteAsync(payload);
+        });
+
+        // Documented contract: "Its directory is created if missing" — two levels deep here.
+        var destination = Path.Combine(_tempDir, "nested", "deeper", "asset.bin");
+        using var downloader = new FileDownloader();
+
+        await downloader.DownloadAsync(server.BaseUrl + "asset.bin", destination, TimeSpan.FromSeconds(30));
+
+        var actual = await File.ReadAllBytesAsync(destination);
+        Assert.That(actual.SequenceEqual(payload), Is.True);
+        Assert.That(File.Exists(destination + ".partial"), Is.False);
+    }
+
     // ---------------------------------------------------------------- failure hygiene
+
+    [Test]
+    public async Task NotFound_Throws_AndNeverTouchesTheFilesystem()
+    {
+        using var server = new LoopbackServer(ctx =>
+        {
+            ctx.Response.StatusCode = (int)HttpStatusCode.NotFound;
+            return Task.CompletedTask;
+        });
+
+        // The destination sits in a directory that does not exist: if the downloader created it,
+        // EnsureSuccessStatusCode must have moved AFTER the filesystem work — that is the ordering
+        // this test pins.
+        var missingDir = Path.Combine(_tempDir, "never-created");
+        var destination = Path.Combine(missingDir, "asset.bin");
+        using var downloader = new FileDownloader();
+
+        var ex = Assert.ThrowsAsync<HttpRequestException>(async () => await downloader.DownloadAsync(
+            server.BaseUrl + "asset.bin", destination, TimeSpan.FromSeconds(30)));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(Directory.Exists(missingDir), Is.False,
+            "a non-success status must fail before ANY filesystem work — not even the destination directory may appear");
+        Assert.That(File.Exists(destination), Is.False);
+        Assert.That(File.Exists(destination + ".partial"), Is.False);
+    }
 
     [Test]
     public async Task Failure_MidStream_LeavesNoPartialFile()
@@ -189,6 +282,8 @@ public class FileDownloaderTests
 
         Assert.That(ex!.Message, Does.Contain(deadline.ToString()),
             "the deadline that fired must be named in the message");
+        Assert.That(ex.InnerException, Is.InstanceOf<OperationCanceledException>(),
+            "the aborting OCE must ride along as InnerException so installer failure reports keep the abort stack");
         Assert.That(File.Exists(destination), Is.False, "a timed-out download must not produce the destination file");
         Assert.That(File.Exists(destination + ".partial"), Is.False, "a timed-out download must not leave a .partial file");
     }
