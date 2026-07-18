@@ -666,6 +666,31 @@ public class CapabilityNegotiationTests
         });
     }
 
+    // ---- The semantic-tokens request gate -----------------------------------
+    //
+    // GetSemanticTokensAsync must not put textDocument/semanticTokens/full on the wire
+    // to a server that never advertised the provider. The gate is a pure public static
+    // predicate (this assembly grants no InternalsVisibleTo — cf. the ParseCompletions /
+    // ResolveWorkingDirectory seam precedent) so it can be pinned exhaustively without
+    // a server process. The negative wire claim itself ("no request actually leaves")
+    // is untestable here without a scripted server; this predicate plus the single
+    // call site inside GetSemanticTokensAsync is the coverage.
+    [Test]
+    public void SemanticTokensGate_IsAPurePredicate()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LanguageService.ShouldRequestSemanticTokens(null), Is.False,
+                "null capabilities = handshake never completed (or server disconnected) — nothing to ask");
+            Assert.That(LanguageService.ShouldRequestSemanticTokens(
+                new ServerCapabilities { HasSemanticTokensProvider = false }), Is.False,
+                "a server that did not advertise the provider must not be sent the request");
+            Assert.That(LanguageService.ShouldRequestSemanticTokens(
+                new ServerCapabilities { HasSemanticTokensProvider = true }), Is.True,
+                "an advertised provider is the one and only green light");
+        });
+    }
+
     // `legend` is not what makes the provider real: an options object without one still
     // advertises the feature. The provider bool stays honest; there is simply nothing
     // to decode indices against.

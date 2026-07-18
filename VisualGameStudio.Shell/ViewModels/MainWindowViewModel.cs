@@ -7777,7 +7777,10 @@ $"""
         {
             if (document.FilePath == null) return;
             // Route semantic tokens to the server that owns this file (BasicLang for .bas, clangd for
-            // .cpp once registered) — the editor decodes the token data, which is server-agnostic.
+            // .cpp once registered). The editor's delta decode (positions, lengths) is server-agnostic,
+            // but the type/modifier indices are legend-relative — indices into THIS server's handshake
+            // tables — so they are remapped HERE onto BasicLang's canonical legend before the editor
+            // ever sees them.
             var svc = _languageServices.GetFor(document.FilePath);
             if (svc is not { IsConnected: true }) return;
 
@@ -7786,10 +7789,17 @@ $"""
 
             if (result?.Data != null && result.Data.Length > 0)
             {
-                document.UpdateSemanticTokens(result.Data);
+                // Cached per legend instance (one Build per handshake, not per keystroke);
+                // a null legend — BasicLang's own server, or a handshake that carried no
+                // tables — resolves to the allocation-free Identity map.
+                var map = SemanticTokenLegendMap.GetOrBuild(svc.Capabilities?.SemanticTokensLegend);
+                document.UpdateSemanticTokens(map.RemapData(result.Data));
             }
             else
             {
+                // Null and empty BOTH clear — deliberately. A provider-less or disconnected-
+                // mid-flight server yields null, a server with nothing to say yields empty,
+                // and stale tokens from either must not outlive the answer.
                 document.ClearSemanticTokens();
             }
         }

@@ -224,6 +224,44 @@ public class SemanticTokenLegendMapTests
     }
 
     [Test]
+    public void LegendMapCache_BuildsOncePerLegendInstance()
+    {
+        // The fetch seam calls GetOrBuild on every semantic-token refresh (every
+        // keystroke debounce) — the map must be built once per handshake, not once
+        // per fetch. The cache is keyed by LEGEND REFERENCE: a server's legend object
+        // is captured once at initialize and handed out by reference from Capabilities,
+        // so reference identity IS "same handshake".
+        var legend = ClangdLegend();
+
+        var first = SemanticTokenLegendMap.GetOrBuild(legend);
+        var second = SemanticTokenLegendMap.GetOrBuild(legend);
+
+        // SameAs is the pin that Build ran once: Build on a non-canonical legend
+        // returns a fresh instance every call, so two equal-but-distinct maps would
+        // mean the cache missed.
+        Assert.That(second, Is.SameAs(first),
+            "repeated GetOrBuild on the same legend reference must return the cached map instance");
+        Assert.That(first.TokenTypeMap[8], Is.EqualTo(2), "the cached map must be the real clangd remap");
+
+        // A distinct-but-equal legend (same names, different object — a server restart's
+        // fresh handshake) is a DIFFERENT key. Deliberate: SemanticTokensLegend's record
+        // equality compares its IReadOnlyLists by reference anyway, so value-keying is
+        // not even available — the cache documents reference-keying as the contract.
+        var equalButDistinct = ClangdLegend();
+        Assert.That(SemanticTokenLegendMap.GetOrBuild(equalButDistinct), Is.Not.SameAs(first),
+            "a distinct legend instance is a distinct key — reference-keyed, never value-keyed");
+    }
+
+    [Test]
+    public void GetOrBuild_NullLegend_IsIdentity()
+    {
+        // Null legend = provider without decode tables (or no provider at all): the
+        // fetch seam resolves that to the shared Identity without touching the cache.
+        Assert.That(SemanticTokenLegendMap.GetOrBuild(null),
+            Is.SameAs(SemanticTokenLegendMap.Identity));
+    }
+
+    [Test]
     public void RemapData_LengthNotMultipleOfFive_ReturnsInputUntouched()
     {
         // Mirror of SemanticTokenHighlighter.Update's guard: malformed data is not

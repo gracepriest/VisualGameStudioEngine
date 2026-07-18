@@ -2377,9 +2377,31 @@ public class LanguageService : ILanguageService
         }
     }
 
+    /// <summary>
+    /// Whether <see cref="GetSemanticTokensAsync"/> may put
+    /// <c>textDocument/semanticTokens/full</c> on the wire: only when a completed
+    /// handshake advertised the provider. Null capabilities (never connected, or
+    /// disconnected — <see cref="Capabilities"/> derives null from <c>IsConnected</c>)
+    /// gates false: "the server never said" is not "the server supports it".
+    /// </summary>
+    /// <remarks>
+    /// Pure and public static so the predicate can be pinned exhaustively without a
+    /// server process — this assembly grants no <c>InternalsVisibleTo</c> for the test
+    /// project (cf. <see cref="ResolveLspPathOverride"/>). Called from exactly one
+    /// place, <see cref="GetSemanticTokensAsync"/>; a second caller would mean a second
+    /// request path this gate no longer covers.
+    /// </remarks>
+    public static bool ShouldRequestSemanticTokens(ServerCapabilities? capabilities) =>
+        capabilities is { HasSemanticTokensProvider: true };
+
     public async Task<SemanticTokensResult?> GetSemanticTokensAsync(string uri, CancellationToken cancellationToken = default)
     {
         if (!IsConnected) return null;
+
+        // A provider-less server never gets the request. Null here is indistinguishable
+        // downstream from "server answered empty" — the fetch seam clears stale tokens on
+        // both — which is exactly right for a server that has no tokens to offer.
+        if (!ShouldRequestSemanticTokens(Capabilities)) return null;
 
         try
         {

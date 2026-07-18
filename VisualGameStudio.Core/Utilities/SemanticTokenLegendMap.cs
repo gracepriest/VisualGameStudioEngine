@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using VisualGameStudio.Core.Abstractions.Services;
 
 namespace VisualGameStudio.Core.Utilities;
@@ -120,6 +121,38 @@ public sealed class SemanticTokenLegendMap
     /// table can be pinned as data; consumers rewrite through <see cref="RemapData"/>.
     /// </summary>
     public IReadOnlyList<int> TokenTypeMap => _typeMap;
+
+    /// <summary>
+    /// One built map per captured legend instance. ConditionalWeakTable keys by
+    /// REFERENCE identity (it ignores <c>Equals</c>/<c>GetHashCode</c> overrides
+    /// entirely), holds keys weakly (a restarted server's dead legend does not pin its
+    /// map forever), and is thread-safe — all three properties are load-bearing here.
+    /// </summary>
+    private static readonly ConditionalWeakTable<SemanticTokensLegend, SemanticTokenLegendMap> BuiltMaps = new();
+
+    /// <summary>
+    /// The fetch-seam entry point: <see cref="Build"/>, cached per legend INSTANCE.
+    /// The token refresh runs on every debounced keystroke, but a server's legend
+    /// object is captured exactly once at the initialize handshake and handed out by
+    /// reference from <c>ServerCapabilities</c> — so reference identity is precisely
+    /// "same handshake", and the map is built once per server session instead of once
+    /// per fetch. Null (no provider, or a provider whose handshake carried no tables)
+    /// resolves to <see cref="Identity"/> without touching the cache.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ Reference-keyed on purpose, and not merely because CWT works that way:
+    /// <see cref="Abstractions.Services.SemanticTokensLegend"/>'s generated record
+    /// equality compares its <c>IReadOnlyList</c>s by reference, so "value equality"
+    /// does not exist for this type to key on. Two handshakes that happen to send
+    /// identical tables get two maps — cheap, correct, and gone with their legends.
+    /// </remarks>
+    public static SemanticTokenLegendMap GetOrBuild(SemanticTokensLegend? serverLegend)
+    {
+        if (serverLegend == null)
+            return Identity;
+
+        return BuiltMaps.GetValue(serverLegend, static legend => Build(legend));
+    }
 
     /// <summary>
     /// Builds the remap for <paramref name="serverLegend"/>. Duplicate-tolerant: the
