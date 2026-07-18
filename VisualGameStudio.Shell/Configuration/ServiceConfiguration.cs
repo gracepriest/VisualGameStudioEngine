@@ -65,6 +65,13 @@ public static class ServiceConfiguration
 
             return new LanguageServiceRegistry(languageServices);
         });
+        // The clangd acquisition pipeline (download → verify → stage → swap into ~/.vgs/tools).
+        // A factory-created singleton so the CONTAINER disposes it on shutdown — it owns a
+        // FileDownloader (HttpClient) — and so DI never has to guess at its all-optional test-seam
+        // ctor parameters. Consumed by MainWindowViewModel, which wraps it in a ClangdDownloadFlow
+        // built over its own toast/progress methods (the flow itself is deliberately NOT in DI:
+        // its sinks are VM methods, and a service→VM dependency would be a cycle).
+        services.AddSingleton(sp => new ClangdInstaller());
         // Gives clangd its obj/gen headers + obj/compile_commands.json on project open, before any
         // build has produced them (Task 10). Singleton because its whole job is to coalesce and
         // serialize a multi-second, non-incremental emission across requests — per-instance state

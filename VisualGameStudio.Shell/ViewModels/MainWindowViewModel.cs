@@ -73,6 +73,13 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly DockFactory _dockFactory;
     private readonly IWorkspaceStateStore _workspaceStateStore;
 
+    /// <summary>
+    /// The "Download C++ tools" policy (pre-flight → install → outcome toast), reached from the
+    /// missing-clangd toast action and the Tools menu. Constructed in the ctor, not injected —
+    /// see the wiring comment there.
+    /// </summary>
+    private readonly Services.ClangdDownloadFlow _clangdDownloadFlow;
+
     // Per-project layout/session persistence (VS Code's workspaceStorage model).
     private CancellationTokenSource? _layoutSaveCts;
     private bool _restoringLayout;
@@ -385,7 +392,8 @@ public partial class MainWindowViewModel : ViewModelBase
         TypeHierarchyViewModel typeHierarchy,
         ThreadsViewModel threads,
         TimelineViewModel timeline,
-        Documents.WelcomeDocumentViewModel welcomeDocument)
+        Documents.WelcomeDocumentViewModel welcomeDocument,
+        ProjectSystem.Services.ClangdInstaller clangdInstaller)
     {
         _projectService = projectService;
         _buildService = buildService;
@@ -412,6 +420,22 @@ public partial class MainWindowViewModel : ViewModelBase
         _intelliSenseEmission = intelliSenseEmission;
         _dockFactory = dockFactory;
         _workspaceStateStore = workspaceStateStore;
+
+        // The clangd download flow is constructed HERE rather than registered in DI: its UI sinks
+        // ARE this VM's toast/progress methods, and no DI-registered service can take the VM as a
+        // dependency without a cycle. Lambdas over our own members keep ClangdDownloadFlow DI-free
+        // and fully seam-testable (ClangdDownloadFlowTests); only ClangdInstaller (which owns a
+        // disposable downloader) lives in the container. The LOCATOR, not the registry, answers
+        // "already installed?": Locate re-scans the whole chain (override → tools root → PATH →
+        // LLVM dirs) on every call, so a clangd installed minutes ago is seen even though DI's
+        // startup registration missed it. Re-running Locate is safe (its consumer registration is
+        // idempotent).
+        _clangdDownloadFlow = new Services.ClangdDownloadFlow(
+            clangdInstaller.InstallAsync,
+            () => ProjectSystem.Services.ClangdLocator.Locate(_settingsService),
+            (message, severity) => ShowNotification(message, severity),
+            ShowProgressNotification,
+            DismissNotification);
 
         SolutionExplorer = solutionExplorer;
         OutputPanel = outputPanel;
@@ -1156,9 +1180,10 @@ public partial class MainWindowViewModel : ViewModelBase
     /// the notification centre, but not for the toast, which is the part the user actually sees.)
     /// </para>
     /// <para>
-    /// INFORMATIONAL ONLY, by decision: Phase 3a hints, and offering to download clangd is
-    /// Phase 3b. So it carries no action buttons — <see cref="ShowNotification(string, string)"/>,
-    /// not the actions overload.
+    /// Carries the one action that can fix it: "Download C++ tools" fires
+    /// <see cref="_clangdDownloadFlow"/> (Phase 3b). Fire-and-forget is safe — the flow never
+    /// throws. The actions overload also makes the toast persist until dismissed (info + actions
+    /// ⇒ no auto-dismiss), which a toast offering a decision should.
     /// </para>
     /// </remarks>
     private void ReportClangdMissingForCppFile(string filePath)
@@ -1176,15 +1201,31 @@ public partial class MainWindowViewModel : ViewModelBase
         if (_clangdMissingReported) return;
         _clangdMissingReported = true;
 
-        // "restart the IDE" must attach to BOTH remedies: ClangdLocator.Locate runs once inside
-        // the DI factory (ServiceConfiguration), so a changed setting is exactly as
-        // restart-bound as a fresh install — wording that promises hot-reload would be a lie.
+        // "restart the IDE" must attach to EVERY remedy — the one-click download included:
+        // ClangdLocator.Locate runs once inside the DI factory (ServiceConfiguration), so a fresh
+        // download, a hand-install and a changed setting are all equally restart-bound — wording
+        // that promises hot-reload would be a lie.
         ShowNotification(
             "clangd was not found, so C++ IntelliSense is unavailable — syntax highlighting and " +
-            $"editing still work. Install clangd, or point the {LanguageServerDescriptor.ClangdSettingsKey} " +
-            "setting at it; either way, restart the IDE to pick it up.",
-            "info");
+            "editing still work. Download C++ tools now, install clangd yourself, or point the " +
+            $"{LanguageServerDescriptor.ClangdSettingsKey} setting at it; either way, restart " +
+            "the IDE to pick it up.",
+            "info",
+            new List<NotificationAction>
+            {
+                new NotificationAction("Download C++ tools", () => _ = _clangdDownloadFlow.RunAsync())
+            });
     }
+
+    /// <summary>
+    /// Tools ▸ Download C++ Tools… — the RETRY path for clangd acquisition. The missing-clangd
+    /// toast is once per session (<see cref="_clangdMissingReported"/>), so after dismissing it
+    /// this menu item is how the user reaches the download again — and the only entry point on a
+    /// machine where no C++ file has been opened yet. Fire-and-forget is safe: the flow never
+    /// throws (its catch-all is the last line of defense on this path).
+    /// </summary>
+    [RelayCommand]
+    private void DownloadCppTools() => _ = _clangdDownloadFlow.RunAsync();
 
     /// <summary>Guards the clangd-not-found toast to once per session; see <see cref="ReportClangdMissingForCppFile"/>.</summary>
     private bool _clangdMissingReported;

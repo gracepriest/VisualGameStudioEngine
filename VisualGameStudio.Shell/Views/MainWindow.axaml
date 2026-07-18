@@ -293,6 +293,8 @@
 
       <MenuItem Header="_Tools">
         <MenuItem Header="_Keyboard Shortcuts..." Command="{Binding ShowKeyboardShortcutsCommand}"/>
+        <MenuItem Header="Download C++ _Tools..." Command="{Binding DownloadCppToolsCommand}"
+                  ToolTip.Tip="Download clangd for C++ IntelliSense (restart the IDE afterwards)"/>
         <Separator/>
         <MenuItem Header="_Settings..." Command="{Binding SettingsCommand}"/>
       </MenuItem>
