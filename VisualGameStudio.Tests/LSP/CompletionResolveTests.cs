@@ -11,6 +11,13 @@ namespace VisualGameStudio.Tests.LSP;
 /// exist server-side), and the completionItem/resolve handler (advertised via
 /// ResolveProvider=true) must attach documentation lazily via
 /// CompletionItem.Data instead of being a no-op.
+///
+/// <para>
+/// ⚠ This is the SERVER side: BasicLang's own <c>CompletionHandler</c> serving resolve.
+/// The CLIENT side — the IDE's <c>LanguageService</c> preserving <c>data</c>, gating on
+/// <c>HasCompletionResolveProvider</c>, and merging the reply — is
+/// <see cref="ClientCompletionResolveTests"/>, which also drives THIS server live.
+/// </para>
 /// </summary>
 [TestFixture]
 public class CompletionResolveTests

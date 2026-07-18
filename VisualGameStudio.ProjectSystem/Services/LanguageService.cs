@@ -1007,6 +1007,130 @@ public class LanguageService : ILanguageService
         }
     }
 
+    /// <summary>
+    /// Whether <see cref="ResolveCompletionAsync"/> may put <c>completionItem/resolve</c> on
+    /// the wire: only when a completed handshake advertised the provider AND the item carries
+    /// the server's <see cref="CompletionItem.Data"/> token to resolve against. Null
+    /// capabilities (never connected, or disconnected — <see cref="Capabilities"/> derives
+    /// null from <c>IsConnected</c>) gates false. Real clangd 22 advertises
+    /// <c>resolveProvider: false</c> (measured, Phase 3b Step 0.3), so the clangd path lives
+    /// on the gated-off side of this predicate; BasicLang's real <c>--lsp</c> server is the
+    /// live beneficiary.
+    /// </summary>
+    /// <remarks>
+    /// Pure and public static so the gate can be pinned exhaustively without a server process
+    /// — this assembly grants no <c>InternalsVisibleTo</c> for the test project (cf.
+    /// <see cref="ShouldRequestSemanticTokens"/>, the same seam one feature over). Called
+    /// from exactly one place, <see cref="ResolveCompletionAsync"/>; a second caller would
+    /// mean a second request path this gate no longer covers.
+    /// </remarks>
+    public static bool ShouldResolve(ServerCapabilities? capabilities, CompletionItem item) =>
+        capabilities is { HasCompletionResolveProvider: true } && item.Data is not null;
+
+    /// <summary>
+    /// The <c>completionItem/resolve</c> params: per LSP they are the completion item itself,
+    /// and what a server actually keys on is the <c>data</c> token it attached — echoed back
+    /// VERBATIM (a <see cref="JsonElement"/> serializes exactly as received), alongside the
+    /// identifying label and wire-integer kind. Pure and public static so the exact wire
+    /// shape is assertable without a server.
+    /// </summary>
+    /// <remarks>
+    /// Only meaningful for items whose <see cref="CompletionItem.Data"/> is present — the
+    /// single caller sits behind <see cref="ShouldResolve"/>, which guarantees it (a null
+    /// would merely be omitted by the serializer's omit-null policy, sending a resolve the
+    /// server cannot key).
+    /// </remarks>
+    public static object BuildResolveParams(CompletionItem item) => new
+    {
+        label = item.Label,
+        kind = (int)item.Kind,
+        data = item.Data
+    };
+
+    /// <summary>
+    /// Folds a <c>completionItem/resolve</c> reply into <paramref name="original"/>: a NEW
+    /// item with the reply's documentation and/or detail when it carries any, the
+    /// <b>original instance</b> when it enriches nothing. Never mutates
+    /// <paramref name="original"/> — it may still be bound to the visible completion list.
+    /// Pure and public static so the merge is assertable from fixture JSON.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>documentation</c> arrives as a plain string OR a MarkupContent object
+    /// (<c>{"kind","value"}</c>) — both are real LSP and both are handled, mirroring
+    /// <see cref="ParseCompletions"/>. Fields the reply omits keep their original values:
+    /// resolve ADDS, it never erases.
+    /// </para>
+    /// <para>
+    /// The <c>ValueKind</c> guard up front also covers the Undefined element
+    /// <see cref="ProcessMessage"/> hands back for a result-less response — per the Phase 3a
+    /// landmine, reading one throws <c>InvalidOperationException</c> (NOT
+    /// <c>JsonException</c>), so the guard sits outside any exception handling.
+    /// </para>
+    /// </remarks>
+    public static CompletionItem MergeResolvedCompletion(CompletionItem original, JsonElement reply)
+    {
+        if (reply.ValueKind != JsonValueKind.Object) return original;
+
+        var detail = ReadString(reply, "detail");
+
+        string? documentation = null;
+        if (reply.TryGetProperty("documentation", out var doc))
+        {
+            documentation = doc.ValueKind == JsonValueKind.String
+                ? doc.GetString()
+                : doc.ValueKind == JsonValueKind.Object &&
+                  doc.TryGetProperty("value", out var value) &&
+                  value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null;
+        }
+
+        if (documentation is null && detail is null) return original;
+
+        return new CompletionItem
+        {
+            Label = original.Label,
+            Detail = detail ?? original.Detail,
+            Documentation = documentation ?? original.Documentation,
+            Kind = original.Kind,
+            InsertText = original.InsertText,
+            FilterText = original.FilterText,
+            SortText = original.SortText,
+            InsertTextFormat = original.InsertTextFormat,
+            Preselect = original.Preselect,
+            Data = original.Data
+        };
+    }
+
+    public async Task<CompletionItem> ResolveCompletionAsync(CompletionItem item, CancellationToken cancellationToken = default)
+    {
+        // The gate subsumes the usual IsConnected check: Capabilities derives null from
+        // IsConnected, and "never advertised" / "no data token" both mean the same thing
+        // here — return the item exactly as the list already shows it.
+        if (!ShouldResolve(Capabilities, item)) return item;
+
+        try
+        {
+            var result = await SendRequestAsync("completionItem/resolve", BuildResolveParams(item), cancellationToken);
+            return MergeResolvedCompletion(item, result);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Caller-initiated cancellation (the highlight moved to another item) — let the
+            // caller distinguish it from "the server had nothing". Same shape as
+            // GetCompletionsAsync's catch.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Resolve is an enrichment, never a gate: any failure (timeout, server error,
+            // disconnect mid-flight) degrades to the item the list already has.
+            _outputService.WriteLine($"[LSP] Completion resolve error: {ex.Message}", OutputCategory.Debug);
+            return item;
+        }
+    }
+
     public async Task<HoverInfo?> GetHoverAsync(string uri, int line, int column, CancellationToken cancellationToken = default)
     {
         if (!IsConnected) return null;
@@ -1527,9 +1651,29 @@ public class LanguageService : ILanguageService
 
     /// <summary>
     /// Parses an LSP textDocument/completion result (CompletionItem[] or
-    /// CompletionList) into the Core model, including insertTextFormat and
-    /// preselect. Public and static for testability.
+    /// CompletionList) into the Core model, including insertTextFormat,
+    /// preselect and the opaque resolve <c>data</c> token. Public and static
+    /// for testability.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>data</c> is captured via <c>Clone()</c>: the element handed in may be backed by a
+    /// caller-owned <c>JsonDocument</c>, and the token must outlive it — it is re-sent later
+    /// by <see cref="ResolveCompletionAsync"/>, long after the completion reply is gone.
+    /// A present-but-JSON-null <c>data</c> is normalized to absent (C# null): it carries
+    /// nothing to resolve against, and one "no data" shape keeps
+    /// <see cref="ShouldResolve"/>'s gate exhaustive.
+    /// </para>
+    /// <para>
+    /// ⚠ Phase 3a landmine, for anyone extending this parse: a <b>default/Undefined</b>
+    /// <c>JsonElement</c> (what <see cref="ProcessMessage"/> hands back for a result-less
+    /// response) throws <c>InvalidOperationException</c> — NOT <c>JsonException</c> — from
+    /// <c>GetRawText()</c>/<c>Clone()</c>. Guard on <c>ValueKind</c> outside any try-catch
+    /// that expects <c>JsonException</c>; the top-of-method ValueKind checks below are that
+    /// guard here (a true <c>TryGetProperty</c> can never yield an Undefined value, so the
+    /// per-property reads are safe).
+    /// </para>
+    /// </remarks>
     public static IReadOnlyList<CompletionItem> ParseCompletions(JsonElement result)
     {
         var items = new List<CompletionItem>();
@@ -1566,7 +1710,10 @@ public class LanguageService : ILanguageService
                                    && itf.GetInt32() == (int)InsertTextFormat.Snippet
                     ? InsertTextFormat.Snippet
                     : InsertTextFormat.PlainText,
-                Preselect = item.TryGetProperty("preselect", out var ps) && ps.ValueKind == JsonValueKind.True
+                Preselect = item.TryGetProperty("preselect", out var ps) && ps.ValueKind == JsonValueKind.True,
+                Data = item.TryGetProperty("data", out var dataProp) && dataProp.ValueKind != JsonValueKind.Null
+                    ? dataProp.Clone()
+                    : (JsonElement?)null
             });
         }
 

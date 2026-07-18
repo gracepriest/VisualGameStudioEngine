@@ -1,3 +1,4 @@
+using System.Text.Json;
 using VisualGameStudio.Core.Models;
 
 namespace VisualGameStudio.Core.Abstractions.Services;
@@ -100,6 +101,23 @@ public interface ILanguageService : IDisposable
     /// Get completions at a position
     /// </summary>
     Task<IReadOnlyList<CompletionItem>> GetCompletionsAsync(string uri, int line, int column, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolve a completion item's lazy details via <c>completionItem/resolve</c>: servers
+    /// that advertise <see cref="ServerCapabilities.HasCompletionResolveProvider"/> defer
+    /// expensive fields (documentation, detail) until an item is actually highlighted, keying
+    /// the lookup off the opaque <see cref="CompletionItem.Data"/> token they attached.
+    /// <para>
+    /// Returns an ENRICHED COPY when the server supplied documentation/detail, otherwise the
+    /// <b>original instance</b> — when the server never advertised the provider (real clangd
+    /// 22 does not), when the item carries no <see cref="CompletionItem.Data"/>, when the
+    /// reply adds nothing, or when the request fails. Resolve is an enrichment, never a gate:
+    /// no failure here may make an already-listed item worse. The one exception is
+    /// caller-initiated cancellation, which rethrows so "you cancelled it" stays
+    /// distinguishable from "the server had nothing".
+    /// </para>
+    /// </summary>
+    Task<CompletionItem> ResolveCompletionAsync(CompletionItem item, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get hover information at a position
@@ -248,8 +266,12 @@ public record ServerCapabilities
     public bool HasCompletionProvider { get; init; }
 
     /// <summary>
-    /// Server implements <c>completionItem/resolve</c>. Both clangd and BasicLang's
-    /// real <c>--lsp</c> server report true; the <c>--lsp-simple</c> fallback reports false.
+    /// Server implements <c>completionItem/resolve</c>. BasicLang's real <c>--lsp</c>
+    /// server reports true (and serves lazy documentation through it); <b>real clangd 22
+    /// reports FALSE</b> (measured, Phase 3b Step 0.3 — an earlier version of this comment
+    /// claimed clangd true, from assumption), as does the <c>--lsp-simple</c> fallback.
+    /// <see cref="ILanguageService.ResolveCompletionAsync"/> gates off cleanly on this
+    /// flag, so false costs nothing but the laziness.
     /// </summary>
     public bool HasCompletionResolveProvider { get; init; }
 
@@ -372,6 +394,20 @@ public class CompletionItem
     /// When true, the server wants this item initially selected in the list.
     /// </summary>
     public bool Preselect { get; set; }
+
+    /// <summary>
+    /// The server's OPAQUE resolve token, verbatim from the completion reply — the key
+    /// <see cref="ILanguageService.ResolveCompletionAsync"/> echoes back in
+    /// <c>completionItem/resolve</c> so the server can find the item again (BasicLang's
+    /// <c>--lsp</c> stashes type+member here for lazy .NET docs). Null when the server sent
+    /// none (or sent JSON null), which gates resolve off for this item.
+    /// <para>
+    /// Never inspected, never rewritten: its shape belongs to the server. Cloned at parse
+    /// (<c>JsonElement.Clone()</c>) so it stays readable after the reply's backing
+    /// <c>JsonDocument</c> is gone.
+    /// </para>
+    /// </summary>
+    public JsonElement? Data { get; init; }
 }
 
 /// <summary>
