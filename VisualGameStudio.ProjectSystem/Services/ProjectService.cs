@@ -9,6 +9,7 @@ public class ProjectService : IProjectService
 {
     private readonly IFileService _fileService;
     private readonly ISettingsService? _settingsService;
+    private readonly IFileWatcherService? _fileWatcher;
     private readonly ProjectSerializer _projectSerializer;
     private readonly SolutionSerializer _solutionSerializer;
 
@@ -22,10 +23,20 @@ public class ProjectService : IProjectService
     public event EventHandler<SolutionEventArgs>? SolutionClosed;
     public event EventHandler? ProjectChanged;
 
-    public ProjectService(IFileService fileService, ISettingsService? settingsService = null)
+    /// <param name="fileWatcher">
+    /// Optional (DI supplies it in the IDE; many tests construct without): lets
+    /// <see cref="SaveProjectAsync"/> suppress the file watcher around its own .blproj write,
+    /// so an IDE-initiated project save does not bounce back to
+    /// <c>RegenOnSaveCoordinator</c>'s .blproj watch as an "external" change (Task 11).
+    /// </param>
+    public ProjectService(
+        IFileService fileService,
+        ISettingsService? settingsService = null,
+        IFileWatcherService? fileWatcher = null)
     {
         _fileService = fileService;
         _settingsService = settingsService;
+        _fileWatcher = fileWatcher;
         _projectSerializer = new ProjectSerializer();
         _solutionSerializer = new SolutionSerializer();
 
@@ -134,7 +145,18 @@ public class ProjectService : IProjectService
     public async Task SaveProjectAsync(CancellationToken cancellationToken = default)
     {
         if (CurrentProject == null) return;
-        await _projectSerializer.SaveAsync(CurrentProject, cancellationToken);
+        // Suppress the watcher around OUR write so an IDE-initiated project save does not
+        // bounce back as an "external" .blproj change (the RegenOnSaveCoordinator watches
+        // this file while the project is open). The handle's dispose keeps a 200ms grace
+        // window, absorbing FS events that land after the write returns. This is the ONLY
+        // writer of the OPEN project's .blproj: CreateProjectAsync's write happens before
+        // ProjectOpened, i.e. before any watch exists, and needs no suppression.
+        using (string.IsNullOrEmpty(CurrentProject.FilePath)
+            ? null
+            : _fileWatcher?.SuppressNotifications(CurrentProject.FilePath))
+        {
+            await _projectSerializer.SaveAsync(CurrentProject, cancellationToken);
+        }
         HasUnsavedChanges = false;
     }
 

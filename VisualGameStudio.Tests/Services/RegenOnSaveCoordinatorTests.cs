@@ -27,6 +27,18 @@ namespace VisualGameStudio.Tests.Services;
 /// two tests whose result depends on staying INSIDE the quiet period (the burst, the mid-quiet
 /// project switch) measure their own gaps and go Inconclusive on a stalled runner.
 /// </para>
+///
+/// <para>
+/// Task 11 extends the fixture with <c>.blproj</c> watching: an EXTERNAL edit of the open
+/// project's <c>.blproj</c> reaches the same trailing-edge debouncer (via the real
+/// <see cref="FileWatcherService"/> — these tests write real files under a per-test temp root),
+/// IDE-side saves are suppressed (<c>SuppressNotifications</c> window, wired inside
+/// <c>ProjectService.SaveProjectAsync</c>), and the watch follows the project lifecycle
+/// (starts on open, stops on close, moves on switch — including the
+/// <c>CreateProjectAsync</c> shape, which raises <c>ProjectOpened</c> with NO prior
+/// <c>ProjectClosed</c>). Negative assertions here use <see cref="WatcherSettleWindow"/>, which
+/// also covers the watcher's 200ms post-dispose unsuppression grace and FS-event latency.
+/// </para>
 /// </summary>
 [TestFixture]
 public class RegenOnSaveCoordinatorTests
@@ -35,10 +47,27 @@ public class RegenOnSaveCoordinatorTests
     private static readonly TimeSpan SettleWindow = TimeSpan.FromMilliseconds(300);
     private static readonly TimeSpan WaitBound = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Settle window for negative assertions that involve REAL FileSystemWatcher events: must
+    /// exceed FS-event delivery latency plus the watcher's 200ms delayed unsuppression grace
+    /// (<c>FileWatcherService.Unsuppress</c>), and stay several times the quiet period.
+    /// </summary>
+    private static readonly TimeSpan WatcherSettleWindow = TimeSpan.FromMilliseconds(600);
+
+    /// <summary>
+    /// Waits out <c>FileWatcherService.DebounceMilliseconds</c> (500ms, private const) — its
+    /// LEADING-edge throttle drops raw FS events inside that window, so any test that writes the
+    /// same watched file twice and needs the SECOND write's event delivered must first let the
+    /// window lapse (otherwise a "no emit" assertion passes vacuously).
+    /// </summary>
+    private static readonly TimeSpan ThrottleLapse = TimeSpan.FromMilliseconds(650);
+
     private EventAggregator _events = null!;
     private RecordingEmissionService _emission = null!;
     private Mock<IProjectService> _projectService = null!;
     private Mock<IBuildService> _buildService = null!;
+    private FileWatcherService _watcher = null!;
+    private readonly List<string> _tempRoots = new();
 
     // Re-read through closures by the mocks, so tests (and the coordinator, at fire time)
     // always observe the CURRENT value, never a setup-time capture.
@@ -58,12 +87,25 @@ public class RegenOnSaveCoordinatorTests
 
         _buildService = new Mock<IBuildService>();
         _buildService.SetupGet(b => b.CurrentConfiguration).Returns(() => _currentConfiguration!);
+
+        _watcher = new FileWatcherService();
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _watcher.Dispose();
+        foreach (var root in _tempRoots)
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+        _tempRoots.Clear();
     }
 
     // ---- harness ----
 
     private RegenOnSaveCoordinator CreateCoordinator()
-        => new(_emission, _projectService.Object, _buildService.Object, _events, QuietPeriod);
+        => new(_emission, _projectService.Object, _buildService.Object, _events, _watcher, QuietPeriod);
 
     /// <summary>A project whose directory is a fake (never-touched) temp-rooted path.</summary>
     private static BasicLangProject NewProject(string dirName)
@@ -75,6 +117,46 @@ public class RegenOnSaveCoordinatorTests
             FilePath = Path.Combine(dir, dirName + ".blproj"),
             TargetBackend = TargetBackend.Cpp,
         };
+    }
+
+    /// <summary>
+    /// A project whose directory and <c>.blproj</c> REALLY exist, under a fresh per-test temp
+    /// root (tracked for TearDown deletion) — required by the watcher tests:
+    /// <c>FileWatcherService.WatchFile</c> silently refuses non-existent directories, and a
+    /// fresh root per test keeps the watcher's per-path leading-edge throttle state
+    /// (<c>_lastNotified</c>) from bleeding between tests.
+    /// </summary>
+    private BasicLangProject NewProjectOnDisk(string dirName)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "vgs-t11-regen", Guid.NewGuid().ToString("N"));
+        _tempRoots.Add(root);
+        var dir = Path.Combine(root, dirName);
+        Directory.CreateDirectory(dir);
+        var project = new BasicLangProject
+        {
+            Name = dirName,
+            FilePath = Path.Combine(dir, dirName + ".blproj"),
+            TargetBackend = TargetBackend.Cpp,
+        };
+        File.WriteAllText(project.FilePath, "<BasicLangProject Version=\"1.0\" />");
+        return project;
+    }
+
+    /// <summary>Externally rewrites the project's <c>.blproj</c> (fresh content every time).</summary>
+    private static void TouchProjectFile(BasicLangProject project)
+        => File.WriteAllText(project.FilePath,
+            $"<BasicLangProject Version=\"1.0\" /><!-- {Guid.NewGuid():N} -->");
+
+    private void OpenProject(BasicLangProject project)
+    {
+        _currentProject = project;
+        _projectService.Raise(p => p.ProjectOpened += null, new ProjectEventArgs(project));
+    }
+
+    private void CloseProject(BasicLangProject project)
+    {
+        _currentProject = null;
+        _projectService.Raise(p => p.ProjectClosed += null, new ProjectEventArgs(project));
     }
 
     private void PublishSave(string filePath) => _events.Publish(new FileSavedEvent(filePath));
@@ -295,6 +377,209 @@ public class RegenOnSaveCoordinatorTests
             "the emit must receive the project current at FIRE time, not at save time");
     }
 
+    // ---- Task 11: .blproj watching ----
+
+    [Test]
+    public async Task ExternalBlprojChange_TriggersOneEmit_ThroughTheTrailingDebouncer()
+    {
+        var project = NewProjectOnDisk("proj");
+        using var coordinator = CreateCoordinator();
+        OpenProject(project);
+
+        long beforeWriteMs = _emission.NowMs;
+        TouchProjectFile(project);
+
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, "an external .blproj change under the open project must emit");
+        await Task.Delay(SettleWindow);
+        Assert.That(_emission.CallCount, Is.EqualTo(1),
+            "one external change must produce exactly one emit");
+
+        // The routing pin (Task 10 review flag 1): the watcher event must go through the
+        // coordinator's TRAILING-edge debouncer, never straight to the fire. A debounced fire
+        // can never land earlier than one quiet period after the write (FS-event latency only
+        // ADDS); a fire wired directly to the watcher event lands within FS latency (~ms).
+        // The small tolerance absorbs timer-vs-stopwatch skew. Stall-immune by construction:
+        // a slow runner makes the fire LATER, never earlier.
+        Assert.That(_emission.Snapshot()[0].AtMs - beforeWriteMs,
+            Is.GreaterThanOrEqualTo((long)QuietPeriod.TotalMilliseconds - 10),
+            "the emit must arrive through the trailing-edge debouncer (>= one quiet period " +
+            "after the external write), not directly off the watcher event");
+    }
+
+    [Test]
+    public async Task BlprojChangeWithNoProjectOpen_DoesNotTrigger_UntilTheProjectOpens()
+    {
+        var project = NewProjectOnDisk("proj");
+        using var coordinator = CreateCoordinator(); // nothing open — nothing watched
+
+        TouchProjectFile(project);
+        bool fired = await WaitUntilAsync(() => _emission.CallCount > 0, WatcherSettleWindow);
+        Assert.That(fired, Is.False,
+            "with no project open the .blproj must not be watched, so no emit");
+
+        // The pre-open write above raised no watcher event at all (no watcher existed), so the
+        // watcher's leading-edge throttle has no entry for this path and the post-open write's
+        // event is guaranteed delivery.
+        OpenProject(project);
+        TouchProjectFile(project);
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, "opening the project must start the .blproj watch");
+    }
+
+    [Test]
+    public async Task ProjectClose_StopsTheBlprojWatch()
+    {
+        var project = NewProjectOnDisk("proj");
+        using var coordinator = CreateCoordinator();
+        OpenProject(project);
+
+        TouchProjectFile(project);
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, "precondition: the watch must be demonstrably ACTIVE before the close — " +
+                     "otherwise the no-emit assertion below would pass vacuously");
+
+        // Wait out the watcher's 500ms leading-edge throttle: without this, the post-close
+        // write's raw FS event would be throttle-dropped even if a buggy close handler left
+        // the watch alive, and the assertion below would prove nothing.
+        await Task.Delay(ThrottleLapse);
+
+        CloseProject(project);
+
+        // Service-level probe: the coordinator's own path filter would ALSO swallow the emit
+        // (watched == null after close), so the emission recorder alone cannot distinguish
+        // "watch retired" from "watch leaked but filtered". The close must actually call
+        // UnwatchFile — i.e. the watcher service must raise NO raw event for this path at all.
+        int rawEventsAfterClose = 0;
+        _watcher.FileChangedExternally += (_, e) =>
+        {
+            if (string.Equals(e.FilePath, project.FilePath, StringComparison.OrdinalIgnoreCase))
+                Interlocked.Increment(ref rawEventsAfterClose);
+        };
+        TouchProjectFile(project);
+
+        bool firedAgain = await WaitUntilAsync(
+            () => _emission.CallCount > 1 || Volatile.Read(ref rawEventsAfterClose) > 0,
+            WatcherSettleWindow);
+        Assert.That(firedAgain, Is.False, "closing the project must stop the .blproj watch");
+        Assert.That(_emission.CallCount, Is.EqualTo(1),
+            "only the pre-close change may have emitted");
+        Assert.That(Volatile.Read(ref rawEventsAfterClose), Is.EqualTo(0),
+            "the close must UNWATCH the file at the service level, not merely filter the " +
+            "coordinator's handler — a leaked FileSystemWatcher keeps raising events forever");
+    }
+
+    [Test]
+    public async Task ProjectSwitchWithoutClose_MovesTheBlprojWatch()
+    {
+        // ProjectService.CreateProjectAsync raises ProjectOpened WITHOUT a ProjectClosed for
+        // the old project (OpenProjectAsync closes first; Create does not) — so the coordinator
+        // must retire the old watch itself on every open, not rely on a close event.
+        var projectA = NewProjectOnDisk("proj-a");
+        var projectB = NewProjectOnDisk("proj-b");
+        using var coordinator = CreateCoordinator();
+        OpenProject(projectA);
+        OpenProject(projectB); // no close in between — the CreateProjectAsync shape
+
+        // Service-level probe (same rationale as ProjectClose_StopsTheBlprojWatch): the
+        // coordinator's path filter alone would swallow the old project's emit even with the
+        // old watch LEAKED, so also assert the watcher service raises no raw event for A.
+        int rawEventsForOld = 0;
+        _watcher.FileChangedExternally += (_, e) =>
+        {
+            if (string.Equals(e.FilePath, projectA.FilePath, StringComparison.OrdinalIgnoreCase))
+                Interlocked.Increment(ref rawEventsForOld);
+        };
+        TouchProjectFile(projectA);
+        bool firedForOld = await WaitUntilAsync(
+            () => _emission.CallCount > 0 || Volatile.Read(ref rawEventsForOld) > 0,
+            WatcherSettleWindow);
+        Assert.That(firedForOld, Is.False,
+            "after the switch, the OLD project's .blproj must be unwatched");
+        Assert.That(Volatile.Read(ref rawEventsForOld), Is.EqualTo(0),
+            "the switch must retire the OLD watch at the service level (UnwatchFile), " +
+            "not merely filter the coordinator's handler");
+
+        TouchProjectFile(projectB);
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, "after the switch, the NEW project's .blproj must be watched");
+    }
+
+    [Test]
+    public async Task SuppressedWrite_DoesNotTrigger_AndTheWatchOutlivesTheSuppression()
+    {
+        var project = NewProjectOnDisk("proj");
+        using var coordinator = CreateCoordinator();
+        OpenProject(project);
+
+        // The IDE-save shape: suppress → write → dispose (ProjectService.SaveProjectAsync
+        // wraps its serializer write exactly like this). WatcherSettleWindow exceeds the
+        // watcher's 200ms post-dispose unsuppression grace, so the follow-up write below is
+        // genuinely unsuppressed.
+        using (_watcher.SuppressNotifications(project.FilePath))
+        {
+            TouchProjectFile(project);
+        }
+        bool fired = await WaitUntilAsync(() => _emission.CallCount > 0, WatcherSettleWindow);
+        Assert.That(fired, Is.False,
+            "a suppressed (IDE-side) .blproj write must not loop back into a regen");
+
+        // Suppression is a WINDOW, not a kill switch: a later external write must still emit.
+        // (Suppressed events skip the watcher's throttle bookkeeping — IsSuppressed is checked
+        // BEFORE IsDebounced — so this event is guaranteed delivery.)
+        TouchProjectFile(project);
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, "the watch must outlive the suppression window");
+    }
+
+    [Test]
+    public async Task SaveProjectAsync_IsSuppressed_ButExternalEditsStillTrigger()
+    {
+        // End-to-end over the REAL ProjectService — the production writer of the open
+        // project's .blproj: SaveProjectAsync must wrap its serializer write in
+        // SuppressNotifications so IDE-initiated project saves do not bounce back as
+        // "external" changes, while a genuinely external edit still does. Also exercises the
+        // real ProjectOpened wiring (CreateProjectAsync raises it after writing the .blproj,
+        // so the creation write itself precedes the watch and is invisible).
+        var root = Path.Combine(Path.GetTempPath(), "vgs-t11-regen", Guid.NewGuid().ToString("N"));
+        _tempRoots.Add(root);
+        Directory.CreateDirectory(root);
+        using var fileService = new FileService();
+        var projectService = new ProjectService(fileService, null, _watcher);
+        using var coordinator = new RegenOnSaveCoordinator(
+            _emission, projectService, _buildService.Object, _events, _watcher, QuietPeriod);
+
+        var project = await projectService.CreateProjectAsync(
+            "SuppressedSave", root, ProjectTemplateKind.ConsoleApplication);
+
+        await projectService.SaveProjectAsync();
+        bool fired = await WaitUntilAsync(() => _emission.CallCount > 0, WatcherSettleWindow);
+        Assert.That(fired, Is.False,
+            "an IDE-side SaveProjectAsync must not trigger a regen (SuppressNotifications)");
+
+        File.WriteAllText(project.FilePath,
+            "<BasicLangProject Version=\"1.0\" /><!-- external -->");
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, "an external edit of the same .blproj must still trigger — the save's " +
+                     "suppression must be a disposed window, not a permanent kill");
+    }
+
+    [Test]
+    public async Task ProjectAlreadyOpenAtConstruction_IsWatched()
+    {
+        // Defensive lifecycle pin: in production the coordinator is resolved at startup,
+        // before any project can open — but if construction ever moves after a
+        // restore-on-launch open, the already-open project's .blproj must still get its
+        // watch (picked up in the ctor, no event needed).
+        var project = NewProjectOnDisk("proj");
+        _currentProject = project;
+        using var coordinator = CreateCoordinator();
+
+        TouchProjectFile(project);
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, "a project already open at construction must be watched");
+    }
+
     // ---- fakes ----
 
     /// <summary>
@@ -304,18 +589,26 @@ public class RegenOnSaveCoordinatorTests
     private sealed class RecordingEmissionService : IIntelliSenseEmissionService
     {
         private readonly object _lock = new();
-        private readonly List<(BasicLangProject? Project, string Configuration)> _calls = new();
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private readonly List<(BasicLangProject? Project, string Configuration, long AtMs)> _calls = new();
 
         public int CallCount { get { lock (_lock) return _calls.Count; } }
 
-        public (BasicLangProject? Project, string Configuration)[] Snapshot()
+        /// <summary>
+        /// Milliseconds on the recorder's own clock — the SAME clock that stamps
+        /// <c>AtMs</c> on each call, so tests can compare "before the trigger" against
+        /// "at the emit" without cross-clock skew.
+        /// </summary>
+        public long NowMs => _clock.ElapsedMilliseconds;
+
+        public (BasicLangProject? Project, string Configuration, long AtMs)[] Snapshot()
         {
             lock (_lock) return _calls.ToArray();
         }
 
         public Task RequestEmit(BasicLangProject? project, string configuration)
         {
-            lock (_lock) _calls.Add((project, configuration));
+            lock (_lock) _calls.Add((project, configuration, _clock.ElapsedMilliseconds));
             return Task.CompletedTask;
         }
     }

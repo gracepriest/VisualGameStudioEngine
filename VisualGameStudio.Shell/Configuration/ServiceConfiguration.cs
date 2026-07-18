@@ -81,7 +81,9 @@ public static class ServiceConfiguration
         services.AddSingleton<IIntelliSenseEmissionService>(sp =>
             new IntelliSenseEmissionService(sp.GetRequiredService<IOutputService>()));
         // Saving a .bas/.mod/.cls file under the current project re-runs that emission after a
-        // 1.5s trailing-edge debounce (Task 10, Phase 3b), so clangd tracks edits between builds.
+        // 1.5s trailing-edge debounce (Task 10, Phase 3b), so clangd tracks edits between builds;
+        // the coordinator also watches the open project's .blproj through IFileWatcherService
+        // (Task 11), so an EXTERNAL project-file edit wakes the same debounced regen path.
         // Registered by concrete type — NOTHING injects it, so App.OnFrameworkInitializationCompleted
         // resolves it eagerly (beside GitAutoFetchService): a lazily-resolved singleton nobody
         // injects is never constructed and therefore never subscribes to FileSavedEvent. Disposed
@@ -91,7 +93,8 @@ public static class ServiceConfiguration
             sp.GetRequiredService<IIntelliSenseEmissionService>(),
             sp.GetRequiredService<IProjectService>(),
             sp.GetRequiredService<IBuildService>(),
-            sp.GetRequiredService<IEventAggregator>()));
+            sp.GetRequiredService<IEventAggregator>(),
+            sp.GetRequiredService<IFileWatcherService>()));
         services.AddSingleton<IDebugService, DebugService>();
         services.AddSingleton<ILaunchConfigurationService, LaunchConfigurationService>();
         services.AddSingleton<IGitService, GitService>();
