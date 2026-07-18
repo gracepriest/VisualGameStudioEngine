@@ -630,7 +630,7 @@ public partial class CodeEditorDocumentView : UserControl
             var c = ordered[i];
             var data = new CompletionData(
                 c.Label,
-                BuildCompletionDescription(c.Detail, c.Documentation),
+                CompletionData.BuildDescription(c.Detail, c.Documentation),
                 ConvertCompletionKind(c.Kind),
                 c.InsertText ?? c.Label,
                 isSnippet: c.InsertTextFormat == Core.Abstractions.Services.InsertTextFormat.Snippet,
@@ -640,7 +640,10 @@ public partial class CodeEditorDocumentView : UserControl
             {
                 // AvaloniaEdit picks the HIGHEST Priority among equal-quality
                 // matches — encode the server rank so its best match wins.
-                Priority = ordered.Count - i
+                Priority = ordered.Count - i,
+                // Carry the LSP item (with the server's opaque resolve token) so the
+                // selected row can be lazily enriched via completionItem/resolve.
+                SourceItem = c
             };
             completionDataList.Add(data);
         }
@@ -653,20 +656,19 @@ public partial class CodeEditorDocumentView : UserControl
     }
 
     /// <summary>
-    /// Combines Detail and Documentation into the tooltip text shown for the
-    /// selected completion item ("Detail\n\nDocumentation").
+    /// Maps the LSP wire kind onto the editor's glyph kind. Both enums mirror LSP 3.x's 25
+    /// kinds name-for-name, so this is an exhaustive identity map — pinned by
+    /// <c>CompletionKindMapTests</c>, which fails by name for ANY kind that falls through to
+    /// the default arm (the pre-Task-13 bug: 10 kinds silently demoted to the Text glyph,
+    /// invisible with BasicLang but all over clangd's EnumMember/Operator/TypeParameter
+    /// lists). Public static: the test project has no InternalsVisibleTo into Shell.
+    /// The default arm survives only for out-of-range values a future server might send.
     /// </summary>
-    private static string? BuildCompletionDescription(string? detail, string? documentation)
-    {
-        if (string.IsNullOrWhiteSpace(documentation)) return detail;
-        if (string.IsNullOrWhiteSpace(detail)) return documentation;
-        return detail + "\n\n" + documentation;
-    }
-
-    private static Editor.Completion.CompletionItemKind ConvertCompletionKind(Core.Abstractions.Services.CompletionItemKind kind)
+    public static Editor.Completion.CompletionItemKind ConvertCompletionKind(Core.Abstractions.Services.CompletionItemKind kind)
     {
         return kind switch
         {
+            Core.Abstractions.Services.CompletionItemKind.Text => Editor.Completion.CompletionItemKind.Text,
             Core.Abstractions.Services.CompletionItemKind.Method => Editor.Completion.CompletionItemKind.Method,
             Core.Abstractions.Services.CompletionItemKind.Function => Editor.Completion.CompletionItemKind.Function,
             Core.Abstractions.Services.CompletionItemKind.Constructor => Editor.Completion.CompletionItemKind.Constructor,
@@ -676,11 +678,21 @@ public partial class CodeEditorDocumentView : UserControl
             Core.Abstractions.Services.CompletionItemKind.Interface => Editor.Completion.CompletionItemKind.Interface,
             Core.Abstractions.Services.CompletionItemKind.Module => Editor.Completion.CompletionItemKind.Module,
             Core.Abstractions.Services.CompletionItemKind.Property => Editor.Completion.CompletionItemKind.Property,
+            Core.Abstractions.Services.CompletionItemKind.Unit => Editor.Completion.CompletionItemKind.Unit,
+            Core.Abstractions.Services.CompletionItemKind.Value => Editor.Completion.CompletionItemKind.Value,
+            Core.Abstractions.Services.CompletionItemKind.Enum => Editor.Completion.CompletionItemKind.Enum,
             Core.Abstractions.Services.CompletionItemKind.Keyword => Editor.Completion.CompletionItemKind.Keyword,
             Core.Abstractions.Services.CompletionItemKind.Snippet => Editor.Completion.CompletionItemKind.Snippet,
-            Core.Abstractions.Services.CompletionItemKind.Enum => Editor.Completion.CompletionItemKind.Enum,
+            Core.Abstractions.Services.CompletionItemKind.Color => Editor.Completion.CompletionItemKind.Color,
+            Core.Abstractions.Services.CompletionItemKind.File => Editor.Completion.CompletionItemKind.File,
+            Core.Abstractions.Services.CompletionItemKind.Reference => Editor.Completion.CompletionItemKind.Reference,
+            Core.Abstractions.Services.CompletionItemKind.Folder => Editor.Completion.CompletionItemKind.Folder,
+            Core.Abstractions.Services.CompletionItemKind.EnumMember => Editor.Completion.CompletionItemKind.EnumMember,
             Core.Abstractions.Services.CompletionItemKind.Constant => Editor.Completion.CompletionItemKind.Constant,
             Core.Abstractions.Services.CompletionItemKind.Struct => Editor.Completion.CompletionItemKind.Struct,
+            Core.Abstractions.Services.CompletionItemKind.Event => Editor.Completion.CompletionItemKind.Event,
+            Core.Abstractions.Services.CompletionItemKind.Operator => Editor.Completion.CompletionItemKind.Operator,
+            Core.Abstractions.Services.CompletionItemKind.TypeParameter => Editor.Completion.CompletionItemKind.TypeParameter,
             _ => Editor.Completion.CompletionItemKind.Text
         };
     }

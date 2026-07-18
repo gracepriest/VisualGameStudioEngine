@@ -44,6 +44,12 @@ public partial class CodeEditorControl : UserControl
     private bool _isInitialized = false;
     private CompletionWindow? _completionWindow;
     private readonly CompletionSession _completionSession = new();
+    /// <summary>
+    /// Lazy completionItem/resolve as the completion-list selection moves (Task 13). Owns the
+    /// per-selection cancellation and stale-reply drop; this control only feeds it selection
+    /// changes and repaints the tooltip when it announces an enriched row.
+    /// </summary>
+    private readonly CompletionSelectionResolver _completionSelectionResolver = new();
     private DispatcherTimer? _completionDebounceTimer;
     /// <summary>Debounce for the initial word-trigger completion request (VS Code-like).</summary>
     private const double CompletionDebounceMilliseconds = 120;
@@ -3916,6 +3922,16 @@ public partial class CodeEditorControl : UserControl
 
         _completionWindow = new CompletionWindow(_textEditor.TextArea);
 
+        // Lazy-docs hook: resolve the selected row in the background and repaint the
+        // window's description tooltip when the reply lands. Subscribed once per window
+        // (the in-place update path above reuses both window and subscription); it dies
+        // with the window. NOT routed through _completionSession's pending-request gate —
+        // that gate suppresses new completion REQUESTS, and holding it per selection move
+        // would starve typing.
+        var selectionWindow = _completionWindow;
+        selectionWindow.CompletionList.SelectionChanged +=
+            (_, _) => OnCompletionSelectionChanged(selectionWindow);
+
         // Calculate the start offset for text replacement
         // Find the start of the current word/identifier being typed
         var caretOffset = _textEditor.CaretOffset;
@@ -4019,6 +4035,10 @@ public partial class CodeEditorControl : UserControl
             if (_completionWindow == openedWindow)
             {
                 _completionWindow = null;
+                // A resolve reply for a list nobody can see must never be applied. Inside
+                // the ownership guard on purpose: a LATE Closed event from a replaced
+                // window must not cancel the newer window's in-flight resolve.
+                _completionSelectionResolver.Cancel();
             }
             if (_completionSession.State == CompletionSession.SessionState.Open)
             {
@@ -4027,6 +4047,68 @@ public partial class CodeEditorControl : UserControl
                 _completionSession.End();
             }
         };
+    }
+
+    /// <summary>
+    /// Fires the lazy completionItem/resolve for the newly selected completion row,
+    /// fire-and-forget so selection movement and typing are never blocked.
+    /// _languageService is the document's ALREADY-ROUTED server (SetLanguageService hands
+    /// this control the registry's GetFor(filePath) result — BasicLang for .bas, clangd for
+    /// .cpp), and ResolveCompletionAsync gates itself off for servers that never advertised
+    /// resolveProvider, so the C++ path today short-circuits for free (S0.3). Stale replies
+    /// are dropped by <see cref="CompletionSelectionResolver"/>; snippet rows and other
+    /// non-CompletionData items pass through as null, which cancels any in-flight resolve.
+    /// </summary>
+    private void OnCompletionSelectionChanged(CompletionWindow window)
+    {
+        if (window != _completionWindow) return;
+
+        var selected = window.CompletionList.SelectedItem as CompletionData;
+        var languageService = _languageService;
+        _ = _completionSelectionResolver.OnSelectionChanged(
+            selected,
+            languageService == null ? null : languageService.ResolveCompletionAsync,
+            data => Dispatcher.UIThread.Post(() => RefreshCompletionTooltip(window, data)));
+    }
+
+    /// <summary>
+    /// Makes a LATE description update visible on the CURRENTLY-selected completion row.
+    ///
+    /// Why a refire, verified against the AvaloniaEdit 11.3.0 source (the package this
+    /// project references — not vendored): CompletionWindow.CompletionList_SelectionChanged
+    /// reads ICompletionData.Description exactly ONCE per selection change into its PRIVATE
+    /// tooltip popup (_toolTipContent.Content = item?.Description) and closes that popup when
+    /// Description is null. Nothing observes later Description changes, so an enriched
+    /// description arriving after selection would stay invisible — and for a row whose
+    /// description started null the tooltip would stay closed. Re-raising the routed
+    /// SelectionChanged event on the CompletionList (the same SelectingItemsControl event its
+    /// CompletionList.SelectionChanged accessor maps onto) makes the window's own handler
+    /// re-read Description, re-set the tooltip content and re-open it if needed — public API
+    /// only, and the handler ignores the event args, re-reading SelectedItem itself.
+    ///
+    /// The refire also re-enters OnCompletionSelectionChanged for the same row; the
+    /// resolver's same-selection no-op breaks that loop (pinned by
+    /// SelectionResolve_ReselectingTheSameRow_DoesNotReResolve).
+    ///
+    /// SMOKE-VERIFIED, NOT HEADLESS-VERIFIED: the suite cannot open a CompletionWindow, so
+    /// this repaint is proven by Task 14's user smoke (step 6), not by a unit test.
+    /// </summary>
+    private void RefreshCompletionTooltip(CompletionWindow window, CompletionData data)
+    {
+        if (window != _completionWindow) return;
+        if (!ReferenceEquals(window.CompletionList.SelectedItem, data)) return;
+
+        try
+        {
+            window.CompletionList.RaiseEvent(new SelectionChangedEventArgs(
+                Avalonia.Controls.Primitives.SelectingItemsControl.SelectionChangedEvent,
+                Array.Empty<object>(),
+                Array.Empty<object>()));
+        }
+        catch
+        {
+            // The tooltip repaint is cosmetic — never let it take down the editor.
+        }
     }
 
     /// <summary>

@@ -5,6 +5,12 @@ using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Models;
 using VisualGameStudio.ProjectSystem.Services;
+// Aliased, not namespace-imported: VisualGameStudio.Editor.Completion has its own
+// CompletionItemKind (and System.ComponentModel its own CategoryAttribute) — wholesale
+// usings would make unqualified uses below ambiguous.
+using CompletionData = VisualGameStudio.Editor.Completion.CompletionData;
+using CompletionSelectionResolver = VisualGameStudio.Editor.Completion.CompletionSelectionResolver;
+using INotifyPropertyChanged = System.ComponentModel.INotifyPropertyChanged;
 
 namespace VisualGameStudio.Tests.LSP;
 
@@ -369,6 +375,194 @@ public class ClientCompletionResolveTests
             KillIfAlive(service.ServerProcessId);
             DeleteDirWithRetry(dir);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Selection-resolve coordination (Task 13): the editor-side seam that fires
+    // ResolveCompletionAsync as the completion-list selection moves and drops
+    // stale replies. Headless by design — the suite cannot open a completion
+    // window, so CompletionSelectionResolver is driven directly with an injected
+    // resolve delegate; CodeEditorControl's SelectionChanged wiring merely
+    // delegates here.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Builds the enriched item a successful resolve produces — a NEW instance carrying the
+    /// late documentation, mirroring <see cref="LanguageService.MergeResolvedCompletion"/>'s
+    /// copy semantics (same-instance-back means "nothing enriched" and must NOT repaint).
+    /// </summary>
+    private static CompletionItem Enriched(CompletionItem original, string documentation) => new()
+    {
+        Label = original.Label,
+        Detail = original.Detail,
+        Documentation = documentation,
+        Kind = original.Kind,
+        InsertText = original.InsertText,
+        FilterText = original.FilterText,
+        SortText = original.SortText,
+        InsertTextFormat = original.InsertTextFormat,
+        Preselect = original.Preselect,
+        Data = original.Data
+    };
+
+    /// <summary>
+    /// The core stale-drop contract: a resolve for item A that completes AFTER the selection
+    /// moved to B is discarded — A keeps its original description, only B's reply lands. Both
+    /// halves are pinned: the per-selection token is CANCELLED the moment the selection moves
+    /// (so a well-behaved transport can abandon the request), and the reply that arrives
+    /// anyway (already in transit — cancellation cannot recall it) fails the selection-token
+    /// compare and is dropped. B's applied update doubles as the liveness proof: the drop is
+    /// selectivity, not a coordinator that never applies anything.
+    /// </summary>
+    [Test]
+    public async Task SelectionResolve_StaleReplyIsDropped()
+    {
+        var itemA = new CompletionItem { Label = "A", Detail = "a-sig", Data = Json("""{"id":1}""") };
+        var itemB = new CompletionItem { Label = "B", Detail = "b-sig", Data = Json("""{"id":2}""") };
+        var dataA = new CompletionData("A", "a-sig") { SourceItem = itemA };
+        var dataB = new CompletionData("B", "b-sig") { SourceItem = itemB };
+
+        // A's reply is held open so the selection can move while it is in flight.
+        var heldReplyA = new TaskCompletionSource<CompletionItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenA = default(CancellationToken);
+
+        Task<CompletionItem> Resolve(CompletionItem item, CancellationToken ct)
+        {
+            if (ReferenceEquals(item, itemA))
+            {
+                tokenA = ct;
+                return heldReplyA.Task;
+            }
+            return Task.FromResult(Enriched(item, "b docs"));
+        }
+
+        var updated = new List<CompletionData>();
+        var coordinator = new CompletionSelectionResolver();
+
+        var taskA = coordinator.OnSelectionChanged(dataA, Resolve, updated.Add);
+        Assert.That(taskA.IsCompleted, Is.False,
+            "premise: A's resolve must actually be in flight (the fake is holding the reply)");
+
+        var taskB = coordinator.OnSelectionChanged(dataB, Resolve, updated.Add);
+        Assert.That(tokenA.IsCancellationRequested, Is.True,
+            "moving the selection must cancel the previous selection's per-selection token");
+
+        // A's reply lands only NOW — after the selection moved on.
+        heldReplyA.SetResult(Enriched(itemA, "a docs, too late"));
+        await taskA;
+        await taskB;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dataA.Description, Is.EqualTo("a-sig"),
+                "the stale reply must be discarded — item A keeps the description the list already had");
+            Assert.That(dataB.Description, Is.EqualTo("b-sig\n\nb docs"),
+                "the CURRENT selection's reply must land — the drop is selectivity, not deadness");
+            Assert.That(updated, Is.EqualTo(new[] { dataB }),
+                "only the applied update may be announced to the UI callback");
+        });
+    }
+
+    /// <summary>
+    /// The apply half: a resolve reply for the still-current selection lands on the
+    /// CompletionData — merged exactly like the initial list built its descriptions
+    /// ("Detail\n\nDocumentation", via CompletionData.BuildDescription), with a
+    /// PropertyChanged notification and the UI callback told which row changed (that callback
+    /// is where CodeEditorControl re-pokes the AvaloniaEdit tooltip, which reads Description
+    /// only at selection time — headless tests cannot see that repaint, Task 14's smoke does).
+    /// </summary>
+    [Test]
+    public async Task SelectionResolve_UpdatesTheDescription()
+    {
+        var item = new CompletionItem
+        {
+            Label = "WriteLine",
+            Detail = "Sub WriteLine(value As String)",
+            Data = Json("""{"type":"Console","member":"WriteLine"}""")
+        };
+        var data = new CompletionData("WriteLine", "Sub WriteLine(value As String)") { SourceItem = item };
+
+        var notified = new List<string?>();
+        ((INotifyPropertyChanged)data).PropertyChanged += (_, e) => notified.Add(e.PropertyName);
+
+        CompletionData? announced = null;
+        var coordinator = new CompletionSelectionResolver();
+
+        await coordinator.OnSelectionChanged(
+            data,
+            (i, _) => Task.FromResult(Enriched(i, "Writes a line to the console.")),
+            d => announced = d);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(data.Description,
+                Is.EqualTo("Sub WriteLine(value As String)\n\nWrites a line to the console."),
+                "the merged docs must land on the data item, formatted exactly like the " +
+                "initial list construction (Detail\\n\\nDocumentation)");
+            Assert.That(notified, Does.Contain(nameof(CompletionData.Description)),
+                "a late description must raise PropertyChanged for Description");
+            Assert.That(announced, Is.SameAs(data),
+                "the UI callback must be handed the row that changed");
+        });
+    }
+
+    /// <summary>
+    /// The free short-circuit: a row without a resolve token (no SourceItem, or SourceItem
+    /// without Data — S0.3: that is EVERY clangd completion today) must never even invoke the
+    /// resolve delegate. The capability half of the gate lives inside ResolveCompletionAsync
+    /// itself (pinned above); this pins that selection moves over token-less rows cost nothing.
+    /// </summary>
+    [Test]
+    public async Task SelectionResolve_NoDataToken_NeverInvokesTheResolver()
+    {
+        var tokenless = new CompletionData("vector", "class vector")
+        {
+            SourceItem = new CompletionItem { Label = "vector" } // no Data
+        };
+        var sourceless = new CompletionData("snippet row", "no source item at all");
+
+        var invoked = false;
+        var coordinator = new CompletionSelectionResolver();
+        Task<CompletionItem> Resolve(CompletionItem item, CancellationToken ct)
+        {
+            invoked = true;
+            return Task.FromResult(item);
+        }
+
+        await coordinator.OnSelectionChanged(tokenless, Resolve);
+        await coordinator.OnSelectionChanged(sourceless, Resolve);
+
+        Assert.That(invoked, Is.False,
+            "no data token = nothing the server could resolve against — the delegate must not fire");
+    }
+
+    /// <summary>
+    /// The feedback-loop breaker: re-announcing the SAME selected row must not re-resolve.
+    /// CodeEditorControl's tooltip refresh re-raises the completion list's SelectionChanged
+    /// for the row that was just enriched (the only public-API way to make CompletionWindow
+    /// re-read Description) — without this no-op that refire would loop:
+    /// resolve → repaint → SelectionChanged → resolve → …, hammering the server once per reply.
+    /// </summary>
+    [Test]
+    public async Task SelectionResolve_ReselectingTheSameRow_DoesNotReResolve()
+    {
+        var item = new CompletionItem { Label = "x", Detail = "sig", Data = Json("""{"id":9}""") };
+        var data = new CompletionData("x", "sig") { SourceItem = item };
+
+        var calls = 0;
+        var coordinator = new CompletionSelectionResolver();
+        Task<CompletionItem> Resolve(CompletionItem i, CancellationToken ct)
+        {
+            calls++;
+            return Task.FromResult(Enriched(i, "docs"));
+        }
+
+        await coordinator.OnSelectionChanged(data, Resolve);
+        await coordinator.OnSelectionChanged(data, Resolve); // the tooltip-refresh refire
+
+        Assert.That(calls, Is.EqualTo(1),
+            "the same still-selected row must resolve exactly once, or the tooltip refresh loops");
     }
 
     // ------------------------------------------------------------------

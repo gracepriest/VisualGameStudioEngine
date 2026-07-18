@@ -1,15 +1,17 @@
+using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Media;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Editing;
+using CoreCompletionItem = VisualGameStudio.Core.Abstractions.Services.CompletionItem;
 
 namespace VisualGameStudio.Editor.Completion;
 
 /// <summary>
 /// Represents a completion item for the code completion popup.
 /// </summary>
-public class CompletionData : ICompletionData
+public class CompletionData : ICompletionData, INotifyPropertyChanged
 {
     // VS Code-style kind colors — chosen to be readable on both light and
     // dark list backgrounds. The label itself inherits the theme foreground.
@@ -38,7 +40,7 @@ public class CompletionData : ICompletionData
         // the server's FilterText when present (Label may contain punctuation
         // like "If...Else" that would defeat prefix matching).
         Text = filterText ?? text;
-        Description = description;
+        _description = description;
         InsertText = insertText ?? text;
         Kind = kind;
         IsSnippet = isSnippet;
@@ -67,8 +69,52 @@ public class CompletionData : ICompletionData
 
     public object Content => BuildContent();
 
-    /// <summary>Tooltip shown for the selected item ("Detail\n\nDocumentation").</summary>
-    public object? Description { get; }
+    private string? _description;
+
+    /// <summary>
+    /// Tooltip shown for the selected item ("Detail\n\nDocumentation"). Starts as whatever
+    /// the completion reply carried and can be enriched later by a lazy
+    /// <c>completionItem/resolve</c> via <see cref="UpdateDescription"/>.
+    /// </summary>
+    public object? Description => _description;
+
+    /// <summary>
+    /// The LSP completion item this row was built from — carries the server's opaque
+    /// resolve token (<c>Data</c>) so the selected row can be lazily enriched through
+    /// <c>completionItem/resolve</c>. Null for purely local rows (editor snippets) and for
+    /// non-LSP construction paths, which short-circuits the resolve for free.
+    /// </summary>
+    public CoreCompletionItem? SourceItem { get; set; }
+
+    /// <inheritdoc/>
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>
+    /// Applies a lazily-resolved description and raises <see cref="PropertyChanged"/> for
+    /// <see cref="Description"/>. NOTE the notification alone does not repaint AvaloniaEdit's
+    /// tooltip — CompletionWindow reads <c>ICompletionData.Description</c> exactly once per
+    /// selection change (verified against the AvaloniaEdit 11.3.0 source), so the UI re-pokes
+    /// the window after calling this (see CodeEditorControl.RefreshCompletionTooltip).
+    /// </summary>
+    public void UpdateDescription(string? description)
+    {
+        if (_description == description) return;
+        _description = description;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Description)));
+    }
+
+    /// <summary>
+    /// Combines Detail and Documentation into the tooltip text shown for the selected
+    /// completion item ("Detail\n\nDocumentation"). Lives here (not in the Shell's completion
+    /// pipeline, its original home) so the resolve coordinator applies the SAME formatting to
+    /// a late reply that the initial list construction used.
+    /// </summary>
+    public static string? BuildDescription(string? detail, string? documentation)
+    {
+        if (string.IsNullOrWhiteSpace(documentation)) return detail;
+        if (string.IsNullOrWhiteSpace(detail)) return documentation;
+        return detail + "\n\n" + documentation;
+    }
 
     /// <summary>
     /// AvaloniaEdit prefers the HIGHEST priority among equal-quality matches.
