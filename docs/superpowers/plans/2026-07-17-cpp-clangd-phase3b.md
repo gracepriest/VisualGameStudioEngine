@@ -295,11 +295,16 @@ Test: extend `VisualGameStudio.Tests/Core/ExecutableLocatorTests.cs`,
     style ONLY (locate vswhere, run `-property installationPath` with a short wait — this runs
     at DI time ONCE; measure: vswhere alone is ~1s, acceptable; document that the 35s hazard
     was the compiler SPAWN probes, not vswhere).
-  - `~/.vgs/tools` root: default from UserProfile, injectable for tests. This is the ~8th
-    duplication of the `.vgs` path construction; the other sites carry NO shared convention
-    comment (claims-verified — do not hunt for one to copy). Write a NEW one-line comment:
-    "another copy of the ~/.vgs root — the canonical path helper remains future work". Do not
-    build the helper here.
+  - `~/.vgs/tools` root: the probe composes its default root from
+    `ClangdInstaller.DefaultToolsRoot` (added by Task 3's fix batch — single-sources the root
+    between installer and probe; the canonical whole-`~/.vgs` helper remains future work).
+    Injectable for tests.
+
+    > **Plan correction (approved, Task 3 fix batch).** This bullet originally said to default
+    > from UserProfile here and write a NEW one-line "another copy of the ~/.vgs root" comment
+    > ("do not build the helper here"). Task 3's review batch added
+    > `ClangdInstaller.DefaultToolsRoot`, which now carries that comment — compose from it
+    > instead of duplicating the path construction again.
   - Also truth-repair the now-stale test remark at `LanguageServiceRegistryTests.cs:643-646`
     ("the locator's answer here is the PATH probe alone") — after this task the production
     chain is override → tools → PATH → LLVM dirs; the test auto-follows, the remark must too.

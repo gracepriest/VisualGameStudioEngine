@@ -175,6 +175,74 @@ public class ClangdInstallerTests
             "a rejected download must never create anything under the tools root");
     }
 
+    [Test]
+    public async Task ArchiveWithoutClangdExe_FailsAtLayoutStep_AndLeaksNothing()
+    {
+        // A verified zip with the right root dir but NO bin/clangd.exe (say, a repack or a
+        // future upstream layout change): the install must fail at the LAYOUT step and leave
+        // the tools root exactly as it found it — no final dir, no staging leak.
+        var fixture = BuildZip(("clangd_22.1.6/LICENSE.TXT", "license text"));
+
+        using var installer = new ClangdInstaller(
+            _toolsRoot,
+            WriteBytesSeam(fixture),
+            expectedSha256: Sha256Hex(fixture),
+            expectedSizeBytes: fixture.Length);
+
+        var result = await installer.InstallAsync();
+
+        Assert.That(result.Success, Is.False);
+        Assert.That(result.FailureStep, Is.EqualTo(ClangdInstaller.StepLayout));
+        Assert.That(Directory.Exists(Path.Combine(_toolsRoot, ClangdInstaller.InstalledDirName)), Is.False,
+            "a layout failure must not produce the final directory");
+        Assert.That(Directory.GetDirectories(_toolsRoot, ".staging-*"), Is.Empty,
+            "a layout failure must clean its staging directory");
+    }
+
+    // ---------------------------------------------------------------- verify-stage never-throws contract
+
+    [Test]
+    public async Task UnreadableDownloadedFile_MapsToVerifyFailure_NotAnException()
+    {
+        // An AV scanner (or anything else) holding the just-downloaded zip open with no sharing
+        // must NOT let an IOException escape InstallAsync — the never-throws contract is what the
+        // toast composer builds on. FileInfo.Length reads metadata (works under the lock), so the
+        // failure surfaces at the hash step, which is the first actual OPEN of the file.
+        var fixture = BuildZip(("clangd_22.1.6/bin/clangd.exe", "fake clangd binary"));
+        string? seamDest = null;
+        FileStream? exclusiveLock = null;
+        try
+        {
+            using var installer = new ClangdInstaller(
+                _toolsRoot,
+                (url, dest, deadline, progress, ct) =>
+                {
+                    seamDest = dest;
+                    File.WriteAllBytes(dest, fixture);
+                    exclusiveLock = new FileStream(dest, FileMode.Open, FileAccess.Read, FileShare.None);
+                    return Task.CompletedTask;
+                },
+                expectedSha256: Sha256Hex(fixture),
+                expectedSizeBytes: fixture.Length);
+
+            var result = await installer.InstallAsync();
+
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.FailureStep, Is.EqualTo(ClangdInstaller.StepVerifySha256),
+                "an unreadable download must surface as a verify failure result, not an exception");
+            Assert.That(result.FailureDetail, Is.Not.Null.And.Not.Empty);
+        }
+        finally
+        {
+            exclusiveLock?.Dispose();
+            // The installer's best-effort temp-zip delete ran while the lock was held; tidy it now.
+            if (seamDest != null)
+            {
+                try { File.Delete(seamDest); } catch { }
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- staging hygiene
 
     [Test]
@@ -344,7 +412,7 @@ public class ClangdInstallerTests
     private static string Sha256Hex(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
 
     /// <summary>A downloader seam that just writes <paramref name="bytes"/> to the destination.</summary>
-    private static Func<string, string, TimeSpan, IProgress<(long, long)>?, CancellationToken, Task> WriteBytesSeam(byte[] bytes)
+    private static ClangdDownloadDelegate WriteBytesSeam(byte[] bytes)
         => (url, dest, deadline, progress, ct) =>
         {
             File.WriteAllBytes(dest, bytes);

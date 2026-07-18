@@ -7,6 +7,9 @@ namespace VisualGameStudio.ProjectSystem.Services;
 /// Outcome of a <see cref="ClangdInstaller.InstallAsync"/> run. The installer never shows UI —
 /// callers compose toasts from this result.
 ///
+/// <para><see cref="InstalledExePath"/> is the absolute <c>bin/clangd.exe</c> path, non-null
+/// exactly when <see cref="Success"/>.</para>
+///
 /// <para>On failure, <see cref="FailureStep"/> is one of the <c>ClangdInstaller.Step*</c> constants
 /// (a closed vocabulary the toast composer switches on) and <see cref="FailureDetail"/> is a short
 /// human-readable explanation (e.g. actual vs expected hash prefix). "An install is already in
@@ -18,7 +21,20 @@ public sealed record ClangdInstallResult(
     bool Success,
     string? InstalledExePath,
     string? FailureStep,
-    string? FailureDetail = null);
+    string? FailureDetail);
+
+/// <summary>
+/// The download seam <see cref="ClangdInstaller"/> consumes: stream <paramref name="url"/> to
+/// <paramref name="destinationPath"/> within <paramref name="deadline"/>, reporting
+/// (bytes downloaded, total bytes or -1). <see cref="FileDownloader.DownloadAsync"/> binds to this
+/// as a method group; tests inject fakes so they never perform HTTP.
+/// </summary>
+public delegate Task ClangdDownloadDelegate(
+    string url,
+    string destinationPath,
+    TimeSpan deadline,
+    IProgress<(long bytesDownloaded, long totalBytes)>? progress,
+    CancellationToken ct);
 
 /// <summary>
 /// Downloads the pinned clangd release, verifies it (size, then SHA-256), and installs it as
@@ -51,6 +67,15 @@ public sealed class ClangdInstaller : IDisposable
     /// <summary>Whole-transfer deadline: ~28MB at a slow ~1Mbps is ~4 minutes; 10 gives headroom while still bounding a wedged transfer.</summary>
     public static readonly TimeSpan DownloadDeadline = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// The production tools root, <c>%USERPROFILE%\.vgs\tools</c> — the locator's tools-root probe
+    /// composes its default from this same property, single-sourcing the root between installer and
+    /// probe. Another copy of the <c>~/.vgs</c> path construction (SettingsService, VsixInstaller,
+    /// ...); a canonical helper is future work.
+    /// </summary>
+    public static string DefaultToolsRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vgs", "tools");
+
     // ---------------------------------------------------------------- FailureStep vocabulary
     // The closed set of ClangdInstallResult.FailureStep values; the toast composer switches on these.
 
@@ -81,33 +106,30 @@ public sealed class ClangdInstaller : IDisposable
     // ---------------------------------------------------------------- state
 
     private readonly string _toolsRoot;
-    private readonly Func<string, string, TimeSpan, IProgress<(long bytesDownloaded, long totalBytes)>?, CancellationToken, Task> _download;
+    private readonly ClangdDownloadDelegate _download;
     private readonly string _expectedSha256;
     private readonly long _expectedSizeBytes;
     private readonly FileDownloader? _ownedDownloader;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <param name="toolsRoot">
-    /// Where versioned tool directories live; null means the production default
-    /// <c>%USERPROFILE%\.vgs\tools</c>. Computed but NOT created here — only an actual install may
-    /// touch the disk (VsixInstaller's eager ctor mkdir was explicitly rejected for this class).
+    /// Where versioned tool directories live; null means <see cref="DefaultToolsRoot"/>. Computed
+    /// but NOT created here — only an actual install may touch the disk (VsixInstaller's eager
+    /// ctor mkdir was explicitly rejected for this class).
     /// </param>
     /// <param name="downloader">
-    /// The download seam <c>(url, destination, deadline, progress, ct)</c>; null means a real
-    /// <see cref="FileDownloader"/> owned (and disposed) by this instance. Tests inject a seam so
-    /// they never perform HTTP.
+    /// The download seam; null means a real <see cref="FileDownloader"/> owned (and disposed) by
+    /// this instance. Tests inject a fake so they never perform HTTP.
     /// </param>
     /// <param name="expectedSha256">Test seam: expected hash of the downloaded file; null means <see cref="ExpectedSha256"/>.</param>
     /// <param name="expectedSizeBytes">Test seam: expected size of the downloaded file; null means <see cref="ExpectedSizeBytes"/>.</param>
     public ClangdInstaller(
         string? toolsRoot = null,
-        Func<string, string, TimeSpan, IProgress<(long bytesDownloaded, long totalBytes)>?, CancellationToken, Task>? downloader = null,
+        ClangdDownloadDelegate? downloader = null,
         string? expectedSha256 = null,
         long? expectedSizeBytes = null)
     {
-        // Another copy of the ~/.vgs path construction (SettingsService, VsixInstaller, ...); a canonical helper is future work.
-        _toolsRoot = toolsRoot ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vgs", "tools");
+        _toolsRoot = toolsRoot ?? DefaultToolsRoot;
 
         if (downloader == null)
         {
@@ -165,7 +187,22 @@ public sealed class ClangdInstaller : IDisposable
             }
 
             // 2. Verify — size first (cheap), then the streamed SHA-256 (never 28MB in memory).
-            var actualSize = new FileInfo(tempZip).Length;
+            // Both stages are guarded: I/O on the just-downloaded zip can fail (e.g. an AV
+            // scanner holding it with no sharing), and the never-throws contract must survive.
+            long actualSize;
+            try
+            {
+                actualSize = new FileInfo(tempZip).Length;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // deliberate caller cancellation — not a failure to report
+            }
+            catch (Exception ex)
+            {
+                return new ClangdInstallResult(false, null, StepVerifySize,
+                    $"could not read the downloaded file: {ex.Message}");
+            }
             if (actualSize != _expectedSizeBytes)
             {
                 return new ClangdInstallResult(false, null, StepVerifySize,
@@ -173,9 +210,19 @@ public sealed class ClangdInstaller : IDisposable
             }
 
             string actualSha;
-            await using (var zipStream = File.OpenRead(tempZip))
+            try
             {
+                await using var zipStream = File.OpenRead(tempZip);
                 actualSha = Convert.ToHexString(await SHA256.HashDataAsync(zipStream, ct).ConfigureAwait(false));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // deliberate caller cancellation — not a failure to report
+            }
+            catch (Exception ex)
+            {
+                return new ClangdInstallResult(false, null, StepVerifySha256,
+                    $"could not read the downloaded file: {ex.Message}");
             }
             if (!string.Equals(actualSha, _expectedSha256, StringComparison.OrdinalIgnoreCase))
             {
@@ -205,6 +252,8 @@ public sealed class ClangdInstaller : IDisposable
 
             // 4. Swap into place. A pre-existing dir is a broken install (this flow only runs when
             // the locator found nothing, or the user forced a reinstall) — replace it whole.
+            // The delete-then-move pair is not atomic: a move failure after a successful delete
+            // leaves NO install at all, surfaced as StepInstall; the next install attempt repairs it.
             var finalDir = Path.Combine(_toolsRoot, InstalledDirName);
             try
             {
@@ -219,7 +268,7 @@ public sealed class ClangdInstaller : IDisposable
                 return new ClangdInstallResult(false, null, StepInstall, ex.Message);
             }
 
-            return new ClangdInstallResult(true, Path.Combine(finalDir, "bin", "clangd.exe"), null);
+            return new ClangdInstallResult(true, Path.Combine(finalDir, "bin", "clangd.exe"), null, null);
         }
         finally
         {
@@ -231,7 +280,8 @@ public sealed class ClangdInstaller : IDisposable
             }
             try { if (File.Exists(tempZip)) File.Delete(tempZip); } catch { }
 
-            _gate.Release();
+            // Dispose-during-install (DI shutdown) must not throw from the finally.
+            try { _gate.Release(); } catch (ObjectDisposedException) { }
         }
     }
 
