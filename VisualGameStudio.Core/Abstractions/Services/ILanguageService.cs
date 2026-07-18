@@ -260,6 +260,26 @@ public record ServerCapabilities
     public bool HasSignatureHelpProvider { get; init; }
 
     /// <summary>
+    /// Server implements <c>textDocument/semanticTokens</c> (LSP types it as
+    /// <c>boolean | SemanticTokensOptions</c>; both forms count, like every other
+    /// provider here). True with a null <see cref="SemanticTokensLegend"/> means the
+    /// feature exists but the handshake carried no legend to decode its indices with —
+    /// supported and decodable are different claims.
+    /// </summary>
+    public bool HasSemanticTokensProvider { get; init; }
+
+    /// <summary>
+    /// The name tables this server's semantic-token integers index into, verbatim from
+    /// the <c>initialize</c> reply — or null when the reply carried none. Consumed by
+    /// the per-server index remap wired at the token fetch seam (Phase 3b Task 9):
+    /// token data is defined against THIS reply's legend and nothing else, so a
+    /// consumer without it can only guess with a hardcoded table.
+    /// See <see cref="VisualGameStudio.Core.Abstractions.Services.SemanticTokensLegend"/>
+    /// for the duplicate-names reality.
+    /// </summary>
+    public SemanticTokensLegend? SemanticTokensLegend { get; init; }
+
+    /// <summary>
     /// The encoding the server picked from the client's offered list, verbatim.
     /// Defaults to <see cref="Utf16"/> when the server omits it, per LSP 3.17.
     /// </summary>
@@ -287,6 +307,29 @@ public record ServerCapabilities
     /// </summary>
     public string? OffsetEncoding { get; init; }
 }
+
+/// <summary>
+/// The index tables an LSP server's semantic-token integers decode against: a token's
+/// type is an index into <see cref="TokenTypes"/>, its modifiers a bit set over
+/// <see cref="TokenModifiers"/>. Captured verbatim from the server's <c>initialize</c>
+/// reply — position IS the contract, so no dedup and no normalization, ever.
+/// </summary>
+/// <remarks>
+/// ⚠ Names REPEAT. Real clangd 22.1.6 sends 25 tokenTypes in which "variable" sits at
+/// [0], [1] and [7], "type" at [12], [13] and [18], and "function" at [3] and [5]
+/// (measured, Phase 3b Step 0.2). These are positional wire tables, not sets: a
+/// name-keyed <c>Dictionary.Add</c> over them THROWS, and deduplicating silently
+/// shifts every index after the first duplicate. A consumer that wants a name-keyed
+/// map owns duplicate tolerance; this record's only job is to carry the arrays
+/// exactly as the server defined them.
+/// </remarks>
+/// <param name="TokenTypes">Token-type names in wire order; a token's type integer is
+/// an index into this list.</param>
+/// <param name="TokenModifiers">Modifier names in wire order; bit <c>N</c> of a
+/// token's modifier integer refers to entry <c>N</c> of this list.</param>
+public sealed record SemanticTokensLegend(
+    IReadOnlyList<string> TokenTypes,
+    IReadOnlyList<string> TokenModifiers);
 
 /// <summary>
 /// A symbol found via workspace/symbol search

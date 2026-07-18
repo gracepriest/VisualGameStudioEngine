@@ -587,8 +587,64 @@ public class LanguageService : ILanguageService
             HasReferencesProvider = HasProvider(caps, "referencesProvider"),
             HasDocumentSymbolProvider = HasProvider(caps, "documentSymbolProvider"),
             HasSignatureHelpProvider = HasProvider(caps, "signatureHelpProvider"),
+            HasSemanticTokensProvider = HasProvider(caps, "semanticTokensProvider"),
+            SemanticTokensLegend = ReadSemanticTokensLegend(caps),
             PositionEncoding = ReadString(caps, "positionEncoding") ?? ServerCapabilities.Utf16
         };
+    }
+
+    /// <summary>
+    /// The legend under <c>capabilities.semanticTokensProvider.legend</c>, verbatim, or
+    /// null when any part of that path is missing or malformed. Null never contradicts
+    /// <see cref="ServerCapabilities.HasSemanticTokensProvider"/>: a bool-form or
+    /// legend-less provider still supports the feature — it just gave us nothing to
+    /// decode its indices with.
+    /// </summary>
+    /// <remarks>
+    /// The arrays are stored AS-IS, duplicates included — real clangd 22.1.6 repeats
+    /// "variable" three times in its 25-entry tokenTypes (measured) — because a token's
+    /// integers are indices into these exact positions. Deduplicating or sorting here
+    /// would silently shift every wire index; a consumer that wants a name-keyed map
+    /// owns duplicate tolerance.
+    /// </remarks>
+    private static SemanticTokensLegend? ReadSemanticTokensLegend(JsonElement capabilities)
+    {
+        if (!capabilities.TryGetProperty("semanticTokensProvider", out var provider) ||
+            provider.ValueKind != JsonValueKind.Object ||
+            !provider.TryGetProperty("legend", out var legend) ||
+            legend.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var tokenTypes = ReadStringArray(legend, "tokenTypes");
+        var tokenModifiers = ReadStringArray(legend, "tokenModifiers");
+        if (tokenTypes == null || tokenModifiers == null) return null;
+
+        return new SemanticTokensLegend(tokenTypes, tokenModifiers);
+    }
+
+    /// <summary>
+    /// The value of <paramref name="name"/> on <paramref name="obj"/> when it is an
+    /// array of strings, in wire order, otherwise null. All-or-nothing on purpose:
+    /// these arrays are read by INDEX, so skipping a single malformed entry would
+    /// silently shift every position after it — worse than rejecting the array whole.
+    /// </summary>
+    private static IReadOnlyList<string>? ReadStringArray(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var values = new List<string>(array.GetArrayLength());
+        foreach (var entry in array.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.String) return null;
+            values.Add(entry.GetString()!);
+        }
+
+        return values;
     }
 
     /// <summary>

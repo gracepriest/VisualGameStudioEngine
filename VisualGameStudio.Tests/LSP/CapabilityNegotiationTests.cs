@@ -552,4 +552,154 @@ public class CapabilityNegotiationTests
         Assert.That(caps["textDocument"]?[member], Is.Not.Null,
             $"textDocument.{member} must still be advertised");
     }
+
+    // ---- Semantic tokens: the legend the handshake used to discard ---------
+    //
+    // A semantic token arrives as integers that are INDICES into the legend arrays of
+    // THIS server's initialize reply — they mean nothing against any other table. The
+    // parser used to drop `semanticTokensProvider` entirely, which forces a consumer
+    // onto a hardcoded legend: one of Phase 3a's named silent-failure landmines.
+    //
+    // The fixture below is the MEASURED clangd 22.1.6 legend (Phase 3b Step 0.2),
+    // duplicates and all — NOT a tidied approximation. The duplicates are the point:
+    // "variable" appears at [0], [1] and [7], "type" at [12], [13] and [18],
+    // "function" at [3] and [5]. These arrays are positional wire tables, not sets.
+
+    private const string Clangd2216SemanticTokensJson = """
+    {"capabilities":{"semanticTokensProvider":{
+        "full":{"delta":true},"range":true,
+        "legend":{
+            "tokenTypes":["variable","variable","parameter","function","method",
+                          "function","property","variable","class","interface",
+                          "enum","enumMember","type","type","unknown","namespace",
+                          "typeParameter","concept","type","macro","modifier",
+                          "operator","bracket","label","comment"],
+            "tokenModifiers":["declaration","definition","deprecated","deduced",
+                              "readonly","static","abstract","virtual","dependentName",
+                              "defaultLibrary","usedAsMutableReference","usedAsMutablePointer",
+                              "constructorOrDestructor","userDefined","functionScope",
+                              "classScope","fileScope","globalScope"]}}}}
+    """;
+
+    [Test]
+    public void Parse_CapturesSemanticTokensLegend_TypesAndModifiersInOrder()
+    {
+        var caps = LanguageService.ParseServerCapabilities(Clangd2216SemanticTokensJson);
+
+        var legend = caps.SemanticTokensLegend;
+        Assert.That(legend, Is.Not.Null, "real clangd's legend must be captured, not discarded");
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.HasSemanticTokensProvider, Is.True);
+
+            // Spot asserts sit at the shuffle-critical positions: [0] and [7] are two of
+            // the three "variable" entries — any dedup collapses them and fails Count;
+            // [24] is the final entry — any truncation or sort fails it; and the exact
+            // counts pin that nothing was added, merged, or dropped.
+            Assert.That(legend!.TokenTypes, Has.Count.EqualTo(25));
+            Assert.That(legend.TokenTypes[0], Is.EqualTo("variable"));
+            Assert.That(legend.TokenTypes[7], Is.EqualTo("variable"));
+            Assert.That(legend.TokenTypes[24], Is.EqualTo("comment"));
+
+            Assert.That(legend.TokenModifiers, Has.Count.EqualTo(18));
+            Assert.That(legend.TokenModifiers[2], Is.EqualTo("deprecated"));
+            Assert.That(legend.TokenModifiers[4], Is.EqualTo("readonly"));
+        });
+    }
+
+    [Test]
+    public void Parse_SemanticTokensAbsent_HasProviderFalse_LegendNull()
+    {
+        var caps = LanguageService.ParseServerCapabilities(
+            """{"capabilities":{"hoverProvider":true}}""");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.HasSemanticTokensProvider, Is.False);
+            Assert.That(caps.SemanticTokensLegend, Is.Null);
+        });
+    }
+
+    // LSP types this as `boolean | SemanticTokensOptions`. No server in this repo
+    // answers with a bare boolean (clangd and BasicLang both send objects — measured),
+    // but the union is the wire contract: a bool-true server DOES support the feature;
+    // it just handed us no legend to decode its indices with. Supported and decodable
+    // are different claims.
+    [Test]
+    public void Parse_SemanticTokensBoolTrue_HasProviderTrue_LegendNull()
+    {
+        var caps = LanguageService.ParseServerCapabilities(
+            """{"capabilities":{"semanticTokensProvider":true}}""");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.HasSemanticTokensProvider, Is.True);
+            Assert.That(caps.SemanticTokensLegend, Is.Null);
+        });
+    }
+
+    // THE LANDMINE, pinned where the data enters. Duplicate names are real (see the
+    // fixture above): a consumer building a name-keyed Dictionary.Add over these
+    // arrays THROWS. Duplicate tolerance belongs to the consumer building the map
+    // (Task 8) — the capture layer must store the arrays verbatim, because the
+    // positions ARE the wire indices and any normalization silently shifts them.
+    [Test]
+    public void Parse_LegendWithDuplicateNames_DoesNotThrow()
+    {
+        var json = """
+        {"capabilities":{"semanticTokensProvider":{"legend":{
+            "tokenTypes":["variable","variable","type","variable","type"],
+            "tokenModifiers":["declaration","declaration"]}}}}
+        """;
+
+        ServerCapabilities caps = null!;
+
+        Assert.DoesNotThrow(() => caps = LanguageService.ParseServerCapabilities(json));
+        Assert.That(caps.SemanticTokensLegend, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.SemanticTokensLegend!.TokenTypes,
+                Is.EqualTo(new[] { "variable", "variable", "type", "variable", "type" }),
+                "duplicates stored verbatim — the positions ARE the wire indices");
+            Assert.That(caps.SemanticTokensLegend.TokenModifiers,
+                Is.EqualTo(new[] { "declaration", "declaration" }));
+        });
+    }
+
+    // `legend` is not what makes the provider real: an options object without one still
+    // advertises the feature. The provider bool stays honest; there is simply nothing
+    // to decode indices against.
+    [Test]
+    public void Parse_SemanticTokensObjectWithoutLegend_HasProviderTrue_LegendNull()
+    {
+        var caps = LanguageService.ParseServerCapabilities(
+            """{"capabilities":{"semanticTokensProvider":{"full":true,"range":true}}}""");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.HasSemanticTokensProvider, Is.True);
+            Assert.That(caps.SemanticTokensLegend, Is.Null);
+        });
+    }
+
+    // A legend this parser cannot read whole is no legend at all. All-or-nothing is
+    // deliberate: tokens index these arrays by POSITION, so skipping one malformed
+    // entry would silently shift every index after it — worse than having no legend.
+    // The provider bool stays true throughout: the feature exists either way.
+    [TestCase("""{"capabilities":{"semanticTokensProvider":{"legend":true}}}""")]
+    [TestCase("""{"capabilities":{"semanticTokensProvider":{"legend":{"tokenTypes":"not an array","tokenModifiers":[]}}}}""")]
+    [TestCase("""{"capabilities":{"semanticTokensProvider":{"legend":{"tokenTypes":["variable",42],"tokenModifiers":[]}}}}""")]
+    [TestCase("""{"capabilities":{"semanticTokensProvider":{"legend":{"tokenTypes":["variable"]}}}}""")]
+    public void Parse_MalformedLegend_IsNull_ProviderStillTrue_NotThrow(string json)
+    {
+        ServerCapabilities caps = null!;
+
+        Assert.DoesNotThrow(() => caps = LanguageService.ParseServerCapabilities(json));
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.SemanticTokensLegend, Is.Null);
+            Assert.That(caps.HasSemanticTokensProvider, Is.True,
+                "an unreadable legend must not erase the provider — supported and decodable are different claims");
+        });
+    }
 }
