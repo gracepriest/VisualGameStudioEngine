@@ -45,8 +45,9 @@ namespace VisualGameStudio.Tests.LSP;
 ///
 /// <para>
 /// <b>Skips when clangd is not installed</b>, resolving through the identical probe
-/// <see cref="ClangdLaunchTests"/> uses (the <c>cpp.clangd.path</c>-override branch against
-/// <c>~\.vgs\tools\clangd*\bin\clangd.exe</c>, then PATH). On the phase's dev machine clangd IS
+/// <see cref="ClangdLaunchTests"/> uses (shared as <see cref="ClangdTestDiscovery"/>: the
+/// <c>cpp.clangd.path</c>-override branch against <c>~\.vgs\tools\clangd*\bin\clangd.exe</c>,
+/// then the locator's own chain). On the phase's dev machine clangd IS
 /// installed and these must RUN — a skip there is a task failure, not a pass.
 /// </para>
 ///
@@ -160,42 +161,19 @@ public class ClangdE2ETests
     private readonly List<(string FilePath, IReadOnlyList<DiagnosticItem> Diagnostics)> _clangdPublishes = new();
 
     // ------------------------------------------------------------------
-    // clangd discovery — same probe as ClangdLaunchTests: the ~\.vgs\tools dir is passed as
-    // the configuredPath override (exercising the cpp.clangd.path branch against a real
-    // executable on a machine that deliberately keeps clangd off PATH), then PATH.
+    // clangd discovery — the shared ClangdTestDiscovery trio (same probe as ClangdLaunchTests):
+    // the ~\.vgs\tools hit is passed as the configuredPath override, exercising the
+    // cpp.clangd.path branch against a real executable; the production locator's own chain
+    // (which probes the same tools root natively since da46530) follows.
     // ------------------------------------------------------------------
 
-    private static string? LocateClangd() =>
-        ClangdLocator.ResolveClangdPath(configuredPath: ProbeVgsToolsDir());
+    private static string? LocateClangd() => ClangdTestDiscovery.LocateClangd();
 
-    private static string? ProbeVgsToolsDir()
-    {
-        try
-        {
-            var toolsDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vgs", "tools");
-            if (!Directory.Exists(toolsDir)) return null;
-
-            return Directory.GetDirectories(toolsDir, "clangd*")
-                .OrderByDescending(dir => dir, StringComparer.OrdinalIgnoreCase)
-                .Select(dir => Path.Combine(dir, "bin", "clangd.exe"))
-                .FirstOrDefault(File.Exists);
-        }
-        catch
-        {
-            return null; // an unreadable profile dir degrades to the PATH probe, never fails the fixture
-        }
-    }
-
-    private static void RequireClangd(string? clangdPath)
-    {
-        if (clangdPath == null)
-        {
-            Assert.Ignore(
-                "clangd is not installed on this machine (not under ~\\.vgs\\tools\\clangd*\\bin, " +
-                "not on PATH). This fixture drives a real clangd end-to-end; install clangd to run it.");
-        }
-    }
+    private static void RequireClangd(string? clangdPath) =>
+        ClangdTestDiscovery.RequireClangd(
+            clangdPath,
+            "clangd is not installed on this machine (not under ~\\.vgs\\tools\\clangd*\\bin, " +
+            "not on PATH). This fixture drives a real clangd end-to-end; install clangd to run it.");
 
     // ------------------------------------------------------------------
     // Setup / teardown

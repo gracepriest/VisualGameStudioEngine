@@ -20,9 +20,10 @@ namespace VisualGameStudio.Tests.LSP;
 /// <b>Skips when clangd is not installed</b>, mirroring the toolchain-conditional native tests.
 /// clangd does not ship with the IDE and is absent from most dev machines, so an unconditional
 /// fixture here would fail for everyone. It resolves through <see cref="ClangdLocator"/> the same
-/// way the IDE does — a configured-path override first, then PATH — so either putting clangd on
-/// PATH or having one under <c>~\.vgs\tools\clangd*\bin</c> (the per-user tools directory this
-/// suite's dev machines use, and where Phase 3b will download to) makes these run.
+/// way the IDE does — a configured-path override first, then the auto-probe chain — so either
+/// putting clangd on PATH or having one under <c>~\.vgs\tools\clangd*\bin</c> (the per-user tools
+/// directory this suite's dev machines use, and where Phase 3b's acquisition downloads to) makes
+/// these run.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -34,39 +35,13 @@ public class ClangdLaunchTests
     /// <summary>
     /// The clangd the IDE would use, or null — the skip condition for every test here.
     /// <para>
-    /// The <c>~\.vgs\tools</c> probe is passed as <c>configuredPath</c>, which ALSO exercises
-    /// Task 11's <c>cpp.clangd.path</c> override branch against a real executable — on a machine
-    /// with clangd deliberately kept off PATH, the override is the only route these tests have,
-    /// exactly as it is the only route such a user's IDE has.
+    /// Shared with <see cref="ClangdE2ETests"/> via <see cref="ClangdTestDiscovery"/>: the
+    /// <c>~\.vgs\tools</c> hit rides Task 11's <c>cpp.clangd.path</c> override branch
+    /// deliberately, independent of the production locator's own tools-root probe — see the
+    /// shared class for the full rationale.
     /// </para>
     /// </summary>
-    private static string? LocateClangd() =>
-        ClangdLocator.ResolveClangdPath(configuredPath: ProbeVgsToolsDir());
-
-    /// <summary>
-    /// A <c>clangd.exe</c> under <c>%USERPROFILE%\.vgs\tools\clangd*\bin</c> (the highest-sorting
-    /// directory name wins — any working clangd will do here), or null. Test-only: the production
-    /// locator deliberately knows nothing about this directory in Phase 3a (acquisition is
-    /// Phase 3b); a user with clangd there points cpp.clangd.path at it.
-    /// </summary>
-    private static string? ProbeVgsToolsDir()
-    {
-        try
-        {
-            var toolsDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vgs", "tools");
-            if (!Directory.Exists(toolsDir)) return null;
-
-            return Directory.GetDirectories(toolsDir, "clangd*")
-                .OrderByDescending(dir => dir, StringComparer.OrdinalIgnoreCase)
-                .Select(dir => Path.Combine(dir, "bin", "clangd.exe"))
-                .FirstOrDefault(File.Exists);
-        }
-        catch
-        {
-            return null; // An unreadable profile dir must degrade to the PATH probe, not fail the fixture.
-        }
-    }
+    private static string? LocateClangd() => ClangdTestDiscovery.LocateClangd();
 
     [SetUp]
     public void SetUp()
@@ -92,15 +67,11 @@ public class ClangdLaunchTests
         }
     }
 
-    private static void RequireClangd(string? clangdPath)
-    {
-        if (clangdPath == null)
-        {
-            Assert.Ignore(
-                "clangd is not installed on this machine (not on PATH, no cpp.clangd.path override). " +
-                "This test exercises a real clangd process; install clangd or put it on PATH to run it.");
-        }
-    }
+    private static void RequireClangd(string? clangdPath) =>
+        ClangdTestDiscovery.RequireClangd(
+            clangdPath,
+            "clangd is not installed on this machine (not on PATH, no cpp.clangd.path override). " +
+            "This test exercises a real clangd process; install clangd or put it on PATH to run it.");
 
     /// <summary>
     /// THE TASK, PROVEN AGAINST THE REAL THING: clangd starts and reaches a connected state.
