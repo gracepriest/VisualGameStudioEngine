@@ -18,6 +18,14 @@ namespace BasicLang.Compiler.LSP
     {
         private readonly DocumentManager _documentManager;
 
+        // KEEP IN SYNC — the legend registered below (CreateRegistrationOptions) IS the
+        // IDE's canonical client-side legend: it is mirrored verbatim (same wire names,
+        // same order) in VisualGameStudio.Core/Utilities/SemanticTokenLegendMap.cs, which
+        // remaps foreign servers' tokens (clangd's) INTO these indices, and the IDE's
+        // SemanticTokenHighlighter brush switch is keyed to the same order. Reorder or
+        // extend the legend here and you must change both of those with it, or remapped
+        // tokens silently shift color.
+
         // Token type indices
         private const int TokenTypeNamespace = 0;
         private const int TokenTypeType = 1;
