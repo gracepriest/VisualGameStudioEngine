@@ -2,7 +2,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
-using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.ProjectSystem.Services;
@@ -99,6 +98,13 @@ public partial class App : Application
         // resolved explicitly here or it would never be created.
         try { _ = Services.GetRequiredService<GitAutoFetchService>(); }
         catch (Exception ex) { LogCrash("GIT_AUTOFETCH_START", ex); }
+
+        // Subscribe the save→IntelliSense-regen coordinator (FileSavedEvent → debounced
+        // RequestEmit, Task 10 / Phase 3b). Same deal as GitAutoFetchService above: nothing else
+        // injects it, so it must be resolved explicitly here or it is never constructed and never
+        // subscribes; the DI container disposes it on shutdown.
+        try { _ = Services.GetRequiredService<RegenOnSaveCoordinator>(); }
+        catch (Exception ex) { LogCrash("REGEN_ON_SAVE_START", ex); }
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

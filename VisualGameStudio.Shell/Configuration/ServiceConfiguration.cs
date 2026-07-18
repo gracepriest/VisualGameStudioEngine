@@ -80,6 +80,18 @@ public static class ServiceConfiguration
         // constructor for tests, and naming the production one here keeps DI from having to choose.
         services.AddSingleton<IIntelliSenseEmissionService>(sp =>
             new IntelliSenseEmissionService(sp.GetRequiredService<IOutputService>()));
+        // Saving a .bas/.mod/.cls file under the current project re-runs that emission after a
+        // 1.5s trailing-edge debounce (Task 10, Phase 3b), so clangd tracks edits between builds.
+        // Registered by concrete type — NOTHING injects it, so App.OnFrameworkInitializationCompleted
+        // resolves it eagerly (beside GitAutoFetchService): a lazily-resolved singleton nobody
+        // injects is never constructed and therefore never subscribes to FileSavedEvent. Disposed
+        // with the container. The factory names the production ctor: the class also exposes a
+        // public quiet-period seam ctor for tests, and naming this one keeps DI from choosing.
+        services.AddSingleton(sp => new RegenOnSaveCoordinator(
+            sp.GetRequiredService<IIntelliSenseEmissionService>(),
+            sp.GetRequiredService<IProjectService>(),
+            sp.GetRequiredService<IBuildService>(),
+            sp.GetRequiredService<IEventAggregator>()));
         services.AddSingleton<IDebugService, DebugService>();
         services.AddSingleton<ILaunchConfigurationService, LaunchConfigurationService>();
         services.AddSingleton<IGitService, GitService>();
