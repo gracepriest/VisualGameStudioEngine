@@ -642,8 +642,9 @@ public class LanguageServiceRegistryTests
     /// <para>
     /// <see cref="BuildProvider"/> swaps in a loose <see cref="ISettingsService"/> mock whose
     /// <c>Get&lt;string&gt;</c> returns null, so there is no <c>cpp.clangd.path</c> override in
-    /// play and the locator's answer here is the PATH probe alone — which is exactly what the
-    /// container is resolving through.
+    /// play and the locator's answer here is the full auto-probe chain — <c>~/.vgs/tools</c>,
+    /// then PATH, then the conventional LLVM install dirs — which is exactly what the container
+    /// is resolving through.
     /// </para>
     /// </remarks>
     [Test]

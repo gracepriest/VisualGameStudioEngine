@@ -282,6 +282,75 @@ public class ExecutableLocatorTests
     }
 
     // ──────────────────────────────────────────────────────────────────
+    //  FindInDirectories — the explicit-directory-list search (no PATH)
+    // ──────────────────────────────────────────────────────────────────
+
+    [Test]
+    public void FindInDirectories_ProbesEachDirInOrder_WithCandidateNames()
+    {
+        var probed = new List<string>();
+        Func<string, bool> recording = p =>
+        {
+            probed.Add(p);
+            return string.Equals(p, @"C:\second\clangd.EXE", StringComparison.Ordinal);
+        };
+
+        var found = ExecutableLocator.FindInDirectories(
+            "clangd",
+            new[] { @"C:\first", @"C:\second" },
+            WinPathExt,
+            recording,
+            isWindows: true);
+
+        Assert.That(found, Is.EqualTo(@"C:\second\clangd.EXE"));
+        // Directory-major with PATHEXT applied inside each directory, stopping at the first hit —
+        // the exact probe sequence is the contract, mirroring FindIn's. The two candidates after
+        // the hit (second\clangd.BAT, second\clangd.CMD) must never be probed.
+        Assert.That(probed, Is.EqualTo(new[]
+        {
+            @"C:\first\clangd.COM", @"C:\first\clangd.EXE", @"C:\first\clangd.BAT", @"C:\first\clangd.CMD",
+            @"C:\second\clangd.COM", @"C:\second\clangd.EXE",
+        }));
+    }
+
+    [Test]
+    public void FindInDirectories_ReturnsAbsolutePaths()
+    {
+        // Same rule as Find: the hit is handed to Process.Start, where a relative path would
+        // re-resolve against the CHILD's working directory. A relative candidate directory must
+        // therefore yield an absolute result.
+        var relativeHit = Path.Combine("toolbin", "clangd.EXE");
+
+        var found = ExecutableLocator.FindInDirectories(
+            "clangd",
+            new[] { "toolbin" },
+            WinPathExt,
+            p => string.Equals(p, relativeHit, StringComparison.OrdinalIgnoreCase),
+            isWindows: true);
+
+        Assert.That(found, Is.Not.Null);
+        Assert.That(Path.IsPathRooted(found), Is.True,
+            $"the hit must be absolute, but was \"{found}\"");
+        Assert.That(found, Is.EqualTo(Path.GetFullPath(relativeHit)));
+    }
+
+    [Test]
+    public void FindInDirectories_SkipsDirsThatThrow()
+    {
+        // Mirrors FindIn's per-directory guard: one inaccessible candidate directory (dead network
+        // share, ACL) must not abort the sweep — the remaining directories are still searched.
+        Func<string, bool> exists = p =>
+            p.Contains("bad", StringComparison.OrdinalIgnoreCase)
+                ? throw new IOException("boom")
+                : string.Equals(p, @"C:\good\clangd.exe", StringComparison.OrdinalIgnoreCase);
+
+        var found = ExecutableLocator.FindInDirectories(
+            "clangd", new[] { @"C:\bad", @"C:\good" }, WinPathExt, exists, isWindows: true);
+
+        Assert.That(found, Is.EqualTo(@"C:\good\clangd.EXE"));
+    }
+
+    // ──────────────────────────────────────────────────────────────────
     //  Find — the environment-reading wrapper
     // ──────────────────────────────────────────────────────────────────
 

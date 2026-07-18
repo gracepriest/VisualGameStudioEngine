@@ -124,6 +124,63 @@ public static class ExecutableLocator
     }
 
     /// <summary>
+    /// The <see cref="FindIn"/> rule over an explicit directory list instead of a PATH value: each
+    /// directory is probed in list order with the same <see cref="CandidateNames"/> (PATHEXT applies
+    /// per directory), and the first hit wins.
+    /// </summary>
+    /// <remarks>
+    /// This is the "conventional install locations" search — the caller supplies directories that
+    /// are merely CANDIDATES (most will not exist), so a directory whose probe throws is skipped
+    /// exactly like a malformed PATH entry in <see cref="FindIn"/>. Unlike <see cref="FindIn"/> the
+    /// hit is absolutized here: the supplied directories are constants rather than environment, so
+    /// there is no purer place to settle a relative entry, and callers hand the result straight to
+    /// <see cref="System.Diagnostics.ProcessStartInfo.FileName"/>.
+    /// </remarks>
+    /// <param name="executable">Tool name, bare or with an extension.</param>
+    /// <param name="directories">Candidate directories, probed in order; null means none.</param>
+    /// <param name="pathExtValue">The PATHEXT value; ignored unless <paramref name="isWindows"/>.</param>
+    /// <param name="fileExists">Existence probe (<see cref="File.Exists(string)"/> in production).</param>
+    /// <param name="isWindows">Whether PATHEXT applies.</param>
+    /// <returns>The first hit as an absolute path, or null.</returns>
+    public static string? FindInDirectories(
+        string? executable,
+        IEnumerable<string>? directories,
+        string? pathExtValue,
+        Func<string, bool> fileExists,
+        bool isWindows)
+    {
+        if (string.IsNullOrWhiteSpace(executable)) return null;
+        if (directories == null) return null;
+
+        var exists = fileExists ?? File.Exists;
+        var candidates = CandidateNames(executable, pathExtValue, isWindows);
+
+        foreach (var entry in directories)
+        {
+            if (string.IsNullOrWhiteSpace(entry)) continue;
+            var dir = entry.Trim();
+
+            foreach (var candidate in candidates)
+            {
+                try
+                {
+                    var full = Path.Combine(dir, candidate);
+                    if (exists(full)) return Path.GetFullPath(full);
+                }
+                catch
+                {
+                    // Same rule as FindIn: whatever one candidate directory can do to Path.Combine
+                    // or the probe must not abort the sweep. Its remaining candidates would fail
+                    // the same way, so move on to the next directory.
+                    break;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// The file names to probe for <paramref name="executable"/>, in priority order.
     /// </summary>
     /// <returns>
