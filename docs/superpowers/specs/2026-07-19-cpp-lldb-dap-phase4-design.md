@@ -38,7 +38,8 @@ hits a guard ("Native C++ debugging arrives in a later phase") at
 5. **Exceptions:** the Exception Settings dialog becomes **adapter-driven**:
    the client stops discarding the DAP `initialize` response and renders
    whatever `exceptionBreakpointFilters` the active adapter advertises
-   (`cpp_throw`/`cpp_catch` for lldb-dap; .NET categories for managed). Any
+   (`cpp_throw`/`cpp_catch` for lldb-dap; the managed adapter's
+   `all`/`uncaught`). Any
    future adapter gets correct exception UI for free.
 
 ## 3. Architecture
@@ -85,17 +86,25 @@ repo's two dead DAP stacks lack.
 Three mandatory correctness fixes land here, once, for both adapters:
 
 1. **Spec-correct handshake**, with the `launch` request's position
-   explicit: `initialize` request → `initialize` response (capabilities
-   retained) → send `launch` **without awaiting its response** → await the
-   `initialized` **event** (adapters emit it only while processing
-   launch/attach) → `setBreakpoints`/`setExceptionBreakpoints` →
-   `configurationDone` → the `launch` response then completes. Today's
+   explicit. Arm the `initialized`-event listener **before anything is
+   sent** — DAP permits a conforming adapter to emit `initialized` any time
+   after the initialize response, and the repo's legacy `--dap-legacy`
+   adapter does exactly that (~50 ms after, before any launch); the two v1
+   adapters emit it while processing launch/attach. Then: `initialize`
+   request → `initialize` response (capabilities retained) → send `launch`
+   **without awaiting its response** → await `initialized` →
+   `setBreakpoints`/`setExceptionBreakpoints` → `configurationDone` → await
+   the `launch` response. Launch-response completion timing is
+   **adapter-dependent** — the managed adapter completes it before
+   configuration, lldb-dap defers it until after `configurationDone` — so
+   the session awaits it only after `configurationDone` and must accept it
+   having arrived earlier; neither timing is a protocol error. Today's
    client ignores the `initialized` event (event switch :1158-1204) and
    awaits the `launch` response before sending `configurationDone`
-   (:160→:182); the managed adapter tolerates this, lldb-dap defers the
-   launch response until `configurationDone` — a stall. The opposite error
-   is just as fatal: waiting for `initialized` before sending `launch`
-   deadlocks, because the event never arrives.
+   (:160→:182); the managed adapter tolerates this, lldb-dap stalls on it.
+   The opposite error is just as fatal against lldb-dap: waiting for
+   `initialized` before sending `launch` deadlocks, because lldb-dap emits
+   it only during launch processing.
 2. **Real threadIds:** the threadId delivered in `stopped` events is threaded
    through continue/step/pause/goto and every stack fetch. Today `1` is
    hardcoded five times in `DebugService.cs` (:492/:540/:556/:588, plus :668
@@ -265,10 +274,14 @@ C++ names; the Variables pane shows those names in v1 either way.
 Three rings, all gating commits via the full suite as usual:
 
 1. **Unit — session core vs a scripted fake adapter** (in-proc DAP stub over
-   pipes): handshake ordering — including an lldb-dap-shaped stub that emits
-   `initialized` only after receiving `launch`, a case today's client fails
-   by deadlock — capabilities retention, threadId propagation, and the
-   framing edge cases (UTF-8/BOM — load-bearing per the 3a lesson).
+   pipes): handshake ordering under **both timing regimes** — an
+   lldb-dap-shaped stub that emits `initialized` only after receiving
+   `launch` and defers the launch response past `configurationDone` (today's
+   client deadlocks on it), and a managed-shaped stub that emits
+   `initialized` immediately after the initialize response and completes
+   launch before configuration — plus capabilities retention, threadId
+   propagation, and the framing edge cases (UTF-8/BOM — load-bearing per
+   the 3a lesson).
    Registry routing, descriptor lookup, and installer behavior (SHA mismatch,
    partial download, extract) get plain unit tests mirroring 3b's.
 2. **Regression — the managed-adapter e2e stays green through the refactor.**
