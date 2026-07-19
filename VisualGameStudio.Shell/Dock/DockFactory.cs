@@ -704,23 +704,34 @@ public class DockFactory : Factory
     {
         if (_rootDock == null) return;
 
-        var (tool, parent) = FindDockableWithParent(_rootDock, toolId, null);
-
-        // If the tool isn't in the layout, the user closed it — recreate and re-dock it so the
-        // menu command actually reopens the panel instead of silently doing nothing.
-        if (tool == null)
+        // Never let a panel activation take down the IDE: restored per-project layouts can arrive
+        // in shapes the rebuild helpers haven't seen (this happened — a post-collapse restore made
+        // every build crash via ShowBuildOutput). A failed activation degrades to a no-op the user
+        // can recover from with View → Reset Layout; a throw here kills the whole app.
+        try
         {
-            (tool, parent) = ReopenClosedTool(toolId);
-            if (tool == null) return;
-        }
+            var (tool, parent) = FindDockableWithParent(_rootDock, toolId, null);
 
-        // Set as active in parent dock first (this switches the tab)
-        if (parent is IDock parentDock)
-        {
-            parentDock.ActiveDockable = tool;
+            // If the tool isn't in the layout, the user closed it — recreate and re-dock it so the
+            // menu command actually reopens the panel instead of silently doing nothing.
+            if (tool == null)
+            {
+                (tool, parent) = ReopenClosedTool(toolId);
+                if (tool == null) return;
+            }
+
+            // Set as active in parent dock first (this switches the tab)
+            if (parent is IDock parentDock)
+            {
+                parentDock.ActiveDockable = tool;
+            }
+            SetActiveDockable(tool);
+            SetFocusedDockable(_rootDock, tool);
         }
-        SetActiveDockable(tool);
-        SetFocusedDockable(_rootDock, tool);
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[DockFactory] ActivateTool('{toolId}') failed: {ex}");
+        }
     }
 
     /// <summary>
@@ -851,9 +862,13 @@ public class DockFactory : Factory
         _mainArea = mainArea;
 
         // Swap MainArea into the DocumentDock's slot, then re-nest the DocumentDock inside it.
+        // The index MUST be re-clamped after the removal: Dock 11.3's RemoveDockable also strips
+        // the now-orphaned adjacent splitter, so when the DocumentDock was the LAST child the
+        // captured slot exceeds the shrunken collection and Collection.Insert throws — which killed
+        // the IDE on every build with a restored post-collapse layout (ShowBuildOutput → here).
         var index = parentDock.VisibleDockables.IndexOf(documentDock);
         RemoveDockable(documentDock, false);
-        InsertDockable(parentDock, mainArea, Math.Max(index, 0));
+        InsertDockable(parentDock, mainArea, Math.Clamp(index, 0, parentDock.VisibleDockables.Count));
         AddDockable(mainArea, documentDock);
         documentDock.Proportion = 0.6; // its share within MainArea, as in CreateLayout
         return mainArea;

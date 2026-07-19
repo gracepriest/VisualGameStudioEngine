@@ -90,6 +90,41 @@ public class DockReopenResilienceTests
         }
     }
 
+    /// <summary>
+    /// Regression: the July 18 smoke crash. A restored per-project layout can arrive with MainArea
+    /// already collapsed away (Dock 11.3 legitimately saves such trees): the DocumentDock is hoisted
+    /// to the LAST slot of the root layout, after [LeftDock, Splitter]. Reopening a bottom tool then
+    /// walks EnsureBottomRegion → EnsureMainArea, which captured DocumentDock's index BEFORE
+    /// RemoveDockable — but 11.3's RemoveDockable also strips the now-adjacent splitter, so the
+    /// stale index exceeded the shrunken collection and Collection.Insert threw
+    /// ArgumentOutOfRangeException, killing the IDE on every build (ShowBuildOutput → ActivateTool).
+    /// </summary>
+    [Test]
+    public void ReopenBottomTool_OnRestoredLayoutWithMainAreaCollapsedAway_DoesNotCrash()
+    {
+        var (factory, root) = NewLayout();
+
+        // Simulate the restored shape: detach MainArea (taking BottomDock and every bottom tool
+        // with it) and hoist the DocumentDock to the end of the root layout — [LeftDock, Splitter,
+        // DocumentDock] — the way a saved post-collapse layout restores. The root layout
+        // ProportionalDock has no Id (cf. DockFactory.RootLayout()): it is the sole child of "Root".
+        var rootLayout = (IDock)((IDock)root).VisibleDockables![0];
+        var mainArea = FindLive(root, "MainArea")!;
+        var documentDock = FindLive(root, "DocumentDock")!;
+        rootLayout.VisibleDockables!.Remove(mainArea);
+        rootLayout.VisibleDockables.Add(documentDock);
+        documentDock.Owner = rootLayout;
+        Assert.That(FindLive(root, "MainArea"), Is.Null, "sanity: MainArea is collapsed away");
+        Assert.That(FindLive(root, "Output"), Is.Null, "sanity: bottom tools went with it");
+
+        factory.ActivateTool("Output");
+
+        Assert.That(FindLive(root, "Output"), Is.Not.Null, "Output must reopen, not crash the IDE");
+        Assert.That(IsUnder(root, "BottomDock", "Output"), Is.True, "Output rebuilt into the bottom region");
+        Assert.That(FindLive(root, "DocumentDock"), Is.Not.Null, "the DocumentDock must never be orphaned");
+        Assert.That(IsUnder(root, "MainArea", "DocumentDock"), Is.True, "DocumentDock re-nested inside the rebuilt MainArea");
+    }
+
     private static readonly string[] AllToolIds =
     {
         "SolutionExplorer","GitChanges","GitBranches","GitStash","GitBlame","Timeline","DocumentOutline","Bookmarks","Extensions",
