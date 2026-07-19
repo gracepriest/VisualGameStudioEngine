@@ -116,7 +116,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // Definition sections are captured FIRST so _usesFramework and the framework
             // call set reflect real usage before the runtime header renders LAST.
-            result.Files.Add(projectHeaderName, CaptureSection(() =>
+            result.Files.Add(projectHeaderName, CaptureSection(projectHeaderName, () =>
                 EmitAggregateHeader(combined, standaloneFunctions, templateFunctions)));
 
             foreach (var name in moduleNames)
@@ -124,21 +124,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var functions = buckets[name];
                 if (functions.Count == 0) continue;   // module contributes no definitions
                 var fileName = name + ".g.cpp";
-                result.Files.Add(fileName, CaptureSection(() => EmitDefinitionUnit(projectHeaderName, functions)));
+                result.Files.Add(fileName, CaptureSection(fileName, () => EmitDefinitionUnit(projectHeaderName, functions)));
                 result.TranslationUnitFileNames.Add(fileName);
             }
 
             if (sharedBucket.Count > 0)
             {
                 var fileName = projectName + ".__shared.g.cpp";
-                result.Files.Add(fileName, CaptureSection(() => EmitDefinitionUnit(projectHeaderName, sharedBucket)));
+                result.Files.Add(fileName, CaptureSection(fileName, () => EmitDefinitionUnit(projectHeaderName, sharedBucket)));
                 result.TranslationUnitFileNames.Add(fileName);
             }
 
             if (emitMain)
             {
                 var fileName = projectName + ".main.g.cpp";
-                result.Files.Add(fileName, CaptureSection(() =>
+                result.Files.Add(fileName, CaptureSection(fileName, () =>
                 {
                     WriteLine($"#include \"{projectHeaderName}\"");
                     WriteLine();
@@ -153,14 +153,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             foreach (var name in moduleNames)
             {
                 if (name.Equals(projectName, StringComparison.OrdinalIgnoreCase)) continue;
-                result.Files.Add(name + ".g.h", CaptureSection(() =>
+                result.Files.Add(name + ".g.h", CaptureSection(name + ".g.h", () =>
                 {
                     WriteLine("#pragma once");
                     WriteLine($"#include \"{projectHeaderName}\"");
                 }));
             }
 
-            result.Files.Add(RuntimeHeaderFileName, CaptureSection(() => EmitRuntimeHeader(combined)));
+            result.Files.Add(RuntimeHeaderFileName, CaptureSection(RuntimeHeaderFileName, () => EmitRuntimeHeader(combined)));
             result.UsesFramework = _usesFramework;
             return result;
         }
@@ -168,8 +168,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <summary>
         /// Swap <see cref="_output"/> to a fresh buffer, run <paramref name="emit"/> at indent
         /// level 0, and return the captured text (buffer and indent restored even on throw).
+        /// <paramref name="fileName"/> is the captured file's own emitted name: the #line
+        /// reset target for synthesized code, with dedupe state fresh per file.
         /// </summary>
-        private string CaptureSection(Action emit)
+        private string CaptureSection(string fileName, Action emit)
         {
             var savedOutput = _output;
             var savedIndent = _indentLevel;
@@ -177,6 +179,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             try
             {
                 _indentLevel = 0;
+                _currentGeneratedFileName = fileName;
+                _lastEmittedSourceLine = -1;
+                _lastEmittedSourceFile = null;
                 emit();
                 return _output.ToString();
             }
@@ -184,6 +189,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 _output = savedOutput;
                 _indentLevel = savedIndent;
+                _currentGeneratedFileName = null;
             }
         }
 

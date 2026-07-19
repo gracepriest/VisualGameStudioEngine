@@ -16,6 +16,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     {
         // Not readonly: swapped temporarily while rendering inline lambda bodies
         private StringBuilder _output;
+        // #line directive state (EmitLineDirectives): dedupe of consecutive same-line
+        // instructions, the captured file's own name (reset target for synthesized code),
+        // and suppression while a lambda body is rendered into a side buffer (a #line
+        // there would land mid-expression and break the compile).
+        private int _lastEmittedSourceLine = -1;
+        private string _lastEmittedSourceFile;      // normalized (forward slashes)
+        private string _currentGeneratedFileName;   // set per captured split file; module-derived in Generate()
+        private bool _suppressLineDirectives;       // true while capturing inline lambda bodies
         private readonly CppCodeGenOptions _options;
         private readonly HashSet<IRValue> _allTemporaries;
         private readonly List<string> _headerIncludes;
@@ -74,6 +82,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _usesFramework = false;
             _frameworkFunctionsUsed.Clear();
             _tempCounter = 0;
+            // Single-file path (unit tests, demos): the whole module is one notional file.
+            // The real build goes through GenerateSplit, where CaptureSection sets this
+            // per captured file.
+            _currentGeneratedFileName = module.Name + ".g.cpp";
+            _lastEmittedSourceLine = -1;
+            _lastEmittedSourceFile = null;
 
             // Generate header
             GenerateHeader(module);
@@ -652,11 +666,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var savedNames = new Dictionary<IRValue, string>(_valueNames);
             var savedDeclared = new HashSet<string>(_declaredIdentifiers, StringComparer.OrdinalIgnoreCase);
             var savedTemps = new HashSet<IRValue>(_allTemporaries);
+            var savedSuppress = _suppressLineDirectives;
 
             try
             {
                 _output = new StringBuilder();
                 _indentLevel = 0;
+                // A #line directive inside an inlined lambda body would land mid-expression
+                // and break the compile — suppress for the whole capture (nesting-safe).
+                _suppressLineDirectives = true;
 
                 var ps = string.Join(", ",
                     lambda.Parameters.Select(p => $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
@@ -678,6 +696,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             finally
             {
                 _output = savedOutput;
+                _suppressLineDirectives = savedSuppress;
                 _currentFunction = savedFunction;
                 _indentLevel = savedIndent;
                 _tempCounter = savedTempCounter;
@@ -1030,6 +1049,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (ctor.Implementation != null)
             {
                 _currentFunction = ctor.Implementation;
+                _lastEmittedSourceLine = -1;
+                _lastEmittedSourceFile = null;
                 InitializeFunctionContext(ctor.Implementation);
                 DeclareLocalsAndTemporaries(ctor.Implementation);
                 GenerateFunctionBody(ctor.Implementation);
@@ -1113,6 +1134,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 Indent();
 
                 _currentFunction = prop.Getter;
+                _lastEmittedSourceLine = -1;
+                _lastEmittedSourceFile = null;
                 InitializeFunctionContext(prop.Getter);
                 DeclareLocalsAndTemporaries(prop.Getter);
                 GenerateFunctionBody(prop.Getter);
@@ -1135,6 +1158,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 Indent();
 
                 _currentFunction = prop.Setter;
+                _lastEmittedSourceLine = -1;
+                _lastEmittedSourceFile = null;
                 InitializeFunctionContext(prop.Setter);
                 DeclareLocalsAndTemporaries(prop.Setter);
                 GenerateFunctionBody(prop.Setter);
@@ -1213,6 +1238,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (method.Implementation != null)
             {
                 _currentFunction = method.Implementation;
+                _lastEmittedSourceLine = -1;
+                _lastEmittedSourceFile = null;
                 InitializeFunctionContext(method.Implementation);
                 DeclareLocalsAndTemporaries(method.Implementation);
                 GenerateFunctionBody(method.Implementation);
@@ -1473,6 +1500,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private void GenerateFunction(IRFunction function)
         {
             _currentFunction = function;
+            // Fresh dedupe per function (mirror CSharpBackend): the first statement must
+            // always get a directive even if the previous function ended on the same line.
+            _lastEmittedSourceLine = -1;
+            _lastEmittedSourceFile = null;
             InitializeFunctionContext(function);
 
             // Generate signature
@@ -1660,6 +1691,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Instructions
             foreach (var instruction in block.Instructions)
             {
+                if (instruction.SourceLine > 0)
+                    EmitLineDirective(instruction.SourceLine, _currentFunction?.SourceFilePath);
+                else
+                    EmitLineReset();
                 instruction.Accept(this);
             }
 
@@ -3025,6 +3060,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (block == null) return;
             foreach (var inst in block.Instructions)
             {
+                // Directive ABOVE the branch skip: terminator lines (If/While conditions)
+                // would otherwise lose their mapping.
+                if (inst.SourceLine > 0) EmitLineDirective(inst.SourceLine, _currentFunction?.SourceFilePath);
+                else EmitLineReset();
                 if (inst is IRBranch or IRConditionalBranch) continue;
                 inst.Accept(this);
             }
@@ -3104,6 +3143,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             foreach (var inst in block.Instructions)
             {
+                // Directive ABOVE the branch/end-mode switch, so terminator lines stay mapped.
+                if (inst.SourceLine > 0) EmitLineDirective(inst.SourceLine, _currentFunction?.SourceFilePath);
+                else EmitLineReset();
                 switch (inst)
                 {
                     case IRBranch br when br.Target == endBlock:
@@ -3412,7 +3454,43 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         private void Write(string text) => _output.Append(text);
-        
+
+        private void EmitLineDirective(int sourceLine, string sourceFile)
+        {
+            if (!_options.EmitLineDirectives || _suppressLineDirectives) return;
+            if (sourceLine <= 0 || string.IsNullOrEmpty(sourceFile)) return;
+            // C++ #line filenames are ESCAPE-PROCESSED string literals — unlike C#'s
+            // (CSharpBackend.EmitLineDirective takes the path verbatim). A raw Windows
+            // path breaks the compile: "C:\Users\..." contains \U, a malformed
+            // universal-character-name. Forward slashes are accepted by MSVC/clang/gcc.
+            var normalized = sourceFile.Replace('\\', '/');
+            if (sourceLine == _lastEmittedSourceLine &&
+                string.Equals(normalized, _lastEmittedSourceFile, StringComparison.OrdinalIgnoreCase))
+                return;
+            _lastEmittedSourceLine = sourceLine;
+            _lastEmittedSourceFile = normalized;
+            // Column-0, unindented, bypassing WriteLine's indent — same rationale as the C# backend.
+            _output.AppendLine($"#line {sourceLine} \"{normalized}\"");
+        }
+
+        // C++ has no `#line hidden`: optimizer-synthesized instructions (SourceLine == 0)
+        // are re-pointed at the generated file ITSELF so the line table maps them to real
+        // lines instead of smearing them onto the last user statement.
+        private void EmitLineReset()
+        {
+            if (!_options.EmitLineDirectives || _suppressLineDirectives) return;
+            if (_lastEmittedSourceFile == null) return;   // already in generated-file coordinates
+            if (string.IsNullOrEmpty(_currentGeneratedFileName)) return;
+            _lastEmittedSourceLine = -1;
+            _lastEmittedSourceFile = null;
+            // `#line N` numbers the line FOLLOWING the directive. The directive lands on
+            // physical line (newlines-so-far + 1), so N = newlines + 2. O(buffer) scan,
+            // bounded by mapped->synthesized transitions — Debug-only cost, measured fine.
+            int newlines = 0;
+            for (int i = 0; i < _output.Length; i++) if (_output[i] == '\n') newlines++;
+            _output.AppendLine($"#line {newlines + 2} \"{_currentGeneratedFileName}\"");
+        }
+
         /// <summary>
         /// Generate extern declaration for C library interop
         /// </summary>
@@ -3475,5 +3553,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public bool GenerateComments { get; set; } = true;
         public bool GenerateMainFunction { get; set; } = true;
         public string Namespace { get; set; } = "BasicLang";
+        /// <summary>Emit C++ #line directives mapping statements back to their .bas source
+        /// (native source-level debugging). Default false: every existing constructor site
+        /// stays byte-identical; the project builder opts in for Debug builds only.</summary>
+        public bool EmitLineDirectives { get; set; } = false;
     }
 }

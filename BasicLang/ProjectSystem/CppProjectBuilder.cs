@@ -252,8 +252,20 @@ namespace BasicLang.Compiler.ProjectSystem
                 // is a safe reorder, not a redesign.
                 try
                 {
-                    split = new CppCodeGenerator().GenerateSplit(
-                        compilation.CombinedIR, safeProject, unitIRs, emitMain);
+                    // Debug-only #line: keyed off the SAME per-config DebugSymbols bit that
+                    // decides /Zi | -g (CppCompileRequest below) so source-mapped line tables
+                    // and debug info always travel together. Release output stays
+                    // byte-identical (DebugSymbols defaults false there, ProjectFile.cs).
+                    // IntelliSense emission stays clean: clangd serves the generated headers
+                    // to user .cpp and #line would remap its diagnostics onto .bas lines.
+                    bool emitLineDirectives = !forIntelliSense;
+                    if (emitLineDirectives
+                        && project.Configurations.TryGetValue(configuration, out var cfgForCodegen))
+                        emitLineDirectives = cfgForCodegen.DebugSymbols;
+                    split = new CppCodeGenerator(new CppCodeGenOptions
+                    {
+                        EmitLineDirectives = emitLineDirectives
+                    }).GenerateSplit(compilation.CombinedIR, safeProject, unitIRs, emitMain);
                 }
                 catch (CppCapabilityException ex)
                 {
