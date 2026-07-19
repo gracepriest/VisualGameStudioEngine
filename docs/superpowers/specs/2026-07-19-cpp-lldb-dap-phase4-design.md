@@ -179,9 +179,9 @@ Structural sibling of `ClangdInstaller`:
 - Entry points: **Tools → Download C++ Debugger** and the offer toast on first
   F5 of a native project (the `ClangdDownloadFlow` pattern).
 - Locator chain, checked in order: explicit setting (`cpp.lldbDap.path`) →
-  `~/.vgs/tools` → PATH → known LLVM install dirs (reuses 3b's
-  `ExecutableLocator`). A user with their own working lldb-dap is served
-  without downloading.
+  `~/.vgs/tools` → PATH → known LLVM install dirs, including
+  `C:\winlibs\mingw64\bin` (reuses 3b's `ExecutableLocator`). A user with
+  their own working lldb-dap is served without downloading.
 
 **The zip is a one-time build-pipeline deliverable** (its own plan task):
 lldb-dap 22.x built with `LLDB_ENABLE_PYTHON=OFF` (kills the broken-python
@@ -296,10 +296,23 @@ Three rings, all gating commits via the full suite as usual:
    exception → disconnect leaves zero orphan processes. The Step-0 gate
    (§7) reuses this harness.
 
-**Machine caveat (honest):** the primary dev machine has MSVC only, so live
-e2e coverage is the MSVC/PDB path — the first-class path by decision. clang
-and g++ routes carry descriptor-pairing and unit coverage and are marked
-untested-live until a machine has those toolchains.
+**Machine reality (updated Jul 19):** besides MSVC, the dev machine now
+carries a winlibs install at `C:\winlibs\mingw64` (GCC 14.2, clang/LLD/LLDB
+19.1.7, mingw-w64 UCRT) with a working self-contained `lldb-dap.exe`
+(bundled `liblldb.dll` + `libpython3.9.dll` — no official-installer python
+trap). All three toolchain routes are therefore live-testable: MSVC/PDB
+(first-class) plus clang and g++ mingw/DWARF. Two cautions:
+
+- **It stays OFF PATH deliberately.** The toolchain probe (clang++ → g++ →
+  vswhere) would otherwise flip default builds from MSVC to mingw clang++ —
+  changing debug format and putting the MSVC-built engine import lib into a
+  mingw link. The debugger locator reaches it through the known-dirs probe
+  (§5) instead.
+- **19.1.7 is the dev debugger, not the shipped one.** It predates the
+  mature native-PDB era (LLDB 21/22); its mingw build uses the native PDB
+  reader exclusively (no DIA) and its DWARF support is fully mature. The
+  shipped zip still pins 22.x, and any MSVC/PDB quirk seen locally on 19 is
+  checked against 22 before being treated as our bug.
 
 ## 11. Risks
 
@@ -308,5 +321,5 @@ untested-live until a machine has those toolchains.
 | lldb-dap stalls/quirks differ from managed adapter | spec-correct handshake (§3.3.1); descriptor timeout profile; session-death path (§8) |
 | Managed debugging regression during extraction | regression e2e ring (§10.2) gates every commit |
 | `#line` gate fails on PDB line tables | it's a gate — measured first, parked with evidence on failure |
-| Self-host zip build effort / hosting | one-time pipeline task with fresh-VM acceptance (§5); locator chain serves user-provided binaries meanwhile |
+| Self-host zip build effort / hosting | one-time pipeline task with fresh-VM acceptance (§5); off the critical path — the dev machine's winlibs lldb-dap (§10) unblocks all development and e2e today |
 | PDB expression-eval crashes the adapter | per-request evaluate isolation + session-death path (§8) |
