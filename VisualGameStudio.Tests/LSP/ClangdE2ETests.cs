@@ -56,6 +56,14 @@ namespace VisualGameStudio.Tests.LSP;
 /// decision — never the machine's real toolchain, so the compile database is the same
 /// clang++-driver one the IDE would produce on a toolchain-less machine.
 /// </para>
+///
+/// <para>
+/// Phase 3b (Task 14) adds a seventh test:
+/// <see cref="SemanticTokens_ForTheMixedProjectCpp_RemapToCanonicalIndices"/> — semantic
+/// tokens fetched from the live clangd and rewritten through a
+/// <see cref="SemanticTokenLegendMap"/> built from the legend captured at THIS fixture's
+/// real handshake, proving capture → build → remap end-to-end.
+/// </para>
 /// </summary>
 [TestFixture]
 [Category("RequiresClangd")]
@@ -436,6 +444,70 @@ public class ClangdE2ETests
     }
 
     // ------------------------------------------------------------------
+    // 6. Semantic tokens (Phase 3b): capture → build → remap against the live server
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task SemanticTokens_ForTheMixedProjectCpp_RemapToCanonicalIndices()
+    {
+        // The REAL negotiated legend — captured verbatim from clangd's initialize reply by
+        // LanguageService at this fixture's handshake. clangd always sends one (measured on
+        // clangd 22.1.6: 25 tokenTypes, with duplicate names); null here means the Phase 3b
+        // capture seam lost it.
+        var legend = _clangd.Capabilities?.SemanticTokensLegend;
+        Assert.That(legend, Is.Not.Null,
+            "clangd's initialize reply carries a semantic-token legend; the capture seam lost it");
+        Assert.That(legend!.TokenTypes, Is.Not.Empty,
+            "clangd's legend must carry token-type names to decode indices against");
+
+        var map = SemanticTokenLegendMap.Build(legend);
+
+        // The known token: line 7 col 5 (1-based) = the 'Player' TYPE reference in
+        // "    Player* who = nullptr;" — LSP wire positions are 0-based, so the token sits
+        // at (line 6, startChar 4), length 6. Player is a CLASS (Direction B lowers a
+        // BasicLang Class to a real C++ class in the generated header), so clangd reports
+        // the reference with its 'class' token type; BasicLang's canonical Class index is 2
+        // (SemanticTokenLegendMap's table, mirroring BasicLang/LSP/SemanticTokensHandler.cs).
+        //
+        // clangd tokenizes only once its async parse of the TU completes — early answers can
+        // be null, empty, or partial — so poll until the stream actually CONTAINS a token at
+        // Player's position, like every sibling polls for its answer.
+        const int playerLine = 6, playerStartChar = 4, playerLength = 6;
+
+        var tokens = await PollUntilAsync(
+            () => _clangd.GetSemanticTokensAsync(_mainCpp),
+            t => t != null && FindQuintuple(t.Data, playerLine, playerStartChar) >= 0,
+            ServerAnswerTimeout,
+            "clangd textDocument/semanticTokens/full for main.cpp containing a token at " +
+            $"0-based ({playerLine},{playerStartChar}) — the 'Player' class reference",
+            _output.Dump);
+
+        // Remap the WHOLE stream through the map built from the real legend — the exact
+        // transformation the IDE's fetch seam applies before the highlighter sees the data.
+        var remapped = map.RemapData(tokens!.Data);
+        Assert.That(remapped, Is.Not.SameAs(tokens.Data),
+            "clangd's legend (25 duplicate-bearing names) is never BasicLang's canonical one, " +
+            "so Build must yield a real remap producing a fresh array — an Identity passthrough " +
+            "here would mean the map was built against the wrong legend");
+
+        // Positions and lengths pass through the remap untouched, so the quintuple located in
+        // the raw stream addresses the same token in the remapped one.
+        var i = FindQuintuple(tokens.Data, playerLine, playerStartChar);
+        Assert.That(remapped[i + 2], Is.EqualTo(playerLength),
+            "the token at Player's position must span exactly the identifier 'Player'; stream:\n" +
+            DescribeTokens(tokens.Data, legend));
+
+        var serverType = tokens.Data[i + 3];
+        var serverName = serverType >= 0 && serverType < legend.TokenTypes.Count
+            ? legend.TokenTypes[serverType]
+            : "<outside the legend>";
+        Assert.That(remapped[i + 3], Is.EqualTo(2),
+            "the 'Player' class reference must carry BasicLang's canonical Class index (2) " +
+            $"after remap; clangd reported server type index {serverType} ('{serverName}'). " +
+            "Decoded stream:\n" + DescribeTokens(tokens.Data, legend));
+    }
+
+    // ------------------------------------------------------------------
     // The launch-race observation from Task 12's review: OnProjectOpened fires emission and
     // server-start as independent fire-and-forgets, so clangd can come up BEFORE
     // obj/compile_commands.json is written. The claim on record was "clangd re-probes the db
@@ -599,6 +671,56 @@ public class ClangdE2ETests
         var fullPath = Path.GetFullPath(location.Uri);
         return fullPath.StartsWith(objGenPrefix, StringComparison.OrdinalIgnoreCase)
             && fullPath.EndsWith(".g.h", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Index of the first quintuple whose decoded ABSOLUTE position is
+    /// (<paramref name="line"/>, <paramref name="startChar"/>), both 0-based, or -1.
+    /// Decodes LSP semantic-token delta encoding: <c>deltaLine</c> adds to the current line;
+    /// <c>deltaStartChar</c> is relative to the previous token's start on the same line and
+    /// absolute when the line advanced.
+    /// </summary>
+    private static int FindQuintuple(int[] data, int line, int startChar)
+    {
+        if (data == null || data.Length % 5 != 0) return -1;
+
+        int curLine = 0, curChar = 0;
+        for (int i = 0; i < data.Length; i += 5)
+        {
+            var deltaLine = data[i];
+            curLine += deltaLine;
+            curChar = deltaLine > 0 ? data[i + 1] : curChar + data[i + 1];
+            if (curLine == line && curChar == startChar) return i;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Every quintuple decoded to absolute positions with its server-legend type name — the
+    /// investigation dump a semantic-token failure needs (which token clangd actually put
+    /// where, under which legend entry), without which a bare index mismatch is unreadable.
+    /// </summary>
+    private static string DescribeTokens(int[] data, SemanticTokensLegend legend)
+    {
+        if (data == null || data.Length % 5 != 0)
+            return $"<malformed stream: {data?.Length.ToString() ?? "null"} ints>";
+
+        var lines = new List<string>();
+        int curLine = 0, curChar = 0;
+        for (int i = 0; i < data.Length; i += 5)
+        {
+            var deltaLine = data[i];
+            curLine += deltaLine;
+            curChar = deltaLine > 0 ? data[i + 1] : curChar + data[i + 1];
+            var type = data[i + 3];
+            var name = type >= 0 && type < legend.TokenTypes.Count
+                ? legend.TokenTypes[type]
+                : "<outside the legend>";
+            lines.Add($"  ({curLine},{curChar}) len={data[i + 2]} type={type} '{name}' mods=0x{data[i + 4]:X}");
+        }
+
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static string DiagCodes(CppProjectBuildResult r) =>
