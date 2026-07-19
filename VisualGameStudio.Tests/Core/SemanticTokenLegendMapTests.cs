@@ -173,6 +173,29 @@ public class SemanticTokenLegendMapTests
     }
 
     [Test]
+    public void RemapData_DefinitionAndAbstract_LandOnTheirCanonicalBits()
+    {
+        // The two remaining MEASURED modifier mappings the fixture had not yet pinned:
+        // clangd definition (bit 1) -> canonical Definition (bit 1) — same slot, but only
+        // because both legends happen to agree, never because the bit passed through
+        // unmapped — and clangd abstract (bit 6) -> canonical Abstract (bit 5).
+        var map = SemanticTokenLegendMap.Build(ClangdLegend());
+
+        Assert.That(map.RemapData(new[] { 0, 0, 5, 0, 1 << 1 })[4], Is.EqualTo(1 << 1),
+            "clangd definition (bit 1) must land on canonical Definition (bit 1)");
+        Assert.That(map.RemapData(new[] { 0, 0, 5, 0, 1 << 6 })[4], Is.EqualTo(1 << 5),
+            "clangd abstract (bit 6) must land on canonical Abstract (bit 5)");
+    }
+
+    [Test]
+    public void Identity_TokenTypeMap_IsExactlyZeroThroughEighteen()
+    {
+        Assert.That(SemanticTokenLegendMap.Identity.TokenTypeMap,
+            Is.EqualTo(Enumerable.Range(0, 19)).AsCollection,
+            "the identity map must cover the canonical 19 types positionally, 0..18");
+    }
+
+    [Test]
     public void RemapData_UnknownType_BecomesThe999Sentinel()
     {
         // 999 EXACTLY: any value >= 19 hits the highlighter's null-brush default arm, and
@@ -224,21 +247,24 @@ public class SemanticTokenLegendMapTests
     }
 
     [Test]
-    public void LegendMapCache_BuildsOncePerLegendInstance()
+    public void LegendMapCache_ReturnsTheSameMapInstancePerLegend()
     {
         // The fetch seam calls GetOrBuild on every semantic-token refresh (every
-        // keystroke debounce) — the map must be built once per handshake, not once
-        // per fetch. The cache is keyed by LEGEND REFERENCE: a server's legend object
-        // is captured once at initialize and handed out by reference from Capabilities,
-        // so reference identity IS "same handshake".
+        // keystroke debounce) — every fetch for a handshake must get the same cached
+        // map, not a fresh build per fetch. The cache is keyed by LEGEND REFERENCE: a
+        // server's legend object is captured once at initialize and handed out by
+        // reference from Capabilities, so reference identity IS "same handshake".
         var legend = ClangdLegend();
 
         var first = SemanticTokenLegendMap.GetOrBuild(legend);
         var second = SemanticTokenLegendMap.GetOrBuild(legend);
 
-        // SameAs is the pin that Build ran once: Build on a non-canonical legend
-        // returns a fresh instance every call, so two equal-but-distinct maps would
-        // mean the cache missed.
+        // SameAs pins INSTANCE IDENTITY, deliberately not invocation count:
+        // ConditionalWeakTable.GetValue may invoke the (pure) factory more than once
+        // under concurrent first access and discard the losers — the property that
+        // holds is that every caller observes ONE map instance per legend. Build on a
+        // non-canonical legend returns a fresh instance every call, so two
+        // equal-but-distinct maps here would mean the cache missed.
         Assert.That(second, Is.SameAs(first),
             "repeated GetOrBuild on the same legend reference must return the cached map instance");
         Assert.That(first.TokenTypeMap[8], Is.EqualTo(2), "the cached map must be the real clangd remap");

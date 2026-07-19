@@ -144,6 +144,54 @@ public class TrailingEdgeDebouncerTests
     }
 
     [Test]
+    public async Task ZeroQuietPeriod_StillFires()
+    {
+        // The ctor test pins that zero is LEGAL ("fire on the next scheduler tick");
+        // this pins that it actually FIRES — Task.Delay(TimeSpan.Zero) completes
+        // immediately rather than degenerating into a silent never-fire.
+        int fireCount = 0;
+        using var debouncer = new TrailingEdgeDebouncer(TimeSpan.Zero,
+            () => Interlocked.Increment(ref fireCount));
+
+        debouncer.Signal();
+
+        Assert.That(await WaitUntilAsync(() => Volatile.Read(ref fireCount) >= 1, WaitBound),
+            Is.True, "a zero quiet period must fire on the next scheduler tick, not never");
+    }
+
+    [Test]
+    public void Fires_DoNotSerialize_ANewCycleCanStartWhileAPreviousFireRuns()
+    {
+        // Documented-but-untested corner (class doc): "Fires do NOT serialize: a new
+        // cycle's fire can start while a previous slow fire is still running" — the
+        // contract consumers with non-overlapping fires must gate themselves. Pin it:
+        // block the first fire and require the second to START before the first ends.
+        using var firstFireStarted = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        int entries = 0;
+        using var debouncer = new TrailingEdgeDebouncer(QuietPeriod, () =>
+        {
+            if (Interlocked.Increment(ref entries) == 1)
+            {
+                firstFireStarted.Set();
+                release.Wait(WaitBound);
+            }
+        });
+
+        debouncer.Signal();
+        Assert.That(firstFireStarted.Wait(WaitBound), Is.True, "the first fire must start");
+
+        debouncer.Signal();
+        bool secondStartedWhileFirstRan = SpinWait.SpinUntil(
+            () => Volatile.Read(ref entries) >= 2, WaitBound);
+        release.Set();
+
+        Assert.That(secondStartedWhileFirstRan, Is.True,
+            "a new cycle's fire must start while the previous slow fire is still running — " +
+            "fires do not serialize; consumers own their own overlap gating");
+    }
+
+    [Test]
     public void Callback_RunsOffTheCallersThread()
     {
         int callbackThreadId = -1;

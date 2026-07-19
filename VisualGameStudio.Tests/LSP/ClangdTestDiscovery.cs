@@ -53,7 +53,10 @@ internal static class ClangdTestDiscovery
         }
         catch
         {
-            return null; // An unreadable profile dir must degrade to the PATH probe, not fail the fixture.
+            // An unreadable profile dir must degrade to ResolveClangdPath's own auto-probe
+            // chain (tools root → PATH → LLVM install dirs), not fail the fixture: null
+            // here just means "no override", and the chain still runs.
+            return null;
         }
     }
 

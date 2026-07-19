@@ -106,12 +106,17 @@ public sealed class SemanticTokenLegendMap
     private readonly int[] _typeMap;      // server type index -> canonical index, or -1
     private readonly int[] _modifierMap;  // server modifier bit -> canonical bit, or -1
     private readonly bool _isIdentity;
+    private readonly IReadOnlyList<int> _typeMapView;
 
     private SemanticTokenLegendMap(int[] typeMap, int[] modifierMap, bool isIdentity)
     {
         _typeMap = typeMap;
         _modifierMap = modifierMap;
         _isIdentity = isIdentity;
+        // A read-only VIEW over the live array, never the array itself: exposing _typeMap
+        // as IReadOnlyList would let a consumer downcast to int[] and rewrite the shared
+        // (cached, Identity-shared) map in place.
+        _typeMapView = Array.AsReadOnly(typeMap);
     }
 
     /// <summary>
@@ -120,7 +125,7 @@ public sealed class SemanticTokenLegendMap
     /// <see cref="RemapData"/> and render uncolored). Exposed so the measured clangd
     /// table can be pinned as data; consumers rewrite through <see cref="RemapData"/>.
     /// </summary>
-    public IReadOnlyList<int> TokenTypeMap => _typeMap;
+    public IReadOnlyList<int> TokenTypeMap => _typeMapView;
 
     /// <summary>
     /// One built map per captured legend instance. ConditionalWeakTable keys by

@@ -87,9 +87,13 @@ public class FileWatcherService : IFileWatcherService
                 EnableRaisingEvents = true
             };
 
+            // Suppression must precede throttle bookkeeping (same order as OnFileChanged):
+            // IsDebounced STAMPS _lastNotified even for events that are then dropped, so a
+            // suppressed event evaluated throttle-first would throttle away the next genuine
+            // one. (WatchDirectory currently has no production callers — verified by grep.)
             watcher.Created += (s, e) =>
             {
-                if (!IsDebounced(e.FullPath) && !IsSuppressed(e.FullPath))
+                if (!IsSuppressed(e.FullPath) && !IsDebounced(e.FullPath))
                 {
                     FileCreatedExternally?.Invoke(this, new FileCreatedExternallyEventArgs(e.FullPath));
                 }
@@ -98,7 +102,7 @@ public class FileWatcherService : IFileWatcherService
             watcher.Changed += (s, e) =>
             {
                 // Directory watcher change events for individual files
-                if (!IsDebounced(e.FullPath) && !IsSuppressed(e.FullPath) && File.Exists(e.FullPath))
+                if (!IsSuppressed(e.FullPath) && !IsDebounced(e.FullPath) && File.Exists(e.FullPath))
                 {
                     FileChangedExternally?.Invoke(this, new FileChangedExternallyEventArgs(e.FullPath));
                 }
@@ -106,7 +110,7 @@ public class FileWatcherService : IFileWatcherService
 
             watcher.Deleted += (s, e) =>
             {
-                if (!IsDebounced(e.FullPath) && !IsSuppressed(e.FullPath))
+                if (!IsSuppressed(e.FullPath) && !IsDebounced(e.FullPath))
                 {
                     FileDeletedExternally?.Invoke(this, new FileDeletedExternallyEventArgs(e.FullPath));
                 }

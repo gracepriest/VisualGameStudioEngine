@@ -91,16 +91,21 @@ public class CompletionData : ICompletionData, INotifyPropertyChanged
 
     /// <summary>
     /// Applies a lazily-resolved description and raises <see cref="PropertyChanged"/> for
-    /// <see cref="Description"/>. NOTE the notification alone does not repaint AvaloniaEdit's
-    /// tooltip — CompletionWindow reads <c>ICompletionData.Description</c> exactly once per
-    /// selection change (verified against the AvaloniaEdit 11.3.0 source), so the UI re-pokes
-    /// the window after calling this (see CodeEditorControl.RefreshCompletionTooltip).
+    /// <see cref="Description"/>. Returns true when the value actually CHANGED — a
+    /// value-equal update is a no-op and returns false, so callers (the selection
+    /// resolver) can skip the tooltip repaint + SelectionChanged refire a re-announce
+    /// would cost. NOTE the notification alone does not repaint AvaloniaEdit's tooltip —
+    /// CompletionWindow reads <c>ICompletionData.Description</c> exactly once per
+    /// selection change (verified against the AvaloniaEdit 11.3.0 source), so the UI
+    /// re-pokes the window after a true return (see
+    /// CodeEditorControl.RefreshCompletionTooltip).
     /// </summary>
-    public void UpdateDescription(string? description)
+    public bool UpdateDescription(string? description)
     {
-        if (_description == description) return;
+        if (_description == description) return false;
         _description = description;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Description)));
+        return true;
     }
 
     /// <summary>

@@ -97,6 +97,28 @@ public class ParseCompletionsTests
     }
 
     [Test]
+    public void ParseCompletions_MalformedDocumentation_IsTreatedAsAbsent_NotThrow()
+    {
+        // Malformed per LSP, but a server bug must not throw away the WHOLE completion
+        // reply: a MarkupContent whose "value" is not a string, a documentation that is
+        // neither string nor object, and a value-less MarkupContent all parse as "no
+        // documentation".
+        var result = Json("""
+            [{"label":"a","documentation":{"kind":"markdown","value":42}},
+             {"label":"b","documentation":123},
+             {"label":"c","documentation":{"kind":"markdown"}}]
+            """);
+
+        IReadOnlyList<CompletionItem> items = null!;
+        Assert.DoesNotThrow(() => items = LanguageService.ParseCompletions(result));
+
+        Assert.That(items, Has.Count.EqualTo(3));
+        Assert.That(items[0].Documentation, Is.Null, "non-string MarkupContent value → absent");
+        Assert.That(items[1].Documentation, Is.Null, "non-string, non-object documentation → absent");
+        Assert.That(items[2].Documentation, Is.Null, "value-less MarkupContent → absent");
+    }
+
+    [Test]
     public void ParseCompletions_SortTextAndFilterText_AreParsed()
     {
         var result = Json("""[{"label":"Trim","sortText":"08904_Trim","filterText":"trim"}]""");

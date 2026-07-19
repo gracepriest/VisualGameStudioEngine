@@ -136,16 +136,13 @@ public class ClientCompletionResolveTests
             Data = Json("""{"type":"Console","member":"WriteLine"}""")
         };
 
-        // Serialized with a mirror of the wire's options (LanguageService.JsonOptions is
-        // private): camelCase + omit-nulls. Exact full-string compare, never Does.Contain —
+        // Serialized with THE wire options themselves (LanguageService.WireJsonOptions —
+        // the read-only view of the private JsonOptions), so this pin cannot drift from
+        // what the client actually sends. Exact full-string compare, never Does.Contain —
         // JsonElement serialization preserves the data object's property order, so the
         // round-trip is deterministic.
-        var wireOptions = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-        };
-        var json = JsonSerializer.Serialize(LanguageService.BuildResolveParams(item), wireOptions);
+        var json = JsonSerializer.Serialize(
+            LanguageService.BuildResolveParams(item), LanguageService.WireJsonOptions);
 
         Assert.That(json, Is.EqualTo(
             """{"label":"WriteLine","kind":2,"data":{"type":"Console","member":"WriteLine"}}"""),
@@ -432,7 +429,14 @@ public class ClientCompletionResolveTests
             if (ReferenceEquals(item, itemA))
             {
                 tokenA = ct;
+                // VSTHRD003 (returning a task not created in this context): returning the
+                // held TCS task IS the test — the reply must stay in flight across the
+                // selection move and must NOT be abandoned on cancellation (WaitAsync(ct)
+                // would gut the reply-arrives-anyway path under test). No JTF/UI thread
+                // exists here, so the deadlock the rule guards against cannot occur.
+#pragma warning disable VSTHRD003
                 return heldReplyA.Task;
+#pragma warning restore VSTHRD003
             }
             return Task.FromResult(Enriched(item, "b docs"));
         }
@@ -563,6 +567,38 @@ public class ClientCompletionResolveTests
 
         Assert.That(calls, Is.EqualTo(1),
             "the same still-selected row must resolve exactly once, or the tooltip refresh loops");
+    }
+
+    /// <summary>
+    /// The repaint economizer: a reply that is a NEW instance (so the same-reference
+    /// nothing-enriched break does not apply) but whose merged description equals what the
+    /// row already shows must not be announced — every announce buys a tooltip repaint plus
+    /// a SelectionChanged refire, for zero visible change.
+    /// </summary>
+    [Test]
+    public async Task SelectionResolve_ValueEqualReply_DoesNotReannounce()
+    {
+        var item = new CompletionItem { Label = "x", Detail = "sig", Data = Json("""{"id":9}""") };
+        var data = new CompletionData("x", "sig") { SourceItem = item };
+
+        var announced = new List<CompletionData>();
+        var coordinator = new CompletionSelectionResolver();
+
+        // A fresh instance whose BuildDescription(Detail: "sig", Documentation: null)
+        // merges to exactly the "sig" the row already displays.
+        await coordinator.OnSelectionChanged(
+            data,
+            (i, _) => Task.FromResult(new CompletionItem { Label = i.Label, Detail = i.Detail, Data = i.Data }),
+            announced.Add);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(announced, Is.Empty,
+                "a value-equal reply changes nothing on screen — announcing it would spend " +
+                "a repaint + refire cycle for nothing");
+            Assert.That(data.Description, Is.EqualTo("sig"),
+                "the description itself must be untouched");
+        });
     }
 
     // ------------------------------------------------------------------

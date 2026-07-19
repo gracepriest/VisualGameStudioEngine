@@ -134,6 +134,25 @@ public class LanguageService : ILanguageService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    /// <summary>
+    /// THE wire serializer options (camelCase, omit-nulls), exposed so exact-JSON tests
+    /// serialize with the very options the client sends with instead of a hand-mirrored
+    /// copy that can drift. Frozen before handing out — no caller can mutate live wire
+    /// behavior through this accessor.
+    /// </summary>
+    public static JsonSerializerOptions WireJsonOptions
+    {
+        get
+        {
+            // populateMissingResolver: the parameterless overload THROWS when no
+            // TypeInfoResolver is configured yet; true wires the same default reflection
+            // resolver the first Serialize call would have — freezing behavior, not
+            // changing it.
+            JsonOptions.MakeReadOnly(populateMissingResolver: true);
+            return JsonOptions;
+        }
+    }
+
     /// <param name="descriptor">
     /// Which server this instance drives. Defaults to BasicLang — resolved from the
     /// <c>basiclang.lsp.path</c> override or the auto-probe — so the DI registration and the
@@ -1698,8 +1717,19 @@ public class LanguageService : ILanguageService
             {
                 Label = item.TryGetProperty("label", out var l) ? l.GetString() ?? "" : "",
                 Detail = item.TryGetProperty("detail", out var d) ? d.GetString() : null,
+                // String or MarkupContent {kind,value} — the same two shapes, with the same
+                // ValueKind guards, as MergeResolvedCompletion. The guards are load-bearing:
+                // TryGetProperty on a non-object and GetString on a non-string both THROW
+                // (InvalidOperationException), and one malformed item must degrade to
+                // "no documentation", not take down the whole reply.
                 Documentation = item.TryGetProperty("documentation", out var doc)
-                    ? (doc.ValueKind == JsonValueKind.String ? doc.GetString() : doc.TryGetProperty("value", out var v) ? v.GetString() : null)
+                    ? (doc.ValueKind == JsonValueKind.String
+                        ? doc.GetString()
+                        : doc.ValueKind == JsonValueKind.Object &&
+                          doc.TryGetProperty("value", out var v) &&
+                          v.ValueKind == JsonValueKind.String
+                            ? v.GetString()
+                            : null)
                     : null,
                 Kind = item.TryGetProperty("kind", out var k) ? (CompletionItemKind)k.GetInt32() : CompletionItemKind.Text,
                 InsertText = item.TryGetProperty("insertText", out var it) ? it.GetString() : null,

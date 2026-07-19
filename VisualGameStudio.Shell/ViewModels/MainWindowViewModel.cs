@@ -1208,8 +1208,8 @@ public partial class MainWindowViewModel : ViewModelBase
         ShowNotification(
             "clangd was not found, so C++ IntelliSense is unavailable — syntax highlighting and " +
             "editing still work. Download C++ tools now, install clangd yourself, or point the " +
-            $"{LanguageServerDescriptor.ClangdSettingsKey} setting at it; either way, restart " +
-            "the IDE to pick it up.",
+            $"{LanguageServerDescriptor.ClangdSettingsKey} setting at it; whichever you choose, " +
+            "restart the IDE to pick it up.",
             "info",
             new List<NotificationAction>
             {

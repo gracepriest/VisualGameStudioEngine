@@ -106,7 +106,7 @@ public sealed class ClangdDownloadFlow
             }
 
             var progress = _progressWrapper(ReportProgress);
-            ClangdInstallResult result;
+            ClangdInstallResult? result = null;
             try
             {
                 result = await _install(progress, ct);
@@ -114,8 +114,13 @@ public sealed class ClangdDownloadFlow
             finally
             {
                 // Success, failure, or a thrown contract violation — the progress toast must
-                // never outlive the transfer it reports on.
-                _dismissProgress(ProgressNotificationId);
+                // never outlive the transfer it reports on. EXCEPT already-in-progress: that
+                // reply means ANOTHER flow's transfer owns the toast (both flows share the
+                // one ProgressNotificationId), and dismissing here would kill its live bar.
+                if (result?.FailureStep != ClangdInstaller.StepAlreadyInProgress)
+                {
+                    _dismissProgress(ProgressNotificationId);
+                }
             }
 
             if (result.Success)

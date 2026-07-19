@@ -287,9 +287,13 @@ public sealed class RegenOnSaveCoordinator : IDisposable
         catch (Exception)
         {
             // GetFullPath throws on malformed input (invalid characters, over-long segments,
-            // unsupported forms). A path that cannot be normalized cannot be located under the
-            // project — and this handler sits on the editor's save path, where a throw would
-            // surface as a failed save, not a missed regen.
+            // unsupported forms). A path that cannot be normalized cannot be located under
+            // the project. This catch is NOT protecting the save — EventAggregator.Publish
+            // already swallows handler exceptions and SaveAsync has its own catch, so an
+            // uncaught throw could never fail a save; it would just kill THIS handler's run
+            // in the aggregator, silently, per malformed save. Catching locally keeps
+            // "malformed path → not under the project" an explicit decision instead of a
+            // regen pipeline that dies quietly upstream.
             return false;
         }
 

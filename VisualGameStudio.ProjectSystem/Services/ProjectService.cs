@@ -151,6 +151,10 @@ public class ProjectService : IProjectService
         // window, absorbing FS events that land after the write returns. This is the ONLY
         // writer of the OPEN project's .blproj: CreateProjectAsync's write happens before
         // ProjectOpened, i.e. before any watch exists, and needs no suppression.
+        // Known swallow-window, inherent to SuppressNotifications' path-keyed design: a
+        // genuinely EXTERNAL .blproj edit that lands during our write + the 200ms grace is
+        // suppressed along with our own events and dropped entirely — no regen for it until
+        // the next trigger (the suppression cannot tell whose FS event it is eating).
         using (string.IsNullOrEmpty(CurrentProject.FilePath)
             ? null
             : _fileWatcher?.SuppressNotifications(CurrentProject.FilePath))

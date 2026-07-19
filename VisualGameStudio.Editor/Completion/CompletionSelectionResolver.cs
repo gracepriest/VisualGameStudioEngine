@@ -121,8 +121,13 @@ public sealed class CompletionSelectionResolver
         // Task 12 contract) — the list already shows everything there is.
         if (ReferenceEquals(resolved, item)) return;
 
-        selected.UpdateDescription(
-            CompletionData.BuildDescription(resolved.Detail, resolved.Documentation));
-        descriptionUpdated?.Invoke(selected);
+        // Announce only a REAL change: a new-instance reply whose merged description
+        // equals what the row already shows would otherwise buy a tooltip repaint plus a
+        // SelectionChanged refire for zero visible difference.
+        if (selected.UpdateDescription(
+            CompletionData.BuildDescription(resolved.Detail, resolved.Documentation)))
+        {
+            descriptionUpdated?.Invoke(selected);
+        }
     }
 }

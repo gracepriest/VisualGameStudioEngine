@@ -194,6 +194,37 @@ public class RegenOnSaveCoordinatorTests
     }
 
     [Test]
+    public async Task UppercaseExtensionSave_Triggers()
+    {
+        var project = NewProject("proj");
+        _currentProject = project;
+        using var coordinator = CreateCoordinator();
+
+        // The EXTENSION compare must be OrdinalIgnoreCase too (the test above covers the
+        // directory prefix): a save reported as MAIN.BAS still counts.
+        PublishSave(Path.Combine(project.ProjectDirectory, "MAIN.BAS"));
+
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, "an upper-cased .BAS extension must still trigger the regen");
+    }
+
+    [TestCase("Module1.mod")]
+    [TestCase("Class1.cls")]
+    public async Task ModAndClsSaves_Trigger(string fileName)
+    {
+        // Positive coverage for the OTHER two BasicLang extensions — the .cpp negative
+        // below alone would pass even if the filter accepted only .bas.
+        var project = NewProject("proj");
+        _currentProject = project;
+        using var coordinator = CreateCoordinator();
+
+        PublishSave(Path.Combine(project.ProjectDirectory, fileName));
+
+        Assert.That(await WaitUntilAsync(() => _emission.CallCount >= 1, WaitBound),
+            Is.True, $"a {Path.GetExtension(fileName)} save must trigger like a .bas save");
+    }
+
+    [Test]
     public async Task SaveBurst_CoalescesToOneEmit()
     {
         var project = NewProject("proj");

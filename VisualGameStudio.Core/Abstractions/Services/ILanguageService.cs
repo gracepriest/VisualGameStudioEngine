@@ -372,6 +372,12 @@ public class DiagnosticsEventArgs : EventArgs
     public IReadOnlyList<DiagnosticItem> Diagnostics { get; set; } = Array.Empty<DiagnosticItem>();
 }
 
+/// <summary>
+/// An LSP completion item in the Core model.
+/// ⚠ Adding a property? Update <c>LanguageService.MergeResolvedCompletion</c>'s
+/// field-by-field copy too — this is a class, not a record, so no compiler forces that
+/// copy to stay complete, and a missed field silently reverts to its default on resolve.
+/// </summary>
 public class CompletionItem
 {
     public string Label { get; set; } = "";

@@ -4100,6 +4100,9 @@ public partial class CodeEditorControl : UserControl
 
         try
         {
+            // Added/removed lists deliberately empty: every known handler (the window's
+            // tooltip handler and OnCompletionSelectionChanged) ignores the args and
+            // re-reads SelectedItem itself.
             window.CompletionList.RaiseEvent(new SelectionChangedEventArgs(
                 Avalonia.Controls.Primitives.SelectingItemsControl.SelectionChangedEvent,
                 Array.Empty<object>(),

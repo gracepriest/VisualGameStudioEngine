@@ -163,6 +163,9 @@ public class ClangdDownloadFlowTests
         Assert.That(h.Toasts[0].Message, Is.EqualTo("A clangd download is already running."));
         Assert.That(h.Toasts[0].Severity, Is.EqualTo("info"),
             "a second click while the first download runs is normal impatience, not an error");
+        Assert.That(h.Dismissed, Is.Empty,
+            "the already-in-progress reply belongs to the FIRST flow's still-running transfer " +
+            "— the progress toast is that flow's, and dismissing it here would kill a live bar");
     }
 
     // ---------------------------------------------------------------- progress mapping
@@ -192,6 +195,15 @@ public class ClangdDownloadFlowTests
         Assert.That(h.Progress[1].Id, Is.EqualTo("clangd-download"));
         Assert.That(h.Progress[1].Fraction, Is.EqualTo(-1));
         Assert.That(h.Progress[1].Message, Is.EqualTo("Downloading clangd… 13.4 MB"));
+    }
+
+    [Test]
+    public void FormatProgress_BytesBeyondTheTotal_ClampToAFullBar()
+    {
+        // A transfer reporting more bytes than its total (an over-counting resume, a
+        // lying server) must clamp to a full bar, never overshoot past 1.0.
+        Assert.That(ClangdDownloadFlow.FormatProgress(30_000_000, 26_000_000).fraction,
+            Is.EqualTo(1.0));
     }
 
     [Test]
