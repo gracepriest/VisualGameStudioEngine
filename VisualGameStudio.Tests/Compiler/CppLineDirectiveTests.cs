@@ -18,8 +18,10 @@ namespace VisualGameStudio.Tests.Compiler;
 ///    breaks the compile. Paths must be emitted with forward slashes.
 ///  - Consecutive instructions on the same source line emit ONE directive (dedupe).
 ///  - Default options emit nothing — every other constructor site stays byte-identical.
-///  - C++ has no `#line hidden`: optimizer-synthesized instructions (SourceLine == 0) are
-///    re-pointed at the generated file itself instead of smearing onto the last user line.
+///  - C++ has no `#line hidden`: synthesized instructions (SourceLine == 0) are re-pointed
+///    at the generated file itself instead of smearing onto the last user line — and
+///    optimizer REPLACEMENTS of user statements are not synthesized: they inherit the line
+///    (the Phase 4 Step-0 gate caught StrengthReductionPass dropping it).
 ///  - Split emission resets dedupe state per captured file, not globally.
 /// </summary>
 [TestFixture]
@@ -134,12 +136,14 @@ public class CppLineDirectiveTests
     }
 
     [Test]
-    public void OptimizedIR_StillEmits_AndSynthesizedCodeResetsToTheGeneratedFile()
+    public void OptimizedIR_KeepsUserStatements_OnTheirBasLines()
     {
-        // "i * 8" inside the loop is strength-reduced to a shift: the optimizer REPLACES the
-        // IRBinaryOp with a new instruction whose SourceLine is 0 (synthesized). C++ has no
-        // `#line hidden`, so synthesized code must reset coordinates to the generated file
-        // itself instead of smearing onto the last user statement.
+        // "total = total + i * 8" (line 4) is strength-reduced to a shift: the optimizer
+        // REPLACES the IRBinaryOp — and the replacement must INHERIT SourceLine 4. The
+        // Phase 4 Step-0 gate caught the original drop live: the replacement carried
+        // SourceLine 0, the generator (correctly) treated it as synthesized and reset the
+        // line table to the generated file, and a debugger `next` from the previous .bas
+        // statement landed in generated glue instead of this line.
         //
         // Text-level assertions only: strength-reduced output currently ALSO trips a
         // pre-existing, directive-independent StrengthReductionPass bug (orphaned-value
@@ -157,8 +161,55 @@ public class CppLineDirectiveTests
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Does.Contain("\"C:/proj/Main.bas\""),
             "user statements must still carry .bas directives under the optimizer");
-        Assert.That(Regex.IsMatch(output!, "#line \\d+ \"TestModule\\.g\\.cpp\""), Is.True,
-            "synthesized instructions must reset the line table to the generated file");
+        Assert.That(output, Does.Contain("#line 4 \"C:/proj/Main.bas\""),
+            "the strength-reduced statement must keep its own source line — optimizer " +
+            "replacements of user statements inherit SourceLine, they are not synthesized");
+    }
+
+    [Test]
+    public void SynthesizedInstructions_ResetToTheGeneratedFile()
+    {
+        // C++ has no `#line hidden`: an instruction with SourceLine 0 (genuinely
+        // synthesized — no user statement to blame) must re-point the line table at the
+        // generated file itself instead of smearing onto the last user statement.
+        // Pinned by surgically zeroing one statement's instructions rather than relying
+        // on an optimizer pass to DROP metadata — passes must not (see the test above).
+        var source =
+            "Sub Main()\n" +
+            "    Dim x As Integer = 1\n" +
+            "    Dim y As Integer = 2\n" +
+            "    Console.WriteLine(x + y)\n" +
+            "End Sub";
+
+        var lexer = new Lexer(source);
+        var parser = new Parser(lexer.Tokenize());
+        var ast = parser.Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            string.Join("; ", analyzer.Errors.Select(e => e.Message)));
+        var irModule = new IRBuilder(analyzer).Build(ast, "TestModule", @"C:\proj\Main.bas");
+
+        var zeroed = 0;
+        foreach (var function in irModule.Functions)
+            foreach (var block in function.Blocks)
+                foreach (var inst in block.Instructions)
+                    if (inst.SourceLine == 3) { inst.SourceLine = 0; zeroed++; }
+        Assert.That(zeroed, Is.GreaterThan(0), "expected instructions stamped line 3 to zero");
+
+        var output = new CppCodeGenerator(new CppCodeGenOptions
+        {
+            GenerateComments = false,
+            EmitLineDirectives = true
+        }).Generate(irModule);
+
+        Assert.That(Regex.IsMatch(output, "#line \\d+ \"TestModule\\.g\\.cpp\""), Is.True,
+            "synthesized instructions must reset the line table to the generated file:\n" + output);
+        Assert.That(output, Does.Not.Contain("#line 3 \"C:/proj/Main.bas\""),
+            "the zeroed statement must not smear onto its old user line:\n" + output);
+        Assert.That(output, Does.Contain("#line 2 \"C:/proj/Main.bas\""),
+            "the statement before the synthesized one keeps its directive:\n" + output);
+        Assert.That(output, Does.Contain("#line 4 \"C:/proj/Main.bas\""),
+            "the statement after the synthesized one re-establishes its directive:\n" + output);
     }
 
     [Test]

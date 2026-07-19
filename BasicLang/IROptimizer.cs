@@ -948,6 +948,13 @@ namespace BasicLang.Compiler.IR.Optimization
                     var reduced = TryReduceBinary(binaryOp);
                     if (reduced != null)
                     {
+                        // The replacement stands in for the user's own statement, so it
+                        // must keep the original's source location. Dropping it leaves
+                        // SourceLine 0 ("synthesized"), which makes debug builds emit a
+                        // #line reset onto the generated file for a line the user wrote —
+                        // stepping in a debugger then lands in generated glue instead of
+                        // the next source statement (found by the Phase 4 Step-0 gate).
+                        reduced.SourceLine = binaryOp.SourceLine;
                         block.Instructions[i] = reduced;
                         ReportModification();
                     }
