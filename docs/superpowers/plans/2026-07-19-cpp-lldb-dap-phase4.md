@@ -433,8 +433,16 @@ int main() {
 - [ ] **Step 3:** Run it: `dotnet test ... --filter "FullyQualifiedName~NativeDebugGateTests"`.
   First run is the measurement — iterate within the timebox (adapter stderr goes to the
   test output; dump ALL raw DAP traffic on failure, the `output.Dump()` idiom).
-- [ ] **Step 4: ⛔ DECISION CHECKPOINT — report the verdict to the orchestrator/user
-  before proceeding. Do not silently continue.**
+- [x] **Step 4: ⛔ DECISION CHECKPOINT — VERDICT: PASS (2026-07-19, commit e483de5).**
+  `.bas`-source debugging is IN v1; Task 14 keeps its `.bas` test. **Winning breakpoint
+  path form: OS-NATIVE BACKSLASH** — `setBreakpoints` with `C:\...\Logic.bas` verified
+  immediately against the forward-slash `#line` spelling (lldb's PDB reader normalizes
+  separators); the forward-slash fallback probe stays in the test for other lldb builds.
+  Bonus finding: the gate's first run caught `StrengthReductionPass` dropping
+  `SourceLine` on replacement ops (step landed in `Logic.g.cpp`) — fixed metadata-only
+  in `IROptimizer.cs`; ~14 sibling replacement sites chipped (task_90438de9). Real
+  threadId observed (6908) — the threadId=1 landmine is confirmed live.
+  *(Original checkpoint text follows for reference.)*
   - **PASS** (all of: verified bind at the right line, stop there, step-next on the next
     `.bas` statement): `.bas`-source debugging is IN v1. Task 14 keeps its `.bas` test.
     Record the winning breakpoint path form here in the plan file.
