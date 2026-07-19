@@ -467,7 +467,7 @@ int main() {
         }
     }
 
-    private static void AssertProcessExits(int pid, TimeSpan timeout, string what)
+    private static void AssertProcessExits(int pid, TimeSpan timeout, string what, RawDapClient? dap = null)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
@@ -477,16 +477,25 @@ int main() {
         }
         // Leave no orphan behind even when the assertion is about to fail.
         try { Process.GetProcessById(pid).Kill(entireProcessTree: true); } catch { }
-        Assert.Fail($"{what} (pid {pid}) was still running {timeout.TotalSeconds:F0}s after shutdown — orphaned process.");
+        Assert.Fail($"{what} (pid {pid}) was still running {timeout.TotalSeconds:F0}s after shutdown — orphaned process." +
+                    TranscriptSuffix(dap));
     }
 
-    private static async Task<T> WithTimeout<T>(Task<T> task, TimeSpan timeout, string what)
+    /// <summary>
+    /// Timeout failures are the most likely symptom of an adapter/handshake regression,
+    /// so they must carry the raw DAP transcript exactly like the protocol assertions do
+    /// (Assert.Fail throws through the catch-all, which lets ResultStateException pass).
+    /// </summary>
+    private static async Task<T> WithTimeout<T>(Task<T> task, TimeSpan timeout, string what, RawDapClient? dap = null)
     {
         var completed = await Task.WhenAny(task, Task.Delay(timeout));
         if (completed != task)
-            Assert.Fail($"Timed out after {timeout.TotalSeconds:F0}s waiting for: {what}");
+            Assert.Fail($"Timed out after {timeout.TotalSeconds:F0}s waiting for: {what}" + TranscriptSuffix(dap));
         return await task;
     }
+
+    private static string TranscriptSuffix(RawDapClient? dap) =>
+        dap == null ? "" : "\n\nRaw DAP traffic:\n" + dap.Transcript;
 
     /// <summary>Builds the temp project through the real BuildService and returns the result.</summary>
     private static async Task<(BuildResult Result, RecordingOutputService Output)> BuildProjectAsync(
@@ -520,7 +529,7 @@ int main() {
         {
             source = new { path = sourcePath },
             breakpoints = new[] { new { line } }
-        }), ResponseTimeout, $"setBreakpoints response ({formLabel} path form)");
+        }), ResponseTimeout, $"setBreakpoints response ({formLabel} path form)", dap);
         AssertDapSuccess(response, "setBreakpoints", dap);
 
         var bps = response.GetProperty("body").GetProperty("breakpoints");
@@ -539,7 +548,7 @@ int main() {
     {
         var response = await WithTimeout(
             dap.SendRequestAsync("stackTrace", new { threadId, startFrame = 0, levels = 20 }),
-            ResponseTimeout, $"stackTrace response ({what})");
+            ResponseTimeout, $"stackTrace response ({what})", dap);
         AssertDapSuccess(response, "stackTrace", dap);
 
         var frames = response.GetProperty("body").GetProperty("stackFrames");
@@ -607,7 +616,7 @@ int main() {
                     supportsVariableType = true,
                     supportsVariablePaging = false,
                     supportsRunInTerminalRequest = false
-                }), ResponseTimeout, "initialize response");
+                }), ResponseTimeout, "initialize response", dap);
                 AssertDapSuccess(initResponse, "initialize", dap);
 
                 // … → launch IN FLIGHT (lldb-dap does not complete it until
@@ -619,7 +628,7 @@ int main() {
                     stopOnEntry = false
                 });
 
-                await WithTimeout(dap.WaitForEventAsync("initialized"), ResponseTimeout, "initialized event");
+                await WithTimeout(dap.WaitForEventAsync("initialized"), ResponseTimeout, "initialized event", dap);
 
                 // ---- 3. setBreakpoints + the path-form probe (feeds Tasks 9/14) ----
                 // The PDB records the #line spelling C:/forward/slash/Logic.bas; lldb
@@ -653,14 +662,14 @@ int main() {
 
                 // ---- 4. configurationDone → launch response → stopped(breakpoint) ----
                 var cdResponse = await WithTimeout(dap.SendRequestAsync("configurationDone", new { }),
-                    ResponseTimeout, "configurationDone response");
+                    ResponseTimeout, "configurationDone response", dap);
                 AssertDapSuccess(cdResponse, "configurationDone", dap);
 
-                var launchResponse = await WithTimeout(launchTask, LaunchStopTimeout, "launch response");
+                var launchResponse = await WithTimeout(launchTask, LaunchStopTimeout, "launch response", dap);
                 AssertDapSuccess(launchResponse, "launch", dap);
 
                 var stopEvent = await WithTimeout(dap.WaitForEventAsync("stopped", "terminated", "exited"),
-                    LaunchStopTimeout, "stopped event at the .bas breakpoint");
+                    LaunchStopTimeout, "stopped event at the .bas breakpoint", dap);
                 Assert.That(RawDapClient.EventName(stopEvent), Is.EqualTo("stopped"),
                     $"The debuggee ended without ever stopping — the .bas breakpoint never bound " +
                     $"(neither path form; last probe state: verified={verified}).\n\nRaw DAP traffic:\n{dap.Transcript}");
@@ -691,11 +700,11 @@ int main() {
 
                 // ---- 6. next → the NEXT .bas statement (not glue, not main.cpp) ----
                 var nextResponse = await WithTimeout(dap.SendRequestAsync("next", new { threadId }),
-                    ResponseTimeout, "next response");
+                    ResponseTimeout, "next response", dap);
                 AssertDapSuccess(nextResponse, "next", dap);
 
                 var stepEvent = await WithTimeout(dap.WaitForEventAsync("stopped", "terminated", "exited"),
-                    LaunchStopTimeout, "stopped event after next");
+                    LaunchStopTimeout, "stopped event after next", dap);
                 Assert.That(RawDapClient.EventName(stepEvent), Is.EqualTo("stopped"),
                     $"The debuggee ended during the step instead of stopping.\n\nRaw DAP traffic:\n{dap.Transcript}");
                 Assert.That(StopReason(stepEvent), Is.EqualTo("step"),
@@ -714,7 +723,7 @@ int main() {
                 // No assertion on the reply — some adapters exit before replying; the
                 // process-exit poll is the real contract.
                 await Task.WhenAny(disconnectTask, Task.Delay(TimeSpan.FromSeconds(10)));
-                AssertProcessExits(adapterPid, TimeSpan.FromSeconds(10), "lldb-dap process");
+                AssertProcessExits(adapterPid, TimeSpan.FromSeconds(10), "lldb-dap process", dap);
 
                 // Checkpoint evidence (shows in the test output on PASS).
                 TestContext.Out.WriteLine("STEP-0 GATE: PASS");
