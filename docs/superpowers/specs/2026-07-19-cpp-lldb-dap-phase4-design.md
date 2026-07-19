@@ -84,17 +84,29 @@ repo's two dead DAP stacks lack.
 
 Three mandatory correctness fixes land here, once, for both adapters:
 
-1. **Spec-correct handshake:** `initialize` → wait for the `initialized`
-   **event** → `setBreakpoints`/`setExceptionBreakpoints` →
-   `configurationDone`. Today's client ignores the `initialized` event
-   (event switch :1158-1204) and sends `configurationDone` after the awaited
-   `launch` response (:160→:182); the managed adapter tolerates this, lldb-dap
-   may defer the launch response until `configurationDone` and stall.
+1. **Spec-correct handshake**, with the `launch` request's position
+   explicit: `initialize` request → `initialize` response (capabilities
+   retained) → send `launch` **without awaiting its response** → await the
+   `initialized` **event** (adapters emit it only while processing
+   launch/attach) → `setBreakpoints`/`setExceptionBreakpoints` →
+   `configurationDone` → the `launch` response then completes. Today's
+   client ignores the `initialized` event (event switch :1158-1204) and
+   awaits the `launch` response before sending `configurationDone`
+   (:160→:182); the managed adapter tolerates this, lldb-dap defers the
+   launch response until `configurationDone` — a stall. The opposite error
+   is just as fatal: waiting for `initialized` before sending `launch`
+   deadlocks, because the event never arrives.
 2. **Real threadIds:** the threadId delivered in `stopped` events is threaded
-   through continue/step/pause and every stack fetch. Today `1` is hardcoded
-   in seven places: `DebugService.cs` :492/:540/:556/:588,
-   `MainWindowViewModel.cs:3188`, `CallStackViewModel.cs:72`,
-   `VariablesViewModel.cs:89`.
+   through continue/step/pause/goto and every stack fetch. Today `1` is
+   hardcoded five times in `DebugService.cs` (:492/:540/:556/:588, plus :668
+   in the goto/Set Next Statement request) and baked into the default
+   parameter `GetStackTraceAsync(int threadId = 1)` (`DebugService.cs:803`,
+   `IDebugService.cs:134`), which the UI stack fetches silently rely on
+   (`MainWindowViewModel.cs:3188`, `CallStackViewModel.cs:72`,
+   `VariablesViewModel.cs:89`). The plumbing task must grep for both
+   patterns. The e2e harness already models the correct behavior —
+   `IdeInAngerTests.cs:475` threads `stopped.ThreadId` into its stack fetch —
+   so the native e2e asserts propagation the same way.
 3. **Capabilities retained:** the `initialize` response is kept on the session
    (today discarded at :146-157). This feeds the adapter-driven Exception
    dialog (§2.5) and lets the session skip requests the adapter doesn't
@@ -110,13 +122,18 @@ change.
 
 ### 3.5 Deletions
 
-The two dead DAP stacks are **deleted in this phase**: `DAP/DapClient` (+
-`DapClientManager`) and `Services/DapClientService`. They are never
-constructed, never registered in DI, and re-ship the pre-fix BOM and
-chars-not-bytes framing bugs — active traps (the 3a `LspClientManager` verdict
-repeats). One historical note: the dead `DapClient.cs:388-394` had the
-handshake ordering right; use it as a reference while writing §3.3.1, then
-delete it with the rest.
+The two dead DAP stacks are **deleted in this phase** — five files:
+`DAP/DapClient.cs` (+ `DapClientManager`), `Services/DapClientService.cs`,
+the orphan interface `Core/Abstractions/Services/IDapClientService.cs`, and
+`Tests/Services/DapClientServiceTests.cs` (which does construct the dead
+service — "never constructed" is true of product code only). Neither stack
+is DI-registered, and each carries a transport trap the live code already
+fixed: `DapClient` reads frames chars-not-bytes on a default-encoding reader
+(:259-263); `DapClientService` frames by bytes but leaves `StandardInput`
+encoding unpinned (:105), so a BOM preamble can still be injected. The 3a
+`LspClientManager` verdict repeats. One historical note: the dead
+`DapClient.cs:388-394` had the handshake ordering right; use it as a
+reference while writing §3.3.1, then delete it with the rest.
 
 ## 4. F5 data flow
 
@@ -129,11 +146,12 @@ delete it with the rest.
    emits no debug info (Release — `/Zi`/`-g` are Debug-only in
    `CppToolchain.FlagsFor`, `CppToolchain.cs:118-140`), warn in Output that
    breakpoints will not bind and suggest the Debug configuration.
-4. **Launch.** Handshake per §3.3.1; breakpoints pushed from the existing
-   path+line-keyed store (no extension gate — `.cpp` gutter breakpoints
-   including conditional/hit-count/logpoints already round-trip, they just
-   never reached an adapter); then the `launch` request with
-   `program = ExecutablePath` and `cwd` = **project directory**, matching
+4. **Launch.** Handshake per §3.3.1 — the `launch` request goes out right
+   after the `initialize` response and stays in flight while breakpoints are
+   pushed from the existing path+line-keyed store (no extension gate — `.cpp`
+   gutter breakpoints including conditional/hit-count/logpoints already
+   round-trip, they just never reached an adapter). Launch arguments:
+   `program = ExecutablePath`, `cwd` = **project directory**, matching
    Ctrl+F5 run semantics so a game finds its assets identically under debug
    and run. The `.vgs/launch.json` overlay (gathered at
    `MainWindowViewModel.cs:3531-3574`) keeps working for overrides.
@@ -193,6 +211,11 @@ tables, so the debug info maps addresses to `.bas` lines and lldb-dap binds
 **Adaptations:**
 - C++ has no `#line hidden`: optimizer-synthesized instructions
   (`SourceLine=0`) are re-pointed at the generated `.g.cpp` itself.
+- **The `#line` filename is a C/C++ string literal** — escape sequences are
+  processed, so a raw Windows path breaks the compile (`C:\Users\…` contains
+  `\U`, a malformed universal-character-name). Emit forward slashes (or
+  doubled backslashes). The C# `#line` directive takes its filename
+  literally, so the template does no escaping — the port must add it.
 - **Debug configuration only.** Release output stays byte-identical to today.
 
 **Gate mechanics.** Step 0 of the implementation plan, timeboxed. Build a real
@@ -242,8 +265,10 @@ C++ names; the Variables pane shows those names in v1 either way.
 Three rings, all gating commits via the full suite as usual:
 
 1. **Unit — session core vs a scripted fake adapter** (in-proc DAP stub over
-   pipes): handshake ordering, capabilities retention, threadId propagation,
-   and the framing edge cases (UTF-8/BOM — load-bearing per the 3a lesson).
+   pipes): handshake ordering — including an lldb-dap-shaped stub that emits
+   `initialized` only after receiving `launch`, a case today's client fails
+   by deadlock — capabilities retention, threadId propagation, and the
+   framing edge cases (UTF-8/BOM — load-bearing per the 3a lesson).
    Registry routing, descriptor lookup, and installer behavior (SHA mismatch,
    partial download, extract) get plain unit tests mirroring 3b's.
 2. **Regression — the managed-adapter e2e stays green through the refactor.**
