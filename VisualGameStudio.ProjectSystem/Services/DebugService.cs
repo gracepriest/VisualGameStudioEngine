@@ -1,7 +1,5 @@
 using System.Diagnostics;
-using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using VisualGameStudio.Core.Abstractions.Services;
 
 namespace VisualGameStudio.ProjectSystem.Services;
@@ -11,19 +9,16 @@ namespace VisualGameStudio.ProjectSystem.Services;
 /// </summary>
 public class DebugService : IDebugService
 {
-    private Process? _debugProcess;
+    // Phase 4: the DAP transport (adapter process, framing, correlation) lives in
+    // DapSession; this service orchestrates IDE debug state on top of it.
+    private DapSession? _session;
     private Process? _targetProcess;
-    private StreamWriter? _writer;
-    private StreamReader? _reader;
     private StreamWriter? _stdinWriter;
-    private Task? _readTask;
-    private CancellationTokenSource? _cts;
-    private int _requestSeq;
-    private readonly Dictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
-    private readonly object _lock = new();
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly string _compilerPath;
     private readonly IOutputService _outputService;
+    private readonly Func<ProcessStartInfo, DapSession> _sessionFactory;
+    // TODO(Task 8): upgrade to the debugger descriptor's DisplayName.
+    private string _adapterDisplayName = "debug adapter";
 
     // Run to cursor state
     private string? _runToCursorFile;
@@ -49,15 +44,16 @@ public class DebugService : IDebugService
     public event EventHandler<DebugOutputEventArgs>? OutputReceived;
     public event EventHandler<BreakpointsChangedEventArgs>? BreakpointsChanged;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
-    public DebugService(IOutputService outputService)
+    /// <summary>
+    /// The optional factory is the test seam for injecting stream-backed
+    /// <see cref="DapSession"/>s. MS.DI honors defaulted parameters, so the plain
+    /// AddSingleton registration keeps resolving.
+    /// </summary>
+    public DebugService(IOutputService outputService,
+        Func<ProcessStartInfo, DapSession>? sessionFactory = null)
     {
         _outputService = outputService;
+        _sessionFactory = sessionFactory ?? (startInfo => new DapSession(startInfo, outputService));
         var baseDir = AppContext.BaseDirectory;
         _compilerPath = Path.Combine(baseDir, "BasicLang.dll");
 
@@ -99,48 +95,19 @@ public class DebugService : IDebugService
         try
         {
             SetState(DebugState.Initializing);
-            _cts = new CancellationTokenSource();
 
             // Start the debug adapter
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                Arguments = $"\"{_compilerPath}\" --debug-adapter",
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                WorkingDirectory = config.WorkingDirectory,
-                // MUST be BOM-less: accessing Process.StandardInput sets AutoFlush=true,
-                // which flushes the wrapper StreamWriter and writes the encoding preamble.
-                // With Encoding.UTF8 (BOM) that injects EF BB BF into the adapter's stdin,
-                // corrupting the first Content-Length header — the adapter never replies.
-                StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
-            };
+            var startInfo = DapSession.BuildStartInfo("dotnet", $"\"{_compilerPath}\" --debug-adapter", config.WorkingDirectory);
+            _adapterDisplayName = startInfo.FileName;
 
-            _debugProcess = new Process { StartInfo = startInfo };
-            _debugProcess.ErrorDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                {
-                    _outputService.WriteLine($"[DAP Error] {e.Data}", OutputCategory.Debug);
-                }
-            };
-
-            _debugProcess.Start();
-            AdapterProcessId = _debugProcess.Id;
-            _debugProcess.BeginErrorReadLine();
-
-            _writer = new StreamWriter(_debugProcess.StandardInput.BaseStream, new UTF8Encoding(false)) { AutoFlush = false };
-            // Latin1 maps every byte 1:1 to a char, so Content-Length (a BYTE count)
-            // can be honoured exactly; the body is re-decoded as UTF-8 afterwards.
-            // A UTF-8 StreamReader here would over-read whenever a message contains
-            // multi-byte characters, corrupting the framing of subsequent messages.
-            _reader = new StreamReader(_debugProcess.StandardOutput.BaseStream, Encoding.Latin1);
-
-            _readTask = Task.Run(() => ReadMessagesAsync(_cts.Token), _cts.Token);
+            var session = _sessionFactory(startInfo);
+            _session = session;
+            // Subscribe before Start so no early event (or an instant adapter death)
+            // can be missed by the read loop.
+            session.EventReceived += OnAdapterEvent;
+            session.Closed += OnSessionClosed;
+            session.Start();
+            AdapterProcessId = session.AdapterProcessId;
 
             // Initialize
             await SendRequestAsync("initialize", new
@@ -200,47 +167,19 @@ public class DebugService : IDebugService
         try
         {
             SetState(DebugState.Initializing);
-            _cts = new CancellationTokenSource();
 
-            // Start the debug adapter process
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                Arguments = $"\"{_compilerPath}\" --debug-adapter",
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                // MUST be BOM-less: accessing Process.StandardInput sets AutoFlush=true,
-                // which flushes the wrapper StreamWriter and writes the encoding preamble.
-                // With Encoding.UTF8 (BOM) that injects EF BB BF into the adapter's stdin,
-                // corrupting the first Content-Length header — the adapter never replies.
-                StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
-            };
+            // Start the debug adapter process (attach: no WorkingDirectory)
+            var startInfo = DapSession.BuildStartInfo("dotnet", $"\"{_compilerPath}\" --debug-adapter", null);
+            _adapterDisplayName = startInfo.FileName;
 
-            _debugProcess = new Process { StartInfo = startInfo };
-            _debugProcess.ErrorDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                {
-                    _outputService.WriteLine($"[DAP Error] {e.Data}", OutputCategory.Debug);
-                }
-            };
-
-            _debugProcess.Start();
-            AdapterProcessId = _debugProcess.Id;
-            _debugProcess.BeginErrorReadLine();
-
-            _writer = new StreamWriter(_debugProcess.StandardInput.BaseStream, new UTF8Encoding(false)) { AutoFlush = false };
-            // Latin1 maps every byte 1:1 to a char, so Content-Length (a BYTE count)
-            // can be honoured exactly; the body is re-decoded as UTF-8 afterwards.
-            // A UTF-8 StreamReader here would over-read whenever a message contains
-            // multi-byte characters, corrupting the framing of subsequent messages.
-            _reader = new StreamReader(_debugProcess.StandardOutput.BaseStream, Encoding.Latin1);
-
-            _readTask = Task.Run(() => ReadMessagesAsync(_cts.Token), _cts.Token);
+            var session = _sessionFactory(startInfo);
+            _session = session;
+            // Subscribe before Start so no early event (or an instant adapter death)
+            // can be missed by the read loop.
+            session.EventReceived += OnAdapterEvent;
+            session.Closed += OnSessionClosed;
+            session.Start();
+            AdapterProcessId = session.AdapterProcessId;
 
             // Initialize
             await SendRequestAsync("initialize", new
@@ -299,7 +238,6 @@ public class DebugService : IDebugService
         try
         {
             SetState(DebugState.Running);
-            _cts = new CancellationTokenSource();
 
             // Run the executable directly
             var startInfo = new ProcessStartInfo
@@ -393,7 +331,7 @@ public class DebugService : IDebugService
     public async Task StopDebuggingAsync()
     {
         // Try to send disconnect request with timeout before cancelling
-        if (_writer != null && State != DebugState.Stopped)
+        if (_session != null && State != DebugState.Stopped)
         {
             try
             {
@@ -411,18 +349,9 @@ public class DebugService : IDebugService
             }
         }
 
-        // Cancel the read loop
-        _cts?.Cancel();
-
-        // Cancel all pending DAP requests to avoid leaked tasks
-        lock (_lock)
-        {
-            foreach (var tcs in _pendingRequests.Values)
-            {
-                tcs.TrySetCanceled();
-            }
-            _pendingRequests.Clear();
-        }
+        // Cancel all pending DAP requests to avoid leaked tasks (the read loop
+        // is cancelled by the session's Dispose inside CleanupProcesses)
+        _session?.CancelPending();
 
         CleanupProcesses();
         SetState(DebugState.Stopped);
@@ -435,40 +364,26 @@ public class DebugService : IDebugService
     {
         // Can be invoked concurrently (terminated event on the read-loop
         // thread racing user Stop / Dispose on the UI thread). Atomically
-        // claim the fields under a lock so each process is killed/disposed
-        // exactly once, and HasExited is never called on a disposed Process.
-        Process? debugProcess;
+        // claim the fields under a lock so each is torn down exactly once,
+        // and HasExited is never called on a disposed Process.
+        DapSession? session;
         Process? targetProcess;
 
         lock (_cleanupLock)
         {
-            try { _writer?.Dispose(); } catch { }
-            try { _reader?.Dispose(); } catch { }
             try { _stdinWriter?.Dispose(); } catch { }
             _stdinWriter = null;
-            _writer = null;
-            _reader = null;
 
-            debugProcess = _debugProcess;
+            session = _session;
             targetProcess = _targetProcess;
-            _debugProcess = null;
+            _session = null;
             _targetProcess = null;
         }
 
-        // Kill the debug adapter process and its entire process tree
-        // (the game/debuggee is a child process of the adapter)
-        if (debugProcess != null)
-        {
-            try
-            {
-                if (!debugProcess.HasExited)
-                {
-                    debugProcess.Kill(entireProcessTree: true);
-                }
-            }
-            catch { }
-            try { debugProcess.Dispose(); } catch { }
-        }
+        // The adapter transport half (writer/reader dispose + kill of the adapter
+        // process tree — the game/debuggee is a child of the adapter) lives in
+        // DapSession.Dispose now.
+        session?.Dispose();
 
         // Kill the target process tree (used in "Run without debugging" mode)
         if (targetProcess != null)
@@ -716,7 +631,7 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<BreakpointInfo>> SetBreakpointsAsync(string filePath, IEnumerable<SourceBreakpoint> breakpoints)
     {
-        if (_writer == null) return Array.Empty<BreakpointInfo>();
+        if (_session == null) return Array.Empty<BreakpointInfo>();
 
         var bpList = breakpoints.ToList();
 
@@ -762,7 +677,7 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<FunctionBreakpointInfo>> SetFunctionBreakpointsAsync(IEnumerable<FunctionBreakpoint> breakpoints)
     {
-        if (_writer == null) return Array.Empty<FunctionBreakpointInfo>();
+        if (_session == null) return Array.Empty<FunctionBreakpointInfo>();
 
         var bpList = breakpoints.ToList();
 
@@ -802,7 +717,7 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<StackFrameInfo>> GetStackTraceAsync(int threadId = 1)
     {
-        if (_writer == null) return Array.Empty<StackFrameInfo>();
+        if (_session == null) return Array.Empty<StackFrameInfo>();
 
         try
         {
@@ -840,7 +755,7 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<ScopeInfo>> GetScopesAsync(int frameId)
     {
-        if (_writer == null) return Array.Empty<ScopeInfo>();
+        if (_session == null) return Array.Empty<ScopeInfo>();
 
         try
         {
@@ -870,7 +785,7 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<VariableInfo>> GetVariablesAsync(int variablesReference)
     {
-        if (_writer == null) return Array.Empty<VariableInfo>();
+        if (_session == null) return Array.Empty<VariableInfo>();
 
         try
         {
@@ -901,7 +816,7 @@ public class DebugService : IDebugService
 
     public async Task<EvaluateResult> EvaluateAsync(string expression, int? frameId = null, string? context = null)
     {
-        if (_writer == null) return new EvaluateResult { Result = "Error: Not debugging" };
+        if (_session == null) return new EvaluateResult { Result = "Error: Not debugging" };
 
         try
         {
@@ -927,7 +842,7 @@ public class DebugService : IDebugService
         IReadOnlyList<DataBreakpoint> breakpoints,
         CancellationToken cancellationToken = default)
     {
-        if (_writer == null) return Array.Empty<DataBreakpointInfo>();
+        if (_session == null) return Array.Empty<DataBreakpointInfo>();
 
         try
         {
@@ -968,7 +883,7 @@ public class DebugService : IDebugService
         int variablesReference, string name,
         CancellationToken cancellationToken = default)
     {
-        if (_writer == null) return null;
+        if (_session == null) return null;
 
         try
         {
@@ -1007,7 +922,7 @@ public class DebugService : IDebugService
 
     public async Task<IReadOnlyList<ThreadInfo>> GetThreadsAsync()
     {
-        if (_writer == null) return Array.Empty<ThreadInfo>();
+        if (_session == null) return Array.Empty<ThreadInfo>();
 
         try
         {
@@ -1063,145 +978,79 @@ public class DebugService : IDebugService
         StateChanged?.Invoke(this, new DebugStateChangedEventArgs { OldState = oldState, NewState = newState });
     }
 
-    private async Task ReadMessagesAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// UI half of spec §8 ("session death is an event, not a hang"): when the still-active
+    /// session's adapter dies unexpectedly, end the debug session instead of leaving the
+    /// IDE hung. A normal Stop/disconnect must NOT double-report — no-op when the session
+    /// is no longer the active one or the state is already Stopped.
+    /// </summary>
+    private void OnSessionClosed(object? sender, DapSessionClosedEventArgs e)
     {
-        while (!cancellationToken.IsCancellationRequested && _reader != null)
+        if (!ReferenceEquals(sender, _session)) return;
+        if (State == DebugState.Stopped) return;
+
+        var codeClause = e.ExitCode is int exitCode ? $" (code {exitCode})" : "";
+        _outputService.WriteError($"[Debug] Adapter '{_adapterDisplayName}' exited unexpectedly{codeClause} — debug session ended.", OutputCategory.Debug);
+        CleanupProcesses();
+        SetState(DebugState.Stopped);
+    }
+
+    /// <summary>
+    /// Adapter events, raised raw by <see cref="DapSession"/>; the handling below is the
+    /// pre-extraction ProcessMessage event switch, logic unchanged.
+    /// </summary>
+    private void OnAdapterEvent(object? sender, DapEventArgs args)
+    {
+        var eventType = args.EventType;
+        var body = args.Body;
+        _outputService.WriteLine($"[DAP] Event received: {eventType}", OutputCategory.Debug);
+
+        switch (eventType)
         {
-            try
-            {
-                var message = await ReadMessageAsync(cancellationToken);
-                if (message != null)
+            case "stopped":
+                var reason = body.TryGetProperty("reason", out var r2) ? r2.GetString() : "unknown";
+                _outputService.WriteLine($"[DAP] Stopped event: reason={reason}, setting state to Paused", OutputCategory.Debug);
+                SetState(DebugState.Paused);
+                var stoppedArgs = new StoppedEventArgs
                 {
-                    ProcessMessage(message.Value);
+                    Reason = ParseStopReason(body.TryGetProperty("reason", out var r) ? r.GetString() : null),
+                    ThreadId = body.TryGetProperty("threadId", out var tid) ? tid.GetInt32() : 1,
+                    Description = body.TryGetProperty("description", out var d) ? d.GetString() : null,
+                    Text = body.TryGetProperty("text", out var txt) ? txt.GetString() : null
+                };
+
+                // Restore original breakpoints after run-to-cursor
+                if (_runToCursorFile != null && _originalBreakpoints != null)
+                {
+                    _ = RestoreBreakpointsAfterRunToCursorAsync();
                 }
-            }
-            catch (OperationCanceledException)
-            {
+
+                Stopped?.Invoke(this, stoppedArgs);
                 break;
-            }
-            catch (Exception ex)
-            {
-                _outputService.WriteLine($"[DAP] Read error: {ex.Message}", OutputCategory.Debug);
-            }
-        }
-    }
 
-    private async Task<JsonElement?> ReadMessageAsync(CancellationToken cancellationToken)
-    {
-        if (_reader == null) return null;
-
-        int contentLength = 0;
-        while (true)
-        {
-            var line = await _reader.ReadLineAsync(cancellationToken);
-            if (line == null) return null;
-            if (line.Length == 0) break;
-
-            if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
-            {
-                if (!int.TryParse(line.Substring(15).Trim(), out contentLength))
-                    contentLength = 0;
-            }
-        }
-
-        if (contentLength == 0) return null;
-
-        // Read content — contentLength is a BYTE count. The reader uses Latin1
-        // (1 byte == 1 char), so reading contentLength chars reads exactly the
-        // message body; re-decode those bytes as UTF-8 to get the real JSON.
-        var buffer = new char[contentLength];
-        var read = 0;
-        while (read < contentLength)
-        {
-            var chunk = await _reader.ReadAsync(buffer.AsMemory(read, contentLength - read), cancellationToken);
-            if (chunk == 0) return null;
-            read += chunk;
-        }
-
-        var bytes = Encoding.Latin1.GetBytes(buffer);
-        var json = Encoding.UTF8.GetString(bytes);
-        return JsonSerializer.Deserialize<JsonElement>(json, JsonOptions);
-    }
-
-    private void ProcessMessage(JsonElement message)
-    {
-        var type = message.TryGetProperty("type", out var t) ? t.GetString() : null;
-
-        if (type == "response")
-        {
-            var reqSeq = message.TryGetProperty("request_seq", out var rs) ? rs.GetInt32() : 0;
-            lock (_lock)
-            {
-                if (_pendingRequests.TryGetValue(reqSeq, out var tcs))
+            case "output":
+                OutputReceived?.Invoke(this, new DebugOutputEventArgs
                 {
-                    _pendingRequests.Remove(reqSeq);
-                    // TrySet* — the request may have been cancelled (timeout /
-                    // stop) concurrently; Set* would throw on the read loop.
-                    if (message.TryGetProperty("success", out var s) && s.GetBoolean())
-                    {
-                        tcs.TrySetResult(message.TryGetProperty("body", out var body) ? body : default);
-                    }
-                    else
-                    {
-                        var errorMsg = message.TryGetProperty("message", out var m) ? m.GetString() : "Unknown error";
-                        tcs.TrySetException(new Exception(errorMsg));
-                    }
-                }
-            }
-        }
-        else if (type == "event")
-        {
-            var eventType = message.TryGetProperty("event", out var e) ? e.GetString() : null;
-            var body = message.TryGetProperty("body", out var b) ? b : default;
-            _outputService.WriteLine($"[DAP] Event received: {eventType}", OutputCategory.Debug);
+                    Category = body.TryGetProperty("category", out var cat) ? cat.GetString() ?? "console" : "console",
+                    Output = body.TryGetProperty("output", out var o) ? o.GetString() ?? "" : ""
+                });
+                break;
 
-            switch (eventType)
-            {
-                case "stopped":
-                    var reason = body.TryGetProperty("reason", out var r2) ? r2.GetString() : "unknown";
-                    _outputService.WriteLine($"[DAP] Stopped event: reason={reason}, setting state to Paused", OutputCategory.Debug);
-                    SetState(DebugState.Paused);
-                    var stoppedArgs = new StoppedEventArgs
-                    {
-                        Reason = ParseStopReason(body.TryGetProperty("reason", out var r) ? r.GetString() : null),
-                        ThreadId = body.TryGetProperty("threadId", out var tid) ? tid.GetInt32() : 1,
-                        Description = body.TryGetProperty("description", out var d) ? d.GetString() : null,
-                        Text = body.TryGetProperty("text", out var txt) ? txt.GetString() : null
-                    };
+            case "terminated":
+                _outputService.WriteLine("Debug session terminated", OutputCategory.Debug);
+                CleanupProcesses();
+                SetState(DebugState.Stopped);
+                break;
 
-                    // Restore original breakpoints after run-to-cursor
-                    if (_runToCursorFile != null && _originalBreakpoints != null)
-                    {
-                        _ = RestoreBreakpointsAfterRunToCursorAsync();
-                    }
+            case "breakpoint":
+                HandleBreakpointEvent(body);
+                break;
 
-                    Stopped?.Invoke(this, stoppedArgs);
-                    break;
-
-                case "output":
-                    OutputReceived?.Invoke(this, new DebugOutputEventArgs
-                    {
-                        Category = body.TryGetProperty("category", out var cat) ? cat.GetString() ?? "console" : "console",
-                        Output = body.TryGetProperty("output", out var o) ? o.GetString() ?? "" : ""
-                    });
-                    break;
-
-                case "terminated":
-                    _outputService.WriteLine("Debug session terminated", OutputCategory.Debug);
-                    CleanupProcesses();
-                    SetState(DebugState.Stopped);
-                    break;
-
-                case "breakpoint":
-                    HandleBreakpointEvent(body);
-                    break;
-
-                case "exited":
-                    var exitCode = body.TryGetProperty("exitCode", out var ec) ? ec.GetInt32() : 0;
-                    _outputService.WriteLine($"Program exited with code {exitCode}", OutputCategory.Debug);
-                    // Note: terminated event should follow and trigger cleanup
-                    break;
-            }
+            case "exited":
+                var exitCode = body.TryGetProperty("exitCode", out var ec) ? ec.GetInt32() : 0;
+                _outputService.WriteLine($"Program exited with code {exitCode}", OutputCategory.Debug);
+                // Note: terminated event should follow and trigger cleanup
+                break;
         }
     }
 
@@ -1255,66 +1104,16 @@ public class DebugService : IDebugService
         };
     }
 
-    private async Task<JsonElement> SendRequestAsync(string command, object arguments, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// All DAP requests flow through the active session — the transport (framing,
+    /// correlation, internal timeout) lives in <see cref="DapSession"/> now.
+    /// </summary>
+    private Task<JsonElement> SendRequestAsync(string command, object arguments, CancellationToken cancellationToken = default)
     {
-        var seq = Interlocked.Increment(ref _requestSeq);
-        // RunContinuationsAsynchronously keeps awaiter continuations from
-        // running inline on the read-loop thread while it holds _lock.
-        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        lock (_lock)
-        {
-            _pendingRequests[seq] = tcs;
-        }
-
-        try
-        {
-            var request = new { seq, type = "request", command, arguments };
-            await SendMessageAsync(request);
-
-            // Internal timeout: if the adapter dies (SendMessageAsync swallows
-            // pipe errors) the response never arrives, and callers that pass
-            // no token would otherwise await forever.
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
-            using var ctr = timeoutCts.Token.Register(() => tcs.TrySetCanceled());
-            return await tcs.Task;
-        }
-        finally
-        {
-            lock (_lock) { _pendingRequests.Remove(seq); }
-        }
-    }
-
-    private async Task SendMessageAsync(object message)
-    {
-        if (_writer == null) return;
-
-        var json = JsonSerializer.Serialize(message, JsonOptions);
-        var content = Encoding.UTF8.GetBytes(json);
-        var header = $"Content-Length: {content.Length}\r\n\r\n";
-
-        await _writeLock.WaitAsync();
-        try
-        {
-            var writer = _writer;
-            if (writer == null) return;
-            await writer.WriteAsync(header);
-            await writer.WriteAsync(json);
-            await writer.FlushAsync();
-        }
-        catch (IOException)
-        {
-            _writer = null;
-        }
-        catch (ObjectDisposedException)
-        {
-            _writer = null;
-        }
-        finally
-        {
-            _writeLock.Release();
-        }
+        var session = _session;
+        if (session == null)
+            throw new InvalidOperationException("No active DAP session");
+        return session.SendRequestAsync(command, arguments, cancellationToken);
     }
 
     public void Dispose()
@@ -1326,19 +1125,10 @@ public class DebugService : IDebugService
         }
 
         // Use synchronous cleanup to avoid thread pool starvation deadlocks
-        // when many tests run in parallel
-        _cts?.Cancel();
-
-        // Release any callers still awaiting a DAP response so they don't
-        // hang after disposal.
-        lock (_lock)
-        {
-            foreach (var tcs in _pendingRequests.Values)
-            {
-                tcs.TrySetCanceled();
-            }
-            _pendingRequests.Clear();
-        }
+        // when many tests run in parallel. The session's Dispose (inside
+        // CleanupProcesses) cancels the read loop; release any callers still
+        // awaiting a DAP response first so they don't hang after disposal.
+        _session?.CancelPending();
 
         CleanupProcesses();
         State = DebugState.Stopped;
