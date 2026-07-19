@@ -89,8 +89,9 @@ Three mandatory correctness fixes land here, once, for both adapters:
    explicit. Arm the `initialized`-event listener **before anything is
    sent** — DAP permits a conforming adapter to emit `initialized` any time
    after the initialize response, and the repo's legacy `--dap-legacy`
-   adapter does exactly that (~50 ms after, before any launch); the two v1
-   adapters emit it while processing launch/attach. Then: `initialize`
+   adapter does exactly that (timer-driven ~50 ms after, without waiting
+   for any launch); the two v1 adapters emit it while processing
+   launch/attach. Then: `initialize`
    request → `initialize` response (capabilities retained) → send `launch`
    **without awaiting its response** → await `initialized` →
    `setBreakpoints`/`setExceptionBreakpoints` → `configurationDone` → await
@@ -274,14 +275,16 @@ C++ names; the Variables pane shows those names in v1 either way.
 Three rings, all gating commits via the full suite as usual:
 
 1. **Unit — session core vs a scripted fake adapter** (in-proc DAP stub over
-   pipes): handshake ordering under **both timing regimes** — an
-   lldb-dap-shaped stub that emits `initialized` only after receiving
-   `launch` and defers the launch response past `configurationDone` (today's
-   client deadlocks on it), and a managed-shaped stub that emits
-   `initialized` immediately after the initialize response and completes
-   launch before configuration — plus capabilities retention, threadId
-   propagation, and the framing edge cases (UTF-8/BOM — load-bearing per
-   the 3a lesson).
+   pipes): handshake ordering under **three timing regimes** — an
+   lldb-dap-shaped stub (emits `initialized` only after receiving `launch`,
+   defers the launch response past `configurationDone`; today's client
+   deadlocks on it), a managed-shaped stub (emits `initialized` during
+   launch processing, completes the launch response before configuration),
+   and an early-emission legacy-shaped stub (emits `initialized` right after
+   the initialize response, potentially before the session sends `launch` —
+   the only regime that stresses §3.3.1's arm-the-listener-before-sending
+   rule) — plus capabilities retention, threadId propagation, and the
+   framing edge cases (UTF-8/BOM — load-bearing per the 3a lesson).
    Registry routing, descriptor lookup, and installer behavior (SHA mismatch,
    partial download, extract) get plain unit tests mirroring 3b's.
 2. **Regression — the managed-adapter e2e stays green through the refactor.**
