@@ -223,9 +223,11 @@ public sealed class DapSession : IDisposable
                     // DELIBERATE behavior change in the Phase 4 extraction (spec §8),
                     // the only one: the original loop spun on a null read, so a crashed
                     // adapter (which never sends the DAP `terminated` event) was a
-                    // silent hang. A null read means the adapter's stdout hit EOF —
-                    // treat it as session death: break out and raise Closed (exactly
-                    // once, guard shared with the Process.Exited path).
+                    // silent hang. A null read means the adapter's stdout hit EOF or
+                    // produced a malformed frame (an absent/unparseable Content-Length
+                    // also reads back as null) — treat either as session death: break
+                    // out and raise Closed (exactly once, guard shared with the
+                    // Process.Exited path).
                     RaiseClosed();
                     break;
                 }
@@ -260,6 +262,7 @@ public sealed class DapSession : IDisposable
             }
         }
 
+        // Malformed/absent Content-Length: the same null → Closed path as EOF.
         if (contentLength == 0) return null;
 
         // Read content — contentLength is a BYTE count. The reader uses Latin1
