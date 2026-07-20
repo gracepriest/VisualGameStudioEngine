@@ -55,6 +55,9 @@ namespace BasicLang.Compiler.ProjectSystem
 
         // C++-only settings (ignored for BasicLang projects)
         public string CppStandard { get; set; } = "c++20";
+
+        // Native-build setting (applies to any IsNativeProject, incl. mixed)
+        public string? CppToolchain { get; set; }   // "llvm" | "gcc" | "msvc"; null = machine probe
         public List<string> IncludeDirs { get; set; } = new List<string>();
         public List<string> NativeLibs { get; set; } = new List<string>();
         public List<string> Defines { get; set; } = new List<string>();
@@ -129,6 +132,8 @@ namespace BasicLang.Compiler.ProjectSystem
                     ?? "CSharp";
                 project.Language = propertyGroup.Element("Language")?.Value ?? "BasicLang";
                 project.CppStandard = propertyGroup.Element("CppStandard")?.Value ?? "c++20";
+                project.CppToolchain = propertyGroup.Element("CppToolchain")?.Value.Trim().ToLowerInvariant();
+                if (string.IsNullOrEmpty(project.CppToolchain)) project.CppToolchain = null;
 
                 var optimize = propertyGroup.Element("Optimize")?.Value;
                 if (optimize != null) project.OptimizationsEnabled = bool.Parse(optimize);
@@ -286,6 +291,7 @@ namespace BasicLang.Compiler.ProjectSystem
                         new XElement("TargetBackend", Backend),
                         IsCppProject ? new XElement("Language", Language) : null,
                         IsCppProject ? new XElement("CppStandard", CppStandard) : null,
+                        string.IsNullOrEmpty(CppToolchain) ? null : new XElement("CppToolchain", CppToolchain),
                         string.IsNullOrEmpty(Description) ? null : new XElement("Description", Description),
                         string.IsNullOrEmpty(Authors) ? null : new XElement("Authors", Authors),
                         new XElement("Version", Version)

@@ -113,6 +113,69 @@ public class CppProjectFileTests
     }
 
     [Test]
+    public void Load_ReadsCppToolchain_Lowercased()
+    {
+        var path = WriteProject("""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>Test</ProjectName>
+                <Language>Cpp</Language>
+                <CppToolchain>GCC</CppToolchain>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+
+        var project = ProjectFile.Load(path);
+
+        Assert.That(project.CppToolchain, Is.EqualTo("gcc"));
+    }
+
+    [Test]
+    public void Load_NoCppToolchainElement_IsNull()
+    {
+        var path = WriteProject("""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup><ProjectName>Test</ProjectName><Language>Cpp</Language></PropertyGroup>
+            </BasicLangProject>
+            """);
+
+        var project = ProjectFile.Load(path);
+
+        Assert.That(project.CppToolchain, Is.Null, "no element = machine probe");
+    }
+
+    [Test]
+    public void Save_EmitsCppToolchain_WhenSet_EvenForMixedProjects()
+    {
+        // Mixed project: Language=BasicLang on the C++ backend still builds
+        // natively, so its toolchain choice must survive a save.
+        var project = new ProjectFile
+        {
+            FilePath = Path.Combine(_dir, "Mixed.blproj"),
+            ProjectName = "Mixed",
+            Backend = "Cpp",
+            CppToolchain = "msvc",
+        };
+        project.Save();
+        var text = File.ReadAllText(project.FilePath);
+        Assert.That(text, Does.Contain("<CppToolchain>msvc</CppToolchain>"));
+    }
+
+    [Test]
+    public void Save_OmitsCppToolchain_WhenNull()
+    {
+        var project = new ProjectFile
+        {
+            FilePath = Path.Combine(_dir, "NoTc.blproj"),
+            ProjectName = "NoTc",
+            Language = "Cpp",
+        };
+        project.Save();
+        var text = File.ReadAllText(project.FilePath);
+        Assert.That(text, Does.Not.Contain("<CppToolchain>"));
+    }
+
+    [Test]
     public void GetCppTranslationUnits_DefaultGlob_FindsTUsExcludingBinObjAndHeaders()
     {
         File.WriteAllText(Path.Combine(_dir, "main.cpp"), "// tu");
