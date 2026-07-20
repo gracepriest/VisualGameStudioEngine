@@ -308,6 +308,55 @@ public class DebugServiceThreadIdTests
             "an explicit threadId must always win over the stopped-thread default");
     }
 
+    [Test]
+    public async Task NewSession_ResetsTheStoppedThreadId()
+    {
+        // DebugService is a DI singleton outliving sessions: after session 1 stops on
+        // thread 7, session 2's PRE-FIRST-STOP pause must carry 1 again — a stale 7
+        // would ask the new adapter to pause a thread it never had (and the managed
+        // adapter echoes the requested id back, yielding an empty call stack).
+        var output = new RecordingOutputService();
+        using var fake1 = FakeDapAdapter.ManagedShaped();
+        using var fake2 = FakeDapAdapter.ManagedShaped();
+        var session1 = new DapSession(fake1.SessionReads, fake1.SessionWrites, output);
+        var session2 = new DapSession(fake2.SessionReads, fake2.SessionWrites, output);
+        var sessions = new Queue<DapSession>(new[] { session1, session2 });
+        var service = new DebugService(output, _ => sessions.Dequeue());
+
+        try
+        {
+            var config = new DebugConfiguration
+            {
+                Program = "FakeApp.exe",
+                WorkingDirectory = Path.GetTempPath()
+            };
+
+            // Session 1: handshake, stop on thread 7, tear down.
+            var started1 = await WithTimeout(service.StartDebuggingAsync(config),
+                "the session 1 handshake");
+            Assert.That(started1, Is.True, "session 1 handshake failed:\n" + output.Dump());
+            await EmitStoppedAndWaitAsync(service, fake1, 7);
+            await WithTimeout(service.StopDebuggingAsync(), "stopping session 1");
+
+            // Session 2: handshake only — deliberately NO stopped event before the pause.
+            var started2 = await WithTimeout(service.StartDebuggingAsync(config),
+                "the session 2 handshake");
+            Assert.That(started2, Is.True, "session 2 handshake failed:\n" + output.Dump());
+            Assert.That(service.State, Is.EqualTo(DebugState.Running));
+
+            await WithTimeout(service.PauseAsync(), "the pre-first-stop pause round-trip");
+
+            Assert.That(WireThreadId(fake2, "pause"), Is.EqualTo(1),
+                "a new session's pre-first-stop pause must carry 1, not the previous session's stopped thread");
+        }
+        finally
+        {
+            service.Dispose();
+            session1.Dispose();
+            session2.Dispose();
+        }
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
@@ -326,33 +375,39 @@ public class DebugServiceThreadIdTests
     }
 
     /// <summary>Emit a stopped event and wait until the service raised Stopped for it.</summary>
-    private async Task EmitStoppedAndWaitAsync(int threadId)
+    private Task EmitStoppedAndWaitAsync(int threadId)
+        => EmitStoppedAndWaitAsync(_service, _fake, threadId);
+
+    private static async Task EmitStoppedAndWaitAsync(DebugService service, FakeDapAdapter fake, int threadId)
     {
         var stopped = new TaskCompletionSource<StoppedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
         void Handler(object? _, StoppedEventArgs e) => stopped.TrySetResult(e);
-        _service.Stopped += Handler;
+        service.Stopped += Handler;
         try
         {
-            _fake.EmitEvent("stopped", new { reason = "breakpoint", threadId });
+            fake.EmitEvent("stopped", new { reason = "breakpoint", threadId });
             var args = await WithTimeout(stopped.Task, $"the Stopped event for threadId {threadId}");
             Assert.That(args.ThreadId, Is.EqualTo(threadId),
                 "the stopped event's threadId was not parsed off the event body");
-            Assert.That(_service.State, Is.EqualTo(DebugState.Paused),
+            Assert.That(service.State, Is.EqualTo(DebugState.Paused),
                 "the stopped event did not pause the service");
         }
         finally
         {
-            _service.Stopped -= Handler;
+            service.Stopped -= Handler;
         }
     }
 
     /// <summary>The threadId the adapter actually received on the wire for a command.</summary>
     private int WireThreadId(string command)
+        => WireThreadId(_fake, command);
+
+    private static int WireThreadId(FakeDapAdapter fake, string command)
     {
-        var matches = _fake.Received.Where(r => r.Command == command).ToArray();
+        var matches = fake.Received.Where(r => r.Command == command).ToArray();
         Assert.That(matches, Is.Not.Empty,
             $"the adapter never received a '{command}' request; it saw: " +
-            string.Join(", ", _fake.Received.Select(r => r.Command)));
+            string.Join(", ", fake.Received.Select(r => r.Command)));
 
         var args = matches.Last().Arguments;
         Assert.That(args.ValueKind, Is.EqualTo(JsonValueKind.Object),

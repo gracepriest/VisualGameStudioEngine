@@ -25,10 +25,10 @@ public class DebugService : IDebugService
     private int _runToCursorLine;
     private List<SourceBreakpoint>? _originalBreakpoints;
 
-    // The threadId of the most recent stopped event; 1 until the first stop
-    // (DAP offers nothing better pre-stop). The Step-0 gate observed lldb-dap
-    // stopping on threadId 6908 — hardcoding 1 breaks every native-path
-    // continue/step/pause/goto/stackTrace.
+    // The threadId of the most recent stopped event; 1 until the first stop of
+    // each session (reset at session start — DAP offers nothing better pre-stop).
+    // The Step-0 gate observed lldb-dap stopping on threadId 6908 — hardcoding 1
+    // breaks every native-path continue/step/pause/goto/stackTrace.
     private int _currentThreadId = 1;
 
     // Restart state
@@ -113,6 +113,9 @@ public class DebugService : IDebugService
         try
         {
             SetState(DebugState.Initializing);
+            // This service is a DI singleton outliving sessions: without the reset, a
+            // pre-first-stop pause in session 2 would carry session 1's thread id.
+            _currentThreadId = 1;
 
             // Start the debug adapter
             var startInfo = DapSession.BuildStartInfo("dotnet", $"\"{_compilerPath}\" --debug-adapter", config.WorkingDirectory);
@@ -164,6 +167,8 @@ public class DebugService : IDebugService
         try
         {
             SetState(DebugState.Initializing);
+            // Same cross-session staleness guard as StartDebuggingAsync.
+            _currentThreadId = 1;
 
             // Start the debug adapter process (attach: no WorkingDirectory)
             var startInfo = DapSession.BuildStartInfo("dotnet", $"\"{_compilerPath}\" --debug-adapter", null);
