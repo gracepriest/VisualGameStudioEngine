@@ -59,7 +59,7 @@ Service interfaces and models. NO implementations live here.
   IBookmarkService, IDialogService, IOutputService, ISnippetService,
   INavigationService, ICodeMetricsService, ICodeFormattingService,
   ISymbolSearchService, ITerminalService, ICodeAnalysisService, ITaskListService,
-  ITextMateService, IDapClientService, IExtensionService, IMarketplaceService,
+  ITextMateService, IExtensionService, IMarketplaceService,
   IKeybindingService, IGitService, ISearchService, ICommandService,
   IProjectTemplateService
 - ViewModels: ViewModelBase (CommunityToolkit.Mvvm), IDocumentViewModel
@@ -451,11 +451,10 @@ Interface (Core)                  -> Implementation (ProjectSystem)  | Descripti
 ILanguageService                  -> LanguageService                 | LSP client (BasicLang.exe --lsp)
 IProjectService                   -> ProjectService                  | Project/solution management
 IBuildService                     -> BuildService                    | Compile via BasicLang.exe build
-IDebugService                     -> DebugService                    | DAP client for debugging
+IDebugService                     -> DebugService                    | DAP client for debugging (spawns a DapSession per launch)
 IFileService                      -> FileService                     | File I/O operations
 IRefactoringService               -> RefactoringService              | Code refactoring operations
 IFindReplaceService               -> FindReplaceService              | Find/replace in files
-IDapClientService                 -> DapClientService                | Generic DAP client
 ISettingsService                  -> SettingsService                 | User preferences
 IBookmarkService                  -> BookmarkService                 | Code bookmarks
 IDialogService                    -> DialogService (Shell)           | Dialog display
@@ -510,7 +509,7 @@ Visual Game Studio IDE -- Architecture Overview
 |  29 Service implementations                               |
 |  LanguageService (LSP) | DebugService (DAP)               |
 |  BuildService | ProjectService | GitService               |
-|  DapClientService                                         |
+|  DapSession (per-launch DAP transport)                    |
 +-----------------------------------------------------------+
 |                    Layer 1: CORE                          |
 |  29 Service interfaces (ILanguageService, etc.)           |
