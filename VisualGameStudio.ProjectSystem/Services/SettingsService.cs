@@ -1265,6 +1265,8 @@ public class SettingsService : ISettingsService, IDisposable
             {
                 Prop(LanguageServerDescriptor.ClangdSettingsKey, SettingsPropertyType.String, "clangd Path", "",
                     "Path to the clangd executable, used for C++ IntelliSense. Leave empty to search PATH."),
+                Prop(DebugAdapterDescriptor.LldbDapSettingsKey, SettingsPropertyType.String, "lldb-dap Path", "",
+                    "Path to the lldb-dap executable, used for native C++ debugging. Leave empty to auto-detect."),
             }
         });
     }

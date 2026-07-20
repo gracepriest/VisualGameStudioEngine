@@ -48,6 +48,9 @@ public static class ClangdLocator
     /// Empty off Windows for now.
     /// <para>Built once per process (the vswhere lookup for the VS-bundled entries spawns a
     /// process, bounded at ~2s) — at DI time in production, since that is the first touch.</para>
+    /// <para>⚠ Keep-in-sync: <see cref="LldbDapLocator"/> composes its known-install-dir sweep
+    /// from THIS list (plus its own winlibs entry) — a directory added or reordered here changes
+    /// the lldb-dap sweep too. The winlibs entry stays lldb-only; do not add it here.</para>
     /// </summary>
     public static readonly IReadOnlyList<string> WindowsLlvmInstallDirectories =
         RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
