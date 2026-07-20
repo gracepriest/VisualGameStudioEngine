@@ -77,14 +77,15 @@ public partial class ExceptionSettingsViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// The managed trio, by id set — the vocabulary the hardcoded BasicLang tree (and the
-    /// legacy translator mapping) was built for.
+    /// The managed vocabulary, detected exactly the way <c>ExceptionFilterTranslator</c>
+    /// picks its mode: ANY of all/uncaught/thrown present. The two predicates MUST stay
+    /// identical — the SHIPPED managed adapter advertises only all+uncaught (a trio
+    /// subset, BasicLang/Debugger/DebugSession.cs), and a dialog that renders adapter
+    /// rows while the translator maps in legacy terms turns "Uncaught Exceptions" into
+    /// a thrown-condition for a type that does not exist.
     /// </summary>
     private static bool IsClassicManagedVocabulary(IReadOnlyList<DapExceptionFilter> filters)
-        => filters.Count == 3
-           && filters.Any(f => f.Id == "all")
-           && filters.Any(f => f.Id == "uncaught")
-           && filters.Any(f => f.Id == "thrown");
+        => filters.Any(f => f.Id is "all" or "uncaught" or "thrown");
 
     private void InitializeDefaultCategories()
     {

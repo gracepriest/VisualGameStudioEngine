@@ -207,6 +207,58 @@ public class ExceptionFilterTranslatorTests
             "All Exceptions", "Runtime Exceptions", "IO Exceptions", "User Exceptions",
         }), "the managed trio must keep today's hardcoded categories");
     }
+
+    // The SHIPPED managed adapter advertises exactly TWO filters — all + uncaught, a trio
+    // SUBSET (BasicLang/Debugger/DebugSession.cs initialize response). During a live managed
+    // session ActiveExceptionFilters therefore serves that pair, and BOTH halves — the dialog
+    // and the translator — must recognize it as the managed vocabulary. A predicate mismatch
+    // here is a live defect: adapter-mode rows fed into the managed mapping turn a checked
+    // "Uncaught Exceptions" row into filters:["thrown"] + a thrown-condition for a type that
+    // does not exist.
+
+    private static readonly IReadOnlyList<DapExceptionFilter> RealManagedAdapterPair = new[]
+    {
+        new DapExceptionFilter("all", "All Exceptions", false),
+        new DapExceptionFilter("uncaught", "Uncaught Exceptions", true),
+    };
+
+    [Test]
+    public void DialogVm_RealManagedAdapterPair_KeepsTheClassicTree()
+    {
+        var vm = new ExceptionSettingsViewModel(null, RealManagedAdapterPair);
+
+        Assert.That(vm.ExceptionCategories.Select(c => c.Name), Is.EqualTo(new[]
+        {
+            "All Exceptions", "Runtime Exceptions", "IO Exceptions", "User Exceptions",
+        }), "a live managed session must render the classic hardcoded tree, not two flat adapter rows");
+
+        // And the classic path means current settings still apply through the tree walk.
+        var vmWithSettings = new ExceptionSettingsViewModel(
+            new[] { new ExceptionSetting { ExceptionType = "NullReferenceException", BreakWhenThrown = true } },
+            RealManagedAdapterPair);
+        var runtime = vmWithSettings.ExceptionCategories.First(c => c.Name == "Runtime Exceptions");
+        Assert.That(runtime.Children!.First(c => c.Name == "NullReferenceException").BreakWhenThrown, Is.True,
+            "persisted per-type settings must keep applying to the classic tree");
+    }
+
+    [Test]
+    public void Translate_RealManagedAdapterPair_StaysInManagedMode()
+    {
+        // The dialog rendered the classic tree, so the rows carry the legacy category and
+        // type names — and the translator must map them with the legacy mapping.
+        var (filters, options) = ExceptionFilterTranslator.Translate(new[]
+        {
+            Row("All Exceptions", thrown: true),
+            Row("Runtime Exceptions", thrown: true, userUnhandled: true),
+            Row("NullReferenceException", thrown: true),
+        }, RealManagedAdapterPair);
+
+        Assert.That(filters, Is.EqualTo(new[] { "all", "uncaught", "thrown" }),
+            "the real adapter's all+uncaught pair must select the MANAGED mapping");
+        Assert.That(options, Is.Not.Null);
+        Assert.That(options!.Select(o => (o.FilterId, o.Condition)),
+            Is.EqualTo(new[] { ("thrown", "NullReferenceException") }));
+    }
 }
 
 /// <summary>
