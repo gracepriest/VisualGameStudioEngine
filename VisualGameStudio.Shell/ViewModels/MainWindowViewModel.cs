@@ -50,6 +50,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IProjectService _projectService;
     private readonly IBuildService _buildService;
     private readonly IDebugService _debugService;
+    private readonly IDebugAdapterRegistry _debugAdapterRegistry;
     private readonly ILanguageServiceRegistry _languageServices;
     private readonly IDialogService _dialogService;
     private readonly IFileService _fileService;
@@ -350,6 +351,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IProjectService projectService,
         IBuildService buildService,
         IDebugService debugService,
+        IDebugAdapterRegistry debugAdapterRegistry,
         ILanguageServiceRegistry languageServices,
         IDialogService dialogService,
         IFileService fileService,
@@ -398,6 +400,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _projectService = projectService;
         _buildService = buildService;
         _debugService = debugService;
+        _debugAdapterRegistry = debugAdapterRegistry;
         _languageServices = languageServices;
         _dialogService = dialogService;
         _fileService = fileService;
@@ -3474,16 +3477,22 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Phase 1: the BasicLang debug adapter cannot debug native C++ exes —
-        // guard F5 for ALL native projects (Language=Cpp AND BasicLang-on-the-C++-
-        // backend) instead of handing a native binary to the BasicLang adapter.
-        if (_projectService.CurrentProject.IsNativeBuild)
+        // Phase 4: the registry routes F5 — the same IsNativeBuild predicate that routes
+        // the BUILD picks the ADAPTER (managed BasicLang or lldb-dap), so the two can never
+        // disagree about what a project is. The old "native C++ debugging arrives in a later
+        // phase" guard lived here; this is the later phase.
+        var descriptor = _debugAdapterRegistry.GetFor(_projectService.CurrentProject);
+        if (descriptor is null)
         {
-            const string message =
-                "Native C++ debugging arrives in a later phase — use Start Without Debugging (Ctrl+F5) to run.";
-            _dockFactory.ActivateTool("Output");
-            OutputPanel.AppendOutput(message + "\n");
-            StatusText = message;
+            OutputPanel.AppendOutput("No debug adapter serves this project type.\n");
+            return;
+        }
+
+        // Installed? Asked NOW, not at startup — lldb-dap may have been installed
+        // mid-session (the one-click acquisition flow), and this F5 must see it.
+        if (descriptor.ResolveLaunchCommand() is null)
+        {
+            ReportDebugAdapterMissing(descriptor);   // Task 12 upgrades this to the offer toast
             return;
         }
 
@@ -3523,6 +3532,14 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        // Native + DebugSymbols off: the exe that just built has no debug info (CppToolchain
+        // only emits /Zi | -g when the configuration says so) — warn, never block.
+        if (Services.DebugLaunchPolicy.ShouldWarnNoDebugInfo(descriptor, _buildService.CurrentConfiguration))
+        {
+            OutputPanel.AppendOutput(Services.DebugLaunchPolicy.ComposeNoDebugInfoWarning(
+                _buildService.CurrentConfiguration.Name) + "\n");
+        }
+
         _debugTargetName = Path.GetFileName(buildResult.ExecutablePath);
         StatusText = $"Debugging: {_debugTargetName}";
         OutputPanel.SelectedCategory = OutputCategory.Debug;
@@ -3560,10 +3577,15 @@ public partial class MainWindowViewModel : ViewModelBase
             WorkingDirectory = workingDir,
             Arguments = arguments,
             Environment = environment,
-            StopOnEntry = stopOnEntry
+            StopOnEntry = stopOnEntry,
+            // The registry's answer rides the config — the debug service resolves this id
+            // instead of re-deriving the routing rule.
+            AdapterId = descriptor.Id
         };
 
-        // Collect all breakpoints to send to the debug adapter
+        // Collect all breakpoints to send to the debug adapter. Path-keyed, no extension
+        // gate — .cpp and .bas breakpoints reach the adapter alike, OS-native path form
+        // (lldb normalizes against the forward-slash #line spelling; Task 1's gate verdict).
         var breakpoints = Breakpoints.GetAllBreakpoints();
 
         var success = await _debugService.StartDebuggingAsync(config, breakpoints);
@@ -3574,6 +3596,20 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// The registry routes to this adapter but <see cref="DebugAdapterDescriptor.ResolveLaunchCommand"/>
+    /// found nothing on disk — say so where the user is looking (Output, activated, the old
+    /// guard's idiom) and in the status bar. Wording is <see cref="Services.DebugLaunchPolicy"/>'s
+    /// pinned contract; Task 12 upgrades the delivery to the download-offer toast.
+    /// </summary>
+    private void ReportDebugAdapterMissing(DebugAdapterDescriptor descriptor)
+    {
+        var message = Services.DebugLaunchPolicy.ComposeAdapterMissingMessage(descriptor);
+        _dockFactory.ActivateTool("Output");
+        OutputPanel.AppendOutput(message + "\n");
+        StatusText = message;
+    }
+
     [RelayCommand]
     private async Task AttachToProcessAsync()
     {
@@ -3582,6 +3618,17 @@ public partial class MainWindowViewModel : ViewModelBase
             await _dialogService.ShowMessageAsync("Attach to Process",
                 "A debug session is already active. Stop the current session first.",
                 DialogButtons.Ok, DialogIcon.Information);
+            return;
+        }
+
+        // Native ATTACH stays out of v1 (spec §9) — the managed adapter owns attach, and
+        // handing it a native process would be the exact mis-route the registry exists to
+        // prevent. Launch is the supported native path.
+        if (_projectService.CurrentProject?.IsNativeBuild == true)
+        {
+            const string message = "Native attach is out of scope for v1 — launch (F5) instead.";
+            OutputPanel.AppendOutput(message + "\n");
+            StatusText = message;
             return;
         }
 
