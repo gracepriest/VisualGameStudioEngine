@@ -60,8 +60,13 @@ identically.
 `ProjectTemplateService.GenerateProjectFileContent`
 (`VisualGameStudio.ProjectSystem/Services/ProjectTemplateService.cs:257-340`,
 hardcode at `:284`) emits `<CppStandard>` from the option (falling back to
-`c++20`) and `<CppToolchain>` whenever the option is non-null — for
-wizard-created C++ projects that is always.
+`c++20`) and `<CppToolchain>` whenever the option is non-null.
+
+The wizard sets `CppToolchain` **only when the selected toolchain was actually
+available at creation time** (per the §1.4 probe). If the user proceeds on a
+machine with no toolchain installed, the element is omitted: the project
+self-heals onto the machine probe once anything is installed, and never
+hard-errors on a "selection" the user couldn't meaningfully make.
 
 Both serializers learn the new element:
 
@@ -71,9 +76,12 @@ Both serializers learn the new element:
   (`VisualGameStudio.Core/Models/BasicLangProject.cs:68-74`). Emit only when
   non-null.
 - Compiler side: `BasicLang/ProjectSystem/ProjectFile.cs` (parse `:115-144`,
-  serialize near `:288`) gains a `CppToolchain` string property with the same
-  only-when-set emission rule. (`CppStandard` keeps its existing default-`c++20`
-  always-emit-for-cpp behavior — unchanged.)
+  serialize near `:288`) gains a `CppToolchain` string property, emitted
+  whenever set — **not** gated on `IsCppProject`, because mixed
+  BasicLang+Cpp-backend projects also build natively (`IsNativeProject`,
+  `:50-54`). (Known asymmetry left unchanged: the existing `<CppStandard>`
+  emit at `:288` is `IsCppProject`-gated, so mixed projects get it only from
+  the IDE serializer.)
 
 The CLI's parallel template system (`BasicLang/ProjectSystem/TemplateEngine.cs`,
 hardcodes at `:454/:490/:521`) stays hardcoded at the `c++20` default —
@@ -140,16 +148,21 @@ entry points. The compile_commands.json driver/dialect invariant
 (`CppProjectBuilder.cs:336-341`) holds automatically — flags derive from the
 resolved toolchain.
 
-The IDE-side project model must hand the value to the compiler-side build: the
-same pathway that today carries `CppStandard` from `CppSettings` into
-`ProjectFile` carries `CppToolchain` alongside it.
+No IDE→compiler hand-off code is needed: `BuildService.BuildCppProject`
+re-loads the `.blproj` from disk via `ProjectFile.Load`
+(`VisualGameStudio.ProjectSystem/Services/BuildService.cs:1040-1042`) — there
+is no `CppSettings`→`ProjectFile` value copy anywhere. Teaching `ProjectFile.cs`
+to parse `<CppToolchain>` (§1.3) therefore covers the IDE build automatically;
+the IDE-side `CppSettings.CppToolchain` exists for the wizard/serializer
+round-trip, not for the build.
 
 ### 2.2 Hard error
 
-Requested-but-missing produces a new diagnostic in the native family (next free
-BL60xx number after BL6014 — the plan pins the exact id after a grep):
+Requested-but-missing produces **BL6015** (verified the next free BL60xx id @
+`dd09b91` — nothing above BL6014 exists; implementer re-confirms with a grep
+before claiming it):
 
-> BL60xx: C++ toolchain 'gcc' requested by the project is not installed.
+> BL6015: C++ toolchain 'gcc' requested by the project is not installed.
 > Detected: msvc. Install GCC or change `<CppToolchain>` in the project file.
 
 One sentence stating requested, detected (from `ProbeAvailability()`), and both
@@ -192,12 +205,17 @@ mechanism.
 `CodeEditorControl.SetLanguageService(service, filePath)`
 (`CodeEditorControl.axaml.cs:407-416`) already receives the file path; it
 forwards the path (or a derived language tag) to `InlineColorRenderer`, which
-selects a pattern set by extension:
+selects a pattern set by extension. The extension→language classification
+**reuses the canonical map** in
+`VisualGameStudio.Core/Utilities/LanguageFileTypes.cs` (BasicLang set `:53`,
+C++ set `:65`) — do **not** hand-roll a third list (standing rule: two
+language-id maps already exist in this codebase and must not be merged or
+multiplied). That means the gate inherits the canonical sets exactly
+(BasicLang: `.bas .bl .mod .cls .class`; C++: `.cpp .cc .cxx .h .hpp .hh
+.hxx .inl`).
 
-- BasicLang: `.bas .mod .cls .bl .basic`
-- C++: `.cpp .cc .cxx .h .hpp .hh`
-- **Anything else: no color patterns** — killing today's latent false positives
-  in arbitrary file types.
+- **Any extension outside those sets: no color patterns** — killing today's
+  latent false positives in arbitrary file types.
 
 ### 3.2 Pattern sets
 
@@ -224,7 +242,10 @@ selects a pattern set by extension:
 A plan task audits `VisualGameStudioEngine/framework.h` for all exports with
 `r,g,b,a` color tails and tops up the whitelist (known examples at
 `framework.h:298/:300/:1494-1502/:2169`; there is no `CreateColor` — that name
-does not exist in the engine).
+does not exist in the engine). The same audit confirms the engine exposes **no
+RGBA-order hex color API** (raylib's `GetColor` convention is `0xRRGGBBAA`) —
+if one exists, its literals must be excluded from `CppHex` detection rather
+than silently misread in `AARRGGBB` order.
 
 ### 3.3 Apply-back by kind
 
@@ -237,7 +258,11 @@ sniffing the old text. Each kind rebuilds its own shape:
   heuristic retained.
 - `VbHex`: `&H[AA]RRGGBB` (existing, `:4800-4807`).
 - `CppHex`: `0x[AA]RRGGBB`, preserving 6- vs 8-digit form.
-- `BraceInit`: `{R, G, B, A}` — end offset includes the closing brace.
+- `BraceInit`: the replacement range starts at the **opening brace** (the
+  `Color` / `(Color)` / `CLITERAL(Color)` prefix survives untouched) and ends
+  at the closing brace inclusive. Arity is preserved: a 3-component literal is
+  rewritten with 3 components unless the picked alpha is < 255 (then 4) —
+  mirroring the `RgbCall` alpha heuristic.
 
 **Ordering rule: each new pattern lands in the same implementation task as its
 apply branch.** Detection must never outrun rewriting — an unrecognized literal
@@ -276,14 +301,18 @@ handler `:1578-1626`). The activation primitive `DockFactory.ActivateTool`
 ### 4.2 The quiet toast
 
 Success (`MWVM:1597-1601`) and failure (`:1608-1613`) toasts lose their action
-buttons and gain explicit auto-dismiss. The toast pipeline
-(`ShowNotification` MWVM:1802-1832 → `ShowToastNotification`
-`MainWindow.axaml.cs:267-450`) gets an `autoDismiss` flag honored regardless of
-severity — today only action-less *info* toasts self-dismiss (`MainWindow.axaml.cs:431`),
-which is why "Build succeeded" currently persists forever and "Build failed"
-(severity error) would too. Quiet build toasts dismiss after ~3 s (a named
-constant). Every toast still lands silently in the status-bar notification
-center (`MWVM:1813/:1831`), so history is preserved.
+buttons and become explicitly auto-dismissing. The mechanism **already exists
+end-to-end**: `NotificationEventArgs.AutoDismiss` (`MWVM:8488`) is honored
+regardless of severity at `MainWindow.axaml.cs:431`. The actual gaps are two:
+(a) the actions-overload of `ShowNotification` computes
+`autoDismiss = info && no actions` internally with no caller override
+(`MWVM:1821`) — it gains an optional override parameter; and (b) the dismiss
+timer is fixed at 5 s (`MainWindow.axaml.cs:434`) — it gains an optional
+per-toast duration, with quiet build toasts using a named ~3 s constant and
+everything else keeping 5 s. (Today "Build succeeded" persists forever because
+it carries an action button, and a severity-error "Build failed" would persist
+even without one.) Every toast still lands silently in the status-bar
+notification center (`MWVM:1813/:1831`), so history is preserved.
 
 ### 4.3 What stays, deliberately
 
@@ -316,7 +345,9 @@ before every commit.
   values; `<CppToolchain>` round-trips in both serializers
   (`ProjectSerializerCppTests`, `CppProjectFileTests`); BasicLang projects emit
   no toolchain element (mirror `CppProjectFileTests:112`);
-  `TemplateBuildSweepTests` continues pinning IDE↔CLI default parity.
+  `TemplateBuildSweepTests` needs no change — it compares generated **source
+  files** only (`:160-166`), never `.blproj` content, so the IDE-only emission
+  of chosen values cannot break it.
 - **Enforcement**: BL60xx missing-toolchain error via injected probe; one
   machine-conditional e2e (this machine has MSVC only on PATH, so requesting
   `gcc` genuinely errors); the engine-.lib link gate (§2.4) as an early plan
