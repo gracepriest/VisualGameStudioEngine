@@ -258,7 +258,10 @@ sniffing the old text. Each kind rebuilds its own shape:
   behavior, `CodeEditorControl.axaml.cs:4810-4819`); alpha-preservation
   heuristic retained.
 - `VbHex`: `&H[AA]RRGGBB` (existing, `:4800-4807`).
-- `CppHex`: `0x[AA]RRGGBB`, preserving 6- vs 8-digit form.
+- `CppHex`: `0x[AA]RRGGBB` — digit count follows the picked alpha (6 digits
+  when the pick is opaque, 8 when translucent), matching today's `&H` apply
+  behavior exactly (`CodeEditorControl.axaml.cs:4803-4806` is picked-alpha-driven,
+  not original-form-preserving).
 - `BraceInit`: the replacement range starts at the **opening brace** (the
   `Color` / `(Color)` / `CLITERAL(Color)` prefix survives untouched) and ends
   at the closing brace inclusive. Arity is preserved: a 3-component literal is

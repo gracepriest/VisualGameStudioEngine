@@ -53,7 +53,7 @@ plus exposing the already-existing toast auto-dismiss mechanism.
 
 Work happens on branch `worktree-wizard-color-quiet` in
 `.claude/worktrees/wizard-color-quiet` (Task 0 creates it). Base: master @
-`e447482` or later.
+`5fc3024` or later.
 
 ## File map
 
@@ -71,7 +71,8 @@ Work happens on branch `worktree-wizard-color-quiet` in
 | `VisualGameStudio.ProjectSystem/Services/CppToolchainProbeService.cs` | NEW: `ICppToolchainProbe` impl wrapping BasicLang probe |
 | `VisualGameStudio.Shell/Configuration/ServiceConfiguration.cs` | register probe service |
 | `VisualGameStudio.Shell/ViewModels/Dialogs/NewProjectWizardViewModel.cs` | threading, c++23, probe/greying |
-| `VisualGameStudio.Shell/Views/Dialogs/NewProjectConfigureView.axaml` | disabled options, hints, warning |
+| `VisualGameStudio.Shell/Views/Dialogs/NewProjectConfigureView.axaml` | standards dropdown, none-installed warning |
+| `VisualGameStudio.Shell/Views/Dialogs/NewProjectSelectView.axaml` | backend list greying + hints (window 1, list at `:40-43`) |
 | `VisualGameStudio.Editor/TextMarkers/ColorMatchFinder.cs` | NEW: pure detection |
 | `VisualGameStudio.Editor/TextMarkers/ColorTextRewriter.cs` | NEW: pure rewrite |
 | `VisualGameStudio.Editor/TextMarkers/InlineColorRenderer.cs` | consume finder; Kind in event args; language gate |
@@ -102,7 +103,10 @@ Work happens on branch `worktree-wizard-color-quiet` in
 - Test: `VisualGameStudio.Tests/Compiler/CppProjectFileTests.cs`
 
 - [ ] **Step 1: Write failing tests.** Mirror the existing `CppStandard` parse
-  test setup at `CppProjectFileTests.cs:36-77` (same temp-file helper):
+  test at `CppProjectFileTests.cs:35-64`. The fixture helper is
+  `WriteProject(fullXml)` (`:28-33`) + `ProjectFile.Load` — the
+  `LoadProjectWith(fragment)` calls below are shorthand; write the full
+  project XML through `WriteProject`:
   ```csharp
   [Test]
   public void Load_ReadsCppToolchain_Lowercased()
@@ -156,10 +160,13 @@ Work happens on branch `worktree-wizard-color-quiet` in
 - Test: Create `VisualGameStudio.Tests/Compiler/CppToolchainResolutionTests.cs`
 
 - [ ] **Step 1: Read `Find()` closely.** It probes clang++ on PATH → g++ on
-  PATH → MSVC via vswhere + vcvars64. Plan the refactor: extract the three
-  probes into private helpers so `Find()`, `TryFindById()`, and
+  PATH → MSVC via vswhere + vcvars64. The clang/gcc "probes" come from
+  parameterizing the existing PATH loop (`:54-73`); the MSVC probe is the
+  `:75-102` branch. Extract private helpers so `Find()`, `TryFindById()`, and
   `ProbeAvailability()` share them. `ProbeAvailability()` must NOT run
-  vcvars64 (seconds-slow) — MSVC availability = vswhere finds an instance.
+  vcvars64 (seconds-slow) — its MSVC check = vswhere finds an instance AND
+  that instance's `vcvars64.bat` exists on disk (cheap file check; keeps
+  `ProbeAvailability_AgreesWithFind` truthful, since `Find()` requires the bat).
 - [ ] **Step 2: Write failing tests.**
   ```csharp
   [Test]
@@ -228,65 +235,82 @@ Work happens on branch `worktree-wizard-color-quiet` in
 ### Task 3: Builder resolve-by-id + BL6015
 
 **Files:**
-- Modify: `BasicLang/ProjectSystem/CppProjectBuilder.cs` (default resolver use near `:63-64`; the `Func<CppToolchain>` seam is `:135-136`)
-- Test: `VisualGameStudio.Tests/Compiler/CppToolchainResolutionTests.cs` (extend) or the fixture that already covers builder diagnostics — grep `BL6002` in Tests to find the pattern and place these beside it.
+- Modify: `BasicLang/ProjectSystem/CppProjectBuilder.cs` (toolchain resolution happens INSIDE `EmitCore` at `:315-327`, deliberately after the obj/gen write — that ordering is pinned by `CppProjectBuilderCleanTests`; the `Func<CppToolchain>` seam is `:135-136`; diagnostic emission is `Fail(result, code, msg, filePath)` at `:492-497`)
+- Test: `VisualGameStudio.Tests/Compiler/CppProjectCliBuildTests.cs` — sit beside `Build_NoCppSources_FailsWithBL6007` (`:104-110`), which drives `CppProjectBuilder.Build(projectFile, "Debug")` directly.
 
-- [ ] **Step 1:** Grep `BL6002` / `BL6014` in `CppProjectBuilder.cs` and
-  `BasicLang/Compiler.cs` to learn exactly how native-family diagnostics are
-  created and surfaced (message format, error vs warning, how Build reports
-  failure). Follow that pattern exactly.
-- [ ] **Step 2: Write failing tests.**
+- [ ] **Step 1:** Read `EmitCore`'s step-6 toolchain gate (`:315-327`): BL6005
+  fires there when no toolchain is found, guarded by `!forIntelliSense`
+  (IntelliSense emission must never hard-fail on toolchain problems — BL6015
+  gets the same guard). Read `Fail()` (`:492-497`) for the emission shape.
+  **Vacancy grep** (spec §2.2): `Select-String -Path` over all `.cs` for
+  `BL601[5-9]` → the only hits must be this batch's own — confirm BL6015 is
+  still unclaimed before using it.
+- [ ] **Step 2: Write failing tests.** Add two optional seams to `Build`
+  mirroring the existing `resolveToolchain` parameter style (`:135-136`) so the
+  missing-toolchain message is deterministically testable on ANY machine
+  (spec §5: "via injected probe"):
   ```csharp
   [Test]
   public void Build_UnknownToolchainId_FailsWithBL6015()
   {
       // ProjectFile with Language=Cpp, CppToolchain="borland" (machine-independent: never resolves)
-      // → build fails, diagnostics contain "BL6015" and "borland"
+      // → result.Success false, diagnostic Code "BL6015", message contains "borland"
   }
 
   [Test]
-  public void Build_MissingToolchain_FailsWithBL6015_NamingRequestedAndDetected()
+  public void Build_MissingToolchain_BL6015_NamesRequestedAndDetected()
   {
-      var avail = CppToolchain.ProbeAvailability();
-      if (avail.Gcc) Assert.Ignore("g++ installed; missing-toolchain path not reachable");
-      // CppToolchain="gcc" → BL6015 message contains "gcc" and avail.DetectedList
+      // Deterministic on every machine: inject
+      //   resolveById: _ => null,
+      //   probeAvailability: () => new CppToolchainAvailability(Llvm: false, Gcc: false, Msvc: true)
+      // with CppToolchain="gcc" → message contains "gcc", "msvc", and "Install gcc"
   }
 
   [Test]
   public void Build_NoToolchainElement_UsesMachineProbe_AsToday()
   {
-      // null CppToolchain → existing Find() path; on a machine with any
-      // toolchain the build proceeds past resolution (reuse an existing
-      // minimal-compile fixture from the BL6002-adjacent tests)
+      // null CppToolchain → existing resolveToolchain()/Find() path; reuse the
+      // minimal-compile fixture shape from CppProjectCliBuildTests
+  }
+
+  [Test]
+  public void Build_MissingToolchain_RealMachine_E2E()
+  {
+      if (CppToolchain.ProbeAvailability().Gcc) Assert.Ignore("g++ installed; not reachable");
+      // real TryFindById path, CppToolchain="gcc" → BL6015 (runs un-ignored on the dev machine)
   }
   ```
 - [ ] **Step 3:** Run filter — FAIL (builder ignores the property).
-- [ ] **Step 4: Implement.** Where `Build` currently invokes the resolver
-  (default `CppToolchain.Find` at `:63-64`):
+- [ ] **Step 4: Implement** inside `EmitCore`'s step-6 gate (`:315-327`),
+  preserving the after-obj/gen ordering and the `!forIntelliSense` guard:
   ```csharp
+  // inside EmitCore, where the toolchain is currently resolved (:318):
   CppToolchain? toolchain;
-  if (!string.IsNullOrEmpty(projectFile.CppToolchain))
+  if (!string.IsNullOrEmpty(project.CppToolchain))
   {
-      toolchain = CppToolchain.TryFindById(projectFile.CppToolchain);
-      if (toolchain is null)
+      toolchain = resolveById(project.CppToolchain);          // default: CppToolchain.TryFindById
+      if (toolchain is null && !forIntelliSense)
       {
-          var detected = CppToolchain.ProbeAvailability().DetectedList;
-          ReportError("BL6015",
-              $"C++ toolchain '{projectFile.CppToolchain}' requested by the project is not installed. " +
-              $"Detected: {detected}. Install it or change <CppToolchain> in the project file.");
-          return /* failed result, matching the BL6002 failure shape */;
+          var detected = probeAvailability().DetectedList;    // default: CppToolchain.ProbeAvailability
+          return Fail(result, "BL6015",
+              $"C++ toolchain '{project.CppToolchain}' requested by the project is not installed. " +
+              $"Detected: {detected}. Install {project.CppToolchain} or change <CppToolchain> in the project file.",
+              project.FilePath);
       }
   }
   else
   {
-      toolchain = resolveToolchain(); // existing behavior, unchanged
+      toolchain = resolveToolchain(); // existing behavior, unchanged (BL6005 path stays as-is)
   }
   ```
-  (`ReportError` = whatever the real diagnostic emission looks like from Step 1.
-  Keep the injected `resolveToolchain` seam for the null-element path only —
-  the by-id path is explicit by design: a test faking the resolver must not
-  bypass BL6015.)
-- [ ] **Step 5:** Filter PASS; full suite; commit:
+  Thread `Func<string, CppToolchain?>? resolveById = null` and
+  `Func<CppToolchainAvailability>? probeAvailability = null` through `Build` →
+  `EmitCore` exactly like the existing `resolveToolchain` param; defaults are
+  the real statics, so production behavior has no seam risk. (Adapt the sketch
+  to `Fail`'s real signature and the gate's real control flow — the sketch is
+  the shape, `:315-327` is the truth.)
+- [ ] **Step 5:** Filter PASS; full suite (watch `CppProjectBuilderCleanTests` —
+  the obj/gen-before-resolution ordering pin must stay green); commit:
   `feat(compiler): per-project <CppToolchain> resolution with BL6015 hard error`
 
 ### Task 4: ⛔ DECISION CHECKPOINT — engine .lib × mingw link gate
@@ -297,28 +321,25 @@ Work happens on branch `worktree-wizard-color-quiet` in
   in `CppProjectBuilder.cs` to find the deploy/search path the builder uses,
   and confirm the `.lib` exists there (if not, build the engine:
   vcxproj x64/Release via vswhere-discovered MSBuild — see CLAUDE.md).
-- [ ] **Step 2:** In the scratchpad, write `gate.cpp`:
-  ```cpp
-  extern "C" {
-      void Framework_InitWindow(int width, int height, const char* title);
-      void Framework_ClearBackground(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
-      void Framework_CloseWindow();
-  }
-  int main() {
-      // Link test only — never actually run a window in the gate.
-      auto f = &Framework_InitWindow; auto g = &Framework_ClearBackground; auto h = &Framework_CloseWindow;
-      return (f && g && h) ? 0 : 1;
-  }
-  ```
-  (Verify those three export names exist in `framework.h` first; substitute any
-  three real `extern "C"` exports if the names differ.)
-- [ ] **Step 3:** Link with both winlibs toolchains **by absolute path**:
+- [ ] **Step 2:** Generate the spec's fixture — a REAL cpp-game project
+  (spec §2.4 says "a cpp-game project", not a scratch file): use the CLI
+  `new` command (check the exact argument shape at `Program.cs:288`
+  `HandleNewCommand` — the template id is `cpp-game`) targeting the scratchpad.
+- [ ] **Step 3:** Compile + link the generated project's `.cpp` sources with
+  both winlibs toolchains **by absolute path**, against the located `.lib`,
+  with the flags the builder would use (`-std=c++20`, the include dir the
+  generated project expects):
   ```powershell
-  C:\winlibs\mingw64\bin\clang++.exe gate.cpp "<path-to>\VisualGameStudioEngine.lib" -o gate-clang.exe
-  C:\winlibs\mingw64\bin\g++.exe     gate.cpp "<path-to>\VisualGameStudioEngine.lib" -o gate-gcc.exe
+  C:\winlibs\mingw64\bin\clang++.exe -std=c++20 <generated .cpp files> "<path-to>\VisualGameStudioEngine.lib" -o gate-clang.exe
+  C:\winlibs\mingw64\bin\g++.exe     -std=c++20 <generated .cpp files> "<path-to>\VisualGameStudioEngine.lib" -o gate-gcc.exe
   ```
-  Then run each exe (it must not need the window — exit 0) with the engine DLL
-  copied beside it.
+  **Fallback isolation fixture:** if the full project hits confounds unrelated
+  to the import lib (missing headers, etc.), reduce to a minimal `gate.cpp`
+  declaring three real exports — `Framework_Initialize(int,int,const char*)`
+  (`framework.h:280`), `Framework_Shutdown()` (`:283`),
+  `Framework_ClearBackground(r,g,b,a)` (`:298`) — take their addresses in
+  `main`, and link that instead; record WHICH fixture produced the verdict.
+  (Running the exes is optional — the gate question is the LINK.)
 - [ ] **Step 4: Record the verdict** by editing this section:
 
   **VERDICT: [PASS-BOTH | PASS-CLANG-ONLY | PASS-GCC-ONLY | FAIL-BOTH] — filled at execution time.**
@@ -424,8 +445,9 @@ Work happens on branch `worktree-wizard-color-quiet` in
 
 **Files:**
 - Modify: `VisualGameStudio.Shell/ViewModels/Dialogs/NewProjectWizardViewModel.cs`
-- Modify: `VisualGameStudio.Shell/Views/Dialogs/NewProjectConfigureView.axaml` (`:84-86` standard dropdown; backend option list UI)
-- Test: `VisualGameStudio.Tests/NewProjectWizardViewModelTests.cs` (existing pin `:245-249`)
+- Modify: `VisualGameStudio.Shell/Views/Dialogs/NewProjectSelectView.axaml` (**the backend list lives here** — window 1, `:40-43`; per-item disable in an Avalonia ComboBox needs an ItemContainerTheme binding to the option's `IsEnabled`)
+- Modify: `VisualGameStudio.Shell/Views/Dialogs/NewProjectConfigureView.axaml` (`:84-86` standard dropdown; none-installed warning)
+- Test: `VisualGameStudio.Tests/NewProjectWizardViewModelTests.cs` (existing pin `:245-249`; VM construction helper at `:34-38`)
 
 - [ ] **Step 1:** Read the VM top-to-bottom (`enum :19`, `BackendOption :21-27`,
   `_cppStandard :71`, `CppStandards :81-82`, `ShowCppStandardSelector :86`,
@@ -447,22 +469,32 @@ Work happens on branch `worktree-wizard-color-quiet` in
   // Standards
   CppStandards_IncludesCpp23_ForLlvmAndGcc_NotMsvc()
   SelectingMsvc_WithCpp23Selected_SnapsBackToCpp20()
+  CppStandards_NoneInstalled_DoesNotOfferCpp23()     // defensive: a null/none selection state must not admit c++23
   ```
 - [ ] **Step 3:** Run filter — FAIL.
 - [ ] **Step 4: Implement.**
-  - Ctor takes `ICppToolchainProbe` (update the dialog's construction site —
-    grep `new NewProjectWizardViewModel(`).
-  - `BackendOption` gains `[ObservableProperty] bool isEnabled = true` and
-    `[ObservableProperty] string? availabilityHint` (or plain INPC props if the
-    record shape resists — follow the file's existing style).
-  - On configure-page entry: `Task.Run(() => _probe.Probe())`, then back on the
-    UI thread apply enabled/hints ("(not installed)"), auto-select, and set
-    `NoToolchainInstalled` + warning text
+  - Ctor takes `ICppToolchainProbe`. **Three construction sites to update**:
+    MWVM `:1961` (pass the DI service — MWVM itself is DI-only, no test
+    fallout), the test helper `NewProjectWizardViewModelTests.cs:34-38`
+    (fake probe), and the design-time VM's `base(new DesignTemplateService())`
+    at `:291` (needs a design-time fake probe).
+  - `BackendOption` (`:23-29`) is a plain `sealed class` with init-only props —
+    NOT a record, NOT ObservableObject. Make it
+    `sealed partial class BackendOption : ObservableObject` and add
+    `[ObservableProperty] private bool _isEnabled = true;` +
+    `[ObservableProperty] private string? _availabilityHint;` (keep the
+    existing init props as-is).
+  - Probe at **wizard OPEN** (spec §1.4 — backends are chosen on window 1, so
+    configure-page-entry is too late): `Task.Run(() => _probe.Probe())`, then
+    on the UI thread apply enabled/hints ("(not installed)"), auto-select, and
+    set `NoToolchainInstalled` + warning text
     ("No C++ toolchain detected — this project won't build until one is installed").
   - `CreateProjectAsync`: when `SelectedLanguage == ProjectLanguage.Cpp` set
     `options.CppStandard = CppStandard;` and
     `options.CppToolchain = SelectedBackendIsAvailable ? SelectedBackend!.ToolchainId : null;`
-    Delete the `:261-262` display-only comment.
+    Delete the `:261-262` display-only comment AND fix the second stale
+    "display-only" mention in the `BackendOption` doc comment at `:22`
+    (Task 18's DoD grep requires zero occurrences).
   - Standards: recompute on backend change — base `{c++20, c++17, c++14}`,
     plus `c++23` when the selected toolchain id is not `msvc`; snap-back rule.
   - **Apply the Task 4 verdict:** if a toolchain FAILED the link gate, extend
@@ -544,7 +576,9 @@ Work happens on branch `worktree-wizard-color-quiet` in
   (± `a`). Produce the list of base names (strip `Framework_`). Cross-check the
   existing whitelist (`InlineColorRenderer.cs:54-70` — now living in the finder);
   note additions. **Also confirm no export takes a packed RGBA-order hex color
-  int** (spec §3.2) — record the finding in the commit message.
+  int** (spec §3.2) — record the finding in the commit message. If one IS found:
+  exclude its call-argument literals from `CppHex` detection (with a test) and
+  surface the finding to the orchestrator before proceeding.
 - [ ] **Step 2: Write failing tests:**
   ```csharp
   Bas_FrameworkPrefixedCall_Matches()            // Framework_ClearBackground(10,10,25,255) → RgbCall
@@ -566,19 +600,25 @@ Work happens on branch `worktree-wizard-color-quiet` in
 - Test: Create `VisualGameStudio.Tests/Editor/ColorTextRewriterTests.cs`
 
 - [ ] **Step 1: Write failing tests** — port the CURRENT apply behaviors as the
-  contract (read `:4800-4819` first; the tests pin parity):
+  contract (read `:4800-4819` first; the tests pin parity). **Hex contract
+  (verified against `:4803-4806`): digit count follows the PICKED alpha, not
+  the original literal** — opaque pick → 6 digits, translucent pick → 8 —
+  regardless of what the old text had:
   ```csharp
   RgbCall_ThreeComponents_PickedOpaque_StaysThree()   // "10, 20, 30)" + (1,2,3,255) → "1, 2, 3)"
   RgbCall_ThreeComponents_PickedAlpha_BecomesFour()   // + (1,2,3,128) → "1, 2, 3, 128)"
   RgbCall_FourComponents_StaysFour()
-  VbHex_SixDigits_StaysSix()                          // "&H33AAFF" + opaque pick → "&H0110FF"-style 6 digits
-  VbHex_EightDigits_StaysEight()
+  VbHex_OpaquePick_EmitsSixDigits()                   // "&H8033AAFF" + (1,2,3,255) → "&H010203"
+  VbHex_TranslucentPick_EmitsEightDigits()            // "&H33AAFF" + (1,2,3,128) → "&H80010203"
   ```
   API: `public static string Rewrite(ColorMatchKind kind, string oldText, byte r, byte g, byte b, byte a)`.
 - [ ] **Step 2:** FAIL → **Step 3: Implement** by moving the logic out of
   `OnColorPicked` verbatim (alpha comma-count heuristic, closing-paren
-  re-emission, `&H` digit-count preservation). Thread `ColorMatchKind` through
-  the `ColorSwatchClicked` event args; `OnColorPicked` becomes: validate
+  re-emission, alpha-driven `&H` digit count). Thread `ColorMatchKind` through
+  **two** event-args hops: `ColorSwatchClickedEventArgs` → a `ColorPickerPopup`
+  property (the popup already carries the offsets this way — pattern at
+  `ColorPickerPopup.cs:41`) → `ColorPickedEventArgs` (`:376-383`), since
+  `OnColorPicked` receives the latter. Then `OnColorPicked` becomes: validate
   offsets → `var newText = ColorTextRewriter.Rewrite(e.Kind, oldText, r, g, b, a);`
   → `document.Replace` → invalidate layer (keep `:4821-4824` shape).
 - [ ] **Step 4:** PASS; build Shell; full suite; commit:
@@ -588,16 +628,20 @@ Work happens on branch `worktree-wizard-color-quiet` in
 
 **Files:** `ColorTextRewriter.cs`, `ColorMatchFinder.cs`, both test files.
 
-- [ ] **Step 1: Failing rewriter tests:** `CppHex_SixDigits_StaysSix()` ("0x33AAFF"),
-  `CppHex_EightDigits_StaysEight()` ("0x8033AAFF" — AARRGGBB order, same as `&H`).
+- [ ] **Step 1: Failing rewriter tests:** `CppHex_OpaquePick_EmitsSixDigits()`
+  ("0x8033AAFF" + opaque → "0x010203"), `CppHex_TranslucentPick_EmitsEightDigits()`
+  ("0x33AAFF" + A=128 → "0x80010203") — AARRGGBB order and the picked-alpha
+  digit rule, both identical to the `&H` contract pinned in Task 11.
 - [ ] **Step 2:** Implement the rewriter branch; PASS.
 - [ ] **Step 3: Failing finder tests:** `Cpp_CppHex_6And8Digits_Match()`,
   `Bas_CppHex_NoMatch()`, `Cpp_CppHex_ShortOrLongHex_NoMatch()` (`0xFFF`,
   `0xFFFFFFFFF` → no match; pattern is exactly 6 or 8 hex digits with a
   word-boundary, mirroring the `&H` pattern at `InlineColorRenderer.cs:46-48`).
-- [ ] **Step 4:** Implement the pattern (Cpp set only); PASS. (Parity note,
-  accepted in the spec: like `&H` in .bas today, ANY 6/8-digit `0x` literal
-  gets a swatch — the end-of-batch smoke evaluates the noise level.)
+- [ ] **Step 4:** Implement the pattern (Cpp set only); PASS. (Parity note —
+  a fair inference from the spec's `&H`-parity intent, not its explicit text:
+  like `&H` in .bas today, ANY 6/8-digit `0x` literal gets a swatch. The
+  end-of-batch smoke evaluates the noise level; if masks like `0xFFFFFF` prove
+  too noisy, that's a follow-up chip, not a mid-task redesign.)
 - [ ] **Step 5:** Full suite; commit: `feat(editor): 0x hex color literals in C++ — rewrite before detect`
 
 ### Task 13: `BraceInit` — rewriter branch FIRST, then finder pattern (one task)
@@ -640,16 +684,29 @@ Work happens on branch `worktree-wizard-color-quiet` in
 **Files:**
 - Modify: `VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs` (`ShowNotification` overloads `:1802-1832`, internal computation `:1821`, `NotificationEventArgs` `:8483-8499`)
 - Modify: `VisualGameStudio.Shell/Views/MainWindow.axaml.cs` (dismiss decision `:431`, 5 s timer `:434`)
-- Test: `NotificationEventArgs` construction tests beside the closest Shell VM fixture (the MWVM-level pins land in Task 16).
+- Test: pure/static tests only — **`MainWindowViewModel` is DI-only and is
+  never constructed anywhere in the suite** (the suite documents this:
+  `SettingsConsumerContractTests.cs:70` "too-heavy-to-construct",
+  `SettingsIntelliSenseWiringTests.cs:21` "needs ~40 services"). Do NOT try.
 
-- [ ] **Step 1: Failing tests:** `NotificationEventArgs` exposes
-  `double? DismissAfterSeconds` (null → the 5 s default) and the actions-overload
-  accepts `bool? autoDismiss = null, double? dismissAfterSeconds = null`,
-  where `autoDismiss: true` wins over the internal
-  `severity == "info" && actions.Count == 0` computation.
-- [ ] **Step 2:** FAIL → **Step 3: Implement.** MWVM: thread the two optional
-  params through `ShowNotification` into the args (default behavior for every
-  existing caller is bit-for-bit unchanged). MainWindow: timer interval becomes
+- [ ] **Step 1: Failing tests** (both machine-independent):
+  (a) direct `NotificationEventArgs` construction tests (it's a public class,
+  `MainWindowViewModel.cs:8483`): new `double? DismissAfterSeconds` property
+  (null → the 5 s default);
+  (b) the `:1821` auto-dismiss computation moves into a **public static** pure
+  helper on MWVM, following the existing `ShouldShowBuildOutput(ISettingsService)`
+  static-seam precedent (`:2956`, pinned by `SettingsBuildBasicLangWiringTests:75-86`):
+  ```csharp
+  public static bool ComputeToastAutoDismiss(string severity, int actionCount, bool? overrideFlag)
+  // overrideFlag true/false wins outright; null → severity == "info" && actionCount == 0
+  ```
+  (No `InternalsVisibleTo` exists for Shell → Tests and none may be added —
+  the helper must be public.)
+- [ ] **Step 2:** FAIL → **Step 3: Implement.** MWVM: the actions-overload of
+  `ShowNotification` gains `bool? autoDismiss = null, double? dismissAfterSeconds = null`,
+  computes via `ComputeToastAutoDismiss`, and threads both into the args
+  (default behavior for every existing caller is bit-for-bit unchanged).
+  MainWindow: timer interval at `:434` becomes
   `TimeSpan.FromSeconds(e.DismissAfterSeconds ?? 5)`.
 - [ ] **Step 4:** PASS; full suite; commit:
   `feat(shell): toast auto-dismiss override + per-toast duration (defaults unchanged)`
@@ -660,31 +717,48 @@ Work happens on branch `worktree-wizard-color-quiet` in
 - Modify: `VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs`:
   `:1616` (delete), `:1597-1601` + `:1608-1613` (quiet toasts), `:3555-3557`
   (delete), `:3564-3566` (demote), `:2953-2960` (+ helper), `:7432/:7455/:7482/:3660` (reroute)
-- Test: the in-anger MWVM harness (grep `IdeInAngerTests` for the construction pattern)
+- Test: pure static seam + source-guard tests. **The in-anger harness does NOT
+  construct MWVM** (it drives services directly), and nothing in the repo ever
+  `new`s a `MainWindowViewModel` — dock activation and `NotificationRequested`
+  cannot be observed from a test. Use the two existing precedents instead.
 
-- [ ] **Step 1: Write failing pins** in the in-anger harness (adapt to its
-  affordances — it constructs a real MWVM; drive a real failing build with a
-  deliberately broken temp project, or raise the service event if the harness
-  exposes the seam):
+- [ ] **Step 1: Write failing pins** using the repo's established patterns:
+  (a) a **public static** toast-composition seam (same precedent as Task 15's
+  helper) that `OnBuildCompleted` will consume:
   ```csharp
-  FailedBuild_DoesNotActivateErrorList()   // after OnBuildCompleted(failure): the active/focused dockable did not change to ErrorList; ErrorList diagnostics ARE populated
-  FailedBuild_Toast_IsQuiet()              // NotificationRequested args: severity error, Actions empty, AutoDismiss true, DismissAfterSeconds ≈ 3
-  SucceededBuild_Toast_IsQuiet()           // same, severity info/success
+  public sealed record BuildToastSpec(string Message, string Severity, bool AutoDismiss, double DismissAfterSeconds);
+  public static BuildToastSpec ComposeBuildToast(bool succeeded, int errorCount, double elapsedSeconds);
+  ```
+  ```csharp
+  ComposeBuildToast_Success_IsQuiet()      // AutoDismiss true, DismissAfterSeconds == 3, severity info
+  ComposeBuildToast_Failure_IsQuiet()      // AutoDismiss true, DismissAfterSeconds == 3, names the error count
+  ```
+  (b) a **source-guard test** following the `NewProjectWizardSwapGuardTests.cs:26`
+  precedent (reads `MainWindowViewModel.cs` as text and asserts patterns):
+  ```csharp
+  MainWindowSource_HasNoErrorListActivation()   // zero occurrences of ActivateTool("ErrorList"); SetBuildDiagnostics still present (population survives)
+  MainWindowSource_BuildTern_HasNoBuildFailedMessageBox()  // the :3555 modal pattern is gone
   ```
 - [ ] **Step 2:** FAIL → **Step 3: Implement.**
   - Delete `:1616` (`ActivateTool("ErrorList")`); leave `:1621-1622` population intact.
-  - Success toast: drop the "Show Output" action; call with
-    `autoDismiss: true, dismissAfterSeconds: QuietBuildToastSeconds` (private
-    `const double QuietBuildToastSeconds = 3;`). Failure toast: drop both
-    actions, same quiet flags. Keep the status-bar messages (`:1588/:1602`).
+  - Success/failure toasts: drop all action buttons; `OnBuildCompleted` builds
+    both from `ComposeBuildToast(...)` (which encodes
+    `public const double QuietBuildToastSeconds = 3;`) and passes
+    `autoDismiss: spec.AutoDismiss, dismissAfterSeconds: spec.DismissAfterSeconds`
+    through the Task 15 overload. Keep the status-bar messages (`:1588/:1602`).
   - Delete the F5 modal `:3555-3557` entirely (the failure toast + Output
     already reported it; nothing consumes the dialog result).
   - `:3564-3566` → replace the modal with the Output-line pattern used by
     Ctrl-F5 at `:3747` (same wording).
   - Extract from `ShowBuildOutput()` a helper that ONLY does the gated reveal:
     ```csharp
-    private void RevealOutputIfEnabled() { if (ShouldShowBuildOutput) _dockFactory.ActivateTool("Output"); }
+    private void RevealOutputIfEnabled()
+    {
+        // ShouldShowBuildOutput is a STATIC method taking ISettingsService (:2956)
+        if (ShouldShowBuildOutput(_settingsService)) _dockFactory.ActivateTool("Output");
+    }
     ```
+    (Adapt the call to the exact shape `:2953-2960` already uses.)
     `ShowBuildOutput()` = select Build channel + `RevealOutputIfEnabled()`.
     Reroute `:7432/:7455/:7482` and `:3660` through `RevealOutputIfEnabled()`
     **without** touching their own channel selection — deliberate deviation
