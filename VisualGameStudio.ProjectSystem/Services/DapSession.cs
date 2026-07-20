@@ -33,6 +33,9 @@ public sealed class DapSession : IDisposable
     private bool _started;
     private bool _disposed;
     private int _closedRaised;
+    // Armed by InitializeAndLaunchAsync BEFORE anything is sent, completed by the
+    // read loop on the `initialized` event (which may fire before launch goes out).
+    private TaskCompletionSource<bool>? _initializedTcs;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -44,21 +47,33 @@ public sealed class DapSession : IDisposable
     /// Production: spawn the adapter process described by <paramref name="startInfo"/>.
     /// startInfo MUST carry the BOM-less encodings — <see cref="BuildStartInfo"/> sets them.
     /// </summary>
-    public DapSession(ProcessStartInfo startInfo, IOutputService outputService)
+    public DapSession(ProcessStartInfo startInfo, IOutputService outputService, DapTimeoutProfile? timeouts = null)
     {
         _startInfo = startInfo;
         _outputService = outputService;
+        Timeouts = timeouts ?? DapTimeoutProfile.Managed;
     }
 
     /// <summary>
     /// Test seam: drive the protocol over in-proc streams; no process is spawned.
     /// </summary>
-    public DapSession(Stream readFromAdapter, Stream writeToAdapter, IOutputService outputService)
+    public DapSession(Stream readFromAdapter, Stream writeToAdapter, IOutputService outputService, DapTimeoutProfile? timeouts = null)
     {
         _readStream = readFromAdapter;
         _writeStream = writeToAdapter;
         _outputService = outputService;
+        Timeouts = timeouts ?? DapTimeoutProfile.Managed;
     }
+
+    /// <summary>Per-adapter timeout budgets (spec §8); from Task 6 the descriptor supplies them.</summary>
+    public DapTimeoutProfile Timeouts { get; }
+
+    /// <summary>
+    /// What the adapter disclosed in its initialize response, retained for the life of
+    /// the session (spec §3.3.3). Null until <see cref="InitializeAndLaunchAsync"/> has
+    /// its initialize response.
+    /// </summary>
+    public DapCapabilities? Capabilities { get; private set; }
 
     /// <summary>
     /// Builds the ProcessStartInfo with the load-bearing encodings for a DAP adapter
@@ -163,7 +178,12 @@ public sealed class DapSession : IDisposable
         return true;
     }
 
-    public async Task<JsonElement> SendRequestAsync(string command, object arguments, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Send one DAP request and await its response. The timeout budget defaults to
+    /// <see cref="Timeouts"/>.Request; pass <paramref name="timeout"/> for requests
+    /// with their own budget (launch, steps, disconnect).
+    /// </summary>
+    public async Task<JsonElement> SendRequestAsync(string command, object arguments, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
         var seq = Interlocked.Increment(ref _requestSeq);
         // RunContinuationsAsynchronously keeps awaiter continuations from
@@ -180,17 +200,73 @@ public sealed class DapSession : IDisposable
             var request = new { seq, type = "request", command, arguments };
             await SendMessageAsync(request);
 
-            // Internal timeout: if the adapter dies (SendMessageAsync swallows
+            // Budgeted timeout: if the adapter dies (SendMessageAsync swallows
             // pipe errors) the response never arrives, and callers that pass
             // no token would otherwise await forever.
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+            timeoutCts.CancelAfter(timeout ?? Timeouts.Request);
             using var ctr = timeoutCts.Token.Register(() => tcs.TrySetCanceled());
             return await tcs.Task;
         }
         finally
         {
             lock (_lock) { _pendingRequests.Remove(seq); }
+        }
+    }
+
+    /// <summary>
+    /// Spec-correct DAP startup (spec §3.3.1). The exact sequence, in order, no reordering:
+    ///  1. ARM the initialized listener BEFORE anything is sent — DAP allows emission any
+    ///     time after the initialize response; the legacy --dap-legacy adapter fires it
+    ///     ~50ms after initialize without waiting for launch. Arming late is a lost-event race.
+    ///  2. initialize request -> response; RETAIN capabilities.
+    ///  3. Send launch/attach WITHOUT awaiting its response. lldb-dap emits `initialized`
+    ///     only while processing launch: awaiting the launch response here (the old client)
+    ///     OR awaiting `initialized` before sending launch BOTH deadlock against it.
+    ///  4. Await `initialized` (may have completed already — legacy).
+    ///  5. Configuration: pushBreakpoints callback, then configurationDone.
+    ///  6. NOW await the launch response — completed long ago (managed) or only now
+    ///     (lldb-dap defers it past configurationDone). Neither timing is an error.
+    /// </summary>
+    public async Task InitializeAndLaunchAsync(
+        string launchCommand,                 // "launch" | "attach"
+        object launchArguments,
+        object initializeArguments,
+        Func<Task> pushConfigurationAsync,    // setBreakpoints / setExceptionBreakpoints
+        CancellationToken cancellationToken)
+    {
+        var initialized = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _initializedTcs = initialized;                                   // completed by the read loop
+
+        var initResponse = await SendRequestAsync("initialize", initializeArguments,
+            cancellationToken: cancellationToken);
+        Capabilities = DapCapabilities.Parse(initResponse);
+
+        var launchTask = SendRequestAsync(launchCommand, launchArguments,
+            timeout: Timeouts.Launch, cancellationToken: cancellationToken);
+
+        try
+        {
+            using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                cts.CancelAfter(Timeouts.Launch);
+                using var ctr = cts.Token.Register(() => initialized.TrySetCanceled());
+                await initialized.Task;
+            }
+
+            await pushConfigurationAsync();
+            await SendRequestAsync("configurationDone", new { }, cancellationToken: cancellationToken);
+            await launchTask;
+        }
+        catch
+        {
+            // The launch request is still in flight on every failure path after step 3
+            // (initialized timeout, breakpoint push, configurationDone). Never leave it
+            // un-awaited — an unobserved fault would surface as UnobservedTaskException
+            // long after the session died. Observe and swallow; the original failure wins.
+            _ = launchTask.ContinueWith(t => _ = t.Exception,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+            throw;
         }
     }
 
@@ -205,6 +281,10 @@ public sealed class DapSession : IDisposable
             }
             _pendingRequests.Clear();
         }
+
+        // A handshake parked on `initialized` must not ride out the full launch
+        // budget when the session is already dead/stopped.
+        _initializedTcs?.TrySetCanceled();
     }
 
     private async Task ReadMessagesAsync(CancellationToken cancellationToken)
@@ -312,6 +392,14 @@ public sealed class DapSession : IDisposable
         {
             var eventType = message.TryGetProperty("event", out var e) ? e.GetString() : null;
             var body = message.TryGetProperty("body", out var b) ? b : default;
+
+            // The handshake awaits this one (spec §3.3.1 step 4); it still flows
+            // through EventReceived below like every other event.
+            if (eventType == "initialized")
+            {
+                _initializedTcs?.TrySetResult(true);
+            }
+
             EventReceived?.Invoke(this, new DapEventArgs { EventType = eventType ?? "", Body = body });
         }
     }

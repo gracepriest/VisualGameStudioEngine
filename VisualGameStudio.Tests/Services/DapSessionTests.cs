@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using NUnit.Framework;
@@ -259,10 +260,10 @@ public class DapSessionTests
                 if (e.NewState == DebugState.Stopped) stopped.TrySetResult(true);
             };
 
-            // The CURRENT handshake order (initialize -> await launch -> configurationDone).
-            // The managed-shaped fake tolerates it BY DESIGN: initialized during launch,
-            // launch answered immediately. (Task 4 rewrites the order; this ring must
-            // stay green before AND after.)
+            // The spec-correct handshake (Task 4): initialize -> launch in flight ->
+            // initialized -> configurationDone -> launch response. The managed-shaped
+            // fake emits initialized during launch and answers launch immediately —
+            // this ring stayed green across the Task 4 order rewrite by design.
             var started = await WithTimeout(service.StartDebuggingAsync(new DebugConfiguration
             {
                 Program = "FakeApp.exe",
@@ -287,6 +288,282 @@ public class DapSessionTests
         {
             service.Dispose();
             session.Dispose();   // belt-and-braces; DebugService's cleanup already did this
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The handshake ring — Task 4: spec-correct DAP startup (spec §3.3.1)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Handshake_LldbShaped_Completes()
+    {
+        // lldb-dap emits `initialized` only while processing launch and defers the
+        // launch RESPONSE until after configurationDone. A client that awaits the
+        // launch response before sending configurationDone deadlocks against it —
+        // THE phase-blocking bug this ring exists to detect.
+        var output = new RecordingOutputService();
+        using var fake = FakeDapAdapter.LldbShaped();
+        var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
+        var service = new DebugService(output, _ => session);
+
+        try
+        {
+            var started = await WithTimeout(service.StartDebuggingAsync(new DebugConfiguration
+            {
+                Program = "FakeApp.exe",
+                WorkingDirectory = Path.GetTempPath()
+            }), "the lldb-shaped handshake (launch response deferred until after configurationDone)");
+
+            Assert.That(started, Is.True,
+                "the handshake against the lldb-shaped fake failed:\n" + output.Dump());
+            Assert.That(service.State, Is.EqualTo(DebugState.Running),
+                "the debug session did not reach Running:\n" + output.Dump());
+        }
+        finally
+        {
+            service.Dispose();
+            session.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Handshake_ManagedShaped_Completes()
+    {
+        // The managed adapter emits `initialized` during launch handling and answers
+        // launch immediately — the sequence must complete against this shape too.
+        var output = new RecordingOutputService();
+        using var fake = FakeDapAdapter.ManagedShaped();
+        var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
+        var service = new DebugService(output, _ => session);
+
+        try
+        {
+            var started = await WithTimeout(service.StartDebuggingAsync(new DebugConfiguration
+            {
+                Program = "FakeApp.exe",
+                WorkingDirectory = Path.GetTempPath()
+            }), "the managed-shaped handshake");
+
+            Assert.That(started, Is.True,
+                "the handshake against the managed-shaped fake failed:\n" + output.Dump());
+            Assert.That(service.State, Is.EqualTo(DebugState.Running),
+                "the debug session did not reach Running:\n" + output.Dump());
+        }
+        finally
+        {
+            service.Dispose();
+            session.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Handshake_LegacyShaped_EarlyInitializedIsNotLost()
+    {
+        // The legacy --dap-legacy adapter fires `initialized` right after the
+        // initialize response — possibly before launch is even sent. This passes
+        // ONLY if the listener is armed before anything goes out the wire; arming
+        // after the launch send is a lost-event race.
+        var output = new RecordingOutputService();
+        using var fake = FakeDapAdapter.LegacyShaped();
+        var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
+        var service = new DebugService(output, _ => session);
+
+        try
+        {
+            var started = await WithTimeout(service.StartDebuggingAsync(new DebugConfiguration
+            {
+                Program = "FakeApp.exe",
+                WorkingDirectory = Path.GetTempPath()
+            }), "the legacy-shaped handshake (initialized possibly before launch is sent)");
+
+            Assert.That(started, Is.True,
+                "the early `initialized` was lost — the listener was armed too late:\n" + output.Dump());
+            Assert.That(service.State, Is.EqualTo(DebugState.Running),
+                "the debug session did not reach Running:\n" + output.Dump());
+        }
+        finally
+        {
+            service.Dispose();
+            session.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Handshake_AdapterSeesInitializeLaunchBreakpointsConfigurationDone_InThatOrder()
+    {
+        var output = new RecordingOutputService();
+        using var fake = FakeDapAdapter.LldbShaped();
+        var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
+        var service = new DebugService(output, _ => session);
+
+        try
+        {
+            var breakpoints = new Dictionary<string, IEnumerable<SourceBreakpoint>>
+            {
+                ["C:\\fake\\main.bas"] = new[] { new SourceBreakpoint { Line = 3 } }
+            };
+
+            var started = await WithTimeout(
+                service.StartDebuggingAsync(new DebugConfiguration
+                {
+                    Program = "FakeApp.exe",
+                    WorkingDirectory = Path.GetTempPath()
+                }, breakpoints),
+                "the lldb-shaped handshake with one breakpoint");
+            Assert.That(started, Is.True, "handshake failed:\n" + output.Dump());
+
+            // Spec §3.3.1 — the adapter must see EXACTLY this order: launch goes out
+            // before any configuration, breakpoints ride between `initialized` and
+            // configurationDone, and nothing else sneaks into the startup sequence.
+            Assert.That(fake.Received.Select(r => r.Command).ToArray(),
+                Is.EqualTo(new[] { "initialize", "launch", "setBreakpoints", "configurationDone" }),
+                "the adapter saw the wrong startup sequence:\n" + output.Dump());
+        }
+        finally
+        {
+            service.Dispose();
+            session.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Handshake_RetainsCapabilities()
+    {
+        // Until Task 4 the initialize response was discarded on arrival — this pins
+        // the retention: filters parsed, boolean probes answering.
+        var output = new RecordingOutputService();
+        using var fake = FakeDapAdapter.LldbShaped();
+        var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
+        var service = new DebugService(output, _ => session);
+
+        try
+        {
+            var started = await WithTimeout(service.StartDebuggingAsync(new DebugConfiguration
+            {
+                Program = "FakeApp.exe",
+                WorkingDirectory = Path.GetTempPath()
+            }), "the lldb-shaped handshake");
+            Assert.That(started, Is.True, "handshake failed:\n" + output.Dump());
+
+            var caps = service.Capabilities;
+            Assert.That(caps, Is.Not.Null,
+                "the initialize response was discarded — Capabilities is null after a completed handshake");
+            Assert.That(caps!.ExceptionBreakpointFilters.Select(f => f.Id),
+                Is.EquivalentTo(new[] { "cpp_throw", "cpp_catch" }),
+                "the adapter's exception filters were not retained/parsed");
+            Assert.That(caps.Supports("supportsConfigurationDoneRequest"), Is.True,
+                "an advertised capability probed false");
+            Assert.That(caps.Supports("supportsDataBreakpoints"), Is.False,
+                "an undisclosed capability must probe false, not throw or default true");
+        }
+        finally
+        {
+            service.Dispose();
+            session.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task LaunchResponse_CompletingBeforeConfigurationDone_IsAccepted()
+    {
+        // Managed-shaped: the launch response lands long before configurationDone.
+        // Spec §3.3.1 step 6 — neither timing is a protocol error.
+        var output = new RecordingOutputService();
+        using var fake = FakeDapAdapter.ManagedShaped();
+        var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
+        var service = new DebugService(output, _ => session);
+
+        try
+        {
+            var started = await WithTimeout(service.StartDebuggingAsync(new DebugConfiguration
+            {
+                Program = "FakeApp.exe",
+                WorkingDirectory = Path.GetTempPath()
+            }), "the managed-shaped handshake (launch answered before configurationDone)");
+
+            Assert.That(started, Is.True,
+                "an early launch response was treated as a protocol error:\n" + output.Dump());
+            Assert.That(service.State, Is.EqualTo(DebugState.Running),
+                "the debug session did not reach Running:\n" + output.Dump());
+            Assert.That(fake.Received.Select(r => r.Command).Last(), Is.EqualTo("configurationDone"),
+                "the startup sequence still has to run to configurationDone");
+        }
+        finally
+        {
+            service.Dispose();
+            session.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task RequestTimeouts_ComeFromTheProfile()
+    {
+        // A 200ms Request budget + a request the fake never answers (the lldb-shaped
+        // fake parks the launch response until a configurationDone that never comes):
+        // cancellation must arrive on the profile's clock, not the old flat 30s.
+        using var fake = FakeDapAdapter.LldbShaped();
+        var profile = DapTimeoutProfile.Managed with { Request = TimeSpan.FromMilliseconds(200) };
+        using var session = new DapSession(fake.SessionReads, fake.SessionWrites, new RecordingOutputService(), profile);
+        session.Start();
+
+        await WithTimeout(session.SendRequestAsync("initialize", new { adapterID = "test" }),
+            "initialize response");
+
+        var stopwatch = Stopwatch.StartNew();
+        var launchTask = session.SendRequestAsync("launch", new { program = "x.exe" });
+        Observe(launchTask);
+
+        var completed = await Task.WhenAny(launchTask, Task.Delay(Budget));
+        stopwatch.Stop();
+
+        Assert.That(completed, Is.SameAs(launchTask),
+            $"the 200ms request budget never fired — still pending after {Budget.TotalSeconds:F0}s");
+        Assert.That(launchTask.IsCanceled, Is.True,
+            $"an unanswered request must cancel on the profile budget, got {launchTask.Status}");
+        Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(5)),
+            $"cancellation took {stopwatch.Elapsed.TotalSeconds:F1}s — that is the flat 30s budget, not the profile's 200ms");
+    }
+
+    [Test]
+    public async Task UnsupportedRequests_AreSkippedByCapability()
+    {
+        // The managed-shaped fake's capabilities do NOT advertise supportsDataBreakpoints.
+        // Spec §3.3.3: the session skips what the adapter disclaims — empty result,
+        // and NOTHING on the wire.
+        var output = new RecordingOutputService();
+        using var fake = FakeDapAdapter.ManagedShaped();
+        var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
+        var service = new DebugService(output, _ => session);
+
+        try
+        {
+            var started = await WithTimeout(service.StartDebuggingAsync(new DebugConfiguration
+            {
+                Program = "FakeApp.exe",
+                WorkingDirectory = Path.GetTempPath()
+            }), "the managed-shaped handshake");
+            Assert.That(started, Is.True, "handshake failed:\n" + output.Dump());
+
+            var info = await WithTimeout(service.GetDataBreakpointInfoAsync(1, "x"),
+                "the capability-gated dataBreakpointInfo call");
+            Assert.That(info, Is.Null,
+                "a disclaimed request must return empty, not ask the adapter anyway");
+
+            var set = await WithTimeout(
+                service.SetDataBreakpointsAsync(new[] { new DataBreakpoint { DataId = "d1", AccessType = "write" } }),
+                "the capability-gated setDataBreakpoints call");
+            Assert.That(set, Is.Empty,
+                "a disclaimed request must return empty, not ask the adapter anyway");
+
+            var sent = fake.Received.Select(r => r.Command).ToArray();
+            Assert.That(sent, Does.Not.Contain("dataBreakpointInfo").And.Not.Contain("setDataBreakpoints"),
+                "the session sent a request the adapter disclaimed (spec §3.3.3): " + string.Join(", ", sent));
+        }
+        finally
+        {
+            service.Dispose();
+            session.Dispose();
         }
     }
 

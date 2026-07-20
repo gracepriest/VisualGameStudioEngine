@@ -29,8 +29,20 @@ public class DebugService : IDebugService
     private DebugConfiguration? _lastConfig;
     private Dictionary<string, IEnumerable<SourceBreakpoint>>? _lastBreakpoints;
 
+    // Exception filters the UI armed, retained across sessions: the handshake's
+    // configuration phase replays them, so filters armed BEFORE a session exists
+    // are no longer silently dropped.
+    private List<string>? _armedExceptionFilters;
+    private List<ExceptionFilterOption>? _armedExceptionFilterOptions;
+
     public DebugState State { get; private set; } = DebugState.NotStarted;
     public bool IsDebugging => State == DebugState.Running || State == DebugState.Paused;
+
+    /// <summary>
+    /// What the adapter disclosed in its initialize response; null until a session's
+    /// initialize response arrives (and again once the session is torn down).
+    /// </summary>
+    public DapCapabilities? Capabilities => _session?.Capabilities;
 
     /// <summary>
     /// Process ID of the most recently started debug-adapter process, or null if an
@@ -109,44 +121,23 @@ public class DebugService : IDebugService
             session.Start();
             AdapterProcessId = session.AdapterProcessId;
 
-            // Initialize
-            await SendRequestAsync("initialize", new
-            {
-                clientID = "visualgamestudio",
-                clientName = "Visual Game Studio",
-                adapterID = "basiclang",
-                pathFormat = "path",
-                linesStartAt1 = true,
-                columnsStartAt1 = true,
-                supportsVariableType = true,
-                supportsVariablePaging = false,
-                supportsRunInTerminalRequest = false
-            }, cancellationToken);
-
-            // Launch
-            await SendRequestAsync("launch", new
-            {
-                program = config.Program,
-                cwd = config.WorkingDirectory,
-                args = config.Arguments,
-                stopOnEntry = config.StopOnEntry,
-                noDebug = false
-            }, cancellationToken);
-
-            // Set breakpoints AFTER launch but BEFORE configurationDone
-            foreach (var kvp in breakpoints)
-            {
-                var filePath = kvp.Key;
-                var bps = kvp.Value.ToList();
-                if (bps.Any())
+            // Spec-correct startup lives in the session (arm -> initialize -> launch
+            // in flight -> initialized -> configuration -> configurationDone -> launch
+            // response). Breakpoints ride the configuration phase, between
+            // `initialized` and configurationDone.
+            await session.InitializeAndLaunchAsync(
+                "launch",
+                new
                 {
-                    _outputService.WriteLine($"Setting {bps.Count} breakpoint(s) in {Path.GetFileName(filePath)}", OutputCategory.Debug);
-                    await SetBreakpointsAsync(filePath, bps);
-                }
-            }
-
-            // Configuration done
-            await SendRequestAsync("configurationDone", new { }, cancellationToken);
+                    program = config.Program,
+                    cwd = config.WorkingDirectory,
+                    args = config.Arguments,
+                    stopOnEntry = config.StopOnEntry,
+                    noDebug = false
+                },
+                InitializeArguments(),
+                () => PushConfigurationAsync(breakpoints),
+                cancellationToken);
 
             SetState(DebugState.Running);
             _outputService.WriteLine("Debugging started", OutputCategory.Debug);
@@ -181,43 +172,16 @@ public class DebugService : IDebugService
             session.Start();
             AdapterProcessId = session.AdapterProcessId;
 
-            // Initialize
-            await SendRequestAsync("initialize", new
-            {
-                clientID = "visualgamestudio",
-                clientName = "Visual Game Studio",
-                adapterID = "basiclang",
-                pathFormat = "path",
-                linesStartAt1 = true,
-                columnsStartAt1 = true,
-                supportsVariableType = true,
-                supportsVariablePaging = false,
-                supportsRunInTerminalRequest = false
-            }, cancellationToken);
-
-            // Attach (instead of launch)
-            await SendRequestAsync("attach", new
-            {
-                processId = processId
-            }, cancellationToken);
-
-            // Set breakpoints AFTER attach but BEFORE configurationDone
-            if (breakpoints != null)
-            {
-                foreach (var kvp in breakpoints)
+            // Same spec-correct startup as launch — "attach" instead of "launch".
+            await session.InitializeAndLaunchAsync(
+                "attach",
+                new
                 {
-                    var filePath = kvp.Key;
-                    var bps = kvp.Value.ToList();
-                    if (bps.Any())
-                    {
-                        _outputService.WriteLine($"Setting {bps.Count} breakpoint(s) in {Path.GetFileName(filePath)}", OutputCategory.Debug);
-                        await SetBreakpointsAsync(filePath, bps);
-                    }
-                }
-            }
-
-            // Configuration done
-            await SendRequestAsync("configurationDone", new { }, cancellationToken);
+                    processId = processId
+                },
+                InitializeArguments(),
+                () => PushConfigurationAsync(breakpoints),
+                cancellationToken);
 
             SetState(DebugState.Running);
             _outputService.WriteLine($"Attached to process {processId}", OutputCategory.Debug);
@@ -228,6 +192,56 @@ public class DebugService : IDebugService
             _outputService.WriteError($"Failed to attach to process: {ex.Message}", OutputCategory.Debug);
             await StopDebuggingAsync();
             return false;
+        }
+    }
+
+    /// <summary>The initialize arguments both launch and attach send, verbatim.</summary>
+    private static object InitializeArguments() => new
+    {
+        clientID = "visualgamestudio",
+        clientName = "Visual Game Studio",
+        adapterID = "basiclang",
+        pathFormat = "path",
+        linesStartAt1 = true,
+        columnsStartAt1 = true,
+        supportsVariableType = true,
+        supportsVariablePaging = false,
+        supportsRunInTerminalRequest = false
+    };
+
+    /// <summary>
+    /// The configuration phase of the handshake (between `initialized` and
+    /// configurationDone): source breakpoints, then any armed exception filters.
+    /// </summary>
+    private async Task PushConfigurationAsync(Dictionary<string, IEnumerable<SourceBreakpoint>>? breakpoints)
+    {
+        if (breakpoints != null)
+        {
+            foreach (var kvp in breakpoints)
+            {
+                var filePath = kvp.Key;
+                var bps = kvp.Value.ToList();
+                if (bps.Any())
+                {
+                    _outputService.WriteLine($"Setting {bps.Count} breakpoint(s) in {Path.GetFileName(filePath)}", OutputCategory.Debug);
+                    await SetBreakpointsAsync(filePath, bps);
+                }
+            }
+        }
+
+        // Filters armed before the session existed used to be dropped (the setter
+        // no-ops without a live session); replay them here. Best-effort — a filter
+        // problem must not kill the launch.
+        if (_armedExceptionFilters is { Count: > 0 })
+        {
+            try
+            {
+                await SendExceptionBreakpointsCoreAsync(_armedExceptionFilters, _armedExceptionFilterOptions);
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError($"Failed to set exception breakpoints: {ex.Message}", OutputCategory.Debug);
+            }
         }
     }
 
@@ -330,17 +344,18 @@ public class DebugService : IDebugService
 
     public async Task StopDebuggingAsync()
     {
-        // Try to send disconnect request with timeout before cancelling
-        if (_session != null && State != DebugState.Stopped)
+        // Try to send disconnect within the profile's grace budget before killing
+        var session = _session;
+        if (session != null && State != DebugState.Stopped)
         {
             try
             {
-                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                await SendRequestAsync("disconnect", new { terminateDebuggee = true }, timeoutCts.Token);
+                await session.SendRequestAsync("disconnect", new { terminateDebuggee = true },
+                    timeout: session.Timeouts.DisconnectGrace);
             }
             catch (OperationCanceledException)
             {
-                // Timeout - proceed with cleanup
+                // Grace expired - proceed with the kill-tree cleanup below
                 _outputService.WriteLine("Disconnect request timed out, forcing stop", OutputCategory.Debug);
             }
             catch
@@ -444,20 +459,22 @@ public class DebugService : IDebugService
     }
 
     /// <summary>
-    /// Send a step request (next/stepIn/stepOut) with a timeout.
+    /// Send a step request (next/stepIn/stepOut) within the profile's step budget.
     /// Step commands don't need the response body — the stopped event is what matters.
     /// </summary>
     private async Task SendStepRequestAsync(string command)
     {
+        var session = _session;
+        if (session == null) return;
+
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await SendRequestAsync(command, new { threadId = 1 }, cts.Token);
+            await session.SendRequestAsync(command, new { threadId = 1 }, timeout: session.Timeouts.Step);
             _outputService.WriteLine($"[DAP] {command} response received, State={State}", OutputCategory.Debug);
         }
         catch (OperationCanceledException)
         {
-            _outputService.WriteLine($"[DAP] {command} response timed out (5s) - continuing anyway", OutputCategory.Debug);
+            _outputService.WriteLine($"[DAP] {command} response timed out ({session.Timeouts.Step.TotalSeconds:F0}s) - continuing anyway", OutputCategory.Debug);
         }
         catch (Exception ex)
         {
@@ -518,39 +535,52 @@ public class DebugService : IDebugService
 
     public async Task SetExceptionBreakpointsAsync(IEnumerable<string> filters, IEnumerable<ExceptionFilterOption>? filterOptions = null)
     {
+        var filtersList = filters.ToList();
+        var optionsList = filterOptions?.ToList();
+
+        // Retain even without a live session — the next handshake's configuration
+        // phase replays armed filters (PushConfigurationAsync).
+        _armedExceptionFilters = filtersList;
+        _armedExceptionFilterOptions = optionsList;
+
         if (!IsDebugging) return;
 
         try
         {
-            var filtersList = filters.ToList();
-            var args = new Dictionary<string, object>
-            {
-                ["filters"] = filtersList
-            };
-
-            if (filterOptions != null)
-            {
-                var options = filterOptions.Select(fo => new
-                {
-                    filterId = fo.FilterId,
-                    condition = fo.Condition
-                }).ToArray();
-
-                if (options.Length > 0)
-                {
-                    args["filterOptions"] = options;
-                }
-            }
-
-            await SendRequestAsync("setExceptionBreakpoints", args);
-
-            var filterNames = string.Join(", ", filtersList);
-            _outputService.WriteLine($"Exception breakpoints set: {(filtersList.Count > 0 ? filterNames : "none")}", OutputCategory.Debug);
+            await SendExceptionBreakpointsCoreAsync(filtersList, optionsList);
         }
         catch (Exception ex)
         {
             _outputService.WriteError($"Failed to set exception breakpoints: {ex.Message}", OutputCategory.Debug);
         }
+    }
+
+    /// <summary>The wire half of setExceptionBreakpoints, shared by the mid-session setter and the handshake replay.</summary>
+    private async Task SendExceptionBreakpointsCoreAsync(List<string> filters, List<ExceptionFilterOption>? filterOptions)
+    {
+        var args = new Dictionary<string, object>
+        {
+            ["filters"] = filters
+        };
+
+        if (filterOptions != null)
+        {
+            var options = filterOptions.Select(fo => new
+            {
+                filterId = fo.FilterId,
+                condition = fo.Condition
+            }).ToArray();
+
+            if (options.Length > 0)
+            {
+                args["filterOptions"] = options;
+            }
+        }
+
+        await SendRequestAsync("setExceptionBreakpoints", args);
+
+        var filterNames = string.Join(", ", filters);
+        _outputService.WriteLine($"Exception breakpoints set: {(filters.Count > 0 ? filterNames : "none")}", OutputCategory.Debug);
     }
 
     public async Task<bool> SetNextStatementAsync(string filePath, int line)
@@ -678,6 +708,10 @@ public class DebugService : IDebugService
     public async Task<IReadOnlyList<FunctionBreakpointInfo>> SetFunctionBreakpointsAsync(IEnumerable<FunctionBreakpoint> breakpoints)
     {
         if (_session == null) return Array.Empty<FunctionBreakpointInfo>();
+
+        // Spec §3.3.3: skip what the adapter disclaims — never send the request.
+        if (Capabilities?.Supports("supportsFunctionBreakpoints") != true)
+            return Array.Empty<FunctionBreakpointInfo>();
 
         var bpList = breakpoints.ToList();
 
@@ -844,6 +878,10 @@ public class DebugService : IDebugService
     {
         if (_session == null) return Array.Empty<DataBreakpointInfo>();
 
+        // Spec §3.3.3: skip what the adapter disclaims — never send the request.
+        if (Capabilities?.Supports("supportsDataBreakpoints") != true)
+            return Array.Empty<DataBreakpointInfo>();
+
         try
         {
             var result = await SendRequestAsync("setDataBreakpoints", new
@@ -855,7 +893,7 @@ public class DebugService : IDebugService
                     condition = bp.Condition,
                     hitCondition = bp.HitCondition
                 }).ToArray()
-            }, cancellationToken);
+            }, cancellationToken: cancellationToken);
 
             var verified = new List<DataBreakpointInfo>();
             if (result.TryGetProperty("breakpoints", out var bps) && bps.ValueKind == JsonValueKind.Array)
@@ -885,13 +923,17 @@ public class DebugService : IDebugService
     {
         if (_session == null) return null;
 
+        // Spec §3.3.3: skip what the adapter disclaims — never send the request.
+        if (Capabilities?.Supports("supportsDataBreakpoints") != true)
+            return null;
+
         try
         {
             var result = await SendRequestAsync("dataBreakpointInfo", new
             {
                 variablesReference,
                 name
-            }, cancellationToken);
+            }, cancellationToken: cancellationToken);
 
             var dataId = result.TryGetProperty("dataId", out var did) ? did.GetString() : null;
             if (dataId == null) return null;
@@ -1106,14 +1148,15 @@ public class DebugService : IDebugService
 
     /// <summary>
     /// All DAP requests flow through the active session — the transport (framing,
-    /// correlation, internal timeout) lives in <see cref="DapSession"/> now.
+    /// correlation, budgeted timeout) lives in <see cref="DapSession"/> now. The
+    /// timeout defaults to the profile's Request budget.
     /// </summary>
-    private Task<JsonElement> SendRequestAsync(string command, object arguments, CancellationToken cancellationToken = default)
+    private Task<JsonElement> SendRequestAsync(string command, object arguments, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
         var session = _session;
         if (session == null)
             throw new InvalidOperationException("No active DAP session");
-        return session.SendRequestAsync(command, arguments, cancellationToken);
+        return session.SendRequestAsync(command, arguments, timeout, cancellationToken);
     }
 
     public void Dispose()

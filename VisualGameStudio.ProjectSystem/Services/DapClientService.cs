@@ -38,7 +38,7 @@ public class DapClientService : IDapClientService
     public DapConnectionState State { get; private set; } = DapConnectionState.Disconnected;
 
     /// <inheritdoc/>
-    public DapCapabilities? Capabilities { get; private set; }
+    public DapClientCapabilities? Capabilities { get; private set; }
 
     /// <inheritdoc/>
     public bool IsStopped => State == DapConnectionState.Paused;
@@ -457,7 +457,7 @@ public class DapClientService : IDapClientService
 
             if (result != null)
             {
-                Capabilities = JsonSerializer.Deserialize<DapCapabilities>(result.Value.GetRawText(), JsonOptions);
+                Capabilities = JsonSerializer.Deserialize<DapClientCapabilities>(result.Value.GetRawText(), JsonOptions);
             }
 
             SetState(DapConnectionState.Ready);

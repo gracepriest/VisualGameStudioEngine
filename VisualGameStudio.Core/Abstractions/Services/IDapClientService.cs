@@ -14,7 +14,7 @@ public interface IDapClientService : IDisposable
     /// <summary>
     /// Gets the adapter capabilities after initialization.
     /// </summary>
-    DapCapabilities? Capabilities { get; }
+    DapClientCapabilities? Capabilities { get; }
 
     /// <summary>
     /// Gets whether the debuggee is currently stopped.
@@ -247,9 +247,11 @@ public enum DapConnectionState
 }
 
 /// <summary>
-/// Debug adapter capabilities.
+/// Debug adapter capabilities (IDapClientService stack). Renamed from DapCapabilities
+/// in Phase 4: that name now belongs to the retained-initialize-response type in
+/// DapProtocol.cs that DapSession/IDebugService use.
 /// </summary>
-public class DapCapabilities
+public class DapClientCapabilities
 {
     public bool SupportsConfigurationDoneRequest { get; set; }
     public bool SupportsFunctionBreakpoints { get; set; }

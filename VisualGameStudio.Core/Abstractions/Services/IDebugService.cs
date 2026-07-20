@@ -16,6 +16,12 @@ public interface IDebugService : IDisposable
     bool IsDebugging { get; }
 
     /// <summary>
+    /// What the adapter disclosed in its initialize response, retained for the life
+    /// of the session. Null until a session's initialize response arrives.
+    /// </summary>
+    DapCapabilities? Capabilities { get; }
+
+    /// <summary>
     /// Fires when debug state changes
     /// </summary>
     event EventHandler<DebugStateChangedEventArgs>? StateChanged;

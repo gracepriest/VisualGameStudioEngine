@@ -124,9 +124,9 @@ public class DapClientServiceTests
     }
 
     [Test]
-    public void DapCapabilities_Defaults_AreCorrect()
+    public void DapClientCapabilities_Defaults_AreCorrect()
     {
-        var caps = new DapCapabilities();
+        var caps = new DapClientCapabilities();
         Assert.That(caps.SupportsConfigurationDoneRequest, Is.False);
         Assert.That(caps.SupportsFunctionBreakpoints, Is.False);
         Assert.That(caps.SupportsConditionalBreakpoints, Is.False);
