@@ -24,6 +24,28 @@ namespace BasicLang.Compiler.ProjectSystem
     }
 
     /// <summary>
+    /// Which of the known toolchain ids ("llvm" / "gcc" / "msvc") are installed
+    /// on this machine. Produced by <see cref="CppToolchain.ProbeAvailability"/>;
+    /// consumed by the wizard (greying unavailable pickers) and the builder
+    /// (diagnosing a &lt;CppToolchain&gt; that names an absent toolchain).
+    /// </summary>
+    public readonly record struct CppToolchainAvailability(bool Llvm, bool Gcc, bool Msvc)
+    {
+        /// <summary>Comma-separated installed ids for diagnostics, e.g. "llvm, msvc"; "none" when empty.</summary>
+        public string DetectedList
+        {
+            get
+            {
+                var found = new List<string>(3);
+                if (Llvm) found.Add("llvm");
+                if (Gcc) found.Add("gcc");
+                if (Msvc) found.Add("msvc");
+                return found.Count == 0 ? "none" : string.Join(", ", found);
+            }
+        }
+    }
+
+    /// <summary>
     /// Discovery and invocation of a native C++ toolchain so the Cpp backend
     /// can produce a runnable executable instead of stopping at source.
     ///
@@ -49,29 +71,66 @@ namespace BasicLang.Compiler.ProjectSystem
         }
 
         /// <summary>Probe for an available toolchain; null when none is installed.</summary>
-        public static CppToolchain Find()
-        {
-            foreach (var exe in new[] { "clang++", "g++" })
-            {
-                try
-                {
-                    using var probe = Process.Start(new ProcessStartInfo(exe, "--version")
-                    {
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    });
-                    probe.WaitForExit(10000);
-                    if (probe.ExitCode == 0)
-                        return new CppToolchain(exe, exe);
-                }
-                catch
-                {
-                    // not on PATH
-                }
-            }
+        public static CppToolchain Find() => FindClang() ?? FindGcc() ?? FindMsvc();
 
+        /// <summary>
+        /// Resolve one specific toolchain by its project-file id ("llvm" | "gcc" |
+        /// "msvc", case-insensitive); null when the id is unknown or that toolchain
+        /// is not installed. Shares <see cref="Find"/>'s probes, so the two agree.
+        /// </summary>
+        public static CppToolchain TryFindById(string id) => id?.Trim().ToLowerInvariant() switch
+        {
+            "llvm" => FindClang(),
+            "gcc" => FindGcc(),
+            "msvc" => FindMsvc(),
+            _ => null,
+        };
+
+        /// <summary>
+        /// Cheap installed/not-installed check for every known toolchain id.
+        /// Deliberately never runs vcvars64.bat (seconds-slow): the MSVC check is
+        /// vswhere reporting an instance whose vcvars64.bat exists on disk — the
+        /// same bar <see cref="Find"/> sets, so the two cannot disagree.
+        /// </summary>
+        public static CppToolchainAvailability ProbeAvailability() =>
+            new(IsOnPath("clang++"), IsOnPath("g++"), FindVcvars() != null);
+
+        private static CppToolchain FindClang() => IsOnPath("clang++") ? new CppToolchain("clang++", "clang++") : null;
+
+        private static CppToolchain FindGcc() => IsOnPath("g++") ? new CppToolchain("g++", "g++") : null;
+
+        private static CppToolchain FindMsvc()
+        {
+            var vcvars = FindVcvars();
+            return vcvars != null ? new CppToolchain("MSVC (cl.exe)", "cmd.exe", vcvars) : null;
+        }
+
+        /// <summary>True when <paramref name="exe"/> runs from PATH (`exe --version` exits 0).</summary>
+        private static bool IsOnPath(string exe)
+        {
+            try
+            {
+                using var probe = Process.Start(new ProcessStartInfo(exe, "--version")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                probe.WaitForExit(10000);
+                return probe.ExitCode == 0;
+            }
+            catch
+            {
+                // not on PATH
+                return false;
+            }
+        }
+
+        /// <summary>vcvars64.bat of the latest VS instance with the C++ workload
+        /// (via vswhere), or null. A file-existence check only — nothing is run.</summary>
+        private static string FindVcvars()
+        {
             try
             {
                 var vswhere = Path.Combine(
@@ -92,7 +151,7 @@ namespace BasicLang.Compiler.ProjectSystem
                     {
                         var vcvars = Path.Combine(installPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
                         if (File.Exists(vcvars))
-                            return new CppToolchain("MSVC (cl.exe)", "cmd.exe", vcvars);
+                            return vcvars;
                     }
                 }
             }
