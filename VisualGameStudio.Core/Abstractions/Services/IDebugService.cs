@@ -135,9 +135,13 @@ public interface IDebugService : IDisposable
     Task<IReadOnlyList<FunctionBreakpointInfo>> SetFunctionBreakpointsAsync(IEnumerable<FunctionBreakpoint> breakpoints);
 
     /// <summary>
-    /// Get current call stack
+    /// Get current call stack.
+    /// <paramref name="threadId"/> 0 (the default) is a sentinel meaning "the thread
+    /// of the most recent stopped event" — DAP thread ids are adapter-assigned and
+    /// never 0, so callers riding the default always get the thread the debugger
+    /// actually stopped on. Pass an explicit id to inspect another thread.
     /// </summary>
-    Task<IReadOnlyList<StackFrameInfo>> GetStackTraceAsync(int threadId = 1);
+    Task<IReadOnlyList<StackFrameInfo>> GetStackTraceAsync(int threadId = 0);
 
     /// <summary>
     /// Get scopes for a stack frame

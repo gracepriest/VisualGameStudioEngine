@@ -25,6 +25,12 @@ public class DebugService : IDebugService
     private int _runToCursorLine;
     private List<SourceBreakpoint>? _originalBreakpoints;
 
+    // The threadId of the most recent stopped event; 1 until the first stop
+    // (DAP offers nothing better pre-stop). The Step-0 gate observed lldb-dap
+    // stopping on threadId 6908 — hardcoding 1 breaks every native-path
+    // continue/step/pause/goto/stackTrace.
+    private int _currentThreadId = 1;
+
     // Restart state
     private DebugConfiguration? _lastConfig;
     private Dictionary<string, IEnumerable<SourceBreakpoint>>? _lastBreakpoints;
@@ -419,7 +425,7 @@ public class DebugService : IDebugService
     {
         if (State != DebugState.Paused) return;
         SetState(DebugState.Running);
-        await SendRequestAsync("continue", new { threadId = 1 });
+        await SendRequestAsync("continue", new { threadId = _currentThreadId });
     }
 
     public async Task StepOverAsync()
@@ -469,7 +475,7 @@ public class DebugService : IDebugService
 
         try
         {
-            await session.SendRequestAsync(command, new { threadId = 1 }, timeout: session.Timeouts.Step);
+            await session.SendRequestAsync(command, new { threadId = _currentThreadId }, timeout: session.Timeouts.Step);
             _outputService.WriteLine($"[DAP] {command} response received, State={State}", OutputCategory.Debug);
         }
         catch (OperationCanceledException)
@@ -485,7 +491,7 @@ public class DebugService : IDebugService
     public async Task PauseAsync()
     {
         if (State != DebugState.Running) return;
-        await SendRequestAsync("pause", new { threadId = 1 });
+        await SendRequestAsync("pause", new { threadId = _currentThreadId });
     }
 
     public async Task RunToCursorAsync(string filePath, int line, IEnumerable<SourceBreakpoint>? existingBreakpoints = null)
@@ -517,7 +523,7 @@ public class DebugService : IDebugService
 
             // Continue execution
             SetState(DebugState.Running);
-            await SendRequestAsync("continue", new { threadId = 1 });
+            await SendRequestAsync("continue", new { threadId = _currentThreadId });
         }
         catch (Exception ex)
         {
@@ -610,7 +616,7 @@ public class DebugService : IDebugService
                         // Execute the goto request
                         await SendRequestAsync("goto", new
                         {
-                            threadId = 1,
+                            threadId = _currentThreadId,
                             targetId = targetId.GetInt32()
                         });
 
@@ -749,9 +755,14 @@ public class DebugService : IDebugService
         }
     }
 
-    public async Task<IReadOnlyList<StackFrameInfo>> GetStackTraceAsync(int threadId = 1)
+    public async Task<IReadOnlyList<StackFrameInfo>> GetStackTraceAsync(int threadId = 0)
     {
         if (_session == null) return Array.Empty<StackFrameInfo>();
+
+        // 0 is the sentinel for "the thread of the most recent stopped event"
+        // (documented on IDebugService) — DAP thread ids are adapter-assigned
+        // and never 0.
+        if (threadId == 0) threadId = _currentThreadId;
 
         try
         {
@@ -1060,6 +1071,10 @@ public class DebugService : IDebugService
                     Description = body.TryGetProperty("description", out var d) ? d.GetString() : null,
                     Text = body.TryGetProperty("text", out var txt) ? txt.GetString() : null
                 };
+
+                // Every later continue/step/pause/goto/stackTrace targets this thread.
+                // Set BEFORE raising Stopped — handlers fetch stacks synchronously.
+                _currentThreadId = stoppedArgs.ThreadId;
 
                 // Restore original breakpoints after run-to-cursor
                 if (_runToCursorFile != null && _originalBreakpoints != null)

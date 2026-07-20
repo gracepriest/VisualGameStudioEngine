@@ -3185,7 +3185,7 @@ public partial class MainWindowViewModel : ViewModelBase
             }
 
             // Navigate to the stopped location and build location string for status
-            var frames = await _debugService.GetStackTraceAsync();
+            var frames = await _debugService.GetStackTraceAsync(e.ThreadId);
             var firstFrame = frames.FirstOrDefault();
 
             // Track current frame ID for debug hover evaluate requests

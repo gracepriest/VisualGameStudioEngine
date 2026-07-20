@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
 using Moq;
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
@@ -201,6 +203,207 @@ public class DebugServiceTests
             _service.Dispose();
             _service.Dispose();
         });
+    }
+}
+
+/// <summary>
+/// Phase 4 Task 5 — real threadIds end to end. The Step-0 gate observed lldb-dap
+/// stopping on threadId 6908, so every execution-control request that hardcodes
+/// threadId = 1 is a landmine on the native path. These tests drive the REAL
+/// DebugService over the sessionFactory seam against the scripted fake and assert
+/// the WIRE value the adapter received — not internal state. Every await is
+/// budget-bounded.
+/// </summary>
+[TestFixture]
+public class DebugServiceThreadIdTests
+{
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+
+    private RecordingOutputService _output = null!;
+    private FakeDapAdapter _fake = null!;
+    private DapSession _session = null!;
+    private DebugService _service = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _output = new RecordingOutputService();
+        _fake = FakeDapAdapter.ManagedShaped();
+        _session = new DapSession(_fake.SessionReads, _fake.SessionWrites, _output);
+        _service = new DebugService(_output, _ => _session);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _service.Dispose();
+        _session.Dispose();
+        _fake.Dispose();
+    }
+
+    [Test]
+    public async Task StoppedThreadId_FlowsIntoContinue()
+    {
+        await StartAndStopOnThreadAsync(7);
+
+        await WithTimeout(_service.ContinueAsync(), "the continue round-trip");
+
+        Assert.That(WireThreadId("continue"), Is.EqualTo(7),
+            "continue must carry the stopped event's threadId, not a hardcoded 1");
+    }
+
+    [Test]
+    public async Task StoppedThreadId_FlowsIntoStepPauseAndGoto()
+    {
+        await StartAndStopOnThreadAsync(7);
+
+        // next — the fake answers immediately and StepOverAsync awaits that response.
+        await WithTimeout(_service.StepOverAsync(), "the next (step over) round-trip");
+        Assert.That(WireThreadId("next"), Is.EqualTo(7),
+            "next must carry the stopped event's threadId");
+
+        // A step leaves the service Running; stepIn needs Paused again.
+        await EmitStoppedAndWaitAsync(7);
+        await WithTimeout(_service.StepIntoAsync(), "the stepIn round-trip");
+        Assert.That(WireThreadId("stepIn"), Is.EqualTo(7),
+            "stepIn must carry the stopped event's threadId");
+
+        // pause needs Running — exactly where the step just left us.
+        Assert.That(_service.State, Is.EqualTo(DebugState.Running),
+            "precondition: the step should have left the service Running");
+        await WithTimeout(_service.PauseAsync(), "the pause round-trip");
+        Assert.That(WireThreadId("pause"), Is.EqualTo(7),
+            "pause must carry the stopped event's threadId");
+
+        // goto needs Paused, and gotoTargets needs a real targets body — scripted one-shot.
+        await EmitStoppedAndWaitAsync(7);
+        _fake.RespondToNextRequestWithBody("gotoTargets",
+            new { targets = new object[] { new { id = 42, label = "line 5", line = 5 } } });
+        var jumped = await WithTimeout(_service.SetNextStatementAsync("C:\\fake\\main.bas", 5),
+            "the gotoTargets/goto round-trip");
+        Assert.That(jumped, Is.True, "SetNextStatementAsync failed:\n" + _output.Dump());
+        Assert.That(WireThreadId("goto"), Is.EqualTo(7),
+            "goto must carry the stopped event's threadId");
+    }
+
+    [Test]
+    public async Task StackTrace_DefaultsToTheStoppedThread()
+    {
+        await StartAndStopOnThreadAsync(7);
+
+        await WithTimeout(_service.GetStackTraceAsync(), "the stackTrace round-trip");
+
+        Assert.That(WireThreadId("stackTrace"), Is.EqualTo(7),
+            "a default GetStackTraceAsync() must ask for the stopped thread, not thread 1");
+    }
+
+    [Test]
+    public async Task StackTrace_ExplicitThreadIdWins()
+    {
+        await StartAndStopOnThreadAsync(7);
+
+        await WithTimeout(_service.GetStackTraceAsync(3), "the stackTrace round-trip");
+
+        Assert.That(WireThreadId("stackTrace"), Is.EqualTo(3),
+            "an explicit threadId must always win over the stopped-thread default");
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    /// <summary>Handshake to Running, then stop on the given thread.</summary>
+    private async Task StartAndStopOnThreadAsync(int threadId)
+    {
+        var started = await WithTimeout(_service.StartDebuggingAsync(new DebugConfiguration
+        {
+            Program = "FakeApp.exe",
+            WorkingDirectory = Path.GetTempPath()
+        }), "the StartDebuggingAsync handshake against the managed-shaped fake");
+        Assert.That(started, Is.True, "handshake failed:\n" + _output.Dump());
+
+        await EmitStoppedAndWaitAsync(threadId);
+    }
+
+    /// <summary>Emit a stopped event and wait until the service raised Stopped for it.</summary>
+    private async Task EmitStoppedAndWaitAsync(int threadId)
+    {
+        var stopped = new TaskCompletionSource<StoppedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? _, StoppedEventArgs e) => stopped.TrySetResult(e);
+        _service.Stopped += Handler;
+        try
+        {
+            _fake.EmitEvent("stopped", new { reason = "breakpoint", threadId });
+            var args = await WithTimeout(stopped.Task, $"the Stopped event for threadId {threadId}");
+            Assert.That(args.ThreadId, Is.EqualTo(threadId),
+                "the stopped event's threadId was not parsed off the event body");
+            Assert.That(_service.State, Is.EqualTo(DebugState.Paused),
+                "the stopped event did not pause the service");
+        }
+        finally
+        {
+            _service.Stopped -= Handler;
+        }
+    }
+
+    /// <summary>The threadId the adapter actually received on the wire for a command.</summary>
+    private int WireThreadId(string command)
+    {
+        var matches = _fake.Received.Where(r => r.Command == command).ToArray();
+        Assert.That(matches, Is.Not.Empty,
+            $"the adapter never received a '{command}' request; it saw: " +
+            string.Join(", ", _fake.Received.Select(r => r.Command)));
+
+        var args = matches.Last().Arguments;
+        Assert.That(args.ValueKind, Is.EqualTo(JsonValueKind.Object),
+            $"'{command}' carried no arguments object");
+        Assert.That(args.TryGetProperty("threadId", out var tid), Is.True,
+            $"'{command}' arguments carried no threadId: {args.GetRawText()}");
+        return tid.GetInt32();
+    }
+
+    private static async Task<T> WithTimeout<T>(Task<T> task, string what)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(Budget));
+        if (completed != task)
+            Assert.Fail($"Timed out after {Budget.TotalSeconds:F0}s waiting for: {what}");
+        return await task;
+    }
+
+    private static async Task WithTimeout(Task task, string what)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(Budget));
+        if (completed != task)
+            Assert.Fail($"Timed out after {Budget.TotalSeconds:F0}s waiting for: {what}");
+        await task;
+    }
+
+    /// <summary>
+    /// Thread-safe IOutputService that records everything, so test failures can include
+    /// the real DAP output. Duplicated per suite convention (the siblings in
+    /// DapSessionTests/IdeInAngerTests are private).
+    /// </summary>
+    private sealed class RecordingOutputService : IOutputService
+    {
+        private readonly ConcurrentQueue<string> _lines = new();
+
+        public string Dump() => string.Join(Environment.NewLine, _lines);
+
+        public void WriteLine(string message, OutputCategory category = OutputCategory.General) => _lines.Enqueue(message);
+        public void Write(string message, OutputCategory category = OutputCategory.General) => _lines.Enqueue(message);
+        public void WriteError(string message, OutputCategory category = OutputCategory.General) => _lines.Enqueue("ERROR: " + message);
+        public void Clear(OutputCategory category) { }
+        public void ClearAll() { }
+        public void Activate(OutputCategory category) { }
+        public IReadOnlyList<string> GetMessages(OutputCategory category) => _lines.ToArray();
+        public event EventHandler<OutputEventArgs>? OutputReceived { add { } remove { } }
+        public IOutputChannel CreateChannel(string name) => throw new NotSupportedException();
+        public IOutputChannel? GetChannel(string name) => null;
+        public IReadOnlyList<IOutputChannel> Channels => Array.Empty<IOutputChannel>();
+        public IOutputChannel? ActiveChannel { get; set; }
+        public event EventHandler<string>? ChannelCreated { add { } remove { } }
+        public event EventHandler<IOutputChannel?>? ActiveChannelChanged { add { } remove { } }
+        public void ShowOutput() { }
     }
 }
 

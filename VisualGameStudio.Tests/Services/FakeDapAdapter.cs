@@ -43,6 +43,7 @@ public sealed class FakeDapAdapter : IDisposable
 
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly ConcurrentDictionary<string, string> _failNext = new();
+    private readonly ConcurrentDictionary<string, object> _bodyNext = new();
     private readonly object _captureLock = new();
     private readonly List<byte> _firstBytes = new();
     private readonly Queue<byte> _incoming = new();
@@ -145,6 +146,14 @@ public sealed class FakeDapAdapter : IDisposable
     /// <summary>The next request with this command gets {success:false, message} (one-shot).</summary>
     public void RespondToNextRequestWithFailure(string command, string message)
         => _failNext[command] = message;
+
+    /// <summary>
+    /// The next request with this command gets {success:true, body} (one-shot) — for
+    /// requests whose caller needs a real body (e.g. gotoTargets' targets array), which
+    /// the generic empty-body responder cannot satisfy.
+    /// </summary>
+    public void RespondToNextRequestWithBody(string command, object body)
+        => _bodyNext[command] = body;
 
     /// <summary>
     /// Simulates adapter death: closes the fake's ends of both pipes. The session's
@@ -265,6 +274,12 @@ public sealed class FakeDapAdapter : IDisposable
         if (_failNext.TryRemove(command, out var failMessage))
         {
             await SendResponseAsync(seq, command, success: false, body: null, message: failMessage);
+            return;
+        }
+
+        if (_bodyNext.TryRemove(command, out var scriptedBody))
+        {
+            await SendResponseAsync(seq, command, success: true, body: scriptedBody);
             return;
         }
 
