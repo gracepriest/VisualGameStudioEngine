@@ -81,6 +81,13 @@ public partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     private readonly Services.ClangdDownloadFlow _clangdDownloadFlow;
 
+    /// <summary>
+    /// The "Download C++ Debugger" policy — the clangd flow's sibling (Task 12), reached from the
+    /// missing-adapter toast action and the Tools menu. Same construction story: built in the
+    /// ctor over this VM's own toast/progress methods, never injected.
+    /// </summary>
+    private readonly Services.LldbDapDownloadFlow _lldbDapDownloadFlow;
+
     // Per-project layout/session persistence (VS Code's workspaceStorage model).
     private CancellationTokenSource? _layoutSaveCts;
     private bool _restoringLayout;
@@ -395,7 +402,8 @@ public partial class MainWindowViewModel : ViewModelBase
         ThreadsViewModel threads,
         TimelineViewModel timeline,
         Documents.WelcomeDocumentViewModel welcomeDocument,
-        ProjectSystem.Services.ClangdInstaller clangdInstaller)
+        ProjectSystem.Services.ClangdInstaller clangdInstaller,
+        ProjectSystem.Services.LldbDapInstaller lldbDapInstaller)
     {
         _projectService = projectService;
         _buildService = buildService;
@@ -436,6 +444,17 @@ public partial class MainWindowViewModel : ViewModelBase
         _clangdDownloadFlow = new Services.ClangdDownloadFlow(
             clangdInstaller.InstallAsync,
             () => ProjectSystem.Services.ClangdLocator.Locate(_settingsService),
+            (message, severity) => ShowNotification(message, severity),
+            ShowProgressNotification,
+            DismissNotification);
+
+        // The lldb-dap flow: same shape, same reasoning (see the clangd wiring above). Its
+        // resolveExisting is LldbDapLocator.Locate — the SAME probe every F5 runs via
+        // DebugAdapterDescriptor.ResolveLaunchCommand, which is why its success toast can promise
+        // "press F5" with no restart: the next session-start resolution sees the fresh install.
+        _lldbDapDownloadFlow = new Services.LldbDapDownloadFlow(
+            lldbDapInstaller.InstallAsync,
+            () => ProjectSystem.Services.LldbDapLocator.Locate(_settingsService),
             (message, severity) => ShowNotification(message, severity),
             ShowProgressNotification,
             DismissNotification);
@@ -1230,8 +1249,20 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void DownloadCppTools() => _ = _clangdDownloadFlow.RunAsync();
 
+    /// <summary>
+    /// Tools ▸ Download C++ Debugger… — the RETRY path for lldb-dap acquisition, and the only
+    /// entry point before any native F5 has failed (the missing-adapter toast is once per
+    /// session, <see cref="_lldbDapMissingReported"/>). Fire-and-forget is safe: the flow never
+    /// throws (its catch-all is the last line of defense on this path).
+    /// </summary>
+    [RelayCommand]
+    private void DownloadCppDebugger() => _ = _lldbDapDownloadFlow.RunAsync();
+
     /// <summary>Guards the clangd-not-found toast to once per session; see <see cref="ReportClangdMissingForCppFile"/>.</summary>
     private bool _clangdMissingReported;
+
+    /// <summary>Guards the lldb-dap-missing offer toast to once per session; see <see cref="ReportDebugAdapterMissing"/>.</summary>
+    private bool _lldbDapMissingReported;
 
     /// <summary>
     /// The BasicLang language server, reached by identity (not by routing a document). Used only for
@@ -3505,7 +3536,7 @@ public partial class MainWindowViewModel : ViewModelBase
         // mid-session (the one-click acquisition flow), and this F5 must see it.
         if (descriptor.ResolveLaunchCommand() is null)
         {
-            ReportDebugAdapterMissing(descriptor);   // Task 12 upgrades this to the offer toast
+            ReportDebugAdapterMissing(descriptor);   // for lldb-dap, this carries the download-offer toast
             return;
         }
 
@@ -3608,14 +3639,41 @@ public partial class MainWindowViewModel : ViewModelBase
     /// The registry routes to this adapter but <see cref="DebugAdapterDescriptor.ResolveLaunchCommand"/>
     /// found nothing on disk — say so where the user is looking (Output, activated, the old
     /// guard's idiom) and in the status bar. Wording is <see cref="Services.DebugLaunchPolicy"/>'s
-    /// pinned contract; Task 12 upgrades the delivery to the download-offer toast.
+    /// pinned contract, and it stays descriptor-conditional: only the LLDB descriptor ALSO gets
+    /// the download-offer toast (Task 12), because "Download C++ Debugger" would be wrong advice
+    /// for a missing managed compiler or a future extension adapter — those keep the
+    /// output-and-status report only.
     /// </summary>
+    /// <remarks>
+    /// The offer toast is once per session (<see cref="_lldbDapMissingReported"/>), mirroring
+    /// <see cref="_clangdMissingReported"/> — a project of native launches must not stack a toast
+    /// per failed F5; Tools ▸ Download C++ Debugger is the retry path after dismissal. The
+    /// actions overload also makes the toast persist until dismissed (info + actions ⇒ no
+    /// auto-dismiss), which a toast offering a decision should. Fire-and-forget is safe — the
+    /// flow never throws. Unlike clangd's toast, this one carries no restart wording anywhere:
+    /// the locator re-runs on every F5 (session-start resolution), so the download is live on
+    /// the next F5.
+    /// </remarks>
     private void ReportDebugAdapterMissing(DebugAdapterDescriptor descriptor)
     {
         var message = Services.DebugLaunchPolicy.ComposeAdapterMissingMessage(descriptor);
         _dockFactory.ActivateTool("Output");
         OutputPanel.AppendOutput(message + "\n");
         StatusText = message;
+
+        if (!string.Equals(descriptor.Id, DebugAdapterDescriptor.LldbDapId, StringComparison.Ordinal))
+            return;
+
+        if (_lldbDapMissingReported) return;
+        _lldbDapMissingReported = true;
+
+        ShowNotification(
+            message,
+            "info",
+            new List<NotificationAction>
+            {
+                new NotificationAction("Download C++ Debugger", () => _ = _lldbDapDownloadFlow.RunAsync())
+            });
     }
 
     [RelayCommand]

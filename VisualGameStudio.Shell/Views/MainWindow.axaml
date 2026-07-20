@@ -295,6 +295,8 @@
         <MenuItem Header="_Keyboard Shortcuts..." Command="{Binding ShowKeyboardShortcutsCommand}"/>
         <MenuItem Header="Download C++ _Tools..." Command="{Binding DownloadCppToolsCommand}"
                   ToolTip.Tip="Download clangd for C++ IntelliSense (restart the IDE afterwards)"/>
+        <MenuItem Header="Download C++ _Debugger..." Command="{Binding DownloadCppDebuggerCommand}"
+                  ToolTip.Tip="Download lldb-dap for native C++ debugging (available on the next F5)"/>
         <Separator/>
         <MenuItem Header="_Settings..." Command="{Binding SettingsCommand}"/>
       </MenuItem>

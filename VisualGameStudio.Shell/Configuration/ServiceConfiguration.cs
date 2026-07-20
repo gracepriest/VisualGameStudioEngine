@@ -72,6 +72,13 @@ public static class ServiceConfiguration
         // built over its own toast/progress methods (the flow itself is deliberately NOT in DI:
         // its sinks are VM methods, and a service→VM dependency would be a cycle).
         services.AddSingleton(sp => new ClangdInstaller());
+        // The lldb-dap acquisition pipeline — the clangd installer's structural sibling (Task 12),
+        // registered for the same reasons: the container disposes its FileDownloader on shutdown,
+        // and DI never guesses at the all-optional test-seam ctor. Consumed by MainWindowViewModel
+        // via an LldbDapDownloadFlow over its own toast/progress methods. Its release pins are
+        // PLACEHOLDERS until the self-hosted zip ships (runbook, Task 13) — the flow's
+        // IsReleasePinned gate keeps the installer from ever fetching the placeholder URL.
+        services.AddSingleton(sp => new LldbDapInstaller());
         // Gives clangd its obj/gen headers + obj/compile_commands.json on project open, before any
         // build has produced them (Task 10). Singleton because its whole job is to coalesce and
         // serialize a multi-second, non-incremental emission across requests — per-instance state
