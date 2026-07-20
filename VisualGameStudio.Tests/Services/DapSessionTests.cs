@@ -250,7 +250,7 @@ public class DapSessionTests
         var output = new RecordingOutputService();
         using var fake = FakeDapAdapter.ManagedShaped();
         var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
-        var service = new DebugService(output, _ => session);
+        var service = new DebugService(output, sessionFactory: (_, _) => session);
 
         try
         {
@@ -305,7 +305,7 @@ public class DapSessionTests
         var output = new RecordingOutputService();
         using var fake = FakeDapAdapter.LldbShaped();
         var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
-        var service = new DebugService(output, _ => session);
+        var service = new DebugService(output, sessionFactory: (_, _) => session);
 
         try
         {
@@ -335,7 +335,7 @@ public class DapSessionTests
         var output = new RecordingOutputService();
         using var fake = FakeDapAdapter.ManagedShaped();
         var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
-        var service = new DebugService(output, _ => session);
+        var service = new DebugService(output, sessionFactory: (_, _) => session);
 
         try
         {
@@ -367,7 +367,7 @@ public class DapSessionTests
         var output = new RecordingOutputService();
         using var fake = FakeDapAdapter.LegacyShaped();
         var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
-        var service = new DebugService(output, _ => session);
+        var service = new DebugService(output, sessionFactory: (_, _) => session);
 
         try
         {
@@ -395,7 +395,7 @@ public class DapSessionTests
         var output = new RecordingOutputService();
         using var fake = FakeDapAdapter.LldbShaped();
         var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
-        var service = new DebugService(output, _ => session);
+        var service = new DebugService(output, sessionFactory: (_, _) => session);
 
         try
         {
@@ -435,7 +435,7 @@ public class DapSessionTests
         var output = new RecordingOutputService();
         using var fake = FakeDapAdapter.LldbShaped();
         var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
-        var service = new DebugService(output, _ => session);
+        var service = new DebugService(output, sessionFactory: (_, _) => session);
 
         try
         {
@@ -472,7 +472,7 @@ public class DapSessionTests
         var output = new RecordingOutputService();
         using var fake = FakeDapAdapter.ManagedShaped();
         var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
-        var service = new DebugService(output, _ => session);
+        var service = new DebugService(output, sessionFactory: (_, _) => session);
 
         try
         {
@@ -534,7 +534,7 @@ public class DapSessionTests
         var output = new RecordingOutputService();
         using var fake = FakeDapAdapter.ManagedShaped();
         var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
-        var service = new DebugService(output, _ => session);
+        var service = new DebugService(output, sessionFactory: (_, _) => session);
 
         try
         {

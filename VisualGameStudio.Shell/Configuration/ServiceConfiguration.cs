@@ -95,7 +95,23 @@ public static class ServiceConfiguration
             sp.GetRequiredService<IBuildService>(),
             sp.GetRequiredService<IEventAggregator>(),
             sp.GetRequiredService<IFileWatcherService>()));
-        services.AddSingleton<IDebugService, DebugService>();
+        // The debug-adapter roster. Deliberately NOT the LSP registry's shape: this
+        // registry owns no processes (DAP sessions are per-launch, owned by the debug
+        // service), so there is no dispose lifecycle and no install-gated registration.
+        services.AddSingleton<IDebugAdapterRegistry>(sp =>
+        {
+            var settingsService = sp.GetRequiredService<ISettingsService>();
+            var registry = new DebugAdapterRegistry();
+            // Built-ins register through the SAME public door an extension would use (spec §2.3).
+            // Launch commands resolve at SESSION START (descriptor contract) — an lldb-dap
+            // installed mid-session is found on the next F5, no IDE restart (contrast clangd, D1).
+            registry.Register(DebugAdapterDescriptor.BasicLangManaged(DebugService.ResolveCompilerPath));
+            registry.Register(DebugAdapterDescriptor.LldbDap(() => LldbDapLocator.Locate(settingsService)));
+            return registry;
+        });
+        services.AddSingleton<IDebugService>(sp => new DebugService(
+            sp.GetRequiredService<IOutputService>(),
+            sp.GetRequiredService<IDebugAdapterRegistry>()));
         services.AddSingleton<ILaunchConfigurationService, LaunchConfigurationService>();
         services.AddSingleton<IGitService, GitService>();
         // Background periodic `git fetch` (git.autoFetch / git.autoFetchInterval). Resolved eagerly

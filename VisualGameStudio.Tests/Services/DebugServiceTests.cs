@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using Moq;
 using NUnit.Framework;
@@ -230,7 +231,7 @@ public class DebugServiceThreadIdTests
         _output = new RecordingOutputService();
         _fake = FakeDapAdapter.ManagedShaped();
         _session = new DapSession(_fake.SessionReads, _fake.SessionWrites, _output);
-        _service = new DebugService(_output, _ => _session);
+        _service = new DebugService(_output, sessionFactory: (_, _) => _session);
     }
 
     [TearDown]
@@ -321,7 +322,7 @@ public class DebugServiceThreadIdTests
         var session1 = new DapSession(fake1.SessionReads, fake1.SessionWrites, output);
         var session2 = new DapSession(fake2.SessionReads, fake2.SessionWrites, output);
         var sessions = new Queue<DapSession>(new[] { session1, session2 });
-        var service = new DebugService(output, _ => sessions.Dequeue());
+        var service = new DebugService(output, sessionFactory: (_, _) => sessions.Dequeue());
 
         try
         {
@@ -462,6 +463,234 @@ public class DebugServiceThreadIdTests
     }
 }
 
+/// <summary>
+/// Phase 4 Task 8 — DebugService routes by descriptor. AdapterId on the configuration
+/// selects a registry descriptor whose resolved command is what gets spawned (asserted
+/// on the ProcessStartInfo the sessionFactory seam receives — the spawn seam, not
+/// internal state); a null AdapterId is the back-compat contract and must keep the
+/// legacy dotnet+compilerPath path byte-for-byte; a not-installed adapter must fail
+/// with a useful message and NO spawn. Every await is budget-bounded.
+/// </summary>
+[TestFixture]
+public class DebugServiceAdapterRoutingTests
+{
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+
+    [Test]
+    public async Task StartDebugging_WithAdapterId_SpawnsTheDescriptorCommand()
+    {
+        var output = new RecordingOutputService();
+        // Session 1 rides the lldb descriptor — use the lldb-shaped handshake regime;
+        // session 2 rides the managed descriptor over the managed-shaped regime.
+        using var lldbFake = FakeDapAdapter.LldbShaped();
+        using var managedFake = FakeDapAdapter.ManagedShaped();
+        var lldbSession = new DapSession(lldbFake.SessionReads, lldbFake.SessionWrites, output);
+        var managedSession = new DapSession(managedFake.SessionReads, managedFake.SessionWrites, output);
+        var sessions = new Queue<DapSession>(new[] { lldbSession, managedSession });
+
+        var registry = new DebugAdapterRegistry();
+        registry.Register(DebugAdapterDescriptor.BasicLangManaged(() => @"C:\fake\BasicLang.dll"));
+        registry.Register(DebugAdapterDescriptor.LldbDap(() => @"C:\fake\tools\lldb-dap.exe"));
+
+        var spawns = new List<(ProcessStartInfo StartInfo, DapTimeoutProfile Timeouts)>();
+        var service = new DebugService(output, registry, (startInfo, timeouts) =>
+        {
+            spawns.Add((startInfo, timeouts));
+            return sessions.Dequeue();
+        });
+
+        try
+        {
+            var config = new DebugConfiguration
+            {
+                Program = "FakeGame.exe",
+                WorkingDirectory = Path.GetTempPath(),
+                AdapterId = DebugAdapterDescriptor.LldbDapId
+            };
+
+            var started = await WithTimeout(service.StartDebuggingAsync(config),
+                "the lldb-descriptor handshake");
+            Assert.That(started, Is.True, "descriptor-routed start failed:\n" + output.Dump());
+
+            // The descriptor's resolved command — FileName AND Arguments — must reach the
+            // spawn verbatim, along with the launch working directory and the DESCRIPTOR's
+            // timeout profile (LldbDap != the legacy default, so this pins the plumbing).
+            Assert.That(spawns, Has.Count.EqualTo(1));
+            Assert.That(spawns[0].StartInfo.FileName, Is.EqualTo(@"C:\fake\tools\lldb-dap.exe"),
+                "the spawned FileName must be the descriptor's resolved executable");
+            Assert.That(spawns[0].StartInfo.Arguments, Is.EqualTo(string.Empty),
+                "lldb-dap's descriptor command carries no arguments — none may be invented");
+            Assert.That(spawns[0].StartInfo.WorkingDirectory, Is.EqualTo(config.WorkingDirectory),
+                "the launch working directory must reach the adapter spawn");
+            Assert.That(spawns[0].Timeouts, Is.EqualTo(DapTimeoutProfile.LldbDap),
+                "the descriptor's timeout profile must reach the session, not the managed default");
+
+            await WithTimeout(service.StopDebuggingAsync(), "stopping the lldb session");
+
+            // Same service, other descriptor: the managed command composes dotnet + the
+            // quoted assembly — proves a NON-empty Arguments string flows through exactly.
+            config.AdapterId = DebugAdapterDescriptor.BasicLangManagedId;
+            var restarted = await WithTimeout(service.StartDebuggingAsync(config),
+                "the managed-descriptor handshake");
+            Assert.That(restarted, Is.True, "managed-descriptor start failed:\n" + output.Dump());
+
+            Assert.That(spawns, Has.Count.EqualTo(2));
+            Assert.That(spawns[1].StartInfo.FileName, Is.EqualTo("dotnet"));
+            Assert.That(spawns[1].StartInfo.Arguments,
+                Is.EqualTo("\"C:\\fake\\BasicLang.dll\" --debug-adapter"),
+                "the managed descriptor's composed arguments must reach the spawn verbatim");
+            Assert.That(spawns[1].Timeouts, Is.EqualTo(DapTimeoutProfile.Managed));
+        }
+        finally
+        {
+            service.Dispose();
+            lldbSession.Dispose();
+            managedSession.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task StartDebugging_NullAdapterId_KeepsTheLegacyManagedPath()
+    {
+        var output = new RecordingOutputService();
+        using var fake = FakeDapAdapter.ManagedShaped();
+        var session = new DapSession(fake.SessionReads, fake.SessionWrites, output);
+
+        // The registry is PRESENT (the DI shape) — its mere existence must not hijack
+        // callers that never set an AdapterId: that null is the back-compat contract
+        // for every existing caller and test.
+        var registry = new DebugAdapterRegistry();
+        registry.Register(DebugAdapterDescriptor.BasicLangManaged(DebugService.ResolveCompilerPath));
+        registry.Register(DebugAdapterDescriptor.LldbDap(() => @"C:\fake\tools\lldb-dap.exe"));
+
+        var spawns = new List<(ProcessStartInfo StartInfo, DapTimeoutProfile Timeouts)>();
+        var service = new DebugService(output, registry, (startInfo, timeouts) =>
+        {
+            spawns.Add((startInfo, timeouts));
+            return session;
+        });
+
+        try
+        {
+            var config = new DebugConfiguration
+            {
+                Program = "FakeApp.exe",
+                WorkingDirectory = Path.GetTempPath()
+                // AdapterId deliberately left null
+            };
+
+            var started = await WithTimeout(service.StartDebuggingAsync(config),
+                "the legacy-path handshake");
+            Assert.That(started, Is.True, "legacy-path start failed:\n" + output.Dump());
+
+            // Byte-for-byte today's command: dotnet + the quoted probed compiler path +
+            // --debug-adapter, on the managed timeout profile.
+            var expectedCompiler = DebugService.ResolveCompilerPath()
+                ?? Path.Combine(AppContext.BaseDirectory, "BasicLang.dll");
+            Assert.That(spawns, Has.Count.EqualTo(1));
+            Assert.That(spawns[0].StartInfo.FileName, Is.EqualTo("dotnet"));
+            Assert.That(spawns[0].StartInfo.Arguments,
+                Is.EqualTo($"\"{expectedCompiler}\" --debug-adapter"),
+                "a null AdapterId must keep the legacy dotnet+compilerPath command unchanged");
+            Assert.That(spawns[0].Timeouts, Is.EqualTo(DapTimeoutProfile.Managed),
+                "the legacy path stays on the managed timeout profile");
+        }
+        finally
+        {
+            service.Dispose();
+            session.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task StartDebugging_AdapterNotInstalled_FailsCleanly_NoSpawn()
+    {
+        var output = new RecordingOutputService();
+        var registry = new DebugAdapterRegistry();
+        // Pre-install reality: the descriptor exists, its locator finds nothing.
+        registry.Register(DebugAdapterDescriptor.LldbDap(() => null));
+
+        var factoryCalls = 0;
+        var service = new DebugService(output, registry, (_, _) =>
+        {
+            factoryCalls++;
+            throw new InvalidOperationException("the sessionFactory must never be reached");
+        });
+
+        try
+        {
+            var config = new DebugConfiguration
+            {
+                Program = "NativeGame.exe",
+                WorkingDirectory = Path.GetTempPath(),
+                AdapterId = DebugAdapterDescriptor.LldbDapId
+            };
+
+            var started = await WithTimeout(service.StartDebuggingAsync(config),
+                "the not-installed refusal");
+
+            Assert.That(started, Is.False, "a not-installed adapter must fail the start");
+            Assert.That(factoryCalls, Is.EqualTo(0),
+                "nothing may be spawned for an adapter that is not installed");
+            Assert.That(output.Dump(), Does.Contain("lldb-dap (native C++)"),
+                "the failure must name the adapter by its display name:\n" + output.Dump());
+            Assert.That(output.Dump(), Does.Contain("not installed"),
+                "the failure must say WHY:\n" + output.Dump());
+            Assert.That(service.IsDebugging, Is.False);
+            Assert.That(service.State, Is.EqualTo(DebugState.NotStarted),
+                "a refused start must leave the service where it was — no state churn");
+        }
+        finally
+        {
+            service.Dispose();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    private static async Task<T> WithTimeout<T>(Task<T> task, string what)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(Budget));
+        if (completed != task)
+            Assert.Fail($"Timed out after {Budget.TotalSeconds:F0}s waiting for: {what}");
+        return await task;
+    }
+
+    private static async Task WithTimeout(Task task, string what)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(Budget));
+        if (completed != task)
+            Assert.Fail($"Timed out after {Budget.TotalSeconds:F0}s waiting for: {what}");
+        await task;
+    }
+
+    /// <summary>Duplicated per suite convention (the siblings elsewhere are private).</summary>
+    private sealed class RecordingOutputService : IOutputService
+    {
+        private readonly ConcurrentQueue<string> _lines = new();
+
+        public string Dump() => string.Join(Environment.NewLine, _lines);
+
+        public void WriteLine(string message, OutputCategory category = OutputCategory.General) => _lines.Enqueue(message);
+        public void Write(string message, OutputCategory category = OutputCategory.General) => _lines.Enqueue(message);
+        public void WriteError(string message, OutputCategory category = OutputCategory.General) => _lines.Enqueue("ERROR: " + message);
+        public void Clear(OutputCategory category) { }
+        public void ClearAll() { }
+        public void Activate(OutputCategory category) { }
+        public IReadOnlyList<string> GetMessages(OutputCategory category) => _lines.ToArray();
+        public event EventHandler<OutputEventArgs>? OutputReceived { add { } remove { } }
+        public IOutputChannel CreateChannel(string name) => throw new NotSupportedException();
+        public IOutputChannel? GetChannel(string name) => null;
+        public IReadOnlyList<IOutputChannel> Channels => Array.Empty<IOutputChannel>();
+        public IOutputChannel? ActiveChannel { get; set; }
+        public event EventHandler<string>? ChannelCreated { add { } remove { } }
+        public event EventHandler<IOutputChannel?>? ActiveChannelChanged { add { } remove { } }
+        public void ShowOutput() { }
+    }
+}
+
 [TestFixture]
 public class DebugConfigurationTests
 {
@@ -475,6 +704,8 @@ public class DebugConfigurationTests
         Assert.That(config.Arguments, Is.Empty);
         Assert.That(config.Environment, Is.Empty);
         Assert.That(config.StopOnEntry, Is.False);
+        Assert.That(config.AdapterId, Is.Null,
+            "null AdapterId IS the back-compat contract — the legacy managed path");
     }
 
     [Test]
@@ -485,7 +716,8 @@ public class DebugConfigurationTests
             Program = "/path/to/app.exe",
             WorkingDirectory = "/path/to/project",
             Arguments = new[] { "--arg1", "--arg2" },
-            StopOnEntry = true
+            StopOnEntry = true,
+            AdapterId = DebugAdapterDescriptor.LldbDapId
         };
         config.Environment["DEBUG"] = "true";
 
@@ -494,6 +726,7 @@ public class DebugConfigurationTests
         Assert.That(config.Arguments, Has.Length.EqualTo(2));
         Assert.That(config.Environment["DEBUG"], Is.EqualTo("true"));
         Assert.That(config.StopOnEntry, Is.True);
+        Assert.That(config.AdapterId, Is.EqualTo("lldb-dap"));
     }
 }
 

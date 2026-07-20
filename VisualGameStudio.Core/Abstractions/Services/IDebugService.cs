@@ -234,6 +234,15 @@ public class DebugConfiguration
     public string[] Arguments { get; set; } = Array.Empty<string>();
     public Dictionary<string, string> Environment { get; set; } = new();
     public bool StopOnEntry { get; set; }
+
+    /// <summary>
+    /// Descriptor id from the registry (<see cref="IDebugAdapterRegistry"/>) naming which
+    /// debug adapter runs this session; null = the legacy managed path (back-compat for
+    /// every existing caller). This field carries the ANSWER, not the routing rule: the
+    /// registry pick happens at the F5 seam where the project is in hand (Task 9), and the
+    /// debug service merely resolves the id it is handed.
+    /// </summary>
+    public string? AdapterId { get; set; }
 }
 
 public class SourceBreakpoint

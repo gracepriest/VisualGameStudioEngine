@@ -16,8 +16,10 @@ public class DebugService : IDebugService
     private StreamWriter? _stdinWriter;
     private readonly string _compilerPath;
     private readonly IOutputService _outputService;
-    private readonly Func<ProcessStartInfo, DapSession> _sessionFactory;
-    // TODO(Task 8): upgrade to the debugger descriptor's DisplayName.
+    private readonly IDebugAdapterRegistry? _registry;
+    private readonly Func<ProcessStartInfo, DapTimeoutProfile, DapSession> _sessionFactory;
+    // The descriptor's DisplayName on the registry path; the spawned FileName on the
+    // legacy one. Only for messages ("adapter X exited unexpectedly").
     private string _adapterDisplayName = "debug adapter";
 
     // Run to cursor state
@@ -63,38 +65,59 @@ public class DebugService : IDebugService
     public event EventHandler<BreakpointsChangedEventArgs>? BreakpointsChanged;
 
     /// <summary>
-    /// The optional factory is the test seam for injecting stream-backed
-    /// <see cref="DapSession"/>s. MS.DI honors defaulted parameters, so the plain
-    /// AddSingleton registration keeps resolving.
+    /// The registry routes descriptor-addressed launches (a null registry simply pins
+    /// every session to the legacy managed path — how the pre-Task-8 integration tests
+    /// construct this service). The optional factory is the test seam for injecting
+    /// stream-backed <see cref="DapSession"/>s; it receives the timeout profile the
+    /// session must run on, so the descriptor's budgets can't be silently dropped on
+    /// the seam path. Both default, so DI factories and 1-arg test construction work.
     /// </summary>
     public DebugService(IOutputService outputService,
-        Func<ProcessStartInfo, DapSession>? sessionFactory = null)
+        IDebugAdapterRegistry? registry = null,
+        Func<ProcessStartInfo, DapTimeoutProfile, DapSession>? sessionFactory = null)
     {
         _outputService = outputService;
-        _sessionFactory = sessionFactory ?? (startInfo => new DapSession(startInfo, outputService));
+        _registry = registry;
+        _sessionFactory = sessionFactory
+            ?? ((startInfo, timeouts) => new DapSession(startInfo, outputService, timeouts));
+        // The legacy path keeps its historical default (baseDir/BasicLang.dll even when
+        // absent — the spawn fails with the same message it always did); only the
+        // descriptor path treats "not found" as null and says "not installed".
+        _compilerPath = ResolveCompilerPath()
+            ?? Path.Combine(AppContext.BaseDirectory, "BasicLang.dll");
+    }
+
+    /// <summary>
+    /// Locates BasicLang.dll for the managed adapter: beside the IDE
+    /// (AppContext.BaseDirectory), then the solution-layout fallbacks used when running
+    /// from source. Null when nothing is found. Public and static so the DI composition
+    /// can hand the method group to <see cref="DebugAdapterDescriptor.BasicLangManaged"/> —
+    /// the descriptor invokes it per session, per its resolve-at-session-start contract.
+    /// </summary>
+    public static string? ResolveCompilerPath()
+    {
         var baseDir = AppContext.BaseDirectory;
-        _compilerPath = Path.Combine(baseDir, "BasicLang.dll");
+        var compilerPath = Path.Combine(baseDir, "BasicLang.dll");
+        if (File.Exists(compilerPath)) return compilerPath;
 
-        if (!File.Exists(_compilerPath))
+        // Try to find BasicLang.dll in the solution's BasicLang project
+        var solutionDir = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", ".."));
+        var possiblePaths = new[]
         {
-            // Try to find BasicLang.dll in the solution's BasicLang project
-            var solutionDir = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", ".."));
-            var possiblePaths = new[]
-            {
-                Path.Combine(solutionDir, "BasicLang", "bin", "Release", "net8.0", "BasicLang.dll"),
-                Path.Combine(solutionDir, "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"),
-                Path.Combine(solutionDir, "BasicLang", "binReleaseFinal", "BasicLang.dll"),
-            };
+            Path.Combine(solutionDir, "BasicLang", "bin", "Release", "net8.0", "BasicLang.dll"),
+            Path.Combine(solutionDir, "BasicLang", "bin", "Debug", "net8.0", "BasicLang.dll"),
+            Path.Combine(solutionDir, "BasicLang", "binReleaseFinal", "BasicLang.dll"),
+        };
 
-            foreach (var path in possiblePaths)
+        foreach (var path in possiblePaths)
+        {
+            if (File.Exists(path))
             {
-                if (File.Exists(path))
-                {
-                    _compilerPath = path;
-                    break;
-                }
+                return path;
             }
         }
+
+        return null;
     }
 
     public Task<bool> StartDebuggingAsync(DebugConfiguration config, CancellationToken cancellationToken = default)
@@ -110,6 +133,12 @@ public class DebugService : IDebugService
 
         if (IsDebugging) return false;
 
+        // Route BEFORE any session state changes: an unknown or not-installed adapter
+        // must refuse with a useful message and NO spawn, leaving the service where it
+        // was — not half-initialized.
+        var launch = ResolveAdapterLaunch(config);
+        if (launch == null) return false;
+
         try
         {
             SetState(DebugState.Initializing);
@@ -118,10 +147,10 @@ public class DebugService : IDebugService
             _currentThreadId = 1;
 
             // Start the debug adapter
-            var startInfo = DapSession.BuildStartInfo("dotnet", $"\"{_compilerPath}\" --debug-adapter", config.WorkingDirectory);
-            _adapterDisplayName = startInfo.FileName;
+            var (startInfo, timeouts, displayName) = launch.Value;
+            _adapterDisplayName = displayName;
 
-            var session = _sessionFactory(startInfo);
+            var session = _sessionFactory(startInfo, timeouts);
             _session = session;
             // Subscribe before Start so no early event (or an instant adapter death)
             // can be missed by the read loop.
@@ -160,6 +189,51 @@ public class DebugService : IDebugService
         }
     }
 
+    /// <summary>
+    /// What to launch for <paramref name="config"/>, or null after reporting why not.
+    /// A null <see cref="DebugConfiguration.AdapterId"/> is the back-compat contract:
+    /// byte-for-byte the legacy dotnet+compilerPath command on the managed timeout
+    /// profile, exactly what every pre-registry caller got. An id routes through the
+    /// registry, and the launch command resolves HERE, at session start (the descriptor
+    /// contract) — an lldb-dap installed mid-session is found on the next F5.
+    /// </summary>
+    private (ProcessStartInfo StartInfo, DapTimeoutProfile Timeouts, string DisplayName)?
+        ResolveAdapterLaunch(DebugConfiguration config)
+    {
+        if (config.AdapterId is not string adapterId)
+        {
+            var startInfo = DapSession.BuildStartInfo(
+                "dotnet", $"\"{_compilerPath}\" --debug-adapter", config.WorkingDirectory);
+            // Explicitly Managed, not "the default": the legacy path's budgets must not
+            // drift if the session's fallback ever changes.
+            return (startInfo, DapTimeoutProfile.Managed, startInfo.FileName);
+        }
+
+        var descriptor = _registry?.GetById(adapterId);
+        if (descriptor == null)
+        {
+            _outputService.WriteError(
+                $"No debug adapter with id '{adapterId}' is registered — cannot start debugging.",
+                OutputCategory.Debug);
+            return null;
+        }
+
+        var command = descriptor.ResolveLaunchCommand();
+        if (command == null)
+        {
+            _outputService.WriteError(
+                $"{descriptor.DisplayName} is not installed — cannot start debugging. " +
+                "Install it (or set its path override in settings) and press F5 again.",
+                OutputCategory.Debug);
+            return null;
+        }
+
+        return (
+            DapSession.BuildStartInfo(command.FileName, command.Arguments, config.WorkingDirectory),
+            descriptor.Timeouts,
+            descriptor.DisplayName);
+    }
+
     public async Task<bool> AttachToProcessAsync(int processId, Dictionary<string, IEnumerable<SourceBreakpoint>>? breakpoints = null, CancellationToken cancellationToken = default)
     {
         if (IsDebugging) return false;
@@ -170,11 +244,13 @@ public class DebugService : IDebugService
             // Same cross-session staleness guard as StartDebuggingAsync.
             _currentThreadId = 1;
 
-            // Start the debug adapter process (attach: no WorkingDirectory)
+            // Start the debug adapter process (attach: no WorkingDirectory). Attach is
+            // managed-only for now — nothing carries an AdapterId here, so the legacy
+            // command and the Managed profile are pinned explicitly.
             var startInfo = DapSession.BuildStartInfo("dotnet", $"\"{_compilerPath}\" --debug-adapter", null);
             _adapterDisplayName = startInfo.FileName;
 
-            var session = _sessionFactory(startInfo);
+            var session = _sessionFactory(startInfo, DapTimeoutProfile.Managed);
             _session = session;
             // Subscribe before Start so no early event (or an instant adapter death)
             // can be missed by the read loop.
