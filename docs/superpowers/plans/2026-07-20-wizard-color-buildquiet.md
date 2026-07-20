@@ -79,7 +79,7 @@ Work happens on branch `worktree-wizard-color-quiet` in
 | `VisualGameStudio.Editor/Controls/CodeEditorControl.axaml.cs` | forward filePath; `OnColorPicked` → rewriter |
 | `VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs` | quiet-build kills + toast overload |
 | `VisualGameStudio.Shell/Views/MainWindow.axaml.cs` | per-toast duration |
-| Tests | `Compiler/CppProjectFileTests.cs`, NEW `Compiler/CppToolchainResolutionTests.cs`, `Serialization/ProjectSerializerCppTests.cs`, template-service tests, `NewProjectWizardViewModelTests.cs`, NEW `Editor/ColorMatchFinderTests.cs`, NEW `Editor/ColorTextRewriterTests.cs`, in-anger MWVM pins |
+| Tests | `Compiler/CppProjectFileTests.cs`, NEW `Compiler/CppToolchainResolutionTests.cs`, `Serialization/ProjectSerializerCppTests.cs`, template-service tests, `NewProjectWizardViewModelTests.cs`, NEW `Editor/ColorMatchFinderTests.cs`, NEW `Editor/ColorTextRewriterTests.cs`, MWVM static-seam + source-guard tests |
 
 ---
 
