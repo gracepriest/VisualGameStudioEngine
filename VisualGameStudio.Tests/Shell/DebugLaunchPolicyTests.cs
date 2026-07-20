@@ -78,4 +78,54 @@ public class DebugLaunchPolicyTests
             "Install it via Tools → Download C++ Debugger, or point the cpp.lldbDap.path " +
             "setting at an existing lldb-dap executable."));
     }
+
+    [Test]
+    public void ComposeAdapterMissingMessage_NonLldbAdapterGetsGenericLineWithoutLldbRemedies()
+    {
+        var message = DebugLaunchPolicy.ComposeAdapterMissingMessage(Managed);
+
+        // The lldb remedies (Tools download, cpp.lldbDap.path) would be WRONG advice for a
+        // missing managed compiler — any non-lldb descriptor gets the generic line only.
+        Assert.Multiple(() =>
+        {
+            Assert.That(message, Is.EqualTo("BasicLang (managed) could not be resolved."));
+            Assert.That(message, Does.Not.Contain("Download C++ Debugger"));
+            Assert.That(message, Does.Not.Contain(DebugAdapterDescriptor.LldbDapSettingsKey));
+        });
+    }
+
+    [Test]
+    public void ResolveActiveConfiguration_ReadsTheProjectsRealConfig_ReleaseWarnsDebugDoesNot()
+    {
+        // The wiring defect this seam exists to prevent: IBuildService.CurrentConfiguration's
+        // getter fabricates `new BuildConfiguration { Name = ... }` on every read, and
+        // DebugSymbols defaults TRUE — fed from there, the warning could never fire. The feed
+        // must be the PROJECT's per-config table, the same lookup the build itself performs.
+        var project = new BasicLangProject
+        {
+            Name = "Game",
+            FilePath = @"C:\g\Game.blproj",
+            Language = ProjectLanguage.Cpp,
+            Configurations =
+            {
+                ["Debug"] = new BuildConfiguration { Name = "Debug", DebugSymbols = true },
+                ["Release"] = new BuildConfiguration { Name = "Release", DebugSymbols = false },
+            }
+        };
+
+        var release = DebugLaunchPolicy.ResolveActiveConfiguration(project, "Release");
+        var debug = DebugLaunchPolicy.ResolveActiveConfiguration(project, "Debug");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(release, Is.SameAs(project.Configurations["Release"]),
+                "the project's real Release entry, not a fabricated default");
+            Assert.That(DebugLaunchPolicy.ShouldWarnNoDebugInfo(Lldb, release), Is.True,
+                "Release (DebugSymbols=false) fires the warning end-to-end through the seam");
+            Assert.That(DebugLaunchPolicy.ShouldWarnNoDebugInfo(Lldb, debug), Is.False,
+                "Debug (DebugSymbols=true) stays silent");
+            Assert.That(DebugLaunchPolicy.ResolveActiveConfiguration(null, "Release"), Is.Null,
+                "no project in hand, nothing to resolve");
+        });
+    }
 }

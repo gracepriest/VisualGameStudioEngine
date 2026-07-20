@@ -3477,6 +3477,19 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        // If already debugging, F5 should continue execution when paused. BEFORE the routing
+        // pre-flight, deliberately: ResolveLaunchCommand probes the disk, and a mid-session
+        // uninstall (or a bad cpp.lldbDap.path edit) must not block a continue the LIVE
+        // session can still execute.
+        if (IsDebugging)
+        {
+            if (IsPaused)
+            {
+                await ContinueAsync();
+            }
+            return;
+        }
+
         // Phase 4: the registry routes F5 — the same IsNativeBuild predicate that routes
         // the BUILD picks the ADAPTER (managed BasicLang or lldb-dap), so the two can never
         // disagree about what a project is. The old "native C++ debugging arrives in a later
@@ -3493,16 +3506,6 @@ public partial class MainWindowViewModel : ViewModelBase
         if (descriptor.ResolveLaunchCommand() is null)
         {
             ReportDebugAdapterMissing(descriptor);   // Task 12 upgrades this to the offer toast
-            return;
-        }
-
-        // If already debugging, F5 should continue execution when paused
-        if (IsDebugging)
-        {
-            if (IsPaused)
-            {
-                await ContinueAsync();
-            }
             return;
         }
 
@@ -3533,11 +3536,16 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         // Native + DebugSymbols off: the exe that just built has no debug info (CppToolchain
-        // only emits /Zi | -g when the configuration says so) — warn, never block.
-        if (Services.DebugLaunchPolicy.ShouldWarnNoDebugInfo(descriptor, _buildService.CurrentConfiguration))
+        // only emits /Zi | -g when the configuration says so) — warn, never block. The feed
+        // is the PROJECT's per-config table (the same lookup the build performs) — NOT
+        // IBuildService.CurrentConfiguration, whose getter fabricates a fresh object with
+        // DebugSymbols defaulted true; only the NAME is real on that surface.
+        var activeConfiguration = Services.DebugLaunchPolicy.ResolveActiveConfiguration(
+            _projectService.CurrentProject, _buildService.CurrentConfiguration.Name);
+        if (Services.DebugLaunchPolicy.ShouldWarnNoDebugInfo(descriptor, activeConfiguration))
         {
             OutputPanel.AppendOutput(Services.DebugLaunchPolicy.ComposeNoDebugInfoWarning(
-                _buildService.CurrentConfiguration.Name) + "\n");
+                activeConfiguration!.Name) + "\n");
         }
 
         _debugTargetName = Path.GetFileName(buildResult.ExecutablePath);

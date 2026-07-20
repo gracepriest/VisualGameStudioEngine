@@ -42,6 +42,26 @@ public static class DebugLaunchPolicy
     }
 
     /// <summary>
+    /// The configuration feed for <see cref="ShouldWarnNoDebugInfo"/>: the PROJECT's own
+    /// per-configuration entry, via the same <see cref="BasicLangProject.GetConfiguration"/>
+    /// lookup the build itself performs (BuildService and CppProjectBuilder both read the
+    /// .blproj per-config table). Never feed <c>IBuildService.CurrentConfiguration</c> here —
+    /// that getter fabricates a fresh <see cref="BuildConfiguration"/> on every read, and
+    /// DebugSymbols defaults TRUE, so the warning would be silenced forever. Null when there
+    /// is no project or no configuration name — nothing to accuse, no warning.
+    /// </summary>
+    public static BuildConfiguration? ResolveActiveConfiguration(
+        BasicLangProject? project, string? configurationName)
+    {
+        if (project is null || string.IsNullOrEmpty(configurationName)) return null;
+
+        // GetConfiguration falls back (first entry, then a DebugSymbols=true default) rather
+        // than returning null — the conservative direction: an unknown name can only ever
+        // SUPPRESS the warning, never invent one.
+        return project.GetConfiguration(configurationName);
+    }
+
+    /// <summary>
     /// The Output-panel warning for a native launch whose configuration builds without debug
     /// info. Names the configuration it accuses and the mechanism (<c>/Zi</c> | <c>-g</c> are
     /// only emitted when the configuration's DebugSymbols is on — <c>CppToolchain.FlagsFor</c>),
@@ -55,18 +75,25 @@ public static class DebugLaunchPolicy
 
     /// <summary>
     /// The message for an adapter the registry routes to but
-    /// <see cref="DebugAdapterDescriptor.ResolveLaunchCommand"/> cannot find on disk: the
-    /// adapter's display name plus BOTH remedies — the one-click download (Tools menu) and the
-    /// <see cref="DebugAdapterDescriptor.LldbDapSettingsKey"/> override. Task 12 upgrades the
-    /// delivery from plain Output text to the offer toast; the wording here is the contract.
+    /// <see cref="DebugAdapterDescriptor.ResolveLaunchCommand"/> cannot find on disk. The
+    /// remedies are descriptor-conditional: only lldb-dap gets the one-click download (Tools
+    /// menu) and the <see cref="DebugAdapterDescriptor.LldbDapSettingsKey"/> override — for any
+    /// other descriptor (a missing managed compiler, a future extension adapter) that advice
+    /// would be wrong, so they get the generic line only. Task 12 upgrades the delivery from
+    /// plain Output text to the offer toast; the wording here is the contract.
     /// </summary>
     public static string ComposeAdapterMissingMessage(DebugAdapterDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
-        return $"{descriptor.DisplayName} is not installed. " +
-            "Install it via Tools → Download C++ Debugger, or point the " +
-            $"{DebugAdapterDescriptor.LldbDapSettingsKey} " +
-            "setting at an existing lldb-dap executable.";
+        if (string.Equals(descriptor.Id, DebugAdapterDescriptor.LldbDapId, StringComparison.Ordinal))
+        {
+            return $"{descriptor.DisplayName} is not installed. " +
+                "Install it via Tools → Download C++ Debugger, or point the " +
+                $"{DebugAdapterDescriptor.LldbDapSettingsKey} " +
+                "setting at an existing lldb-dap executable.";
+        }
+
+        return $"{descriptor.DisplayName} could not be resolved.";
     }
 }
