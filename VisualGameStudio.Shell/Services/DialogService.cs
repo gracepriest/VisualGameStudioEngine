@@ -264,7 +264,7 @@ public class DialogService : IDialogService
         return null;
     }
 
-    public async Task<List<ExceptionSettingResult>?> ShowExceptionSettingsDialogAsync(IEnumerable<ExceptionSettingResult>? currentSettings = null)
+    public async Task<List<ExceptionSettingResult>?> ShowExceptionSettingsDialogAsync(IEnumerable<ExceptionSettingResult>? currentSettings = null, IReadOnlyList<DapExceptionFilter>? adapterFilters = null)
     {
         var window = GetMainWindow();
         if (window == null) return null;
@@ -277,7 +277,11 @@ public class DialogService : IDialogService
             BreakWhenUserUnhandled = s.BreakWhenUserUnhandled
         });
 
-        var viewModel = new ViewModels.Dialogs.ExceptionSettingsViewModel(internalSettings);
+        // With an adapter vocabulary the dialog renders it; without one, the legacy
+        // managed dialog exactly as it was.
+        var viewModel = adapterFilters != null
+            ? new ViewModels.Dialogs.ExceptionSettingsViewModel(internalSettings, adapterFilters)
+            : new ViewModels.Dialogs.ExceptionSettingsViewModel(internalSettings);
         var dialog = new Views.Dialogs.ExceptionSettingsDialog(viewModel);
 
         var result = await dialog.ShowDialog<List<ViewModels.Dialogs.ExceptionSetting>?>(window);

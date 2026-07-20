@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
 
 namespace VisualGameStudio.Shell.ViewModels.Dialogs;
@@ -37,6 +38,53 @@ public partial class ExceptionSettingsViewModel : ViewModelBase
             ApplyCurrentSettings(currentSettings);
         }
     }
+
+    /// <summary>
+    /// Adapter-aware construction (Phase 4 Task 10): the dialog renders whatever the
+    /// active adapter advertises. The classic managed trio (all/uncaught/thrown) keeps
+    /// today's hardcoded BasicLang tree — including the User Exceptions add/remove
+    /// affordance — byte-identical; any other vocabulary (lldb-dap's cpp_throw/cpp_catch)
+    /// renders exactly one flat category per advertised filter, checked from the current
+    /// setting when one exists, else the filter's advertised default. No User Exceptions
+    /// category exists then, which leaves the add/remove affordance inert by construction.
+    /// </summary>
+    public ExceptionSettingsViewModel(
+        IEnumerable<ExceptionSetting>? currentSettings,
+        IReadOnlyList<DapExceptionFilter> adapterFilters)
+    {
+        if (IsClassicManagedVocabulary(adapterFilters))
+        {
+            InitializeDefaultCategories();
+            if (currentSettings != null)
+            {
+                ApplyCurrentSettings(currentSettings);
+            }
+            return;
+        }
+
+        var settings = currentSettings?.ToList();
+        foreach (var filter in adapterFilters)
+        {
+            var current = settings?.FirstOrDefault(s =>
+                s.ExceptionType == filter.Label || s.ExceptionType == filter.Id);
+
+            ExceptionCategories.Add(new ExceptionCategoryViewModel(filter.Label)
+            {
+                BreakWhenThrown = current?.BreakWhenThrown ?? filter.Default,
+                BreakWhenUserUnhandled = current?.BreakWhenUserUnhandled ?? true
+            });
+        }
+    }
+
+    /// <summary>
+    /// The managed trio, by id set — the vocabulary the hardcoded BasicLang tree (and the
+    /// legacy translator mapping) was built for.
+    /// </summary>
+    private static bool IsClassicManagedVocabulary(IReadOnlyList<DapExceptionFilter> filters)
+        => filters.Count == 3
+           && filters.Any(f => f.Id == "all")
+           && filters.Any(f => f.Id == "uncaught")
+           && filters.Any(f => f.Id == "thrown");
 
     private void InitializeDefaultCategories()
     {

@@ -3952,67 +3952,22 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task ShowExceptionSettingsAsync()
     {
-        var result = await _dialogService.ShowExceptionSettingsDialogAsync(_currentExceptionSettings);
+        // One snapshot of the active adapter's vocabulary feeds BOTH the dialog (what it
+        // renders) and the translation (what the checked rows mean) — even if the session
+        // ends while the dialog is open, the two halves stay consistent.
+        var availableFilters = _debugService.ActiveExceptionFilters;
+        var result = await _dialogService.ShowExceptionSettingsDialogAsync(_currentExceptionSettings, availableFilters);
         if (result != null)
         {
             _currentExceptionSettings = result;
 
-            // Apply exception breakpoints to debug service
-            var filters = new List<string>();
-            var filterOptions = new List<ExceptionFilterOption>();
-
-            foreach (var setting in result.Where(s => s.BreakWhenThrown))
-            {
-                if (setting.ExceptionType == "All Exceptions")
-                {
-                    filters.Add("all");
-                }
-                else if (setting.ExceptionType == "Runtime Exceptions" ||
-                         setting.ExceptionType == "IO Exceptions" ||
-                         setting.ExceptionType == "User Exceptions")
-                {
-                    // Category-level filter: add "uncaught" if user-unhandled is also set
-                    if (setting.BreakWhenUserUnhandled && !filters.Contains("uncaught"))
-                    {
-                        filters.Add("uncaught");
-                    }
-                }
-                else
-                {
-                    // Individual exception type: send as a filter option with condition
-                    if (!filters.Contains("thrown"))
-                    {
-                        filters.Add("thrown");
-                    }
-                    filterOptions.Add(new ExceptionFilterOption
-                    {
-                        FilterId = "thrown",
-                        Condition = setting.ExceptionType
-                    });
-                }
-            }
-
-            // Also add user-unhandled filter for settings that only have BreakWhenUserUnhandled
-            foreach (var setting in result.Where(s => !s.BreakWhenThrown && s.BreakWhenUserUnhandled))
-            {
-                if (setting.ExceptionType != "All Exceptions" &&
-                    setting.ExceptionType != "Runtime Exceptions" &&
-                    setting.ExceptionType != "IO Exceptions" &&
-                    setting.ExceptionType != "User Exceptions")
-                {
-                    filterOptions.Add(new ExceptionFilterOption
-                    {
-                        FilterId = "uncaught",
-                        Condition = setting.ExceptionType
-                    });
-                }
-            }
+            // Apply exception breakpoints to debug service, in the adapter's vocabulary
+            // (the legacy managed mapping moved verbatim into the translator).
+            var (filters, filterOptions) = Services.ExceptionFilterTranslator.Translate(result, availableFilters);
 
             if (IsDebugging)
             {
-                await _debugService.SetExceptionBreakpointsAsync(
-                    filters,
-                    filterOptions.Count > 0 ? filterOptions : null);
+                await _debugService.SetExceptionBreakpointsAsync(filters, filterOptions);
             }
         }
     }

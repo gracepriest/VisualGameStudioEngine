@@ -22,6 +22,15 @@ public interface IDebugService : IDisposable
     DapCapabilities? Capabilities { get; }
 
     /// <summary>
+    /// The exception breakpoint filters the Exception Settings dialog should offer RIGHT
+    /// NOW: what the live adapter advertised
+    /// (<see cref="DapCapabilities.ExceptionBreakpointFilters"/>) when non-empty, else the
+    /// active adapter descriptor's <see cref="DebugAdapterDescriptor.FallbackExceptionFilters"/>,
+    /// else the managed fallback set (no session was ever started). Never empty.
+    /// </summary>
+    IReadOnlyList<DapExceptionFilter> ActiveExceptionFilters { get; }
+
+    /// <summary>
     /// Fires when debug state changes
     /// </summary>
     event EventHandler<DebugStateChangedEventArgs>? StateChanged;

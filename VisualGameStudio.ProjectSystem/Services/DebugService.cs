@@ -43,6 +43,12 @@ public class DebugService : IDebugService
     private List<string>? _armedExceptionFilters;
     private List<ExceptionFilterOption>? _armedExceptionFilterOptions;
 
+    // The resolved adapter's known exception vocabulary (descriptor fallback), set at
+    // launch resolution and retained across teardown (like _adapterDisplayName) so the
+    // Exception Settings dialog keeps offering the last adapter's vocabulary. Null until
+    // the first launch resolves = the managed fallback.
+    private IReadOnlyList<DapExceptionFilter>? _activeFallbackFilters;
+
     public DebugState State { get; private set; } = DebugState.NotStarted;
     public bool IsDebugging => State == DebugState.Running || State == DebugState.Paused;
 
@@ -51,6 +57,16 @@ public class DebugService : IDebugService
     /// initialize response arrives (and again once the session is torn down).
     /// </summary>
     public DapCapabilities? Capabilities => _session?.Capabilities;
+
+    /// <summary>
+    /// What the Exception Settings dialog should offer: the live adapter's ADVERTISED
+    /// filters when it disclosed any, else the active descriptor's known vocabulary,
+    /// else the managed fallback set (no session was ever resolved). Never empty.
+    /// </summary>
+    public IReadOnlyList<DapExceptionFilter> ActiveExceptionFilters
+        => Capabilities?.ExceptionBreakpointFilters is { Count: > 0 } advertised
+            ? advertised
+            : _activeFallbackFilters ?? DebugAdapterDescriptor.ManagedFallbackExceptionFilters;
 
     /// <summary>
     /// Process ID of the most recently started debug-adapter process, or null if an
@@ -205,7 +221,9 @@ public class DebugService : IDebugService
             var startInfo = DapSession.BuildStartInfo(
                 "dotnet", $"\"{_compilerPath}\" --debug-adapter", config.WorkingDirectory);
             // Explicitly Managed, not "the default": the legacy path's budgets must not
-            // drift if the session's fallback ever changes.
+            // drift if the session's fallback ever changes. Same for the exception
+            // vocabulary — a preceding lldb session must not leak its filters here.
+            _activeFallbackFilters = DebugAdapterDescriptor.ManagedFallbackExceptionFilters;
             return (startInfo, DapTimeoutProfile.Managed, startInfo.FileName);
         }
 
@@ -228,6 +246,11 @@ public class DebugService : IDebugService
             return null;
         }
 
+        // Retained for ActiveExceptionFilters: when this adapter's initialize response
+        // discloses no exceptionBreakpointFilters, the dialog offers the descriptor's
+        // known vocabulary instead of the managed one.
+        _activeFallbackFilters = descriptor.FallbackExceptionFilters;
+
         return (
             DapSession.BuildStartInfo(command.FileName, command.Arguments, config.WorkingDirectory),
             descriptor.Timeouts,
@@ -246,9 +269,11 @@ public class DebugService : IDebugService
 
             // Start the debug adapter process (attach: no WorkingDirectory). Attach is
             // managed-only for now — nothing carries an AdapterId here, so the legacy
-            // command and the Managed profile are pinned explicitly.
+            // command, the Managed profile and the managed exception vocabulary are
+            // pinned explicitly.
             var startInfo = DapSession.BuildStartInfo("dotnet", $"\"{_compilerPath}\" --debug-adapter", null);
             _adapterDisplayName = startInfo.FileName;
+            _activeFallbackFilters = DebugAdapterDescriptor.ManagedFallbackExceptionFilters;
 
             var session = _sessionFactory(startInfo, DapTimeoutProfile.Managed);
             _session = session;

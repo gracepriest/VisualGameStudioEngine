@@ -10,7 +10,12 @@ public interface IDialogService
     Task<string?> ShowInputDialogAsync(string title, string prompt, string defaultValue = "");
     Task<string?> ShowFunctionBreakpointDialogAsync();
     Task<BreakpointConditionResult?> ShowBreakpointConditionDialogAsync(string location, string? condition, string? hitCount, string? logMessage, string? initialMode = null);
-    Task<List<ExceptionSettingResult>?> ShowExceptionSettingsDialogAsync(IEnumerable<ExceptionSettingResult>? currentSettings = null);
+    /// <summary>
+    /// Shows the Exception Settings dialog. <paramref name="adapterFilters"/> is the active
+    /// debug adapter's exception vocabulary (<see cref="IDebugService.ActiveExceptionFilters"/>);
+    /// null keeps the legacy managed dialog exactly as it was.
+    /// </summary>
+    Task<List<ExceptionSettingResult>?> ShowExceptionSettingsDialogAsync(IEnumerable<ExceptionSettingResult>? currentSettings = null, IReadOnlyList<DapExceptionFilter>? adapterFilters = null);
     Task<int?> ShowGoToLineDialogAsync(int currentLine, int totalLines);
     /// <summary>
     /// Shows a Go To Line dialog that supports line:column format.

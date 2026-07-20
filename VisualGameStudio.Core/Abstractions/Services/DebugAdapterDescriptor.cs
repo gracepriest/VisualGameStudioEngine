@@ -57,6 +57,19 @@ public sealed class DebugAdapterDescriptor
     /// </summary>
     public const string LldbDapSettingsKey = "cpp.lldbDap.path";
 
+    /// <summary>
+    /// The managed adapter's known exception vocabulary — its
+    /// <see cref="FallbackExceptionFilters"/>, and also the no-session default the debug
+    /// service offers before any adapter has been resolved (there is nothing better to
+    /// show than the vocabulary of the adapter that has always been the default).
+    /// </summary>
+    public static readonly IReadOnlyList<DapExceptionFilter> ManagedFallbackExceptionFilters = new[]
+    {
+        new DapExceptionFilter("all", "All Exceptions", false),
+        new DapExceptionFilter("uncaught", "Uncaught Exceptions", true),
+        new DapExceptionFilter("thrown", "Thrown Exceptions", false, SupportsCondition: true),
+    };
+
     private readonly Func<DapLaunchCommand?> _resolveLaunchCommand;
     private readonly Func<BasicLangProject, bool> _serves;
 
@@ -134,12 +147,7 @@ public sealed class DebugAdapterDescriptor
         serves: p => !p.IsNativeBuild,
         toolchains: Array.Empty<string>(),
         timeouts: DapTimeoutProfile.Managed,
-        fallbackExceptionFilters: new[]
-        {
-            new DapExceptionFilter("all", "All Exceptions", false),
-            new DapExceptionFilter("uncaught", "Uncaught Exceptions", true),
-            new DapExceptionFilter("thrown", "Thrown Exceptions", false, SupportsCondition: true),
-        });
+        fallbackExceptionFilters: ManagedFallbackExceptionFilters);
 
     /// <summary>
     /// lldb-dap, the native C++ adapter — launched by absolute path, no arguments.
