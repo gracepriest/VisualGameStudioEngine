@@ -43,7 +43,8 @@ public string? CppToolchain { get; set; }   // "llvm" | "gcc" | "msvc"
 
 The wizard's `CreateProjectAsync` (`NewProjectWizardViewModel.cs:243-285`) copies
 its `CppStandard` observable and `SelectedBackend.ToolchainId` into the options
-when `SelectedLanguage == ProjectLanguage.Cpp`; both stay null for BasicLang
+when `SelectedLanguage == ProjectLanguage.Cpp` — the toolchain only if it was
+available at creation time per §1.3/§1.4; both stay null for BasicLang
 projects. The ":261 display-only" comment is removed. Note
 `CreateSolutionOptions.InitialProjects` reuses `CreateProjectOptions`
 (`IProjectTemplateService.cs:605`), so there is no second shape to extend.
@@ -339,8 +340,9 @@ before every commit.
 - **Wizard**: viewmodel tests (extend
   `VisualGameStudio.Tests/NewProjectWizardViewModelTests.cs`) for option
   threading (C++ fills both fields; BasicLang leaves them null), `c++23`
-  visibility + MSVC snap-back, and greying/auto-select driven by the injected
-  probe.
+  visibility + MSVC snap-back, greying/auto-select driven by the injected
+  probe, and the none-installed case (probe reports nothing → options carry no
+  `CppToolchain` → generated `.blproj` has no element).
 - **Generation/serialization**: `GenerateProjectFileContent` emits chosen
   values; `<CppToolchain>` round-trips in both serializers
   (`ProjectSerializerCppTests`, `CppProjectFileTests`); BasicLang projects emit
