@@ -66,7 +66,16 @@ public static class ColorMatchFinder
         RegexOptions.Compiled);
 
     /// <summary>
+    /// The C-ABI export prefix in <c>VisualGameStudioEngine/framework.h</c>.
+    /// BasicLang accepts it optionally (wrapper names AND raw exports light up);
+    /// C++ REQUIRES it (unprefixed names never match — raylib's own geometry
+    /// overloads like DrawRectangle(x, y, w, h) would otherwise false-positive).
+    /// </summary>
+    private const string EnginePrefix = "Framework_";
+
+    /// <summary>
     /// Known engine functions that take color parameters (R, G, B or R, G, B, A at the end).
+    /// Names are the framework.h export names with the <see cref="EnginePrefix"/> stripped.
     /// If empty, all matching patterns are treated as potential colors.
     /// </summary>
     private static readonly HashSet<string> ColorFunctions = new(StringComparer.OrdinalIgnoreCase)
@@ -84,7 +93,38 @@ public static class ColorMatchFinder
         "FillRectangle", "FillCircle", "FillEllipse", "FillTriangle",
         "SetPixel", "DrawString", "DrawLineEx", "DrawCircleSector",
         "DrawCircleSectorLines", "DrawCircleGradient",
-        "DrawArc", "DrawArcLines", "SetTint", "SetTextColor"
+        "DrawArc", "DrawArcLines", "SetTint", "SetTextColor",
+
+        // framework.h audit (color-tail exports: params end in r, g, b [, a]).
+        // Exports whose color is NOT the parameter tail (e.g. Camera_Flash,
+        // Effects_Flash, Tween_Color, Lighting_SetDayAmbient, the Color_* utils,
+        // Cutscene_SetDialogueColors) are deliberately absent — trailing non-color
+        // args would misparse as components.
+        "Atlas_DrawSprite", "Atlas_DrawSpriteEx", "Atlas_DrawSpritePro",
+        "Batch_AddSprite", "Batch_AddSpriteSimple",
+        "Cmd_SetBackgroundColor", "Cmd_SetTextColor", "Console_PrintColored",
+        "DebugDraw_Arrow", "DebugDraw_Circle", "DebugDraw_CircleFilled",
+        "DebugDraw_Cross", "DebugDraw_Grid", "DebugDraw_Line",
+        "DebugDraw_Point", "DebugDraw_Rect", "DebugDraw_RectFilled",
+        "DebugDraw_Text", "Debug_SetOverlayColor",
+        "DrawBezierCubic", "DrawBezierQuad",
+        "DrawGradientCircle", "DrawGradientLine", "DrawGradientRect4",
+        "DrawGradientRectH", "DrawGradientRectV",
+        "DrawSpline", "DrawTextCentered", "DrawTextExH", "DrawTextRight",
+        "DrawTextureH", "DrawTextureNPatch", "DrawTexturePro", "DrawTextureProH",
+        "DrawTextureRec", "DrawTextureRecH", "DrawTextureV", "DrawTextureVH",
+        "DrawTextureExH",
+        "Ecs_SetEmitterColorEnd", "Ecs_SetEmitterColorStart",
+        "Ecs_SetEmitterColorStop", "Ecs_SetEmitterTrailColor", "Ecs_SetSpriteTint",
+        "Effects_SetFadeColor", "Effects_SetTintColor", "Effects_SetVignetteColor",
+        "Level_SetBackground", "Light_SetColor",
+        "Lighting_SetAmbientColor", "Lighting_SetDirectionalColor",
+        "Lighting_SetShadowColor",
+        "Parallax_SetTint", "Path_DrawDebug",
+        "Scene_SetTransitionColor", "Skeleton_Draw", "SpriteSheet_DrawFrame",
+        "Trail_SetColor",
+        "UI_SetBackgroundColor", "UI_SetBorderColor", "UI_SetDisabledColor",
+        "UI_SetHoverColor", "UI_SetPressedColor", "UI_SetTextColor", "UI_SetTint"
     };
 
     /// <summary>
@@ -102,15 +142,15 @@ public static class ColorMatchFinder
 
     /// <summary>
     /// Finds every color value in a single line of source text, using the pattern
-    /// set for <paramref name="language"/>. BasicLang runs {RgbCall, VbHex};
-    /// Cpp runs no patterns yet (its patterns arrive in later tasks — until then a
-    /// C++ file gets NO swatches, which also kills the latent false positive where a
-    /// raylib-style geometry call like DrawRectangle(10, 20, 100, 50) showed a bogus
-    /// swatch); None never matches.
+    /// set for <paramref name="language"/>. BasicLang runs {RgbCall, VbHex} with the
+    /// <see cref="EnginePrefix"/> optional on RgbCall names; Cpp runs {RgbCall} with
+    /// the prefix REQUIRED (unprefixed names never match — that keeps raylib-style
+    /// geometry calls like DrawRectangle(10, 20, 100, 50) swatch-free); None never
+    /// matches.
     /// </summary>
     public static IReadOnlyList<ColorMatch> FindMatches(string lineText, ColorLanguage language)
     {
-        if (language != ColorLanguage.BasicLang || string.IsNullOrEmpty(lineText))
+        if (language == ColorLanguage.None || string.IsNullOrEmpty(lineText))
             return Array.Empty<ColorMatch>();
 
         var results = new List<ColorMatch>();
@@ -119,9 +159,17 @@ public static class ColorMatchFinder
         foreach (Match match in RgbCallPattern.Matches(lineText))
         {
             var funcName = match.Groups[1].Value;
+            var hasEnginePrefix = funcName.StartsWith(EnginePrefix, StringComparison.OrdinalIgnoreCase);
+
+            // C++ only ever calls the raw framework.h exports — the prefix is required.
+            if (language == ColorLanguage.Cpp && !hasEnginePrefix)
+                continue;
+
+            // The whitelist stores prefix-stripped base names.
+            var baseName = hasEnginePrefix ? funcName.Substring(EnginePrefix.Length) : funcName;
 
             // Only report matches for known color functions (or if list is empty, all matches)
-            if (ColorFunctions.Count > 0 && !ColorFunctions.Contains(funcName))
+            if (ColorFunctions.Count > 0 && !ColorFunctions.Contains(baseName))
                 continue;
 
             if (!int.TryParse(match.Groups[3].Value, out int r) || r > 255) continue;
@@ -143,7 +191,10 @@ public static class ColorMatchFinder
                 HasAlphaComponent: match.Groups[6].Success));
         }
 
-        // Detect hex color patterns
+        // Detect hex color patterns (&H literals are BasicLang-only syntax)
+        if (language != ColorLanguage.BasicLang)
+            return results;
+
         foreach (Match match in HexColorPattern.Matches(lineText))
         {
             var hexStr = match.Groups[1].Value;

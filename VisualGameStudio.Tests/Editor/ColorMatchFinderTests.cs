@@ -163,7 +163,119 @@ public class ColorMatchFinderTests
     }
 
     // ---------------------------------------------------------------
-    // Language gate — Cpp gets NO patterns in this task, None never matches
+    // Framework_ prefix rules (raw framework.h exports)
+    // BasicLang: prefix OPTIONAL — wrapper names AND raw exports light up.
+    // Cpp: prefix REQUIRED — unprefixed names would false-positive on
+    // raylib's own DrawRectangle/DrawCircle geometry overloads.
+    // ---------------------------------------------------------------
+
+    [Test]
+    public void Bas_FrameworkPrefixedCall_Matches()
+    {
+        const string line = "Framework_ClearBackground(10, 10, 25, 255)";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.BasicLang);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.RgbCall));
+        Assert.That(m.R, Is.EqualTo(10));
+        Assert.That(m.G, Is.EqualTo(10));
+        Assert.That(m.B, Is.EqualTo(25));
+        Assert.That(m.A, Is.EqualTo(255));
+        Assert.That(m.HasAlphaComponent, Is.True);
+
+        // Replace range: first R digit through the closing paren inclusive —
+        // the function name (prefix included) stays outside the rewrite.
+        var expectedStart = line.IndexOf("10");
+        Assert.That(m.ReplaceStart, Is.EqualTo(expectedStart));
+        Assert.That(m.ReplaceLength, Is.EqualTo(line.IndexOf(')') - expectedStart + 1));
+    }
+
+    [Test]
+    public void Cpp_FrameworkPrefixedCall_Matches()
+    {
+        const string line = "Framework_ClearBackground(10, 10, 25, 255);";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.RgbCall));
+        Assert.That(m.R, Is.EqualTo(10));
+        Assert.That(m.G, Is.EqualTo(10));
+        Assert.That(m.B, Is.EqualTo(25));
+        Assert.That(m.A, Is.EqualTo(255));
+        Assert.That(m.HasAlphaComponent, Is.True);
+
+        var expectedStart = line.IndexOf("10");
+        Assert.That(m.ReplaceStart, Is.EqualTo(expectedStart));
+        Assert.That(m.ReplaceLength, Is.EqualTo(line.IndexOf(')') - expectedStart + 1));
+    }
+
+    [Test]
+    public void Cpp_UnprefixedWhitelistName_StillNoMatch()
+    {
+        var matches = ColorMatchFinder.FindMatches(
+            "ClearBackground(1,2,3)", ColorLanguage.Cpp);
+
+        Assert.That(matches, Is.Empty);
+    }
+
+    [Test]
+    public void Cpp_FrameworkPrefixedNonWhitelisted_NoMatch()
+    {
+        // Framework_GetTime is a real export (framework.h) but takes no color.
+        var matches = ColorMatchFinder.FindMatches(
+            "Framework_GetTime(1,2,3)", ColorLanguage.Cpp);
+
+        Assert.That(matches, Is.Empty);
+    }
+
+    // ---------------------------------------------------------------
+    // Audit-added whitelist names (framework.h color-tail exports)
+    // ---------------------------------------------------------------
+
+    [Test]
+    public void Bas_AuditAddedExport_Matches()
+    {
+        // Ecs_SetSpriteTint(entity, r, g, b, a) — added by the framework.h audit.
+        const string line = "Ecs_SetSpriteTint(7, 200, 100, 50, 255)";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.BasicLang);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.RgbCall));
+        Assert.That(m.R, Is.EqualTo(200));
+        Assert.That(m.G, Is.EqualTo(100));
+        Assert.That(m.B, Is.EqualTo(50));
+        Assert.That(m.A, Is.EqualTo(255));
+        Assert.That(m.HasAlphaComponent, Is.True);
+
+        // Replace range starts at the R component, not the leading entity arg.
+        Assert.That(m.ReplaceStart, Is.EqualTo(line.IndexOf("200")));
+    }
+
+    [Test]
+    public void Cpp_AuditAddedExport_PrefixedMatches()
+    {
+        const string line = "Framework_Ecs_SetSpriteTint(7, 200, 100, 50, 255);";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.RgbCall));
+        Assert.That(m.R, Is.EqualTo(200));
+        Assert.That(m.G, Is.EqualTo(100));
+        Assert.That(m.B, Is.EqualTo(50));
+        Assert.That(m.A, Is.EqualTo(255));
+    }
+
+    // ---------------------------------------------------------------
+    // Language gate — Cpp matches ONLY Framework_-prefixed RgbCalls
+    // (no VbHex, no unprefixed names); None never matches
     // ---------------------------------------------------------------
 
     [TestCase("ClearBackground(10, 20, 30)")]
