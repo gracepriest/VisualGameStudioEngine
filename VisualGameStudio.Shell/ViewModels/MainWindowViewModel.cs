@@ -1578,6 +1578,29 @@ public partial class MainWindowViewModel : ViewModelBase
 
     #endregion
 
+    /// <summary>
+    /// Quiet-build toast duration (Task 16): both success and failure build toasts self-dismiss
+    /// after this many seconds, with no action buttons and no ErrorList/modal seizure. The Output
+    /// pane (gated by <c>build.showOutput</c>) plus the Problems badge/status-bar counts are where
+    /// the detail lives — the toast is just a heads-up.
+    /// </summary>
+    public const double QuietBuildToastSeconds = 3;
+
+    /// <summary>
+    /// Composes the build-result toast (message/severity/auto-dismiss) as a pure static seam,
+    /// mirroring <see cref="ComputeToastAutoDismiss"/> / <see cref="ShouldShowBuildOutput"/>, so the
+    /// mapping can be pinned headlessly without constructing the DI-only MainWindowViewModel.
+    /// Both outcomes are quiet: auto-dismiss at <see cref="QuietBuildToastSeconds"/>, no actions.
+    /// </summary>
+    public static BuildToastSpec ComposeBuildToast(bool succeeded, int errorCount, double elapsedSeconds)
+    {
+        var message = succeeded
+            ? $"Build succeeded - {elapsedSeconds:F1}s"
+            : $"Build failed: {errorCount} error(s)";
+        var severity = succeeded ? "info" : "error";
+        return new BuildToastSpec(message, severity, AutoDismiss: true, DismissAfterSeconds: QuietBuildToastSeconds);
+    }
+
     private void OnBuildCompleted(object? sender, BuildCompletedEventArgs e)
     {
         var result = e.Result;
@@ -1593,30 +1616,26 @@ public partial class MainWindowViewModel : ViewModelBase
         // Update status bar diagnostic counts
         StatusBar.UpdateDiagnostics(result.ErrorCount, result.WarningCount, 0);
 
+        // Quiet build toast (Task 16): no action buttons, self-dismisses at QuietBuildToastSeconds.
+        var toast = ComposeBuildToast(result.Success, result.ErrorCount, result.Duration.TotalSeconds);
+
         // Screen reader announcement for build result
         if (result.Success)
         {
             Services.ScreenReaderService.Instance.Announce($"Build succeeded in {result.Duration.TotalSeconds:F1} seconds");
-            ShowNotification($"Build succeeded - {result.Duration.TotalSeconds:F1}s", "info",
-                new List<NotificationAction>
-                {
-                    new NotificationAction("Show Output", () => _dockFactory.ActivateTool("Output"))
-                });
+            ShowNotification(toast.Message, toast.Severity, new List<NotificationAction>(),
+                autoDismiss: toast.AutoDismiss, dismissAfterSeconds: toast.DismissAfterSeconds);
             ShowStatusBarMessage($"Build succeeded - {result.Duration.TotalSeconds:F1}s", 5.0);
         }
         else
         {
             Services.ScreenReaderService.Instance.AnnounceAssertive(
                 $"Build failed with {result.ErrorCount} error{(result.ErrorCount == 1 ? "" : "s")} and {result.WarningCount} warning{(result.WarningCount == 1 ? "" : "s")}");
-            ShowNotification($"Build failed: {result.ErrorCount} error(s), {result.WarningCount} warning(s)", "error",
-                new List<NotificationAction>
-                {
-                    new NotificationAction("Show Error List", () => _dockFactory.ActivateTool("ErrorList")),
-                    new NotificationAction("Show Output", () => _dockFactory.ActivateTool("Output"))
-                });
+            ShowNotification(toast.Message, toast.Severity, new List<NotificationAction>(),
+                autoDismiss: toast.AutoDismiss, dismissAfterSeconds: toast.DismissAfterSeconds);
 
-            // Show the Error List panel when the build has errors
-            _dockFactory.ActivateTool("ErrorList");
+            // Task 16: no more auto-activating the Error List on a failed build — the quiet toast
+            // + Output pane already report it, and seizing the panel stole focus from the editor.
         }
 
         // Update error list: build results replace the previous build's entries
@@ -2975,6 +2994,19 @@ public partial class MainWindowViewModel : ViewModelBase
     private void ShowBuildOutput()
     {
         OutputPanel.SelectedCategory = OutputCategory.Build;
+        RevealOutputIfEnabled();
+    }
+
+    /// <summary>
+    /// Reveals the Output panel when <c>build.showOutput</c> is enabled, without touching whichever
+    /// category the caller already selected. Task 16: centralizes the build.showOutput gate so
+    /// panel-reveal call sites outside <see cref="ShowBuildOutput"/> (task runner, missing-adapter
+    /// report) honor the same setting instead of forcing the panel open unconditionally — a
+    /// deliberate deviation from routing those callers through <see cref="ShowBuildOutput"/> itself,
+    /// which would stomp their own Build/Debug/General channel selection.
+    /// </summary>
+    private void RevealOutputIfEnabled()
+    {
         if (ShouldShowBuildOutput(_settingsService))
         {
             _dockFactory.ActivateTool("Output");
@@ -3572,19 +3604,16 @@ public partial class MainWindowViewModel : ViewModelBase
 
         var buildResult = await _buildService.BuildProjectAsync(_projectService.CurrentProject);
 
-        if (!buildResult.Success)
-        {
-            await _dialogService.ShowMessageAsync("Build Failed",
-                "Cannot start debugging because the build failed.",
-                DialogButtons.Ok, DialogIcon.Error);
-            return;
-        }
+        // Task 16: no more Build-Failed modal here — the (quiet, self-dismissing) failure toast
+        // and the Output pane already report it, and nothing consumed this dialog's result.
+        if (!buildResult.Success) return;
 
         // Use the executable path from build result
         if (string.IsNullOrEmpty(buildResult.ExecutablePath) || !File.Exists(buildResult.ExecutablePath))
         {
-            await _dialogService.ShowMessageAsync("Debug", "No executable found after build.",
-                DialogButtons.Ok, DialogIcon.Error);
+            // Task 16: demoted from a modal to an Output line, matching the Ctrl+F5
+            // (RunInExternalConsoleAsync) / StartWithoutDebuggingAsync precedent.
+            OutputPanel.AppendOutput("Error: No executable found after build.\n");
             return;
         }
 
@@ -3679,7 +3708,8 @@ public partial class MainWindowViewModel : ViewModelBase
     private void ReportDebugAdapterMissing(DebugAdapterDescriptor descriptor)
     {
         var message = Services.DebugLaunchPolicy.ComposeAdapterMissingMessage(descriptor);
-        _dockFactory.ActivateTool("Output");
+        // Task 16: gated through build.showOutput instead of forcing the panel open unconditionally.
+        RevealOutputIfEnabled();
         OutputPanel.AppendOutput(message + "\n");
         StatusText = message;
 
@@ -7451,7 +7481,7 @@ $"""
         {
             var task = tasks[selected];
             StatusText = $"Running task: {task.Label}...";
-            _dockFactory.ActivateTool("Output");
+            RevealOutputIfEnabled();
 
             var exitCode = await _taskRunnerService.RunTaskAsync(task, projectDir);
             StatusText = exitCode == 0
@@ -7474,7 +7504,7 @@ $"""
         if (buildTask != null)
         {
             StatusText = $"Running build task: {buildTask.Label}...";
-            _dockFactory.ActivateTool("Output");
+            RevealOutputIfEnabled();
 
             var exitCode = await _taskRunnerService.RunTaskAsync(buildTask, projectDir);
             StatusText = exitCode == 0
@@ -7501,7 +7531,7 @@ $"""
         if (testTask != null)
         {
             StatusText = $"Running test task: {testTask.Label}...";
-            _dockFactory.ActivateTool("Output");
+            RevealOutputIfEnabled();
 
             var exitCode = await _taskRunnerService.RunTaskAsync(testTask, projectDir);
             StatusText = exitCode == 0
@@ -8561,6 +8591,12 @@ public class NotificationAction
         Callback = callback;
     }
 }
+
+/// <summary>
+/// Result of <see cref="MainWindowViewModel.ComposeBuildToast"/> — the quiet build-toast contract
+/// (Task 16): message text, notification severity, and the always-on auto-dismiss timing.
+/// </summary>
+public sealed record BuildToastSpec(string Message, string Severity, bool AutoDismiss, double DismissAfterSeconds);
 
 /// <summary>
 /// Event args for temporary status bar messages.
