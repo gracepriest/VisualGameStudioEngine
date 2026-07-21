@@ -431,7 +431,7 @@ public partial class MainWindow : Window
         bool shouldAutoDismiss = e.AutoDismiss || (severity == "info" && e.Actions.Count == 0 && !e.ShowProgress);
         if (shouldAutoDismiss)
         {
-            var removeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            var removeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(e.DismissAfterSeconds ?? 5) };
             removeTimer.Tick += (s, args) =>
             {
                 removeTimer.Stop();

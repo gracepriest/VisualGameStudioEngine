@@ -1819,11 +1819,21 @@ public partial class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// Shows a notification with action buttons (e.g., "Show Output", "Retry", "Open File").
     /// </summary>
-    public void ShowNotification(string message, string severity, List<NotificationAction> actions, string? details = null)
+    /// <param name="autoDismiss">
+    /// Forces auto-dismiss on (true) or off (false) regardless of severity/actions. Null (default)
+    /// preserves prior behavior: auto-dismiss only for info-severity toasts with no actions.
+    /// </param>
+    /// <param name="dismissAfterSeconds">
+    /// Per-toast auto-dismiss duration override, in seconds. Null (default) preserves the IDE's
+    /// 5-second default.
+    /// </param>
+    public void ShowNotification(string message, string severity, List<NotificationAction> actions, string? details = null,
+        bool? autoDismiss = null, double? dismissAfterSeconds = null)
     {
-        bool autoDismiss = severity == "info" && actions.Count == 0;
+        bool resolvedAutoDismiss = ComputeToastAutoDismiss(severity, actions.Count, autoDismiss);
         NotificationRequested?.Invoke(this, new NotificationEventArgs(
-            message, severity, details, autoDismiss, actions));
+            message, severity, details, resolvedAutoDismiss, actions,
+            dismissAfterSeconds: dismissAfterSeconds));
 
         var sev = severity.ToLowerInvariant() switch
         {
@@ -1833,6 +1843,15 @@ public partial class MainWindowViewModel : ViewModelBase
         };
         StatusBar.AddNotification(message, sev, "IDE");
     }
+
+    /// <summary>
+    /// Resolves whether a toast should auto-dismiss: <paramref name="overrideFlag"/> wins outright
+    /// when set; otherwise falls back to the historical rule (info severity, no action buttons).
+    /// Pure static seam (mirrors <see cref="ShouldShowBuildOutput"/>) so the mapping can be pinned
+    /// headlessly without constructing the (DI-only) MainWindowViewModel.
+    /// </summary>
+    public static bool ComputeToastAutoDismiss(string severity, int actionCount, bool? overrideFlag)
+        => overrideFlag ?? (severity == "info" && actionCount == 0);
 
     /// <summary>
     /// Shows or updates a progress notification for long-running operations.
@@ -8495,18 +8514,25 @@ public class NotificationEventArgs : EventArgs
     public List<NotificationAction> Actions { get; }
     public string? NotificationId { get; }
 
+    /// <summary>
+    /// Per-toast auto-dismiss duration override, in seconds. Null means "use the IDE default"
+    /// (5 seconds — see MainWindow.axaml.cs ShowToastNotification).
+    /// </summary>
+    public double? DismissAfterSeconds { get; }
+
     public NotificationEventArgs(string message, string severity)
     {
         Message = message;
         Severity = severity;
         AutoDismiss = severity == "info";
         Actions = new List<NotificationAction>();
+        DismissAfterSeconds = null;
     }
 
     public NotificationEventArgs(string message, string severity, string? details,
         bool autoDismiss, List<NotificationAction>? actions = null,
         double progress = 0, bool isIndeterminate = false, bool showProgress = false,
-        string? notificationId = null)
+        string? notificationId = null, double? dismissAfterSeconds = null)
     {
         Message = message;
         Severity = severity;
@@ -8517,6 +8543,7 @@ public class NotificationEventArgs : EventArgs
         IsIndeterminate = isIndeterminate;
         ShowProgress = showProgress;
         NotificationId = notificationId;
+        DismissAfterSeconds = dismissAfterSeconds;
     }
 }
 
