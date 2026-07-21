@@ -370,6 +370,33 @@ public class NewProjectWizardViewModelTests
     }
 
     [Test]
+    public async Task SwitchingMsvcToLlvmAndBack_PreservesCpp17()
+    {
+        var vm = NewVm(out _); // all installed
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp; // llvm selected
+
+        // Mimic the rooted configure-page ComboBox: window 2 is closed on Back but
+        // stays alive (the VM roots it via BrowseLocationCommand), so its TwoWay
+        // SelectedItem binding pushes NULL into CppStandard when the standards
+        // list is cleared for a refill. The VM must restore a still-offered
+        // user selection instead of discarding it.
+        vm.CppStandards.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+                vm.CppStandard = null!;
+        };
+
+        vm.CppStandard = "c++17";
+
+        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "msvc");
+        Assert.That(vm.CppStandard, Is.EqualTo("c++17"), "user's c++17 lost across llvm -> msvc");
+
+        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "llvm");
+        Assert.That(vm.CppStandard, Is.EqualTo("c++17"), "user's c++17 lost across msvc -> llvm");
+    }
+
+    [Test]
     public async Task CppStandards_NoneInstalled_DoesNotOfferCpp23()
     {
         // Defensive: the selection may still point at llvm, but with nothing

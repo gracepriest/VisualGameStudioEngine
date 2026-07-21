@@ -241,12 +241,21 @@ public partial class NewProjectWizardViewModel : ObservableObject
 
         if (!CppStandards.SequenceEqual(desired))
         {
+            // Capture BEFORE Clear(): window 2 is closed on Back but stays rooted
+            // by the VM, so its live TwoWay SelectedItem binding pushes null into
+            // CppStandard on the Reset. Re-assigning after the refill restores a
+            // still-offered user pick (e.g. c++17 across llvm -> msvc) instead of
+            // silently discarding it.
+            var current = CppStandard;
             CppStandards.Clear();
             foreach (var s in desired) CppStandards.Add(s);
+            CppStandard = desired.Contains(current) ? current : "c++20";
         }
-
-        if (!CppStandards.Contains(CppStandard))
+        else if (!CppStandards.Contains(CppStandard))
+        {
+            // Unchanged offer but an out-of-list value (defensive): snap back.
             CppStandard = "c++20";
+        }
     }
 
     partial void OnSelectedLanguageOptionChanged(LanguageOption? value)
@@ -370,6 +379,11 @@ public partial class NewProjectWizardViewModel : ObservableObject
         IsCreating = true;
         try
         {
+            // Close the create-before-probe race: availability (backend IsEnabled,
+            // auto-select) must reflect the probe before deciding whether the
+            // toolchain travels. Never faults — probe exceptions are swallowed.
+            await ToolchainProbeTask;
+
             var options = new CreateProjectOptions
             {
                 Name = ProjectName,
