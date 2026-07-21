@@ -93,7 +93,8 @@ public class InlineColorRenderer : IBackgroundRenderer
                 var endColumn = colorMatch.ReplaceStart + colorMatch.ReplaceLength;
                 DrawSwatch(textView, drawingContext, visualLine, docLine, endColumn, color,
                     lineNumber, colorMatch.ReplaceStart + docLine.Offset,
-                    endColumn, colorMatch.R, colorMatch.G, colorMatch.B, colorMatch.A);
+                    endColumn, colorMatch.R, colorMatch.G, colorMatch.B, colorMatch.A,
+                    colorMatch.Kind);
             }
         }
     }
@@ -101,7 +102,7 @@ public class InlineColorRenderer : IBackgroundRenderer
     private void DrawSwatch(TextView textView, DrawingContext drawingContext,
         VisualLine visualLine, DocumentLine docLine, int columnAfter,
         Color color, int lineNumber, int colorStartOffset, int colorEndRelative,
-        int r, int g, int b, int a)
+        int r, int g, int b, int a, ColorMatchKind kind)
     {
         try
         {
@@ -151,7 +152,8 @@ public class InlineColorRenderer : IBackgroundRenderer
                 Line = lineNumber,
                 R = r, G = g, B = b, A = a,
                 ColorTextStartOffset = colorStartOffset,
-                ColorTextEndOffset = docLine.Offset + colorEndRelative
+                ColorTextEndOffset = docLine.Offset + colorEndRelative,
+                Kind = kind
             });
         }
         catch
@@ -186,7 +188,8 @@ public class InlineColorRenderer : IBackgroundRenderer
                     ColorTextEndOffset = region.ColorTextEndOffset,
                     ScreenX = screenPoint.X,
                     ScreenY = screenPoint.Y,
-                    SwatchBounds = region.Bounds
+                    SwatchBounds = region.Bounds,
+                    Kind = region.Kind
                 });
                 e.Handled = true;
                 return;
@@ -205,6 +208,7 @@ public class InlineColorRenderer : IBackgroundRenderer
         public int A { get; set; }
         public int ColorTextStartOffset { get; set; }
         public int ColorTextEndOffset { get; set; }
+        public ColorMatchKind Kind { get; set; }
     }
 }
 
@@ -223,4 +227,8 @@ public class ColorSwatchClickedEventArgs : EventArgs
     public double ScreenX { get; set; }
     public double ScreenY { get; set; }
     public Rect SwatchBounds { get; set; }
+
+    /// <summary>Which detection pattern produced the clicked swatch — the apply
+    /// side dispatches its rewrite on this via <see cref="ColorTextRewriter"/>.</summary>
+    public ColorMatchKind Kind { get; set; }
 }

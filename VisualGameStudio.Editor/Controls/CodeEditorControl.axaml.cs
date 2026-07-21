@@ -4760,6 +4760,7 @@ public partial class CodeEditorControl : UserControl
         _colorPickerControl.Line = e.Line;
         _colorPickerControl.ColorTextStartOffset = e.ColorTextStartOffset;
         _colorPickerControl.ColorTextEndOffset = e.ColorTextEndOffset;
+        _colorPickerControl.Kind = e.Kind;
         _colorPickerControl.ColorPicked += OnColorPicked;
         _colorPickerControl.Cancelled += OnColorPickerCancelled;
 
@@ -4818,28 +4819,10 @@ public partial class CodeEditorControl : UserControl
 
             var oldText = document.GetText(startOffset, endOffset - startOffset);
 
-            // Determine what kind of color text we're replacing
-            string newText;
-            if (oldText.StartsWith("&H", StringComparison.OrdinalIgnoreCase))
-            {
-                // Hex color literal: replace with new hex value
-                if (e.A < 255)
-                    newText = $"&H{e.A:X2}{e.R:X2}{e.G:X2}{e.B:X2}";
-                else
-                    newText = $"&H{e.R:X2}{e.G:X2}{e.B:X2}";
-            }
-            else
-            {
-                // RGB/RGBA numeric arguments: rebuild just the numeric values portion
-                // The startOffset points to the first R value, endOffset to closing paren
-                // We need to reconstruct: R, G, B or R, G, B, A
-                // Detect if the original had an alpha component
-                var commaCount = oldText.Count(c => c == ',');
-                if (commaCount >= 3 || e.A < 255)
-                    newText = $"{e.R}, {e.G}, {e.B}, {e.A})";
-                else
-                    newText = $"{e.R}, {e.G}, {e.B})";
-            }
+            // The rewrite rules live in the pure ColorTextRewriter, dispatched on
+            // the match kind that rode along from the swatch click.
+            var newText = ColorTextRewriter.Rewrite(
+                e.Kind, oldText, (byte)e.R, (byte)e.G, (byte)e.B, (byte)e.A);
 
             document.Replace(startOffset, endOffset - startOffset, newText);
 

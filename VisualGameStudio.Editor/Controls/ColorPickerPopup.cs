@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using VisualGameStudio.Editor.TextMarkers;
 
 namespace VisualGameStudio.Editor.Controls;
 
@@ -41,6 +42,12 @@ public class ColorPickerPopup : UserControl
     public int ColorTextStartOffset { get; set; }
     public int ColorTextEndOffset { get; set; }
     public int Line { get; set; }
+
+    /// <summary>
+    /// Which detection pattern produced the swatch being edited — carried through
+    /// (like the offsets) so the apply side can dispatch its rewrite on it.
+    /// </summary>
+    public ColorMatchKind Kind { get; set; }
 
     public int Red => (int)_redSlider.Value;
     public int Green => (int)_greenSlider.Value;
@@ -199,7 +206,8 @@ public class ColorPickerPopup : UserControl
                 R = Red, G = Green, B = Blue, A = Alpha,
                 Line = Line,
                 ColorTextStartOffset = ColorTextStartOffset,
-                ColorTextEndOffset = ColorTextEndOffset
+                ColorTextEndOffset = ColorTextEndOffset,
+                Kind = Kind
             });
         };
 
@@ -382,4 +390,8 @@ public class ColorPickedEventArgs : EventArgs
     public int Line { get; set; }
     public int ColorTextStartOffset { get; set; }
     public int ColorTextEndOffset { get; set; }
+
+    /// <summary>Which detection pattern produced the swatch being edited — the
+    /// apply side passes this to <see cref="ColorTextRewriter.Rewrite"/>.</summary>
+    public ColorMatchKind Kind { get; set; }
 }
