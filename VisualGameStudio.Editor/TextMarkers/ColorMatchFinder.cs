@@ -73,10 +73,15 @@ public static class ColorMatchFinder
     /// <see cref="HexColorPattern"/>'s {6,8} (which admits 7 digits), this is an
     /// EXACT 6-or-8 alternation so 7-digit and 9+-digit runs never match — the
     /// trailing word boundary rejects a longer run because the extra hex digit
-    /// keeps both sides of the boundary as word characters.
+    /// keeps both sides of the boundary as word characters. A leading negative
+    /// lookbehind guards the start: unlike <c>&amp;H</c>'s <c>&amp;</c>, both
+    /// <c>0</c> and <c>x</c> are word characters, so without the lookbehind
+    /// "0x..." would false-match mid-identifier (e.g. <c>g0x33AAFF</c>) — the
+    /// lookbehind blocks the match whenever a word character precedes the
+    /// literal.
     /// </summary>
     private static readonly Regex CppHexColorPattern = new(
-        @"0x([0-9A-Fa-f]{8}|[0-9A-Fa-f]{6})\b",
+        @"(?<![0-9A-Za-z_])0x([0-9A-Fa-f]{8}|[0-9A-Fa-f]{6})\b",
         RegexOptions.Compiled);
 
     /// <summary>

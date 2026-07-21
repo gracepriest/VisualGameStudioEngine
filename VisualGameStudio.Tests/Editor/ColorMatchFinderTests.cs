@@ -222,9 +222,23 @@ public class ColorMatchFinderTests
 
     [TestCase("auto c = 0xFFF;")]
     [TestCase("auto c = 0xFFFFFFFFF;")]
+    [TestCase("auto c = 0x8033AAF;")] // 7 digits — the {8}|{6} exact alternation must reject this near-miss
     public void Cpp_CppHex_ShortOrLongHex_NoMatch(string line)
     {
         // Exactly 6 or 8 hex digits only — not 7 (short) and not 9+ (long).
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Is.Empty);
+    }
+
+    [TestCase("g0x33AAFF")]
+    [TestCase("00x33AAFF")]
+    [TestCase("myColor0x8033AAFF")]
+    public void Cpp_CppHex_InsideIdentifier_NoMatch(string line)
+    {
+        // 0 and x are both word characters, so without a leading boundary guard
+        // "0x..." false-matches mid-identifier (e.g. g0x33AAFF) — corrupting a
+        // variable name if the click-to-pick rewrite fires on it.
         var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
 
         Assert.That(matches, Is.Empty);
