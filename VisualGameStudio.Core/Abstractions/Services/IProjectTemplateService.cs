@@ -572,6 +572,16 @@ public class CreateProjectOptions
     /// Target framework (for .NET projects).
     /// </summary>
     public string TargetFramework { get; set; } = "net8.0";
+
+    /// <summary>
+    /// C++ language standard ("c++14".."c++23"); null → template default (c++20). C++ projects only.
+    /// </summary>
+    public string? CppStandard { get; set; }
+
+    /// <summary>
+    /// Per-project toolchain id ("llvm"|"gcc"|"msvc"); null → machine probe. Only set when the toolchain was available at creation time.
+    /// </summary>
+    public string? CppToolchain { get; set; }
 }
 
 /// <summary>

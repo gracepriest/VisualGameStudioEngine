@@ -436,6 +436,10 @@ End Namespace
             // cpp-game-app templates in
             // VisualGameStudio.ProjectSystem/Services/ProjectTemplateService.cs
             // (the two template systems are known to drift — change one, change both).
+            // Intentional .blproj divergence: these CLI templates emit defaults
+            // only (hardcoded c++20, no <CppToolchain>); the IDE emits the
+            // user-chosen <CppStandard>/<CppToolchain> from CreateProjectOptions.
+            // Only the SOURCE files are held identical.
             _templates["cpp-console"] = new ProjectTemplate
             {
                 Name = "cpp-console",

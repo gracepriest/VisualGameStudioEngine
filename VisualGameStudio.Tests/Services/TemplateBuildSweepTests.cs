@@ -186,6 +186,78 @@ public class TemplateBuildSweepTests
             $"IDE and CLI template systems drifted on {fileName} — keep them in sync (see comments in both)");
     }
 
+    // .blproj emission of wizard-chosen C++ options: CreateProjectOptions carries
+    // CppStandard/CppToolchain into the generated project file. These tests read
+    // the generated .blproj text directly — no compiler involved. (Intentional
+    // IDE/CLI divergence: the CLI templates emit defaults only.)
+    [Test]
+    public async Task CreateProject_Cpp_EmitsChosenStandardAndToolchain()
+    {
+        var template = ProjectTemplates.All.Single(t => t.Id == "cpp-console-app");
+        var options = new CreateProjectOptions
+        {
+            Name = "BlprojCppChosen",
+            Location = _rootDir,
+            Template = template,
+            SolutionType = SolutionTypes.Cpp,
+            CreateSolutionFolder = false,
+            CreateGitRepository = false,
+            CppStandard = "c++17",
+            CppToolchain = "gcc"
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, $"project creation failed: {result.Error}");
+
+        var content = File.ReadAllText(result.ProjectPath!);
+        Assert.That(content, Does.Contain("<CppStandard>c++17</CppStandard>"));
+        Assert.That(content, Does.Contain("<CppToolchain>gcc</CppToolchain>"));
+    }
+
+    [Test]
+    public async Task CreateProject_Cpp_NullOptions_EmitsDefaultStandard_NoToolchain()
+    {
+        // The none-installed self-heal case: no toolchain chosen at creation
+        // time → no <CppToolchain> element, so the machine probe decides at
+        // build time; the standard falls back to the template default.
+        var template = ProjectTemplates.All.Single(t => t.Id == "cpp-console-app");
+        var options = new CreateProjectOptions
+        {
+            Name = "BlprojCppDefaults",
+            Location = _rootDir,
+            Template = template,
+            SolutionType = SolutionTypes.Cpp,
+            CreateSolutionFolder = false,
+            CreateGitRepository = false
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, $"project creation failed: {result.Error}");
+
+        var content = File.ReadAllText(result.ProjectPath!);
+        Assert.That(content, Does.Contain("<CppStandard>c++20</CppStandard>"));
+        Assert.That(content, Does.Not.Contain("<CppToolchain>"));
+    }
+
+    [Test]
+    public async Task CreateProject_BasicLang_EmitsNeither()
+    {
+        var template = ProjectTemplates.All.Single(t => t.Id == "console-app");
+        var options = new CreateProjectOptions
+        {
+            Name = "BlprojBasicLangNone",
+            Location = _rootDir,
+            Template = template,
+            SolutionType = SolutionTypes.DotNet,
+            CreateSolutionFolder = false,
+            CreateGitRepository = false
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, $"project creation failed: {result.Error}");
+
+        var content = File.ReadAllText(result.ProjectPath!);
+        Assert.That(content, Does.Not.Contain("<CppStandard>"));
+        Assert.That(content, Does.Not.Contain("<CppToolchain>"));
+    }
+
     private static (int ExitCode, string Output) RunCompilerBuild(string compiler, string projectFile)
     {
         var psi = new ProcessStartInfo

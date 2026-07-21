@@ -281,7 +281,11 @@ public class ProjectTemplateService : IProjectTemplateService
         if (options.SolutionType.Id == "cpp")
         {
             sb.AppendLine("    <Language>Cpp</Language>");
-            sb.AppendLine("    <CppStandard>c++20</CppStandard>");
+            sb.AppendLine($"    <CppStandard>{options.CppStandard ?? "c++20"}</CppStandard>");
+            if (!string.IsNullOrEmpty(options.CppToolchain))
+            {
+                sb.AppendLine($"    <CppToolchain>{options.CppToolchain}</CppToolchain>");
+            }
         }
         // Windows desktop UI frameworks need the net*-windows TFM at build time.
         if (options.Template.Id == "winforms-app")
@@ -1048,6 +1052,11 @@ End Sub
     // cpp-library / cpp-game templates in BasicLang/ProjectSystem/TemplateEngine.cs
     // (the two template systems are known to drift — change one, change both).
     // The CLI substitutes {{ProjectName}}; here Replace does the same.
+    // Intentional .blproj divergence: the IDE emits the user-chosen
+    // <CppStandard>/<CppToolchain> from CreateProjectOptions
+    // (GenerateProjectFileContent); the CLI templates emit defaults only
+    // (hardcoded c++20, no <CppToolchain>). Only the SOURCE files above are
+    // held identical.
 
     private async Task<string> GenerateCppConsoleFilesAsync(string projectDir, CreateProjectOptions options, CancellationToken cancellationToken)
     {
