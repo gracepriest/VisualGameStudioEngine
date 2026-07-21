@@ -705,6 +705,49 @@ End Sub
         Assert.That(completed!.Result, Is.SameAs(result));
     }
 
+    // ------------------------------------------------------------------
+    // 9. BuildInternalAsync's compile core must not turn a user-initiated
+    //    cancellation into an ordinary "build failed" BuildCompleted event.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task BuildProject_AlreadyCancelledToken_DoesNotFireBuildCompleted()
+    {
+        // Regression risk from the CompileProjectCoreAsync extraction: BuildResult has
+        // no Cancelled flag, so if the core mapped OperationCanceledException to an
+        // ordinary failed BuildResult, BuildInternalAsync's ceremony would treat a
+        // deliberate user cancel exactly like a real build failure and fire
+        // BuildCompleted for it — which downstream (post-quiet-builds wiring) reads as
+        // a "Build failed" toast/announcement for an action that already has its own
+        // quiet CancelBuildAsync/BuildCancelled path. The core must instead RE-THROW
+        // OperationCanceledException so it escapes to BuildInternalAsync's OWN outer
+        // catch, which already handles cancellation quietly (a Warning diagnostic,
+        // no BuildCompleted) and predates this refactor.
+        CreateMinimalConsoleProject(_rootDir, "CancelledProj");
+        var project = await new ProjectSerializer().LoadAsync(
+            Path.Combine(_rootDir, "CancelledProj", "CancelledProj.blproj"));
+
+        var output = new RecordingOutput();
+        var buildService = new BuildService(output);
+        var completedCount = 0;
+        buildService.BuildCompleted += (_, _) => completedCount++;
+
+        // Already-cancelled: CompileWithBasicLangApiAsync's own
+        // ThrowIfCancellationRequested fires deterministically before any real
+        // compiling/dotnet-build work, so this stays fast and reliable.
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = await buildService.BuildProjectAsync(project, cts.Token);
+
+        Assert.That(result.Success, Is.False,
+            "a cancelled build must not report success.\n" + Describe(result, output));
+        Assert.That(completedCount, Is.EqualTo(0),
+            "BuildCompleted must NOT fire for a user-initiated cancellation — it has its own " +
+            "quiet CancelBuildAsync/BuildCancelled path and must never be indistinguishable " +
+            "from a real build failure.\n" + Describe(result, output));
+    }
+
     private static void CreateMinimalConsoleProject(string solutionDir, string name)
     {
         var projectDir = Path.Combine(solutionDir, name);

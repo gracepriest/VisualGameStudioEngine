@@ -393,7 +393,13 @@ public class BuildService : IBuildService
 
     /// <summary>
     /// The guard-free compile CORE: dispatches to the native builder or the managed
-    /// compiler engine and maps cancellation/exceptions to a failed <see cref="BuildResult"/>.
+    /// compiler engine and maps non-cancellation exceptions to a failed
+    /// <see cref="BuildResult"/>. A user-initiated <see cref="OperationCanceledException"/>
+    /// is deliberately NOT mapped to a failed result — <see cref="BuildResult"/> has no
+    /// Cancelled flag, so doing so would make a deliberate cancel indistinguishable from
+    /// a real failure to callers (quiet-build toasts/announcements). It is re-thrown so
+    /// the caller's own outer catch (which predates this core and already handles
+    /// cancellation quietly, without firing <see cref="BuildCompleted"/>) takes over.
     /// Deliberately contains NONE of the build-SESSION ceremony (<see cref="IsBuilding"/>,
     /// <see cref="_buildCts"/>, <see cref="BuildStarted"/>, output-clearing, the per-build
     /// banner/logging, or <see cref="BuildCompleted"/>) — that ceremony is meaningful once
@@ -443,13 +449,15 @@ public class BuildService : IBuildService
         }
         catch (OperationCanceledException)
         {
-            result.Success = false;
-            result.Diagnostics.Add(new DiagnosticItem
-            {
-                Message = "Build was cancelled",
-                Severity = DiagnosticSeverity.Warning
-            });
-            _outputService.WriteLine("Build cancelled by user.", OutputCategory.Build);
+            // Do NOT map this to a failed BuildResult: a user-initiated cancel is not
+            // a build failure, and this core has no way to tell the caller "cancelled"
+            // apart from "failed" (BuildResult carries no Cancelled flag). Re-throwing
+            // (mirroring CompileWithBasicLangApiAsync's own catch) lets it escape to
+            // BuildInternalAsync's / BuildSolutionAsync's outer catch — both already
+            // handle it quietly (Warning diagnostic + "Build cancelled by user.",
+            // deliberately WITHOUT firing BuildCompleted) so a deliberate cancel never
+            // surfaces as a "Build failed" toast/announcement.
+            throw;
         }
         catch (Exception ex)
         {
