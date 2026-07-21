@@ -73,8 +73,9 @@ public class ProjectSerializer
                 }
 
                 // CppToolchain follows the same language-independent rule as CppStandard.
-                // Lowercased to match the compiler-side ProjectFile; absent/empty = null (machine probe).
-                var cppToolchain = propertyGroup.Element("CppToolchain")?.Value;
+                // Trimmed + lowercased to match the compiler-side ProjectFile exactly;
+                // absent/empty = null (machine probe).
+                var cppToolchain = propertyGroup.Element("CppToolchain")?.Value.Trim();
                 if (!string.IsNullOrEmpty(cppToolchain))
                 {
                     project.CppSettings ??= new CppProjectSettings();

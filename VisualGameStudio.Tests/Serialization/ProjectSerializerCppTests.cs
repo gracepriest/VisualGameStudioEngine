@@ -311,6 +311,29 @@ public class ProjectSerializerCppTests
     }
 
     [Test]
+    public async Task Parse_CppToolchain_TrimsAndLowercases()
+    {
+        var path = Path.Combine(_dir, "PadTc.blproj");
+        File.WriteAllText(path, """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>PadTc</ProjectName>
+                <Language>Cpp</Language>
+                <CppToolchain>  LLVM  </CppToolchain>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+
+        var project = await new ProjectSerializer().LoadAsync(path);
+
+        Assert.That(project.CppSettings, Is.Not.Null);
+        Assert.That(project.CppSettings!.CppToolchain, Is.EqualTo("llvm"),
+            "a padded pin must trim + lowercase on parse, exactly like the compiler-side ProjectFile — " +
+            "otherwise the IDE model carries ' llvm ' while the CLI build sees 'llvm'");
+    }
+
+    [Test]
     public async Task Serializer_MixedCompileItems_RoundTripVerbatim()
     {
         var path = Path.Combine(_dir, "MixedItems.blproj");
