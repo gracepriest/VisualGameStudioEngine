@@ -380,4 +380,102 @@ public class ColorMatchFinderTests
 
         Assert.That(matches, Is.Empty);
     }
+
+    // ---------------------------------------------------------------
+    // Cpp — BraceInit pattern (raylib Color{} brace literals, Cpp-only).
+    // A Color/(Color)/CLITERAL(Color) prefix is REQUIRED; the replace
+    // range is the brace group ONLY — the prefix survives the rewrite.
+    // ---------------------------------------------------------------
+
+    [Test]
+    public void Cpp_BraceInit_ColorPrefix_Matches()
+    {
+        const string line = "Color{255, 0, 0, 255}";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.BraceInit));
+        Assert.That(m.R, Is.EqualTo(255));
+        Assert.That(m.G, Is.EqualTo(0));
+        Assert.That(m.B, Is.EqualTo(0));
+        Assert.That(m.A, Is.EqualTo(255));
+        Assert.That(m.HasAlphaComponent, Is.True);
+
+        // Replace range: AT the opening brace (not the 'C' of Color), through
+        // the closing brace inclusive.
+        var expectedStart = line.IndexOf('{');
+        Assert.That(m.ReplaceStart, Is.EqualTo(expectedStart));
+        Assert.That(m.ReplaceLength, Is.EqualTo(line.IndexOf('}') - expectedStart + 1));
+    }
+
+    [Test]
+    public void Cpp_BraceInit_ParenColorPrefix_Matches()
+    {
+        const string line = "(Color){255, 0, 0}";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.BraceInit));
+        Assert.That(m.R, Is.EqualTo(255));
+        Assert.That(m.G, Is.EqualTo(0));
+        Assert.That(m.B, Is.EqualTo(0));
+        Assert.That(m.HasAlphaComponent, Is.False);
+
+        var expectedStart = line.IndexOf('{');
+        Assert.That(m.ReplaceStart, Is.EqualTo(expectedStart));
+        Assert.That(m.ReplaceLength, Is.EqualTo(line.IndexOf('}') - expectedStart + 1));
+    }
+
+    [Test]
+    public void Cpp_BraceInit_CLiteralPrefix_Matches()
+    {
+        const string line = "CLITERAL(Color){ 255, 0, 0, 255 }";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.BraceInit));
+        Assert.That(m.R, Is.EqualTo(255));
+        Assert.That(m.G, Is.EqualTo(0));
+        Assert.That(m.B, Is.EqualTo(0));
+        Assert.That(m.A, Is.EqualTo(255));
+
+        var expectedStart = line.IndexOf('{');
+        Assert.That(m.ReplaceStart, Is.EqualTo(expectedStart));
+        Assert.That(m.ReplaceLength, Is.EqualTo(line.IndexOf('}') - expectedStart + 1));
+    }
+
+    [Test]
+    public void Cpp_BareBraces_NoMatch()
+    {
+        // No Color/(Color)/CLITERAL(Color) prefix — must never match.
+        var matches = ColorMatchFinder.FindMatches(
+            "{255, 0, 0, 255}", ColorLanguage.Cpp);
+
+        Assert.That(matches, Is.Empty);
+    }
+
+    [Test]
+    public void Bas_BraceInit_NoMatch()
+    {
+        // BraceInit is Cpp-only.
+        var matches = ColorMatchFinder.FindMatches(
+            "Color{255, 0, 0}", ColorLanguage.BasicLang);
+
+        Assert.That(matches, Is.Empty);
+    }
+
+    [Test]
+    public void Cpp_BraceInit_ComponentOver255_NoMatch()
+    {
+        var matches = ColorMatchFinder.FindMatches(
+            "Color{300, 0, 0}", ColorLanguage.Cpp);
+
+        Assert.That(matches, Is.Empty);
+    }
 }

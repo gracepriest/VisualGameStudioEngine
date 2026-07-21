@@ -17,9 +17,11 @@ namespace VisualGameStudio.Editor.TextMarkers;
 /// exactly, with a <c>0x</c> prefix instead of <c>&amp;H</c>: digit count is
 /// picked-alpha-driven, a &lt; 255 → 8 digits <c>0x{A}{R}{G}{B}</c>, else 6 digits
 /// <c>0x{R}{G}{B}</c> — uppercase X2.</item>
+/// <item><see cref="ColorMatchKind.BraceInit"/> mirrors <see cref="ColorMatchKind.RgbCall"/>'s
+/// comma-count alpha heuristic exactly, with braces instead of parens and no
+/// prefix re-emitted (the <c>Color</c>/<c>(Color)</c>/<c>CLITERAL(Color)</c> prefix
+/// sits outside the replace range).</item>
 /// </list>
-/// <see cref="ColorMatchKind.BraceInit"/> has no rewrite rule yet (its pattern lands
-/// with its branch) — it throws.
 /// </summary>
 public static class ColorTextRewriter
 {
@@ -56,6 +58,18 @@ public static class ColorTextRewriter
                 if (a < 255)
                     return $"0x{a:X2}{r:X2}{g:X2}{b:X2}";
                 return $"0x{r:X2}{g:X2}{b:X2}";
+
+            case ColorMatchKind.BraceInit:
+            {
+                // Mirrors RgbCall's comma-count alpha heuristic exactly, but with
+                // braces instead of parens. The replace range is the brace group
+                // itself (no prefix — Color/(Color)/CLITERAL(Color) sits outside
+                // the range and is never touched).
+                var commaCount = oldText.Count(c => c == ',');
+                if (commaCount >= 3 || a < 255)
+                    return $"{{{r}, {g}, {b}, {a}}}";
+                return $"{{{r}, {g}, {b}}}";
+            }
 
             default:
                 throw new NotSupportedException(

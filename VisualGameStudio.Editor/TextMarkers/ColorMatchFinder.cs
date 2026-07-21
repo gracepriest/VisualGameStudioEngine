@@ -10,9 +10,6 @@ public enum ColorLanguage { None, BasicLang, Cpp }
 
 /// <summary>
 /// The kind of source pattern a <see cref="ColorMatch"/> was produced from.
-/// <see cref="CppHex"/> and <see cref="BraceInit"/> are future kinds — the enum
-/// members exist now so consumers can switch exhaustively, but no patterns emit
-/// them yet.
 /// </summary>
 public enum ColorMatchKind { RgbCall, VbHex, CppHex, BraceInit }
 
@@ -48,7 +45,11 @@ public sealed record ColorMatch(
 /// through the closing paren inclusive; <see cref="ColorMatchKind.VbHex"/> spans
 /// from the <c>&amp;H</c> start through the end of the literal;
 /// <see cref="ColorMatchKind.CppHex"/> spans from the <c>0x</c> start through the
-/// end of the literal, analogous to <see cref="ColorMatchKind.VbHex"/>.
+/// end of the literal, analogous to <see cref="ColorMatchKind.VbHex"/>;
+/// <see cref="ColorMatchKind.BraceInit"/> spans from the opening <c>{</c> through
+/// the closing <c>}</c> inclusive — the <c>Color</c>/<c>(Color)</c>/
+/// <c>CLITERAL(Color)</c> prefix is NOT part of the replace range and survives
+/// the rewrite untouched.
 /// </summary>
 public static class ColorMatchFinder
 {
@@ -76,6 +77,19 @@ public static class ColorMatchFinder
     /// </summary>
     private static readonly Regex CppHexColorPattern = new(
         @"0x([0-9A-Fa-f]{8}|[0-9A-Fa-f]{6})\b",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Matches raylib Color brace-literals: <c>Color{r,g,b[,a]}</c>,
+    /// <c>(Color){r,g,b[,a]}</c>, or <c>CLITERAL(Color){r,g,b[,a]}</c>. A
+    /// <c>Color</c>-token prefix is REQUIRED (via the mandatory, non-optional
+    /// alternation) — a bare <c>{r,g,b}</c> never matches. Capture group 1 is the
+    /// brace group itself, which is the REPLACE RANGE (the prefix sits outside it
+    /// and is never touched by a rewrite). Groups 2-4 are R/G/B, group 5 is the
+    /// optional A.
+    /// </summary>
+    private static readonly Regex BraceInitColorPattern = new(
+        @"(?:CLITERAL\s*\(\s*Color\s*\)\s*|\(\s*Color\s*\)\s*|\bColor\b\s*)(\{\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(\d{1,3}))?\s*\})",
         RegexOptions.Compiled);
 
     /// <summary>
@@ -159,10 +173,12 @@ public static class ColorMatchFinder
     /// Finds every color value in a single line of source text, using the pattern
     /// set for <paramref name="language"/>. BasicLang runs {RgbCall, VbHex} with the
     /// <see cref="EnginePrefix"/> optional on RgbCall names; Cpp runs
-    /// {RgbCall, CppHex} with the prefix REQUIRED on RgbCall names (unprefixed names
-    /// never match — that keeps raylib-style geometry calls like
-    /// DrawRectangle(10, 20, 100, 50) swatch-free) and <c>0x</c> hex literals
-    /// (Cpp-only, mirroring how <c>&amp;H</c> is BasicLang-only); None never matches.
+    /// {RgbCall, CppHex, BraceInit} with the prefix REQUIRED on RgbCall names
+    /// (unprefixed names never match — that keeps raylib-style geometry calls like
+    /// DrawRectangle(10, 20, 100, 50) swatch-free), <c>0x</c> hex literals
+    /// (Cpp-only, mirroring how <c>&amp;H</c> is BasicLang-only), and
+    /// <c>Color{r,g,b[,a]}</c> brace-literals (Cpp-only, prefix required); None
+    /// never matches.
     /// </summary>
     public static IReadOnlyList<ColorMatch> FindMatches(string lineText, ColorLanguage language)
     {
@@ -264,6 +280,28 @@ public static class ColorMatchFinder
                     match.Index, match.Length,
                     r, g, b, a,
                     HasAlphaComponent: hexStr.Length == 8));
+            }
+
+            // Detect raylib Color brace-literals — Cpp-only, Color-token prefix
+            // required (a bare {r,g,b} never matches).
+            foreach (Match match in BraceInitColorPattern.Matches(lineText))
+            {
+                if (!int.TryParse(match.Groups[2].Value, out int r) || r > 255) continue;
+                if (!int.TryParse(match.Groups[3].Value, out int g) || g > 255) continue;
+                if (!int.TryParse(match.Groups[4].Value, out int b) || b > 255) continue;
+
+                int a = 255;
+                if (match.Groups[5].Success && int.TryParse(match.Groups[5].Value, out int alpha) && alpha <= 255)
+                    a = alpha;
+
+                // Replace range: the brace group only (group 1) — the
+                // Color/(Color)/CLITERAL(Color) prefix survives the rewrite.
+                var braceGroup = match.Groups[1];
+                results.Add(new ColorMatch(
+                    ColorMatchKind.BraceInit,
+                    braceGroup.Index, braceGroup.Length,
+                    (byte)r, (byte)g, (byte)b, (byte)a,
+                    HasAlphaComponent: match.Groups[5].Success));
             }
         }
 

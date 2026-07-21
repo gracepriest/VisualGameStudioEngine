@@ -88,15 +88,32 @@ public class ColorTextRewriterTests
     }
 
     // ---------------------------------------------------------------
-    // Future kinds — rewriter-first ordering: branches land in later
-    // tasks, so until then the kind name must surface in the throw.
+    // BraceInit — mirrors RgbCall's comma-count alpha heuristic, but
+    // braces instead of parens (no prefix — the prefix is outside the
+    // replace range).
     // ---------------------------------------------------------------
 
     [Test]
-    public void BraceInit_Throws_NotSupported_Yet()
+    public void BraceInit_ThreeComponents_PickedOpaque_StaysThree()
     {
-        var ex = Assert.Throws<NotSupportedException>(() =>
-            ColorTextRewriter.Rewrite(ColorMatchKind.BraceInit, "{ 10, 20, 30, 255 }", 1, 2, 3, 255));
-        Assert.That(ex!.Message, Does.Contain("BraceInit"));
+        var result = ColorTextRewriter.Rewrite(
+            ColorMatchKind.BraceInit, "{255, 0, 0}", 1, 2, 3, 255);
+        Assert.That(result, Is.EqualTo("{1, 2, 3}"));
+    }
+
+    [Test]
+    public void BraceInit_ThreeComponents_PickedAlpha_BecomesFour()
+    {
+        var result = ColorTextRewriter.Rewrite(
+            ColorMatchKind.BraceInit, "{255, 0, 0}", 1, 2, 3, 128);
+        Assert.That(result, Is.EqualTo("{1, 2, 3, 128}"));
+    }
+
+    [Test]
+    public void BraceInit_FourComponents_StaysFour()
+    {
+        var result = ColorTextRewriter.Rewrite(
+            ColorMatchKind.BraceInit, "{255, 0, 0, 255}", 9, 9, 9, 255);
+        Assert.That(result, Is.EqualTo("{9, 9, 9, 255}"));
     }
 }
