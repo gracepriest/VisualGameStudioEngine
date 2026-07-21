@@ -238,6 +238,30 @@ public class TemplateBuildSweepTests
     }
 
     [Test]
+    public async Task CreateProject_Cpp_EmptyStandard_EmitsDefault()
+    {
+        // Empty string is what an unset wizard field degrades to; it must fall
+        // back to the template default exactly like null does (a bare
+        // <CppStandard></CppStandard> would later become a bare `-std=`).
+        var template = ProjectTemplates.All.Single(t => t.Id == "cpp-console-app");
+        var options = new CreateProjectOptions
+        {
+            Name = "BlprojCppEmptyStd",
+            Location = _rootDir,
+            Template = template,
+            SolutionType = SolutionTypes.Cpp,
+            CreateSolutionFolder = false,
+            CreateGitRepository = false,
+            CppStandard = ""
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, $"project creation failed: {result.Error}");
+
+        var content = File.ReadAllText(result.ProjectPath!);
+        Assert.That(content, Does.Contain("<CppStandard>c++20</CppStandard>"));
+    }
+
+    [Test]
     public async Task CreateProject_BasicLang_EmitsNeither()
     {
         var template = ProjectTemplates.All.Single(t => t.Id == "console-app");

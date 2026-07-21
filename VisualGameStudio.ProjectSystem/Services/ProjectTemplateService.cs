@@ -281,7 +281,7 @@ public class ProjectTemplateService : IProjectTemplateService
         if (options.SolutionType.Id == "cpp")
         {
             sb.AppendLine("    <Language>Cpp</Language>");
-            sb.AppendLine($"    <CppStandard>{options.CppStandard ?? "c++20"}</CppStandard>");
+            sb.AppendLine($"    <CppStandard>{(string.IsNullOrEmpty(options.CppStandard) ? "c++20" : options.CppStandard)}</CppStandard>");
             if (!string.IsNullOrEmpty(options.CppToolchain))
             {
                 sb.AppendLine($"    <CppToolchain>{options.CppToolchain}</CppToolchain>");
