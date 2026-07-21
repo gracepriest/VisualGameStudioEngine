@@ -80,6 +80,9 @@ public partial class CodeEditorControl : UserControl
     /// </summary>
     private ISettingsService? _settingsService;
     private string? _documentFilePath;
+    // Color-swatch gate path only — deliberately NOT _documentFilePath, so split-view
+    // panes can gate swatches without inheriting any LSP-path behavior.
+    private string? _colorGateFilePath;
     private bool _isColumnSelectionMode;
     private CurrentLineNumberMargin? _currentLineNumberMargin;
     private TextMarkers.SelectionOccurrenceHighlighter? _selectionOccurrenceHighlighter;
@@ -414,9 +417,22 @@ public partial class CodeEditorControl : UserControl
         // fires last wins — both orders end with the correct highlighting.
         SetHighlightingForFile(filePath);
 
-        // Gate inline color swatches by file language. Null before OnInitialized
-        // (renderer not created yet); OnInitialized replays from _documentFilePath,
-        // so whichever hook fires last wins here too.
+        // Gate inline color swatches by file language.
+        SetColorGateFile(filePath);
+    }
+
+    /// <summary>
+    /// Tells the inline color-swatch renderer which file this editor shows, so
+    /// detection is gated by language (<see cref="TextMarkers.ColorMatchFinder.ClassifyFile"/>).
+    /// Deliberately separate from <see cref="SetLanguageService"/>: split-view panes
+    /// need the color gate WITHOUT gaining LSP behavior (folding/completion), so they
+    /// call this directly and never touch <c>_documentFilePath</c>. Safe before
+    /// OnInitialized (renderer not created yet) — creation replays the stored path,
+    /// so whichever hook fires last wins.
+    /// </summary>
+    public void SetColorGateFile(string? filePath)
+    {
+        _colorGateFilePath = filePath;
         _inlineColorRenderer?.SetFile(filePath);
     }
 
@@ -704,9 +720,9 @@ public partial class CodeEditorControl : UserControl
         _textEditor.TextArea.TextView.BackgroundRenderers.Add(_cursorFadeRenderer);
 
         // Setup inline color swatch renderer. Replay the file path in case
-        // SetLanguageService already ran before the renderer existed.
+        // SetColorGateFile/SetLanguageService already ran before the renderer existed.
         _inlineColorRenderer = new TextMarkers.InlineColorRenderer(_textEditor);
-        _inlineColorRenderer.SetFile(_documentFilePath);
+        _inlineColorRenderer.SetFile(_colorGateFilePath);
         _textEditor.TextArea.TextView.BackgroundRenderers.Add(_inlineColorRenderer);
         _inlineColorRenderer.ColorSwatchClicked += OnColorSwatchClicked;
 

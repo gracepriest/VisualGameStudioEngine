@@ -345,6 +345,16 @@ public partial class CodeEditorDocumentView : UserControl
                 MainEditor.SetLanguageService(vm.LanguageService, vm.FilePath);
             }
 
+            // Inline color-swatch language gate for the split panes. Split view HIDES
+            // MainEditor (IsVisible="{Binding !IsSplitView}"), so without this the four
+            // split editors would sit at ColorLanguage.None and every swatch vanishes.
+            // Deliberately SetColorGateFile, NOT SetLanguageService — the split panes
+            // must not gain LSP behavior (folding/completion) from a rendering gate.
+            this.FindControl<CodeEditorControl>("TopEditor")?.SetColorGateFile(vm.FilePath);
+            this.FindControl<CodeEditorControl>("BottomEditor")?.SetColorGateFile(vm.FilePath);
+            this.FindControl<CodeEditorControl>("LeftEditor")?.SetColorGateFile(vm.FilePath);
+            this.FindControl<CodeEditorControl>("RightEditor")?.SetColorGateFile(vm.FilePath);
+
             // Initialize git gutter and load initial changes
             if (MainEditor != null && vm.GitService != null && vm.FilePath != null)
             {
