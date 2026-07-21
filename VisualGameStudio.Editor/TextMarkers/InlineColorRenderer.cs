@@ -4,14 +4,14 @@ using Avalonia.Media;
 using AvaloniaEdit;
 using AvaloniaEdit.Document;
 using AvaloniaEdit.Rendering;
-using System.Text.RegularExpressions;
 
 namespace VisualGameStudio.Editor.TextMarkers;
 
 /// <summary>
-/// Renders small colored squares inline next to color values in BasicLang code.
-/// Detects RGB patterns in function calls like ClearBackground(255, 128, 0) and
-/// hex color literals like &amp;HFF8000.
+/// Renders small colored squares inline next to color values in source code.
+/// Detection (which patterns, in which language) lives in the pure
+/// <see cref="ColorMatchFinder"/>; this class keeps only geometry — swatch
+/// layout, scroll-offset math, and click hit-testing.
 /// Clicking a swatch opens an inline color picker popup.
 /// </summary>
 public class InlineColorRenderer : IBackgroundRenderer
@@ -19,6 +19,7 @@ public class InlineColorRenderer : IBackgroundRenderer
     private readonly TextEditor _editor;
     private List<ColorSwatchHitRegion> _hitRegions = new();
     private bool _enabled = true;
+    private ColorLanguage _language = ColorLanguage.None;
 
     /// <summary>
     /// Raised when a color swatch is clicked. The handler should open the color picker popup.
@@ -31,43 +32,6 @@ public class InlineColorRenderer : IBackgroundRenderer
     private const double SwatchSize = 12;
     private const double SwatchMarginLeft = 4;
     private const double SwatchBorderWidth = 1;
-
-    /// <summary>
-    /// Matches RGB triplets in function calls: FuncName(R, G, B) or FuncName(..., R, G, B) or
-    /// FuncName(..., R, G, B, A). Captures the three or four numeric arguments at the end.
-    /// </summary>
-    private static readonly Regex RgbCallPattern = new(
-        @"(\w+)\s*\(([^)]*?)\b(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(\d{1,3}))?\s*\)",
-        RegexOptions.Compiled);
-
-    /// <summary>
-    /// Matches VB-style hex color literals: &amp;HRRGGBB or &amp;HAARRGGBB
-    /// </summary>
-    private static readonly Regex HexColorPattern = new(
-        @"&H([0-9A-Fa-f]{6,8})\b",
-        RegexOptions.Compiled);
-
-    /// <summary>
-    /// Known engine functions that take color parameters (R, G, B or R, G, B, A at the end).
-    /// If empty, all matching patterns are treated as potential colors.
-    /// </summary>
-    private static readonly HashSet<string> ColorFunctions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "ClearBackground", "DrawPixel", "DrawLine", "DrawCircle", "DrawCircleLines",
-        "DrawRectangle", "DrawRectangleLines", "DrawTriangle", "DrawTriangleLines",
-        "DrawText", "DrawTextEx", "DrawPoly", "DrawPolyLines",
-        "DrawEllipse", "DrawEllipseLines", "DrawRing", "DrawRingLines",
-        "DrawRectangleRounded", "DrawRectangleRoundedLines",
-        "DrawRectangleGradientV", "DrawRectangleGradientH",
-        "DrawRectangleGradientEx", "DrawLineBezier",
-        "SetColor", "SetBackgroundColor", "SetForegroundColor",
-        "Color", "NewColor", "MakeColor", "ColorFromRGB", "ColorFromRGBA",
-        "DrawSprite", "DrawSpriteEx", "DrawTexture", "DrawTextureEx",
-        "FillRectangle", "FillCircle", "FillEllipse", "FillTriangle",
-        "SetPixel", "DrawString", "DrawLineEx", "DrawCircleSector",
-        "DrawCircleSectorLines", "DrawCircleGradient",
-        "DrawArc", "DrawArcLines", "SetTint", "SetTextColor"
-    };
 
     public InlineColorRenderer(TextEditor editor)
     {
@@ -91,6 +55,17 @@ public class InlineColorRenderer : IBackgroundRenderer
         }
     }
 
+    /// <summary>
+    /// Tells the renderer which file it is rendering, so detection can be gated by
+    /// language (via <see cref="ColorMatchFinder.ClassifyFile"/>). Null or unknown
+    /// extensions classify as <see cref="ColorLanguage.None"/> — no swatches.
+    /// </summary>
+    public void SetFile(string? filePath)
+    {
+        _language = ColorMatchFinder.ClassifyFile(filePath);
+        _editor?.TextArea?.TextView?.InvalidateLayer(KnownLayer.Selection);
+    }
+
     public void Draw(TextView textView, DrawingContext drawingContext)
     {
         if (!textView.VisualLinesValid || !_enabled) return;
@@ -108,59 +83,17 @@ public class InlineColorRenderer : IBackgroundRenderer
             var docLine = document.GetLineByNumber(lineNumber);
             var lineText = document.GetText(docLine.Offset, docLine.Length);
 
-            // Detect RGB patterns in function calls
-            var rgbMatches = RgbCallPattern.Matches(lineText);
-            foreach (Match match in rgbMatches)
+            // Detection is delegated to the pure finder (language-gated); this loop
+            // keeps only geometry. For every match kind the swatch sits just past the
+            // end of the replace range (RgbCall: after the closing paren; VbHex:
+            // after the literal).
+            foreach (var colorMatch in ColorMatchFinder.FindMatches(lineText, _language))
             {
-                var funcName = match.Groups[1].Value;
-
-                // Only render swatches for known color functions (or if list is empty, all matches)
-                if (ColorFunctions.Count > 0 && !ColorFunctions.Contains(funcName))
-                    continue;
-
-                if (!int.TryParse(match.Groups[3].Value, out int r) || r > 255) continue;
-                if (!int.TryParse(match.Groups[4].Value, out int g) || g > 255) continue;
-                if (!int.TryParse(match.Groups[5].Value, out int b) || b > 255) continue;
-
-                int a = 255;
-                if (match.Groups[6].Success && int.TryParse(match.Groups[6].Value, out int alpha) && alpha <= 255)
-                    a = alpha;
-
-                var color = Color.FromArgb((byte)a, (byte)r, (byte)g, (byte)b);
-
-                // Position the swatch after the closing paren
-                var endColumn = match.Index + match.Length;
+                var color = Color.FromArgb(colorMatch.A, colorMatch.R, colorMatch.G, colorMatch.B);
+                var endColumn = colorMatch.ReplaceStart + colorMatch.ReplaceLength;
                 DrawSwatch(textView, drawingContext, visualLine, docLine, endColumn, color,
-                    lineNumber, match.Groups[3].Index + docLine.Offset,
-                    match.Index + match.Length, r, g, b, a);
-            }
-
-            // Detect hex color patterns
-            var hexMatches = HexColorPattern.Matches(lineText);
-            foreach (Match match in hexMatches)
-            {
-                var hexStr = match.Groups[1].Value;
-                byte r, g, b, a = 255;
-
-                if (hexStr.Length == 8)
-                {
-                    a = Convert.ToByte(hexStr.Substring(0, 2), 16);
-                    r = Convert.ToByte(hexStr.Substring(2, 2), 16);
-                    g = Convert.ToByte(hexStr.Substring(4, 2), 16);
-                    b = Convert.ToByte(hexStr.Substring(6, 2), 16);
-                }
-                else // 6 chars
-                {
-                    r = Convert.ToByte(hexStr.Substring(0, 2), 16);
-                    g = Convert.ToByte(hexStr.Substring(2, 2), 16);
-                    b = Convert.ToByte(hexStr.Substring(4, 2), 16);
-                }
-
-                var color = Color.FromArgb(a, r, g, b);
-                var endColumn = match.Index + match.Length;
-                DrawSwatch(textView, drawingContext, visualLine, docLine, endColumn, color,
-                    lineNumber, match.Index + docLine.Offset,
-                    match.Index + match.Length, r, g, b, a);
+                    lineNumber, colorMatch.ReplaceStart + docLine.Offset,
+                    endColumn, colorMatch.R, colorMatch.G, colorMatch.B, colorMatch.A);
             }
         }
     }

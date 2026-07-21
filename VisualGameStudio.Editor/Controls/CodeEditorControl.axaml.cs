@@ -413,6 +413,11 @@ public partial class CodeEditorControl : UserControl
         // No-ops before OnInitialized (_textEditor is null); whichever hook
         // fires last wins — both orders end with the correct highlighting.
         SetHighlightingForFile(filePath);
+
+        // Gate inline color swatches by file language. Null before OnInitialized
+        // (renderer not created yet); OnInitialized replays from _documentFilePath,
+        // so whichever hook fires last wins here too.
+        _inlineColorRenderer?.SetFile(filePath);
     }
 
     /// <summary>
@@ -698,8 +703,10 @@ public partial class CodeEditorControl : UserControl
         _cursorFadeRenderer = new CursorFadeRenderer(_textEditor);
         _textEditor.TextArea.TextView.BackgroundRenderers.Add(_cursorFadeRenderer);
 
-        // Setup inline color swatch renderer
+        // Setup inline color swatch renderer. Replay the file path in case
+        // SetLanguageService already ran before the renderer existed.
         _inlineColorRenderer = new TextMarkers.InlineColorRenderer(_textEditor);
+        _inlineColorRenderer.SetFile(_documentFilePath);
         _textEditor.TextArea.TextView.BackgroundRenderers.Add(_inlineColorRenderer);
         _inlineColorRenderer.ColorSwatchClicked += OnColorSwatchClicked;
 
