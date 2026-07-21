@@ -68,6 +68,8 @@ public enum ProjectLanguage
 public class CppProjectSettings
 {
     public string CppStandard { get; set; } = "c++20";
+    /// <summary>Toolchain pin ("llvm" | "gcc" | "msvc", lowercase); null = machine probe.</summary>
+    public string? CppToolchain { get; set; }
     public List<string> IncludeDirs { get; set; } = new();
     public List<string> NativeLibs { get; set; } = new();
     public List<string> Defines { get; set; } = new();

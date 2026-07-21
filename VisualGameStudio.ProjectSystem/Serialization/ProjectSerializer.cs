@@ -71,6 +71,15 @@ public class ProjectSerializer
                     project.CppSettings ??= new CppProjectSettings();
                     project.CppSettings.CppStandard = cppStandard;
                 }
+
+                // CppToolchain follows the same language-independent rule as CppStandard.
+                // Lowercased to match the compiler-side ProjectFile; absent/empty = null (machine probe).
+                var cppToolchain = propertyGroup.Element("CppToolchain")?.Value;
+                if (!string.IsNullOrEmpty(cppToolchain))
+                {
+                    project.CppSettings ??= new CppProjectSettings();
+                    project.CppSettings.CppToolchain = cppToolchain.ToLowerInvariant();
+                }
             }
             else
             {
@@ -214,6 +223,11 @@ public class ProjectSerializer
                     // on CppStandard) per design decision D8.
                     !string.IsNullOrEmpty(project.CppSettings?.CppStandard)
                         ? new XElement("CppStandard", project.CppSettings!.CppStandard)
+                        : null,
+                    // CppToolchain: same language-independent rule as CppStandard; a null
+                    // toolchain (machine probe) must not gain an element on save.
+                    !string.IsNullOrEmpty(project.CppSettings?.CppToolchain)
+                        ? new XElement("CppToolchain", project.CppSettings!.CppToolchain)
                         : null
                 )
             )

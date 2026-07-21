@@ -186,6 +186,131 @@ public class ProjectSerializerCppTests
     }
 
     [Test]
+    public async Task RoundTrip_CppToolchain_NonDefault()
+    {
+        var path = Path.Combine(_dir, "Tc.blproj");
+        var project = new BasicLangProject
+        {
+            FilePath = path,
+            Name = "Tc",
+            Language = ProjectLanguage.Cpp,
+            TargetBackend = TargetBackend.Cpp,
+            CppSettings = new CppProjectSettings { CppToolchain = "gcc" }
+        };
+
+        var serializer = new ProjectSerializer();
+        await serializer.SaveAsync(project);
+
+        var xml = File.ReadAllText(path);
+        Assert.That(xml, Does.Contain("<CppToolchain>gcc</CppToolchain>"),
+            "a non-null CppToolchain must be emitted on save");
+
+        var reloaded = await serializer.LoadAsync(path);
+        Assert.That(reloaded.CppSettings, Is.Not.Null);
+        Assert.That(reloaded.CppSettings!.CppToolchain, Is.EqualTo("gcc"),
+            "CppToolchain must survive an IDE save round-trip");
+    }
+
+    [Test]
+    public async Task Parse_NoCppToolchainElement_IsNull()
+    {
+        var path = Path.Combine(_dir, "NoTc.blproj");
+        File.WriteAllText(path, """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>NoTc</ProjectName>
+                <Language>Cpp</Language>
+                <CppStandard>c++20</CppStandard>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="main.cpp" />
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+
+        var project = await new ProjectSerializer().LoadAsync(path);
+
+        Assert.That(project.CppSettings, Is.Not.Null);
+        Assert.That(project.CppSettings!.CppToolchain, Is.Null,
+            "a project without <CppToolchain> means machine probe (null), not a default toolchain");
+    }
+
+    [Test]
+    public async Task Serialize_OmitsCppToolchain_WhenNull()
+    {
+        var path = Path.Combine(_dir, "OmitTc.blproj");
+        var project = new BasicLangProject
+        {
+            FilePath = path,
+            Name = "OmitTc",
+            Language = ProjectLanguage.Cpp,
+            TargetBackend = TargetBackend.Cpp,
+            CppSettings = new CppProjectSettings()   // CppToolchain stays null
+        };
+
+        var serializer = new ProjectSerializer();
+        await serializer.SaveAsync(project);
+
+        Assert.That(File.ReadAllText(path), Does.Not.Contain("<CppToolchain>"),
+            "a null CppToolchain (machine probe) must not gain an element on save");
+    }
+
+    [Test]
+    public async Task RoundTrip_CppToolchain_MixedProject()
+    {
+        // Language stays BasicLang (default) but TargetBackend=Cpp — like CppStandard,
+        // CppToolchain is language-independent (design decision D8).
+        var path = Path.Combine(_dir, "MixedTc.blproj");
+        var project = new BasicLangProject
+        {
+            FilePath = path,
+            Name = "MixedTc",
+            TargetBackend = TargetBackend.Cpp,
+            CppSettings = new CppProjectSettings { CppToolchain = "msvc" }
+        };
+
+        Assert.That(project.Language, Is.EqualTo(ProjectLanguage.BasicLang), "sanity: Language defaults to BasicLang");
+
+        var serializer = new ProjectSerializer();
+        await serializer.SaveAsync(project);
+
+        var xml = File.ReadAllText(path);
+        Assert.That(xml, Does.Not.Contain("<Language>"),
+            "a Language=BasicLang project must not gain a <Language> element (design decision D8)");
+        Assert.That(xml, Does.Contain("<CppToolchain>msvc</CppToolchain>"),
+            "CppToolchain must be emitted independent of Language when CppSettings carries one");
+
+        var reloaded = await serializer.LoadAsync(path);
+        Assert.That(reloaded.Language, Is.EqualTo(ProjectLanguage.BasicLang));
+        Assert.That(reloaded.CppSettings, Is.Not.Null);
+        Assert.That(reloaded.CppSettings!.CppToolchain, Is.EqualTo("msvc"),
+            "CppToolchain must round-trip for a native BasicLang (mixed) project");
+    }
+
+    [Test]
+    public async Task Parse_CppToolchain_IsLowercased()
+    {
+        var path = Path.Combine(_dir, "CaseTc.blproj");
+        File.WriteAllText(path, """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>CaseTc</ProjectName>
+                <Language>Cpp</Language>
+                <CppToolchain>MSVC</CppToolchain>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+
+        var project = await new ProjectSerializer().LoadAsync(path);
+
+        Assert.That(project.CppSettings, Is.Not.Null);
+        Assert.That(project.CppSettings!.CppToolchain, Is.EqualTo("msvc"),
+            "CppToolchain is normalized to lowercase on parse, matching the compiler-side ProjectFile");
+    }
+
+    [Test]
     public async Task Serializer_MixedCompileItems_RoundTripVerbatim()
     {
         var path = Path.Combine(_dir, "MixedItems.blproj");
