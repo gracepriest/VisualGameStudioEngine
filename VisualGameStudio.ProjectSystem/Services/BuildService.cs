@@ -128,7 +128,12 @@ public class BuildService : IBuildService
 
                 if (loadedProject != null)
                 {
-                    var projectResult = await BuildInternalAsync(loadedProject, false, _buildCts.Token);
+                    // CompileProjectCoreAsync (not BuildInternalAsync) — BuildInternalAsync's
+                    // OWN guard ("if (IsBuilding) return failure") would otherwise short-circuit
+                    // every project here, since IsBuilding was already set true for the whole
+                    // solution above. The core compiles without touching IsBuilding/_buildCts/
+                    // BuildStarted/Clear/BuildCompleted — this loop owns the solution-wide ceremony.
+                    var projectResult = await CompileProjectCoreAsync(loadedProject, false, _buildCts.Token);
 
                     // Merge diagnostics into combined result
                     combinedResult.Diagnostics.AddRange(projectResult.Diagnostics);
@@ -329,37 +334,9 @@ public class BuildService : IBuildService
 
             BuildProgress?.Invoke(this, new BuildProgressEventArgs("Starting build...", 0));
 
-            // ---------- Native projects: route to the shared native builder ----------
-            // Both Language=Cpp (hand-written C++) and a BasicLang project on the
-            // C++ backend (TargetBackend=Cpp, transpiled to native) build through
-            // the SAME CppProjectBuilder the CLI uses — one native-project path, no
-            // IDE-side reimplementation (the CLI mirror is ProjectFile.IsNativeProject).
-            if (project.IsNativeBuild)
-            {
-                // BuildCppProject never throws (exceptions map to a failed result)
-                // so execution ALWAYS falls through to the shared finalization
-                // below — BuildCompleted is the Error List's only diagnostics feed.
-                result = await Task.Run(() => BuildCppProject(project), _buildCts.Token);
-            }
-            else
-            {
-                // Get source files
-                var sourceFiles = project.GetSourceFiles().ToList();
-                if (!sourceFiles.Any())
-                {
-                    result.Success = false;
-                    result.Diagnostics.Add(new DiagnosticItem
-                    {
-                        Id = "BL0001",
-                        Message = "No source files found in project",
-                        Severity = DiagnosticSeverity.Error
-                    });
-                    return result;
-                }
-
-                // Delegate to the real BasicLang compiler engine (same as `BasicLang.exe build`)
-                result = await CompileWithBasicLangApiAsync(project, sourceFiles, _buildCts.Token);
-            }
+            // The guard-free compile CORE (dispatch + exception mapping) is shared
+            // with BuildSolutionAsync's per-project loop — see CompileProjectCoreAsync.
+            result = await CompileProjectCoreAsync(project, rebuild, _buildCts.Token);
 
             stopwatch.Stop();
             result.Duration = stopwatch.Elapsed;
@@ -409,6 +386,81 @@ public class BuildService : IBuildService
             IsBuilding = false;
             _buildCts?.Dispose();
             _buildCts = null;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The guard-free compile CORE: dispatches to the native builder or the managed
+    /// compiler engine and maps cancellation/exceptions to a failed <see cref="BuildResult"/>.
+    /// Deliberately contains NONE of the build-SESSION ceremony (<see cref="IsBuilding"/>,
+    /// <see cref="_buildCts"/>, <see cref="BuildStarted"/>, output-clearing, the per-build
+    /// banner/logging, or <see cref="BuildCompleted"/>) — that ceremony is meaningful once
+    /// per build GESTURE, not once per project. <see cref="BuildInternalAsync"/> (single-project
+    /// builds) wraps this with that ceremony; <see cref="BuildSolutionAsync"/> calls this
+    /// DIRECTLY per project so an N-project solution keeps ONE solution-level ceremony
+    /// instead of tripping over BuildInternalAsync's own IsBuilding guard (which
+    /// BuildSolutionAsync has already set true for the whole solution).
+    /// </summary>
+    private async Task<BuildResult> CompileProjectCoreAsync(BasicLangProject project, bool rebuild, CancellationToken cancellationToken)
+    {
+        var result = new BuildResult();
+
+        try
+        {
+            // ---------- Native projects: route to the shared native builder ----------
+            // Both Language=Cpp (hand-written C++) and a BasicLang project on the
+            // C++ backend (TargetBackend=Cpp, transpiled to native) build through
+            // the SAME CppProjectBuilder the CLI uses — one native-project path, no
+            // IDE-side reimplementation (the CLI mirror is ProjectFile.IsNativeProject).
+            if (project.IsNativeBuild)
+            {
+                // BuildCppProject never throws (exceptions map to a failed result)
+                // so execution ALWAYS falls through to the shared finalization
+                // in the caller — BuildCompleted is the Error List's only diagnostics feed.
+                result = await Task.Run(() => BuildCppProject(project), cancellationToken);
+            }
+            else
+            {
+                // Get source files
+                var sourceFiles = project.GetSourceFiles().ToList();
+                if (!sourceFiles.Any())
+                {
+                    result.Success = false;
+                    result.Diagnostics.Add(new DiagnosticItem
+                    {
+                        Id = "BL0001",
+                        Message = "No source files found in project",
+                        Severity = DiagnosticSeverity.Error
+                    });
+                    return result;
+                }
+
+                // Delegate to the real BasicLang compiler engine (same as `BasicLang.exe build`)
+                result = await CompileWithBasicLangApiAsync(project, sourceFiles, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            result.Success = false;
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Message = "Build was cancelled",
+                Severity = DiagnosticSeverity.Warning
+            });
+            _outputService.WriteLine("Build cancelled by user.", OutputCategory.Build);
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = "BL9999",
+                Message = $"Build failed with exception: {ex.Message}",
+                Severity = DiagnosticSeverity.Error
+            });
+            _outputService.WriteError($"Build error: {ex.Message}", OutputCategory.Build);
         }
 
         return result;

@@ -652,6 +652,83 @@ End Sub
     }
 
     // ------------------------------------------------------------------
+    // 8. BuildSolutionAsync: the service-level solution build must not
+    //    self-trip its own per-project IsBuilding guard.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task BuildSolution_MultiProject_DoesNotSelfDeadlock()
+    {
+        // Regression: BuildSolutionAsync sets IsBuilding=true (:75) BEFORE its
+        // per-project loop calls BuildInternalAsync (:131). BuildInternalAsync's
+        // OWN first statement is "if (IsBuilding) return failure(...)" (:303) —
+        // already true by then — so the FIRST project's build short-circuited
+        // with a canned "A build is already in progress" diagnostic, the loop
+        // treated that as a failure and broke, and EVERY solution build reported
+        // a bogus "1 error" while compiling NOTHING. Task 17 routes the "Build
+        // Solution" command through this exact method (see
+        // BuildSolutionAmplifierGuardTests), so it must actually work end-to-end
+        // with a real multi-project solution, not just fire one BuildCompleted.
+        var solutionDir = Path.Combine(_rootDir, "SelfDeadlockSolution");
+        Directory.CreateDirectory(solutionDir);
+
+        CreateMinimalConsoleProject(solutionDir, "ProjA");
+        CreateMinimalConsoleProject(solutionDir, "ProjB");
+
+        var solution = new BasicLangSolution
+        {
+            FilePath = Path.Combine(solutionDir, "SelfDeadlock.blsln"),
+            SolutionName = "SelfDeadlock",
+        };
+        solution.Projects.Add(new SolutionProject { Name = "ProjA", RelativePath = Path.Combine("ProjA", "ProjA.blproj") });
+        solution.Projects.Add(new SolutionProject { Name = "ProjB", RelativePath = Path.Combine("ProjB", "ProjB.blproj") });
+
+        var output = new RecordingOutput();
+        var buildService = new BuildService(output);
+        var completedCount = 0;
+        BuildCompletedEventArgs? completed = null;
+        buildService.BuildCompleted += (_, e) => { completedCount++; completed = e; };
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var result = await buildService.BuildSolutionAsync(solution, cts.Token);
+
+        Assert.That(result.Diagnostics.Any(d => d.Message.Contains("A build is already in progress")), Is.False,
+            "BuildSolutionAsync self-tripped BuildInternalAsync's own IsBuilding guard — the per-project " +
+            "compile never ran.\n" + Describe(result, output));
+        Assert.That(result.Success, Is.True,
+            "solution build did not succeed — both projects are known-good minimal console apps.\n" + Describe(result, output));
+
+        Assert.That(completedCount, Is.EqualTo(1),
+            "BuildCompleted must fire exactly ONCE for a solution build (a solution-level aggregate " +
+            "event, never one per project).");
+        Assert.That(completed, Is.Not.Null);
+        Assert.That(completed!.Result, Is.SameAs(result));
+    }
+
+    private static void CreateMinimalConsoleProject(string solutionDir, string name)
+    {
+        var projectDir = Path.Combine(solutionDir, name);
+        Directory.CreateDirectory(projectDir);
+        File.WriteAllText(Path.Combine(projectDir, "Main.bas"),
+            $"Sub Main()\n    PrintLine(\"{name} ok\")\nEnd Sub\n");
+
+        var projectXml =
+$@"<?xml version=""1.0"" encoding=""utf-8""?>
+<BasicLangProject Version=""1.0"">
+  <PropertyGroup>
+    <ProjectName>{name}</ProjectName>
+    <OutputType>Exe</OutputType>
+    <TargetBackend>CSharp</TargetBackend>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""Main.bas"" />
+  </ItemGroup>
+</BasicLangProject>
+";
+        File.WriteAllText(Path.Combine(projectDir, name + ".blproj"), projectXml);
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
