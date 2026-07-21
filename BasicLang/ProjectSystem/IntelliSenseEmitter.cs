@@ -27,8 +27,10 @@ namespace BasicLang.Compiler.ProjectSystem
         /// The installed toolchain whose driver and flag style to emit, or null to emit for
         /// the blessed default (clang++, GNU flags). Callers that have probed should pass
         /// what they found so the database matches what a real build would produce; callers
-        /// that have not may pass null. Never probes on its own — discovery is the caller's
-        /// choice, and a null here is a supported state, not an error.
+        /// that have not may pass null. For a project that pins &lt;CppToolchain&gt;, the pin
+        /// overrides this parameter — EmitCore resolves it by id (a cheap probe); otherwise
+        /// discovery stays the caller's choice, and a null here is a supported state, not
+        /// an error.
         /// </param>
         /// <returns>
         /// <see cref="CppProjectBuildResult.Success"/> is true when both artifacts were
