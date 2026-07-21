@@ -92,9 +92,17 @@ public static class ColorMatchFinder
     /// brace group itself, which is the REPLACE RANGE (the prefix sits outside it
     /// and is never touched by a rewrite). Groups 2-4 are R/G/B, group 5 is the
     /// optional A.
+    ///
+    /// Both the <c>CLITERAL(...)</c> and bare <c>(Color)</c> alternatives are
+    /// leading-boundary guarded (<c>\b</c> / a negative lookbehind for an
+    /// identifier character, respectively) — without the second guard, a plain
+    /// <c>\b</c> before <c>CLITERAL</c> alone is not enough: <c>(Color)</c> is a
+    /// literal substring of <c>CLITERAL(Color)</c>, so <c>MYCLITERAL(Color){...}</c>
+    /// would still false-match via the bare-paren alternative even once the
+    /// CLITERAL alternative itself correctly rejects it.
     /// </summary>
     private static readonly Regex BraceInitColorPattern = new(
-        @"(?:CLITERAL\s*\(\s*Color\s*\)\s*|\(\s*Color\s*\)\s*|\bColor\b\s*)(\{\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(\d{1,3}))?\s*\})",
+        @"(?:\bCLITERAL\s*\(\s*Color\s*\)\s*|(?<![0-9A-Za-z_])\(\s*Color\s*\)\s*|\bColor\b\s*)(\{\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(\d{1,3}))?\s*\})",
         RegexOptions.Compiled);
 
     /// <summary>

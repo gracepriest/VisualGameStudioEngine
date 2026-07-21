@@ -464,6 +464,21 @@ public class ColorMatchFinderTests
         Assert.That(m.ReplaceLength, Is.EqualTo(line.IndexOf('}') - expectedStart + 1));
     }
 
+    [TestCase("MYCLITERAL(Color){10, 20, 30}")]
+    [TestCase("XCLITERAL(Color){1,2,3}")]
+    public void Cpp_BraceInit_CLiteralInsideIdentifier_NoMatch(string line)
+    {
+        // Neither the CLITERAL(...) nor the bare (Color) alternative in
+        // BraceInitColorPattern originally had a leading boundary guard, so
+        // "CLITERAL(Color){...}" false-matched mid-identifier (e.g. MYCLITERAL(...))
+        // — symmetry with the \bColor\b alternative, which already requires one.
+        // Guarding CLITERAL alone is not enough: (Color) is a literal substring of
+        // CLITERAL(Color), so the bare-paren alternative needs its own guard too.
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Is.Empty);
+    }
+
     [Test]
     public void Cpp_BareBraces_NoMatch()
     {

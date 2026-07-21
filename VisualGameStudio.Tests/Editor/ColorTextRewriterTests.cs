@@ -13,8 +13,9 @@ namespace VisualGameStudio.Tests.Editor;
 /// PICKED-ALPHA-DRIVEN (a &lt; 255 → 8 digits &amp;H{A}{R}{G}{B}, else 6 digits
 /// &amp;H{R}{G}{B}), uppercase X2 hex; CppHex mirrors VbHex exactly but with a
 /// <c>0x</c> prefix (a &lt; 255 → 8 digits 0x{A}{R}{G}{B}, else 6 digits
-/// 0x{R}{G}{B}), uppercase X2 hex.
-/// BraceInit's branch lands in a later task — until then it throws.
+/// 0x{R}{G}{B}), uppercase X2 hex; BraceInit mirrors RgbCall's comma-count
+/// alpha heuristic exactly, with braces instead of parens and no prefix
+/// re-emitted (the replace range is the brace group only).
 /// </summary>
 [TestFixture]
 public class ColorTextRewriterTests
