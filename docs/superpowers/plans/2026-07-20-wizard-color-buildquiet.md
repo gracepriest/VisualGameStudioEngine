@@ -342,7 +342,24 @@ Work happens on branch `worktree-wizard-color-quiet` in
   (Running the exes is optional — the gate question is the LINK.)
 - [ ] **Step 4: Record the verdict** by editing this section:
 
-  **VERDICT: [PASS-BOTH | PASS-CLANG-ONLY | PASS-GCC-ONLY | FAIL-BOTH] — filled at execution time.**
+  **VERDICT: PASS-BOTH** — executed 2026-07-20.
+
+  - Fixture: **full `cpp-game` project** (no fallback needed) — generated via
+    `IDE\BasicLang.exe new cpp-game -n GateGame`; its `main.cpp` self-declares
+    the eight `extern "C"` `Framework_*` prototypes, so no engine headers were
+    involved.
+  - Lib: `IDE\VisualGameStudioEngine.lib` (MSVC import lib, 544,792 bytes,
+    byte-identical to `VisualGameStudioEngine\x64\Release\` — the path
+    `EngineDeployment.LocateImportLib()` resolves first).
+  - Link commands (both exit 0, zero warnings, exes produced):
+    ```
+    C:\winlibs\mingw64\bin\clang++.exe -std=c++20 main.cpp "<IDE>\VisualGameStudioEngine.lib" -o gate-clang.exe
+    C:\winlibs\mingw64\bin\g++.exe     -std=c++20 main.cpp "<IDE>\VisualGameStudioEngine.lib" -o gate-gcc.exe
+    ```
+  - Import-table check (`objdump -p`): both exes bind all 8 `Framework_*`
+    imports against `DLL Name: VisualGameStudioEngine.dll` — real thunks, not
+    dead-stripped or mis-linked.
+  - **Consequence for Task 8: no game-template greying needed on any toolchain.**
 
   - PASS for a toolchain → game templates stay selectable on it (Task 8 does nothing extra).
   - FAIL for a toolchain → Task 8 additionally greys that toolchain **for game
