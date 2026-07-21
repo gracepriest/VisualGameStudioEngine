@@ -6818,33 +6818,17 @@ public partial class MainWindowViewModel : ViewModelBase
         Services.ScreenReaderService.Instance.Announce("Solution build started");
         ShowProgressNotification("build", "Building solution...");
 
-        var buildOrder = _solutionService.GetBuildOrder();
-        var solutionDir = _solutionService.CurrentSolution!.SolutionDirectory;
-        bool allSucceeded = true;
-
-        for (int i = 0; i < buildOrder.Count; i++)
-        {
-            var proj = buildOrder[i];
-            StatusText = $"Building {proj.Name} ({i + 1}/{buildOrder.Count})...";
-
-            var projectPath = proj.GetFullPath(solutionDir);
-            try
-            {
-                var project = await _projectService.OpenProjectAsync(projectPath);
-                await _buildService.BuildProjectAsync(project);
-            }
-            catch (Exception ex)
-            {
-                _outputService.WriteError($"Failed to build {proj.Name}: {ex.Message}", OutputCategory.Build);
-                allSucceeded = false;
-                break;
-            }
-        }
+        // Single combined build across every project in the solution (Task 17). This mirrors
+        // the BuildAsync command's solution path: BuildService.BuildSolutionAsync aggregates all
+        // projects into one BuildResult and raises exactly one BuildCompleted event
+        // (BuildService.cs ~:54-174), which drives one quiet toast + one Output reveal. The
+        // previous per-project BuildProjectAsync loop fired a separate BuildCompleted
+        // (BuildService.cs ~:384) for every project, amplifying a single "Build Solution"
+        // gesture into N toasts + N Output reveals. Per-project progress/output lines are still
+        // written by the service itself, so nothing user-visible is lost.
+        await _buildService.BuildSolutionAsync(_solutionService.CurrentSolution!);
 
         DismissNotification("build");
-        StatusText = allSucceeded
-            ? $"Solution build succeeded ({buildOrder.Count} project(s))"
-            : "Solution build failed";
     }
 
     [RelayCommand]
